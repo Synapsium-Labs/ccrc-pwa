@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ad8b8ea76b8773c2eec587e8d578a28224611585f47713aafc1403d1288f81da
+# ccrc:generated 1 sha256=ee7ccaefdf66397894d4bf5d8720add3e0362c45896b3cddd85fb99b1a785de8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31916,7 +31916,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its eight callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its nine callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -31924,12 +31924,17 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
   # and checkout directory. The eighth is the collector's quarantine path,
   # `_ws_collect_qpath`: the quarantine maker, the record writer and the
-  # record reader all reach this function through it, never directly, so
-  # the census stays eight.
+  # record reader all reach this function through it, never directly. The
+  # ninth is the removal mount question, `_ws_removal_mounts_clear`, in its
+  # `resolve` mode only (path-identity spec §3.5), for a removal whose path
+  # may stand under a symbolic link: a caller that passes `resolve` reaches
+  # this function through it, never directly, so the census stays nine.
+  # (`_ws_leaf_remove` asks it without `resolve`; its own call here is its
+  # root's, one of the three newline sites.)
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its eight callers only. Bare captures stand elsewhere, and the ones
+  # for its nine callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
@@ -32491,6 +32496,46 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   [[ -z "$why" ]] || return 2
   return 0
 }
+_ws_removal_mounts_clear() {   # dir [resolve] -> 0 nothing is mounted at dir or under it — on Darwin, never asked (spec
+  #                                §3.5); 2 (_WS_MOUNTS_WHY) one is, the table could not be read whole, or (resolve) dir
+  #                                could not be resolved. Never 1: every caller refuses both alike
+  # ONE QUESTION, ONE DEFINITION, ONE GUARD (path-identity spec §3.5). A
+  # removal that could cross a mount asks it before it acts. The device
+  # compare in `_ws_leaf_remove` and `rm --one-file-system` see only another
+  # device, so a bind mount of the leaf's own file system was crossed, and a
+  # same-uid process can make a FUSE mount in ccd's namespace. This is the
+  # collector's own question, `_ws_collect_mounts_clear`, reused and never
+  # copied: the kernel's table, read through its one seam
+  # (`_ws_collect_mountinfo`), with a mount point at or under the path
+  # compared as encoded text.
+  # - THE GUARD is the first line of code below, and the only one: Darwin has
+  #   no such table, so nothing is asked there and the caller's removal runs
+  #   as before. "Not asked" and "clear" both answer 0, and both mean
+  #   "proceed".
+  # - THE PATH is the one the removal acts on, spelled physically, because the
+  #   table writes mount points physically. `_ws_leaf_remove` hands its leaf,
+  #   physical by construction (a physical root, an id with no `/`, and no
+  #   link), so nothing here enters it: resolved, a mode-000 leaf could not be
+  #   entered, and would be kept for ever. A caller whose path may stand under
+  #   a symbolic link passes `resolve`, and the path is resolved first
+  #   (`_ws_dir_physical`); a path that cannot be resolved is never asked, and
+  #   answers 2. Bash's `pwd -P` keeps a link target's leading `//`, which
+  #   Linux reads as `/` and the table never writes, so it is collapsed,
+  #   never refused.
+  # - THE ANSWER is 0 or 2, never 1. The question's own 1 (a mount stands) and
+  #   2 (the table was not read whole) are folded HERE, so no caller can split
+  #   them or read either as a refusal: each keeps what it would have removed.
+  [[ "$CCD_OS" != darwin ]] || return 0
+  local d="${1-}"
+  if [[ -n "${2-}" ]]; then
+    _ws_dir_physical "$d" \
+      || { _WS_MOUNTS_WHY="$d cannot be resolved ($_WS_PHYS_WHY), so whether anything is mounted under it was never asked"; return 2; }
+    d="$_WS_PHYS"
+  fi
+  [[ "$d" != //[!/]* ]] || d="${d#/}"   # Linux reads `//x` as `/x`, and the kernel's table never writes `//`
+  _ws_collect_mounts_clear "$d" && return 0
+  return 2
+}
 _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
   # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
@@ -32527,7 +32572,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   #   `--one-file-system` measures from its own argument, so a mount AT the
   #   leaf (a session's own FUSE or sshfs mount in its TMPDIR) would be emptied
   #   before its rmdir failed. (A bind mount of the root's OWN file system
-  #   carries the root's device, and is not seen: the limit stated below.)
+  #   carries the root's device, so this compare cannot see one: the mount
+  #   question, below, does.)
   #   Asking the physical path means entering the
   #   leaf, so the leaf's OWN owner bits are set first (`find -P … -maxdepth 0
   #   -user … -exec chmod … {} +`: find never follows a link, though the chmod
@@ -32539,10 +32585,25 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
   #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
-  #   (`--one-file-system`; BSD's `-x` on Darwin). THE LIMIT, STATED: both
-  #   compare `st_dev` alone, so a bind mount of the SAME file system inside
-  #   the leaf is crossed (GNU rm's own documented limit); only root can make
-  #   one.
+  #   (`--one-file-system`; BSD's `-x` on Darwin). Both compare `st_dev`
+  #   alone, so `rm` by itself would cross a bind mount of the SAME file
+  #   system inside the leaf (GNU rm's own documented limit), and a same-uid
+  #   process can make a FUSE mount in ccd's namespace: on the measured box
+  #   the crossing is live, not latent (path-identity spec §3.5).
+  # - THE MOUNT QUESTION (path-identity spec §3.5) is asked TWICE, through
+  #   `_ws_removal_mounts_clear`: directly after the device compare, and
+  #   again directly before `rm`. The first comes before the owner bits, the
+  #   checkout question and the permission pass, so neither the leaf's own
+  #   mode nor anything inside a mount is written before it answers; the
+  #   second sees a mount made while those ran. A mount point at or under the
+  #   leaf in the kernel's table (of any file system, a same-device bind
+  #   included), or a table that could not be read whole, answers 2, and
+  #   nothing is removed: the tail keeps the leaf `unmeasured`, and the
+  #   collector's step 6 keeps its record and slot (`failed quarantine-kept`,
+  #   for a mount made after its step 5 asked). The leaf is handed over
+  #   physical and is never resolved there, so the question never enters it,
+  #   and a mode-000 leaf is answered as before. Darwin has no such table, and
+  #   is not asked.
   # - EVERY EXIT CODE IS READ, and the answer is a MEASUREMENT: after any
   #   removal the leaf's absence is PROVEN, and a leaf that stands again (a
   #   writer re-created it) is unmeasured, never "removed". rc 2 is not
@@ -32623,6 +32684,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
       || { _WS_LEAF_WHY="the device of $leaf or of $rroot could not be read, so whether it is a mount point was never asked"; return 2; }
     [[ "${ldev%%:*}" == "${rdev%%:*}" ]] \
       || { _WS_LEAF_WHY="$leaf is a mount point (device ${ldev%%:*}, not its root's ${rdev%%:*}) — ccd never removes a mount"; return 1; }
+    _ws_removal_mounts_clear "$leaf" \
+      || { _WS_LEAF_WHY="$_WS_MOUNTS_WHY — nothing under $leaf was removed"; return 2; }
     find -P "$leaf" -maxdepth 0 -type d -user "$me" ! -perm -u=rwx -exec chmod u+rwx {} + 2>/dev/null \
       || { _WS_LEAF_WHY="the owner bits of $leaf could not be set, so nothing under it was removed"; return 2; }
     lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
@@ -32635,6 +32698,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
     (( rc != 1 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 1; }
+    _ws_removal_mounts_clear "$leaf" \
+      || { _WS_LEAF_WHY="$_WS_MOUNTS_WHY — nothing under $leaf was removed"; return 2; }
     if [[ "$CCD_OS" == darwin ]]; then err=$(rm -rfx -- "$leaf" 2>&1); rc=$?
     else err=$(rm -rf --one-file-system -- "$leaf" 2>&1); rc=$?; fi
     (( rc == 0 )) \
