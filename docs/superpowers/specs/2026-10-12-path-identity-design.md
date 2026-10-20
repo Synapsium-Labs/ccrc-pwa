@@ -621,6 +621,264 @@ Proposed, both halves in W2:
 > [!NOTE]
 > An observation for the operator, outside this design: `~/.cc-tmp` holds 219 leaves, 183 of them unregistered, and only 1 of those has a witness. They take about 23 GiB in all, registered leaves included (measured: ls and du). By design the collector reaches only directories ccrc recorded handing out, so it will never reclaim that backlog.
 
+### 3.10 As built (W2)
+
+W2 built this section's TR1 to TR8 and TR12, and items 32 to 36 of §7: item 32 a prose fix in two test headers, items
+33 to 36 test-only. This subsection records where what it built narrows, corrects or spells out §3.1 to §3.9, and names
+the residuals it leaves. It amends, and rewrites none of the text above. Every claim is measured at the wave's tip
+unless it says otherwise. Items 38 and 40 of §7 read `Built (child-reclamation wave 10)`: that wave's edits already
+made them, and W2 touched neither.
+
+**The witness drop (TR3, TR4).**
+- All three drops go through one generation-exact `_ws_tmproot_witness_drop`: `_ws_tmproot_remove`'s drop and step
+  6's two kept arms. The helper prints nothing. It answers complete (0, with `_WS_WDROP` set to `dropped` or
+  `absent`), kept (1) or unmeasured (2), with its reason in `_WS_WDROP_WHY`. Every kept reason begins "its witness was
+  kept: ".
+- Its order is fixed:
+  1. An id no witness is named for is kept, with nothing touched.
+  2. No witness standing, proven absent by `_ws_reclaim_absent`, is complete, `absent`. An absence that cannot be
+     proven is unmeasured.
+  3. A witness that does not parse is unmeasured.
+  4. The device the witness records is asked (`_ws_collect_root_dev`). Any answer but 0 is unmeasured.
+  5. The id's quarantine slots are listed (`_ws_collect_slots_of`). Any slot of the id keeps the witness, whether or
+     not a record names it. A quarantine that cannot be listed is unmeasured.
+  6. The leaf is proved absent again.
+  7. Only then is exactly the generation read dropped.
+- Where a NOREPLACE move exists (`_ws_collect_mv_ok`), the drop is the collector's own compare-and-drop,
+  `_ws_collect_witness_cad`, fed the first read's fields, so a newer generation is kept. Where none exists (on Darwin,
+  and on a Linux `mv` without `--no-copy`), the helper reads the witness again, compares all six parsed fields with
+  its first read, unlinks the live name, and proves it gone. The device and slot checks run on both paths.
+- `drop-helper-reproves-the-absence`: Figure 3 goes from the tail's absence proof straight to the parse. As built, the
+  helper proves the leaf absent again (`_ws_reclaim_absent`) after its witness read and before the drop. So "kept"
+  always means "not proven gone". A leaf that stands again answers kept, never unmeasured.
+- `kept-witness-reason-in-the-row-not-on-stderr`: Figure 3's slot arm says "keep witness, warn". As built, the helper
+  prints nothing on any arm, and the reason reaches the done row through the tail's `tmpwhy`. The compare-and-drop
+  prints one warning when what it moved aside cannot go back to the witness's name. The helper silences that warning
+  at its call and chooses its own reason by looking at the name: nothing there means the generation it moved aside
+  stands at its aside, and otherwise a newer generation stands.
+- `_ws_tmproot_remove` maps the helper's kept and unmeasured answers to its own 2 (unmeasured). It never maps them to
+  its 1, which means the leaf was refused. Its reason leads "no leaf stands, but" (true whether its leaf half removed
+  the leaf or proved it absent), followed by the helper's.
+- Step 6 has two kept arms: the in-use answer, and the unmeasured answer, which is always the arm on Darwin. Both
+  record a drop that is not complete as `tmpRootKept` `unmeasured`, with a reason that leads "no leaf stands, but".
+  No `tmpRootKept` word was added. Each of the three callers has a mutation pin of its own, and a scan pin refuses any
+  drop call suppressed with `|| :`.
+- A `~/.cc-tmp` deleted whole now holds its witnesses, because its device cannot be read.
+- So, as the In short says, three W2 changes keep or return an id to the collector's population. TR3 and TR4 keep a
+  witness the tail cannot prove it may drop. TR6 returns the id of an orphaned compare-and-drop aside (below). Each
+  such id stays collectable only under the collector's full ladder.
+
+**Mounts (TR5).**
+- Every new mount question goes through one helper, `_ws_removal_mounts_clear`. It reuses `_ws_collect_mounts_clear`
+  rather than copying it. It answers 0 when nothing is mounted at the path or under it. It answers 2 when a mount
+  stands there, when the kernel's table could not be read whole, or, in its resolve mode, when the path could not be
+  resolved. It never answers 1, so every caller refuses a mount and an unreadable table alike.
+- Its first line of code is the one Darwin guard, `[[ "$CCD_OS" != darwin ]] || return 0`. On Darwin nothing is
+  asked, and "not asked" and "clear" both mean proceed. There are three Darwin pins, one per site: the leaf, a standing
+  nested checkout, and the child's own worktree. Each poisons the mount table's reader and proves the clean removal
+  still reaches its Darwin path. Deleting the guard reds all three.
+- `leaf-mount-ask-before-the-owner-bits`: §3.5 puts the leaf's first ask "immediately after the `lreal` check". As
+  built, `_ws_leaf_remove` asks directly after its device compare: before the owner-bits chmod of the leaf itself,
+  before `_ws_leaf_checkouts`, and before `_ws_reclaim_normalise`. It asks again directly before `rm`. This is
+  stricter: with a same-device bind at the leaf, the chmod would otherwise change the bind source's root first. Either
+  ask's refusal becomes the leaf's 2, unmeasured, and nothing under the leaf is touched.
+- The leaf's path is physical by construction, because its root is resolved before the leaf is named. So is each
+  standing nested checkout's path at step 3. Neither is resolved again, and a mode-000 leaf keeps the answer it had.
+  Step 4 asks in the resolve mode, because a workdir may sit under a symlinked ancestor.
+- A physical spelling that begins with `//` loses one leading `/` before the table is asked, as Linux reads it. It is
+  not refused.
+- Through the tail's step 6, a mount under the clips leaf or under the temp-root leaf keeps that leaf `unmeasured`
+  (`clipsKept`, `tmpRootKept`). The leaf and its witness stay standing.
+- The tail asks before `keep_of` and again before `git worktree remove --force`. It does so at every standing nested
+  checkout (step 3) and at the child's own worktree (step 4). A mount, or a table that cannot be read, fails the
+  reclaim or the expiry as `worktree-remove-failed`, with the breadcrumb and that tree standing. A standing workdir
+  that cannot be resolved fails the same way, before `keep_of`. The refusal's existing sentence says ccrc could not
+  prove that the tree, or a checkout inside it, is its own. That sentence already covers a mount.
+- The collector's step 6 removes through `_ws_leaf_remove`. So a mount that appears after the collector's own step-5
+  ask now answers `failed quarantine-kept`, with the record and the slot kept.
+- The arms that remove the record of a checkout that is already gone ask nothing. No ask covers the whole child before
+  step 3's loop.
+- A mount found at step 3 or step 4 is found after the pane kill, so each retry fails the same way until the mount is
+  gone.
+
+**The kept-leaf end (TR1, TR2).**
+- `meas.leaf` takes two words, `removed` and `absent`: `removed` on `_ws_collect_finish`'s `done` line, and `absent` on
+  `_ws_collect_witness_only`'s `done` line. They are spelled once, as the keys of `COLLECT_LEAF_END_TABLE` in
+  `shared/api.ts`.
+- When `_lc_json`'s meas rung drops the other measurement fields, it keeps `meas.leaf`. Its last-resort line keeps it
+  too, so a collect line cut twice stays decided.
+- The store reads a collect row raw: `lifecycleLeafEndsFor` passes its `measJson` and `truncated` to
+  `childReclaimLeafEndRead`, which answers one of four kinds:
+  - a word;
+  - keyless: an uncut line with no `leaf`, written by an older ccd. It ends the item, as every collect row did before
+    (TR2 A);
+  - truncated-keyless: a cut line with no `leaf`. It fails closed;
+  - malformed: a `leaf` that is not one of ccd's words, or a `measJson` that is not a JSON object. It fails closed.
+- The ends are monotone. A `removed` or keyless row after the source ends the temp-root half, wherever it falls among
+  the rows. Otherwise, an `absent` row keeps the item until the 7-day horizon, with one clause added:
+  `The collector found nothing at ~/.cc-tmp/<id> and dropped its witness; if ~/.cc-tmp is a mount, check that it is mounted.`
+- The clause rides only an item whose temp-root half was reported kept, and never a clips-only item. An item that
+  carries the clause never joins the `kept-many` collapse; that marker lives on the server's own type, not on the wire.
+  An unread collect row (malformed or truncated-keyless) adds no prose: the item reads as if no collect had happened.
+- `present-null-leaf-reads-as-legacy`: §3.4 says the server fails closed for a present malformed value. As built, a
+  stored `"leaf":null` reads keyless, and on an uncut row it ends the item. The reason: the reviver writes every key,
+  the store persists that revived object, and ccd's encoder never writes a null value. So `"leaf":null` is the store's
+  own spelling of "not carried". A forged one ends the item, as a forged `removed` would. Any other present value is
+  revived as its text, reads malformed and fails closed; it is never read as absent.
+- The deploy is fleet box first. In the window between the two boxes, an old server drops `meas.leaf` at ingest:
+  - An uncut collect `done` it stored reads keyless after the upgrade, and ends as every collect row ended before.
+  - A collect `done` the encoder cut is stored keyless with `truncated` set. After the upgrade it reads
+    truncated-keyless and keeps its item until the horizon.
+
+  Neither ends a line early.
+
+**C5, the compare-and-drop aside (TR6).**
+- `aside-joins-the-population`: the server's population admits an id when two things hold. At least one name under
+  `tmproots/` parses as that id's `.<id>.drop.<pid>` (`COLLECT_ASIDE_NAME_RE`, `parseCollectAsideName`), and
+  `isTmpRootId` holds. Such ids fold into the population's `ids`, with no new field. Every other dot-leading name is
+  still dropped uncounted. ccd decides "sole" and "parseable" from the bodies. A parity pin holds the grammar equal to
+  ccd's `_ws_collect_aside_id`. This changes the programme contract's population rule, which dropped every
+  dot-leading name.
+- The audit judges a sole parseable aside as the witness, read-only, so the token it mints equals the verb's token
+  after the restore. "Parseable" means the aside would read sound as the witness: one parser,
+  `_ws_tmproot_witness_parse`, reads both.
+- Before the reap lock, a sole aside that parses as the witness opens the lock at once. Two or more asides, one that
+  does not parse, or asides that cannot be listed answer only after the registry peek, so `registered` keeps its
+  place ahead of any of those answers.
+- `aside-probe-word`: §3.6 calls an ambiguous, malformed or competing aside "unmeasured", and names no word. As built,
+  two or more asides, or one that does not parse as a witness of the id, answer the probe word `aside`, which the lane
+  classes `per-leaf`. An aside listing that fails keeps the word `witness`.
+- An old-generation aside beside a new leaf answers the terminal `witness-mismatch`, and the detail names the aside's
+  path.
+- `aside-restore-by-link-not-rename`: §3.6 restores the aside "with a NOREPLACE rename". As built,
+  `_ws_tmproot_aside_settle` restores it under the reap lock in three steps: `link`, then a dev:ino proof of the
+  witness name, then `rm` of the aside. It runs in the verb before its evaluation, and in the tail before step 6. It is
+  portable, so the tail restores on Darwin too. It never clobbers, since `link` fails on a name that exists. A crash
+  between `link` and `rm` leaves two names for one inode, which is an equal witness, and the next settle unlinks it.
+- Beside a standing witness, an equal aside (the same dev:ino, or the same six witness fields) is unlinked. Any other
+  aside is left, with a warning.
+- At the verb, the settle's doubt blocks only an act: it applies only when the evaluation answers `collectable`.
+- `tail-aside-warns-without-keeping`: at the reclaim and expiry tail, an aside the settle can neither restore nor
+  unlink prints a warning and never sets `tmpRootKept`. An aside keeps no leaf, and the collector lists it per-leaf.
+- The compare-and-drop's warning no longer says that no reader takes a dot-leading name. It says where the aside was
+  left, and what the next settle under the reap lock does with it.
+
+**The smaller fixes.**
+- TR7: `_ws_collect_floor_s` strips the knob's leading zeros with one anchored capture, `^0*([1-9][0-9]*)?$`, in place
+  of §3.6's `^0*([0-9]*)$`. The anchored form has exactly one parse, so its answer does not depend on how a regex
+  library orders the matches of a starred group. Its results are the old strip's, and its status is read: a capture
+  that fails answers 2, unmeasured, never a silent 24 h. Two pins hold it: a row of 200,000 zeros built in the shell,
+  and a structure pin. `ccd/ccrc` carries a copy of the old strip, which is left to its
+  owner.
+- TR8: `_ws_leaf_read_small` also reports whether the file it read holds a NUL, and where. `_ws_leaf_checkout_one`
+  refuses (1) a back-link that holds a NUL before any byte that is not a NUL, a CR or an LF, because git never writes
+  one. A trailing NUL is still a line end, and a NUL in the `.git` file is still unmeasured (2).
+- TR12: the six recycled-spawn cases stand in their own Linux-only file, `ccd-collect-race-spawn-late.test.ts`. That
+  file joins CLAUDE.md's load-flake list, and so do `ccd-reclaim-tail-mounts.test.ts`,
+  `ccd-tmproot-drop-propagation.test.ts` and `ccd-collect-aside-settle.test.ts`, whose ws-expire cases walk the real
+  `/proc` through the expiry ladder.
+- Item 32: race-spawn's header points at that file. Race-crash's header and its closed residual lines say the tail's
+  drop now keeps a witness beside a standing slot.
+- Item 34: a blank sibling admin entry is pinned.
+- Item 35: the quarantine maker is pinned under the BSD argument order.
+- Item 36: 2 cases, the two F9 cases W1b found, measured red under two long `TMPDIR`s, now assert the detail's lead and
+  as much of the needle as the 300-byte cut lets reach. The four collect-why cases §3.9 names measured green under
+  both lengths and were left as they were.
+
+**Entry counts.**
+- Measured on the fleet box before the first edit, counts only:
+  - 54 witnesses: 54 of them `v=1`, 54 on the device their line records, and 0 unparsed;
+  - 0 dot-leading names beside them, 0 of them compare-and-drop asides;
+  - 3 quarantine records and 3 slots;
+    - Also 1 quarantine directory, 3 records whose id has a standing witness, and 1 record older than 24 hours. The
+      coordinator ruled that the wave proceed with them standing: a standing slot keeps its witness, and the extra
+      collector round that costs is accepted;
+  - mounts: 1 at the temp root itself and 0 under it, 1 at the worktrees root and 0 under it, and 0 at or under a
+    session's workdir, in a mount table of 55 lines;
+  - the temp root on the registry's device: 0;
+  - `mv --no-copy` present: 1;
+  - 68 collect `done` rows in the lifecycle journal, 0 of them cut and 0 witness-only.
+- Not measured, and judged instead: an inner-NUL back-link (no git admin `gitdir` body was read), an unresolvable
+  standing workdir (no workdir was resolved), and cut keyless collect rows beyond the recorded count. Each would now
+  be refused or held, never removed.
+
+**Stated residuals.**
+- `tail-drop-not-noreplace-without-mv-no-copy`: on Darwin, and on a Linux `mv` without `--no-copy`, the drop is a
+  field compare of a second read, then an unlink. A writer that lands between that read and the unlink loses its
+  witness. The collector never runs on such a box.
+- `stale-aside-beside-a-new-leaf-is-a-mismatch`: an old-generation aside beside a new leaf answers the terminal
+  `witness-mismatch`, naming the aside, and is never restored.
+- `git-mount-crossing-unmeasured`: no session runs a privileged container, so nobody measured whether
+  `git worktree remove --force` crosses a bind or FUSE mount. The ask comes before git runs and only refuses, so it
+  does not depend on the answer. The operator may measure it on a throwaway box of their own choosing.
+- `worktree-ask-to-force-window`: a mount made between the second ask and git's forced recursive delete is still
+  crossed. It stands beside `git-mount-crossing-unmeasured`.
+- `drop-device-asked-once`: the witness drop asks the device once, before the slot listing and the leaf's second
+  proof. An unmount after that ask lets both read an empty mount point as an absence. The collector's witness-only arm
+  has the same window.
+- `audit-normalise-has-no-mount-ask`: the ladder's audit-time normalise asks no mount question. Forwarded to workspace
+  lifecycle.
+- `mount-found-after-the-kill-repeats`: a mount found at step 3 or step 4 fails `worktree-remove-failed` after the
+  pane kill. It fails again on every retry until the mount is gone. Forwarded to workspace lifecycle.
+- `human-gated-removals-ask-no-mounts`: these removals ask no mount question: ws-reap's bare `rm -rf` of the clips
+  leaf, and the non-forced `git worktree remove` in `cmd_ws_rm`, `_ws_reap_tail` and `_ws_gc_prune_row`. These verbs
+  are human-gated, so they were forwarded to workspace lifecycle with the consent request, not built.
+- `no-whole-child-mount-ask-before-step-3`: no ask covers the whole child before step 3's loop. Each standing
+  checkout is asked on its own.
+- `vanished-checkout-arms-ask-no-mounts`: the arms that remove the record of a checkout that is already gone ask
+  nothing. There is no tree left to cross.
+- `absent-clause-names-a-drop-the-compare-kept`: the found-nothing clause says the collector dropped its witness, even
+  when the witness-only arm's compare kept a newer witness.
+- `found-nothing-clause-yields-to-a-collector-item`: when a collector item already holds the id, the found-nothing
+  item yields to it whole. Its clause is not carried onto the collector item, though the clips clause is.
+- `found-nothing-clause-yields-to-a-reclaim-item`: when a reclaim item (terminal, failing, stuck, kept, or a kept-many
+  member) already holds the id, the found-nothing item yields to it whole, and no item carries its clause.
+- `non-object-meas-reads-as-keyless`: a collect `done` whose `meas` is not an object is revived to null and stored as
+  NULL. It then reads keyless and, if uncut, ends the item. ccd's encoder never writes one.
+- `truncated-docstring-predates-meas-leaf`: `LifecycleEvent.truncated`'s docstring and `_lc_json`'s last-resort
+  comment do not say that `meas.leaf` survives the cut. Line neutrality, and the wave's limits on `shared/api.ts`,
+  kept the edit out.
+- `store-reclaim-to-prose-predates-the-heir-gate`: the store's sentence on a reclaim row's `to` (it may hold
+  whitespace or an arrow of its own) predates the heir gate that path-identity W1a added. It lies outside the lines
+  this wave edited there.
+- `read-small-second-read-can-fail`: `_ws_leaf_read_small` reads a file twice, once for its bytes and once for the NUL
+  map. A writer that unlinks or replaces the file between the two makes the second read fail, so a measured answer
+  becomes unmeasured. It fails safe, and the expiry tail's checkout question can reach it.
+- `item36-window-68-to-78-unmeasured`: item 36 was measured at two lengths, 67 and 81 characters (81 falls back to a
+  shorter fixture home). Lengths from 68 to about 78 were never measured.
+- `ccrc-timeout-knob-strip-is-quadratic`: `ccd/ccrc`'s copy of the zero strip is still quadratic. It is a residual
+  for that file's owner.
+- `registry-id-l0-comments-say-ccd-scans-the-session-value`: two comments in `registry-id-l0.test.ts`, its header and
+  the comment above its dash-leading rows, still say in the present tense that ccd's verbs read their decision flags
+  from any position. Only a ccd older than path-identity W1b did. That file lay outside this wave's edits.
+- The §3.7 set, standing (TR9 C, TR10 C, TR11 C): `rec-eq-f-recycled-admin`,
+  `device-test-cannot-see-a-same-device-bind-mount`, `permanent-device-change-holds-every-absence`,
+  `cc-tmp-deleted-whole-holds-its-witnesses`, `source-parent-without-owner-write-loops` and
+  `tmproot-probe-misses-the-whole-volume-spelling`.
+
+**Closed carries.**
+- `tail-drop-believes-an-absent-leaf` (TR3): the tail's drops ask the device the witness records before they believe
+  an absence. A same-device bind of `~/.cc-tmp` stays the standing residual above.
+- `tail-drop-ignores-a-recordless-slot` (TR4): any standing slot of the id keeps the witness.
+- `server-docstrings-call-ccds-predicate-dot-only`: the docstring of `childReclaimLeafKept` says ccd's
+  `_ws_tmproot_id_ok` refuses a leading `.` or `-`.
+- `comments-say-ccd-scans-the-session-value`: `isRegistryId`'s docstring (where path-identity W1a moved the
+  `isTmpRootId` docstring's sentence), and the comment above `collect-l0.test.ts`'s dash-leading rows, now say that
+  only a ccd older than path-identity W1b read its decision flags from any position. Two comments in
+  `registry-id-l0.test.ts` still say it: a stated residual above.
+- `collector-learning-audit-relies-on-the-population-gate`: `learnCollect` asks `isTmpRootId` before it composes an
+  audit. If the id is refused, it answers `id-refused`, which the watcher ignores.
+- `session-shape-prose-predates-the-id-gate`: the store's docstring above the reclaim run-event reader says what the
+  server's id gate has checked since path-identity W1a.
+- `leaf-end-acts-spelled-twice`: the two end acts are spelled once, in `CHILD_RECLAIM_LEAF_END_ACTS`.
+- `cad-header-calls-the-tail-drop-a-plain-unlink`: `_ws_collect_witness_cad`'s header no longer calls the tail's drop a
+  plain unlink. It says the tail's drop calls it where a NOREPLACE move exists, and names the settle that finds an
+  aside it leaves.
+- `learning-audit-gate-prose-in-two-test-comments`: the header of `collect-id-pins.test.ts` and the
+  `collector-population` docstring of `id-argv-census.test.ts` no longer say that `learnCollect` asks no id predicate
+  of its own, and that census registers `learnCollect`'s gate as a row of its own.
+- `review-335-f9-needle-outgrows-the-cap-under-this-tmpdir`: folded into item 36.
+
 ## 4. Worktree path identity
 
 This section is about which tree `git worktree remove --force` may delete. Today the other sessions' rows are placed against the child by string comparison. The design adds identity captured at entry, dev:ino ancestry, one mountinfo read, a refusal-only cwd probe and identity re-checks in the tail window, and every one of them may only add a hold.
@@ -1282,15 +1540,15 @@ This table has one row for every carried item (37 from the pre-flight and three 
 | 8 | owned-main-checkout-ambient-realpath | correctness | W3 | Proposed | `-ef` as a second refusal in the owned arm; record reader gains refusals only (PI10) |
 | 9 | rows-rung-git-reads-unbounded (constraint) | correctness | W3 | Proposed | one batched call with a deadline, maps per call, budget pin (PI8) |
 | 10 | corrupt-admin-entry-box-wide-reach-via-rung9 | correctness | W0 | Proposed | state the reach in the contract; it stays a hold (PI9) |
-| 11 | tail-drop-believes-an-absent-leaf | correctness | W2 | Proposed | ask the recorded device before each drop (TR3) |
-| 12 | tail-drop-ignores-a-recordless-slot | correctness | W2 | Proposed | slot check inside the drop helper (TR4) |
+| 11 | tail-drop-believes-an-absent-leaf | correctness | W2 | Built (W2) | ask the recorded device before each drop (TR3) |
+| 12 | tail-drop-ignores-a-recordless-slot | correctness | W2 | Built (W2) | slot check inside the drop helper (TR4) |
 | 13 | device-test-cannot-see-a-same-device-bind-mount | correctness | W4 or standing | Proposed | standing; root sentinel only if W4 runs (TR10) |
-| 14 | kept-leaf-end-filter-needs-a-removal-meas-key | correctness | W2 | Proposed | `meas.leaf`, end on removed; keyless rows end (TR1, TR2) |
+| 14 | kept-leaf-end-filter-needs-a-removal-meas-key | correctness | W2 | Built (W2) | `meas.leaf`, end on removed; keyless rows end (TR1, TR2) |
 | 15 | rec-eq-f-recycled-admin (alias-refusal-ends-at-the-putback) | safety | standing, W4 | Proposed | stated residual; measure birth order in W4 (TR9) |
-| 16 | nul-back-link-corner (+C10 pins) | safety | W2 | Proposed | refuse a back-link holding a NUL, pins on both sides (TR8) |
-| 17 | c5-compare-and-drop-aside-orphan | safety | W2 | Proposed | admit one valid aside into population and ccd admission, then restore it under the reap lock (TR6) |
-| 18 | floor-knob-zero-strip-is-quadratic | correctness | W2 | Proposed | linear regex capture (TR7) |
-| 19 | same-fs-bind-at-or-inside-leaf (removal helper) | safety | W2 | Proposed | mount question in `_ws_leaf_remove` before normalise and before rm, and before every standing nested-checkout and child forced removal (TR5) |
+| 16 | nul-back-link-corner (+C10 pins) | safety | W2 | Built (W2) | refuse a back-link holding a NUL, pins on both sides (TR8) |
+| 17 | c5-compare-and-drop-aside-orphan | safety | W2 | Built (W2) | admit one valid aside into population and ccd admission, then restore it under the reap lock (TR6) |
+| 18 | floor-knob-zero-strip-is-quadratic | correctness | W2 | Built (W2) | linear regex capture (TR7) |
+| 19 | same-fs-bind-at-or-inside-leaf (removal helper) | safety | W2 | Built (W2) | mount question in `_ws_leaf_remove` before normalise and before rm, and before every standing nested-checkout and child forced removal (TR5) |
 | 20 | in-use-probe-misses-another-mount | safety | W3, W4 | Proposed | worktree half by string OR dev:ino (PI4); temp-root half in W4 (TR11) |
 | 21 | ccd-cured-standing-residuals | correctness | standing, W4 | Proposed | standing; root sentinel cures renumbering only (TR10) |
 | 22 | registry-id-shape-gate (SECURITY) | security | W1a | Proposed | `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, and classification or migration of all 12 compatibility callers (SEC2) |
@@ -1303,15 +1561,15 @@ This table has one row for every carried item (37 from the pre-flight and three 
 | 29 | witness-only-header-omits-the-pause-rung | prose | W1b, else W2 | Built (W1b) | line-neutral comment fix, rides the first ccd restamp |
 | 30 | collector-budget-header-sums-a-grace-per-probe (F22) | prose | W1b, else W2 | Built (W1b) | one grace, 73 s or 78 s; drop the stale wave-9 clause |
 | 31 | collect-v1-ships-it-inert | prose | W1b, else W2 | Built (W1b) | say the lane is armed by the switch (marker or Settings) |
-| 32 | stale-wave9-carry-comments-in-tests | prose | W2 | Proposed | re-point race-spawn; race-crash closed with TR4 |
-| 33 | c1-resume-boundary-spawn-pins | test-only | W2 | Proposed | a representative 6 in a Linux-only file (TR12) |
-| 34 | c13-reach-to-another-admin-entry | test-only | W2 | Proposed | add the sibling-entry case |
-| 35 | maker-under-bsd-order-unpinned | test-only | W2 | Proposed | run the maker under the bsdOrderEnv shim |
-| 36 | collect-why-cases-red-past-the-cut | test-only | W2 | Proposed | assert before the 300-byte cut |
+| 32 | stale-wave9-carry-comments-in-tests | prose | W2 | Built (W2) | re-point race-spawn; race-crash closed with TR4 |
+| 33 | c1-resume-boundary-spawn-pins | test-only | W2 | Built (W2) | a representative 6 in a Linux-only file (TR12) |
+| 34 | c13-reach-to-another-admin-entry | test-only | W2 | Built (W2) | add the sibling-entry case |
+| 35 | maker-under-bsd-order-unpinned | test-only | W2 | Built (W2) | run the maker under the bsdOrderEnv shim |
+| 36 | collect-why-cases-red-past-the-cut | test-only | W2 | Built (W2) | assert before the 300-byte cut |
 | 37 | macos-purge-refused-red | correctness | Later | Deferred | stated residual; reopen if the macOS red recurs |
-| 38 | r1-lane-case-title-overclaims-order | prose | W2, or SW | Proposed | retitle "ahead of the forgotten-id return" |
+| 38 | r1-lane-case-title-overclaims-order | prose | W2, or SW | Built (child-reclamation wave 10) | retitle "ahead of the forgotten-id return" |
 | 39 | task5-corrections-line-counts-three-indents | prose | W0 | Proposed | "the watcher's two indented at fix round 2" |
-| 40 | probes-at-arrival-says-latest-change | prose | SW, else W2 | Proposed | "rebuilt", at all four measured sites |
+| 40 | probes-at-arrival-says-latest-change | prose | SW, else W2 | Built (child-reclamation wave 10) | "rebuilt", at all four measured sites |
 | 41 | collector-lane-settings-switch | safety | SW | Ruled in principle | wanted (2026-10-12); detailed shape awaits SW1 to SW7 |
 
 Notes on placement (judgement unless marked):
