@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b0e7386d1214e3f22d4138da0a8955a26dcb280cbc35edd43d2a8e528b2cbded
+# ccrc:generated 1 sha256=e33842c86eba2ce44447848332289188420af066bb478c1dde143410ba19ecd1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -282,8 +282,8 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # false on macOS — the total EQUALLED the row sum and overstated the
 # reclaim. `-type l` rides along because `du -sb` counts a symlink's own
 # st_size too (directories need nothing: GNU du charges a directory 0 in
-# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
-# identity to dedup on (device:inode) and the size in one exec batch.
+# byte totals — measured, coreutils 9.4). `find -ls` hands awk inode ($1) and size ($7) from find's own lstat;
+# `-exec stat` cost ~6 ms a file on macOS, minutes per worktree. Dedup by inode: one workspace, one filesystem.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a
@@ -330,8 +330,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   local p errf err out rc
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
-  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
+  out=$(find "$@" \( -type f -o -type l \) -ls 2>"$errf" \
+        | awk '{ if (!seen[$1]++) s+=$7 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
@@ -6415,10 +6415,15 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # exactly as the other three slugs do, no more contrived. Unlinking a lock file while
 # another process holds it is exactly how two processes come to hold "the
 # lock" on two different inodes — reopening the double compare-and-set this
-# branch's lock migration closed.
+# branch's lock migration closed. A sixth, D-5884 (#128): project `.ignored`
+# + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
+# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
+# its one retry. Unlinking that one costs nothing a lock protects: it only
+# lowers contention and is never a gate, so two retries holding two inodes is
+# two retries running at once, each with every refusal intact.
 #
-# NOT reachable this way, and this set IS the boundary — TWELVE dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these seven are
+# NOT reachable this way, and this set IS the boundary — THIRTEEN dot-prefixed
+# artifacts live under `$REG`; the six above are reachable, these seven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
@@ -11522,6 +11527,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
 }
 
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+REAP_IGNLOCK_WAIT=5       # D-5884: the most a retry waits on `.ignored-scan.lock` before it retries unlocked
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
   # THE §0 GUARD, ONE DIRECTORY DOWN. `--ignored=matching` collapses a wholly
@@ -11580,6 +11586,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   _WS_INSIDE_HITS=()
   left=$(( deadline - SECONDS ))
   (( left > 0 )) || {
+    REAP_IGNTIMEOUT=1   # D-5884: a scan that ran out of time, not a tree that could not be read
     REAP_IGNREASON="the scan of the ignored directories did not finish within ${REAP_SCAN_SECONDS}s (stopped at $ent): remove or move the largest ignored directory and reap again"
     return 1
   }
@@ -11598,6 +11605,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then
     rm -f "$outf"
+    REAP_IGNTIMEOUT=1   # D-5884
     REAP_IGNREASON="the scan of the ignored directories did not finish within ${REAP_SCAN_SECONDS}s (stopped at $ent): remove or move the largest ignored directory and reap again"
     return 1
   fi
@@ -11748,7 +11756,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   #     workspace — as an "ignored entry".
   local wd="$1" entry p b sens deadline outf errf err rc ih drc
   REAP_IGNORED=(); REAP_SENSITIVE=(); REAP_IGNDIGEST=""; REAP_IGNREASON=""
-  REAP_SENSITIVE_FILTERED=0
+  REAP_SENSITIVE_FILTERED=0; REAP_IGNTIMEOUT=0   # D-5884: set only by `_ws_sensitive_inside`'s two expiry arms
   # `REAP_IGNSCANNED` is the PROOF THIS RAN, cleared here and set on the single
   # success path at the end — final-round tests review F3. Every other variable
   # this function fills has a value that is indistinguishable from a real
@@ -11766,8 +11774,11 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   git -C "$wd" -c core.quotePath=false status --porcelain --ignored=matching -z \
     >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-  (( rc == 0 )) || { rm -f "$outf"; return 1; }
-  [[ -z "$err" ]] || { rm -f "$outf"; return 1; }
+  # D-5885: the read's exit status and the first line of what it said, so a
+  # refusal names what went wrong and not only where. Detail only — the
+  # verdict and the refusal are what they were.
+  (( rc == 0 )) || { rm -f "$outf"; REAP_IGNREASON="git status --ignored exited $rc${err:+: ${err%%$'\n'*}}"; return 1; }
+  [[ -z "$err" ]] || { rm -f "$outf"; REAP_IGNREASON="git status --ignored warned: ${err%%$'\n'*}"; return 1; }
   while IFS= read -r -d '' entry; do
     case "$entry" in '!! '*) ;; *) continue ;; esac
     p="${entry#!! }"
@@ -11861,6 +11872,35 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # returns 1 with the flag still 0, which is what makes "these figures are a
   # measurement" a fact this function states rather than one the caller infers.
   REAP_IGNSCANNED=1
+}
+
+_ws_collect_ignored_settled() {   # workdir — `_ws_collect_ignored`, asked ONCE more under a lock when it fails (D-5884, #128)
+  # The ignored-set read is the most expensive step of an audit, and under
+  # concurrent audits the BIGGEST worktrees — the ones worth reclaiming — lost
+  # it: ten audits at once answered `tree-unreadable` for two healthy, merged
+  # workspaces that answered `reapable` one at a time minutes later. So a read
+  # that fails is asked once more, serialised on `$REG/.ignored-scan.lock`.
+  # The lock only lowers contention; it is NEVER a gate. No `flock`, a lock
+  # file that will not open, or a wait that runs out each still retry,
+  # unlocked — and the retry is the same `_ws_collect_ignored`, with every one
+  # of its refusals intact, so a second attempt can turn a failure into a pass
+  # only by actually reading the whole set. Nothing here widens what is deleted.
+  # The wait is short (REAP_IGNLOCK_WAIT, not the scan budget): the audit and
+  # reap runner budgets were sized for one scan, and a holder the lock outlives
+  # — a `timeout find` child of a killed ccd inherits the fd — is bounded by
+  # its own REAP_SCAN_SECONDS anyway.
+  _WS_IGNTIMEOUT_FIRST=0
+  _ws_collect_ignored "$1" && return 0
+  _WS_IGNTIMEOUT_FIRST=$REAP_IGNTIMEOUT   # D-5884: whether the FIRST attempt ran out of time — the retry resets the flag
+  local lfd="" rc
+  if command -v flock >/dev/null 2>&1 && { exec {lfd}>>"$REG/.ignored-scan.lock"; } 2>/dev/null; then
+    flock -w "$REAP_IGNLOCK_WAIT" "$lfd" 2>/dev/null || true
+  else
+    lfd=""
+  fi
+  _ws_collect_ignored "$1"; rc=$?
+  [[ -z "$lfd" ]] || { exec {lfd}>&-; } 2>/dev/null
+  return "$rc"
 }
 
 _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
@@ -12271,8 +12311,20 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     REAP_DIRTY=$(printf '%s' "$dirt" | grep -c . || true)
     (( REAP_DIRTY == 0 )) \
       || { _reap_refuse dirty-tree "$REAP_DIRTY uncommitted or untracked file(s)"; return 1; }
-    _ws_collect_ignored "$workdir" \
-      || { _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
+    # D-5884: retried once, and a scan that ran out of time BOTH times says so
+    # — `scan-timeout` in the detail — instead of borrowing the wording of a
+    # tree that could not be read. Same verdict, same refusal: a slow tree is
+    # still not one ccd has described.
+    _ws_collect_ignored_settled "$workdir" || {
+      if (( REAP_IGNTIMEOUT && _WS_IGNTIMEOUT_FIRST )); then
+        _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir was scanned twice and ran out of time both times — $REAP_IGNREASON"
+      elif (( REAP_IGNTIMEOUT )); then
+        _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir ran out of time on the retry — $REAP_IGNREASON"
+      else
+        _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"
+      fi
+      return 1
+    }
     (( ${#REAP_SENSITIVE[@]} == 0 )) \
       || { _reap_refuse sensitive-ignored "${REAP_SENSITIVE[*]}"; return 1; }
     # LAST rung of Phase B, deliberately, and after `sensitive-ignored` for the
