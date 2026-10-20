@@ -21,7 +21,7 @@ const seed = (): void => {
   fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
 };
 /** Compact JSONL, the shape Claude Code writes. `banner` is the real row from
- *  expoAI-assistant-swift-meadow at 2026-09-10T10:12:21Z, field for field. */
+ *  project-h-swift-meadow at 2026-09-10T10:12:21Z, field for field. */
 const L = {
   banner: (over: Record<string, unknown> = {}) => JSON.stringify({
     parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: 'b1', timestamp: '2026-09-10T10:12:21.199Z',
@@ -268,7 +268,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   /** tmux answers ONE pane for every capture (plain and `-e` alike), `_pane_box_draft`
    *  answers `$BOX_DRAFT`, and the swap decision is stubbed so the test is about the
    *  verdict, never the fixture roster's telemetry. */
-  const STUBS = (pane: string, target = 'claude2'): string => `
+  const STUBS = (pane: string, target = 'claude9'): string => `
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
       capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;;
       display-message) echo "\${TMUX_CREATED:-1}" ;; esac; return 0; };
@@ -287,8 +287,8 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   it('a banner newest in the transcript rescues a session whose pane shows only a prompt; the line says via=transcript', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=transcript/);
   });
   it('a BLANK pane no longer blinds the rescue: the transcript decides', () => {
     seed(); writeTranscript([L.banner()]);
@@ -315,7 +315,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.banner()]);
     h.sh(`_reg_set ${ID} stalepress $(( $(date +%s) - STALE_RESUME_GRACE - 1 ))`);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
   });
   it('control: the pane arm is unaffected by a fresh stalepress — the grace only stands down the transcript arm', () => {
     seed(); writeTranscript([L.assistant()]);
@@ -332,7 +332,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.assistant()]);
     h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'typing' });
     expect(dispatches()).toHaveLength(1);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\]$/m);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\]$/m);
   });
   it('no destination: a transcript banner marks the row stranded, like a pane banner does', () => {
     seed(); writeTranscript([L.banner()]);
@@ -361,8 +361,8 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   it('auth loss newest in the transcript rescues a prompt pane, via=transcript (D-3522)', () => {
     seed(); writeTranscript([L.human(), AUTH()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=transcript/);
   });
   it("the old account's 401, carried into a pane created after it, rescues nothing (D-3522)", () => {
     seed(); writeTranscript([L.human(), AUTH()]);
@@ -373,7 +373,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   it('a rescue off a 401 marks the account auth-dead, so nothing sends a session back to it (D-3522)', () => {
     seed(); writeTranscript([L.human(), AUTH()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(authdead()).toMatch(/^\d+ rescue-401$/);
     expect(h.sh('_authdead claude && echo dead || echo live')).toBe('dead');
   });
@@ -392,7 +392,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     fs.mkdirSync(path.join(h.home, '.cc-secrets'), { recursive: true });
     fs.writeFileSync(path.join(h.home, '.cc-secrets', 'claude-oauth.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(authdead()).toBeNull();
   });
   it('CONTROL: a credential older than the pane is marked (D-3524)', () => {
@@ -402,7 +402,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     const now = Math.floor(Date.now() / 1000);
     writeTranscript([L.human(), JSON.stringify({ ...JSON.parse(AUTH()), timestamp: new Date((now + 60) * 1000).toISOString() })]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`, { TMUX_CREATED: String(now + 30) });
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(authdead()).toMatch(/^\d+ rescue-401$/);
   });
   it('a lane with no secretsFile still marks when its `.credentials.json` changed after the pane was born — that file is not its credential (D-3524 round 1)', () => {
@@ -416,7 +416,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     fs.mkdirSync(path.join(h.home, '.claude-b'), { recursive: true });
     fs.writeFileSync(path.join(h.home, '.claude-b', '.credentials.json'), '{}\n');   // ctime now; the pane was born at 1
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     const f = path.join(h.home, '.cc-sessions', 'claude-b-authdead');
     expect(fs.existsSync(f), 'the rescue marked the login lane').toBe(true);
     expect(fs.readFileSync(f, 'utf8')).toMatch(/^\d+ rescue-401$/);
@@ -604,7 +604,7 @@ describe('_pane_limit_banner: the wordings this fleet actually renders (D-3100)'
 describe('the banner rung rescues, and the log names WHICH detector fired (D-3100, D-3101)', () => {
   const PROMPT = '? for shortcuts\n❯ ';
   const NEW_BANNER = "You've hit your session limit · resets 9:10pm (UTC)\n❯ ";
-  const STUBS = (pane: string, target = 'claude2'): string => `
+  const STUBS = (pane: string, target = 'claude9'): string => `
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
       capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
@@ -622,8 +622,8 @@ describe('the banner rung rescues, and the log names WHICH detector fired (D-310
     // fires at all — which is the defect, and this case is its measurement.
     seed(); writeTranscript([L.assistant()]);
     h.sh(`${STUBS(NEW_BANNER)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=banner/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=banner/);
   });
 
   it('the rescue does not wait out the transcript cache — the pane decides this tick', () => {
@@ -634,7 +634,7 @@ describe('the banner rung rescues, and the log names WHICH detector fired (D-310
     seed(); writeTranscript([L.assistant()]);
     h.sh(`_reg_set ${ID} tscan "$(date +%s) 0"`);
     h.sh(`${STUBS(NEW_BANNER)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
   });
 
   it('a banner pane with no destination strands the row, like every other hard block', () => {
@@ -754,14 +754,14 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
   const BORN = BANNER_AT + 60;
   /** D-2363's stubs, except that `display-message` answers only when
    *  `TMUX_CREATED` is set — unset is "tmux cannot say", the D-3100 stubs' shape. */
-  const STUBS = (pane: string, target = 'claude2'): string => `
+  const STUBS = (pane: string, target = 'claude9'): string => `
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
       capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;;
       display-message) [ -n "\${TMUX_CREATED:-}" ] && echo "$TMUX_CREATED" ;; esac; return 0; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
     _swap_target() { echo ${target}; }; _avail() { return 0; };
     _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
-  const tick = (pane: string, born: number | null = BORN, target = 'claude2'): void => {
+  const tick = (pane: string, born: number | null = BORN, target = 'claude9'): void => {
     h.sh(`${STUBS(pane, target)} _auto_swap_check ${ID}`, born === null ? {} : { TMUX_CREATED: String(born) });
   };
   const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
@@ -819,21 +819,21 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
   });
   it('control: a pane born BEFORE the banner is rescued via=transcript, with no carried-in line', () => {
     carried(); tick(PROMPT, BANNER_AT - 60);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=transcript/);
     expect(notes()).toEqual([]);
   });
   it('never came up: this process settled rc 4, so the carried banner still moves it — the ruling', () => {
     carried(); settled(BORN + 900, 4);
     tick(PROMPT);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=transcript/);
     expect(notes()).toEqual([]);
   });
   it('never came up counts the settle AT the birth second too', () => {
     carried(); settled(BORN, 4);
     tick(PROMPT);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
   });
   it('control: an rc 4 from an EARLIER process (a .spawn older than born) is not "never came up"', () => {
     carried(); settled(BORN - 10, 4);
@@ -868,24 +868,24 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
   it('never came up keeps a pane positive too', () => {
     carried(); settled(BORN + 900, 4);
     tick(NEW_BANNER);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(swapLog()).toMatch(/via=banner/);
   });
   it('control: a real row after the carried banner means this process wrote something — the pane banner rescues', () => {
     seed(); writeTranscript([L.banner(), L.assistant()]);
     tick(NEW_BANNER);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=banner/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=banner/);
     expect(notes()).toEqual([]);
   });
   it('control: born unknown keeps every pane positive', () => {
     carried(); tick(NEW_BANNER, null);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(notes()).toEqual([]);
   });
   it('control: an auth failure on the pane is not dated against a rate-limit row', () => {
     carried(); tick(AUTH_PANE);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(notes()).toEqual([]);
     expect(authdead()).toBeNull();
   });
@@ -897,7 +897,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     // This process has now written its own limit row: the pane banner is real.
     writeTranscript([L.human(), L.banner(), L.banner({ timestamp: iso(BANNER_AT + 120) })]);
     tick(NEW_BANNER);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
   });
   it('the strand half: a carried banner writes no .stranded', () => {
@@ -969,13 +969,13 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
       // (3) the same process, and now a target frees: it is moved.
       h.sh(`_reg_set ${ID} tscan ""`);
       tick(pane, REVIVED);
-      expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+      expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     });
   it('a missing lastswap (a refused carry deletes it) is no swap: the row stays a block', () => {
     seed(); writeTranscript([L.human(), L.banner()]);
     settled(BANNER_AT + 7 * 3600 + 30, 0);
     tick(PROMPT, BANNER_AT + 7 * 3600);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     expect(notes()).toEqual([]);
   });
   it('control: the same restart with a swap after the row is carried in', () => {
@@ -989,7 +989,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     seed(); writeTranscript([L.human(), L.banner()]);
     h.sh(`_reg_set ${ID} lastswap ${BANNER_AT}`);
     tick(PROMPT);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
     // Control: one second later is.
     h.sh(`_reg_set ${ID} lastswap ${BANNER_AT + 1}; _reg_set ${ID} tscan ""`);
     expect(verdict(PROMPT)).toBe('1:');

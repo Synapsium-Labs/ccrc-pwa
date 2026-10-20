@@ -2,8 +2,8 @@
 
 > **For the `claude-ccrc-pwa` session.** You are a Claude Code session running
 > at `/srv/projects/ccrc-pwa` (main checkout) on the fleet
-> host **openclaw** (198.51.100.7) — the box that runs `ccrc-agent.service`,
-> `claude-docserver.service`, and all `claude-session@*` units including you.
+> host **<fleet-host>** (198.51.100.7) — the box that runs `ccrc-agent.service`,
+> `docs-preview.service`, and all `claude-session@*` units including you.
 > The ccrc **server** (`ccrc.service`, port 7788) and the served PWA live on
 > **<server-host>** (203.0.113.7). Execute the phases IN ORDER; each has a
 > "prove it" step whose expected output is stated. Where a step says
@@ -26,8 +26,8 @@ happens AFTER this runbook, in this repo, via superpowers writing-plans.
 - Never print secret file contents; existence checks by `ls` only.
 - Both repos are live checkouts; other sessions run on this box. Work on
   branches where the runbook says so; never `git clean` outside your tree.
-- The monorepo is at `/srv/projects/OpenClawHetzner`
-  (= `/data/projects/OpenClawHetzner`; same directory — `/data` is a
+- The monorepo is at `/srv/projects/project-c`
+  (= `/data/projects/project-c`; same directory — `/data` is a
   symlink. ALWAYS use the `/mnt/...` spelling in anything you write).
 
 ## Phase A — repo hygiene (direct commits to main, protection comes last)
@@ -107,7 +107,7 @@ for now; protection is not yet on)
    - server `/health` on <server-host>:7788 ok; served PWA bundle is the one
      built in step 6 (compare a content hash, not a timestamp);
    - a PR-state read through the PWA returns real state (known truth at
-     writing: `data-internal-clear-mesa` → merged #157; re-verify against
+     writing: `project-e-clear-mesa` → merged #157; re-verify against
      the live registry, don't assume);
    - `systemctl --user list-units 'claude-session@*' --no-legend | wc -l`
      equals the count taken BEFORE the deploy (17 as of 2026-08-04, you
@@ -128,7 +128,7 @@ for now; protection is not yet on)
     must fail the check; then delete the scratch. A guard never seen red is
     the green-signal failure class this project keeps paying for.
 12. Docserver: add `{"label":"ccrc-pwa","root":"/srv/projects/ccrc-pwa"}`
-    to `~/.claude-docserver/config.json` (hot-reloads on mtime). Prove it by
+    to `~/.docs-preview/config.json` (hot-reloads on mtime). Prove it by
     fetching `https://<server-host>.<tailnet>.ts.net/docs/ccrc-pwa/specs/2026-08-04-worktree-ownership-design.md`
     and grepping the response for "Worktree ownership" — NEVER by status
     code (the SPA answers 200 for everything). If the tailnet name does not
@@ -175,7 +175,7 @@ for now; protection is not yet on)
   monorepo clear-out.
 - `ws/soft-prairie` workspace: retire via PWA archive → clean-up once its
   port PR merges.
-- `custom-tools-warm-meadow`: registry says `ws/warm-meadow`, git says the
+- `project-d-warm-meadow`: registry says `ws/warm-meadow`, git says the
   worktree is on `main` — needs hand-untangling before any lifecycle verb
   will touch it.
 - The 26 GB foreign-tree triage and main-session retirement: separate

@@ -55,6 +55,14 @@ function stamped(m: FleetNodeMeasured, connectionEpoch: number): CurrentFleetIde
 export class FleetIdentityCell {
   private epoch = 0;
   private latest: CurrentFleetIdentity = stamped({ kind: 'unmeasured', why: 'no-ready' }, 0);
+  private readonly knownListeners: (() => void)[] = [];
+
+  /** Called, synchronously and after the answer is readable, each time a publish makes the node `known` (D-6057
+   *  (6): the roster-divergence reconcile waits for the identity the ready frame invalidated). A listener that
+   *  throws is skipped; it never stops the publish or the next listener. */
+  onKnown(listener: () => void): void {
+    this.knownListeners.push(listener);
+  }
 
   /** Synchronous. The epoch rises by one, and the answer becomes `unmeasured` with `why` under the new epoch,
    *  whatever it was before. Returns the new epoch. */
@@ -81,6 +89,7 @@ export class FleetIdentityCell {
   publish(captured: number, measured: FleetNodeMeasured): FleetIdentityPublish {
     if (captured !== this.epoch) return { kind: 'stale-epoch', captured, current: this.epoch };
     this.latest = stamped(measured, this.epoch);
+    if (measured.kind === 'known') for (const l of this.knownListeners) { try { l(); } catch { /* the publish stands */ } }
     return { kind: 'published' };
   }
 }

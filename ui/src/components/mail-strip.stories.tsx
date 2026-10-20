@@ -95,6 +95,36 @@ export const Held: Story = {
   },
 };
 
+/** D-5912: the mail lane stashes a human's draft around its nudge, so a draft
+ *  never holds mail; what can hold it is the stash refusing. CHECK both phrases
+ *  read as something to look at, not to wait out, and that the longer one wraps
+ *  inside its row at 360. */
+export const StashRefused: Story = {
+  args: {
+    mail: [
+      mail({
+        id: 1,
+        state: 'queued',
+        lastError: 'stash-failed',
+        lastGate: 'stash-failed',
+        gateSince: NOW - MAIL_GATE_HELD_MS - 60_000,
+        gateCount: MAIL_GATE_HELD_COUNT,
+        gateAt: NOW - 5_000,
+      }),
+      mail({
+        id: 2,
+        state: 'queued',
+        subject: 'wave 4 brief',
+        lastError: 'stash-occupied',
+        lastGate: 'stash-occupied',
+        gateSince: NOW - MAIL_GATE_HELD_MS - 120_000,
+        gateCount: MAIL_GATE_HELD_COUNT,
+        gateAt: NOW - 5_000,
+      }),
+    ],
+  },
+};
+
 /** A gate this client has never heard of — an older console against a newer
  *  server, which is an ordinary state on this fleet. CHECK that the RAW token
  *  renders rather than a blank: the wire is additive and absence-permits, and a

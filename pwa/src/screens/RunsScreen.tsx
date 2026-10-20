@@ -124,7 +124,7 @@ export function RunsScreen({
   const { cold, state: coldState, reload: loadCold } = useColdRuns(store, loadRuns);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
-  // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
+  // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
   // run's workspace's child mark, read off the fleet row this board already looks up.
   const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
     ? undefined : sessionById.get(abandonTarget.sessionId);

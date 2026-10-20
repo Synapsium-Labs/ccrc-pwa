@@ -28,7 +28,7 @@ At 04:35 two session processes reached 9.2G and 7.3G — inside their per-scope 
 which worked — and their sum plus the other sixteen panes hit the 26G `user@1000` cap
 with no intermediate ceiling to absorb it. Panes carry `oom_score_adj=-900`, so the
 kernel could not touch the offenders and killed the supervision layer instead, in
-ascending protection order: `ccrc-agent` (200), `claude-docserver` (200), then systemd
+ascending protection order: `ccrc-agent` (200), `docs-preview` (200), then systemd
 PID 1179, the user manager itself (100). That killed the tmux server, and the trap
 closed:
 

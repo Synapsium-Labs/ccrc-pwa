@@ -3,6 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { LifecycleGap, LifecycleQueryResult, MirroredLifecycleEvent } from '../../shared/api';
 import { HistoryTab } from '../src/session/HistoryTab';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { createSessionStore } from '../src/stores/session';
 import { api } from '../src/lib/api';
 
@@ -106,7 +109,7 @@ describe('SessionScreen opens the history from the header overflow', () => {
     act(() => {
       store.getState().apply({ type: 'backlog', uuid: 'u1', events: [], offset: 0, file: '/t.jsonl', missing: false });
     });
-    render(<SessionScreen id="claude:demo" store={store} />);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id="claude:demo" store={store} /></>);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByText('History'));
     await waitFor(() => expect(spy).toHaveBeenCalledWith('claude:demo'));

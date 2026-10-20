@@ -13,7 +13,7 @@ confirming both consequences in §11. Wave 1 is planned
 
 **Date:** 2026-09-24 · **Branch:** `ws/workspace-lifecycle-design` (from `origin/main` `28271ace`)
 **Parents:**
-- `2026-09-22-child-workspace-reclamation-design.md` (CCR-15). Stages 3 and 4 run on its wave-3 executor
+- `2026-09-22-child-workspace-reclamation-design.md` (#166). Stages 3 and 4 run on its wave-3 executor
   machinery and its wave-4 sweep lane, and amend six of its texts (§6).
 - `2026-09-16-board-placement-and-repo-label-design.md`. Its "Lifetime: while the workspace is held" stays in force.
 - `2026-09-23-session-continuity-design.md`. Its wave 9 makes every verb that ends a pane stop the pane's whole
@@ -27,7 +27,7 @@ The fleet board on 2026-09-24, 08:56–13:26 UTC, read from `ccd ls`, the runs l
 - **Half the board is released workers.** 29 of 56 registry rows are workspaces whose newest run is terminal, that
   no open run names and that carry no hold. They were released by three live coordinators, which released 12, 10
   and 7 of them. 11 still have a live pane. The median time since release was half a day and the oldest was
-  6.9 days. 15 of the 29 carry CCR-15's `.child` marker; 14 were minted before CCR-15 wave 1 deployed and carry
+  6.9 days. 15 of the 29 carry #166's `.child` marker; 14 were minted before #166 wave 1 deployed and carry
   none.
 - **Why they are loose.** `nestFleet` draws the coordinator→worker bracket from the `runs` frame, which is
   active-only by construction (`nestFleet.ts`'s header; `watch.ts`'s `emitRuns`). Board placement keys on the hold.
@@ -54,7 +54,7 @@ The fleet board on 2026-09-24, 08:56–13:26 UTC, read from `ccd ls`, the runs l
 | L3 | **An archived workspace is cleaned up 7 days after its archive.** The cleanup keeps git state and transcripts (§5.3). Main checkouts are exempt. |
 | L4 | **A coordinator that CRASHED and stays dead for 1 hour, with no successor,** has its open runs closed `failed`, and its workers are then cleaned up. Only a crash counts. A coordinator the operator archived or stopped is never "dead" here. |
 | L5 | **Archiving a coordinator that still has open runs asks** "It has N open runs. End its programme too? Its workers will be cleaned up." Ending a programme is always the operator's explicit act. |
-| L6 | **CCR-15 wave 4 dispatches the moment wave 3 merges.** This spec does not re-plan it. Stages 3 and 4 build on it after it lands. |
+| L6 | **#166 wave 4 dispatches the moment wave 3 merges.** This spec does not re-plan it. Stages 3 and 4 build on it after it lands. |
 
 "Lossless" in L3 keeps everything git knows: commits, dirty work committed first, stashes and operation heads, all
 pinned in ccd's attic. It keeps the transcripts. It deletes git-ignored files, secret-shaped files and clips,
@@ -64,7 +64,7 @@ recording their paths and sizes. This was stated to the operator and not objecte
 
 The 2026-09-10 ruling removed `sweepMerged`'s automatic `ws-archive` after 5 of 13 archive markers in 48 hours
 landed on sessions a human revived by hand. Its argument is that an instantaneous `idle` cannot tell "finished"
-from "a human is reading it", and this spec does not dispute it. CCR-15 §3 answered it for children by changing
+from "a human is reading it", and this spec does not dispute it. #166 §3 answered it for children by changing
 the population. L3 changes the population too, by a different declaration:
 
 1. **Someone already archived it.** An archived workspace is one a person archived (stage 2's door), or one a
@@ -76,7 +76,7 @@ the population. L3 changes the population too, by a different declaration:
    swap. Every spawn path clears `.archived` (`_spawn_start`), and the expiry token binds the archive's epoch. So a
    workspace brought back, and archived again later, starts a new week and can never be taken on the old one
    (§5.3).
-4. **Nothing git knows is lost.** The pin phase is CCR-15 wave 3's.
+4. **Nothing git knows is lost.** The pin phase is #166 wave 3's.
 
 **What L2 changes about item 1** (§11 item 2): after stage 2, archiving is the only way to put a workspace down. A
 "stop for now" to free memory therefore also starts the 7-day clock.
@@ -92,16 +92,16 @@ number.
 | Wave | Stage | What | Files (not exhaustive; the plan measures) | Deploy class | Depends on |
 |---|---|---|---|---|---|
 | 1 | 1 | The `Released (N)` fold; `FleetSession.releasedFrom` | `shared/api.ts`, a new L1 file, `server/src/coord/store.ts`, `server/src/fleet.ts`, `pwa/src/fleet/groupFleet.ts`, `ProjectCard.tsx`, `FleetScreen.tsx` and their tests | server + pwa | — |
-| 2 | 2 | One "Archive"; the coordinator ask; the Archived fold takes stopped main checkouts; "Restore" | `server/src/server.ts`, `server/src/coord/routes.ts` (the serialiser), `close.ts` (the port), `shared/api.ts` (refusals, the fold predicate), `SessionHeader.tsx`, `SessionScreen.tsx`, `SessionActionsSheet.tsx`, `ArchiveConflictSheet.tsx`, `groupFleet.ts` and their tests | server + pwa | CCR-15 wave 3 merged (its close-path port) |
-| 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive | `ccd/ccd`, the grant files, the lane's file, a new L1 file, CLAUDE.md, README | **AGENT-FIRST** | CCR-15 waves 3–4 merged and deployed; §3's measurement |
-| 4 | 4 | The dead-coordinator lane | `coord/reclaim.ts` (the verdict widened), a new L1 file, the lane, `store.ts` (the anchor table), `close.ts` (`causedBy`) | server | wave 2; CCR-15 waves 3–4 |
+| 2 | 2 | One "Archive"; the coordinator ask; the Archived fold takes stopped main checkouts; "Restore" | `server/src/server.ts`, `server/src/coord/routes.ts` (the serialiser), `close.ts` (the port), `shared/api.ts` (refusals, the fold predicate), `SessionHeader.tsx`, `SessionScreen.tsx`, `SessionActionsSheet.tsx`, `ArchiveConflictSheet.tsx`, `groupFleet.ts` and their tests | server + pwa | #166 wave 3 merged (its close-path port) |
+| 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive | `ccd/ccd`, the grant files, the lane's file, a new L1 file, CLAUDE.md, README | **AGENT-FIRST** | #166 waves 3–4 merged and deployed; §3's measurement |
+| 4 | 4 | The dead-coordinator lane | `coord/reclaim.ts` (the verdict widened), a new L1 file, the lane, `store.ts` (the anchor table), `close.ts` (`causedBy`) | server | wave 2; #166 waves 3–4 |
 
-**Coordination with CCR-15's in-flight waves.** CCR-15's contract cites `shared/api.ts` by line (R9). Wave 1
-inserts into that file while CCR-15 waves 3 and 4 are unmerged, so wave 1 places its insertions below the last
+**Coordination with #166's in-flight waves.** #166's contract cites `shared/api.ts` by line (R9). Wave 1
+inserts into that file while #166 waves 3 and 4 are unmerged, so wave 1 places its insertions below the last
 line those citations name, or re-points them in the same PR. The plan measures which.
 
-Wave 2 edits `close.ts` and `routes.ts`, which CCR-15 wave 3 also edits, and it needs wave 3's `childReclaim`
-port, so it lands after CCR-15 wave 3 merges. Waves 1 and 2 share `groupFleet.ts` and `shared/api.ts`, so they
+Wave 2 edits `close.ts` and `routes.ts`, which #166 wave 3 also edits, and it needs wave 3's `childReclaim`
+port, so it lands after #166 wave 3 merges. Waves 1 and 2 share `groupFleet.ts` and `shared/api.ts`, so they
 land one at a time.
 
 ## 5. The design, in stages
@@ -119,7 +119,7 @@ The wire field is named for what it carries: `released` is already a member of `
     closedAt: number; child: boolean }
   ```
 
-  `child` is true when the registry's CCR-15 child reading (`FleetSession.child`, a `ChildMark`) is `child` or
+  `child` is true when the registry's #166 child reading (`FleetSession.child`, a `ChildMark`) is `child` or
   `unreadable`. The PWA needs no second
   read of the marker to skip children (below), and an unreadable marker reads as a child, the direction that
   defers.
@@ -162,8 +162,8 @@ The wire field is named for what it carries: `released` is already a member of `
     within them run newest `closedAt` first. Each row is a `SessionLine` and opens as today.
 - **"Archive all (N)"**, inside the expanded fold, behind one confirm.
   - It sends a PLAIN archive for each row, one at a time: never `interrupt`, never `programme`, never `force`.
-  - It skips rows whose `releasedFrom.child` is true. Those are CCR-15's, and they leave on their own once CCR-15
-    wave 4 is deployed; CCR-15 §5.9 assumes a child is never archived.
+  - It skips rows whose `releasedFrom.child` is true. Those are #166's, and they leave on their own once #166
+    wave 4 is deployed; #166 §5.9 assumes a child is never archived.
   - Before each row it re-reads that row from the current frame, and skips it if it is no longer folded.
   - A row the server refuses (busy, a coordinator, or anything else) is left in place. One summary toast reports
     how many were archived, skipped and refused, with each refusal's reason.
@@ -247,7 +247,7 @@ undone.
    - An unreadable store refuses with `runs: []`, fail-shut, and the refusal carries the store's own `detail`.
 2. **Then act, in this order.**
    - (a) With `programme:'end'`, each run is abandoned through `closeRun`'s abandon arm (`intent:'abandon'`,
-     `causedBy:'operator'`), on the coordination serialiser, with CCR-15 wave 3's `childReclaim` port wired exactly
+     `causedBy:'operator'`), on the coordination serialiser, with #166 wave 3's `childReclaim` port wired exactly
      as the abandon route wires it. Before the first abandon, every run is asked what that arm would refuse from
      its row alone (for example a run in `closing`, which the abandon arm cannot move); such a run stops the door
      with nothing ended. If an abandon still refuses at the act, or fails, the door stops there. Either way it
@@ -302,13 +302,13 @@ stop included. This spec adds nothing there and states the dependency.
 ### 5.3 Stage 3 — archived workspaces expire after 7 days (`ws-expire`)
 
 **The verb.** `ccd ws-expire --expect <token> --session <id>`, minted by `ws-audit --expire`. It is a SIBLING of
-CCR-15 wave 3's `ws-reclaim`, not a flag on it: wave 3's rung 2 (the `.child` marker) has "no override
+#166 wave 3's `ws-reclaim`, not a flag on it: wave 3's rung 2 (the `.child` marker) has "no override
 anywhere", and its argument that a population-widening flag becomes an override applies unchanged.
 
 It shares wave 3's machinery (the ladder's generic rungs, the pin phase, the tail, the `$REG/.reap-<id>.lock`) and
 has its OWN vocabulary everywhere wave 3's is child-keyed:
 - the breadcrumb flavour `expire:`, whose resume arm re-asserts the archive epoch;
-- the journal act word `expire`, added to ccd's `_LC_ACTS` and to every declaration that must agree with it (CCR-15's contract names three declarations and four cardinals for that vocabulary);
+- the journal act word `expire`, added to ccd's `_LC_ACTS` and to every declaration that must agree with it (#166's contract names three declarations and four cardinals for that vocabulary);
 - the tombstone kind;
 - the mirror refusal sentences;
 - the feed row;
@@ -326,7 +326,7 @@ callers) honour reap's `reaping` breadcrumb, and gives every one of them the sam
 - **Rung 2′**, replacing the child rung.
   - `.archived` is present, and its epoch is at most `now − WS_EXPIRE_AFTER_S` (604 800).
   - The token's input includes that epoch, so any return and re-archive refuses `state-changed`.
-  - A `.child` marker that reads as a child, or cannot be read, refuses `child` (retryable). That follows CCR-15
+  - A `.child` marker that reads as a child, or cannot be read, refuses `child` (retryable). That follows #166
     R29's direction: an unreadable marker defers.
 - **Then wave 3's generic rungs, in wave 3's order.** `paused`; `held`; `attached`; the identity refusal
   `no-worktree-record` (terminal); the vanished-worktree arm; `tree-busy`; `branch-elsewhere`; `tree-unreadable`;
@@ -347,7 +347,7 @@ worktree. It deletes:
 This is not the 2026-09-23 manual procedure, which tarred ignored files and refused dirty trees. The operator
 accepted the difference (§2).
 
-**The lane.** A sibling of CCR-15 wave 4's `sweepChildReclaim` pass, on the same tick, never a population inside it
+**The lane.** A sibling of #166 wave 4's `sweepChildReclaim` pass, on the same tick, never a population inside it
 (wave 3b's sibling pass). It shares the pass's registry read, its cadence (`CHILD_RECLAIM_SWEEP_MS`) and the switch,
 and nothing else. It has:
 - its own L1 verdict, `archivedExpiryVerdict`, in its own file;
@@ -359,7 +359,7 @@ A row is eligible when:
 - it is a workspace with `.archived`, epoch at least 7 days old;
 - its child reading is `none` (a `marked` or `unreadable` child is the child lane's);
 - no non-terminal run names it as `sessionId` or as `claimedBy`. An unreadable store makes it ineligible;
-- it is not the `sessionId` of a review run whose reviewed run is non-terminal. This is CCR-15 R16's rule
+- it is not the `sessionId` of a review run whose reviewed run is non-terminal. This is #166 R16's rule
   applied to unmarked reviewers, because the report lives in that workspace's clips;
 - it has no hold;
 - the switch is down, and all of the above held on the previous pass too.
@@ -369,16 +369,16 @@ Presence defers WITHOUT a ceiling. Rule 4's 15-minute ceiling exists only becaus
 **An archived workspace that is still held after 7 days** is not acted on. It goes on the attention list. A close
 that archives on `archive:true` leaves the hold standing, so these are real, not hypothetical.
 
-**The switch.** CCR-15 defines `reclaim-paused` as stopping child reclamation "and nothing else". It becomes the
+**The switch.** #166 defines `reclaim-paused` as stopping child reclamation "and nothing else". It becomes the
 fleet's single CLEANUP switch, stopping child reclamation, `ws-expire` and the stage-4 lane, with its Runs-banner
 row relabelled. One toggle is what the operator reaches for. The route's exemption argument (a kill-switch with no
-box token) holds unchanged for a wider switch. This amends CCR-15's text (§6).
+box token) holds unchanged for a wider switch. This amends #166's text (§6).
 
 **The contracts that move.**
 - CLAUDE.md's SAFETY list gains `ws-expire` among the verbs no agent runs against the live host. "`ws-reap` is
   human-only by contract" stays literally true. A new sentence says `ws-expire` is the server's, on archived
   workspaces 7 days after their archive.
-- The skill corpora do NOT name `ws-expire`. That is CCR-15 wave 3's ruling for the server-composed `ws-reclaim`,
+- The skill corpora do NOT name `ws-expire`. That is #166 wave 3's ruling for the server-composed `ws-reclaim`,
   and the same argument applies.
 - One skill sentence becomes false and moves. Wave 3 rewrites coordinator clause 3 to end "this session's own
   workspace is cleaned up by a human, never by a sweep". After stage 3, an archived coordinator workspace is
@@ -490,7 +490,7 @@ each item is a departure named there).
     there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
     With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
     `pin-failed`, before the breadcrumb: resumable on a ccd older than wave 6, audited afresh since (below). A branch already absent when the token was minted reads absent twice and expires
-    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of CCR-15
+    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of #166
     left it: its tip was pinned at the fresh pin.
   - **A `failed` `state-changed` is audited afresh.** ccd prints that document only on a fresh expiry, before the
     tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
@@ -499,7 +499,7 @@ each item is a departure named there).
     feed row records it, and nothing is listed. `probe-unmeasured` was read as final (and still is from a ccd that prints no `crumb`), but ccd prints it on a
     resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
     answer), so there it could stop the lane on a part-expired archive until a restart. That was a known gap and an
-    arming blocker for the lane; wave 6 closes it with CCR-15 wave 7's `crumb` field (below). Without `crumb` (an older
+    arming blocker for the lane; wave 6 closes it with #166 wave 7's `crumb` field (below). Without `crumb` (an older
     ccd), `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
     breadcrumb too; the `crumb` field is what tells those apart.
   - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
@@ -520,7 +520,7 @@ each item is a departure named there).
 - **As wave 6 closes the lane** (each a departure named in the wave-6 plan,
   `docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md`).
   - **`ws-expire` says `crumb`, and the lane reads it first.** Every `failed` document `ws-expire` prints carries
-    CCR-15's `crumb`: `false` on a fresh expiry, before its breadcrumb (`probe-unmeasured`, `pin-failed`,
+    #166's `crumb`: `false` on a fresh expiry, before its breadcrumb (`probe-unmeasured`, `pin-failed`,
     `state-changed`, `tombstone-unwritable`), `true` on a resumed one (its `probe-unmeasured`, printed while its
     `expire:` breadcrumb stands) and, as before, in the shared tail; a breadcrumb that stands but cannot be read leaves
     it unsaid, as `ws-reclaim` does. The parser reads the word, then `crumb`: `false` is audited afresh, `true` is
@@ -562,7 +562,7 @@ the type instead of re-splitting by hand. This lane is that consumer: `ClaimantV
 - its verdict is `dead` with cause `orphan`, `never-started` or `absent`; AND
 - the lifecycle journal mirror shows NO deliberate act for that id since its last successful start: `stop`, an
   `unsupervise` with a declared surface, `archive`, `reap`, `destroy`, `purge` or `forget` (ccd's `_LC_ACTS`), or
-  CCR-15's `reclaim` or this spec's `expire`.
+  #166's `reclaim` or this spec's `expire`.
 
 The journal clause matters for two cases.
 - A person stopped the session, a later revive failed, and ccd's spawn paths cleared the stop stamp on the
@@ -603,7 +603,7 @@ An `alive` answer at any point ends the whole act.
 **The act.** For each non-terminal run whose `claimedBy` is the crashed id, the lane runs `closeRun`'s abandon arm:
 - with `causedBy: 'sweep'`, a third attribution word beside `'coordinator' | 'operator'`, so the run event, the
   feed row and the audit never read as the operator's act;
-- with CCR-15 wave 3's `childReclaim` port wired as the abandon route wires it. Wave 3 hands a child to the reclaim
+- with #166 wave 3's `childReclaim` port wired as the abandon route wires it. Wave 3 hands a child to the reclaim
   executor only through that optional port.
 
 A run the abandon arm cannot move is listed in the attention item with the crashed id and is not retried beyond the
@@ -618,7 +618,7 @@ an hour; programme `<slug>` ended, `<n>` runs closed failed".
   last open run, to `done` or `abandoned` by that close (measured in a fixture store, wave 5).
 - Outstanding deliveries naming those runs are cancelled.
 - The slug stays fenced to the crashed id until someone reclaims it.
-- CCR-15 wave 3 reclaims each marked child whose run closed. That includes a worker mid-turn: its work is committed
+- #166 wave 3 reclaims each marked child whose run closed. That includes a worker mid-turn: its work is committed
   and pinned, and its turn is lost (L4).
 - An unmarked worker is only released, so it moves into the `Released` fold.
 
@@ -733,9 +733,9 @@ each item is a departure named there).
 - **Wire.** Stage 1 adds `FleetSession.releasedFrom` and `ReleasedFrom`. Stage 2 adds `ARCHIVE_REFUSALS` with six
   new codes (the door's three and the three `ws-archive` refusals "Stop only" answers), the archive body's
   `interrupt` and `programme`, and its answer's `archived`, `stopped` and `ended`. There is no `FLEET_PROTO` bump.
-- **CCR-15 texts this spec amends.** Each is amended when this spec's wave lands, after the CCR-15 wave that wrote
+- **#166 texts this spec amends.** Each is amended when this spec's wave lands, after the #166 wave that wrote
   it has merged:
-  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3). Amended by this design’s wave 3b: CCR-15's
+  1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3). Amended by this design’s wave 3b: #166's
      §5.8 now says the pause stops the expiry of archived workspaces too.
   2. Coordinator clause 3's closing sentence (§5.3). Amended by this design’s wave 3b: the clause, README and
      `wave-lifecycle.md` §6 say the server cleans an archived workspace up seven days after its archive once the
@@ -743,13 +743,13 @@ each item is a departure named there).
   3. Spec §5.9 "No child ever appears in the reap or archive sheets". A person may now archive a child by hand, and
      "Archive all" skips children (§5.1).
   4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
-     this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
+     this design's wave 3 (3965): #166's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
      mirror, and `ws-restore`'s refusal of an expiry in progress.
-  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4). Amended by this design’s wave 4: CCR-15's texts name no
+  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4). Amended by this design’s wave 4: #166's texts name no
      `causedBy` vocabulary (measured); the set is written in the build-4 design (`2026-08-11-build4-conversation-and-controls-design.md`),
      which now names the third word, and in `close.ts`'s `CloseCause`.
   6. Wave 4's lane gains a second population (§5.3). Amended by this design’s wave 3b, recorded by wave 4: the expiry
-     lane is a SIBLING pass on the same tick, never a population inside `sweepChildReclaim`, so CCR-15's sweep and its
+     lane is a SIBLING pass on the same tick, never a population inside `sweepChildReclaim`, so #166's sweep and its
      text are unchanged.
   7. The contract's `shared/api.ts` line citations (R9), which waves 1 and 2 must place below or re-point (§4).
 - **CLAUDE.md** (§5.3), and its box-token census for the archive route (§5.2).
@@ -760,8 +760,8 @@ each item is a departure named there).
 ## 7. What is not done
 
 - No automatic archive of anything. Released rows are archived by the operator ("Archive all") or reclaimed by
-  CCR-15.
-- No backfill of CCR-15's marker onto the 14 pre-policy children.
+  #166.
+- No backfill of #166's marker onto the 14 pre-policy children.
 - No change to board placement's lifetime.
 - No change to the bucket ladder (M10).
 - No new `SessionLifecycle` word.
@@ -824,11 +824,11 @@ workspace's commits in the meantime.
 
 ## 10. Sequencing
 
-1. **Wave 1** is independent of CCR-15's code and dispatches now. It respects CCR-15's `shared/api.ts` citations
+1. **Wave 1** is independent of #166's code and dispatches now. It respects #166's `shared/api.ts` citations
    (§4).
-2. **CCR-15 waves 3 and 4** run as their own programme. L6: wave 4 dispatches the moment wave 3 merges.
-3. **Wave 2** dispatches once CCR-15 wave 3 has merged (its close-path port and shared files).
-4. **Wave 3** is planned against CCR-15 wave 4's merged lane. It dispatches once CCR-15 wave 4 is deployed and §9's
+2. **#166 waves 3 and 4** run as their own programme. L6: wave 4 dispatches the moment wave 3 merges.
+3. **Wave 2** dispatches once #166 wave 3 has merged (its close-path port and shared files).
+4. **Wave 3** is planned against #166 wave 4's merged lane. It dispatches once #166 wave 4 is deployed and §9's
    return-delay row has been measured.
 5. **Wave 4** lands after wave 3 (the same lane file), and after wave 2 (the serialiser and the L5 door).
 
@@ -904,7 +904,7 @@ collects them.
 - **Its arming blockers are closed.** A pre-breadcrumb `state-changed` is audited afresh (wave 5). A resumed expiry's
   `probe-unmeasured` is retried (wave 6, through `crumb`), and a fresh one's is audited afresh, counted and listed after
   the hour if it recurs, where it was final before. `_ws_expire_cwd_users` resolves its parent through
-  `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (CCR-15 wave 6; its
+  `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (#166 wave 6; its
   case in `ccd-leaf-root-newline.test.ts` goes red when the bare `pwd -P` is put back, measured in wave 6).
 - **One residual of question (k), in a narrow window.** A breadcrumb that stands but cannot be read (a
   `$REG/<id>.reaping` that is not a readable file) leaves `crumb` unsaid, as on the reclaim side. If it is already
@@ -917,13 +917,13 @@ collects them.
 - **One archived tree holds a leaked test tmux server** (the ledger's pre-arming item (d)). The lane refuses that row
   `in-use` each time it is asked and lists it after three, naming the process; it never ends it. End that server first, once
   you know what it is, or arm knowing the row stays listed.
-- **A branch already gone now expires.** Since CCR-15 wave 6, an archived workspace whose branch is gone when its token
+- **A branch already gone now expires.** Since #166 wave 6, an archived workspace whose branch is gone when its token
   is minted expires with its work in the attic, where `main` stopped at `pin-failed`, and its ignored and secret-shaped
   files go with the tree, as the standing policy says. A branch deleted between the fresh pin and the tail's settle has
   its tip pinned at the fresh pin. With HEAD still symbolic to a deleted branch the pin fails before the breadcrumb, and
   the lane audits it afresh each time, counted and listed after the hour.
 - **A branch deleted or made inside the lock stops the act** before the breadcrumb, in both directions (question (j)).
-- **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (CCR-15
+- **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (#166
   wave 7, rung 8); a record that is truly absent stays terminal.
 - **What each answer does to a row.** A person viewing it defers it with no ceiling. A process working in it is refused
   `in-use` each time the row is asked (the lane makes at most one act per pass, fleet-wide) and listed after three, naming
@@ -1009,6 +1009,6 @@ collects them.
   an unreadable one at the audit is backed off) be retried on the persistent tier, rather than listed at once and not
   asked again until the server restarts?
 - Wave 2's three: the PR sheet's "Archive now" offers no consent for a busy or coordinating workspace; a real worktree
-  check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for CCR-15's
+  check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for #166's
   children.
 - Wave 6's own are in its plan's questions for the operator.

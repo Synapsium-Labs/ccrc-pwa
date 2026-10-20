@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -10,6 +10,7 @@ import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
+import type { AccountsConnect, LaneWire } from '../../../shared/api';
 
 export interface FleetNotice {
   id: number;
@@ -38,6 +39,16 @@ export interface FleetState {
    * name, `--ink-tertiary`) — never a guessed account.
    */
   roster: readonly RosterWire[];
+  /** `GET /api/accounts`'s `lanes` (each lane's state word and what the screen may show about its credential), sent
+   *  for a session reader only (D-5511). Held in memory and NEVER in the offline snapshot, which persists
+   *  `RosterWire` only (G15; accounts plan Task A12): `null` until an answer carries it, and again after one that
+   *  does not (a signed-out session, a dark gate). */
+  lanes: Readonly<Record<string, LaneWire>> | null;
+  /** `GET /api/accounts`'s `connect`, on the same terms as `lanes`. */
+  accountsConnect: AccountsConnect | null;
+  /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
+   *  landed in `roster`, `lanes` and `accountsConnect`. Silent on failure, as the poll is. */
+  refreshAccounts(): Promise<void>;
   /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
    *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
    *  a reconnect to a fixed server must unblock, so this is never a one-way
@@ -235,9 +246,8 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
       listed?: unknown; enforcement?: unknown; byProject?: unknown;
       epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown;
     };
-    const validEnforcement = outer.enforcement === 'enforced'
-      || outer.enforcement === 'unavailable'
-      || outer.enforcement === 'unknown';
+    // D-6048 (ARCH-12): the shared guard, derived from the type, so a new member is accepted here too.
+    const validEnforcement = isPoolsEnforcement(outer.enforcement);
     // Item 3 (I1, wave-1 fix round A): `accountPools` rides the SAME
     // `PoolsEnforcement` domain as `enforcement` above and gets the identical
     // envelope-level gate — it was produced by `poolsWire` (T9-R2/F2) and
@@ -245,10 +255,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     // value would have slipped through unrejected into the first real
     // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
     // `epoch`/`observedEpoch`: an older server simply omits it.
-    const validAccountPools = outer.accountPools === undefined
-      || outer.accountPools === 'enforced'
-      || outer.accountPools === 'unavailable'
-      || outer.accountPools === 'unknown';
+    const validAccountPools = outer.accountPools === undefined || isPoolsEnforcement(outer.accountPools);
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
@@ -317,11 +324,33 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // fix round 1, finding 3. Before this, a cold offline start hydrated
     // `sessions` from the snapshot but `roster` stayed at its bare `[]`
     // default, so every account rendered as its raw wrapper id
-    // (`claude2`, `claude-corp`) instead of the jargon-free label this
+    // (`claude9`, `claude-acme`) instead of the jargon-free label this
     // whole module exists to restore — a real regression against the
     // compile-time roster this replaced, which never had an "unarrived"
     // state to begin with.
     const snapshot = loadFleetSnapshot();
+
+    // ONE reader of `GET /api/accounts` for the store: the 20 s poll below and `refreshAccounts()` both call it.
+    // `lanes` and `connect` are taken only as objects and cleared by an answer without them; neither ever reaches
+    // `saveFleetSnapshot`, whose roster argument is `get().roster` alone (G15).
+    const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
+    const isRecord = (v: unknown): boolean => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const readAccounts = (): Promise<void> => fetchAccounts().then((r) => {
+      set({
+        lanes: isRecord(r.lanes) ? r.lanes! : null,
+        accountsConnect: isRecord(r.connect) ? r.connect! : null,
+      });
+      // Preserves the last good roster on a malformed response — never
+      // clobbers it with `[]` (fix round 1, finding 5): a transient bad
+      // read must not un-teach every consumer the account labels it
+      // already had.
+      if (Array.isArray(r.roster)) { set({ roster: r.roster }); return; }
+      // A genuine protocol break (a route answering the wrong shape) has
+      // no other signal anywhere — every consumer just silently reverts
+      // to raw wrapper ids, which reads as "nothing is wrong" (fix
+      // round 1, finding 6).
+      warnNonArrayRoster(r);
+    }).catch(() => {});
 
     return {
       // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold
@@ -346,6 +375,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       divergenceCensus: null,
       projects: null,
       roster: snapshot?.roster ?? [],
+      // Never hydrated: the snapshot holds no lane, by design (G15).
+      lanes: null,
+      accountsConnect: null,
+      refreshAccounts: readAccounts,
 
       connect() {
         if (socket) return;
@@ -373,21 +406,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // consumer's next render into a `TypeError` — a shape no server
         // response can legitimately produce (`AccountsResponse.roster` is
         // never optional), but a bad JSON body can.
-        const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
-        const pollRoster = (): void => {
-          void fetchAccounts().then((r) => {
-            // Preserves the last good roster on a malformed response — never
-            // clobbers it with `[]` (fix round 1, finding 5): a transient bad
-            // read must not un-teach every consumer the account labels it
-            // already had.
-            if (Array.isArray(r.roster)) { set({ roster: r.roster }); return; }
-            // A genuine protocol break (a route answering the wrong shape) has
-            // no other signal anywhere — every consumer just silently reverts
-            // to raw wrapper ids, which reads as "nothing is wrong" (fix
-            // round 1, finding 6).
-            warnNonArrayRoster(r);
-          }).catch(() => {});
-        };
+        const pollRoster = (): void => { void readAccounts(); };
         pollRoster();
         rosterTimer = setInterval(pollRoster, 20_000);
 

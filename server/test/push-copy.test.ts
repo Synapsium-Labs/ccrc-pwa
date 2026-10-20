@@ -212,7 +212,7 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('names the project when more than one is active', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -1021,7 +1021,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('falls back to the RECIPIENT session\'s own project for run-less mail in a multi-project fleet', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();                  // priming
 
       const mail = w.coord!.insertMail({
@@ -1041,7 +1041,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('suppresses the decoration entirely — never a dangling separator — when even the recipient\'s project is unknown', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();
 
       // `toId` names no live session (e.g. reaped between send and
@@ -1289,10 +1289,10 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     title: 'ccrc v0.0.9 is out',
     body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
     tag: 'release-v0.0.9',
-    url: '/settings',
+    url: '/settings/updates',
   };
 
-  it('sends the pinned copy — title, body, collapse tag and the /settings url, with no session', () => {
+  it('sends the pinned copy — title, body, collapse tag and the /settings/updates url, with no session', () => {
     const { sent, push } = recorder();
     const w = watcher({ push, coord: true, sessions: [] });
     seed(w.coord!, { releases: [listed('v0.0.9'), listed('v0.0.7')], server: 'v0.0.7', fleet: 'v0.0.7' });

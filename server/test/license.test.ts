@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PRIVATE_NAMES, matchLine } from './private-names.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -127,12 +128,13 @@ describe('README states the notice, since no source file does', () => {
 });
 
 describe('the release owner (S1)', () => {
-  // BASE64, the same residue idiom `topology-clean.test.ts` uses and for the
-  // same reason: this assertion has to NAME the org it forbids, so spelling it
-  // verbatim would make the enforcing test the tree's last plaintext copy —
-  // and `topology-clean`'s operator-residue class, which bans exactly this
-  // token everywhere, would red on the file enforcing its absence.
-  const OLD_ORG = Buffer.from('RXhwb1BsYXRmb3JtLUx0ZA==', 'base64').toString('utf8');
+  // The previous org's name is one of `topology-clean`'s hashed entries
+  // (`PRIVATE_NAMES`, private-names.mjs), looked up here by their `#h8`: this
+  // assertion has to name the org it forbids, and the base64 literal it used to
+  // carry decoded to the name itself. A failure prints `file:line #h8`, never
+  // the name.
+  const OLD_ORG_H8S = ['a4277cd1', 'fc353e41', 'eaa169b5'];
+  const OLD_ORG = PRIVATE_NAMES.filter((e) => OLD_ORG_H8S.includes(e.h.slice(0, 8)));
   const OWNER = /^CCRC_RELEASE_OWNER="([^"]+)"$/m;
 
   it.each(['install.sh', 'ccd/ccrc'])('%s builds its release URL from the ruled owner', (f) => {
@@ -147,10 +149,13 @@ describe('the release owner (S1)', () => {
     // that lives only as long as GitHub's post-transfer redirect — which ends
     // the moment anyone recreates the old name. docs/ is excluded: the design
     // record legitimately describes the history, and the S2 sweep owns it.
+    expect(OLD_ORG, 'the previous org is no longer three PRIVATE_NAMES entries (split, merged, run together)')
+      .toHaveLength(OLD_ORG_H8S.length);
     const shipped = ['install.sh', 'ccd/ccrc', 'ccd/ccd', 'deploy/deploy.sh', 'README.md'];
     for (const f of shipped) {
       if (!existsSync(join(REPO, f))) continue;
-      expect(read(f), `${f} still names ${OLD_ORG}`).not.toContain(OLD_ORG);
+      const hits = read(f).split('\n').flatMap((line, i) => matchLine(line, OLD_ORG).map((h) => `${f}:${i + 1} #${h}`));
+      expect(hits, `${f} still names the previous org`).toEqual([]);
     }
   });
 });

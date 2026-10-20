@@ -302,7 +302,7 @@ describe('each stop predicate, one at a time — the scope is reported, never st
 
   it('a process in it is the parent of a process in another cgroup', () => {
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
-    proc(3999, { age: 2 * 86400, ppid: 3001, cg: '/user.slice/user-1000.slice/user@1000.service/app.slice/mekwar-ddb.service' });
+    proc(3999, { age: 2 * 86400, ppid: 3001, cg: '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service' });
     const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
     reportedFor(u, 'parent-of-a-process-elsewhere');
   });
@@ -455,7 +455,7 @@ describe('a value it cannot measure skips that scope for the tick — the old li
   });
 
   it('a ControlGroup that names another unit', () => {
-    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/mekwar-ddb.service';
+    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service';
     one({ pane: 3001, procs: [3001], cgShown: other });
     fs.mkdirSync(path.join(fx.cg, other), { recursive: true });
     fs.writeFileSync(path.join(fx.cg, other, 'cgroup.procs'), '3001\n');

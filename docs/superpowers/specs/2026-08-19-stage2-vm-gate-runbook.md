@@ -870,5 +870,5 @@ point of the A2-NEW work this gate is proving. If a step above does not converge
   consumes no forwarded header, and turning proxy trust on would only arm a spoof surface for
   whatever reads `req.ip` next.
 - **More than one operator.** The session layer carries a single identity — there are no users, no
-  roles, and no per-person audit. That is the team-edition seam, held open deliberately; this slice
+  roles, and no per-person audit. That is a seam held open deliberately for a later decision; this slice
   ships one operator.

@@ -14,7 +14,8 @@
  * source-pin ratchet (`single-definition.test.ts`, the ARCH-40 describe) read, so neither imports the parser.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
- * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
+ * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges; a `Record<X, true>`
+ * counts only as a variable's annotation or a `satisfies` type, and only with `X` named bare (D-6048).
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
@@ -29,6 +30,9 @@ export interface ImportEdge {
   typeOnly: boolean;
   /** The bound names: `default` as its local name, a namespace as `* as x`, named ones by their imported name. */
   names: string[];
+  /** The named ones bound with a per-name `type` (`import { type A, b }` → `['A']`), for an `import` or an
+   *  `export … from`; absent on the other kinds. An edge whose every name is here binds no value (D-6045, stage 2). */
+  typeNames?: string[];
   /** 1-based. */
   line: number;
 }
@@ -130,6 +134,65 @@ const literalText = (t: ts.TypeNode): string | null => {
   return null;
 };
 
+/** The bare `X` of a `Record<X, true>` inside `t` (or `Readonly<Record<X, true>>`), else `null`. */
+const recordTrueKey = (t: ts.TypeNode): string | null => {
+  if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return null;
+  const args = t.typeArguments ?? [];
+  if (t.typeName.text === 'Readonly' && args.length === 1) return recordTrueKey(args[0]!);
+  if (t.typeName.text !== 'Record' || args.length !== 2) return null;
+  const [k, v] = [args[0]!, args[1]!];
+  return ts.isTypeReferenceNode(k) && ts.isIdentifier(k.typeName) && !k.typeArguments
+    && ts.isLiteralTypeNode(v) && v.literal.kind === ts.SyntaxKind.TrueKeyword ? k.typeName.text : null;
+};
+
+/** D-6048 (ARCH-12): the wire-totality facts of one parsed file, read by a walk of their own (kept out of
+ *  `ParsedFile` so the shared walk stays one owner's). Runtime-bearing forms only. */
+export interface WireFacts {
+  /** The `X` of every `Record<X, true>` (bare or inside `Readonly<…>`) typing a non-`declare` variable or a
+   *  `satisfies` expression: a map that fails to compile when `X` gains a member. Bare type names only. */
+  recordTrueKeys: string[];
+  /** The `X` of every `v is X` predicate on a function, method or arrow WITH a body; not `asserts v is X`, not a
+   *  type-only signature. Bare type names only. */
+  guardedTypes: string[];
+  /** Every string literal the file compares against by hand: an operand of `===`, `!==`, `==` or `!=`, or a `case`
+   *  label. In source order, repeats kept. */
+  comparedLiterals: string[];
+}
+
+const EQUALITY = new Set<ts.SyntaxKind>([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
+
+const isDeclared = (d: ts.VariableDeclaration): boolean => {
+  const stmt = d.parent?.parent;
+  return !!stmt && ts.isVariableStatement(stmt)
+    && !!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword);
+};
+
+const hasBody = (n: ts.Node): boolean =>
+  (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n))
+  && n.body !== undefined;
+
+/** The wire-totality facts of `p` (D-6048). */
+export function wireFacts(p: ParsedFile): WireFacts {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const out: WireFacts = { recordTrueKeys: [], guardedTypes: [], comparedLiterals: [] };
+  const visit = (node: ts.Node): void => {
+    const rk = ts.isVariableDeclaration(node) && node.type && !isDeclared(node) ? recordTrueKey(node.type)
+      : ts.isSatisfiesExpression(node) ? recordTrueKey(node.type) : null;
+    if (rk !== null) out.recordTrueKeys.push(rk);
+    if (ts.isTypePredicateNode(node) && !node.assertsModifier && node.type && ts.isTypeReferenceNode(node.type)
+      && ts.isIdentifier(node.type.typeName) && !node.type.typeArguments && hasBody(node.parent)) {
+      out.guardedTypes.push(node.type.typeName.text);
+    }
+    const operands = ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind) ? [node.left, node.right]
+      : ts.isCaseClause(node) ? [node.expression] : [];
+    for (const o of operands) if (ts.isStringLiteralLike(o)) out.comparedLiterals.push(o.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];
   const out = members.map(literalText);
@@ -189,15 +252,23 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
       if (c?.name) names.push(c.name.text);
       const nb = c?.namedBindings;
       if (nb && ts.isNamespaceImport(nb)) names.push(`* as ${nb.name.text}`);
-      if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) names.push((e.propertyName ?? e.name).text);
+      const typeNames: string[] = [];
+      if (nb && ts.isNamedImports(nb)) {
+        for (const e of nb.elements) {
+          names.push((e.propertyName ?? e.name).text);
+          if (e.isTypeOnly) typeNames.push((e.propertyName ?? e.name).text);
+        }
+      }
       imports.push({ specifier: st.moduleSpecifier.text, kind: 'import',
-        typeOnly: c?.phaseModifier === ts.SyntaxKind.TypeKeyword, names, line: lineOf(st.getStart(sf)) });
+        typeOnly: c?.phaseModifier === ts.SyntaxKind.TypeKeyword, names, typeNames, line: lineOf(st.getStart(sf)) });
     } else if (ts.isExportDeclaration(st) && st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)) {
       const ec = st.exportClause;
       const names = !ec ? ['*']
         : ts.isNamespaceExport(ec) ? [`* as ${nameText(ec.name) ?? ''}`]
           : ec.elements.map((e) => nameText(e.propertyName ?? e.name) ?? '');
-      imports.push({ specifier: st.moduleSpecifier.text, kind: 'export-from', typeOnly: st.isTypeOnly, names,
+      const typeNames = ec && ts.isNamedExports(ec)
+        ? ec.elements.filter((e) => e.isTypeOnly).map((e) => nameText(e.propertyName ?? e.name) ?? '') : [];
+      imports.push({ specifier: st.moduleSpecifier.text, kind: 'export-from', typeOnly: st.isTypeOnly, names, typeNames,
         line: lineOf(st.getStart(sf)) });
     } else if (ts.isImportEqualsDeclaration(st) && ts.isExternalModuleReference(st.moduleReference)
       && ts.isStringLiteral(st.moduleReference.expression)) {
@@ -283,4 +354,32 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
 /** Read and parse one file. */
 export function parseFile(file: string): ParsedFile {
   return parseSource(readFileSync(file, 'utf8'), file);
+}
+
+/** One piece of string text in the source: a string literal, a no-substitution template, or one literal part of a
+ *  template (its head or the text after a `${…}`). Pieces split at every `${…}`, so a word built across one is not
+ *  in any piece. `text` is the cooked value; `line` is 1-based, where the piece starts. */
+export interface StringPiece {
+  text: string;
+  line: number;
+}
+
+/** Every string piece in a source text, in source order (D-6051: the ccd stub scanner reads the bash a test holds).
+ *  KNOWN WIDTH: pieces are cooked text, and a template nested inside a `${…}` yields pieces of its own. */
+export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const out: StringPiece[] = [];
+  const add = (t: string, node: ts.Node): void => {
+    out.push({ text: t, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) add(node.text, node);
+    else if (ts.isTemplateExpression(node)) {
+      add(node.head.text, node.head);
+      for (const s of node.templateSpans) add(s.literal.text, s.literal);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
 }

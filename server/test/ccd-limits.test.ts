@@ -248,8 +248,8 @@ describe('the account that was stranded on 2026-07-27', () => {
     // Registry for a session whose HOME is claude but which sits on gpt.
     const reg = path.join(home, '.cc-sessions');
     fs.mkdirSync(reg, { recursive: true });
-    fs.writeFileSync(path.join(reg, 'claude-synapsium-platform.home'), 'claude');
-    fs.writeFileSync(path.join(reg, 'claude-synapsium-platform.wrapper'), 'gpt');
+    fs.writeFileSync(path.join(reg, 'claude-project-k.home'), 'claude');
+    fs.writeFileSync(path.join(reg, 'claude-project-k.wrapper'), 'gpt');
   };
 
   it('makes the home account available again', () => {
@@ -259,7 +259,7 @@ describe('the account that was stranded on 2026-07-27', () => {
 
   it('sends the exiled session home instead of leaving it on gpt', () => {
     strand();
-    expect(sh('_swap_target claude-synapsium-platform gpt claude')).toBe('claude');
+    expect(sh('_swap_target claude-project-k gpt claude')).toBe('claude');
   });
 });
 

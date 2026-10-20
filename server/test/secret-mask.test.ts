@@ -1689,6 +1689,70 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
   });
 });
 
+describe('the final audit: a row measured in columns when its text holds an emoji sequence or a combining mark (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const KEYS: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['JWT', JWT]];
+  const W = 40;
+  /** Text before a key that holds more UTF-16 units than the columns a terminal draws it in: [name, text, columns]. */
+  const WIDE: [string, string, number][] = [
+    ['a flag', '🇬🇧', 2], ['a ZWJ family', '👨‍👩‍👧', 2], ['a skin tone', '👍🏽', 2], ['a keycap', '1️⃣', 1],
+    ['a combining mark', 'é', 1], ['a mathematical letter', '𝐀', 1], ['a zero-width space', '​', 0],
+  ];
+  /** `k` cut after `cut` bytes on a full row of `W` columns that opens with `pre`, its rest on rows indented two columns. */
+  const wrapped = (k: string, cut: number, pre: string, cols: number): string[] => {
+    const rows = [`${pre}${'x'.repeat(W - cols - cut - 1)} ${k.slice(0, cut)}`];
+    for (let at = cut; at < k.length; at += W - 2) rows.push(`  ${k.slice(at, at + W - 2)}`);
+    return rows;
+  };
+
+  it('a key wrapped two or more times after such text leaves no byte of it, at every cut, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const [what, pre, cols] of WIDE) {
+        for (const cut of [1, 3, 9, 20]) {
+          const rows = wrapped(k, cut, pre, cols);
+          if (k.length - cut > W - 2) expect(rows.length, `${name} ${what} cut ${cut}`).toBeGreaterThanOrEqual(3);
+          const o = m.maskText(`hello\r\n${rows.join('\r\n')}\r\n done\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} after ${what}, cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+          expect(o, `${name} after ${what}, cut ${cut}`).toContain(' done\r\n$ ');
+        }
+      }
+    }
+  });
+
+  it('the same wrap written one row per drawer push, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const [what, pre, cols] of WIDE) {
+        for (const cut of [1, 9, 20]) {
+          for (const gap of [0, 9]) {
+            const out: string[] = [];
+            const d = m.drawer((t) => out.push(t));
+            const rows = wrapped(k, cut, pre, cols);
+            d.push(`hello\r\n${rows[0]}`);
+            for (const row of rows.slice(1)) { if (gap > 0) vi.advanceTimersByTime(gap); d.push(`\r\n${row}`); }
+            d.push('\r\n done\r\n$ ');
+            vi.advanceTimersByTime(80);
+            const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;   // item 14: a JWT's signature
+            expect(leaksNone(out.join(''), secret), `${name} after ${what}, cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+            d.dispose();
+          }
+        }
+      }
+    }
+  });
+
+  it('a short row after such a row still ends the value: the next indented row is drawn as typed', () => {
+    const m = new SecretMasker();
+    for (const [what, pre] of WIDE) {
+      const text = `${pre} key ${OAT.slice(0, 20)}\r\n  ${OAT.slice(20, 30)}\r\n  plain words here\r\n`;
+      expect(m.maskText(text, { rows: true }), what).toContain('  plain words here\r\n');
+    }
+  });
+});
+
 describe('the follow-ups\' verification: a key wrapped twice under a cursor-move indent, and inside a bordered box (D-5995)', () => {
   afterEach(() => { vi.useRealTimers(); });
   const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
@@ -1801,5 +1865,58 @@ describe('the follow-ups\' verification: a key wrapped twice under a cursor-move
     expect(m.maskText(box, { rows: true })).toBe(box);
     const moved = `hello\r\n${'x'.repeat(30)}\r\n\x1b[2Cnext row\r\n\x1b[6;3Hlast row\r\n`;
     expect(m.maskText(moved, { rows: true })).toBe(moved);
+  });
+});
+
+describe('the final audit: a row joined to the next row never hides a key that row begins (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const KEYS: [string, string][] = [['sk-ant api', API], ['sk-ant oat', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  /** Runs that begin a shape and do not match one: the wrap join glues them to the next row's leading run. */
+  const OPEN_RUNS: [string, string][] = [['a JSON blob in base64', `eyJ${fill(30, 'blob')}`], ['a file name', `${SK}-v1.py`]];
+  /** A row that ends in `run` and the row after it that begins with `k`: in a box, after a shell pipe, indented. */
+  const LAYOUTS: [string, (run: string, k: string) => string][] = [
+    ['a table', (run, k) => `│ ${run} │\r\n│ ${k} │\r\n`],
+    ['a shell pipe', (run, k) => `$ echo ${run} |\r\n    ${k}\r\n`],
+    ['a tool result', (run, k) => `  ⎿  ${run}\r\n     ${k}\r\n`],
+  ];
+
+  it('a key that begins the row after a row ending in an open shape run is masked, in rows mode and through the drawer at every split', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [kn, k] of KEYS) {
+      for (const [rn, run] of OPEN_RUNS) {
+        for (const [ln, layout] of LAYOUTS) {
+          const text = layout(run, k);
+          const secret = kn === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+          const o = m.maskText(text, { rows: true });
+          expect(leaksNone(o, secret), `${kn} after ${rn} in ${ln}: ${JSON.stringify(o)}`).toBe(true);
+          for (let cut = 1; cut < text.length; cut += 5) {
+            for (const gap of [0, 3, 9, 15]) {
+              const out: string[] = [];
+              const d = m.drawer((t) => out.push(t));
+              d.push(text.slice(0, cut));
+              vi.advanceTimersByTime(gap);
+              d.push(`${text.slice(cut)}$ `);
+              vi.advanceTimersByTime(80);
+              expect(leaksNone(out.join(''), secret), `${kn} after ${rn} in ${ln} cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+              d.dispose();
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('the rows around it are drawn as typed', () => {
+    const m = new SecretMasker();
+    for (const [, run] of OPEN_RUNS) {
+      for (const [ln, layout] of LAYOUTS) {
+        const o = m.maskText(layout(run, 'plain words after it'), { rows: true });
+        expect(o, ln).toContain('words after it');
+        expect(o, ln).toContain(run.slice(0, 3));
+      }
+    }
   });
 });

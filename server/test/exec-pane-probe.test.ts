@@ -28,7 +28,7 @@ import { describe, it, expect } from 'vitest';
 import { Tmux, PANE_PROBE_FORMAT, type ExecResult, type Runner } from '../src/exec.js';
 import type { PaneProbe } from '../../shared/api.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 
 const probeOn = async (r: ExecResult): Promise<{ probe: PaneProbe; calls: string[][] }> => {
   const calls: string[][] = [];

@@ -19,10 +19,10 @@ On 2026-09-14 the fleet's dispatch cap read `cap-concurrency limit 7 running 7`,
 
 | run | programme | state | dispatched |
 |---|---|---|---|
-| 39 | bug-fix-waves | `awaiting-review` | 110 h earlier |
-| 40 | bug-fix-waves | `awaiting-review` | 110 h earlier |
+| 39 | prog-g | `awaiting-review` | 110 h earlier |
+| 40 | prog-g | `awaiting-review` | 110 h earlier |
 
-Wave 1 of `bug-fix-waves` had been cut into **five bundles** (runs 37–41) under **one coordinator**.
+Wave 1 of `prog-g` had been cut into **five bundles** (runs 37–41) under **one coordinator**.
 That coordinator was not idle — in the 17 hours its event feed reached back it issued twelve numbered
 rulings and closed two bundles — but it reviews serially, and one bundle (run 40) had a rebase go wrong
 and was consuming rounds. Run 39 had **all three work items done, no mail outstanding, and not one event

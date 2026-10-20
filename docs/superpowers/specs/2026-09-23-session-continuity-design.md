@@ -788,7 +788,7 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
 2. **Re-seed the route records seeded under the pre-#169 default** (C10). Executed the same day: of the 41 sessions
    with a registry row, one record's only class write was the pre-#169 spawn default — this spec's authoring
    session — and it was reset through `cmd_route` with `actor=operator-ruling`. The one other record saying Fable,
-   claude-rp-llm, was set by the operator from the PWA and is untouched. No code ships for it.
+   claude-project-j, was set by the operator from the PWA and is untouched. No code ships for it.
 
 3. **The rescue-wait bound is 10 minutes** (C13; §5.4 rule 2). Against the 168 rescues of §1.2 on a five-hour window (150 on a session
    banner, 18 on a monthly-spend banner), of 248:
@@ -816,7 +816,7 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    services live sessions still used; it collects the orphaned and zombied without touching anything that runs,
    serves or forks. The pressure-reap variable was to ship first; rev 8 ships it after the sweep, once baseline B
    has been counted with the reap still on (§10). The operator stopped the DynamoDB Local server the
-   same day (2026-09-23 21:13 UTC, data file unchanged); MekWarLive restarts it from its own script when it needs it.
+   same day (2026-09-23 21:13 UTC, data file unchanged); project-f restarts it from its own script when it needs it.
 5. **The slice ceiling** (C14). 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on,
    while the host had memory to spare (§1.3). The kill itself chose sensibly, usually a background worker; what
    turns it into a session death is `OOMPolicy=stop` on every pane scope, the user manager's `DefaultOOMPolicy`.

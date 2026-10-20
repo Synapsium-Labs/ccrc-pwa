@@ -944,7 +944,7 @@ _check_services() {
           ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
           ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
           ccd-telemetry-keepalive.timer) why="an idle account's ~/.cc-limits reading goes stale, so placement acts on a number nobody is refreshing" ;;
-          # Sentence is claude-OpenClawHetzner's own — the session that reported this gap
+          # Sentence is claude-project-c's own — the session that reported this gap
           # (D-2190): "a dead timer means every lane's catalogue goes stale and nothing
           # says so."
           ccrc-models.timer) why="a dead timer means every lane's catalogue goes stale and nothing says so" ;;
@@ -2345,8 +2345,8 @@ _check_disk() {
 # ── the roster against the wrappers on disk ───────────────────────────────
 # THE CHECK THAT FOUND D-69. It is deliberately stronger than "the wrappers
 # are present and executable", because presence was never the failure mode:
-# the fleet host's `claude-corp` is present, executable, and sources
-# `.cc-secrets/claude-corp-oauth.env` while its roster entry says
+# the fleet host's `claude-acme` is present, executable, and sources
+# `.cc-secrets/claude-acme-oauth.env` while its roster entry says
 # `{"kind":"generated"}` with no secretsFile at all. Every check that only
 # stats a file passes that box.
 #
@@ -2628,7 +2628,7 @@ _check_wrappers() {
     //   - TSV integrity: a tab or a newline inside a value would silently
     //     become a field or a record boundary.
     //   - THE VERDICT LINE IS READ BY A HUMAN, on a terminal that ACTS on
-    //     control bytes. `"claude\bcorp"` renders as `claude-corp` if the
+    //     control bytes. `"claude-x\bacme"` renders as `claude-acme` if the
     //     terminal is allowed to see the backspace, so an id that is not an
     //     account can be made to look exactly like one that is. The reader
     //     used to squash the three it knew about down to a space, which
@@ -4553,7 +4553,7 @@ _check_graphify() {
   # (not sourced — that script is a converge-on-run installer, not a
   # library): source accounts.sh for CCRC_ACCOUNTS/_ccrc_cfg_dir, then de-dup
   # on the REAL skills/ directory, because two rostered homes may symlink
-  # skills/ into one place (the reference fleet's .claude-gpt/.claude-kimi)
+  # skills/ into one place (the reference fleet's .claude-gpt/.claude-alt2)
   # and a de-duped check reports that shared directory once, not twice. A
   # roster home that does not exist on this box yet is skipped, not FAILed —
   # `install-graphify-skill.sh` itself treats a missing home the same way,
@@ -5362,10 +5362,10 @@ _check_fleet() {
 # reported that two homes disagreed about a project's memory, so a session read
 # its own superseded record after an account swap and acted on it. A
 # convergence mechanism without a detector only moves the silence one layer
-# down: the next unconverged home forks exactly as `.claude-dev0` did.
+# down: the next unconverged home forks exactly as `.claude-lab0` did.
 #
-# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
-# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-alt1` and
+# `.claude-alt2` are on disk, hold memory, and are in no roster entry — a
 # roster-driven check would report PASS while the homes most likely to fork
 # went unexamined.
 #
@@ -5479,7 +5479,7 @@ _check_fleet() {
 # never touched this home, the MAXIMAL case of "will fork on first use".
 # Round 1 of this check only ever examined a settings.json that existed,
 # which silently PASSed exactly the home most likely to fork (measured:
-# `.claude-kimi/projects/` with no settings.json at all read as converged).
+# `.claude-alt2/projects/` with no settings.json at all read as converged).
 # The third shape is a settings.json that EXISTS but cannot be READ (mode
 # problem, not a content problem): folding that into "unreachable" would be
 # the overloaded-null defect this codebase bans by name yet again — D-1350's
@@ -5516,17 +5516,17 @@ _check_fleet() {
 # `ccd/ccrc:2048`-`:2063` still picks FAIL as the return code — `unreachable`
 # alone is what can still fail `ccrc update`.
 #
-# NO `.claude-docserver` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
+# NO `.claude-docs-preview` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
 # review round 3 — reached independently of `_mem_homes`'s identical guard in
 # ccd/ccrc, which is owned by other work in this wave, but for the same
 # reason). It used to be excluded by name in this loop. Removed because (a)
 # hard-coding one operator's box-local tool's directory name into shipped,
 # public-release-bound source is exactly the residue class the top-level
 # CLAUDE.md bans by name ("no account-name list in ANY shipped source file"),
-# and this tree is not supposed to know `.claude-docserver` exists at all —
+# and this tree is not supposed to know `.claude-docs-preview` exists at all —
 # it is "operator plumbing this tree does not know about", the same phrase
 # that CLAUDE.md uses to keep Tailscale out of this codebase; (b) it excluded
-# nothing measurable: `~/.claude-docserver` carries no `projects/` directory
+# nothing measurable: `~/.claude-docs-preview` carries no `projects/` directory
 # on the box it was written for, so the very next line
 # (`[ -d "${h}projects" ] || continue`) already skips it. If some future box's
 # docserver ever does grow a `projects/` directory, treating it like any other

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseFile, parseSource, type ParsedFile } from './scan/parse.js';
+import { parseFile, parseSource, wireFacts, type ParsedFile } from './scan/parse.js';
 
 const FIXTURE = [
   "import { readFileSync, type Stats } from 'node:fs';",
@@ -57,6 +57,29 @@ describe('scan/parse.ts lists a type query as a type-only edge (D-6045)', () => 
         { specifier: '../shared/api', kind: 'type-query', typeOnly: true, names: ['NotifyEvent'], line: 3 },
         { specifier: './a.js', kind: 'type-query', typeOnly: true, names: ['Outer'], line: 4 },
       ]);
+  });
+});
+
+// D-6045, stage 2 (ARCH-04 (#545)): a per-name `type` is reported per name, so the outward-edges rule can tell an
+// import that binds a value from one whose every name is a type.
+describe('scan/parse.ts lists the names bound with a per-name type (D-6045, stage 2)', () => {
+  it('for an import and an export … from; none for a whole-statement type, absent on the other kinds', () => {
+    const t = parseSource([
+      "import { type A, b, type C as D } from './x.js';",
+      "import type { E } from './e.js';",
+      "export { type F, g } from './f.js';",
+      "export * from './all.js';",
+      "import './side.js';",
+      "const h = await import('./h.js');",
+    ].join('\n'));
+    expect(t.imports.map(({ specifier, typeNames }) => ({ specifier, typeNames }))).toEqual([
+      { specifier: './x.js', typeNames: ['A', 'C'] },
+      { specifier: './e.js', typeNames: [] },
+      { specifier: './f.js', typeNames: ['F'] },
+      { specifier: './all.js', typeNames: [] },
+      { specifier: './side.js', typeNames: [] },
+      { specifier: './h.js', typeNames: undefined },
+    ]);
   });
 });
 
@@ -152,5 +175,50 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
   it('parseSource takes text directly, and a .tsx name parses JSX', () => {
     const t = parseSource('export const View = () => <div>hi</div>;\n', 'view.tsx');
     expect(t.symbols.map((s) => s.name)).toEqual(['View']);
+  });
+});
+
+describe('scan/parse.ts reads the totality facts: Record<X, true> maps, type guards, compared literals (D-6048)', () => {
+  const FACTS = wireFacts(parseSource([
+    "export type Mode = 'on' | 'off';",
+    "export type Kind = 'a' | 'b';",
+    "export type Tone = 'x' | 'y';",
+    'const MODE_MAP: Record<Mode, true> = { on: true, off: true };',
+    'const KIND_TABLE: Readonly<Record<Kind, true>> = { a: true, b: true };',
+    'const TONES = { x: true, y: true } satisfies Record<Tone, true>;',
+    'const NOT_A_MAP: Record<Mode, string> = { on: "1", off: "0" };',
+    'type Shadow = Record<Kind, true>;',
+    'function take(m: Record<Tone, true>): void {}',
+    "export function isMode(v: unknown): v is Mode { return v === 'on' || 'off' == v; }",
+    'const isKind = (v: unknown): v is Kind => true;',
+    'function isMany(v: unknown): v is Array<Kind> { return true; }',
+    'export function check(v: string): string {',
+    "  switch (v) { case 'left': return v !== 'right' ? 'up' : 'down'; default: return v; }",
+    '}',
+  ].join('\n')));
+
+  it('a Record<X, true> counts as a variable annotation (bare or Readonly) or a satisfies type, nowhere else', () => {
+    expect(FACTS.recordTrueKeys).toEqual(['Mode', 'Kind', 'Tone']);
+  });
+
+  it('a type guard counts by its bare predicate type, a declaration or an arrow', () => {
+    expect(FACTS.guardedTypes).toEqual(['Mode', 'Kind']);
+  });
+
+  it('a compared literal is an equality operand or a case label, in source order', () => {
+    expect(FACTS.comparedLiterals).toEqual(['on', 'off', 'left', 'right']);
+  });
+
+  it('a form that gives nothing at runtime counts as neither: a declare map, an asserts predicate, a type-only guard', () => {
+    const none = wireFacts(parseSource([
+      "export type Mode = 'on' | 'off';",
+      'declare const M: Record<Mode, true>;',
+      'export function assertMode(v: unknown): asserts v is Mode {}',
+      'type G = (v: unknown) => v is Mode;',
+      'interface H { isMode(v: unknown): v is Mode }',
+      'declare function isMode(v: unknown): v is Mode;',
+    ].join('\n')));
+    expect(none.recordTrueKeys).toEqual([]);
+    expect(none.guardedTypes).toEqual([]);
   });
 });
