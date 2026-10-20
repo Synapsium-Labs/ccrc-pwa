@@ -4602,6 +4602,10 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
   const SEED = hex('seed');
   const STORE_A = '00000000-0000-4000-8000-0000000000a1';
   const STORE_B = '00000000-0000-4000-8000-0000000000b2';
+  const STORE_C = '00000000-0000-4000-8000-0000000000c3';
+  const VOS = 'value-outside-set';
+  /** A small non-empty set of families that each expect windows, so q18Power walks its grid. */
+  const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
   const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const OPUS = 'claude-opus-9-1';
   const ARM = 'claude-arm-9-1';
@@ -5446,15 +5450,11 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     });
   });
   describe('review fix round 1: validator bindings (D-5791)', () => {
-    const STORE_C = '00000000-0000-4000-8000-0000000000c3';
-    const VOS = 'value-outside-set';
     /** q18Power called with the smallest valid parameters, `over` replacing some: families [] returns once they are valid. */
     const q18With = (over: Record<string, unknown>): unknown =>
       (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
         { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...over });
     const q18 = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
-    /** A small non-empty set of families that each expect windows, so q18Power walks its grid. */
-    const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
 
     it('CONTROL: the valid draft and the valid final validate', () => {
       expect(verdict(draft())).toEqual([]);
@@ -5613,9 +5613,6 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     });
   });
   describe('review fix round 2: Q18 values and the part 2 bindings (D-5791)', () => {
-    const STORE_C = '00000000-0000-4000-8000-0000000000c3';
-    const VOS = 'value-outside-set';
-    const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
     const q18Run = (over: Record<string, unknown>): unknown =>
       (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
         { families: FAMS, plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 4, gridStep: 0.05, B: 40, ...over });
@@ -5645,6 +5642,30 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       expect(one('grid_step', 1e-15), 'CONTROL: answers as before').toEqual([]);
       expect(one('rho_headline', 1e-300), 'CONTROL: (1 - rho)/rho is 1e300, finite').toEqual([]);
       expect(one('rho_headline', 5e-309)).toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
+    });
+
+    it('the ruled edges: a subnormal rho whose (1 - rho)/rho is finite, and the smallest grid step whose x.den·N is still a safe integer, validate AND run; their neighbours are refused AND throw', () => {
+      const one = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
+      const refused = (key: string): Err[] => [{ path: `q18_settings.${key}`, word: VOS }];
+      // Smallest step with a safe x.den·N: N = 900719925474099 and 10·N = 9007199254740990 < 2^53 - 1. One more N is not safe.
+      const SMALLEST_SAFE = 0.9 / 900719925474099;
+      const FIRST_UNSAFE = 0.9 / 900719925474100;
+      // CONTROLS: the validator accepts (so asked first) and q18Power returns, in milliseconds.
+      for (const rho of [1e-308, 2.2e-308, 5.6e-309]) {
+        expect(one('rho_headline', rho), `CONTROL: subnormal rho ${rho} has a finite (1 - rho)/rho`).toEqual([]);
+        expect(() => q18Run({ rho }), `q18Power: rho ${rho}`).not.toThrow();
+      }
+      for (const gridStep of [SMALLEST_SAFE, 9.995e-16]) {
+        expect(one('grid_step', gridStep), `CONTROL: grid step ${gridStep} has a safe x.den·N`).toEqual([]);
+        expect(() => q18Run({ gridStep }), `q18Power: grid step ${gridStep}`).not.toThrow();
+      }
+      // The refused neighbours, validator asked first so a loosened guard reds by assertion, not by a hang.
+      expect(one('rho_headline', 5.562684646268003e-309), 'the largest rho below the edge, measured: (1 - rho)/rho overflows').toEqual(refused('rho_headline'));
+      expect(() => q18Run({ rho: 5.562684646268003e-309 })).toThrow(RangeError);
+      for (const gridStep of [FIRST_UNSAFE, 9.99e-16]) {
+        expect(one('grid_step', gridStep), `grid step ${gridStep}`).toEqual(refused('grid_step'));
+        expect(() => q18Run({ gridStep }), `q18Power: grid step ${gridStep}`).toThrow(RangeError);
+      }
     });
 
     describe('registry_drops', () => {

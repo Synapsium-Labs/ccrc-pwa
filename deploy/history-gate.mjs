@@ -1045,10 +1045,10 @@ function q18GridSteps(gridStep, x) {
 }
 
 /**
- * The one test of a Q18 rho: 0, or a value in (0, 1) whose (1 - rho) / rho is finite. A subnormal rho makes
- * gammaDraw loop forever. Answers null for a rho Q18 can honour, 'range' for a value outside [0, 1), and 'tiny' for a
- * rho in (0, 1) too small for the procedure. q18Power chooses its message from the answer and validateOpenRecord
- * refuses on any answer but null.
+ * The one test of a Q18 rho: 0, or a value in (0, 1) whose (1 - rho) / rho is finite. A rho so small that (1 - rho)/rho
+ * overflows (1e-309, for example) makes gammaDraw loop forever; a subnormal rho above that runs. Answers null for a rho
+ * Q18 can honour, 'range' for a value outside [0, 1), and 'tiny' for a rho in (0, 1) too small for the procedure.
+ * q18Power chooses its message from the answer and validateOpenRecord refuses on any answer but null.
  * @param {number} rho
  * @returns {null|'range'|'tiny'}
  */
