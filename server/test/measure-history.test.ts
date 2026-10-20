@@ -4150,6 +4150,8 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     const keyOrder = <T extends { key: string }>(xs: T[]): T[] => [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     /** A fixed interleaving of 17 positions, a literal permutation (no randomness). */
     const WEAVE = [3, 12, 0, 9, 15, 6, 1, 13, 4, 16, 8, 2, 11, 5, 14, 7, 10];
+    /** The same for 14 positions. */
+    const WEAVE14 = [3, 12, 0, 9, 6, 1, 13, 4, 8, 2, 11, 5, 10, 7];
     const ordersOf = <T extends { key: string }>(sorted: T[], weave: number[]): Array<[string, T[]]> => {
       expect(isPerm(weave) && weave.length === sorted.length, 'the interleaving is a permutation of the families').toBe(true);
       return [['by key', [...sorted]], ['reversed', [...sorted].reverse()], ['interleaved', weave.map((i) => sorted[i])]];
@@ -4196,9 +4198,7 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
       }));
       const clustersOf = (xs: typeof fams) => xs.map((f) => ({ t: f.questions.filter((x) => x.treatment.label === 'correct').length,
         c: f.questions.filter((x) => x.control.label === 'correct').length, n: f.questions.length }));
-      const orders: Array<[string, typeof fams]> = [['by key', [...fams]], ['reversed', [...fams].reverse()],
-        ['interleaved', [3, 12, 0, 9, 6, 1, 13, 4, 8, 2, 11, 5, 10, 7].map((i) => fams[i])]];
-      expect(isPerm([3, 12, 0, 9, 6, 1, 13, 4, 8, 2, 11, 5, 10, 7])).toBe(true);
+      const orders = ordersOf(fams, WEAVE14);
       expect(fams.map((f) => f.key), 'the fixture is listed in key order').toEqual(keyOrder(fams).map((f) => f.key));
       const raw = (xs: typeof fams) => gateT8.clusterBootstrap({ clusters: clustersOf(xs), B: gateT8.BOOTSTRAP.B, rng: gateT8.substream(SEED, 'quiz-ci'), mode: 'paired' });
       expect(distinct(orders.map(([, xs]) => raw(xs).lower)), 'non-vacuous: the raw order moves the paired lower bound').toBeGreaterThanOrEqual(2);
@@ -4215,6 +4215,65 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
         expect(a.upper, orders[i][0]).toEqual(want.upper);
         expect(a, orders[i][0]).toEqual(verdicts[0].criteria.accuracy);
         expect(v.verdict, orders[i][0]).toBe(verdicts[0].verdict);
+      }
+    });
+
+    // The order is by CODE UNIT (the module's cmpId), not by locale and not with digit runs read as numbers. Two key schemes
+    // separate the comparators: unpadded ids ('demo-10' sorts before 'demo-2' by code unit, after it numerically), and mixed-case
+    // store ids ('Store-B' sorts before 'store-a' by code unit, after it by locale). Each is CHECKED to move the bootstrap.
+    const codeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    const SCHEMES: Array<{ name: string; key: (i: number) => string; alt: (a: string, b: string) => number }> = [
+      { name: 'unpadded ids (numeric order differs)', key: (i) => fk(i), alt: (a, b) => a.localeCompare(b, undefined, { numeric: true }) },
+      { name: 'mixed-case store ids (locale order differs)', key: (i) => JSON.stringify([i % 2 === 0 ? 'store-a' : 'Store-B', `demo-${String(i).padStart(2, '0')}`, 'gen']), alt: (a, b) => a.localeCompare(b) },
+    ];
+
+    it('criterion 3: the order is by code unit, not by locale and not numeric (D-5787)', () => {
+      const withCalls = [1, 9, 2, 8, 3, 7, 0, 10, 5, 4, 6, 2, 9, 1];
+      const dens = [10, 10, 9, 10, 8, 10, 10, 10, 7, 10, 10, 9, 10, 8];
+      for (const sc of SCHEMES) {
+        const sorted = withCalls.map((w, i) => liveFam(sc.key(i), 'treatment', dens[i], Math.min(w, dens[i])))
+          .sort((a, b) => codeUnit(a.key, b.key));
+        const share = (f: LiveFam) => ({ num: f.windows.filter((w) => w.with_call).length, den: f.windows.length });
+        const boot = (cmp: (a: string, b: string) => number) => gateT8.clusterBootstrap({
+          clusters: [...sorted].sort((a, b) => cmp(a.key, b.key)).map(share), B: gateT8.BOOTSTRAP.B, rng: gateT8.substream(SEED, 'live-ci'), mode: 'share' });
+        const want = boot(codeUnit);
+        const other = boot(sc.alt);
+        expect(sorted.map((f) => f.key).join('|') === [...sorted].sort((a, b) => sc.alt(a.key, b.key)).map((f) => f.key).join('|'),
+          `${sc.name}: the alternative comparator orders the keys differently`).toBe(false);
+        expect(`${other.lower.num}/${other.lower.den} ${other.upper.num}/${other.upper.den}`,
+          `${sc.name}: non-vacuous, the alternative order moves a bound`).not.toBe(`${want.lower.num}/${want.lower.den} ${want.upper.num}/${want.upper.den}`);
+        for (const [name, fams] of ordersOf(sorted, WEAVE14)) {
+          const got = decide({ live: { families: fams } }).criteria.uptake!;
+          expect(got.lower, `${sc.name}, ${name}`).toEqual(want.lower);
+          expect(got.upper, `${sc.name}, ${name}`).toEqual(want.upper);
+        }
+      }
+    });
+
+    it('criterion 1: the order is by code unit, not by locale and not numeric (D-5787)', () => {
+      const sizes = Array.from({ length: 14 }, (_, i) => 3 + (i % 3));
+      const treatmentCorrect = [3, 1, 5, 0, 4, 2, 3, 3, 0, 4, 1, 5, 2, 3];
+      const controlCorrect = [1, 1, 1, 3, 0, 2, 2, 0, 0, 1, 1, 2, 0, 3];
+      for (const sc of SCHEMES) {
+        const sorted = sizes.map((n, i) => ({
+          key: sc.key(i),
+          questions: Array.from({ length: n }, (_, j) => q(j < Math.min(treatmentCorrect[i], n) ? R() : U(), j < Math.min(controlCorrect[i], n) ? R() : U())),
+        })).sort((a, b) => codeUnit(a.key, b.key));
+        const cluster = (f: (typeof sorted)[number]) => ({ t: f.questions.filter((x) => x.treatment.label === 'correct').length,
+          c: f.questions.filter((x) => x.control.label === 'correct').length, n: f.questions.length });
+        const boot = (cmp: (a: string, b: string) => number) => gateT8.clusterBootstrap({
+          clusters: [...sorted].sort((a, b) => cmp(a.key, b.key)).map(cluster), B: gateT8.BOOTSTRAP.B, rng: gateT8.substream(SEED, 'quiz-ci'), mode: 'paired' });
+        const want = boot(codeUnit);
+        const other = boot(sc.alt);
+        expect(sorted.map((f) => f.key).join('|') === [...sorted].sort((a, b) => sc.alt(a.key, b.key)).map((f) => f.key).join('|'),
+          `${sc.name}: the alternative comparator orders the keys differently`).toBe(false);
+        expect(`${other.lower.num}/${other.lower.den} ${other.upper.num}/${other.upper.den}`,
+          `${sc.name}: non-vacuous, the alternative order moves a bound`).not.toBe(`${want.lower.num}/${want.lower.den} ${want.upper.num}/${want.upper.den}`);
+        for (const [name, fams] of ordersOf(sorted, WEAVE14)) {
+          const got = decide({ quiz: { families: fams } }).criteria.accuracy!;
+          expect(got.lower, `${sc.name}, ${name}`).toEqual(want.lower);
+          expect(got.upper, `${sc.name}, ${name}`).toEqual(want.upper);
+        }
       }
     });
   });

@@ -1657,7 +1657,8 @@ function fracOrNull(v, name) {
  *
  * Order (D-5787): the bootstraps draw clusters by index, so criterion 1's paired clusters and criterion 3's share
  * clusters reach clusterBootstrap sorted by family `key`, by code unit (W2-5b passes familyKey(store_id, ccrc_id,
- * generation) as each key); the order the caller lists the families in moves no bound and no verdict, and no input is sorted in place.
+ * generation) as each key); the order the caller lists the families in moves no bound and no verdict, and no input is
+ * sorted in place.
  *
  * Unruled inputs throw, on every path (a hold or a halt included): a seedHex that is not a non-empty string, a B that is not
  * a positive safe integer (only an undefined B takes the default), a missing live section, a missing handcheck section or
