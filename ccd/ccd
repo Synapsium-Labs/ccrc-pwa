@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d162d290f2ab3669ff1fbbb79f5a64196b983770a4e2a4c7162736298cca4185
+# ccrc:generated 1 sha256=e789e76ec3ae436c82b39c88e66c6a97a40a2e78eaa6a484b9baa862ac88fe96
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -15330,7 +15330,13 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
     return 0
   fi
 
-  local bytes age; bytes=$(_ws_gc_bytes "$wt"); age=$(_ws_gc_age "$wt")
+  # `--fast` (D-5886, #123): no per-row `du`. Every row reads `-`, which
+  # `_ws_gc_human` already renders as unmeasured; the archived rung below takes
+  # its archive manifest's figure instead. Membership is decided by the rungs
+  # below, none of which reads `bytes`, so the rows are the full run's rows.
+  local bytes age
+  if (( ${GC_FAST:-0} )); then bytes='-'; else bytes=$(_ws_gc_bytes "$wt"); fi
+  age=$(_ws_gc_age "$wt")
 
   # Anything ccd did not create is FOREIGN: reported so it is visible, never
   # pruned. Guessing at another tool's lifecycle is how a reclaimer destroys
@@ -15365,7 +15371,24 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   elif _ws_gc_dirty "$wt";                       then state=$GC_DIRTY_STATE
   else                                                state=tracked
   fi
+  if (( ${GC_FAST:-0} )) && [[ "$state" == archived ]]; then
+    bytes=$(_ws_gc_manifest_bytes "$project-$slug")   # D-5886
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
+}
+
+# D-5886 (#123): an archived workspace's size under `ws-gc --fast`, read from
+# the `worktreeBytes` its archive manifest recorded when `ws-archive` measured
+# the tree, rather than a fresh `du`. A figure from archive time, not from now.
+# `-` (unmeasured) for anything that is not a whole number there: no manifest,
+# a manifest that is not JSON, a `null` (the archive's own unmeasured value),
+# or no `jq` on the box. Never 0 in place of a reading, the rule
+# `_ws_gc_bytes` keeps.
+_ws_gc_manifest_bytes() {   # id -> bytes, or '-'
+  local m b
+  m=$(_reg_get "$1" archivemanifest) || { echo '-'; return 0; }
+  b=$(printf '%s' "$m" | jq -r '.worktreeBytes | numbers' 2>/dev/null) || b=''
+  if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo '-'; fi
 }
 
 _ws_gc_scan() {
@@ -15862,13 +15885,23 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
   esac
 }
 
-cmd_ws_gc() {   # [--prune]
-  local prune=0
-  case "${1:-}" in
-    '')       ;;
-    --prune)  prune=1 ;;
-    *)        die "usage: ccd ws-gc [--prune]" ;;
-  esac
+cmd_ws_gc() {   # [--prune | --fast]
+  local prune=0 a
+  # `GC_FAST` is read by `_ws_gc_row` through bash's dynamic scope, so it is
+  # declared here and always set: an exported `GC_FAST` cannot reach a run.
+  local GC_FAST=0
+  for a in "$@"; do
+    case "$a" in
+      --prune) (( ! prune )) || die "usage: ccd ws-gc [--prune | --fast]"; prune=1 ;;
+      --fast)  (( ! GC_FAST )) || die "usage: ccd ws-gc [--prune | --fast]"; GC_FAST=1 ;;
+      *)       die "usage: ccd ws-gc [--prune | --fast]" ;;
+    esac
+  done
+  # D-5887: `--fast` is a read and only a read. A prune decides each row by
+  # its own checks, never by the size column, but refusing the pair keeps
+  # that true by construction: the flag cannot change what a prune removes.
+  (( ! (prune && GC_FAST) )) \
+    || die "ws-gc --fast is read-only and never combines with --prune; run ccd ws-gc --prune on its own"
 
   local rows; rows=$(_ws_gc_scan)
   [[ -n "$rows" ]] || { echo "nothing to report — no worktrees found under $PROJECTS_ROOT"; return 0; }
@@ -15904,7 +15937,14 @@ cmd_ws_gc() {   # [--prune]
   # partial sum rendered as a figure under a sentence that says "what removing
   # all of them would free" — an affirmative total over a read that did not
   # finish, which is the class this branch has closed eleven times.
+  # `--fast` (D-5886) skips this aggregate `du` as well: on large trees it is
+  # the slowest read in the command, and the footer below says so instead.
   local total='-' tf terr trc
+  if (( GC_FAST )); then
+    echo
+    echo "no total across $n worktree$( (( n == 1 )) || echo s ) — --fast skips sizing. Archived rows show the size their archive manifest recorded; every other size is unmeasured. Run ccd ws-gc without --fast for the figures."
+    return 0
+  fi
   if (( ${#paths[@]} > 0 )); then
     tf=$(_plat_mktemp) || tf=''
     if [[ -n "$tf" ]]; then

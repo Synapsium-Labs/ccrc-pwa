@@ -321,6 +321,156 @@ describe('ws-gc report', () => {
   });
 });
 
+// `ws-gc --fast` (D-5886, #123): the membership answer without the sizing.
+// A plain `ws-gc` measures every worktree with `du` and then the whole set once
+// more for the total, which on a registry of multi-GB trees did not return
+// inside a minute. `--fast` reads the same rows and skips every `du`; an
+// archived row reuses the `worktreeBytes` its archive manifest already holds.
+describe('ws-gc --fast', () => {
+  // The stated bound for 45 workspaces. The run it times makes no `du` at all
+  // (asserted below), so what is left is one `git worktree list`, one
+  // `git status` per registered tree and one `stat` per row. Measured at about
+  // 1.7 s on a developer laptop, so the bound leaves CI ten times the room.
+  const FAST_BOUND_MS = 20_000;
+
+  /** 45 workspaces of one project, built with plain git and registry files
+   *  (45 `ws-add`s would cost minutes): 1-5 archived with a manifest,
+   *  6-35 tracked, 36-40 dirty, 41-45 orphans with no `.uuid`. */
+  const build45 = (): void => {
+    h.makeRepo('demo');
+    h.sh(`main="$HOME/projects/demo"; reg="$HOME/.cc-sessions"
+      for i in $(seq -w 1 45); do
+        s="ws-$i"; wt="$HOME/worktrees/demo/$s"
+        git -C "$main" worktree add -q -b "ws/$s" "$wt" >/dev/null 2>&1 || exit 1
+        (( 10#$i > 40 )) && continue
+        printf 'u-%s\\n' "$i" > "$reg/demo-$s.uuid"
+        (( 10#$i > 35 )) && printf 'x\\n' > "$wt/scratch.txt"
+        if (( 10#$i <= 5 )); then
+          : > "$reg/demo-$s.archived"
+          printf '{"id":"demo-%s","worktreeBytes":%d}\\n' "$s" $(( 10#$i * 1048576 )) > "$reg/demo-$s.archivemanifest"
+        fi
+      done; true`);
+  };
+
+  /** The table's rows as `state project slug path`, sorted; SIZE and IDLE left out. */
+  const members = (out: string): string[] => {
+    const lines = out.split('\n');
+    const rows: string[] = [];
+    for (const l of lines.slice(lines.findIndex((x) => x.startsWith('STATE')) + 1)) {
+      if (!l.trim()) break;
+      const f = l.trim().split(/\s+/);
+      rows.push(`${f[0]} ${f[1]} ${f[2]} ${f[f.length - 1]}`);
+    }
+    return rows.sort();
+  };
+
+  /** The SIZE column of one workspace's row. */
+  const sizeOf = (out: string, slug: string): string =>
+    out.split('\n').map((l) => l.trim().split(/\s+/)).find((f) => f[2] === slug)![3];
+
+  it('lists exactly the same candidates as the full run on a 45-workspace fixture, under the bound, with no du', () => {
+    build45();
+    const full = h.sh('cmd_ws_gc');
+    const t0 = Date.now();
+    const fast = h.sh(`_plat_bytes() { echo "$*" >> "$HOME/du-calls"; return 1; }; cmd_ws_gc --fast`);
+    const ms = Date.now() - t0;
+    const want = members(full);
+    expect(want).toHaveLength(45);
+    const count = (s: string): number => want.filter((r) => r.startsWith(`${s} `)).length;
+    expect([count('archived'), count('tracked'), count('dirty'), count('orphan')]).toEqual([5, 30, 5, 5]);
+    expect(members(fast)).toEqual(want);
+    expect(fs.existsSync(path.join(h.home, 'du-calls')), 'a du ran under --fast').toBe(false);
+    expect(ms, `--fast took ${ms} ms`).toBeLessThan(FAST_BOUND_MS);
+  }, 180_000);
+
+  it('gives an archived row the manifest\'s worktreeBytes and leaves every other row unmeasured', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    addWs('demo', 'still-cove');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archivemanifest'), '{"id":"demo-quiet-mesa","worktreeBytes":3145728}\n');
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(sizeOf(fast, 'quiet-mesa'), fast).toMatch(/^(3\.0M|3145728)$/);
+    expect(sizeOf(fast, 'still-cove'), fast).toBe('-');
+    // The control: the full run measures the same tracked row.
+    expect(sizeOf(h.sh('cmd_ws_gc'), 'still-cove')).not.toBe('-');
+  });
+
+  for (const [label, manifest] of [
+    ['a null worktreeBytes', '{"id":"demo-quiet-mesa","worktreeBytes":null}\n'],
+    ['a manifest that is not JSON', 'not json\n'],
+    ['a fractional worktreeBytes', '{"id":"demo-quiet-mesa","worktreeBytes":1.5}\n'],
+    ['no manifest at all', undefined],
+  ] as const) {
+    it(`reads an archived row with ${label} as unmeasured, never as 0`, () => {
+      h.makeRepo('demo');
+      addWs('demo', 'quiet-mesa');
+      const reg = path.join(h.home, '.cc-sessions');
+      fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+      if (manifest !== undefined) fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archivemanifest'), manifest);
+      const fast = h.sh('cmd_ws_gc --fast');
+      expect(members(fast)[0]).toMatch(/^archived demo quiet-mesa /);
+      expect(sizeOf(fast, 'quiet-mesa'), fast).toBe('-');
+    });
+  }
+
+  it('claims no total: the footer says sizing was skipped', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(fast).toContain('--fast skips sizing');
+    expect(fast).not.toContain('what removing all of them would free');
+    expect(fast).not.toContain('total unmeasured');
+  });
+
+  // SAFETY: `--fast` is a read. It never combines with `--prune`, in either
+  // order, so the flag cannot change which rows a prune acts on.
+  for (const args of ['--fast --prune', '--prune --fast']) {
+    it(`refuses \`${args}\` and removes nothing`, () => {
+      h.makeRepo('demo');
+      const wt = addOrphan('demo', 'still-cove');   // a clean merged orphan: what --prune removes
+      const out = h.sh(`(cmd_ws_gc ${args}) 2>&1; echo "rc=$?"`);
+      expect(out).toMatch(/--fast is read-only/);
+      expect(out).not.toContain('rc=0');
+      expect(out).not.toContain('pruning:');
+      expect(fs.existsSync(wt)).toBe(true);
+    });
+  }
+
+  it('refuses an unrecognised argument beside --fast, and a repeated flag', () => {
+    h.makeRepo('demo');
+    for (const args of ['--fast --purge', '--fast --fast', '--prune --prune']) {
+      const out = h.sh(`(cmd_ws_gc ${args}) 2>&1; echo "rc=$?"`);
+      expect(out, args).toContain('usage: ccd ws-gc [--prune | --fast]');
+      expect(out, args).not.toContain('rc=0');
+    }
+  });
+
+  it('MODIFIES NOTHING under --fast either', () => {
+    h.makeRepo('demo');
+    const wt = addOrphan('demo', 'still-cove');
+    const before = h.sh(`find "$HOME/worktrees" "$HOME/.cc-sessions" "$HOME/projects" -print | LC_ALL=C sort`);
+    h.sh('cmd_ws_gc --fast');
+    expect(h.sh(`find "$HOME/worktrees" "$HOME/.cc-sessions" "$HOME/projects" -print | LC_ALL=C sort`)).toBe(before);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('is reachable as a subcommand', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    expect(h.sh(`"${CCD}" ws-gc --fast`)).toContain('quiet-mesa');
+  });
+
+  it('only the flag turns it on: an exported GC_FAST leaves a plain run measuring', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const out = h.sh('cmd_ws_gc', { GC_FAST: '1' });
+    expect(sizeOf(out, 'quiet-mesa'), out).not.toBe('-');
+    expect(out).toContain('what removing all of them would free');
+  });
+});
+
 describe('ws-gc --prune', () => {
   const prune = (): string => h.sh(`cmd_ws_gc --prune 2>&1`);
 
