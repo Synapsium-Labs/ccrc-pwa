@@ -2388,6 +2388,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         tests). The squash's parent is `84a0a0608` and its tree is the tested merge's. The scratch worktree is removed.
         - STATUS: fleet and server v0.0.472, newest v0.0.478, stable v0.0.328, intent dev/auto=off, backups fleet
           222M/server 7978M, disk free fleet 198G/work volume 64G/server 24G, no anomalies.
+      - **18:05 UTC: the full run for the final promotion is dispatched, on v0.0.479.**
+        - `main`'s head is #989's `e99d6ec72`, tagged v0.0.479. `stable` is at v0.0.328 (`c44bea401`), an ancestor, so
+          the promotion is a fast-forward. No before-stable item is open.
+        - Both of today's `main` reds are fixed there. Measured on a clean checkout of `e99d6ec72` with its own
+          `npm ci`: `citations` passes (#988), and `single-definition` passes its literal-pin ratchet with a long
+          timeout. Its default 20 s timeout fails at 28 s on this loaded box.
+        - Dispatched: full run 39471710692 (`gh workflow run ci.yml --ref main -f mode=full`). On a green
+          `full-suite` I fast-forward `stable` to `e99d6ec72`. A red that is a recorded or timing flake gets one job
+          re-run. Any other red is reported first.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
