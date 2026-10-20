@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, STASH_TRIES, type SendResult } from '../src/inject/send.js';
+import { ECHO_TRIES, sendPrompt, STASH_TRIES, SUBMIT_TRIES, type SendResult } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 
 /**
@@ -68,6 +68,13 @@ interface FakeOpts {
   runOnSubmit?: boolean;
   /** Called before the k-th capture after the first submit (k from 1), to land a late event. */
   afterSubmit?: (k: number, s: Cc) => void;
+  /** D-6010: the n-th typed literal (from 1) is refused by tmux, `type-failed`. */
+  failLiteral?: number;
+  /** D-6010: typed literals never reach the box (the echo never renders). */
+  dropLiterals?: boolean;
+  /** D-6010: after the first typed literal, the next `blind` captures come back with no box (`no-box`) or fail
+   *  (`dead`), then the pane reads normally again. */
+  blindAfterType?: { kind: 'no-box' | 'dead'; captures: number };
 }
 
 const nonBlank = (rows: string[]): boolean => rows.some((r) => r.trim() !== '');
@@ -99,15 +106,26 @@ function fakeCc(o: FakeOpts = {}) {
   let swallow = o.swallowEnters ?? 0;
   let submits = 0;
   let sinceSubmit = 0;
+  let literals = 0;
+  let blind = 0;
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'capture-pane') {
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
+      if (blind > 0) {
+        blind--;
+        if (o.blindAfterType!.kind === 'dead') return { code: 1, stdout: '', stderr: "can't find pane" };
+        return { code: 0, stdout: ['⏺ a long transcript row', 'more transcript'].join('\n') + '\n', stderr: '' };
+      }
       return { code: 0, stdout: render(s), stderr: '' };
     }
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') {
         const text = args.at(-1)!;
         keys.push(`lit:${text}`);
+        literals++;
+        if (literals === 1 && o.blindAfterType) blind = o.blindAfterType.captures;
+        if (o.failLiteral === literals) return { code: 1, stdout: '', stderr: 'refused' };
+        if (o.dropLiterals) return { code: 0, stdout: '', stderr: '' };
         if (s.box.length === 0) s.box = [''];
         s.box[s.box.length - 1] += text;
         return { code: 0, stdout: '', stderr: '' };
@@ -275,7 +293,10 @@ describe("onDraft: 'stash' (D-5911)", () => {
       const res = await send(f, 'hello world');
       expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
       expect(f.state.history).toEqual([]);
-      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      // D-6010: the stash is still held, so the box is ours: cleared, and the draft popped back.
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored-restored' });
+      expect(f.state.box).toEqual(['hello world, and the rest of a half typed thought']);
+      expect(f.state.stash).toBeNull();
     });
 
     it('a turn already running before the call proves nothing: a mid-render box is `enter-ignored`, one Enter', async () => {
@@ -397,6 +418,145 @@ describe("onDraft: 'stash' (D-5911)", () => {
       const f = fakeCc({ box: ['a half typed note'], menu: true });
       expect(await send(f, 'hi')).toEqual({ ok: false, error: 'dialog-open' });
       expect(f.keys).toEqual([]);
+    });
+  });
+
+  describe('D-6010: a send that fails after its `C-s` gives the draft back', () => {
+    const DRAFT = ['a half typed note'];
+    const pops = (keys: string[]): number => keys.filter((k) => k === 'C-s').length;
+    // Each arm ends with the human's draft back in the box, the stash empty, and the refusal's word unchanged.
+    const givenBack = (f: ReturnType<typeof fakeCc>, res: SendResult, error: string): void => {
+      expect(res).toMatchObject({ ok: false, error });
+      expect(f.state.stash, 'the draft is not left in the stash').toBeNull();
+      expect(f.state.box).toEqual(DRAFT);
+      expect(f.state.history, 'nothing was submitted').toEqual([]);
+      expect(pops(f.keys), 'one stash, one pop').toBe(2);
+    };
+
+    it('`type-failed` mid-message: our partial text is cleared and the stash popped', async () => {
+      const f = fakeCc({ box: [...DRAFT], failLiteral: 2 });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await send(f, 'first line of ours\nsecond line of ours');
+      givenBack(f, res, 'type-failed');
+      expect(f.keys.indexOf('C-u')).toBeGreaterThan(f.keys.indexOf('lit:second line of ours'));
+    });
+
+    it('`verify-failed` (the echo never rendered): the empty box takes the pop', async () => {
+      const f = fakeCc({ box: [...DRAFT], dropLiterals: true });
+      const res = await send(f, 'hello from the lane');
+      givenBack(f, res, 'verify-failed');
+      expect(f.keys).not.toContain('C-u');
+    });
+
+    it('`box-unreadable` (no box on any echo poll): once the box is back, our text is cleared and the stash popped', async () => {
+      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'no-box', captures: ECHO_TRIES } });
+      const res = await send(f, 'hello from the lane');
+      givenBack(f, res, 'box-unreadable');
+    });
+
+    it('`not-alive` (every echo capture failed): once the pane reads again, our text is cleared and the stash popped', async () => {
+      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'dead', captures: ECHO_TRIES } });
+      const res = await send(f, 'hello from the lane');
+      givenBack(f, res, 'not-alive');
+    });
+
+    it('`enter-ignored` (both Enters swallowed): our text cleared, the stash popped, `enter-ignored-restored`, no rescue claim', async () => {
+      const f = fakeCc({ box: [...DRAFT], swallowEnters: 2 });
+      const res = await send(f, 'hello from the lane');
+      givenBack(f, res, 'enter-ignored-restored');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
+    });
+
+    it('`restore-unverified` (a turn started over a box that could be the restore): a stash still held on an empty box is popped', async () => {
+      const draft = 'hello world, and the rest of a half typed thought';
+      const f = fakeCc({
+        box: [draft], restoreOnSubmit: false, runOnSubmit: true,
+        // Every submit poll reads a prefix of the draft (maybe the restore mid-render); then the box is empty with
+        // the stash still held: the restore never landed.
+        afterSubmit: (k, s) => {
+          if (k <= SUBMIT_TRIES) s.box = ['hello world, and the rest'];
+          else if (k === SUBMIT_TRIES + 1) s.box = [];
+        },
+      });
+      const res = await send(f, 'hello world');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(pops(f.keys)).toBe(2);
+      expect(f.state.stash).toBeNull();
+      expect(f.state.box).toEqual([draft]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('`stash-failed` with the stash landing after the budget: the late stash is popped back', async () => {
+      const f = fakeCc({ box: [...DRAFT] });
+      let captures = 0;
+      let late = false;
+      const tmux = f.tmux;
+      const capture = tmux.captureAnsi.bind(tmux);
+      const key = tmux.sendKey.bind(tmux);
+      // The first `C-s` lands only after the last of the budget's polls, before the give-back's fresh capture.
+      tmux.sendKey = async (id: string, k: string) => {
+        if (k === 'C-s' && !late) { late = true; f.keys.push(k); return true; }
+        return key(id, k);
+      };
+      tmux.captureAnsi = async (id: string) => {
+        if (++captures === 2 + STASH_TRIES) { f.state.stash = f.state.box; f.state.box = []; }
+        return capture(id);
+      };
+      const res = await send(f, 'hello from the lane');
+      expect(res).toMatchObject({ ok: false, error: 'stash-failed' });
+      expect(f.keys.filter((k) => k === 'C-s'), 'the late stash, then its pop').toHaveLength(2);
+      expect(f.state.stash).toBeNull();
+      expect(f.state.box).toEqual(DRAFT);
+      expect(typed(f.keys)).toEqual([]);
+    });
+
+    it('text in the box this send cannot prove its own is left alone, with a warn line', async () => {
+      // Both Enters swallowed, and the human typed over our text meanwhile: not a prefix of ours, never cleared.
+      const f = fakeCc({
+        box: [...DRAFT], swallowEnters: 2,
+      });
+      const tmux = f.tmux;
+      const orig = tmux.sendKey.bind(tmux);
+      let enters = 0;
+      tmux.sendKey = async (id: string, key: string) => {
+        const r = await orig(id, key);
+        if (key === 'Enter' && ++enters === 2) f.state.box = ['hello from the lane, and someone kept typing'];
+        return r;
+      };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await send(f, 'hello from the lane');
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(f.keys).not.toContain('C-u');
+      expect(pops(f.keys)).toBe(1);
+      expect(f.state.box).toEqual(['hello from the lane, and someone kept typing']);
+      expect(f.state.stash).toEqual(DRAFT);
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('D-6011: `resumeIfOwn` with a stash held', () => {
+    it('a restored human draft that begins with the needle never takes the retry Enter', async () => {
+      // An earlier stash-path send left our nudge in the box over a held stash. The resume's Enter submits it and
+      // Claude Code restores the stash: a human draft that starts with the same 24 characters.
+      const nudge = 'you have mail waiting for you, fetch it';
+      const human = `${nudge.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [nudge], stash: [human] });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.keys).toEqual(['Enter']);
+      expect(f.state.history).toEqual([nudge]);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('…and while the stash still shows, our unsent text still gets the retry Enter', async () => {
+      const nudge = 'you have mail waiting for you, fetch it';
+      const f = fakeCc({ box: [nudge], stash: ['an earlier human note'], swallowEnters: 1 });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.keys).toEqual(['Enter', 'Enter']);
+      expect(f.state.history).toEqual([nudge]);
+      expect(res).toEqual({ ok: true });
     });
   });
 
