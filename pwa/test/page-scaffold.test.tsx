@@ -214,7 +214,9 @@ describe('PageScaffold (D-5102)', () => {
     expect(wrapper).toContain(`${at}gap-6`);
     expect(body.className.split(/\s+/)).toEqual(expect.arrayContaining([`${at}pl-0`, `${at}mx-0`]));
     const navColumn = screen.getByRole('navigation', { name: 'sections' }).parentElement!.className.split(/\s+/);
-    expect(navColumn).toEqual(expect.arrayContaining([`${at}sticky`, `${at}top-head`, `${at}self-start`]));
+    // min-w-0 lets the nav's one-line, ellipsised rows (R2c) shrink inside
+    // the 200/220 track rather than widen it.
+    expect(navColumn).toEqual(expect.arrayContaining(['min-w-0', `${at}sticky`, `${at}top-head`, `${at}self-start`]));
     expect(navColumn.filter((c) => /^(?:@[\w-[\]]+:)?p[xlr]?-/.test(c)), 'a padding inside the nav column').toEqual([]);
   });
 
