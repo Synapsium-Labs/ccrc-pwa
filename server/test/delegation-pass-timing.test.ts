@@ -1382,9 +1382,9 @@ describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real
     const original = DelegationDurability.prototype.repairProjection;
     let ran = false;
     let ranAtRepair: boolean | null = null;
-    vi.spyOn(DelegationDurability.prototype, 'repairProjection').mockImplementation(function (this: DelegationDurability, ...args: never[]) {
+    vi.spyOn(DelegationDurability.prototype, 'repairProjection').mockImplementation(function (this: DelegationDurability, ...args: Parameters<DelegationDurability['repairProjection']>) {
       ranAtRepair = ran;
-      return (original as (...a: never[]) => ReturnType<typeof original>).apply(this, args);
+      return original.apply(this, args);
     });
     r.arm({});
     r.also('effects', () => { setImmediate(() => { ran = true; }); });
