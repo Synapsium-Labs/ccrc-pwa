@@ -387,7 +387,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
     // spec 2026-10-20-workspace-disk-and-registry-truth §2.6 chose: seven days, matching expiry's horizon. The
-    // accounts word's signed-in window (D-6058 (3)) is the accounts spec's own seven days since the last good check,
+    // accounts word's signed-in window (D-6058 (3), (6)) is the accounts spec's own 7 d since the last good check (§4.1),
     // a separate quantity that does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
