@@ -4855,6 +4855,41 @@ export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closin
 export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
 
 /**
+ * THE DRIFT KINDS (coordinator-durability tail spec §4.2, `drift-decider-pure` (D-5921)): what the drift
+ * reconciler can find out of step, each mapped to the kind of subject it names, so a finding's target is a run
+ * (`/runs`) or a session (`/s/<id>`). The one home of the list: `DRIFT_KINDS` is this map's keys and
+ * `isDriftKind` the one narrowing of an untrusted string. The decider is `server/src/coord/drift.ts`.
+ */
+export const DRIFT_KIND_MAP = {
+  'run-quiet': 'run',
+  'claimant-gone': 'run',
+  'mail-parked': 'session',
+  'mail-held': 'session',
+  'parent-mismatch': 'session',
+  'review-waiting': 'run',
+  'question-orphaned': 'session',
+} as const satisfies Record<string, 'run' | 'session'>;
+export type DriftKind = keyof typeof DRIFT_KIND_MAP;
+export const DRIFT_KINDS: readonly DriftKind[] = Object.keys(DRIFT_KIND_MAP) as DriftKind[];
+export function isDriftKind(raw: unknown): raw is DriftKind {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(DRIFT_KIND_MAP, raw);
+}
+
+/** One finding (D-5921). `key` names the subject, so the same drift is the same key on every pass; `subject` is
+ *  the JSON of the ids it names; `detail` one line in words; `factAt` the fact's own time where it has one, else
+ *  null (its age then runs from first sight). `runId` is set on a run kind (for `claimant-gone`, the programme's
+ *  newest open run) and `sessionId` on a session kind; each is null where it does not apply. */
+export interface DriftFinding {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly factAt: number | null;
+  readonly runId: number | null;
+  readonly sessionId: string | null;
+}
+
+/**
  * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
  * or release-with-ceremony, and reusing those states would make the table lie
@@ -11755,3 +11790,36 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
+ *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
+ *  `server/src/coord/redact.ts` for approval rows). */
+export interface CredentialMask { readonly id: string; readonly source: string }
+
+/** THE credential shapes a lane's files can hold, whether or not ccrc wrote them (D-5513, plan Task A10): the whole
+ *  Anthropic `sk-ant-<kind><nn>-` family (the OAuth access token `oat`, the refresh token `ort` a login lane's
+ *  `.credentials.json` holds, and the API key `api`), OpenRouter keys, the Codex gateway key (`ccrc-codex` reads it
+ *  as `sk-` and 48 lowercase hex), the generic `sk-` rule and the JWT shape (so a Codex `auth.json`'s access, id and
+ *  refresh tokens are covered), and the Codex `auth.json` token fields by name. The one home: `redact.ts`'s
+ *  `KNOWN_TOKEN` and `JWT` read `genericSk` and `jwt` from here. Each specific family is its own entry, so it is
+ *  masked even if the generic rule were ever narrowed. */
+export const CREDENTIAL_MASKS = [
+  { id: 'anthropic', source: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}` },
+  { id: 'openrouter', source: String.raw`sk-or-v1-[A-Za-z0-9]{8,}` },
+  { id: 'codexGateway', source: String.raw`sk-[0-9a-f]{48}` },
+  { id: 'genericSk', source: String.raw`sk-[A-Za-z0-9_-]{8,}` },
+  { id: 'jwt', source: String.raw`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*` },
+  { id: 'codexTokenField', source: String.raw`(?<="(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*")(?:[^"\\\n]|\\.)+` },
+] as const satisfies readonly CredentialMask[];
+export type CredentialMaskId = (typeof CREDENTIAL_MASKS)[number]['id'];
+
+/** One credential shape's source, by id. */
+export function credentialMaskSource(id: CredentialMaskId): string {
+  return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
+}
+
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+export const SECRET_MASK = '‹secret masked›';
+/** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
+ *  check fails closed, so no run is ever passed through unchecked (D-5513). */
+export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
