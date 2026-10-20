@@ -14,6 +14,7 @@ import { ApiError } from '../lib/apiError';
 import { BAD_TITLE_REASONS, type BadTitleReason } from '../../../shared/refusal';
 import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../shared/slug';
 import { BAD_REQUEST_TEXT } from './workspaceAddWords';
+import { BLANK_TITLE_TEXT } from './workspaceNameWords';
 
 /** The rename sheet's own words, spelled once. */
 export const RENAME_TEXT = {
@@ -99,7 +100,10 @@ export function renameRefusalText(r: RenameRefusal): string {
     case 'bad-request': return BAD_REQUEST_TEXT;
     case 'bad-session-id': return "This session's id isn't valid, so it can't be renamed. Reload the page.";
     case 'name-too-long': return 'That title is too long. Shorten it, or paste just the ticket id.';
-    case 'bad-name': return r.reason === null ? "That title can't be used. Change it and try again." : NAME_REFUSAL_TEXT[r.reason];
+    // A rename is not bound by the slug grammar, so the one `bad-name` this server answers is a title with nothing in it;
+    // any other reason is an older box, and its words stand.
+    case 'bad-name': return r.reason === null ? "That title can't be used. Change it and try again."
+      : r.reason === 'no-usable-characters' ? BLANK_TITLE_TEXT : NAME_REFUSAL_TEXT[r.reason];
     case 'bad-title': return r.reason === null
       ? "The fleet box's ccd refused that title. Change it and try again."
       : BAD_TITLE_TEXT[r.reason];

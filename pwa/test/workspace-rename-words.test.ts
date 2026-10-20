@@ -7,6 +7,7 @@ import {
   RENAME_TEXT, classifyRenameError, renameRefusalText, slugStays, type RenameRefusal,
 } from '../src/fleet/workspaceRenameWords';
 import { NAME_REFUSALS, NAME_REFUSAL_TEXT } from '../../shared/slug';
+import { BLANK_TITLE_TEXT } from '../src/fleet/workspaceNameWords';
 
 const err = (status: number, body: unknown): ApiError => new ApiError(status, body);
 
@@ -60,8 +61,14 @@ describe('renameRefusalText', () => {
     for (const a of texts) for (const b of texts) if (a !== b) expect(b.startsWith(a), `${a} starts ${b}`).toBe(false);
   });
 
-  it("says the grammar's own sentence for a refused name, as the field does", () => {
-    for (const reason of NAME_REFUSALS) expect(renameRefusalText({ kind: 'bad-name', reason })).toBe(NAME_REFUSAL_TEXT[reason]);
+  it("says its own sentence for an empty title, and the grammar's for any other reason a box could still name", () => {
+    // A rename is not bound by the slug grammar: the one `bad-name` this server answers is a title with nothing in it,
+    // and "no letters or numbers" would be false of an emoji title. Any other reason is an older box, and its words stand.
+    expect(renameRefusalText({ kind: 'bad-name', reason: 'no-usable-characters' })).toBe(BLANK_TITLE_TEXT);
+    expect(BLANK_TITLE_TEXT).not.toBe(NAME_REFUSAL_TEXT['no-usable-characters']);
+    for (const reason of NAME_REFUSALS.filter((r) => r !== 'no-usable-characters')) {
+      expect(renameRefusalText({ kind: 'bad-name', reason })).toBe(NAME_REFUSAL_TEXT[reason]);
+    }
   });
 
   it("says ccd's reason when it gave one, and says it gave none when it did not", () => {

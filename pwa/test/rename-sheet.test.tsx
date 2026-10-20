@@ -9,7 +9,8 @@ import type { FleetSession } from '../../shared/api';
 import { RenameSheet, type RenameSheetProps } from '../src/fleet/RenameSheet';
 import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import { RENAME_TEXT, classifyRenameError, renameRefusalText } from '../src/fleet/workspaceRenameWords';
-import { LINEAR_SETTINGS_PATH, LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
+import { BLANK_TITLE_TEXT, LINEAR_SETTINGS_PATH, LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
+import { WS_TITLE_MAX_BYTES } from '../../shared/slug';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
 import { fleetSession } from './fleetFixture';
@@ -107,13 +108,38 @@ describe('saving a title', () => {
     expect(screen.getByText('slug stays quiet-harbor')).toBeInTheDocument();
   });
 
-  it('a refused title shows the grammar sentence, disables the confirm and sends nothing', () => {
+  // A rename never changes the slug, so the slug grammar has no say in a title: these were all refused before.
+  it.each([
+    ['CJK, no ASCII letter or digit', '日本語のタイトル'],
+    ['an emoji', '🚀'],
+    ['one character', 'x'],
+    ['punctuation', '!!'],
+  ])('%s is a title: previewed as typed, the confirm enabled, and sent as typed', async (_why, title) => {
+    const p = props();
+    mount(p);
+    type(title);
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByText('slug stays quiet-harbor')).toBeInTheDocument();
+    expect(button(RENAME_TEXT.save)).toBeEnabled();
+    expect(api.linearResolve).not.toHaveBeenCalled();
+    fireEvent.click(button(RENAME_TEXT.save));
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('project-a-quiet-harbor', { title }));
+  });
+
+  it('a title with nothing in it but control characters is refused in the field: its own sentence, the confirm disabled, nothing sent', () => {
     mount(props());
-    type('!!');
-    expect(screen.getByText('That has no letters or numbers in it.')).toBeInTheDocument();
+    type('\u0001\u0002');
+    expect(screen.getByText(BLANK_TITLE_TEXT)).toBeInTheDocument();
     expect(button(RENAME_TEXT.fixName)).toBeDisabled();
     fireEvent.click(button(RENAME_TEXT.fixName));
     expect(rename).not.toHaveBeenCalled();
+  });
+
+  it('a title past the byte cap is previewed as it will be saved: shortened, ending in an ellipsis', () => {
+    mount(props());
+    type('語'.repeat(400));
+    const shown = screen.getByText(/^語+…$/);
+    expect(new TextEncoder().encode(shown.textContent ?? '').length).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
   });
 
   it('a Linear lookup that failed keeps the title typed and the Save open, with the way to Settings', async () => {

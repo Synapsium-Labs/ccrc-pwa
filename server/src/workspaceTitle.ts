@@ -6,8 +6,11 @@
  *
  * A RENAME CHANGES THE LABEL, NEVER THE SLUG. The slug, the branch, the directory and the session id are the workspace's
  * for life; ccd's `ws-title` writes the two registry fields `title` and `named` and nothing else, so what the operator
- * types here is the display sentence and the field's grammar is the create's (`deriveWorkspaceSlug`'s refusals): the one
- * field the sheet previews through `GET /api/linear/resolve` must accept at Save exactly what it accepted at preview.
+ * types here is the display sentence and NOT a slug: the slug grammar (`deriveWorkspaceSlug`, which refuses a title with no
+ * ASCII letter or digit, a single character, or a link that is not Linear's) has no say. A title is refused only for what
+ * ccd re-proves (non-blank, no control characters, within the byte cap), and the last two are made true by `sanitizeTitle`
+ * before ccd sees the text, so the one refusal left is a title with nothing in it. A ticket id or link still resolves to
+ * its Linear title (`parseLinearRef`, the create's own ticket reader).
  *
  * EVERY WAY IT CAN BE REFUSED IS DECIDED HERE, BEFORE ANY ARGV EXISTS, the missing verb included (M7): a box whose
  * `ccd caps` does not list `ws-title` is `501 unsupported`, and nothing is sent, so an older ccd is never asked to run a
@@ -16,7 +19,7 @@
 import { WS_TITLE_VERB } from './ccdargv.js';
 import { LINEAR_REF_MAX_CHARS } from './workspaceCreate.js';
 import type { BadTitleReason, WsCreateRefusal } from '../../shared/refusal.js';
-import { deriveWorkspaceSlug, NAME_REFUSAL_TEXT, type NameRefusal, type SlugAsk } from '../../shared/slug.js';
+import { NAME_REFUSAL_TEXT, parseLinearRef, sanitizeTitle, type LinearRef, type NameRefusal } from '../../shared/slug.js';
 
 /** Which verbs the deployed box advertised, read by the route with `capSupported` (no evidence = false). */
 export interface RetitleCaps { verb: boolean }
@@ -32,8 +35,8 @@ export type RetitlePlan =
   | { kind: 'refuse'; refusal: RetitleRefusal }
   /** Remove the title and the named marker: the row goes back to the ai-title sweep. */
   | { kind: 'clear' }
-  /** Set the title to what `name` becomes. `name` is the operator's text, untrimmed; `ask` is the grammar's answer. */
-  | { kind: 'title'; name: string; ask: Extract<SlugAsk, { kind: 'named' }> };
+  /** Set the title to what `name` becomes. `name` is the operator's text, untrimmed; `ticket` is the Linear ticket it names, or null. */
+  | { kind: 'title'; name: string; ticket: LinearRef | null };
 
 const refuse = (error: RetitleRefusal['error'], extra: RetitleRefusal['extra'] = {}): RetitlePlan =>
   ({ kind: 'refuse', refusal: { error, extra } });
@@ -43,10 +46,10 @@ const refuse = (error: RetitleRefusal['error'], extra: RetitleRefusal['extra'] =
  *   1. the body names exactly ONE change: `{clear: true}` or `{title: <string>}`. Both, neither, a `clear` that is not
  *      the boolean `true` (`false` is not "keep"; there is no such request), or a non-string `title` is `400 bad-request`;
  *   2. a title past `LINEAR_REF_MAX_CHARS` is `400 name-too-long`, the preview read's own bound;
- *   3. a blank title is `400 bad-name` (`no-usable-characters`), NEVER a clear: erasing a name is its own request, and a
- *      field emptied by a slip of the thumb must not be answered as one;
- *   4. a title the grammar refuses is `400 bad-name` with its reason, the create's own words;
- *   5. a box that does not list the verb is `501 unsupported` naming it, for a set and a clear alike.
+ *   3. a title with nothing in it once sanitised (blank, or only control characters) is `400 bad-name`
+ *      (`no-usable-characters`), NEVER a clear: erasing a name is its own request, and a field emptied by a slip of the
+ *      thumb must not be answered as one. Nothing else about the text can refuse it (the slug grammar is not applied);
+ *   4. a box that does not list the verb is `501 unsupported` naming it, for a set and a clear alike.
  */
 export function planRetitle(body: { title?: unknown; clear?: unknown }, caps: RetitleCaps): RetitlePlan {
   const { title, clear } = body;
@@ -58,14 +61,11 @@ export function planRetitle(body: { title?: unknown; clear?: unknown }, caps: Re
   if (typeof title !== 'string') return refuse('bad-request');
   if (title.length > LINEAR_REF_MAX_CHARS) return refuse('name-too-long');
 
-  const ask = deriveWorkspaceSlug(title);
-  // `auto` is a blank title (step 3).
-  if (ask.kind !== 'named') {
-    const reason: NameRefusal = ask.kind === 'refused' ? ask.reason : 'no-usable-characters';
-    return refuse('bad-name', { reason, detail: NAME_REFUSAL_TEXT[reason] });
+  if (sanitizeTitle(title) === '') {
+    return refuse('bad-name', { reason: 'no-usable-characters', detail: NAME_REFUSAL_TEXT['no-usable-characters'] });
   }
   if (!caps.verb) return refuse('unsupported', { needs: WS_TITLE_VERB });
-  return { kind: 'title', name: title, ask };
+  return { kind: 'title', name: title, ticket: parseLinearRef(title) };
 }
 
 /** What ccd's refusal of a rename means, in the words the route answers with. */

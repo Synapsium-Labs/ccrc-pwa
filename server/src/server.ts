@@ -2919,7 +2919,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // the one the sheet showed whenever Linear answers; every failure arm degrades to the offline title and the create
     // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
     // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
-    const { title } = await resolveTitle(plan.name, plan.ask, {
+    const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
       ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     });
     const slug = plan.ask.slug;
@@ -3919,7 +3919,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The title is resolved HERE, as the create does: Linear's when the text is a ticket and Linear answers, the offline
     // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
     // through a lookup.
-    const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ask, {
+    const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ticket, {
       ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     })).title;
     const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });

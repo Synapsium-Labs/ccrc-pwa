@@ -60,10 +60,10 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
   const edited = typed !== current;
   // The title as it stands is not previewed: it would raise a Linear lookup on opening for a ticket-shaped title, and it
   // has nothing to preview. The field then shows `unchanged` in the preview's place.
-  const preview = useNamePreview(edited ? value : '');
-  const clearing = typed === '';
-  const hasTitle = session.title !== null;
   const slug = session.workspace ?? '';
+  const preview = useNamePreview(edited ? value : '', { keepSlug: slug });
+  const clearing = typed === '';
+  const hasTitle = (session.title ?? null) !== null;
 
   const send = async (change: { title: string } | { clear: true }): Promise<void> => {
     if (busy !== null) return;

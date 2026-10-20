@@ -13,6 +13,7 @@ import { WS_TITLE_VERB } from '../src/ccdargv.js';
 import { LINEAR_KEY_FILE } from '../src/linear/connection.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { testDeps } from './helpers.js';
+import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -108,6 +109,38 @@ describe('a rename', () => {
   });
 });
 
+describe('a rename is not bound by the slug grammar (a rename never changes the slug)', () => {
+  it.each([
+    ['CJK', '日本語のタイトル'],
+    ['an emoji', '🚀'],
+    ['one character', 'x'],
+    ['punctuation only', '!!'],
+    ['a non-Linear link', 'https://example.com/a/b'],
+  ])('%s reaches ccd as the title, as typed', async (_why, title) => {
+    const { app, calls } = await boot();
+    const res = await post(app, { title });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: ID, title });
+    expect(calls).toEqual([['ws-title', '--session', ID, '--title', title]]);
+  });
+
+  it('a title over ccd\'s byte cap is shortened with an ellipsis, never refused', async () => {
+    const { app, calls } = await boot();
+    const res = await post(app, { title: '語'.repeat(400) });
+    expect(res.statusCode).toBe(200);
+    const sent = calls[0]![4]!;
+    expect(new TextEncoder().encode(sent).length).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+    expect(sent.endsWith('…')).toBe(true);
+    expect(res.json()).toEqual({ ok: true, id: ID, title: sent });
+  });
+
+  it('a title with control characters reaches ccd with one space for each run', async () => {
+    const { app, calls } = await boot();
+    expect((await post(app, { title: '日本\t\n語' })).statusCode).toBe(200);
+    expect(calls[0]![4]).toBe('日本 語');
+  });
+});
+
 describe('refusals send no argv', () => {
   it.each([
     [{}], [{ title: 5 }], [{ title: null }], [{ title: ['a'] }], [{ clear: 'yes' }], [{ clear: false }],
@@ -128,16 +161,11 @@ describe('refusals send no argv', () => {
     expect(calls).toEqual([]);
   });
 
-  it.each([
-    ['!!', 'no-usable-characters'],
-    ['a', 'too-short'],
-    ['https://example.com/a/b', 'url-not-recognised'],
-  ])('a refused title %j is 400 bad-name with reason %s', async (title, reason) => {
+  it('a title of nothing but control characters is 400 bad-name too', async () => {
     const { app, calls } = await boot();
-    const res = await post(app, { title });
+    const res = await post(app, { title: '\u0001\u0002' });
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ ok: false, error: 'bad-name', reason });
-    expect(typeof (res.json() as { detail: unknown }).detail).toBe('string');
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-name', reason: 'no-usable-characters' });
     expect(calls).toEqual([]);
   });
 

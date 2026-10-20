@@ -7,17 +7,41 @@ const YES = { verb: true };
 const NO = { verb: false };
 
 describe('planRetitle', () => {
-  it('a title that derives a name carries the text untouched, and its ticket when it is one', () => {
+  it('a title carries the text untouched, and its ticket when it is one', () => {
     const plan = planRetitle({ title: '  ENG-1234  ' }, YES);
     expect(plan.kind).toBe('title');
     if (plan.kind !== 'title') return;
     expect(plan.name).toBe('  ENG-1234  ');
-    expect(plan.ask.ticket).toMatchObject({ key: 'ENG', num: '1234' });
+    expect(plan.ticket).toMatchObject({ key: 'ENG', num: '1234' });
   });
 
   it('a plain title has no ticket', () => {
     const plan = planRetitle({ title: 'Login cleanup' }, YES);
-    expect(plan.kind === 'title' && plan.ask.ticket).toBeNull();
+    expect(plan.kind === 'title' && plan.ticket).toBeNull();
+  });
+
+  // A RENAME NEVER CHANGES THE SLUG, so the slug grammar has no say in what a title may be: it refused exactly the
+  // titles a slug cannot be made of. Only what ccd re-proves (non-blank, no control characters, within the byte cap) can
+  // refuse a title, and the last two are sanitised away before ccd sees them.
+  it.each([
+    ['CJK, no ASCII letter or digit', '日本語のタイトル'],
+    ['an emoji alone', '🚀'],
+    ['one character', 'x'],
+    ['symbols only', '!!'],
+    ['a non-Linear link', 'https://example.com/a/b'],
+    ['accented text', 'Ünïcödé — ✓'],
+  ])('%s is a title', (_why, title) => {
+    const plan = planRetitle({ title }, YES);
+    expect(plan.kind).toBe('title');
+    if (plan.kind !== 'title') return;
+    expect(plan.name).toBe(title);
+    expect(plan.ticket).toBeNull();
+  });
+
+  it('a title that is a Linear link still has its ticket', () => {
+    const link = ['https:/', ['linear', 'app'].join('.'), 'team-a', 'issue', 'ENG-2087', 'export-drops-the-last-row'].join('/');
+    const plan = planRetitle({ title: link }, YES);
+    expect(plan.kind === 'title' && plan.ticket).toMatchObject({ key: 'ENG', num: '2087' });
   });
 
   it('{clear:true} is a clear', () => {
@@ -36,10 +60,9 @@ describe('planRetitle', () => {
     expect(plan).toMatchObject({ kind: 'refuse', refusal: { error: 'bad-name', extra: { reason: 'no-usable-characters' } } });
   });
 
-  it('a refused title carries its reason and its sentence', () => {
-    expect(planRetitle({ title: 'a' }, YES)).toMatchObject({ refusal: { error: 'bad-name', extra: { reason: 'too-short' } } });
-    expect(planRetitle({ title: 'https://example.com/x' }, YES))
-      .toMatchObject({ refusal: { error: 'bad-name', extra: { reason: 'url-not-recognised' } } });
+  it('a title of nothing but control characters is blank once sanitised: bad-name, never a clear', () => {
+    expect(planRetitle({ title: '\u0001\u0007\t' }, YES))
+      .toMatchObject({ kind: 'refuse', refusal: { error: 'bad-name', extra: { reason: 'no-usable-characters' } } });
   });
 
   it('a title past the bound is name-too-long, and the bound is characters, not bytes', () => {
@@ -55,7 +78,7 @@ describe('planRetitle', () => {
 
   it('a malformed body is refused as malformed before the missing verb is mentioned', () => {
     expect(planRetitle({ title: 5 }, NO)).toMatchObject({ refusal: { error: 'bad-request' } });
-    expect(planRetitle({ title: '!!' }, NO)).toMatchObject({ refusal: { error: 'bad-name' } });
+    expect(planRetitle({ title: ' \u0001 ' }, NO)).toMatchObject({ refusal: { error: 'bad-name' } });
   });
 });
 

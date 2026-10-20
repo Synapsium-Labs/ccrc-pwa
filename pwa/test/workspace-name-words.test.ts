@@ -2,7 +2,7 @@
 // does to it. Pure; the debounce and the call are `useNamePreview`'s (workspace-name-field.test.tsx).
 import { describe, expect, it } from 'vitest';
 import {
-  LOOKUP_NOTE, NAME_DOOR_TEXT, confirmLabel, isResolveReason, localPreview, nameDoorReason, needsLookup, shortTitle, withLookup,
+  BLANK_TITLE_TEXT, LOOKUP_NOTE, NAME_DOOR_TEXT, confirmLabel, isResolveReason, localPreview, nameDoorReason, needsLookup, shortTitle, withLookup,
   type NamePreview,
 } from '../src/fleet/workspaceNameWords';
 import { accountIsHomeAble } from '../src/lib/accounts';
@@ -102,6 +102,41 @@ describe('withLookup', () => {
 
   it('a Linear answer never carries a note, whatever it was sent with', () => {
     expect(withLookup(pending, { title: 'ENG-1234 - X', source: 'linear', note: 'timeout' })).toMatchObject({ note: null });
+  });
+});
+
+describe('localPreview in rename mode (a rename never changes the slug)', () => {
+  const keep = { keepSlug: 'quiet-harbor' };
+
+  it.each([
+    ['CJK', '日本語のタイトル'], ['an emoji', '🚀'], ['one character', 'x'], ['punctuation', '!!'], ['a non-Linear link', 'https://example.test/x/y'],
+  ])('%s is a title, never a refusal, and the slug it carries is the workspace\'s own', (_why, title) => {
+    const p = localPreview(title, keep);
+    expect(p).toMatchObject({ kind: 'named', slug: 'quiet-harbor', shortened: false, title, lookup: 'none', note: null });
+    expect(needsLookup(p)).toBe(false);
+    // The create's grammar still refuses what it always refused.
+    expect(localPreview(title).kind === 'named' && title === '日本語のタイトル').toBe(false);
+  });
+
+  it('blank is empty (a clear), and only control characters are refused, in the rename\'s own words', () => {
+    expect(localPreview('   ', keep)).toEqual({ kind: 'empty' });
+    expect(localPreview('\u0001\u0002', keep)).toEqual({ kind: 'refused', reason: 'no-usable-characters', text: BLANK_TITLE_TEXT });
+  });
+
+  it('a ticket is still looked up, and a pasted link still reads as its id and title until Linear answers', () => {
+    const p = localPreview('ENG-1301', keep);
+    expect(p).toMatchObject({ kind: 'named', slug: 'quiet-harbor', title: 'ENG-1301', lookup: 'pending' });
+    expect(needsLookup(p)).toBe(true);
+    const link = ['https:/', ['linear', 'app'].join('.'), 'team-a', 'issue', 'ENG-2087', 'export-drops-the-last-row'].join('/');
+    expect(localPreview(link, keep)).toMatchObject({ title: 'ENG-2087 - Export drops the last row', lookup: 'pending' });
+  });
+
+  it('shows the title the rename will save: sanitised and capped', () => {
+    expect(localPreview('Login\tcleanup', keep)).toMatchObject({ title: 'Login cleanup' });
+    const p = localPreview('語'.repeat(400), keep);
+    if (p.kind !== 'named') throw new Error('expected a named preview');
+    expect(p.title).toBe(sanitizeTitle('語'.repeat(400)));
+    expect(p.title.endsWith('…')).toBe(true);
   });
 });
 

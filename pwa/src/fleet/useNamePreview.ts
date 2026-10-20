@@ -21,12 +21,16 @@ export const NAME_LOOKUP_DEBOUNCE_MS = 400;
 interface Answered { text: string; answer: ResolveRead | 'call-failed' }
 
 /** `enabled: false` is a door that cannot take a name (its field is disabled): the preview is `empty` and NOTHING is
- *  asked, because text the door will never send is not worth a Linear call on the operator's behalf. */
+ *  asked, because text the door will never send is not worth a Linear call on the operator's behalf. `keepSlug` is the
+ *  rename door's: the workspace's own slug, and the preview then reads a title and not a slug (`localPreview`). */
 export function useNamePreview(
   value: string,
-  { enabled = true, debounceMs = NAME_LOOKUP_DEBOUNCE_MS }: { enabled?: boolean; debounceMs?: number } = {},
+  { enabled = true, debounceMs = NAME_LOOKUP_DEBOUNCE_MS, keepSlug }: { enabled?: boolean; debounceMs?: number; keepSlug?: string } = {},
 ): NamePreview {
-  const local = useMemo<NamePreview>(() => (enabled ? localPreview(value) : { kind: 'empty' }), [value, enabled]);
+  const local = useMemo<NamePreview>(
+    () => (enabled ? localPreview(value, keepSlug === undefined ? undefined : { keepSlug }) : { kind: 'empty' }),
+    [value, enabled, keepSlug],
+  );
   const [answered, setAnswered] = useState<Answered | null>(null);
   const text = value.trim();
   const wanted = needsLookup(local);

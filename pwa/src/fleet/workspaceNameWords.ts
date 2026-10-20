@@ -11,7 +11,9 @@
 // NEVER A GATE. Every fallback keeps the title the operator typed and leaves the create open: "Linear is a lookup,
 // never a gate" (design §In short). A refusal here is the GRAMMAR's (`NameRefusal`), never Linear's.
 import { LINEAR_FAILURES, type LinearFailure } from '../../../shared/linear';
-import { NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type NameRefusal } from '../../../shared/slug';
+import {
+  NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, parseLinearRef, sanitizeTitle, type NameRefusal,
+} from '../../../shared/slug';
 
 /** The two notes that are this client's: the preview call itself failed, or answered a word this build does not know. */
 type ClientNote = 'unrecognised' | 'call-failed';
@@ -80,12 +82,21 @@ export type NamePreview =
 const TITLE_ID = /^([A-Za-z][A-Za-z0-9]{0,9}-[0-9]{1,7})(?: - |$)/;
 export const shortTitle = (title: string): string => TITLE_ID.exec(title)?.[1] ?? title;
 
+/** The one refusal a rename can meet: a title with nothing in it once sanitised (only control characters). Not the
+ *  create's "no letters or numbers", which would be false of a title in any script the slug cannot be made from. */
+export const BLANK_TITLE_TEXT = 'That title is empty. Type one, or clear the title instead.';
+
 /**
  * The preview with no network: refusal and slug are final, the title is the offline one, and a ticket is `pending`
  * until its lookup answers. The grammar's `refused` arm is shown at once, which is why the sheet can disable its
  * confirm with nothing sent.
+ *
+ * RENAME MODE (`keep`): a rename never changes the slug, so the slug grammar has no say in a title. Whatever is typed
+ * is a title unless it has nothing in it (`BLANK_TITLE_TEXT`); the slug carried is the workspace's own, and a ticket is
+ * still looked up (`parseLinearRef`, the same reader the server's rename plan uses).
  */
-export function localPreview(value: string): NamePreview {
+export function localPreview(value: string, keep?: { keepSlug: string }): NamePreview {
+  if (keep !== undefined) return renamePreview(value, keep.keepSlug);
   const ask = deriveWorkspaceSlug(value);
   if (ask.kind === 'auto') return { kind: 'empty' };
   if (ask.kind === 'refused') return { kind: 'refused', reason: ask.reason, text: NAME_REFUSAL_TEXT[ask.reason] };
@@ -96,6 +107,17 @@ export function localPreview(value: string): NamePreview {
   return {
     kind: 'named', slug: ask.slug, shortened: ask.shortened, title, short: shortTitle(title),
     lookup: ask.ticket === null ? 'none' : 'pending', note: null,
+  };
+}
+
+function renamePreview(value: string, slug: string): NamePreview {
+  if (value.trim() === '') return { kind: 'empty' };
+  // `offlineTitle` is null for a title the slug grammar refuses, which a rename accepts; the typed text is then the title.
+  const title = sanitizeTitle(offlineTitle(value) ?? value.trim());
+  if (title === '') return { kind: 'refused', reason: 'no-usable-characters', text: BLANK_TITLE_TEXT };
+  return {
+    kind: 'named', slug, shortened: false, title, short: shortTitle(title),
+    lookup: parseLinearRef(value) === null ? 'none' : 'pending', note: null,
   };
 }
 

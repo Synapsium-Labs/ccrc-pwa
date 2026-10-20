@@ -11,7 +11,7 @@
  * offline title carrying its fixed word as `reason`, and neither the key, its digest nor Linear's text leaves it.
  */
 import type { LinearFailure, ResolveAnswer } from '../../../shared/linear.js';
-import { deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type SlugAsk } from '../../../shared/slug.js';
+import { deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type LinearRef } from '../../../shared/slug.js';
 import { lookupLinearIssue, type FetchLike } from './client.js';
 import { markLinearRejected, readLinearKey } from './connection.js';
 import { ticketTitle } from './title.js';
@@ -25,24 +25,25 @@ export interface ResolveDeps {
   now?: () => number;
 }
 
-/** A name the grammar accepted: `deriveWorkspaceSlug`'s `named` arm. */
-export type NamedAsk = Extract<SlugAsk, { kind: 'named' }>;
-
 /** The display title of an accepted name and where it came from; `reason` is the Linear failure arm on an offline fallback. */
 export interface ResolvedTitle { title: string; source: 'linear' | 'offline'; reason?: LinearFailure }
 
 /**
- * The title for a name the grammar ACCEPTED (`ask` is `deriveWorkspaceSlug(ref)`'s answer, so no refusal or auto arm can
- * reach here). Linear's when the name is a ticket, a key is connected and Linear answers; otherwise the offline title.
- * Always sanitised and within `WS_TITLE_MAX_BYTES`, so ccd's `--title` refusals cannot be reached by a lookup.
+ * The title for a name, given the Linear `ticket` it names (null for a plain one). Linear's when the name is a ticket, a
+ * key is connected and Linear answers; otherwise the offline title. Always sanitised and within `WS_TITLE_MAX_BYTES`, so
+ * ccd's `--title` refusals cannot be reached by a lookup.
+ *
+ * THE TICKET IS A PARAMETER, NOT DERIVED HERE, because the two callers read a name differently: a create's name was
+ * accepted by the slug grammar (`deriveWorkspaceSlug`, whose `ticket` is this), and a rename's was not asked to be (a
+ * rename never changes the slug, so a title the grammar refuses is still a title, and its ticket is `parseLinearRef`'s).
  */
-export async function resolveTitle(ref: string, ask: NamedAsk, deps: ResolveDeps): Promise<ResolvedTitle> {
-  // `offlineTitle` is null only for an auto or refused name, which `ask` is not; the trimmed text is the operator's own.
+export async function resolveTitle(ref: string, ticket: LinearRef | null, deps: ResolveDeps): Promise<ResolvedTitle> {
+  // `offlineTitle` is null for a name the slug grammar refuses (a rename's title may be one); the trimmed text is the operator's own.
   const offline = sanitizeTitle(offlineTitle(ref) ?? ref.trim());
-  if (ask.ticket === null) return { title: offline, source: 'offline' };
+  if (ticket === null) return { title: offline, source: 'offline' };
 
   const key = await readLinearKey(deps.ccrcDir);
-  const look = await lookupLinearIssue(ask.ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+  const look = await lookupLinearIssue(ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
   if (look.ok) {
     // Composed, then sanitised AGAIN: the lookup's title fits the cap alone, and `ENG-1234 - ` in front of it may
     // push the whole past it.
@@ -67,7 +68,7 @@ export async function resolveName(ref: string, deps: ResolveDeps): Promise<Resol
   if (ask.kind === 'refused') {
     return { kind: 'refused', slug: null, title: null, source: 'offline', reason: ask.reason };
   }
-  const t = await resolveTitle(ref, ask, deps);
+  const t = await resolveTitle(ref, ask.ticket, deps);
   return {
     kind: 'named', slug: ask.slug, title: t.title, source: t.source, ...(t.reason === undefined ? {} : { reason: t.reason }),
   };
