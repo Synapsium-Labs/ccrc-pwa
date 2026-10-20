@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** The exact count in the tree. May only go DOWN (D-5893, revised). */
-const BASELINE = 1585;
+const BASELINE = 1584;
 
 const CODE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|sh|bats|py)$/;
 // `ccd/<name>` and `ccd/<dir>/<name>` with no extension: the bash executables.
