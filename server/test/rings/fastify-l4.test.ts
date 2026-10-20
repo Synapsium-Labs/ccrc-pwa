@@ -1,7 +1,8 @@
 // D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-04 (#545), stage 1).
 // RING RULE: `fastify`, `@fastify/*` and every `Fastify*` name (FastifyReply above all) are imported only by the L4
-// files `fastify-l4.data.ts` names. The 08-10 spec's L1 says "no `fastify` … **no `reply`**": a decision that can
-// touch the reply can answer HTTP itself, and the refusal word, the status and the body stop having one owner.
+// files `fastify-l4.data.ts` names, across `server/src`, `agent/src`, `pwa/src` and `ui/src`. The 08-10 spec's L1
+// says "no `fastify` … **no `reply`**": a decision that can touch the reply can answer HTTP itself, and the refusal
+// word, the status and the body stop having one owner.
 //
 // Every import form counts, a type import included: `import type`, a per-name `type`, `export … from`, a dynamic
 // `import('fastify')`, a type query `import('fastify').FastifyReply`, and a `Fastify*` name re-bound from a local
@@ -20,7 +21,7 @@ const FASTIFY_NAME = /^Fastify/;
 const fastifyEdges = (p: ParsedFile): ImportEdge[] =>
   p.imports.filter((e) => FASTIFY_PKG.test(e.specifier) || e.names.some((n) => FASTIFY_NAME.test(n)));
 
-const files = (): string[] => walkSrc({ roots: ['server/src', 'pwa/src'], min: 330 });
+const files = (): string[] => walkSrc({ roots: ['server/src', 'pwa/src', 'agent/src', 'ui/src'], min: 390 });
 
 describe('fastify is imported only by the L4 allowlist (ARCH-04 stage 1, D-6045)', () => {
   it('CONTROL: the predicate sees every import form, and nothing that is not one', () => {
@@ -50,7 +51,9 @@ describe('fastify is imported only by the L4 allowlist (ARCH-04 stage 1, D-6045)
   it('CONTROL: the walk has a floor, and a walk over the wrong tree throws', () => {
     expect(() => walkSrc({ roots: ['server/src'], min: 1_000_000 })).toThrow(/below the floor/);
     expect(files()).toContain('server/src/coord/close.ts');
-    expect(files().some((f) => f.startsWith('pwa/src/'))).toBe(true);
+    for (const root of ['pwa/src/', 'agent/src/', 'ui/src/']) {
+      expect(files().some((f) => f.startsWith(root)), root).toBe(true);
+    }
   });
 
   it('CONTROL: an entry needs a one-line reason and a real date, not in the future', () => {
