@@ -18,7 +18,7 @@ export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
 // The popover (D-5934): Radix's, on the layers the Sheet already runs on.
-export { Popover, PopoverTrigger, PopoverContent, type PopoverContentProps } from './primitives/popover';
+export { Popover, PopoverTrigger, PopoverClose, PopoverContent, type PopoverContentProps } from './primitives/popover';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { Banner, bannerVariants, type BannerProps } from './primitives/banner';

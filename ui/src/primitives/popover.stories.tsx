@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from './popover';
 const meta = {
   title: 'Primitives/Popover',
   component: PopoverContent,
-  parameters: { layout: 'fullscreen', viewport: { defaultViewport: 'desktop' } },
+  parameters: { layout: 'fullscreen', viewport: { defaultViewport: 'laptop' } },
 } satisfies Meta<typeof PopoverContent>;
 export default meta;
 

@@ -21,6 +21,10 @@ export const Popover = PopoverPrimitive.Root;
  *  caller's own button instead of rendering one. */
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 
+/** Closes the popover through Radix and hands focus back to the trigger.
+ *  `asChild` wraps a menu item that acts, so a choice also closes the menu. */
+export const PopoverClose = PopoverPrimitive.Close;
+
 export type PopoverContentProps = ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>;
 
 /** Room kept between the panel and the viewport edge it is pushed off. */

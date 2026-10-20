@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Popover, PopoverContent, PopoverTrigger } from '@ccrc/ui';
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@ccrc/ui';
 
 afterEach(cleanup);
 
@@ -20,6 +20,7 @@ function Fixture(): React.ReactElement {
         <PopoverTrigger>agent actions</PopoverTrigger>
         <PopoverContent aria-label="agent actions">
           <button type="button">Skip agent</button>
+          <PopoverClose>Stop agent</PopoverClose>
         </PopoverContent>
       </Popover>
     </div>
@@ -86,5 +87,33 @@ describe('Popover', () => {
       path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'theme.css'), 'utf8',
     );
     expect(theme).toMatch(/^\s*--shadow-pop:\s*var\(--elev-[a-z]+\);/m);
+  });
+
+  it('a `PopoverClose` item closes it and focus returns to the trigger', async () => {
+    // A menu item that acts must also close the menu, through Radix's own
+    // close, so a caller never has to run the popover controlled for that.
+    const user = userEvent.setup();
+    render(<Fixture />);
+    const trigger = screen.getByRole('button', { name: 'agent actions' });
+    await user.click(trigger);
+    await settle();
+    await user.click(screen.getByRole('button', { name: 'Stop agent' }));
+    await settle();
+    expect(screen.queryByRole('dialog', { name: 'agent actions' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("pwa resolves one dismissable layer, shared with vaul's dialog (D-6018)", () => {
+    // Two copies would be two layer stacks: Escape or an outside press inside
+    // an open Sheet would then close both the popover and the Sheet.
+    const lock = JSON.parse(readFileSync(
+      path.join(import.meta.dirname, '..', 'package-lock.json'), 'utf8',
+    )) as { packages: Record<string, { version?: string }> };
+    const versions = new Set(
+      Object.entries(lock.packages)
+        .filter(([k]) => k.endsWith('node_modules/@radix-ui/react-dismissable-layer'))
+        .map(([, v]) => v.version),
+    );
+    expect(versions.size).toBe(1);
   });
 });
