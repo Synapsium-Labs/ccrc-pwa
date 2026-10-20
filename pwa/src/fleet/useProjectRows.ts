@@ -19,12 +19,11 @@
 // Nothing here reaches the DOM, so this file is `.ts` and the contrast gate
 // has nothing to re-key.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { toast } from '@ccrc/ui';
 import type {
   ProjectPoolsWire, ProjectPoolWire, ProjectRepoWire, ProjectRow,
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
-import { api, failedTo } from '../lib/api';
+import { api, type WorkspaceAddAnswer } from '../lib/api';
 import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
@@ -86,6 +85,14 @@ const poolSelectionFor = (
   };
 };
 
+/** How a workspace create ended. `refused` carries what was thrown, unread: the sheet that asked is the one that
+ *  says it (`workspaceAddWords`), so no sentence is composed here and no toast is raised behind its back. `busy` is
+ *  a second request for a project whose first has not answered: nothing was sent. */
+export type AddOutcome =
+  | { kind: 'added'; answer: WorkspaceAddAnswer }
+  | { kind: 'refused'; error: unknown }
+  | { kind: 'busy' };
+
 export interface ProjectRowsPlane {
   rows: ProjectRowsRead;
   /** R5 (D-3010): the card set is seeded from the known-project list once it
@@ -100,7 +107,9 @@ export interface ProjectRowsPlane {
   poolFor: (project: string) => ProjectPoolWire | null;
   repoFor: (project: string) => ProjectRepoWire | undefined;
   adding: ReadonlySet<string>;
-  addWorkspace: (project: string) => Promise<void>;
+  /** Creates a workspace on `project`: today's bodyless request when `name` is absent or blank, the named one when
+   *  it is not. Keeps the class the chooser holds, and refreshes the rows after a success. */
+  addWorkspace: (project: string, opts?: { name?: string }) => Promise<AddOutcome>;
   poolSelection: PoolSelection | null;
   poolOpen: boolean;
   openPool: (project: string) => void;
@@ -282,19 +291,21 @@ export function useProjectRows(
     });
   }, [poolOpen, placementFor]);
 
-  const addWorkspace = async (project: string): Promise<void> => {
-    if (adding.has(project)) return;
+  const addWorkspace = async (project: string, opts: { name?: string } = {}): Promise<AddOutcome> => {
+    if (adding.has(project)) return { kind: 'busy' };
     setAdding((s) => new Set(s).add(project));
     try {
       // Seeds the SAME class the chooser fetched with — the `+` starts a
       // workspace on the lane the row above it just forecast, rather than
       // asking the coordinator to re-decide from an unset row.
-      await (classFilter === ''
-        ? api.workspaceAdd(project)
-        : api.workspaceAdd(project, { class: classFilter }));
+      const answer = await api.workspaceAdd(project, {
+        ...(classFilter === '' ? {} : { route: { class: classFilter } }),
+        ...(opts.name === undefined ? {} : { name: opts.name }),
+      });
       void refreshProjects();
-    } catch (err) {
-      toast(failedTo('create workspace', err), 'error');
+      return { kind: 'added', answer };
+    } catch (error) {
+      return { kind: 'refused', error };
     } finally {
       // finally, not the try tail: a refusal must re-arm the button, or ccd
       // saying no leaves a `+` that can never be pressed again.

@@ -12,6 +12,7 @@ import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorr
 import {
   LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, type LinearCheckOutcome, type LinearConnectionView,
 } from '../../../shared/linear';
+import { isResolveReason, type LookupNote, type ResolveRead } from '../fleet/workspaceNameWords';
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
@@ -661,6 +662,43 @@ function linearViewOf(raw: unknown): LinearConnectionView | 'unreadable' {
   return (isRecord(raw) && raw.ok === true ? readLinearConnection(raw.connection) : null) ?? 'unreadable';
 }
 
+/**
+ * `GET /api/linear/resolve`'s answer for a name that parsed, read (named workspaces S7). `named` is the only kind the
+ * sheet asks it about, and the only one read: an `auto` or `refused` answer for a name the grammar here accepted is a
+ * server whose grammar differs, and reads as unreadable rather than as a refusal the operator never earned. NOTHING
+ * ELSE is kept, so a field a newer server adds is never shown by accident. An offline answer's `reason` is the
+ * server's own word when this build knows it, and `unrecognised` when it does not: a lookup that failed in a way
+ * this build cannot name is still a failure, never silence.
+ */
+export function readResolve(raw: unknown): ResolveRead | null {
+  if (!isRecord(raw) || raw.kind !== 'named') return null;
+  if (typeof raw.title !== 'string' || raw.title === '') return null;
+  if (raw.source !== 'linear' && raw.source !== 'offline') return null;
+  const note: LookupNote | null = raw.source === 'linear' || raw.reason === undefined
+    ? null
+    : isResolveReason(raw.reason) ? raw.reason : 'unrecognised';
+  return { title: raw.title, source: raw.source, note };
+}
+
+/** A named create's 200: the workspace the box made, with the title it was given. `{ok:true}` alone is today's
+ *  create, which makes no claim about a name. A named answer this build cannot read is `named: false`: the create
+ *  DID land (the exchange completed and answered 2xx), only the title echo is lost, and the board shows the truth. */
+export type WorkspaceAddAnswer =
+  | { named: false }
+  | { named: true; id: string; slug: string; title: string };
+
+export function readWorkspaceAdd(raw: unknown): WorkspaceAddAnswer {
+  if (isRecord(raw) && raw.ok === true && typeof raw.id === 'string' && typeof raw.slug === 'string' && typeof raw.title === 'string') {
+    return { named: true, id: raw.id, slug: raw.slug, title: raw.title };
+  }
+  return { named: false };
+}
+
+/** What a workspace create can carry. `name` and `wrapper` ride the body only for a NON-BLANK name: a blank one is
+ *  today's create (the server ignores `wrapper` then, and an old server has no use for either), so the request is
+ *  byte for byte what it was before names existed. */
+export interface WorkspaceAddOptions { route?: RouteFields; name?: string; wrapper?: string }
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -999,10 +1037,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
      *  is selected there, and an ordinary `+` (the chooser left on
      *  "Coordinator row") calls this with one argument, so its request body
-     *  is byte-identical to every caller that predates this parameter. */
-    workspaceAdd: (project: string, route?: RouteFields): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
-        route === undefined ? undefined : { route }),
+     *  is byte-identical to every caller that predates this parameter.
+     *
+     *  `name` (named workspaces S7) rides only when it is non-blank after a trim, and `wrapper` only beside a name:
+     *  the server ignores a wrapper without one, so sending it would be a field with no meaning. The 2xx is READ:
+     *  a named create answers `{ok, id, slug, title}`. */
+    workspaceAdd: async (project: string, opts: WorkspaceAddOptions = {}): Promise<WorkspaceAddAnswer> => {
+      const name = opts.name?.trim() ?? '';
+      const body: Record<string, unknown> = {
+        ...(opts.route === undefined ? {} : { route: opts.route }),
+        ...(name === '' ? {} : { name, ...(opts.wrapper === undefined ? {} : { wrapper: opts.wrapper }) }),
+      };
+      return readWorkspaceAdd(await postRead<unknown>(`/api/projects/${encodeURIComponent(project)}/workspaces`, null,
+        Object.keys(body).length === 0 ? undefined : body));
+    },
+    /** `GET /api/linear/resolve?ref=` — what a typed or pasted name would become, with Linear's real title when it
+     *  can be asked (named workspaces S4/S7). Session-gated like every PWA read. A refusal (`bad-ref`,
+     *  `ref-too-long`, a signed-out 401) rejects with its `ApiError`; a 2xx this build cannot read is `'unreadable'`,
+     *  never a guess at a title. */
+    linearResolve: async (ref: string): Promise<ResolveRead | 'unreadable'> =>
+      readResolve(await (await request(`/api/linear/resolve?ref=${encodeURIComponent(ref)}`,
+        { headers: { accept: 'application/json' } })).json().catch(() => null)) ?? 'unreadable',
     /** `POST /api/projects/:project/pool` — tag the project into an account
      *  pool, or clear it with an explicit `null`.
      *
