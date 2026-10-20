@@ -85,7 +85,7 @@ export function timersOf(p: ParsedFile): Timer[] {
     else if (target !== null) {
       // Module scope: the name is declared at column 0 and no local of the same name holds this call.
       const local = p.bindings.some((b) => b.name === target && b.scopeStart > 0 && b.scopeStart <= c.start
-        && c.start <= b.scopeEnd) || new RegExp(`^[ \\t]+(?:let|var|const)\\s+${target.replace(/\$/g, '\\$')}\\b`, 'm')
+        && c.start <= b.scopeEnd) || new RegExp(`^[ \\t]+(?:let|var|const)\\s+${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm')
         .test(code.slice(0, c.start).split('\n').slice(-80).join('\n'));
       if (moduleNames.has(target) && !local) { kind = 'scheduler'; held = `module-scope ${target}`; }
       else held = `local ${target}`;
