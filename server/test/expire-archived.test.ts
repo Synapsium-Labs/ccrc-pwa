@@ -330,3 +330,20 @@ describe('the one executor', () => {
     expect(expireFeedBody(out, false), 'the CONTROL: over no standing entry the row says so').toContain('nothing was deleted');
   });
 });
+
+// APPENDED (D-5859, plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e). Through the
+// funnel the row's body is built as `notify`'s argument, outside the archive's guard, so a body that throws would escape
+// `recordExpireFeed` into the lane's tick after an act that already ran. A corrupt registry instant beyond what `Date`
+// can render (about 8.64e9 s) is the one input that could: the row says the raw instant instead of throwing.
+describe('an instant Date cannot render does not throw out of the feed row (D-5859)', () => {
+  it('the row names the raw epoch, and recordExpireFeed records it', async () => {
+    const s = await rig({ live: false });
+    const out = await expireArchived(s.deps, s.req);
+    const corrupt = { ...out, archivedAt: 9_000_000_000_000 };
+    expect(() => expireFeedBody(corrupt)).not.toThrow();
+    expect(expireFeedBody(corrupt)).toContain('archived epoch 9000000000000 s');
+    expect(() => recordExpireFeed(s.deps, corrupt)).not.toThrow();
+    expect(s.coord.feedEvents(10).filter((e) => e.sessionId === ID)).toHaveLength(1);
+    expect(expireFeedBody(out), 'the CONTROL: a renderable instant keeps its UTC words').toMatch(/archived \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
+  });
+});
