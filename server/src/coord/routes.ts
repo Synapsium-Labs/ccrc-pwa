@@ -1082,14 +1082,15 @@ export function registerCoordRoutes(
     // (fix-round finding 1 / D-37): `io.readdir` failing outright is not
     // evidence the acking session does not exist — the cost here is lower
     // (a replay just retries the ack next sweep) but a recorded, permanent
-    // `unknown-sender` would be equally false.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // `unknown-sender` would be equally false. One read (D-5863), as the
+    // ingress route's: `names` and `records` come from the same listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       if (names.includes(`${fromId}.uuid`)) {
