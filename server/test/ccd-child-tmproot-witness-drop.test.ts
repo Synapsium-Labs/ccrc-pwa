@@ -121,7 +121,7 @@ describe('step (6) reads `_ws_reclaim_absent`’s THREE answers on the kept arms
         .toBe('written after the absence was proven');
       expect(fs.readFileSync(witness(), 'utf8'), 'a leaf stands at the drop’s own proof: its witness stays, byte for byte')
         .toBe(before);
-      expect(measOf(doneOf())['tmpRootKept']).toBeUndefined();
+      expect(measOf(doneOf())['tmpRootKept']).toBe('unmeasured');
     }, 90_000);
 });
 

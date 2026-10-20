@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=19cef82f54ea4a9acf9a1a25dd79f89b92aaf2051bfa3e5e2644559a2544e16e
+# ccrc:generated 1 sha256=8be7ed88cc3c82be2381ea0fab8c74b36a274e5b3d5e91fe827294a97a44e887
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32925,7 +32925,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc wdrc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   # Every failure from here on is printed past a breadcrumb, for both verbs
   # (`crumb`, spec §5.6).
@@ -33458,17 +33458,22 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # wait after the kill delayed everything since, and this is the answer the
   # removal acts on. Nobody: the helper removes it. In use, or unmeasured (on
   # Darwin, always): the leaf is KEPT, and said — but only a leaf that STANDS
-  # is kept: over nothing, nothing is recorded. `_ws_reclaim_absent`'s three
-  # answers are read apart there: absent, PROVEN — nothing is kept, and the
-  # leaf's witness goes to `_ws_tmproot_witness_drop` (spec §5.2; path-identity
-  # spec §3.2 and §3.3), which drops it only once it has proven that absence
-  # again, on the device the witness records, beside no quarantine slot of the
-  # id, and only in the generation it read — never through
-  # `_ws_tmproot_remove`, whose leaf half would remove, unprobed, a leaf
-  # re-created since; standing — kept as the probe said; and an absence
-  # that could not be proven — kept `unmeasured`, with the absence's reason,
-  # and the witness stays. Every reason the row carries is the probe's, the
-  # absence's or the helper's, through `_ws_leaf_why_line`.
+  # is kept. `_ws_reclaim_absent`'s three answers are read apart there:
+  #   absent, PROVEN: the leaf's witness goes to `_ws_tmproot_witness_drop`
+  #     alone, never through `_ws_tmproot_remove`, whose leaf half would
+  #     remove, unprobed, a leaf re-created since. The drop takes exactly the
+  #     generation it read, on the device the witness records, beside no
+  #     quarantine slot, once it has proven the leaf absent again
+  #     (path-identity spec §3.2, §3.3). Its answer is READ, never swallowed:
+  #     a complete drop records nothing; a drop that kept the witness (rc 1)
+  #     or could not measure it (rc 2) keeps the temp root `unmeasured`, its
+  #     reason "no leaf stands, but" the drop's — no new word, and the same
+  #     answer `_ws_tmproot_remove` gives on the removal arm;
+  #   standing: kept as the probe said;
+  #   an absence that could not be proven: kept `unmeasured`, with the
+  #     absence's reason, and the witness stays.
+  # Every reason the row carries is the probe's, the absence's, the drop's or
+  # the helper's, through `_ws_leaf_why_line`.
   # A LINK OR FILE LEAF is no one's temp root (`_child_tmpdir` composes TMPDIR
   # only for a real directory), and unlinking it touches nothing it names: it
   # is never kept for its users, on any platform (spec §5.6; wave 3's
@@ -33494,13 +33499,15 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     # The kept arms: the witness goes ONLY on a proven absence, and alone (spec §5.2); a leaf that stands keeps both.
     1) _ws_reclaim_absent "$HOME/.cc-tmp/$id"; tarc=$?
        case "$tarc" in
-         0) _ws_tmproot_witness_drop "$id" || : ;;   # nothing stands there: nothing is kept
+         0) _ws_tmproot_witness_drop "$id"; wdrc=$?   # no leaf stands: its witness goes only on a COMPLETE drop
+            (( wdrc == 0 )) || { tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "no leaf stands, but $_WS_WDROP_WHY"); } ;;
          1) tmpkept=in-use; tmpwhy=$(_ws_leaf_why_line "still in use after the bounded wait — $_WS_PATH_USERS_WHY") ;;
          *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_ABSENT_WHY") ;;
        esac ;;
     *) _ws_reclaim_absent "$HOME/.cc-tmp/$id"; tarc=$?
        case "$tarc" in
-         0) _ws_tmproot_witness_drop "$id" || : ;;   # nothing stands there: nothing is kept
+         0) _ws_tmproot_witness_drop "$id"; wdrc=$?   # no leaf stands: its witness goes only on a COMPLETE drop
+            (( wdrc == 0 )) || { tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "no leaf stands, but $_WS_WDROP_WHY"); } ;;
          1) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_PATH_USERS_WHY") ;;
          *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_ABSENT_WHY") ;;
        esac ;;

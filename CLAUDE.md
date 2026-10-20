@@ -162,7 +162,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   real break. Re-run the file alone first. `ccd-reclaim-tail-mounts` (path-identity W2) runs the real reclaim and
   expire verbs end to end on git fixtures (its expire cases with the expiry ladder's real `/proc` walk), at about 10 s
   a case at worst, so under load it fails as vitest's `Test timed out in <n>ms`; any other red is a real break, so
-  re-run the file alone first.
+  re-run the file alone first. `ccd-tmproot-drop-propagation` (path-identity W2) runs the real reclaim and expire verbs
+  end to end on git fixtures, its in-use probe stubbed but its ws-expire case with the expiry ladder's real `/proc`
+  walk, at about 10 s a case at worst, so under load it fails as vitest's `Test timed out in <n>ms`; any other red
+  is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
