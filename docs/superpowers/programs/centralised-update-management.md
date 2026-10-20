@@ -2339,6 +2339,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         Server backups 6822M, 10 kept, the newest 795M. v0.0.456 (#826) followed, unapplied; #722 still open.
         STATUS: fleet and server v0.0.455, newest v0.0.456, stable v0.0.328, intent dev/auto=off, backups fleet
         203M/server 6822M, disk free fleet 208G/work volume 98G/server 26G, no anomalies.
+      - **15:00 UTC: a probe ANOMALY that was the broker's stall, and the soak's disk line now about two days away.**
+        - Both boxes moved to v0.0.460 (#947) by the operator's tap: fleet 14:25:40 to 14:27:03, server to 14:29:44.
+          Both `done`, gates passed, doctor 0 failed on both boxes.
+        - The 14:58 probe read `server /health says ''`. Its one 5 s request at about 14:58:05 got no answer. Six
+          requests from 14:58:25 answered v0.0.460 in 0.02 s, and the unit had been up since 14:28:59 with no restart.
+          The broker's slow-pass line covers it: window 14:58:00 to 14:58:15, block 12.9 s, rewrite 6.1 s, repair 2.7 s,
+          with the checkpoint at 33.6 MB. So it was a stall, not an update fault. Mail 7267 to the broker's coordinator,
+          the first non-response measured beside a line.
+        - The probe now retries an unanswered `/health` once, 20 s later, and prints a NOTE (not an ANOMALY) when the
+          retry answers the stamp's version. A server still silent on the retry stays an ANOMALY.
+        - Soak day 2 (mail 7269): server free disk 25G, down 5G in 24 h. coord.db 532M, delegation_events 385M
+          (147,852 rows, 3.1 times day 1), journal 301M, checkpoint 33.6M. Backups 7061M: all 10 kept are from today's
+          11 taps, 586M to 817M. Without taps the box grows about 0.55G a day, so the 15G line is about 18 days away.
+          At today's tap pace, each tap swaps the oldest backup for a bigger one, so the line is about two days away
+          (around 2026-10-22). The operator's ruling stands: under 15G, the operator decides again.
+        - #722 merged at 13:59 (`b2c17f859`), so README is free and docs part 2b can start.
+        - STATUS: fleet and server v0.0.460, newest v0.0.467 (#968), stable v0.0.328, intent dev/auto=off, backups
+          fleet 203M/server 7061M, disk free fleet 208G/work volume 101G/server 25G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
