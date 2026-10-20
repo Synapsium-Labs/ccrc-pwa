@@ -35,6 +35,7 @@
 // `world()`, `setCensus`, `censusPass`, `primed` and `disk` below MIRROR the fixture of `delegation-watch.test.ts` (trimmed to what these
 // rows need: the owner listing hold is kept for R7, the other fault knobs are not).
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -1404,22 +1405,41 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     },
   };
 
+  // The attempts part sits between two phase announcements: `attempts` (its start) and `leases` (the next, once it has ended). The lane's
+  // in-memory checkpoint and the file are read at both, so what the part itself did to the revision and the bytes is pinned apart from the
+  // flush's commit before it and the lease's after it.
+  type Snap = { revision: number; canonical: string; file: Buffer; ids: string[] };
+  const snap = (w: World): Snap => {
+    const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
+    return { revision: cp.revision, canonical: canonicalDelegationJson(cp), file: readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)), ids: cp.attempts.map((a) => a.attemptId).sort() };
+  };
+  const sha = (x: string | Buffer): string => createHash('sha256').update(x).digest('hex');
+  /** What `fileAttempts` answers, taken from a spy on the lane that calls through (the method has this name and answer at the review base). */
+  const answers = (w: World): { all: () => Promise<string[][]> } => {
+    const spy = vi.spyOn(laneOf(w) as { fileAttempts(...a: unknown[]): Promise<Set<string>> }, 'fileAttempts');
+    return { all: async () => Promise.all(spy.mock.results.map(async (r) => [...(await (r.value as Promise<Set<string>>))].sort())) };
+  };
+
+  // The boundary values both rows pin. Computed by this fixture with production at ee03056ab (the review base) and identical at this commit:
+  // the state at the attempts boundary rests on the fixture's fixed clock (`NOW`/`setNow`), its fixed session and tree names, and ids that
+  // are content hashes of those, so nothing in it depends on the random fixture home (measured equal over repeated runs at both). Each
+  // `sha` is of the canonical JSON of the lane's in-memory checkpoint, or of the checkpoint file's bytes, read at the `attempts` announcement
+  // (start) and the `leases` announcement (end).
+  const FILED_ID = '6e45196d4b26808fa5e3facdca82c8e0d79facf14c0691c0a4d9de1a11f76e31';
+  const AT_START = { revision: 3, canonical: '536b91c4b758575c220d5c37773e3b2fa6ccb50b51511f6c5b3c94fd23f827ed', file: 'cf44ab9aeaa8901be3e2629e59bad6dc8ba7060489fdce1fe2d1b6e2b62bbd0b' };
+  const AT_END_B = { revision: 4, canonical: '2537dd6c9e4d330d5e49630ccc59fe1ea6eade21685979e6f827d0356f0782a0', file: 'a0d42d895275258e78148a70d5dcf6058358c12065e6f3e7389cbc02be35adfd' };
+  const shaOf = (s: Snap | null): { revision: number; canonical: string; file: string } => ({ revision: s!.revision, canonical: sha(s!.canonical), file: sha(s!.file) });
+
   it('D-5834 R1 (a): every attempt already on file: no applyCheckpointChange call, the same attempts, the lease request still reaches createLease, attemptsSkipped=1', async () => {
     let attemptsBefore: readonly DelegationAttemptRow[] = [];
-    // The attempts part sits between two phase announcements: `attempts` (its start) and `leases` (the next, once it has ended). The lane's
-    // in-memory checkpoint and the file are read at both, so what the part itself did to the revision and the bytes is pinned apart from the
-    // flush's commit before it and the lease's after it.
-    type Snap = { revision: number; canonical: string; file: Buffer; ids: string[] };
-    const snap = (w: World): Snap => {
-      const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
-      return { revision: cp.revision, canonical: canonicalDelegationJson(cp), file: readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)), ids: cp.attempts.map((a) => a.attemptId) };
-    };
     let start: Snap | null = null;
     let end: Snap | null = null;
+    let returned: { all: () => Promise<string[][]> } | null = null;
     const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
       ...replay,
       setup: ({ w, r }) => {
         attemptsBefore = checkpointOf(w.home).attempts;
+        returned = answers(w);
         r.also('attempts', () => { start = snap(w); });
         r.also('leases', () => { end = snap(w); });
       },
@@ -1438,28 +1458,41 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     expect(end!.canonical, 'and the checkpoint\'s canonical bytes').toBe(start!.canonical);
     expect(end!.file.equals(start!.file), 'and the file on disk').toBe(true);
     expect([...end!.ids].sort(), 'the ids on file (the set the part answers) are the ones that were').toEqual(attemptsBefore.map((a) => a.attemptId).sort());
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes').toEqual(AT_START);
+    expect(shaOf(end), 'and at its end: the revision, the canonical bytes and the file bytes are unchanged').toEqual(AT_START);
+    expect(end!.ids, 'the ids on file are the one attempt').toEqual([FILED_ID]);
+    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID]]);
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says the call was skipped').toBe(1);
   });
 
   it('D-5834 R1 (b): one new attempt beside a filed one: exactly one call, and it is filed (green at main; M8 reds them); attemptsSkipped=0 (red at main: no such key)', async () => {
     const NEW_ID = 'attempt-new-5834';
     let attemptsBefore: readonly DelegationAttemptRow[] = [];
+    let start: Snap | null = null;
+    let end: Snap | null = null;
+    let returned: { all: () => Promise<string[][]> } | null = null;
     const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
       ...replay,
-      setup: ({ w, plan, realPlan }) => {
+      setup: ({ w, r, plan, realPlan }) => {
         attemptsBefore = checkpointOf(w.home).attempts;
         const template = attemptsBefore[0]!;
         plan.mockImplementation((input) => [...realPlan(input), { kind: 'record-unowned-worktree' as const, attempt: { ...template, attemptId: NEW_ID } }]);
+        returned = answers(w);
+        r.also('attempts', () => { start = snap(w); });
+        r.also('leases', () => { end = snap(w); });
       },
     });
     expectReached('attempts', sc);
     expect(attemptsBefore.length, 'the earlier pass filed the first attempt').toBeGreaterThanOrEqual(1);
     expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'one change for the lot').toBe(1);
-    // (b)'s bytes follow from (a)'s and from this: the pre-filter hands the change only the fresh list, and `applyCheckpointChange`'s own
-    // `have` filter and no-op compare already made the filed attempt a no-op, so the checkpoint after the one call is (a)'s plus the new
-    // attempt row, and its ids are pinned exactly here.
     const after = checkpointOf(sc.w.home).attempts;
     expect(after.map((a) => a.attemptId).sort(), 'the new attempt is on file beside the old ones').toEqual([...attemptsBefore.map((a) => a.attemptId), NEW_ID].sort());
+    expect(start, 'the attempts part started').not.toBeNull();
+    expect(end, 'and the lease part began after it').not.toBeNull();
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes (the same as (a)\'s)').toEqual(AT_START);
+    expect(shaOf(end), 'and at its end the one change left the revision, canonical bytes and file bytes the review base computes').toEqual(AT_END_B);
+    expect(end!.ids, 'the filed attempt and the new one').toEqual([FILED_ID, NEW_ID].sort());
+    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID, NEW_ID].sort()]);
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says a call was made').toBe(0);
   });
 });
