@@ -131,7 +131,7 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
   'server.ts | GET /api/fleet | readRegistryMeasured | stale',
   'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
-  'coord/routes.ts | POST /api/mail | readRegistry | raw-name',
+  'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | raw-name',
   'coord/routes.ts | attributionVerdict | readRegistry | raw-name',
   'coord/routes.ts | POST /api/approvals | readRegistry | refuses',
@@ -363,21 +363,22 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
       'a production call leaves its rows to the tests-only fallback').toEqual([]);
   });
 
-  it('the migrated readers carry their placed words, and readRegistry keeps 10 sites', () => {
+  it('the migrated readers carry their placed words, and readRegistry keeps its counted sites', () => {
     const sitesOf = (file: string, reader: 'readRegistry' | 'readRegistryMeasured') =>
       allSites().filter((s) => s.file === file && s.reader === reader);
     const words = (file: string): (string | null)[] => sitesOf(file, 'readRegistryMeasured').map((s) => s.word);
     expect(words('fleet.ts'), 'assembleFleet’s fallback is reached by tests alone').toEqual(['tests-only']);
     expect(words('lifecycle.ts'), 'listProjects reports registry').toEqual(['reports']);
     expect(words('server.ts'), 'GET /api/fleet, then the ws cold start').toEqual(['stale', 'stale']);
-    expect(words('coord/routes.ts'), 'GET /api/peers, then the claims conflict').toEqual(['reports', 'reports']);
+    expect(words('coord/routes.ts'), 'POST /api/mail (D-5863), then GET /api/peers and the claims conflict')
+      .toEqual(['refuses', 'reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone, placed knownId').toHaveLength(1);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack, placed raw-name; the two approval routes, placed refuses').toHaveLength(5);
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution and ack, placed raw-name; the two approval routes, placed refuses').toHaveLength(4);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(10);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(15);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(9);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(16);
   });
 });
