@@ -238,7 +238,12 @@ const notRanDetail = (argv: CcdArgv, res: Extract<CcdResult, { ran: false }>): s
 
 // ── the feed row ─────────────────────────────────────────────────────────────
 
-const iso = (epochS: number): string => new Date(epochS * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+// D-5859: the row's body is built as the funnel's argument, outside its archive guard, so it never throws: an instant
+// beyond what `Date` renders (a corrupt registry document) is said as the raw epoch instead.
+const iso = (epochS: number): string => {
+  const d = new Date(epochS * 1000);
+  return Number.isNaN(d.getTime()) ? `epoch ${epochS} s` : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+};
 
 const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   expired: 'archived workspace cleaned up',
