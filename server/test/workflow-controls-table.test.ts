@@ -262,10 +262,21 @@ describe('the workflow-control table (D-5935)', () => {
     // CONTROL: a record with no pane capture beside it.
     expect(rules.recipeInCaptures({ [V]: { 'skip-agent': SKIP_AGENT } }, fixtureCaptures((f) => { delete f['skip-agent.view.txt']; }, 'rc')))
       .toEqual([`${V} skip-agent: no rc/ pane capture`]);
+    // CONTROL: a record whose act: names another act than its file.
+    expect(rules.recipeInCaptures({ [V]: { 'stop-run': STOP_RUN } }, fixtureCaptures(setField('stop-run.record.txt', 'act', 'stop-agent'), 'rc')))
+      .toEqual([`${V} stop-run: rc/ record names act stop-agent`]);
+    // CONTROL: a command recipe whose record says it was driven by view keys.
+    expect(rules.recipeInCaptures({ [V]: { 'stop-run': STOP_RUN } }, fixtureCaptures(setField('stop-run.record.txt', 'drive', 'view-keys'), 'plain')))
+      .toEqual([`${V} stop-run: plain/ recorded drive view-keys`]);
   });
 
   it("every recipe's mid-turn, starts-turn and inert facts are the recorded ones", () => {
     expect(rules.factsRecorded(WORKFLOW_CONTROLS, diskCaptures)).toEqual([]);
+    // midTurn is the fact that refuses turn-running with zero keys, so it is compared with the record too.
+    const notMidTurn: WorkflowControlTable = { [V]: { 'stop-run': { ...STOP_RUN, midTurn: false } } };
+    expect(rules.factsRecorded(notMidTurn, fixtureCaptures())).toEqual([
+      `${V} stop-run: midTurn not the rc/ recorded one`, `${V} stop-run: midTurn not the plain/ recorded one`,
+    ]);
     const flipped: WorkflowControlTable = { [V]: { 'stop-run': { ...STOP_RUN, startsTurn: true } } };
     expect(rules.factsRecorded(flipped, fixtureCaptures())).toEqual([
       `${V} stop-run: startsTurn not the rc/ recorded one`, `${V} stop-run: startsTurn not the plain/ recorded one`,
