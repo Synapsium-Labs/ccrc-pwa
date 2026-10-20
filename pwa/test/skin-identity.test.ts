@@ -35,8 +35,9 @@
 //   (h)  no !important;
 //   (i)  the contrast gate's stylesheet walk lists skins.css by its exact path;
 //   (j)  the scan sees something;
-// and three censuses: (k) `data-skin` in stylesheets, (l) the skin attribute in
-// source, (m) `useSkin`, with (n) their own vacuity check.
+// and four censuses: (k) `data-skin` in stylesheets, (l) the skin attribute in
+// source, (m) `useSkin`, (o) the skin's one branch (the set map and the skin
+// ids, W2 Task S2b, D-5469), with (n) their own vacuity check.
 //
 // EVERY RULE IS SHOWN LIVE. Each is run against the real tree and against a
 // planted copy (`plantedTree()`: ui/src, ui/.storybook, pwa/src, pwa/index.html
@@ -680,7 +681,10 @@ function sourceCensus(tree: string, registry: readonly string[] = SOURCE_REGISTR
  *  directories. Both ways. The hook's own file is its definition, not a
  *  caller. Any mention counts, a call or an import, so an aliased import
  *  (`useSkin as useLayout`) is seen too. */
-const HOOK_REGISTRY: readonly string[] = [];
+const HOOK_REGISTRY: readonly string[] = [
+  // W2 Task S2b: `SKIN_SETS[useSkin()]`, the one shared branch on the skin (D-5469).
+  'pwa/src/app.tsx',
+];
 const HOOK_DEFINITION = 'pwa/src/lib/skin.ts';
 
 function hookCensus(tree: string, registry: readonly string[] = HOOK_REGISTRY): Census {
@@ -690,6 +694,40 @@ function hookCensus(tree: string, registry: readonly string[] = HOOK_REGISTRY): 
     problems: [
       ...callers.filter((f) => !registry.includes(f)).map((f) => `${f} reaches useSkin outside the registry`),
       ...registry.filter((f) => !callers.includes(f)).map((f) => `${f} is registered for useSkin but never reaches it`),
+    ],
+    read: files,
+  };
+}
+
+/** (o) The registry: the shared files, under `pwa/src` and outside
+ *  `pwa/src/skins/`, that may import the set map (`skins/index`) or name a
+ *  skin id (`REFINED`, `INSTRUMENT`, or either as a string). Exactly the files
+ *  W2 Task S2b's Step 0 measured, each with its reason; both ways. A shared
+ *  file that compares a skin id forks behaviour on the skin, which is the
+ *  frame's parts' job alone (D-5469). */
+const BRANCH_REGISTRY: Readonly<Record<string, string>> = {
+  'pwa/src/app.tsx': 'the one branch: SKIN_SETS[useSkin()] chooses the frame\'s parts',
+  'pwa/src/lib/skin.ts': "the hook's own module: Refined is the skin before initSkin runs and on the server snapshot",
+  'pwa/src/screens/SkinFieldset.tsx': "the Layout picker reads Instrument's catalogue row for its preview line (D-5096)",
+};
+const SKIN_ID = /\bREFINED\b|\bINSTRUMENT\b|(['"`])(?:refined|instrument)\1/;
+const SETS_IMPORT = /\b(?:from|import)\s*\(?\s*['"][^'"]*\/skins(?:\/index)?(?:\.tsx?)?['"]/;
+/** A skin's own parts reached directly (`skins/refined/parts`, `skins/instrument/…`): anything under `skins/` but
+ *  the frame and the set's type, which every shared screen may use. `REFINED_SET` is no skin id to `SKIN_ID`, so
+ *  this is its own pattern. */
+const PARTS_IMPORT = /\b(?:from|import)\s*\(?\s*['"][^'"]*\/skins\/(?!(?:frame|types)(?:\.tsx?)?['"])[^'"]+['"]/;
+
+function branchCensus(tree: string, registry: Readonly<Record<string, string>> = BRANCH_REGISTRY): Census {
+  const files = filesUnder(tree, 'pwa/src', (n) => /\.(?:tsx?|jsx?|mjs)$/.test(n) && notTestOrStory(n))
+    .filter((f) => !f.startsWith('pwa/src/skins/'));
+  const hits = files.filter((f) => {
+    const text = stripJs(read(tree, f));
+    return SKIN_ID.test(text) || SETS_IMPORT.test(text) || PARTS_IMPORT.test(text);
+  });
+  return {
+    problems: [
+      ...hits.filter((f) => !(f in registry)).map((f) => `${f} branches on the skin outside the registry`),
+      ...Object.keys(registry).filter((f) => !hits.includes(f)).map((f) => `${f} is registered as a skin branch but names no skin`),
     ],
     read: files,
   };
@@ -1199,8 +1237,51 @@ describe('(m) useSkin is reached in no file under pwa/src but the registry', () 
   });
 
   it('reds a registered file that never reaches useSkin', () => {
-    expect(hookCensus(REPO, ['pwa/src/fleet/SessionLine.tsx']).problems).toEqual([
+    expect(hookCensus(REPO, [...HOOK_REGISTRY, 'pwa/src/fleet/SessionLine.tsx']).problems).toEqual([
       'pwa/src/fleet/SessionLine.tsx is registered for useSkin but never reaches it']);
+  });
+}, 30_000);
+
+describe('(o) no shared file imports the set map or compares a skin id, but the registry', () => {
+  it('holds on the tree, both ways, and app.tsx is the one importer of the set map', () => {
+    expect(branchCensus(REPO).problems).toEqual([]);
+    const importers = branchCensus(REPO).read.filter((f) => SETS_IMPORT.test(stripJs(read(REPO, f))));
+    expect(importers).toEqual(['pwa/src/app.tsx']);
+    for (const reason of Object.values(BRANCH_REGISTRY)) expect(reason.length).toBeGreaterThan(20);
+  });
+
+  it("reds `if (skin === 'instrument')` planted in SessionScreen.tsx", () => {
+    const tree = append(plantedTree(), 'pwa/src/screens/SessionScreen.tsx',
+      "export const dense = (skin: string): boolean => skin === 'instrument';");
+    expect(branchCensus(tree).problems).toEqual(['pwa/src/screens/SessionScreen.tsx branches on the skin outside the registry']);
+  });
+
+  it('reds the set map imported into ChatList.tsx', () => {
+    const tree = plant(plantedTree(), 'pwa/src/session/ChatList.tsx',
+      (s) => `import { SKIN_SETS } from '../skins';\nvoid SKIN_SETS;\n${s}`);
+    expect(branchCensus(tree).problems).toEqual(['pwa/src/session/ChatList.tsx branches on the skin outside the registry']);
+  });
+
+  it("reds one skin's parts imported straight into ChatList.tsx, by a name that is no skin id", () => {
+    const tree = plant(plantedTree(), 'pwa/src/session/ChatList.tsx',
+      (s) => `import { REFINED_SET } from '../skins/refined/parts';\nvoid REFINED_SET;\n${s}`);
+    expect(branchCensus(tree).problems).toEqual(['pwa/src/session/ChatList.tsx branches on the skin outside the registry']);
+  });
+
+  it('reads the frame and the set type as shared, not as a skin', () => {
+    expect(PARTS_IMPORT.test("import { useFrameSet } from '../skins/frame';")).toBe(false);
+    expect(PARTS_IMPORT.test("import type { SkinSet } from '../skins/types';")).toBe(false);
+    expect(PARTS_IMPORT.test("import { INSTRUMENT_SET } from '../skins/instrument/parts';")).toBe(true);
+  });
+
+  it('reds a registered file that names no skin', () => {
+    expect(branchCensus(REPO, { ...BRANCH_REGISTRY, 'pwa/src/fleet/SessionLine.tsx': 'planted' }).problems).toEqual([
+      'pwa/src/fleet/SessionLine.tsx is registered as a skin branch but names no skin']);
+  });
+
+  it('reads no skin id into a word that only contains one', () => {
+    expect(SKIN_ID.test("const unrefined = 'refinedness';")).toBe(false);
+    expect(SKIN_ID.test('const REFINEDISH = 1;')).toBe(false);
   });
 }, 30_000);
 
@@ -1215,5 +1296,6 @@ describe('(n) the censuses are looking at something', () => {
     expect(sources.length).toBeGreaterThanOrEqual(100);
     for (const f of [...SOURCE_REGISTRY, 'ui/.storybook/preview.ts']) expect(sources).toContain(f);
     expect(hookCensus(REPO).read.length).toBeGreaterThanOrEqual(100);
+    expect(branchCensus(REPO).read.length).toBeGreaterThanOrEqual(100);
   });
 });

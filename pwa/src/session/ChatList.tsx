@@ -13,6 +13,7 @@ import { splitClipPaths } from '../../../shared/api';
 import { MailCard, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
+import { useFrameSet } from '../skins/frame';
 import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
 import { buildChatItems, type ChatItem } from './chatItems';
@@ -583,6 +584,15 @@ class Column {
     return performance.now() < this.settleUntil;
   }
 
+  /** The rows re-wrap without the column changing width: a skin switch puts
+   *  new type and density tokens on the same column (D-5466). Read the
+   *  measures again now, in the switch's layout effect, under the new tokens,
+   *  and settle, so a reader at the newest turn is put back. */
+  resettle(): void {
+    this.measured = this.el === null ? null : measuresOf(this.el);
+    this.settleUntil = performance.now() + SETTLE_MS;
+  }
+
   private resized(width: number): void {
     if (width !== this.width) {
       this.measured = null;
@@ -608,6 +618,17 @@ export function ChatList(props: ChatListProps): ReactNode {
     setReady(true);
     return () => column.detach();
   }, [column]);
+  // A SKIN SWITCH KEEPS THIS LIST MOUNTED (the frame's ladder never remounts,
+  // D-5466, D-5679) but re-wraps its rows: a reader following a running turn is still
+  // following once they re-measure. The set's identity is the signal, never
+  // its id: nothing here branches on the skin (D-5469).
+  const set = useFrameSet();
+  const lastSet = useRef(set);
+  useLayoutEffect(() => {
+    if (lastSet.current === set) return;
+    lastSet.current = set;
+    column.resettle();
+  }, [set, column]);
   return (
     <div className="chat-list" ref={ref}>
       {ready && <ChatScroller {...props} column={column} />}
