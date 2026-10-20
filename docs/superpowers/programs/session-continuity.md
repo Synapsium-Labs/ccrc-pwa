@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -819,6 +819,27 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - One scoped reply was accepted. Lifecycle remains complete; this does not reopen it or authorize cleanup,
     W3, acceptance, landing, deployment, restart, arming or settings. Work 308 remains working, four items settled
     but unaccepted; its final handoff needs NEW independent review. Tasks 5 and 7 remain gated.
+- **2026-10-20 07:42 UTC - fix-round handoff verified by the server; NEW independent review dispatched.**
+  - The worker's handoff names PR #435 at `2f6caa48e`: code final at `5a71ccf91`, the last commit gate evidence
+    only. Its signal lines read suite red, failure unclear. The branch tip and PR head were re-read before the
+    claim was submitted unchanged; the server's re-measurement accepted it, and work 308 is awaiting review with
+    four of four items settled but unaccepted. No routing change was made.
+  - The worker reports every review-630 ruling addressed. It attributes Task 3's epoch merge, Task 4's parser
+    widening and acceptance of the pending-model typing cost to answers to its structured asks. This coordinator
+    answered none of those asks and observed none of the answers; they stay the worker's report until the review
+    checks the shipped behaviour against the chosen option texts.
+  - The reported first complete server pass is red: four files said to fail identically on the base, one failure
+    tied to a gitignored build directory, the branch-tip README-size guard, and one indivisible test batch longer
+    than the foreground tool bound. These are classifications to verify, not accepted results.
+  - GitHub reads the PR as unmergeable, with a reported generated-stamp conflict against current main, so no PR
+    pipeline ran at the new head. One manual full-mode CI run was started on the worker branch at that head for the
+    suites' answer; it is not a required check and grants no landing. No absorption was requested; the stamp
+    conflict is resolved at landing.
+  - Review 685 was opened against work 308 and dispatched with the held-out panel, one disclosed safety-only
+    preamble addition, and two wave-specific lenses: conformance to the operator's chosen options, and the
+    absorbed merge. Route opus/xhigh, sonnet default, workflow on. Review 630 is not reused. A read-only check of
+    the brief before dispatch found seven defects, all corrected first.
+  - Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -890,8 +911,10 @@ question was also handed over, with no option selected; its out-of-brief live-tr
 At 22:25 UTC the worker reported code final at `5a71ccf91`, unpushed, and attributed epoch merge and parser widening
 to operator answers. Exact ruling provenance and coverage of a newly disclosed pending-model typing cost are still
 owed; no coordinator selection or cost acceptance is implied. At 22:31 UTC the pending-model read-back cost was
-asked explicitly and handed to the operator without a selection; no answer was observed. Owning groups 1-8 are
-reported green, group 9 timed out, and the serial full pass remains pending. Await its final handoff without redispatch.
+asked explicitly and handed to the operator without a selection; no answer was observed. Owning groups 1-8 were
+reported green and group 9 timed out. On 2026-10-20 at 07:25 UTC the server accepted the worker's fix-round handoff at
+`2f6caa48e` (code `5a71ccf91`; the last commit is gate evidence only), reported suite red with failure unclear. Work 308
+is awaiting review and review 685 was dispatched at 07:42 UTC. Await its report; review 630 is not reused.
 Required server CI at the old reviewed tip was red for an inherited README-size guard; its 714-file selection is
 not a changed-tip proof or
 full-suite waiver. Tasks 1-4 remain four settled, unaccepted items; Task 5 is pending.
