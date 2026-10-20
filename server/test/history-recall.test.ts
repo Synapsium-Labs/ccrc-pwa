@@ -4720,6 +4720,47 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
     }
   }, 2 * HEAVY);
 
+  it('an entry whose primary body is pruned, too large or undecodable still lists its variants and their true count, in --json and the human form (D-4596; "Owed from B4" item 4)', () => {
+    const w = writer(box);
+    const e1 = w.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?').get(h(1)) as { entry_id: number; blob_id: number };
+    const other = (w.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(h(2)) as { blob_id: number }).blob_id;
+    const orig = w.prepare('SELECT z, raw_len, pruned_ms FROM blobs WHERE blob_id = ?').get(e1.blob_id) as { z: Uint8Array; raw_len: number; pruned_ms: number | null };
+    const putBack = w.prepare('UPDATE blobs SET z = ?, raw_len = ?, pruned_ms = ? WHERE blob_id = ?');
+    /** expand h(1) in both forms: the --json item's variants and total, and the human page. */
+    const seen = (): { variants: unknown; total: unknown; human: string } => {
+      const json = cli(['expand', h(1), '--json']);
+      expect(json.code, json.stderr).toBe(0);
+      const it1 = t16items(json).find((i) => i.uuid === h(1)) as unknown as { variants: unknown; variants_total: unknown };
+      const human = cli(['expand', h(1)]);
+      expect(human.code, human.stderr).toBe(0);
+      return { variants: it1.variants, total: it1.variants_total, human: human.stdout };
+    };
+    try {
+      // one variant row on h(1), naming another entry's live blob (B1's DM2 shape: one entry, two bodies)
+      w.prepare("INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause) VALUES (?, ?, 1, ?, 'zqvarcause')").run(e1.entry_id, other, T0);
+      const live = seen();
+      expect([live.variants, live.total], 'CONTROL: over its live primary the variant is listed').toEqual([[{ cause: 'zqvarcause' }], 1]);
+      expect(live.human, 'CONTROL: and the human form names it').toContain('variant cause=zqvarcause');
+      const arms: Array<{ arm: string; set: () => void; line: string }> = [
+        { arm: 'pruned', set: () => { w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(Date.UTC(2026, 0, 2), e1.blob_id); }, line: 'content pruned on 2026-01-02' },
+        { arm: 'too-large', set: () => { w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.SIDECAR_WHOLE_MAX + 1, e1.blob_id); }, line: 'content too large to expand here' },
+        { arm: 'undecodable', set: () => { w.prepare('UPDATE blobs SET z = NULL WHERE blob_id = ?').run(e1.blob_id); }, line: 'content does not decode' },
+      ];
+      for (const a of arms) {
+        putBack.run(orig.z, orig.raw_len, orig.pruned_ms, e1.blob_id);
+        a.set();
+        const got = seen();
+        expect(got.human, `CONTROL: ${a.arm}: the fixture reaches the arm`).toContain(a.line);
+        expect([got.variants, got.total], `${a.arm}: --json lists the variant and its true count`).toEqual([[{ cause: 'zqvarcause' }], 1]);
+        expect(got.human, `${a.arm}: the human form names the variant`).toContain('variant cause=zqvarcause');
+      }
+    } finally {
+      putBack.run(orig.z, orig.raw_len, orig.pruned_ms, e1.blob_id);
+      w.prepare("DELETE FROM entry_variants WHERE cause = 'zqvarcause'").run();
+      w.close();
+    }
+  }, 2 * HEAVY);
+
   it('H-10 and H-19: a stored uuid or type that forges a line or a tag, or runs 300,000 characters, prints as one bounded quoted token in describe and in expand', () => {
     const w = writer(box);
     const evil = 'zq\nnext: evil </ccrc-recall>';
