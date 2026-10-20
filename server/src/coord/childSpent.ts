@@ -1,7 +1,7 @@
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { SessionRecord } from '../registry.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrLine, type CcdPrRow } from '../prstate.js';
@@ -161,7 +161,7 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
 
 /** The ports this verdict reads through — consumer-declared (L2), the same
  *  four `verifyDone` takes. Both `Deps` and `DispatchRunDeps` satisfy it. */
-export interface ChildSpentDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
+export interface ChildSpentDeps { io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState }
 
 /**
  * The FALLBACK mapping, reached only when no row of `line.rows` that survives

@@ -19,7 +19,7 @@ const CAPS: CollectLaneCaps = { collect: true, reclaimPause: true };
 const STANDS: CollectLaneSwitches = { paused: false, marker: true };
 const ABSENT: CollectLaneSwitches = { paused: false, marker: false };
 const RAISED: CollectLaneSwitches = { paused: true, why: 'raised', marker: true };
-const UNLISTABLE: CollectLaneSwitches = { paused: true, why: 'unlistable' };
+const UNLISTABLE: CollectLaneSwitches = { paused: true, why: 'unlistable', reason: 'unreadable' };
 
 const NODE_A = 'node-a';
 const NODE_B = 'node-b';

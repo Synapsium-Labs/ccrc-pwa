@@ -118,7 +118,12 @@ function storeRead(coord: HibernateSweepDeps['coord'], claimants: ReadonlySet<st
     if (!claimant.ok) return { ok: false, detail: claimant.detail };
     return {
       ok: true, openWorker: worker.siblings.length > 0, openClaimant: claimant.siblings.length > 0,
-      claim: claimants.has(id), mail: coord.outstandingMailFor(id, 1).length > 0,
+      claim: claimants.has(id),
+      // D-5838: a PARKED row does not veto (it waits on its box, up to 24 h, and
+      // would keep this session resident that long). Its retry still reaches
+      // the session through the due loop, and a hibernated one through the
+      // ensure-wake gate first; a fresh box then differs from its park and lands.
+      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
     };
   } catch (err) {
     return { ok: false, detail: errText(err) };

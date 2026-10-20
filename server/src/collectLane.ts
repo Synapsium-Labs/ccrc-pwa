@@ -2015,13 +2015,20 @@ export function isCollectLaneKebab(v: string): boolean {
 // Nothing here reads a file, a row, a clock or the link. `collectLaneEffective` is called by the executor
 // (`coord/collectTempRoot.ts`), nearest the argv, and by the view (`collectLaneView`), and by nothing else.
 
+/** Why a registry listing failed (D-5969). ITS WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`). This file cannot
+ *  import that type (its imports are pinned, `collect-readers.test.ts`), so the union is DERIVED from the array rather
+ *  than restated, and `coord/collectTempRoot.ts` holds it EQUAL to `ReadFailure` at compile time. */
+export const COLLECT_LISTING_FAILURES = ['absent', 'unreadable'] as const;
+export type CollectListingFailure = (typeof COLLECT_LISTING_FAILURES)[number];
+
 /** The registry listing as the executor reads it (path-identity spec 2026-10-12 §5.2). `marker` is the MEASURED
  *  presence of `COLLECT_LANE_LIVE_MARKER`. An unlistable registry carries NO marker field: a listing that failed proves
- *  no absence, and a proved absence is what retires the latch. */
+ *  no absence, and a proved absence is what retires the latch. It carries instead `reason`, the measured listing's
+ *  failure: an unreadable registry is REPORTED as unreadable, never folded into an empty one (D-5969, ARCH-08b). */
 export type CollectLaneSwitches =
   | { readonly paused: false; readonly marker: boolean }
   | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean }
-  | { readonly paused: true; readonly why: 'unlistable' };
+  | { readonly paused: true; readonly why: 'unlistable'; readonly reason: CollectListingFailure };
 /** The connection epoch around a listing (path-identity spec 2026-10-12 §5.2, §5.5). In the executor, `before` is the
  *  epoch the job was queued under and `after` the epoch read after the final listing; in the pass, the pass-head epoch
  *  and the epoch after the gather. Epochs only rise, so `before === after` is "no connection came or went". */

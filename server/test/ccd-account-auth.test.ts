@@ -13,6 +13,7 @@ import {
   makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
@@ -193,6 +194,17 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
       + "os.path.join(reg, '.prstate-' + id_ + '.lock')",
   };
 
+  /** Written by a bash file the scan sees, and NOT YET in the paragraph, because
+   *  the paragraph lives in `ccd/ccd`, which an open PR holds (the accounts
+   *  plan's freeze; D-5755 (13f)). Each entry is checked in both directions: it
+   *  must be in the scan (or it names nothing) and still absent from the
+   *  paragraph (or the amendment landed and the entry is stale). The cardinal
+   *  check below leaves these out until that amendment counts them. */
+  const PENDING_PARAGRAPH: Record<string, string> = {
+    accounts: "`ccrc account`'s lane-state DIRECTORY (`ccd/ccrc`, accounts plan Task A11) — "
+      + "unreachable for `.reaped/`'s reason, as `.auth/` is",
+  };
+
   /** And two the paragraph names in prose that NO literal scan can ever reach,
    *  because their name is an interpolated id rather than a literal:
    *  `_reg_set`'s own tmps and session-hook.sh's `.$id.$$.hookstate.tmp`. */
@@ -230,7 +242,13 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
     // finding.
     expect(found.length, 'the scan found no dot-prefixed registry artifact at all')
       .toBeGreaterThanOrEqual(7);
-    for (const name of found) {
+    for (const [name, why] of Object.entries(PENDING_PARAGRAPH)) {
+      expect(found, `$REG/.${name} is no longer written by ccd's bash — drop its PENDING_PARAGRAPH entry (${why})`)
+        .toContain(name);
+      expect(region, `the R-3 paragraph now names $REG/.${name} — drop its PENDING_PARAGRAPH entry`)
+        .not.toContain(`.${name}`);
+    }
+    for (const name of found.filter((n) => !(n in PENDING_PARAGRAPH))) {
       expect(region, `$REG/.${name} is written by ccd's own bash and the R-3 boundary paragraph does not name it`)
         .toContain(`.${name}`);
     }
@@ -247,7 +265,8 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
     // The cardinal is DERIVED, not remembered: what the scan found, plus the
     // declared blind spots, plus the two whose name is an interpolated id.
     // That arithmetic is what keeps the written number tied to a measurement.
-    const total = found.length + Object.keys(UNSCANNABLE).length + VARIABLE_NAMED;
+    const total = found.length - Object.keys(PENDING_PARAGRAPH).length + Object.keys(UNSCANNABLE).length
+      + VARIABLE_NAMED;
     expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${VARIABLE_NAMED} variable-named)`)
       .toContain(`${CARDINAL[total]} dot-prefixed`);
   });
@@ -2047,8 +2066,12 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     }, { systemd: true, tmux: true });
     // 20s is well under vitest's own patience and well over every case here;
     // a case that reaches it has HUNG, which is the defect being pinned.
-    try { execFileSync('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore' }); }
-    catch { /* a hang throws ETIMEDOUT; the file below is then absent or stale */ }
+    // IN A PROCESS GROUP OF ITS OWN (#172, D-5894): a hang is killed with everything it started, and a
+    // `noDeadline` run, which strands its mint ON PURPOSE (the pump's backstop TERMs the pty wrapper and the
+    // mint under it runs on), has that mint ended through the group when it returns. A hang leaves the file
+    // below absent or stale.
+    spawnSyncGroup('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore', encoding: 'utf8' },
+      { strays: opts.noDeadline ? 'end' : 'throw' });
     if (!fs.existsSync(out)) return { hung: 'yes' };
     return Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
       .map((l) => l.split('=') as [string, string]));

@@ -8672,7 +8672,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // 13, the same five sites ENTERED and nothing LEFT. Main's new blocks in
       // that file are appended below every frozen anchor, and this branch's
       // block stays last.
-      'server/test/single-definition.test.ts': 13,
+      // RE-MEASURED on the one delivery writer (D-5997; base = origin/main,
+      // tip = this branch merged onto it): 13 -> 11. This branch's census
+      // edits in that file shift the frozen `plan:3236 :1319-1323` and
+      // `spec:1347 :1319-1323` sites back onto lines that carry their quote:
+      // two coincidental passes gained, not repairs; Task 11 still owns them.
+      'server/test/single-definition.test.ts': 11,
       // RE-MEASURED on the session-workflows view (D-5560; base = origin/main,
       // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
       // else moved. This branch adds 11 lines to the cited file (one type
@@ -8685,6 +8690,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // on the word `null`; the quoted line is main's `:8523`). A coincidental
       // pass lost, not a new debt; Task 11 still owns it. No rule changed, so
       // no D-number.
+      // RE-MEASURED on the drift decider (D-5921; base = origin/main, tip =
+      // this branch merged onto it): `shared/api.ts` 1 -> 0, so its entry is
+      // gone. This branch adds 35 lines to the cited file (the drift kinds,
+      // above README's anchors), and every anchor below them shifts by exactly
+      // 35. README's four were re-pointed to the tip's lines (`:8427-8429`,
+      // `:8479`, `:8487`, `:8500`). The one site that LEFT is the frozen plan's
+      // `plan:3396` site named above (its `:5644`), whose quote now lands by
+      // coincidence on the shifted line: a coincidental pass gained, not a
+      // repair, and Task 11 still owns that anchor. No rule changed, so no
+      // D-number.
+      // RE-MEASURED on the one delivery writer (D-5997; base = origin/main,
+      // tip = this branch merged onto it): `shared/api.ts` 0 -> 1. This branch
+      // adds 11 lines to the cited file (`outstandingDeliveryStates` and
+      // `OUTSTANDING_DELIVERY_STATES`, above README's anchors), so every anchor
+      // below them shifts by exactly 11. README's four were re-pointed to the
+      // tip's lines (`:8438-8440`, `:8490`, `:8498`, `:8511`). The one site
+      // that ENTERED is the frozen plan's `plan:3379` site (its `:5644`)
+      // named above, losing the coincidental pass the drift decider gave it.
+      // No rule changed, so no D-number.
+      // RE-MEASURED on the archived-held block (D-5943; base = origin/main
+      // after the one delivery writer above, tip = this branch merged onto
+      // it): nothing in the map moved. This branch adds 51 lines to the cited
+      // file (the `FleetHealth.archivedHeld` field and the block's types and
+      // reader, above README's anchors), so every anchor below them shifts by
+      // exactly 51 more. README's four were re-pointed to the tip's lines.
+      // The frozen plan's site named above stays off its quote. No rule
+      // changed, so no D-number.
       'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
@@ -8838,7 +8870,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 202 -> 201 at hibernation's server half (D-5242, plan Task 17a): the one `shared/api.ts` site (`plan:3396
     // :5644`) passes coincidentally on that file's +20 inserted lines, argued beside the map; no other key moves and
     // neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202); // 201 -> 202: `shared/api.ts` 0 -> 1, the session-workflows view's shift (above)
+    // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
+    // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(200);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9703,6 +9737,28 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // neither corpus document nor README changed, so nothing was re-pointed
         // and no rule changed. Values in the instrument's order, never retyped.
         // S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the ws-rm shared-branch guard (#138, D-5880), 55 -> 54,
+        // FROM THE SAME RUN as the site-level set below (35 -> 34, its
+        // `spec:2125 ccd/ccd:13560-13562` leaving for the same reason). ONE cause:
+        // the guard's 7 net lines in `cmd_ws_rm` slid every
+        // `ccd/ccd` line below it down 7. ONE LEAVES (`ccd/ccd:13560-13562`)
+        // and none enter: those lines now hold a comment reading "destroyed",
+        // which the row's own quoted `destroy` matches — a coincidence, not a
+        // repair. Measured by running this test with `origin/main`'s `ccd/ccd`
+        // and with this branch's, everything else the same tree. Neither corpus
+        // document changed, so nothing was re-pointed and no rule changed.
+        // S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the ws-reap C1 live-upstream fix (#126, D-5882), 54 -> 55.
+        // ONE cause: C1's move and its live-head probe in `_ws_reap_eval` add 31
+        // net lines, sliding every `ccd/ccd` line below it down 31. ONE ENTERS
+        // (the range the D-5880 note saw leave) and none leave: those lines no longer hold the
+        // "destroyed" comment the D-5880 re-measure found there, and now hold
+        // `_reap_paths_json`'s header, which offers no token of its row — the
+        // reverse coincidence, not rot. The site-level set below mirrors it, 34 -> 35
+        // (the same range, cited from spec:2125, enters), from the same run.
+        // Measured by running this test with `origin/main`'s `ccd/ccd` and with
+        // this branch's, everything else the same tree. Neither corpus document
+        // changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',

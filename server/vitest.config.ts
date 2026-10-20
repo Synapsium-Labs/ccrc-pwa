@@ -92,6 +92,8 @@ export default defineConfig({
     maxWorkers: '40%',
     // #316: one owned temp parent per run — collected at teardown or on a signal, and after a SIGKILL by a later run once quiet; see the header of
     // test/run-tmp.globalsetup.mjs. Runs in vitest's MAIN process; workers inherit its TMPDIR at fork.
-    globalSetup: ['test/run-tmp.globalsetup.mjs'],
+    // #172 (D-5894): a process a test started that is still alive at teardown fails the run — see the header of
+    // test/proc-leak.globalsetup.mjs.
+    globalSetup: ['test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
   },
 });

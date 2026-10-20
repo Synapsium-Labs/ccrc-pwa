@@ -1,6 +1,6 @@
 # ccrc consolidation wave: one owner per job (design)
 
-**Status:** rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
+**Status:** rev 2.2 (2026-10-20): rev 2.1 with the operator's parser choice for ARCH-00 recorded (§8). Rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
 
 **The request (operator, 2026-10-19):** "I also feel like we have a lot of separate mechanisms that try to do similar stuff, and we should do a consolidation and refactoring wave that also gets us to DDD/CLEAN/SOLID state plus consolidation of similar functionality."
 
@@ -113,7 +113,11 @@ A pin like this is the right answer when the two copies have to live in two lang
 ### 2.1 How this extends the 08-10 spec
 
 - **The rings are unchanged.** L0 shared kernel, L1 policy, L2 ports, L3 adapters, L4 delivery, L5 composition root. Ring membership is still a property of a file's imports.
-- **ARCH-02a's wording is adopted as written:** a deadline timer inside one adapter call is L3, schedulers and pollers are L4, the `.mjs` carve-out lists its `node:*` modules, and the PWA rings are `*Words.ts`/policy/pure lib = L1, `lib/api.ts` = L3, stores/hooks/components/screens = L4.
+- **ARCH-02a's wording is adopted as written** (D-6000). It lives in the 08-10 spec's rings and its "Deciding a file's ring and context" section, and CLAUDE.md copies it word for word:
+  - A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a timer whose handle is stored on an object field or at module scope is a scheduler or poller.
+  - The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a `shared/*.ts` file imports no `node:*` module at all.
+  - PWA: `*Words.ts`, policy and pure lib modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4.
+  - Every non-test file under `server/src` and `pwa/src` has one ring and one context (C1 to C9, or K for the kernels and platform files), decided by that section's rules and its path table.
 - **Two cross-cutting rules are added** to 08-10's (a)–(e):
   - **(f) One writer per fact.** Every fact this spec names in §2.2 has a declared writer set, and a `writers` pin (§5.1) lists it. The set may only shrink. "Writer" means the function that performs the write, not the callers that ask for it: two lanes may ask one primitive to write.
   - **(g) A schedule is data.** A lane's cadence, clock and single-flight rule are a row in one table. They are not fields on a class or a constant aliased from another lane. This is **not** a lane interface (see §2.5).
@@ -214,14 +218,15 @@ The 08-10 six are kept and re-cut in two places: Workspace takes the whole end o
 - **Ports:** `PushService`, `NotifyLog` (ring cache) and coord.db.
 
 #### C7. Update control plane (ARCH-02a)
+- Its language, allowed dependencies and files are in the 08-10 spec's context 7 and its path table (D-6000).
 - Catalogue, inventory, intent, dispatch/converge leases, server-caps, and the Claude Code binary roll and install (CB-tasks).
 - The server-caps file is written by `update/serverCaps.ts` on server nodes and by `ccd-update-sync` on fleet nodes. That is one fact per node with one writer per node kind, which is legitimately different, but it is pinned.
 
 #### C8. Auth & box token (ARCH-02a)
-`auth/`, `token/`, WebAuthn, the box token. The wave does not touch it except to move its redaction calls onto the kernel.
+`auth/`, `token/`, WebAuthn, the box token. Its language, allowed dependencies and files are in the 08-10 spec's context 8 and its path table (D-6000). The wave does not touch it except to move its redaction calls onto the kernel.
 
 #### C9. Docs (ARCH-02a)
-`docs/`, `shared/docs.ts`, and ccd's docs verbs. The wave moves only its redactor (§3 K7).
+`docs/`, `shared/docs.ts`, and ccd's docs verbs. Its language, allowed dependencies and files are in the 08-10 spec's context 9 and its path table (D-6000). The wave moves only its redactor (§3 K7).
 
 ### 2.3 Shared kernels: one implementation, no context
 
@@ -1046,3 +1051,11 @@ Two reviewers read the plans against `origin/main`. Each finding was re-measured
 | R4-5 | `readSwitches` would add a second vocabulary beside the wire's `MarkerState`, and readers map an unlistable registry differently | `shared/api.ts` `MarkerState`; `coord/routes.ts` stall-watch view vs the mail lanes | Applied: marker rows answer `MarkerState`; each reader keeps its unlistable mapping | K12 |
 | R4-6 | rev 1 remnants: "three modes", "10 of the 12 files", #745 listed open, `hasMailWithSubject` still replaced | the lines themselves | Applied | §2.2, K6, K12, Related, §4.1, §5.1 |
 | R4-7 | #397 merged | `gh pr view 397`: merged 2026-10-19 as `6ae03d2de` | Applied: Related and §5.3 record it; W1a's #397 gate is open | Related, §5.1 rule 6, §5.3 |
+
+### rev 2.1 → rev 2.2 (2026-10-20): the parser for ARCH-00 (OA-C1)
+
+The operator chose option (a) for ARCH-00 (#525) on 2026-10-20, replying "A" to the three options the ticket offers, and confirmed that the parser is used by tests only, never at runtime. This answers the one operator act W0 waited for (§5.2): ARCH-00 is Task C0f of the W0 plan (D-5853), and ARCH-06's W1a slice (Task C0g) follows it.
+
+| # | Finding (short) | Checked against | Outcome | Where |
+|---|---|---|---|---|
+| R5-1 | the test scanners need a TS parser, and the server's TypeScript has no stable one | `server/package.json`: `typescript` `^7.0.2`; `typeof require('typescript').createSourceFile` in `server/` is `undefined` on `origin/main` `248cb3c85`; only `typescript/unstable/*` is exported | Applied: option (a). TypeScript 6's compiler API is the stable, documented one, has no native binaries, and is unaffected by the server's TypeScript 7 upgrade. It is installed as the dev-only alias `typescript-api` (`npm:typescript@6.0.3`, the version the PWA already resolves), pinned exactly so an install cannot drift: a new parser version needs a reviewed PR, whose scanner suites must pass. `server/test/scan/parse.ts` wraps it (syntax only) and is its one importer, so a later swap touches one file. Not taken: (b) a standalone parser package (a native binary and a second AST vocabulary); (c) `typescript/unstable/ast` (can break on any 7.x minor). Cost: about 23 MB of dev-only install; no production byte | §5.2; the W0 plan's Task C0f; `single-definition.test.ts`'s ARCH-40 describe |

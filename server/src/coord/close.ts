@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, verifyReviewDone, type DoneClaim } from './fingerprint.js';
@@ -12,11 +12,11 @@ import {
 import {
   HANDOFF_SHA,
   holdReasonVerdict,
-  queueSystemMail,
   releaseIsSafe,
   survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';
@@ -42,7 +42,7 @@ import {
  */
 export interface CloseRunDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   /** Child reclamation (spec 2026-09-22 §5.7): hand a reclaim to THE ONE
    *  executor. Called only AFTER the close's transaction has committed — a
    *  reclaim that fails can never un-close a run — and NEVER awaited: the

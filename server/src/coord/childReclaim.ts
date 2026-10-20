@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
@@ -505,7 +505,7 @@ export const CHILD_RECLAIM_FEED_QUIET_NONE: ChildReclaimFeedQuiet = { deferWhy: 
  *  nowhere, which is the existing degrade for every other feed writer. */
 export interface ChildReclaimDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   notifyLog?: NotifyLog;
   /** The wall clock, epoch ms. Absent: `Date.now`. It renders the feed row's wait (spec §5.7), and

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
+import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
@@ -37,7 +38,8 @@ import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type Sw
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { STALL_QUIET_MS } from './stall.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
@@ -1214,7 +1216,8 @@ export function registerCoordRoutes(
     const mail = program !== null
       ? coord.mailForProgram(program, { limit, all })
       : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
-    return reply.code(200).send({ ok: true, mail });
+    // Session-derived text, masked before it leaves (D-5513, accounts plan Task A10).
+    return reply.code(200).send({ ok: true, mail: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(mail) });
   });
 
   /**
@@ -1246,7 +1249,10 @@ export function registerCoordRoutes(
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
-    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
+    return reply.code(200).send({
+      ok: true, id: row.id, toId: row.toId, state: row.state,
+      envelope: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(row.envelope),   // masked before it leaves (D-5513)
+    });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -1708,9 +1714,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':
@@ -3134,7 +3139,7 @@ export function registerCoordRoutes(
     if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
-    return { ok: true, items: deps.coord.workItems(id) };
+    return { ok: true, items: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.workItems(id)) };   // D-5513
   });
 
   /**
@@ -3183,9 +3188,10 @@ export function registerCoordRoutes(
     // predating that grammar legitimately contain dots.
     const program = typeof q.program === 'string' && q.program.trim() !== ''
       ? q.program.trim() : null;
-    return { events: program === null
+    // Every event's text came off a session: masked before it leaves (D-5513, accounts plan Task A10).
+    return { events: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(program === null
       ? deps.coord.feedEvents(limit)
-      : deps.coord.feedEventsForProgram(program, limit) };
+      : deps.coord.feedEventsForProgram(program, limit)) };
   });
 
   /**

@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, type CcdHarness, toolAdjToken as adj } from './ccdWsHelpers.js';
-import { CHILD_DENY_RULES, CHILD_DENY_PATH_QUALIFIED } from '../../shared/api.js';
+import { CHILD_DENY_RULES, CHILD_DENY_PATH_QUALIFIED, childDenyRules } from '../../shared/api.js';
 import { FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { childShellOf, denySettingsOf, readSessionRecord } from '../src/registry.js';
 import { loadConfig } from '../src/config.js';
@@ -69,11 +69,29 @@ const childLine = (id: string, settings: string, sidflag: string): string =>
   + `CLAUDE_CODE_SHELL=/bin/bash '${h.home}/.local/bin/claude' --settings '${settings}' ${sidflag} --dangerously-skip-permissions`;
 
 describe('CHILD_DENY_RULES (spec §6.6)', () => {
-  it('is Task 12\'s forbidden ccd verbs, then ccrc update and rollback; the path-qualified forms wait on Task 13', () => {
+  it('is Task 12\'s forbidden ccd verbs, then ccrc update and rollback, then claude install and update; the path-qualified forms wait on Task 13', () => {
     expect(CHILD_DENY_PATH_QUALIFIED).toBe(false);
     expect(CHILD_DENY_RULES).toEqual([
       ...FORBIDDEN_CCD_VERBS.map((v) => `Bash(ccd ${v}:*)`), 'Bash(ccrc update:*)', 'Bash(ccrc rollback:*)',
+      'Bash(claude install:*)', 'Bash(claude update:*)',
     ]);
+  });
+  // D-5696 (spec §7.6): rolling, installing and selecting a build are never a session's.
+  it('a child\'s `ccd roll` and `ccd claude …` are deny rules, so under default-escalate they are never an approvable prompt', () => {
+    expect(CHILD_DENY_RULES).toContain('Bash(ccd roll:*)');
+    expect(CHILD_DENY_RULES).toContain('Bash(ccd claude:*)');
+  });
+  it('`claude install` and `claude update` are denied to a child, and the same under the roster\'s upstream id', () => {
+    const rules = childDenyRules('upstream-a');
+    for (const r of ['Bash(claude install:*)', 'Bash(claude update:*)', 'Bash(upstream-a install:*)', 'Bash(upstream-a update:*)']) {
+      expect(rules, r).toContain(r);
+    }
+    expect(rules.slice(0, CHILD_DENY_RULES.length)).toEqual([...CHILD_DENY_RULES]);
+    expect(childDenyRules('claude')).toEqual([...CHILD_DENY_RULES]);       // the upstream id that is Claude Code's own name
+    expect(childDenyRules(null)).toEqual([...CHILD_DENY_RULES]);
+  });
+  it('no account verb is denied: `ccd swap` and `ccd swap-self` stay open (the 2026-10-19 ruling)', () => {
+    for (const r of childDenyRules('upstream-a')) expect(r, r).not.toMatch(/^Bash\(ccd swap/);
   });
 });
 

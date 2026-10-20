@@ -406,6 +406,21 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
   });
 
+  it('surfaces a REVIEW child past its ceiling on the banner as review-report-stale, through the watcher (D-5942)', async () => {
+    const f = fixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-r', { child: String(review.id) });
+    await f.pass(); await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention ?? [], 'stale before its ceiling').toEqual([]);
+    f.wallStep(7 * 24 * 3_600_000 + 1);
+    f.next(); await f.pass(); await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{ kind: 'kept', sessionId: 'demo-r',
+      runId: review.id, word: 'review-report-stale', sentence: CHILD_RECLAIM_SKIP['review-report-stale'].sentence }]);
+    expect(f.requests).toEqual([]);
+  });
+
   it('keeps a REVIEW child while the run it reviewed is open, and reclaims it once that run is terminal', async () => {
     const f = fixture();
     const work = f.openRun();

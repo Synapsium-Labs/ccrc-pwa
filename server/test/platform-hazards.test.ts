@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 import { unitJson } from './docsHelperPy.js';
 
@@ -46,7 +47,11 @@ const CANARY = 'CANARY_PLATFORM_HAZARD_TOKEN';
  *  including whether it had to be cut. */
 function bash(program: string, ms = 20_000): { cut: boolean; stdout: string; ms: number } {
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', program], { encoding: 'utf8', timeout: ms, stdio: ['ignore', 'pipe', 'pipe'] });
+  // IN A PROCESS GROUP OF ITS OWN (#172, D-5894): these probes wedge on purpose (BSD `grep -r` blocked on a live
+  // FIFO is the measured case), and a timeout that killed only `bash` left the wedged grep running past the run.
+  // A probe whose grandchild outlives it by design has that grandchild ended through the group, not left behind.
+  const r = spawnSyncGroup('bash', ['-c', program], { encoding: 'utf8', timeout: ms, stdio: ['ignore', 'pipe', 'pipe'] },
+    { strays: 'end' });
   const cut = r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
   return { cut, stdout: (r.stdout ?? '') + (r.stderr ?? ''), ms: Date.now() - t0 };
 }

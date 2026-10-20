@@ -12,7 +12,7 @@
 
 **Deploy class.** Tests and docs only. **Zero production bytes change**: no file under `server/src`, `agent/src`, `shared/`, `pwa/`, `ui/`, `ccd/` or `deploy/` is edited, and the ccd launcher's SHA-256 is unchanged. No deploy is needed for any task. The one non-test edit is C0f's exact `devDependency` pin in `server/package.json` and its lockfile, which ships nothing.
 
-**Names.** Tasks are **C0a** to **C0g** (W0 now). The W1a plan's tasks are **C1a** to **C1f**. Operator acts are **OA-C1** to **OA-C3** (C1 and C2 here, C3 in the W1a plan). Later W0 slices (spec §5.2) get their own plans before the wave that needs them.
+**Names.** Tasks are **C0a** to **C0g** (W0 now), plus **C0h** (ARCH-02a, a later W0 slice planned here). The W1a plan's tasks are **C1a** to **C1f**. Operator acts are **OA-C1** to **OA-C3** (C1 and C2 here, C3 in the W1a plan). Later W0 slices (spec §5.2) get their own plans before the wave that needs them.
 
 **Goal, PR by PR.**
 
@@ -149,7 +149,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   | a `writeFileSync(join(reg, 'reclaim-paused'), '')` added to `server/src/watch.ts` | single-definition | "reclaim-paused: one writer" |
   | a `touch "$REG/mail-disabled"` added to `ccd/ccd` | single-definition | "mail-disabled: hand-only" |
   | `feedRecordCallSites` counts comment lines | consolidation-census | "a docstring mention is not a call site" |
-  | `reclaimPauseParseSites` matches the bare word | consolidation-census | "12 files name it; 10 expressions parse it" |
+  | `reclaimPauseParseSites` matches the bare word | consolidation-census | "FIXTURE: an import, a comment, a template or a bare literal names the marker but is not a parse" |
 
 - [ ] **Step 4: Verify.**
 
@@ -302,6 +302,78 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** the literal source pins over W1a's moved regions: the Step 0 count → 0; the ratchet predicate pinned for W1a's files; zero production bytes. **Not in this slice:** the other files' literal pins (later slices, ahead of the wave that moves their code).
 
+### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (judgment: it writes the rules every ring scanner will assert). **Lane:** docs only. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-02a says none is needed). **Gates:** none. #434 is another session's superseded PR and is not ridden (D-6001). CLAUDE.md is also edited by #842 and #851; this task's hunk (the "Rings / bounded contexts" bullet) is line-disjoint from both.
+
+**Files:**
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`:
+  - (a) the timer rule under L3, and L4's "timers" read as "schedulers and pollers";
+  - (b) the `.mjs` carve-out under L0, listing every `node:*` module it allows (`node:crypto`, `node:fs`, `node:url`);
+  - (c) contexts 7 (Update control plane, `update/`), 8 (Auth & box token, `auth/`, `token/`) and 9 (Docs, `docs/`), each with its language and allowed dependencies, plus the **K** row (kernels and platform files, no aggregate);
+  - (d) a new section, "Deciding a file's ring and context": the server and PWA ring predicates, the header declaration rule (outward only), and the path table between `ring-context-map` markers;
+  - (e) a status table per increment and per enforcement item, each row naming its test file or ARCH ticket, and the "still open" lines re-verified against `main` by symbol.
+- Modify `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md`: §2.1's adoption bullet quotes the wording; C7 to C9 point at the 08-10 contexts.
+- Modify `CLAUDE.md`: the "Rings / bounded contexts" bullet copies the timer, `.mjs` and PWA sentences word for word.
+- No test file, no production byte. The proof is a throwaway checker in the scratchpad, never committed: ARCH-04 stage 4 is the committed assertion.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`: list `shared/*.mjs`'s `node:*` imports; read `CoordStore.bumpReplayCount`, `markIngested`, `markDelivered`, `rejectDelivery`, `backOff` and `FleetWatcher.sweepMail`'s use of them; list every timer call in `server/src` with where its handle lives; list every test the status tables will cite. `gh pr list --state open` for PRs holding the three files.
+- [ ] **Step 1: Red (doc checks).** Two throwaway scripts: `map-check.mjs` parses the spec's `ring-context-map` table and the ring rules and lists every non-test `server/src` and `pwa/src` file that maps to zero or two rings or contexts; `word-check.mjs` asserts CLAUDE.md and the consolidation spec carry the 08-10 spec's timer, `.mjs` and PWA sentences byte for byte after whitespace folding. Both are red on `origin/main` (no table; no sentences).
+- [ ] **Step 2: Green.** Write the spec, consolidation-spec and CLAUDE.md edits. `map-check` reports zero files with zero or two contexts; the ring predicates exclude each other by construction (ordered "any other file" clauses), so for rings it measures coverage, and it lists every header that names a ring token without a declaration the grammar accepts, each read by hand to confirm it is a reference to another file's ring and not the file's own. The timer rule is wired into the predicates (a deadline timer is an L3 fact, a scheduler or poller an L4 fact, in both packages), so no file has one ring by the predicates and another by the timer sentence. `word-check` passes. The PR body carries the per-ring and per-context counts.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | delete the `fleet/**` row from the table | map-check | the `fleet/` files no file row names are listed with zero contexts |
+  | add `watch.ts` to C3's file rows as well as K's | map-check | `server/src/watch.ts` listed with two contexts |
+  | duplicate the `session/**` directory row under C6 | map-check | every `session/` file no file row names listed with two contexts |
+  | drop the scheduler/poller clause from the server L4 predicate | map-check | the ring counts change: `auth/sessions.ts`, `remote/client.ts`, `sessionws.ts` and `watch.ts` leave L4 (`token/driver.ts` stays, by its header) |
+  | drop the deadline-timer clause from the server L3 predicate | map-check | the ring counts change: `inject/send.ts`, `livestate.ts` and `shutdownseal.ts` fall to L1 |
+  | the header grammar loses the `— ` and `ring ` prefixes | map-check | `update/converge.ts` and `token/link.ts` fall to L1 and are listed as undeclared ring tokens |
+  | CLAUDE.md's timer sentence loses "inside one adapter call" | word-check | red, naming the timer sentence |
+  | the spec's carve-out drops `node:url` | word-check | red, naming the `.mjs` sentence |
+  | D-6000 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+  | a concrete `D-TBD-<slug>` placeholder (a real slug) in the task section | `dtbd.test.ts` | red |
+
+- [ ] **Step 4: Verify.** From `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition`, `docs-grammar`, one at a time with `--maxWorkers=2`. No `tsc` is needed (no TypeScript changes).
+
+**Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
+
+### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 1, literal moves, but every line sits in a file another open PR edits, so the line-disjointness check is the judgment). **Lane:** server types only; zero emitted bytes change. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-03 says none is needed). **Gates:** ARCH-05 (#846) and ARCH-02a (Task C0h, #874) merged; both are. **Not yet:** the `Deps` move, which #850 blocks (D-6004). #434 is not ridden.
+
+**Files:**
+- Create `server/src/coord/ports.ts` (L2: every top-level statement is a type): `CcdResult` (moved from `lifecycle.ts`, docstring and all), `RunCcd`, and `FleetWatcherView` (the two pane-scraped reads `turnverdict.ts` takes), each with its failure contract.
+- Modify `server/src/lifecycle.ts`: `CcdResult` is re-exported from `coord/ports.ts`; `CcdRunner` becomes `RunCcd`'s alias, so the runner type has one definition.
+- Modify the seven coordination lanes that took `Deps['runCcd']`: `coord/childReclaim.ts`, `childSpent.ts`, `close.ts`, `collectTempRoot.ts`, `dispatch.ts`, `expireArchived.ts` and `fingerprint.ts`. Each swaps `import type { Deps } from '../server.js'` for `import type { RunCcd } from './ports.js'`, and `Deps['runCcd']` for `RunCcd`.
+- Modify `server/src/turnverdict.ts`: `FleetWatcher` (from `watch.ts`) becomes `FleetWatcherView` (from `coord/ports.ts`).
+- Create `server/test/inner-ring-host-imports.test.ts`: the files that import `server.ts` or `watch.ts` in any form (type-only, extension-less, dynamic, `typeof import`) are exactly a pinned outer set plus a pinned pending set. A CONTROL proves each outer member is L4 or L5 by a ring fact the spec states: `index.ts`, a `fastify` import, a timer handle kept on a field, or an L4 header declaration. A second CONTROL proves each pending member is not.
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: the "Import-direction test" status row names the new pin.
+- `server.ts` and `watch.ts` are not touched. Nothing moves out of `watch.ts`: `FleetWatcher` is a runtime class and `FleetWatcherView` is a new port, so ARCH-03's "watch.ts re-exports the moved types" clause has nothing to re-export, and this task records that it does not apply to `watch.ts`. `server.ts`'s re-export of `Deps` comes with the `Deps` move (D-6004).
+
+- [ ] **Step 0: Re-ground.** On `origin/main`, list every non-test `server/src` file that names `server.js` or `watch.js` in any import form, and decide each one's ring by the C0h rules. The issue's nine are the inner ones: `commands.ts`, `turnverdict.ts` and the seven lanes. Read what each takes. The seven take only `Deps['runCcd']`, `turnverdict.ts` takes two `FleetWatcher` reads, and `commands.ts` takes the whole `Deps`. Run `gh pr list --state open` with `gh pr diff` for every file touched. #870 (`collectTempRoot.ts` lines 2 and 151, `expireArchived.ts` line 1) and #877 (`dispatch.ts` after line 26) change no line this task changes, and one unchanged line separates each pair. #850 edits inside `Deps` (`server.ts` ≈:279–287).
+- [ ] **Step 1: Red.** The new pin, run on `origin/main`, lists the eight drainable files beyond the pinned sets. Its CONTROLs pass on `main`: the scan sees every import shape, and every outer and pending member has the ring the pin claims.
+- [ ] **Step 2: Green.** Make the moves above. `tsc` is clean, and the pin passes.
+- [ ] **Step 3: Emit proof.** `tsc -p server --outDir` from a `git archive` of `origin/main` and from the branch: `diff -r` shows every existing emitted file byte-identical, and one new file, `coord/ports.js`, which is `export {};`. Nothing imports it at runtime, because every importer takes it as a type. The removed lines were type-only imports, which tsc already elided.
+- [ ] **Step 4: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `coord/close.ts` takes `import type { Deps } from '../server.js'` again | the pin | red, listing `coord/close.ts` |
+  | `turnverdict.ts` takes `import type { FleetWatcher } from './watch.js'` again | the pin | red, listing `turnverdict.ts` |
+  | `coord/fingerprint.ts` takes the host extension-less (`'../server'`) | the pin | red, listing `coord/fingerprint.ts` |
+  | `coord/dispatch.ts` reaches the host through `typeof import('../server.js')` | the pin | red, listing `coord/dispatch.ts` |
+  | `commands.ts` moved from the pending list to the outer list | CONTROL | red: `commands.ts` is not L4 or L5 by any ring fact |
+  | `commands.ts` drains (its import removed) but stays pending | the pin | red: the pending entry must go with it |
+  | the scan skips `import type` lines | CONTROL | red: the shape list loses `./server.js` and `./c.js` |
+  | the fastify fact dropped from the ring facts | CONTROL | red for `coord/routes.ts`, `token/routes.ts` and `update/routes.ts` |
+  | D-6003 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+
+- [ ] **Step 5: Verify.** `tsc -p server`. Then, one at a time with `--maxWorkers=2`, the new pin, `coord-policy-rings`, `docs-source` (it imports `CcdResult` and `CcdRunner` from `lifecycle.ts`), `archive-door`, `dispatch-live-gate` and `single-definition`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
+
+**Exit (GATES):** inner-ring importers of `server.ts`/`watch.ts` go from 9 to 1 (`commands.ts`, pending, D-6004). The pin holds the count, and the emit is byte-identical. No new `ports/` or `domain/` directory exists. **Not in this task:** `Deps`'s move to a type-only `server/src/deps.ts`, its re-export from `server.ts`, `commands.ts`'s import, and ARCH-02b's justification line. All of these are the second half, after #850 lands.
+
 ## Operator acts in this wave
 
 - **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
@@ -334,9 +406,36 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
   - **Departs from ARCH-06:** the ticket's exemplar suites (the stall-sweep tick order, the coord-store UPDATE census) are not W1a's and move in a later slice; this slice moves the suites W1a needs.
 
+### A departure entered by the coordinator
+
+- **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
+  - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
+
+### Issued for Task C0h and defined here
+
+Task C0h was issued three numbers, 6000 to 6002.
+
+- **D-6000** — `ring-rules-decidable` (Task C0h; ARCH-02a): the 08-10 spec's ring rules are decidable from a file's own imports, timers and header: a deadline timer inside one adapter call is L3 and schedulers and pollers are L4 (a timer's handle says which: a local of one call or one not kept is a deadline, one stored on an object field or at module scope is a scheduler or poller), and both are facts the ring predicates use in both packages; the `.mjs` carve-out lists `node:crypto`, `node:fs` and `node:url`; contexts 7 to 9 and the K row join the map; the PWA rings are stated; one path table gives every `server/src` and `pwa/src` file one context; and the increments and enforcement items carry a status row each.
+  - **Departs from ARCH-02a as written:** two rules were needed to keep the ring decidable on today's tree, and both are stated in the spec. `node:path`, `node:url`, `node:util` and `node:crypto` do not make a file L3, because the 08-10 L1 rule never forbade them and `coord/delegation-model.ts` hashes in L1. A file that acts only through the deps it is handed may declare its ring in its header, outward only, because by imports and timers alone fourteen files would read as L1 against their own stated ring (thirteen by their header, among them `hibernateSweep.ts`, `stopDoneSweep.ts`, `coord/mirror.ts`, `update/converge.ts`, `token/link.ts` and `accounts/audit.ts`, and `docs/ccdsource.ts` by its ring pin). Two files still decide L1 by rule though their comments call them adapters, because neither states its ring in a form the grammar accepts: `coord/store.ts` (it holds the handle it is handed) and `fleet.ts`; ARCH-04 or ARCH-05 gives each a header declaration.
+- **D-6001** — `arch-02a-standalone` (Task C0h): the CLAUDE.md edit lands standalone and does not ride #434.
+  - **Departs from** the spec's §5.2 ("ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open") and ARCH-02a's routing line. #434 is still open, but it is superseded and belongs to another session, so riding it would tie this work to a PR nobody is landing. This task's CLAUDE.md hunk is line-disjoint from #434's, #842's and #851's.
+
+Issued and unused (Task C0h): 6002.
+
+### Issued for Task C0i and defined here
+
+Task C0i was issued three numbers, 6003 to 6005.
+
+- **D-6003** — `consumer-side-ports-coord-and-turn-reads` (Task C0i; ARCH-03): ports that a consumer below L4 takes from an L4 host are declared beside the consumer, in `server/src/coord/ports.ts` (L2). That file holds `CcdResult`, `RunCcd` (which `lifecycle.ts`'s `CcdRunner` aliases) and `FleetWatcherView`. No file below L4 imports `server.ts` or `watch.ts` in any form, and `server/test/inner-ring-host-imports.test.ts` holds that with an exact outer set whose ring each CONTROL proves. Declarations move, nothing is narrowed, and the emitted JS of every existing file is byte-identical.
+  - **Second half (ARCH-03, after #850 merged):** `Deps` and its member `CollectLaneDeps` move to `server/src/deps.ts`, which is type-only (L2 by the ring rules, K by context: a composition-root type, not a domain layer). `server.ts` re-exports both, so no caller breaks, and `commands.ts` imports `deps.ts`. The pin's pending list is gone: no file below L4 imports either host. D-6004's departure is closed.
+- **D-6004** — `arch-03-deps-move-after-850` (Task C0i): this task lands ARCH-03's ports half now. `commands.ts` stays the one pinned pending importer until `Deps` moves.
+  - **Departs from ARCH-03 as written**, which moves `Deps` to a type-only `server/src/deps.ts` in the same change. #850 is open and adds a member inside `Deps` (`server.ts` ≈:279–287). Moving the declaration would delete that range, so it cannot stay line-disjoint from #850. The ports half touches no line any open PR changes. The `watch.ts` re-export clause does not apply, because nothing declared in `watch.ts` moves.
+
+Issued and unused (Task C0i): 6005.
+
 ## Out of scope
 
-Every later W0 slice (spec §5.2): ARCH-02a, ARCH-02b's programme ruling, ARCH-04, ARCH-23, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte.
+Every later W0 slice (spec §5.2) except ARCH-02a, which is Task C0h, and ARCH-03's ports half, which is Task C0i: ARCH-02b's programme ruling, ARCH-04, ARCH-23, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte.
 
 ## Review log
 

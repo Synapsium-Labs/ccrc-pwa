@@ -6,6 +6,7 @@
 import type { ReactNode } from 'react';
 import { BareRow, EmptyState, PageScaffold, Section } from '@ccrc/ui';
 import { navigate } from '../lib/router';
+import { humanBytes } from '../lib/format';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
@@ -51,13 +52,6 @@ export function archivedSizeText(sum: ArchivedSummary): string {
   return sum.unmeasured === 0
     ? humanBytes(sum.bytes)
     : `${humanBytes(sum.bytes)} + ${sum.unmeasured} unmeasured`;
-}
-
-export function humanBytes(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
-  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)} kB`;
-  return `${n} B`;
 }
 
 export function ArchiveScreen({

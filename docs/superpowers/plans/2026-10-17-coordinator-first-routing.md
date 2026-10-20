@@ -1039,3 +1039,221 @@ Issued and unused (Task 16): none.
 - **D-5493** — `digest-as-built` (Task 17): eight decisions the Files list did not make. (1) One line per row, its FINAL coordinator decision, decided by one predicate per table (`askDecision`, `approvalDecision`, `server/src/coord/digest.ts`), which the correction route reads too, so the digest and `409 not-coordinator` cannot disagree: a row held for a coordinator and then answered (or allowed, denied) by it is that decision, a late answer after the lapse included (D-5289); `declined` is the hand-over; a held row the coordinator never ruled is the lapse, at `releasedAt` for a question and at `notifyAt` for an approval, whoever acted after; the operator's own answer inside the window, a row minted released and a stale question are no line. (2) A day with no decisions is CLAIMED with count 0 and sends no push, so the beat does not rebuild it every minute; `GET /api/digest` reports `pushed: false` for it. (3) The beat's one idempotence check is the claim (`INSERT OR IGNORE` into `digests`, before the push): no pre-read of the row, so a reader that agrees with the claim cannot mask its deletion (the mutation table's restart row). (4) A second correction on the same row while the first mail is still undelivered is `409 duplicate` (`queueSystemMail`'s outstanding-mail rule, said instead of dropped); the mail carries `runId` null. (5) The mail screen carries a standing Digest door, so a missed push loses nothing in the app either. (6) `POST /api/digest/correct` queues mail to a coordinator with no box token, so it joins `box-token-census.test.ts`'s session-only set beside the kickoff route, and `CLAUDE.md`'s bullet names it. (7) A day's push is a snapshot at its claim, and the GET re-reads the rows, so three edges are by design and lose nothing (the GET answers any day): a lapse that its coordinator later answers (late answer wins) moves from the lapse's day to the answer's, so the earlier day's GET can list fewer decisions than its push named; a server that starts, or comes back from an outage, just before the hour with yesterday unclaimed sends yesterday's digest and then today's minutes apart; and moving `~/.ccrc/digest-hour` later after the day was claimed leaves the shifted hours unpushed for that day. Task M reads a day's count drop in that light, not as a bug. (8) The route cases live in their own `server/test/digest-routes.test.ts` (on the approvals lane's fixture); `server/test/routes.test.ts`, which the Files list named, is unchanged. Held by `digest.test.ts`, `digest-routes.test.ts`, `digest-screen.test.tsx` and `box-token-census.test.ts`.
 
 Issued and unused (Task 17): none.
+
+### Durability (#752) — issued 2026-10-19 and defined here (D1, #754)
+
+The coordinator↔worker durability fixes (epic #752) live here because coordinator-first routing is the plan that
+owns the coordinator↔worker channel, and that channel is ordinary mail; no plan owns the mail lane's delivery states
+as such.
+
+- **D-5838** — `mail-parked-never-rejected-while-alive` (D1, #754): a mail is never rejected `undeliverable` while
+  its recipient session is alive. Measured on main before it: `sweepMail` rejected a never-delivered row on the FIRST
+  `enter-ignored` (the nudge in a fresh box) and on any refusal reaching `MAIL_MAX_ATTEMPTS` (in practice
+  `draft-present`, about 15 minutes of a human's unsent text), and told only the operator's feed, never the sending
+  session; 21 days lost five wave briefs and two done-mails that way. Now such a row PARKS (`CoordStore.parkDelivery`,
+  migration 27's four nullable `mail_deliveries` columns `parkedAt`/`parkReason`/`parkBox`/`parkEscalatedAt`). It stays
+  `state: 'queued'`, so every outstanding reader keeps it and an older build retries it as an ordinary row; the sweep
+  probes its recipient's input box (`readBoxText`, read-only, through the session's queue, at most every 30 s) and wakes
+  it when the box differs from what it held at the park; otherwise it is re-attempted every 10 minutes through every
+  gate, so a recipient that has since died, stopped or been purged is rejected by the lifecycle rungs exactly as before,
+  and a closed run still cancels it. An `enter-ignored` park types nothing while its box still holds the same text
+  (never the nudge under itself); on its retry timer, a box that holds exactly OUR OWN nudge goes to `sendPrompt`'s
+  `resumeIfOwn` arm, which presses Enter only after its correspondence check (`pressEnterAndConfirm`) and never types,
+  so the stranded wave brief is submitted without a human, at most once per 10-minute retry; any other text is held
+  with nothing pressed. A `parkBox` the park could not read (the box absent, or a menu up) is UNKNOWN, not empty
+  (`parkBoxSeen`): it wakes only on a box seen empty, and any other reading becomes its baseline
+  (`CoordStore.baselineParkBox`) without a press. The probe is grouped per recipient and claims `mailInFlight` for that
+  recipient while it waits, so a probe stuck behind another caller's queue slot holds only its own recipient, never the
+  whole lane. A parked row does not veto hibernation or stop-done (`hibernateSweep.ts`, `stopDoneSweep.ts`): it would
+  otherwise keep its session resident for up to 24 h; a hibernated recipient is still reached through the ensure-wake
+  gate on the retry, and a stopped one is rejected by the lifecycle rung as before. The sending session gets one system mail from `operator`
+  (`mail parked: <subject>`, saying why and what lands it; `tellSender`'s degrade rule holds: never a role, never a
+  session-less sender, never the recipient itself); the operator gets one push regardless of who sent it, tagged
+  `mail-parked-<delivery id>` and addressed to the sender's session or, for a role-sent mail, the recipient's, at
+  15 minutes parked, or at once for a park that followed the attempts ceiling, recorded in `parkEscalatedAt` so a
+  restart never repeats it. At 24 hours parked the row is rejected with `lastError` `parked 24 h, never delivered:
+  <reason>`, and the sender is mailed `mail rejected: <subject>`. On the wire: `MailSummary.parkedAt` (optional, only on
+  a `queued` row) and `RunHealth.mailParkedLive` (optional); the mail strip renders a `parked` line and head mark, and
+  the run board a `waiting` warning. The coordinator skill's `mail-envelope.md` says a park is not a give-up. What
+  holds it: `server/test/mail-sweep.test.ts`'s "a live recipient's mail PARKS, never rejects (D-5838)" block,
+  `pwa/test/mail-strip.test.tsx` and `pwa/test/runs-health.test.tsx`.
+- **D-5839** — `parked-word-two-senses` (D1, #754): `RunHealth.mailParked` and the run board's "N parked" already
+  meant a delivery the lane GAVE UP on (rejected, not a deliberate cancel), and that reader is unchanged. The new live
+  count is therefore a separate field, `mailParkedLive`, rendered as "N waiting", not a second "parked" with the
+  opposite meaning; the mail strip, which renders one delivery's state, says "parked". It departs from the brief's "expose
+  'parked' wherever delivery states are listed" only in the run board's word, and `MailDeliveryState` gains no member, so
+  every reader keyed on `state` (the stall watch's queued-mail verdict among them) is unchanged.
+- **D-5840** — `mail-gate-parked` (D1, #754): the `enter-ignored` park's pre-send hold (a box holding text that is
+  neither changed since the park nor our own nudge) is a refusal before the send,
+  and the D-792 ladder rule is that every such `continue` names a gate. So `MailGate` gains one member, `parked`
+  (additive on a closed union; `GATE_PHRASE` in the mail strip has its words), and the hold records it.
+
+Issued and unused (D1): none.
+
+### Durability (#752) — D3, #755: the wave brief is confirmed taken (issued 2026-10-20 and defined here)
+
+- **D-5841** — `brief-landed-or-coordinator-told` (D3, #755): after a run is dispatched, the server confirms its wave
+  brief was taken. Measured on main before it: the brief is an ordinary `queueSystemMail` row (subject `wave-brief`,
+  from `coordinator`), and nothing looked at whether it ever reached `ingestedAt`; a brief parked behind a dirty box
+  (D1 now keeps it outstanding) was learned of only through the quiet stall ladder, hours later. Now the mail sweep's
+  brief pass (`sweepMail`, after the parked pass) reads every UNLANDED brief of an ACTIVE run (`CoordStore.unlandedBriefs`:
+  the brief's latest delivery has no `ingestedAt` and is not `acked`, queued within the last 24 h, and its run has no
+  `brief-not-taken` row yet), and the pure decider `briefStep` (`server/src/coord/briefwatch.ts`) answers per row:
+  - at `BRIEF_RETRY_MS` (5 min) after the brief was queued, ONE retry: a `brief-retry` run-event row
+    (`recordStallObservation`, so it is durable and deduped by `(runId, detail)`), then, for a PARKED row, D1's own
+    `wakeParked`. The woken row goes through every gate of the due loop exactly as D1's 10-minute retry does: the
+    ensure-wake gate first for a hibernated worker, a box holding OUR OWN nudge gets `resumeIfOwn`'s verified Enter
+    and is never re-typed, and any other text is held with nothing pressed or typed. A row that is not parked is
+    already on its own retry ladder and gets the row only;
+  - at `BRIEF_NOTICE_MS` (10 min), ONE notice: the run's claimant (`resolveCoordinator(runId)`) gets a system mail from
+    `operator`, subject `brief not taken by <worker>, run N: <reason>` (`briefNotTakenSubject`, `briefNotTakenReason`),
+    in one transaction with its `brief-not-taken` row (`queueStallNotice`); a run with no claimant, or whose claimant
+    is the worker itself, gets the row alone (`recordStallObservation`). The operator gets one push, tagged
+    `brief-not-taken-<runId>`, only for the call that wrote the row, so a second sweep or a restart never repeats it.
+  The pass dispatches nothing, writes no run state, hold, claim or pool limit, and types nothing itself: its only
+  writes are the two run-event rows, the notice mail, and D1's `wakeParked`. Every timer reads back from `coord.db`
+  (`mail.at`, the run-event rows), so a server restart neither re-sends nor forgets. A closed run is out of the pass
+  (`INACTIVE_RUN_STATES_SQL`, and `insertStallObservation`'s own `run-gone` re-check). The mail kill-switch stops it
+  with the rest of the sweep. A rejected brief of a still-active run is noticed too: it has not landed either.
+  `WAVE_BRIEF_SUBJECT` is the subject's one spelling, used by `dispatchRun` and by the pass.
+
+  **Files.** `server/src/coord/briefwatch.ts` (new: the L1 decider, its constants, subject and reason words);
+  `server/src/coord/store.ts` (`unlandedBriefs`, `absorbParkEscalation`); `server/src/coord/dispatch.ts` (the subject constant);
+  `server/src/watch.ts` (the brief pass in `sweepMail`, and the sweep's empty-queue return counts unlanded briefs);
+  `server/test/brief-landed.test.ts` (new); `server/test/single-definition.test.ts` (the new names).
+
+  **Steps.** (1) The red suite, seen failing on `origin/main`. (2) `briefwatch.ts` and `unlandedBriefs`. (3) The pass in
+  `sweepMail`. (4) Green; the mutation table run on a `git archive` copy; tsc and the doc suites.
+
+  **Red tests** (`server/test/brief-landed.test.ts`): a brief taken within 5 min gets no row, no mail and no push; an
+  `enter-ignored` brief on a fresh worker is retried at 5 min through the park and lands with our nudge never
+  re-typed, and the retry is one row however many sweeps follow; a FOREIGN draft is never typed over, and at 10 min
+  the claimant is mailed `brief not taken by <worker>, run N: …` and the operator pushed once; a restart over the same
+  `coord.db` repeats neither; a closed run is never noticed; a rejected brief of an active run is noticed even when
+  nothing else is outstanding; the pass leaves the run row (state, session, claimant) as it found it.
+
+  **Mutation table** (each run against the suite alone): M1 the retry's `wakeParked` deleted; M2 the retry at the
+  notice's 10 min; M3 the notice's dedupe dropped (the reader's `brief-not-taken` filter and the pass's `told` check
+  both: either alone is held by the other, the observation row's own `(runId, detail)` dedupe); M4 the
+  `ingestedAt IS NULL` filter dropped; M5 the active-run filter dropped and `insertStallObservation`'s `run-gone`
+  re-check bypassed (again both: either alone is held by the other); M6 the notice addressed to the worker; M7 the
+  empty-queue return blind to unlanded briefs; M8 the push untagged per run; M9 the notice step deleted; M10 the
+  pass never called.
+
+  **Verify.** `server/test/brief-landed.test.ts`, `mail-sweep.test.ts`, `stall-store.test.ts`, `run-routes.test.ts`,
+  `coord-store.test.ts`; `tsc --noEmit -p .` in `server/`; `single-definition`, `deviation-refs` (after
+  `git fetch -q origin main`), `dtbd`, `topology-clean`, `docs-grammar`. Nothing rendered: no UI table.
+
+  **Routing.** Server only; no wire field, no route, no migration (the durable state is rows `coord.db` already has),
+  no `ccd` change. **Needs.** D1 (#754, merged as #853). **Gates.** None open.
+
+  **Review round (extends D-5841).** Four corrections from verification, each with its red test first:
+  - The pass reads its briefs AFTER the sweep's `UserPromptSubmit` edge loop and its awaits, never the list read at the
+    top of `sweepMail` (that one only feeds the empty-queue return): a brief taken just before the 10-minute sweep was
+    otherwise noticed and pushed in the same sweep that set its `ingestedAt`.
+  - The notice absorbs D1's park escalation for that delivery (`CoordStore.absorbParkEscalation`: `parkEscalatedAt` set
+    on the outstanding, never-delivered row, parked or not, since a brief still on its failure ladder at 10 minutes
+    parks after the notice). The operator then gets the brief's one push and no later `mail-parked-<id>` push. D1's
+    park-time sender mail is unchanged.
+  - A REJECTED brief's notice body says the lane has given up and will not try again; only an outstanding brief's says
+    it is retried.
+  - The subject is held to `MAIL_SUBJECT_MAX_BYTES` (system mail skips the HTTP ingress that enforces it), trimmed by
+    code point.
+  Accepted and stated: the push is sent by the call that committed the `brief-not-taken` row, after the commit; a
+  crash between the two loses that push for good, while the claimant's mail is durable in the same transaction.
+
+  **Red tests (review round):** an ingest edge sampled in the same sweep that crosses 10 minutes gets no row, mail or
+  push; a run claimed by its own worker gets the row and one push and no mail; a brief parked behind a foreign draft
+  gives one brief push and no park push over 30 minutes; a rejected brief's notice never promises a retry; the notice
+  subject never exceeds the subject cap.
+
+  **Mutation table (review round):** M11 the `coordinator !== worker` guard dropped; M12 the pass given the list read
+  before the edge loop; M13 the `absorbParkEscalation` call deleted; M14 the rejected body branch dropped; M15 the
+  subject cap dropped.
+
+Issued and unused (D3): D-5842, D-5843.
+
+### Durability (#752) — ARCH-15, #532: one guarded writer for `mail_deliveries` (issued 2026-10-20 and defined here)
+
+Defined here rather than in the consolidation W1a plan: W1a owns the switches and the notify door, while this section
+already owns the mail lane's delivery states (D1's park columns and writers, D3's brief pass), and every writer this
+task folds is one of them or sits beside them.
+
+- **D-5997** — `mail-deliveries-one-writer` (ARCH-15, #532): `CoordStore` writes `mail_deliveries` in ONE place, the
+  private `writeDeliveries(set, setArgs, guard, where, whereArgs)`, which owns the terminality guard: `'outstanding'`
+  (`OUTSTANDING_STATES_SQL`), `'non-terminal'` (`TERMINAL_DELIVERY_SQL`), or `'ack'` (the negative form plus
+  `markAcked`'s one named exception, the replay-ceiling park). A caller's `where` is ANDed after the guard, never ORed
+  into it, so no writer can widen what the guard admits. `writeDelivery(id, …)` wraps it for one row and answers
+  `DeliveryWrite` = `{changed, state}`, the state read back after the write (`'absent'` for no row). Measured on main
+  before it: 19 `UPDATE mail_deliveries` statements in `store.ts`, `OUTSTANDING_STATES_SQL` a hand-typed literal, nine
+  writers returning `void` and six park writers (D1's five, D3's one) a bare boolean, and `sweepMail` assuming every write landed: an ack
+  landing while a send was in flight still had the sender mailed `mail parked` for a row that was acked. Now
+  `OUTSTANDING_STATES_SQL` is built from L0's `OUTSTANDING_DELIVERY_STATES`, the complement of
+  `TERMINAL_DELIVERY_STATES` (`outstandingDeliveryStates`, `shared/api.ts`); all nineteen writers delegate and return
+  the result (`setDeliveryEnvelope`, `bumpReplayCount` and `markAcked` keep their unions, now built from it); and
+  `sweepMail` consumes each answer through `FleetWatcher.landed`: a refused `markDelivered`, `markIngested`, `backOff`,
+  `noteGate`, `rejectDelivery`, `parkDelivery`, `holdParked` or `baselineParkBox` is logged (`mail sweep: <writer>
+  refused on delivery <id> (row is <state>)`) and the step that assumed it is skipped (the park's sender mail and
+  escalation, the ceiling's rejected mail, the replay count, and the `draft-present` blocked notice, now sent only
+  after its back-off lands). `wakeParked`, `markParkEscalated` and
+  `absorbParkEscalation` refuse in the ordinary course, so their `changed` is read without a log. No other behaviour
+  changes: every SQL predicate is the one it replaces, and the bound `lastError` values are the strings that were
+  interpolated.
+
+**Files.** `shared/api.ts` (`outstandingDeliveryStates`, `OUTSTANDING_DELIVERY_STATES`); `server/src/coord/store.ts`
+(`writeDeliveries`, `writeDelivery`, `DeliveryWrite`, `DeliveryBulkWrite`, the nineteen writers, the derived
+`OUTSTANDING_STATES_SQL`, the reader walk); `server/src/watch.ts` (`landed` and its call sites in `sweepMail` and the
+brief pass); `server/test/mail-deliveries-writer.test.ts` (new); `server/test/mail-sweep.test.ts` (four race tests);
+`server/test/mail-hardening.test.ts` (the census as one writer and no `void`); `server/test/single-definition.test.ts`
+(the negative-form count is exact); `server/test/child-reclaim-mail-store.test.ts` and `hibernate-sweep.test.ts` (the
+new result shapes); `server/test/mail-routes.test.ts` (`non-terminal`, a guard name, joins the non-code kebab
+allowlist); `server/test/session-hook.test.ts` and `README.md` (the citation census re-measured and README's four
+`shared/api.ts` anchors re-pointed past the 11 new lines); `CLAUDE.md` (the "Open on `main`" paragraph).
+
+**Steps.** (1) The red tests, seen failing on `origin/main`; the mail suites' baseline green. (2) The L0 derivation.
+(3) The primitive and the nineteen writers. (4) `sweepMail` consumes the results. (5) The censuses and `CLAUDE.md`.
+(6) Green; the mutation table on a `git archive` copy; tsc and the doc suites.
+
+**Red tests.** `mail-deliveries-writer.test.ts`: `backOff` on an acked row answers `{changed: false, state: 'acked'}`
+and leaves the row as it was; `noteGate` on a rejected row the same; `markDelivered`, `markIngested` and
+`rejectDelivery` on an acked row; the park writers refuse a delivered row and a terminal one; an absent row answers
+`absent`; every one-row writer answers `{changed: true, state}` on a live row; `cancelDeliveriesTo` answers
+`{changed: n}`; a member added to the terminal list leaves the outstanding list; `store.ts` holds exactly one
+`UPDATE mail_deliveries` in code, still one `UPDATE` and one `mail_deliveries SET` once string concatenations are
+folded, and no hand-typed outstanding literal. `mail-sweep.test.ts`: an ack landing mid-send refuses the
+`enter-ignored` park, so the sender gets no `mail parked` mail and the refusal is logged; an ack landing before a
+`draft-present` back-off leaves the row with no back-off, pushes the sender no blocked notice and logs the refusal; an
+ack landing after the parked pass read its rows refuses that pass's ceiling reject, and an ack landing during the
+in-flight send of a row past the ceiling refuses the due loop's ceiling reject: in both the sender gets no `mail
+rejected` mail and the refusal is logged.
+
+**Mutation table** (each against the suites named): M1 the guard dropped from `writeDeliveries`; M2 `where` ORed into
+the guard; M3 `OUTSTANDING_STATES_SQL` back to a literal; M4 the derivation no longer removes the terminal states; M5
+`backOff` writes its own unguarded `UPDATE`, bypassing the one writer; M6 `writeDelivery` answers `changed: true`
+always; M7 `writeDelivery` never reads the state back; M8 `sweepMail` ignores `parkDelivery`'s refusal; M9 `landed`
+logs nothing; M10 `markAcked`'s replay-ceiling exception dropped; M11 the first park's escalation `.changed` dropped
+(an object is always truthy; held by `brief-landed.test.ts`, where D3's notice has already absorbed the escalation).
+Review round: M12 the parked pass's ceiling-reject skip dropped (the sender is mailed `rejected` for an acked row); M13
+the due loop's ceiling-reject skip dropped, the same; M14 the `draft-present` back-off's skip dropped (the blocked
+notice is pushed for an acked row); M15 a writer rewritten as `'UPDATE ' + 'mail_deliveries SET …'` outside the one
+writer (the folded census). Recorded as equivalent: the parked pass's own `.changed` dropped (M11b), since that pass
+reads `parkEscalatedAt IS NULL` first and nothing else stamps the column between that read and the write; and
+`markDelivered`'s skip dropped (M16), since a refused `markDelivered` means the row is terminal, so the
+`bumpReplayCount` that follows refuses too.
+
+**Verify.** `mail-deliveries-writer`, `mail-hardening`, `mail-sweep`, `coord-store`, `brief-landed`, `stall-store`,
+`child-reclaim-mail-store`, `hibernate-sweep`, `single-definition`; `tsc --noEmit -p .` in `server/` and `pwa/`
+(`shared/api.ts` is L0); `deviation-refs` (after `git fetch -q origin main`), `dtbd`, `topology-clean`, `docs-grammar`.
+Nothing rendered: no UI table.
+
+**Routing.** Server and L0 only; no wire field, no route, no migration, no `ccd` change. **Needs.** D1 (#754, merged
+as #853) and D3 (#755, merged as #877). **Gates.** #448 merged; none open.
+
+### Deviations (ARCH-15)
+
+- **D-5998** — `bulk-delivery-write-count` (ARCH-15, #532): the issue says every writer returns `{changed, state}`.
+  The five scoped bulk writers (`cancelKickoffsTo`, `repointCoordinatorMail`, `parkSupersededDeliveries`,
+  `cancelOutstandingDeliveries`, `cancelDeliveriesTo`) write many rows and have no one state to name, so they answer
+  `DeliveryBulkWrite` = `{changed: <rows>}`. None of them returns `void` any more.
+
+Issued and unused (ARCH-15): D-5999.

@@ -374,6 +374,7 @@ measured at the wave's tip unless it says otherwise.
 - As built at the landing (recorded 2026-10-19). The 259, 188 and 71 above are Task 10's figures, from before
   hibernate existed, and they stand as that measurement. At #410's final head (`6968de956`) the file has 275 cases:
   the sixth absorption of `main` added 16 hibernate rows, eight dash ids each with and without a reason.
+  - Correction (review 647 F3, 2026-10-19): the absorption brought the verb, not the rows. At the merge `adca4a843` the parity file had no hibernate probe, so it had no hibernate rows, and its anti-whitelist case was red. The 16 rows came from `6968de956`'s hibernate probe, added in the landing round. The counts stand: 275 cases, 188 red and 87 green against the pre-wave binary, and 16 red and 259 green against `adca4a843`'s.
   - Re-run against the pre-wave binary, which has no `hibernate` verb, 188 go red and 87 stay green. The 16
     hibernate rows are green there, because that binary refuses an unknown verb.
   - Against `adca4a843`'s binary, which had hibernate without its fix, those 16 rows go red and the other 259 stay

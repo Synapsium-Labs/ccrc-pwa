@@ -3624,6 +3624,13 @@ export interface FleetHealth {
    * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
    */
   delegation?: DelegationObservationHealth;
+  /**
+   * The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943,
+   * `ArchivedHeld`). Optional for the same absence-permits reason the blocks above are: absent until the lane's first
+   * pass, and on a server with no watcher or no coordination database; absent reads as UNKNOWN, never as nothing held.
+   * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
+   */
+  archivedHeld?: ArchivedHeld;
 }
 
 /**
@@ -4060,10 +4067,10 @@ export function isMarkerState(v: unknown): v is MarkerState {
  *  says what ends each). The PWA renders sentences and never switches on a word. */
 export type ChildReclaimKeptWord =
   | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
-  | 'reviewed-run-absent' | 'not-a-workspace';
+  | 'reviewed-run-absent' | 'not-a-workspace' | 'review-report-stale';
 const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
   coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
-  'reviewed-run-absent': true, 'not-a-workspace': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true, 'review-report-stale': true,  // D-5942
 };
 export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
   Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];
@@ -4154,6 +4161,50 @@ export interface ExpiryAttention {
   readonly archivedAt: number;
   readonly expiresAt: number | null;
   readonly at: number;
+}
+
+/** The RANKED TOTAL of bytes ARCHIVED WORKSPACES hold (D-5943; spec 2026-10-20 §2.7, #120 folded into #318), each with
+ *  the expiry lane's latest verdict for it — a READ MODEL, never a tap: it decides nothing and nothing acts on it. Composed
+ *  by the lane once per pass (`rankArchivedHeld`, L1 `server/src/archivedExpiry.ts`), shadow and armed alike, and carried
+ *  by `GET /api/fleet/health` as the optional `archivedHeld` block. It covers registry rows only.
+ *   - `bytes` is ws-archive's own measure AT ARCHIVE TIME (`FleetSession.archivedBytes`); `null` is UNMEASURED — never 0 —
+ *     counted in `unmeasured`, left out of `totalBytes` and ranked last.
+ *   - `rows` are ranked by bytes, descending, ties by `sessionId`.
+ *   - `kind` is the family of the lane's latest word, `verdict` the word itself (D-6026): the standing report's
+ *     (`ExpiryAttention.kind`, a refusal's token as its word), else the last act's answer (`deferred` with its reason,
+ *     `refused` with its token, …), else `learned`/`expiry-known` (the audit taught the instant, nothing asked yet), else
+ *     `not-yet-audited` for both. Read them as text: the vocabulary is the lane's and grows with it. */
+export interface ArchivedHeldRow {
+  readonly sessionId: string;
+  readonly bytes: number | null;
+  readonly verdict: string;
+  readonly kind: string;
+}
+export interface ArchivedHeld {
+  readonly totalBytes: number;
+  readonly unmeasured: number;
+  readonly rows: readonly ArchivedHeldRow[];
+}
+
+/** THE ONE READER of `FleetHealth.archivedHeld` (D-5943): the block, or `null` — absent (an older server, or a lane that
+ *  has not passed yet) or malformed alike, and `null` reads as UNKNOWN, never as nothing held. */
+export function readArchivedHeld(health: unknown): ArchivedHeld | null {
+  if (typeof health !== 'object' || health === null) return null;
+  const v = (health as Record<string, unknown>)['archivedHeld'];
+  if (v === undefined || v === null) return null;
+  try {
+    const o = asObj(v, 'archivedHeld');
+    const rowsRaw = o['rows'];
+    if (!Array.isArray(rowsRaw)) return null;
+    const rows = rowsRaw.map((r, i): ArchivedHeldRow => {
+      const x = asObj(r, `archivedHeld.rows[${i}]`);
+      return { sessionId: reqStr(x, 'sessionId'), bytes: optNum(x, 'bytes'), verdict: reqStr(x, 'verdict'), kind: reqStr(x, 'kind') };
+    });
+    return { totalBytes: reqNum(o, 'totalBytes'), unmeasured: reqNum(o, 'unmeasured'), rows };
+  } catch (err) {
+    if (err instanceof MalformedSnapshot) return null;
+    throw err;
+  }
 }
 
 /** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
@@ -4855,6 +4906,41 @@ export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closin
 export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
 
 /**
+ * THE DRIFT KINDS (coordinator-durability tail spec §4.2, `drift-decider-pure` (D-5921)): what the drift
+ * reconciler can find out of step, each mapped to the kind of subject it names, so a finding's target is a run
+ * (`/runs`) or a session (`/s/<id>`). The one home of the list: `DRIFT_KINDS` is this map's keys and
+ * `isDriftKind` the one narrowing of an untrusted string. The decider is `server/src/coord/drift.ts`.
+ */
+export const DRIFT_KIND_MAP = {
+  'run-quiet': 'run',
+  'claimant-gone': 'run',
+  'mail-parked': 'session',
+  'mail-held': 'session',
+  'parent-mismatch': 'session',
+  'review-waiting': 'run',
+  'question-orphaned': 'session',
+} as const satisfies Record<string, 'run' | 'session'>;
+export type DriftKind = keyof typeof DRIFT_KIND_MAP;
+export const DRIFT_KINDS: readonly DriftKind[] = Object.keys(DRIFT_KIND_MAP) as DriftKind[];
+export function isDriftKind(raw: unknown): raw is DriftKind {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(DRIFT_KIND_MAP, raw);
+}
+
+/** One finding (D-5921). `key` names the subject, so the same drift is the same key on every pass; `subject` is
+ *  the JSON of the ids it names; `detail` one line in words; `factAt` the fact's own time where it has one, else
+ *  null (its age then runs from first sight). `runId` is set on a run kind (for `claimant-gone`, the programme's
+ *  newest open run) and `sessionId` on a session kind; each is null where it does not apply. */
+export interface DriftFinding {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly factAt: number | null;
+  readonly runId: number | null;
+  readonly sessionId: string | null;
+}
+
+/**
  * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
  * or release-with-ceremony, and reusing those states would make the table lie
@@ -4961,6 +5047,17 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
  *  recorded by this wave, not a decision this list makes. */
 export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
   readonly MailDeliveryState[];
+
+/** The states a delivery sits in while it is still OUTSTANDING, DERIVED as the
+ *  complement of `terminal` within this vocabulary (D-5997, #532), so a member
+ *  added to `TERMINAL_DELIVERY_STATES` leaves this list in the same edit and both
+ *  of the store's guards move together. `unknown` is in neither list: a state this
+ *  build cannot name is not outstanding either (D-1406 stays open). A function so
+ *  the derivation itself can be measured against a different terminal list. */
+export function outstandingDeliveryStates(terminal: readonly MailDeliveryState[]): readonly MailDeliveryState[] {
+  return MAIL_DELIVERY_STATES.filter((s) => s !== 'unknown' && !terminal.includes(s));
+}
+export const OUTSTANDING_DELIVERY_STATES = outstandingDeliveryStates(TERMINAL_DELIVERY_STATES);
 
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
@@ -6091,7 +6188,10 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
+  // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
+  // held at the park — our own nudge, unsubmitted. Nothing is pressed or typed.
+  | 'parked';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6101,7 +6201,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -6241,8 +6341,17 @@ export interface RunHealth {
    *  cross-repo §4) and a `child workspace reclaimed` park (the server
    *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
    *  working as designed, and reporting any of them would announce a change
-   *  that has already been handled. */
+   *  that has already been handled.
+   *
+   *  NOT the parked STATE below: this count is the older sense of the word, a
+   *  delivery the lane gave up on and rejected, and it stays exactly that. */
   readonly mailParked: number;
+  /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
+   *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
+   *  nudge, and the lane is waiting for the box to change (or its retry timer)
+   *  to deliver it — not lost, and not yet delivered. OPTIONAL because an older
+   *  server omits it; absence means "nothing to say", never zero. */
+  readonly mailParkedLive?: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
    *  was meant to steer; this is the number that was climbing the whole time
@@ -7060,6 +7169,17 @@ export interface MailSummary {
   gateCount: number;
   gateSince: number | null;
   gateAt: number | null;
+  /**
+   * D-5838 (#754): when this delivery was PARKED, or `null` when it is
+   * not. A parked delivery is still `state: 'queued'` — outstanding, not lost:
+   * its recipient is alive, its input box would not take the nudge, and the lane
+   * delivers it when the box changes (or on its retry timer), rejecting it only
+   * after 24 h parked. `state` deliberately does NOT gain a member for it, so
+   * every reader that counts `queued` as outstanding stays right. Set only on a
+   * `queued` row. ADDITIVE and OPTIONAL: an older server omits it, and absence
+   * means "nothing to say about a park".
+   */
+  parkedAt?: number | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
@@ -11204,7 +11324,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -11215,17 +11335,29 @@ export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
 
 /** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
  *  `CHILD_DENY_PATH_QUALIFIED`. */
-const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
+/** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
+ *  (`roll` and the operator's `claude …` switches among them), then `ccrc update` and `ccrc rollback`, then Claude
+ *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
+ *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
+ *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
+export function childDenyRules(upstreamId: string | null): readonly string[] {
+  const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
+  return [
+    ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+    ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+    ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
+  ];
+}
+
 /** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
- *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
- *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
- *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
-export const CHILD_DENY_RULES: readonly string[] = [
-  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
-  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
-];
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299), on a box whose
+ *  upstream account is named `claude` (`childDenyRules` for any other). No approval overrides a deny rule. The
+ *  installer's bash copy is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled
+ *  in a test. */
+export const CHILD_DENY_RULES: readonly string[] = childDenyRules(null);
 
 /** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
  *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task
@@ -11709,6 +11841,39 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
+ *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
+ *  `server/src/coord/redact.ts` for approval rows). */
+export interface CredentialMask { readonly id: string; readonly source: string }
+
+/** THE credential shapes a lane's files can hold, whether or not ccrc wrote them (D-5513, plan Task A10): the whole
+ *  Anthropic `sk-ant-<kind><nn>-` family (the OAuth access token `oat`, the refresh token `ort` a login lane's
+ *  `.credentials.json` holds, and the API key `api`), OpenRouter keys, the Codex gateway key (`ccrc-codex` reads it
+ *  as `sk-` and 48 lowercase hex), the generic `sk-` rule and the JWT shape (so a Codex `auth.json`'s access, id and
+ *  refresh tokens are covered), and the Codex `auth.json` token fields by name. The one home: `redact.ts`'s
+ *  `KNOWN_TOKEN` and `JWT` read `genericSk` and `jwt` from here. Each specific family is its own entry, so it is
+ *  masked even if the generic rule were ever narrowed. */
+export const CREDENTIAL_MASKS = [
+  { id: 'anthropic', source: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}` },
+  { id: 'openrouter', source: String.raw`sk-or-v1-[A-Za-z0-9]{8,}` },
+  { id: 'codexGateway', source: String.raw`sk-[0-9a-f]{48}` },
+  { id: 'genericSk', source: String.raw`sk-[A-Za-z0-9_-]{8,}` },
+  { id: 'jwt', source: String.raw`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*` },
+  { id: 'codexTokenField', source: String.raw`(?<="(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*")(?:[^"\\\n]|\\.)+` },
+] as const satisfies readonly CredentialMask[];
+export type CredentialMaskId = (typeof CREDENTIAL_MASKS)[number]['id'];
+
+/** One credential shape's source, by id. */
+export function credentialMaskSource(id: CredentialMaskId): string {
+  return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
+}
+
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+export const SECRET_MASK = '‹secret masked›';
+/** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
+ *  check fails closed, so no run is ever passed through unchecked (D-5513). */
+export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 
 /** What a `collect` `done` journals of the leaf it acted on (path-identity spec §3.4, TR1 A): `removed` on
  *  `_ws_collect_finish`'s line (the slot's leaf proven gone after this collection removed it), `absent` on the

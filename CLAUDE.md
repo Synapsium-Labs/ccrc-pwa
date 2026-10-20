@@ -7,24 +7,40 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6702 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
 ## Architecture aim: DDD, Clean Architecture, SOLID
 ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
 change should leave the code closer to that aim, never further from it:
-- **DDD:** each concept lives in one bounded context, with one model and one vocabulary. Domain rules, such as
-  state transitions, refusal sets and derived lists, are written once, and every caller goes through them.
-- **Clean Architecture:** dependencies point inward through the rings (L0 shared up to L5 `index.ts`). Policy
-  makes no I/O, and delivery code makes no decisions.
-- **SOLID:** small modules with one reason to change. Ports are interfaces declared by the consumer, and an
-  adapter keeps every distinction it receives.
+- **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
+  Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
+  consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
+  and schedule, switches, redaction, Claude Code grammar). Domain rules, such as state transitions, refusal sets and
+  derived lists, are written once, and every caller goes through them. Every invariant and fact has ONE writer: a
+  new fact gets an owner, never a second writer.
+- **Clean Architecture:** imports point inward: L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure
+  deciders) → L2 ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root
+  (`index.ts`). **Decide in L1, act in L4**: policy makes no I/O, and delivery code makes no decisions.
+- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
+  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
+  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
+  each port, the port states its failure contract, and an adapter keeps every distinction it receives.
+- **SOLID:** small modules with one reason to change; extend through tables and deciders (a row, an edge, a case),
+  never by growing a parallel mechanism beside them.
+- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
+  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
+  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
+  host or process) in its spec or PR.
+- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
+  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
-Adoption is incremental: fix what you touch, and do not start a big-bang rewrite. The assessment and target design are
-in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`. The binding ring rules are the
-**Rings / bounded contexts** bullet under *Conventions that shape every change* below. When a change and the
-aim conflict, say so in the PR. Do not bend the rings without saying so.
+Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
+list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+`docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
+binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
+When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
@@ -84,6 +100,15 @@ real values: `deploy/reference-fleet.md` (gitignored).
   that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+- **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
+  `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
+  or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
+  `FORBIDDEN_PATTERNS`, `server/src/coord/approvalguard.ts`). `claude install` and `claude update` (under the roster's
+  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`); a top-level session's prompt for them
+  escalates to the operator. A child runs with permissions bypassed, so the session hook's PreToolUse deny is what
+  stops it: the verbs, the writes, and `install`/`update` under any path head, a `claude…` wrapper name or a
+  `~/.local/bin/<id>` launcher (D-5994). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
@@ -243,40 +268,20 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
 
-## Architecture direction — DDD, Clean Architecture, SOLID
-ccrc is moving, incrementally, to a DDD / Clean Architecture / SOLID shape (operator directive 2026-08-10). Every
-change moves toward it, never away:
-- **Rings, imports point inward:** L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure deciders) → L2
-  ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root (`index.ts`).
-  **Decide in L1, act in L4**; an inner ring never imports an outer one. Ring rules in detail: the next section.
-- **Bounded contexts, one writer per invariant:** Fleet Registry & Accounts, Fleet Mutation, Session Conversation,
-  Workspace & PR Lifecycle, Coordination, Attention & Notification (the consolidation wave adds the update control
-  plane, auth & box token, docs, and context-free shared kernels: clock and schedule, switches, redaction, Claude
-  Code grammar). Every invariant and fact has ONE writer: a new fact gets an owner, never a second writer.
-- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
-  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
-  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
-  each port, and the port states its failure contract.
-- **SOLID in practice:** one reason to change per module; extend through tables and deciders (a row, an edge, a
-  case), never by growing a new parallel mechanism beside them.
-- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
-  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
-  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
-  host or process) in its spec or PR.
-- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
-  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
-- **Specs:** `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (rings, contexts, cross-cutting
-  rules, and a Rejected list no PR relitigates). The consolidation wave's spec — one owner per job: the nine
-  contexts, the shared kernels, the "legitimately different" catalogue — is its follow-up and is not on `main` yet.
-
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
-  even `node:*`) — the reason is that the PWA bundles those files, so deploy-side `shared/*.mjs`, which it never
-  imports, may use `node:*` (`shared/mark.mjs`'s `node:crypto` import); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
+  even `node:*`) because the PWA bundles those files. The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA
+  never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a
+  `shared/*.ts` file imports no `node:*` module at all. L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
-  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
-  DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
+  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/schedulers but is NOT allowed to
+  DECIDE; L5 = `index.ts` only. A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A
+  timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
+  timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
+  modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
+  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
   (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
@@ -461,25 +466,15 @@ change moves toward it, never away:
   against the shipped tree, and `ccrc doctor --fix` cures it from the same tree.
 
 ## Open on `main` — do NOT assume these are fixed
-`MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
-`server/src/coord/store.ts` names one of two shared guard fragments — `OUTSTANDING_STATES_SQL` or
-`TERMINAL_DELIVERY_SQL`, the latter built by `.join` from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`) —
-pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
-two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
-that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
-`markDelivered`, `markIngested`, `backOff`, `noteGate`, `rejectDelivery` and `parkSupersededDeliveries`.
-The last is Task 6 of the crossrepo-programmes wave-1-server plan, carrying D-2059's worker-arm park —
-but its EXTRACTION into its own method is a separate departure from the brief's own text (which put this
-`UPDATE` inline), recorded as its own number, **D-2338**, because D-2059 argues the park's role-generalised
-SQL and says nothing about this method's existence. Split into its own single-line-signature method rather
-than inlined in the method that calls it — a write inlined there would have this file's own writer census
-walk back past that caller's DECLARED multi-line-signature exemption and mis-attribute it, the failure mode
-that exemption's own comment warns about. Their guard is
-invisible to the caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered`
-as the archetype of,
-and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
-replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
-that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+`MailDeliveryState` terminality: since **D-5997** (#532) `server/src/coord/store.ts` writes `mail_deliveries` in ONE
+place, the private `writeDeliveries`, which owns the guard: `OUTSTANDING_STATES_SQL` or `TERMINAL_DELIVERY_SQL`, both
+built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement `OUTSTANDING_DELIVERY_STATES`,
+`shared/api.ts`). Every writer delegates to it and returns what it decided — `{changed, state}` for one row
+(`DeliveryWrite`), `{changed}` for a scoped bulk write (D-5998) — so no delivery-row writer returns `void`, and
+`watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
+Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
+`single-definition.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
+column is `schema.ts:138-139`; the deploy-rollback that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
 this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
