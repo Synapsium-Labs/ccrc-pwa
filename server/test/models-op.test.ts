@@ -3716,6 +3716,9 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } }, null, 2)}\n`;
   /** What an answer names for that move once a locked writer settles it as landed: an automatic advance's. */
   const RECOVERED = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', how: 'advance' };
+  /** The history entry that move becomes, once, in whichever locked writer settles it. */
+  const RECOVERED_ENTRY = { at: INTENT.at, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true,
+    canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true };
   /** A hand set-class's intent (W1 Task 5's `beginHandMove`), written before ITS registry rename
    *  (D-5188): fable set by hand to the delta model. */
   const HAND_INTENT = { how: 'hand', class: 'fable', from: null, to: 'model-6-delta', emptied: [],
@@ -3850,7 +3853,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
       how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: false, canary: 'passed' })]);
     const again = commit({ now: LATER });
     expect(again.body).toMatchObject({ outcome: 'failed', push: false });
-    expect(opusOf().history).toEqual([expect.objectContaining({ ok: false, tries: 2, lastAt: LATER })]);
+    expect(opusOf().history).toEqual([expect.objectContaining({ ok: false, canary: 'passed', tries: 2, lastAt: LATER })]);
   });
 
   // Root ignores a directory's write bit, so this proves nothing there: a
@@ -3980,17 +3983,20 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(opusOf().history).toEqual([expect.objectContaining({ how: 'advance', to: 'model-6.1-gamma', ok: true })]);
   });
 
+  /** revert's own entry, after the recovered one, when the revert undoes that very move. */
+  const REVERT_ENTRY = { at: NOW, how: 'revert', from: 'model-6.1-gamma', to: 'model-5.6-gamma', ok: true,
+    canary: 'not-run', effort: { from: 'xhigh', to: 'max' } };
   it.each([
-    ['hold', ['hold', '--class', 'sonnet']],
-    ['release', ['release', '--class', 'sonnet']],
-    ['revert', ['revert', '--class', 'opus']],
-    ['a hand set-class', ['set-class', '--class', 'fable', '--model', 'model-6-delta']],
-  ] as [string, string[]][])('%s run first after a crashed automatic advance records that move and names it in its answer', (_w, argv) => {
+    ['hold', ['hold', '--class', 'sonnet'], [RECOVERED_ENTRY]],
+    ['release', ['release', '--class', 'sonnet'], [RECOVERED_ENTRY]],
+    ['revert', ['revert', '--class', 'opus'], [RECOVERED_ENTRY, REVERT_ENTRY]],
+    ['a hand set-class', ['set-class', '--class', 'fable', '--model', 'model-6-delta'], [RECOVERED_ENTRY]],
+  ] as [string, string[], unknown[]][])('%s run first after a crashed automatic advance records that move once and names it in its answer', (_w, argv, history) => {
     // Review Focus (the crash gap): the lane's next locked writer may be a hand
     // verb rather than the hourly step, and it settles the landed intent in its
     // own write, as every writer does. So its answer names the move too
-    // (D-5216): the intent is gone from disk after this, and no later writer
-    // could report it.
+    // (D-6067): the intent is gone from disk after this, and no later writer
+    // could report it. The class's WHOLE history pins "recorded exactly once".
     plantStep({ advance: stepAdvance({}, INTENT) });
     fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
     const [verb, ...args] = argv;
@@ -3998,8 +4004,125 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body['recoveredMove']).toEqual(RECOVERED);
     expect(laneAdvance().pending).toBeNull();
-    expect(opusOf().history[0]).toEqual({ at: INTENT.at, how: 'advance', from: 'model-5.6-gamma',
-      to: 'model-6.1-gamma', ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true });
+    expect(opusOf().history).toEqual(history);
+    expect(backfill().body).not.toHaveProperty('recoveredMove');
+  });
+
+  it.each([
+    ['hold, after an intent that never landed', ['hold', '--class', 'sonnet'], true],
+    ['release, after an intent that never landed', ['release', '--class', 'sonnet'], true],
+    ['a hand set-class, after an intent that never landed', ['set-class', '--class', 'fable', '--model', 'model-6-delta'],
+      true],
+    ['revert, with no intent at all', ['revert', '--class', 'opus'], false],
+  ] as [string, string[], boolean][])('%s names no recovered move', (_w, argv, dropped) => {
+    if (dropped) {
+      plantStep({ advance: stepAdvance({}, INTENT) });   // the registry still pins `from`: the rename never happened
+    } else {
+      plantStep({ advance: stepAdvance({ opus: { previous: { model: 'model-5.6-gamma', effort: 'max' } } }) });
+      fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    }
+    const [verb, ...args] = argv;
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('recoveredMove');
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history.filter((e) => e.how === 'advance')).toEqual([]);
+  });
+
+  it('a hand set-class whose own intent cannot be written names no recovered move; the next writer names it once', () => {
+    // Its intent write is refused (a clock not of the file's form), so that write
+    // recorded nothing, the crashed advance's intent included: it is still on
+    // disk, and the next locked writer reports it. Naming it here too would
+    // report one move twice.
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    const r = opEnv({ CCRC_MODELS_NOW: 'yesterday' }, 'set-class', '--file', rosterPath(), '--id', 'lane-a',
+      '--class', 'fable', '--model', 'model-6-delta');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(String(r.body['advanceNote'])).toMatch(/^advance-invalid: /);
+    expect(r.body).not.toHaveProperty('recoveredMove');
+    expect(laneAdvance().pending).toEqual(INTENT);
+    expect(backfill().body['recoveredMove']).toEqual(RECOVERED);
+  });
+
+  /** The op copied with some lines replaced so that a real write fails (the idiom of the set-class registry-write
+   *  case above), then run with `argv` on lane-a: every other byte is the op as it is. */
+  const through = (edits: [string, string][], argv: string[]): Result => {
+    let src = fs.readFileSync(OP, 'utf8');
+    for (const [line, instead] of edits) {
+      expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
+      src = src.replace(line, instead);
+    }
+    const copy = path.join(home, 'models-op-copy.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`));
+    const [verb, ...args] = argv;
+    const r = spawnSync(process.execPath, [copy, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
+    const stdout = r.stdout ?? '';
+    expect(stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(stdout)}`).toHaveLength(2);
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  /** `writeRegistry` aimed under the registry FILE, so its mkdir fails: the one registry write a copy can refuse. */
+  const REGISTRY_FAILS: [string, string] = ["return writeJsonFile(registryPath(id), registry, 'registry-unwritable');",
+    "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"];
+
+  it.each([
+    ['revert, its materialise failing', ['revert', '--class', 'opus'], 'materialise'],
+    ['revert, its registry write failing', ['revert', '--class', 'opus'], 'registry'],
+    ['a hand set-class, its materialise failing', ['set-class', '--class', 'fable', '--model', 'model-6-delta'],
+      'materialise'],
+    ['a hand set-class, its registry write failing', ['set-class', '--class', 'fable', '--model', 'model-6-delta'],
+      'registry'],
+  ] as [string, string[], string][])('%s after its first write still names the recovered move that write recorded (D-6067)', (_w, argv, fault) => {
+    // The first write (revert's hold, set-class's intent) recorded the crashed
+    // advance; the refusal that follows is the only answer this verb gives, so
+    // it carries the move, or no answer ever would.
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    let r: Result;
+    if (fault === 'materialise') {
+      const tsv = path.join(home, '.ccrc', 'models', 'lane-a.classes.tsv');
+      fs.rmSync(tsv);
+      fs.mkdirSync(tsv);
+      const [verb, ...args] = argv;
+      r = opEnv({ CCRC_MODELS_NOW: NOW }, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args);
+    } else {
+      r = through([REGISTRY_FAILS], argv);
+    }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body).toMatchObject({ ok: false, error: fault === 'materialise' ? 'materialise-failed' : 'registry-unwritable',
+      recoveredMove: RECOVERED });
+    expect(opusOf().history[0]).toEqual(RECOVERED_ENTRY);
+    expect(laneAdvance().pending).not.toEqual(INTENT);
+  });
+
+  it('a commit whose failure record cannot be written after its intent write names the move that intent write recorded', () => {
+    // A copy whose registry write fails (so the commit records a failed move)
+    // and whose advance-file write fails once `pending` is cleared: the intent
+    // write, step 6, recorded the crashed advance, and the refusal that follows
+    // is this commit's only answer.
+    plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    const r = through([REGISTRY_FAILS, ["  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+      "  return parsed.pending === null ? ['advance-unwritable', 'this copy refuses the write.']\n"
+      + "    : writeJsonFile(advancePath(id), parsed, 'advance-unwritable');"]],
+    ['advance-commit', '--class', 'fable', '--from', 'none', '--to', 'model-6-delta', '--canary', 'passed']);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body).toMatchObject({ ok: false, error: 'advance-unwritable', recoveredMove: RECOVERED });
+    expect(opusOf().history).toEqual([RECOVERED_ENTRY]);
+    expect(laneAdvance().pending).toMatchObject({ class: 'fable', from: null, to: 'model-6-delta' });
+  });
+
+  it('a commit whose first write fails names no recovered move: the intent is still on disk for the next writer', () => {
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    const r = commit({ cls: 'fable', from: 'none', to: 'model-6-delta', canary: 'failed', reason: 'http 500',
+      now: 'yesterday' });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body).toMatchObject({ ok: false, error: 'advance-invalid' });
+    expect(r.body).not.toHaveProperty('recoveredMove');
+    expect(laneAdvance().pending).toEqual(INTENT);
+    expect(backfill().body['recoveredMove']).toEqual(RECOVERED);
   });
 
   it('an abandoned commit still writes back an intent it reconciled, and nothing else', () => {

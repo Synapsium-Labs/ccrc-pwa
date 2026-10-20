@@ -172,9 +172,11 @@ const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
  *  shape on every path. It RETURNS the exit class, so each op's
  *  `return refuse(1, …)` is the whole control flow. `field` is carried when
  *  there is one — the verbs' contract is "refuses, with the field named", and
- *  Plan 3a's PATCH route points a UI control at it. */
-function refuse(code, error, detail, field) {
-  out({ ok: false, error, detail, ...(field === undefined ? {} : { field }) });
+ *  Plan 3a's PATCH route points a UI control at it. `extra` is spread into the
+ *  object: a writer refusing after a write that already landed names what that
+ *  write recorded (`recoveredField`, D-6067). */
+function refuse(code, error, detail, field, extra = {}) {
+  out({ ok: false, error, detail, ...(field === undefined ? {} : { field }), ...extra });
   process.stderr.write(`${SELF}: ${detail} (${error})\n`);
   return code;
 }
@@ -471,10 +473,10 @@ function writeAdvance(id, advance) {
  *  change is a no-op. ANY lane: a hand act is recorded whatever the probe, and a probe with no `SEED_FAMILIES` row
  *  seeds no family, so its empty classes stay unfilled; only the codex arm ever advances a class (`advance-backfill`
  *  and `advance-plan` say why not for every other lane).
- *  WHAT A SETTLED INTENT RECORDED, when it had LANDED (D-5216), for the caller's answer: once the caller writes, the
+ *  WHAT A SETTLED INTENT RECORDED, when it had LANDED (D-6067), for the caller's answer: once the caller writes, the
  *  intent is gone from disk, so no later writer could report it. Every writer that settles one names it
- *  (`recoveredField`), so a move the hourly step never sees, because a hand verb settled it first, still reaches
- *  whoever ran that verb.
+ *  (`recoveredField`), a refusal after that write included, so a move the hourly step never sees, because a hand
+ *  verb settled it first, still reaches whoever ran that verb.
  *    `recoveredMove`  `{class, from, to, how}`, else null. `how` is the intent's own: `advance` for an automatic
  *                     advance's (its intent carries no `how`), `hand` for a hand set-class's (`beginHandMove`,
  *                     written before that verb's registry rename). A landed hand move is reported as hand, never
@@ -495,7 +497,7 @@ function advanceForWrite(id, registry) {
     recoveredMove: { class: intent.class, from: intent.from, to: intent.to, how } };
 }
 
-/** An answer's `recoveredMove` field (`advanceForWrite`, D-5216): present only when a settled intent had landed. */
+/** An answer's `recoveredMove` field (`advanceForWrite`, D-6067): present only when a settled intent had landed. */
 const recoveredField = (move) => (move === null ? {} : { recoveredMove: move });
 
 /** Create the lane's advance file from its registry when there is none, and NEVER rewrite one that exists,
@@ -544,8 +546,8 @@ function seedForInit(id, registry, createIfAbsent) {
  *  Loaded through `advanceForWrite(id, before)`: an intent an earlier crash left is settled first, and an absent file
  *  is backfilled from the registry BEFORE this change. It never refuses, because set-class never has: `{note: null}`
  *  when the intent is on disk, else `{note}` naming what failed, and the registry change goes ahead unrecorded.
- *  `recoveredMove` is the earlier intent's move when it had landed and this write recorded it (D-5216), else null:
- *  set-class names it in its answer. A
+ *  `recoveredMove` is the earlier intent's move when it had landed and this write recorded it (D-6067), else null:
+ *  set-class names it in its answer, or in its refusal when a later step fails. A
  *  registry write that then fails leaves the intent behind; the next locked writer drops it, the pin still `from`,
  *  except where `from` and `to` are one (`none` on a class already empty), whose only effect, the family cleared, is
  *  what the call asked for. */
@@ -562,7 +564,10 @@ function beginHandMove(id, before, after, cls) {
     at: now(),
   };
   const w = writeAdvance(id, { ...loaded.advance, pending: intent });
-  // A write that failed recorded nothing, the earlier intent included: it stays for the next locked writer to report.
+  // A write that failed recorded nothing, so the earlier intent is still on disk and this answer names no move. The
+  // lane's next locked writer settles that intent against the registry as THIS set-class leaves it: it records the
+  // move while the intent's class still pins its `to`, and drops it when this set-class re-pinned or emptied that
+  // class, the move having landed all the same (W1's rule: a pin not on `to` reads as a move that never landed).
   if (w !== null) {
     return { recoveredMove: null, note: `${w[0]}: ${w[1]} The class registry was written; the advance file is as it `
       + 'was, so this change has no history entry and no class family was rewritten.' };
@@ -654,7 +659,7 @@ const refuseAdvance = (err, opName, id) => refuse(1, err[0], `${err[1]} ${opName
  *  lane's settings stay as they are, so nothing re-materialises. A hold records WHEN (`now()`) and the ACT that set
  *  it, `hand` here (D-5190). A second hold, or a release of a class not held, changes nothing and says so
  *  (`changed: false`); a pending intent found on the way is still settled and written, and the answer names its move
- *  when it had landed (`recoveredMove`, D-5216). */
+ *  when it had landed (`recoveredMove`, D-6067). */
 function holdOp(opName, a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
   if (loaded.err !== undefined) return refuseAdvance(loaded.err, opName, a.id);
@@ -684,6 +689,21 @@ function sayWhatChanged(detail, rest) {
   return `${detail.endsWith(NOTHING_CHANGED) ? detail.slice(0, -NOTHING_CHANGED.length) : `${detail} `}${rest}`;
 }
 
+/** A class's effort level in a registry copy the caller is building (`next`, edited in place and returned): set to
+ *  `level`, or removed for null, the `effort` map dropped once that was its last entry. ONE rule for every op that
+ *  moves a level: `revert`, `advance-commit` and `set-effort`. */
+function withEffort(next, cls, level) {
+  if (level === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[cls];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: level };
+  }
+  return next;
+}
+
 /**
  * `revert <class>` (auto-advance spec §2.7): put back the model the class had before its last automatic advance
  * (`previous`, with its effort level — D-5189 — through `resolveEffort` when that model no longer offers it), and
@@ -710,7 +730,8 @@ function sayWhatChanged(detail, rest) {
  *    class's level) has the level put back, and that change is recorded: a `revert` entry whose `from` and `to` are
  *    that one model, with the `effort` pair. The final write's note says, for each shape, what is not recorded.
  *  - A PENDING INTENT found on the way is settled into the hold's write, the brake's, and the answer names its move
- *    when it had landed (`recoveredMove`, D-5216). A revert of the very class that move advanced reverts it.
+ *    when it had landed (`recoveredMove`, D-6067), as does every refusal after that write. A revert of the very class
+ *    that move advanced reverts it.
  */
 function revertOp(a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
@@ -749,14 +770,7 @@ function revertOp(a, account, registry, catalogue, win) {
     effortTo = resolveEffort({ stored: effortTo, oldEfforts: ranker?.efforts ?? null, newEfforts: toRow.efforts })
       ?? null;
   }
-  if (effortTo === null) {
-    if (isObj(next.effort)) {
-      delete next.effort[a.class];
-      if (Object.keys(next.effort).length === 0) delete next.effort;
-    }
-  } else {
-    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [a.class]: effortTo };
-  }
+  withEffort(next, a.class, effortTo);
   // An explicit discovery list has to offer what a class routes to: set-class's own rule, and like it never on an
   // openrouter lane, whose list grows only through `discovery add`'s whitelist check.
   if (to !== null && registry.probe !== 'openrouter' && Array.isArray(next.discovery) && !next.discovery.includes(to)) {
@@ -786,7 +800,7 @@ function revertOp(a, account, registry, catalogue, win) {
   if (w1 !== null) {
     return refuse(1, w1[0], sayWhatChanged(w1[1], 'The registry was not changed. The hold this revert wrote to the '
       + `lane's advance file stays, so ${a.class} is held now, on ${from ?? 'none'}, and its previous model is still `
-      + 'on record, so the revert can be run again.'));
+      + 'on record, so the revert can be run again.'), undefined, recoveredField(loaded.recoveredMove));
   }
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) {
@@ -796,7 +810,8 @@ function revertOp(a, account, registry, catalogue, win) {
       : again.err === undefined ? 'was put back, and the lane re-rendered on it'
         : `was put back, and rendering it failed too (${again.err[1]})`;
     return refuse(1, mat.err[0], `${mat.err[1]} The registry ${how}; ${a.class} is held, on ${from ?? 'none'}, and `
-      + 'its previous model is still on record, so the revert can be run again.');
+      + 'its previous model is still on record, so the revert can be run again.', undefined,
+      recoveredField(loaded.recoveredMove));
   }
   c.previous = null;
   // D-5992: the restored pin's family, so the file stays true for every reader. A revert to none keeps the stored
@@ -1582,6 +1597,10 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   let adv = loaded.advance;
   recovered = loaded.recovered;
   recoveredMove = loaded.recoveredMove;
+  // True once the intent write (step 6) has landed, and with it any intent the load settled: a refusal from then on
+  // names that move (D-6067). Never before it: an earlier write that failed recorded nothing, so the settled intent
+  // is still on disk and the next locked writer reports it.
+  let settled = false;
   const abandon = (why) => {
     if (loaded.dirty) {
       const w = writeAdvance(a.id, adv);
@@ -1608,7 +1627,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     const history = f.advance.classes[cls].history;
     history[history.length - 1].canary = canary;
     const w = writeAdvance(a.id, { ...f.advance, pending });
-    if (w !== null) return refuse(1, w[0], w[1]);
+    if (w !== null) return refuse(1, w[0], w[1], undefined, settled ? recoveredField(recoveredMove) : {});
     return answer('failed', { reason, push: f.isNew, ...extra });
   };
   if (a.canary === 'failed') return fail(historyReason(a.reason ?? '') || 'the canary failed', 'failed');
@@ -1620,14 +1639,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   effortTo = choice.effortTo;
   const next = JSON.parse(JSON.stringify(registry));
   next.classes[cls] = a.to;
-  if (effortTo === null) {
-    if (isObj(next.effort)) {
-      delete next.effort[cls];
-      if (Object.keys(next.effort).length === 0) delete next.effort;
-    }
-  } else {
-    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: effortTo };
-  }
+  withEffort(next, cls, effortTo);
 
   // 5. Validate before anything is written (rule 2).
   const windows = windowsOf(win);
@@ -1645,6 +1657,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at };
   let w = writeAdvance(a.id, { ...adv, pending: intent });
   if (w !== null) return refuse(1, w[0], w[1]);
+  settled = true;
 
   // 7. The rename, then 8. materialise, or 9. the restore.
   w = writeRegistry(a.id, validated);
@@ -2151,15 +2164,14 @@ function main(argv) {
         `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
     }
     if (a.level === 'default') {
-      if (isObj(next.effort)) delete next.effort[a.class];
-      if (isObj(next.effort) && Object.keys(next.effort).length === 0) delete next.effort;
+      withEffort(next, a.class, null);
     } else {
       if (next.classes[a.class] === null) {
         return refuse(1, 'class-unassigned',
           `account "${a.id}" routes ${a.class} to nothing, so there is no model to set an effort `
           + `on. Run 'ccrc models ${a.id} set-class ${a.class} <modelId>' first.`);
       }
-      next.effort = { ...(isObj(next.effort) ? next.effort : {}), [a.class]: a.level };
+      withEffort(next, a.class, a.level);
     }
   } else if (opName === 'discovery') {
     if (a.action === 'catalogue') {
@@ -2274,13 +2286,19 @@ function main(argv) {
   // killed in between leaves the intent for the lane's next locked writer, and so does a materialise that fails
   // below, the registry having moved. Neither half ever refuses for that file: a note becomes `advanceNote`.
   const hand = opName === 'set-class' ? beginHandMove(a.id, registry, validated, a.class) : null;
+  // D-6067: the answer, and any refusal after `beginHandMove`'s write, names the move that write recorded (none when
+  // that write failed).
+  const recoveredByHand = recoveredField(hand === null ? null : hand.recoveredMove);
   const w = writeRegistry(a.id, validated);
-  if (w !== null) return refuse(1, w[0], hand !== null && hand.note === null ? handIntentLeft(w[1]) : w[1]);
+  if (w !== null) {
+    return refuse(1, w[0], hand !== null && hand.note === null ? handIntentLeft(w[1]) : w[1], undefined,
+      recoveredByHand);
+  }
   const mat = materialise(account, validated, catalogue, windowsOf(win));
-  if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
+  if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1], undefined, recoveredByHand);
   const advanceNote = hand === null ? null : (hand.note ?? settleHandMove(a.id, validated));
   const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win),
-    ...recoveredField(hand === null ? null : hand.recoveredMove) };
+    ...recoveredByHand };
   if (advanceNote !== null) {
     answer.advanceNote = advanceNote;
     process.stderr.write(`${SELF}: ${advanceNote}\n`);
