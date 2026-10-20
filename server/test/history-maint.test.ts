@@ -17,10 +17,10 @@ import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
   SCHEMA_VERSION, beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
-  REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf,
+  REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf, entryIndexText,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createFtsTables, getMeta, openWriter, setMeta, withTx, V2_INDEXES } from '../../ccd/history/store.mjs';
-import { backupOp, ftsOwedPlans, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
+import { backupOp, beltWitness, ftsOwedPlans, ftsTextOfBlob, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
@@ -2833,5 +2833,82 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
       const r = runCli(box, [...args, '--json'], { env: { CLAUDECODE: '1' } });
       expect(gtPipedEnvelope(r, `${r.stdout}${r.stderr}`), `ccrc history ${cmd}`).toEqual({ exit: 2, reason: 'apply-in-session' });
     }
+  }, HEAVY);
+});
+
+// ── W5h-2 Task 2: stored text is re-cleaned under the widened class, as a sweep phase (D-5746 (history-belt-v2-value-class-reindex)) ─
+// End to end, through the real scheduled sweep on a fixture HOME. The store is left as a BELT_VERSION 1 build (B4, W5h-1) leaves
+// it: the blobs_fts row of the searchable request that holds `password=zqa&<tail>` indexes the tail as a term of its own, one
+// leaf's gist and its nodes_fts row hold `password=[redacted]&<tail>`, and fts_belt is stamped v 1 with the store's own witness,
+// taken in a transaction of its own after the index writes committed (a witness read inside the transaction that wrote blobs_fts
+// may be behind, spec §6.2 "Witness timing", and a moved witness would open a generation whatever the version). One more row,
+// holding no named value, carries a sentinel term the re-derivation would never write: the generation must leave that row alone.
+describe('W5h-2 Task 2: the scheduled ticks re-clean a store a BELT_VERSION 1 build indexed (D-5746)', () => {
+  skipOnDarwin();
+
+  it('the ticks rewrite the blobs_fts rows and the gist holding a widened value and stamp BELT_VERSION; a row holding none keeps its planted body', async (ctx) => {
+    const tail = `zqwt${randomBytes(6).toString('hex')}7`;
+    const box = makeHistoryBox('ccrc-hist-w5h2-belt-', { role: 'fleet', shim: true });
+    // A searchable row (summaries are not indexed) holding the widened value: segment 0's first request.
+    const rows = compactionSequence({ n: 2, trigger: 'manual' }).rows
+      .map((r) => JSON.parse(JSON.stringify(r).replaceAll('Segment 0 request 0.', `Segment 0 request 0 password=zqa&${tail} end.`)) as typeof r);
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows });
+    expect(runSweep(box).code).toBe(0);
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();          // a Node without FTS5 has no index to re-derive
+    const leaf = maintQ<{ node_id: string; rid: number }>(box, 'SELECT node_id, rowid AS rid FROM nodes WHERE depth = 0 ORDER BY rowid LIMIT 1')[0];
+    expect(leaf, 'CONTROL: the fixture derived a leaf').toBeDefined();
+    const plantedGist = `Rotate the service password=${REDACTED_MARK}&${tail} for segment 0.`;
+    const bare = makePairIndex([]);
+    const db = new DatabaseSync(dbFile(box));
+    let planted = 0;
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      const blobs = db.prepare('SELECT blob_id, z, raw_len, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL ORDER BY blob_id').all() as Array<{ blob_id: number; z: Uint8Array; raw_len: number; is_sidecar: number }>;
+      let sentinel = false;
+      for (const b of blobs) {
+        const t = await ftsTextOfBlob(b.z, b.is_sidecar === 1, bare, Number(b.raw_len));
+        if (t.text === null) continue;
+        const now = entryIndexText(t.text, bare);
+        let body: string | null = null;
+        if (t.text.includes(tail)) {
+          body = now.replaceAll(`password=${REDACTED_MARK}`, `password=${REDACTED_MARK}&${tail}`);
+          expect(body, 'CONTROL: the row this build wrote masks the value whole').not.toBe(now);
+          planted += 1;
+        } else if (!sentinel && !t.text.includes('=')) {
+          body = `${now} zqkeep7`;
+          sentinel = true;
+        }
+        if (body === null) continue;
+        db.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(b.blob_id);
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(b.blob_id, body);
+      }
+      expect(sentinel, 'CONTROL: a row with no named value took the sentinel').toBe(true);
+      const row = db.prepare('SELECT topics, refs FROM nodes_fts WHERE rowid = ?').get(leaf!.rid) as { topics: string; refs: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(plantedGist, leaf!.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(leaf!.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(leaf!.rid, plantedGist, row.topics, row.refs);
+      db.exec('COMMIT');
+      db.exec('BEGIN IMMEDIATE');
+      const s0 = JSON.parse(getMeta(db, BELT_META)!) as { rids: number[] };
+      setMeta(db, BELT_META, formatBeltState({ v: 1, rids: s0.rids, gen: null, w: beltWitness(db) }));
+      db.exec('COMMIT');
+    } finally { db.close(); }
+    expect(planted, 'CONTROL: one indexed row holds the widened value').toBe(1);
+    const tailQ = `"${tail}"`;
+    const nodesMatch = (): number => maintQ<{ n: number }>(box, 'SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH ?', tailQ)[0]!.n;
+    const belt = (): { v: number; gen: number[] | null } => JSON.parse(maintMeta(box, BELT_META)!) as { v: number; gen: number[] | null };
+    const nodesBeltDone = (): boolean =>
+      maintQ<{ c: number | null }>(box, "SELECT completed_ms AS c FROM derivation_state WHERE step = 'nodes-belt' AND version = 1")[0]?.c != null;
+    expect(maintMatch(box, tailQ), 'CONTROL: the planted rows answer the tail, as v1 rows do').toBe(planted);
+    expect(nodesMatch(), 'CONTROL: and so does the planted gist\'s nodes_fts row').toBe(1);
+    expect(maintMatch(box, 'zqkeep7'), 'CONTROL: the sentinel is indexed').toBe(1);
+    expect(belt().v, 'CONTROL: stamped as a BELT_VERSION 1 build stamps it').toBe(1);
+    for (let k = 0; k < 6 && !(belt().v === BELT_VERSION && belt().gen === null && nodesBeltDone()); k += 1) expect(runSweep(box).code).toBe(0);
+    expect(belt().v, 'the generation completed under this version').toBe(BELT_VERSION);
+    expect(maintMatch(box, tailQ), 'no blobs_fts row answers the tail').toBe(0);
+    expect(maintMatch(box, 'zqkeep7'), 'a row with no widened value is not rewritten').toBe(1);
+    const gist = maintQ<{ gist: string }>(box, 'SELECT gist FROM nodes WHERE node_id = ?', leaf!.node_id)[0]!.gist;
+    expect(gist, 'the stored gist is re-cleaned from its own text').toBe(`Rotate the service password=${REDACTED_MARK} for segment 0.`);
+    expect(nodesMatch(), 'and its nodes_fts row with it').toBe(0);
   }, HEAVY);
 });

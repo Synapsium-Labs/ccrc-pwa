@@ -2821,7 +2821,13 @@ const DOOR_READINGS = (() => {
  *  a sequence, or only JSON-escaped, prints whole. The cost is about two passes of the door. */
 function composeDoor(r, args, idx) {
   const base = r.base(...args);
-  return r.v2(base, idx);
+  const out = r.v2(base, idx);
+  // D-5746: under a re-derivation probe, a text this build writes otherwise than its rev 3.6 door wrote it is an owed hit
+  if (out !== base && typeof out === 'string' && idx !== null) {
+    const hit = beltHit(idx);
+    if (hit !== null) hit();
+  }
+  return out;
 }
 
 /** R11's two readings of one exported door, or null for any other function: a read-only test accessor, which arms nothing
@@ -6234,8 +6240,16 @@ export function ftsTablesHealthy({ tables, columns }) {
 /** The belt's derivation version (meta fts_belt's `v`). A store whose recorded version differs, a B1 store's absent
  *  state included, re-derives its whole index once (decideBelt, rederivePlan); a generation open across a bump is
  *  restarted, and a completion stamps the version its walk ran under (`gv`, ruling R-version). Bump it with any change
- *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule. */
-export const BELT_VERSION = 1;
+ *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule, and with any change to a layer-2
+ *  field-form rule that can change an index text (D-5746 (history-belt-v2-value-class-reindex)).
+ *  2 (W5h-2): the named value class widened in its field form, which every door reads over its rev 3.6 door's output
+ *  (W5h-2 Task 1, D-5745, R11). Under a re-derivation probe composeDoor counts an owed hit when that reading changes the
+ *  rev 3.6 door's text, which is the text a build at 1 stored, so the generation this bump opens rewrites exactly the rows
+ *  whose text changes, and, as every belt generation does, rows with a pair above the mark or a layer-4 or glue-window
+ *  hit; the node belt step re-redacts every stored node field from its own text. A rollback to a build at 1 reads 2 as
+ *  due, walks once and stamps 1; moving forward reads 1 as due and walks again: safe, since a walk rewrites only rows
+ *  whose probe counted a hit, at the cost of a second walk. */
+export const BELT_VERSION = 2;
 /** The bits a matched stretch must carry in its unit's folded alphabet: SECRET_SEGMENT_MIN base64url characters'
  *  72 bits, the bound §8.3 already sets on a segment. */
 export const BELT_BITS = 72;

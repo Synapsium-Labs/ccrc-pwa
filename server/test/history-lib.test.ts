@@ -6819,7 +6819,7 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
   });
 
   it('publishes the exact frozen belt contract Task 7B and Task 14 consume', () => {
-    expect(libRedact.BELT_VERSION).toBe(1);
+    expect(libRedact.BELT_VERSION).toBe(2);   // W5h-2 Task 2 (D-5746): layer 2's widened named value class
     expect(libRedact.BELT_BITS).toBe(72);
     expect(libRedact.BELT_K_LADDER).toEqual([12, 14, 16, 18, 21]);
     expect(libRedact.BELT_GRAMS_MAX).toBe(65536);
@@ -9560,5 +9560,102 @@ describe('W5h-1 Task 4: the listing record and decideMarkCheck\'s vanished input
     expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]', vanished: false }).check, 'neither').toBe(false);
     expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]' }).check, 'no vanished input').toBe(false);
     expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: null, vanished: false }).check, 'a new fact still checks').toBe(true);
+  });
+});
+
+// ── W5h-2 Task 2: stored text is re-cleaned under the widened class, as a sweep phase (D-5746 (history-belt-v2-value-class-reindex)) ─
+// Pure. Every redaction door is its v2 reading over its rev 3.6 reading (Task 1, R11). Under a re-derivation probe (makeProbeIndex
+// with beltAll, rederiveFts' index) a door whose v2 reading changes the base reading's text counts one owed hit, so the belt
+// generation BELT_VERSION 2 opens rewrites exactly the rows whose index text this build writes otherwise than a BELT_VERSION 1
+// build wrote it (R3 as R11 amends it). The CONTROL inputs below print what B4 printed (each `v1` literal measured at bd363a76b)
+// and count no hit.
+describe('W5h-2 Task 2: a re-derivation probe counts each row the composed index text changes, and BELT_VERSION is 2 (D-5746)', () => {
+  const M = libRedact.REDACTED_MARK;
+  /** The owed hits one index text counts under a probe index with no pair (so no layer-1, glue or layer-4 hit can count). */
+  const hitsOf = (text: string, beltAll = true): number => {
+    const idx = libRedact.makeProbeIndex([], 0, { beltAll });
+    libRedact.entryIndexText(text, idx);
+    return idx.probe.hits;
+  };
+  // [why, input, the value the widened class takes]
+  const WIDENED: Array<[string, string, string]> = [
+    ['an ampersand not before NAME=', 'note password=zqa&zqtail7 end', 'zqa&zqtail7'],
+    ['a semicolon before a word', 'note password=zqa;zqtail7 end', 'zqa;zqtail7'],
+    ['a comma before a word', 'note password=zqa,zqtail7 end', 'zqa,zqtail7'],
+    ['a single quote inside the value', "note password=zqa'zqtail7 end", "zqa'zqtail7"],
+    ['a double-quoted value holding an ampersand', 'note password="zqa&zqtail7" end', 'zqa&zqtail7'],
+    ['a single-quoted value holding a space', "note PASSWORD='zqa zqtail7' end", 'zqa zqtail7'],
+    ['a widened value that ends in a head hands it its quoted value', "note secret=zqa,API_KEY=' zqb zqtail7' end", ' zqb zqtail7'],
+  ];
+  // [why, input, what B4 (BELT_VERSION 1) printed for it: measured at bd363a76b, and this build prints the same]
+  const SAME: Array<[string, string, string]> = [
+    ['a plain value', 'note password=zqplain7 end', `note password=${M} end`],
+    ['a query string', 'url?a=1&password=zqx&b=2', `url?a=1&password=${M}&b=2`],
+    ['a cookie pair', 'password=zqabc; path=/', `password=${M}; path=/`],
+    ['a list', 'password=zqabc, user=bob', `password=${M}, user=bob`],
+    ['a JSON string', '{"cmd":"password=zqabc"}', `{"cmd":"password=${M}"}`],
+    ['a call', "run('password=zqabc')", `run('password=${M}')`],
+    ['an empty quoted value', 'TOKEN=""', 'TOKEN=""'],
+    ['a double-quoted value', 'note password="zqabc" end', `note password="${M}" end`],
+    ['a single-quoted value', "note PASSWORD='zqabc' end", `note PASSWORD='${M}' end`],
+    ['an ampersand before NAME=', 'token=zqabc&next=1', `token=${M}&next=1`],
+    ['no secret name', 'level=INFO path=/a/b', 'level=INFO path=/a/b'],
+    // R11's named residual: the base reading's mark took the tail head's NAME in, so the widened rules read no head there and the
+    // value after it prints as at the base (the widening lost to composition). Unchanged, so no hit: the walk leaves the row
+    ['a tail head whose NAME the base masked into its value', "note secret=zqvAPI_KEY= 'zqa zqtail7' end", `note secret=${M} '${M} zqtail7' end`],
+  ];
+
+  it.each(WIDENED)('widened, %s: the probe counts an owed hit', (_why, text, value) => {
+    expect(libRedact.entryIndexText(text, libRedact.makePairIndex([])), 'CONTROL: the index text masks the value whole').not.toContain('zqtail7');
+    expect(libRedact.redactField(text, libRedact.makePairIndex([])), 'CONTROL: and so does the field door').not.toContain(value.trim());
+    expect(hitsOf(text)).toBeGreaterThan(0);
+  });
+
+  it.each(SAME)('not widened, %s: B4\'s output, and no hit', (_why, text, v1) => {
+    expect(libRedact.redactField(text, libRedact.makePairIndex([])), 'the value v1 took').toBe(v1);
+    expect(hitsOf(text)).toBe(0);
+  });
+
+  // the plan's fifth review: a NAME=value glued to an escaped JSON pair. The rev 3.6 door masks the pair's value, and the widened
+  // rules then read the NAME's value whole, so the text changes and counts a hit, and the rewritten index text holds no value the B4
+  // row masked (measured at bd363a76b: `{"text":"TOKEN=[redacted],"api_key": "[redacted]"}"}`)
+  it('an escaped pair glued to a NAME=value: the probe counts a hit, and the rewrite indexes no value B4 masked', () => {
+    const text = String.raw`{"text":"TOKEN=zqa,\"api_key\": \"zqescaped7\"}"}`;
+    const idx = libRedact.makeProbeIndex([], 0, { beltAll: true });
+    expect(libRedact.entryIndexText(text, idx), 'the rewritten index text').toBe(`{"text":"TOKEN=${M} "${M}"}"}`);
+    expect(idx.probe.hits).toBeGreaterThan(0);
+  });
+
+  // R3 as R11 amends it: the probe's hit IS the comparison. Over f2Cases (the (j3) corpus), these tables and both index doors, a row
+  // counts a hit exactly when the composed index text differs from its base reading, the text a BELT_VERSION 1 build wrote
+  it('a row counts a hit exactly when the composed index text differs from the rev 3.6 door\'s, through entryIndexText and sidecarIndexText', () => {
+    const bare = libRedact.makePairIndex([]);
+    const texts = [...f2Cases().map((c) => c.input), ...WIDENED.map(([, t]) => t), ...SAME.map(([, t]) => t)];
+    const entry = libRedact.redactDoorReadings(libRedact.entryIndexText)!;
+    const sidecar = libRedact.redactDoorReadings(libRedact.sidecarIndexText)!;
+    let changed = 0;
+    for (const t of texts) {
+      const a = libRedact.makeProbeIndex([], 0, { beltAll: true });
+      const differs = libRedact.entryIndexText(t, a) !== entry.base(t, bare);
+      if (differs) changed += 1;
+      expect(a.probe.hits > 0, `entryIndexText: ${JSON.stringify(t)}`).toBe(differs);
+      const b = libRedact.makeProbeIndex([], 0, { beltAll: true });
+      const bytes = Buffer.from(t);
+      expect(libRedact.sidecarIndexText(bytes, b) !== sidecar.base(bytes, bare), `sidecarIndexText: ${JSON.stringify(t)}`).toBe(b.probe.hits > 0);
+    }
+    expect(changed, 'CONTROL: some rows change, and some do not').toBeGreaterThan(5);
+    expect(changed, 'CONTROL: some rows change, and some do not').toBeLessThan(texts.length);
+  });
+
+  it('only a re-derivation probe counts: without beltAll the same widened text counts nothing, and a plain index has no probe to count on', () => {
+    expect(hitsOf('note password=zqa&zqtail7 end', false)).toBe(0);
+    expect(libRedact.entryIndexText('note password=zqa&zqtail7 end', libRedact.makePairIndex([])), 'CONTROL: the widened value is masked whole').not.toContain('zqtail7');
+  });
+
+  it('a store a BELT_VERSION 1 build stamped (a first upgrade, or a rollback and forward again) is due, and its walk starts again at cursor 0', () => {
+    expect(libRedact.decideBelt({ v: 1, rids: [], gen: null }, [], 0)).toEqual({ due: true, restart: true, next: { v: 1, rids: [], gen: null } });
+    expect(libRedact.decideBelt({ v: 1, rids: [], gen: [], gv: 1 }, [], 0).restart, 'a generation a v1 build left open restarts').toBe(true);
+    expect(libRedact.rederivePlan(0, 0, 9, { target: 0, cursor: 5, end: 9, belt: true }, true, true)).toEqual({ target: 0, cursor: 0, end: 9, belt: true });
+    expect(libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [], gen: null }, [], 0).due, 'CONTROL: a store at this version is not due').toBe(false);
   });
 });
