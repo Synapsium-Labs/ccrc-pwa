@@ -17,6 +17,11 @@ import { available, rankCommands, type CommandContext, type CommandPage } from '
 import { DOOR_EVENT } from './door';
 import { useShortcuts } from './useShortcuts';
 
+/** How long a closing palette may hold focus before the layer restores it:
+ *  forty ticks of 25 ms, a second, well past any exit animation. */
+const RESTORE_TICK_MS = 25;
+const RESTORE_TRIES = 40;
+
 /** Is a command's answer a page to open, rather than nothing? */
 function isPage(r: void | CommandPage): r is CommandPage {
   return typeof r === 'object' && r !== null;
@@ -68,16 +73,28 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     wasOpen.current = false;
     const back = opener.current;
     opener.current = null;
-    // After the palette's own close has run its course (its layer lets go of
-    // the page in its own effects), not inside this commit.
-    const t = window.setTimeout(() => {
+    // After the palette's own close has run its course, not inside this
+    // commit: while its layer animates out (`data-state="closed"`, still
+    // mounted) its focus trap would pull focus straight back, and it drops
+    // focus on the body as it unmounts. Measured in Chromium at 1280: a
+    // restore at 0 ms was undone that way. So wait for the closing layer to
+    // go, a bounded number of short ticks.
+    let tries = 0;
+    let t = 0;
+    const restore = (): void => {
+      if (document.querySelector('[role="dialog"][data-state="closed"]') !== null && tries < RESTORE_TRIES) {
+        tries += 1;
+        t = window.setTimeout(restore, RESTORE_TICK_MS);
+        return;
+      }
       const active = document.activeElement;
       if (active !== null && active !== document.body) return;
       const target = back instanceof HTMLElement && back !== document.body && back.isConnected
         ? back
         : document.getElementById(CONTENT_ID);
       target?.focus({ preventScroll: true });
-    }, 0);
+    };
+    t = window.setTimeout(restore, 0);
     return () => window.clearTimeout(t);
   }, [open]);
 
