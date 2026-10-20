@@ -24,7 +24,7 @@ import {
   childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems, childReclaimKeptList,
   childReclaimKeptManySentence, childReclaimKeptVerdicts,
   childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict, childReclaimTerminalRefusal,
-  isChildReclaimPreLockToken,
+  isChildReclaimPreLockToken, REVIEW_CHILD_CEILING_MS,
   type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimFeedQuiet, type ChildReclaimHoldCandidate,
   type ChildReclaimJournalAttention, type ChildReclaimJournalRow, type ChildReclaimKeptAttention,
   type ChildReclaimLaneNow, type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome,
@@ -90,7 +90,7 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
   held: { kind: 'none' },
   terminal: false,
   mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: NOW - 3_600_000,
-    openedAt: NOW - 3_600_000 } },
+    openedAt: NOW - 3_600_000, closedAt: null } },
   // A WORK run's child: its minting run reviews nothing (spec §5.7).
   reviewedRun: { kind: 'not-a-review' },
   siblings: { ok: true, open: 0 },
@@ -103,11 +103,15 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
 
 const skip = (over: Partial<ChildReclaimSweepInput>) => childReclaimSweepVerdict(base(over));
 
+/** How `review-report-stale`'s sentence ends (D-5942): its release is the reviewed run's close, not a person's removal. */
+const REVIEW_STALE_ENDING = 'ccrc never reclaims it while the run it reviewed stays open; '
+  + 'closing or abandoning that run releases this workspace, and the sweep reclaims it then.';
+
 describe('childReclaimSweepVerdict', () => {
   it('a child of a finished run with nothing open on it is eligible, carrying the MARKER\'s run id', () => {
     expect(childReclaimSweepVerdict(base())).toEqual({ eligible: true, runId: 7 });
     expect(skip({ mintingRun: { ok: true, run: { state: 'failed', sessionId: 'demo-a', dispatchStartedAt: null,
-      openedAt: NOW - 3_600_000 } } }))
+      openedAt: NOW - 3_600_000, closedAt: null } } }))
       .toEqual({ eligible: true, runId: 7 });
   });
 
@@ -121,8 +125,11 @@ describe('childReclaimSweepVerdict', () => {
       ['not-a-workspace', { workspace: null }],
       ['minting-run-absent', { mintingRun: { ok: true, run: null } }],
       ['minting-run-postdates-child', { mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a',
-        dispatchStartedAt: null, openedAt: NOW - 3_600_000 + SKEW + 1 } } }],
+        dispatchStartedAt: null, openedAt: NOW - 3_600_000 + SKEW + 1, closedAt: null } } }],
       ['reviewed-run-absent', { reviewedRun: { kind: 'absent' } }],
+      ['review-report-stale', { reviewedRun: { kind: 'run', state: 'working' }, mintingRun: { ok: true, run: {
+        state: 'done', sessionId: 'demo-a', dispatchStartedAt: null, openedAt: NOW - 3_600_000,
+        closedAt: NOW - REVIEW_CHILD_CEILING_MS - 1 } } }],
       ['coordinating', { coordinatorClaim: 'open' }],
     ];
     expect(kept.map(([w]) => w).sort()).toEqual([...CHILD_RECLAIM_KEPT_WORDS].sort());
@@ -194,9 +201,9 @@ describe('childReclaimSweepVerdict', () => {
   it('a live minting run that names THIS child, or no session at all, keeps it', () => {
     for (const state of ['planned', 'dispatched', 'working', 'awaiting-review', 'merging', 'closing', 'unknown'] as const) {
       expect(skip({ mintingRun: { ok: true, run: { state, sessionId: 'demo-a', dispatchStartedAt: NOW - 3_600_000,
-        openedAt: NOW - 3_600_000 } } }), state).toEqual({ eligible: false, why: 'minting-run-open' });
+        openedAt: NOW - 3_600_000, closedAt: null } } }), state).toEqual({ eligible: false, why: 'minting-run-open' });
       expect(skip({ mintingRun: { ok: true, run: { state, sessionId: null, dispatchStartedAt: NOW - 3_600_000,
-        openedAt: NOW - 3_600_000 } } }), `${state}, no session`).toEqual({ eligible: false, why: 'minting-run-open' });
+        openedAt: NOW - 3_600_000, closedAt: null } } }), `${state}, no session`).toEqual({ eligible: false, why: 'minting-run-open' });
     }
   });
 
@@ -204,14 +211,14 @@ describe('childReclaimSweepVerdict', () => {
     // Dispatch's two arms that mint a child and fail to bind it: the run was
     // re-dispatched and names the child that DID get bound.
     expect(skip({ mintingRun: { ok: true, run: { state: 'working', sessionId: 'demo-b',
-      dispatchStartedAt: NOW - 3_600_000, openedAt: NOW - 3_600_000 } } }))
+      dispatchStartedAt: NOW - 3_600_000, openedAt: NOW - 3_600_000, closedAt: null } } }))
       .toEqual({ eligible: true, runId: 7 });
   });
 
   it('…except inside the spawn-stall window of a planned run, where the dispatch may still be binding', () => {
     const planned = (dispatchStartedAt: number | null) =>
       skip({ mintingRun: { ok: true, run: { state: 'planned', sessionId: 'demo-b', dispatchStartedAt,
-        openedAt: NOW - 3_600_000 } } });
+        openedAt: NOW - 3_600_000, closedAt: null } } });
     expect(planned(NOW - 1_000)).toEqual({ eligible: false, why: 'dispatch-in-flight' });
     expect(planned(NOW - SPAWN_STALL_MS + 1)).toEqual({ eligible: false, why: 'dispatch-in-flight' });
     // The boundary is exclusive of the window: at exactly SPAWN_STALL_MS the
@@ -228,7 +235,7 @@ describe('childReclaimSweepVerdict', () => {
 
   it('a minting run opened after the child\'s birth (plus the skew) cannot be the run that minted it', () => {
     const opened = (openedAt: number) => skip({ childBornAt: NOW - 3_600_000,
-      mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: null, openedAt } } });
+      mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: null, openedAt, closedAt: null } } });
     // Exactly at the skew: still placeable.
     expect(opened(NOW - 3_600_000 + SKEW)).toEqual({ eligible: true, runId: 7 });
     // One millisecond past it: doubt.
@@ -272,6 +279,62 @@ describe('childReclaimSweepVerdict', () => {
     }
   });
 
+  // D-5942 (spec §2.6): a review child whose own run closed more than the ceiling ago, while the run it
+  // reviewed is still open, answers the KEPT word `review-report-stale` so the banner lists it. It is
+  // never reclaimed for it: closing or abandoning the reviewed run is the release.
+  describe('the review child ceiling (D-5942)', () => {
+    const DAY = 24 * 3_600_000;
+    const reviewClosed = (closedAt: number | null): Partial<ChildReclaimSweepInput> => ({
+      mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: NOW - 9 * DAY,
+        openedAt: NOW - 9 * DAY, closedAt } },
+      childBornAt: NOW - 9 * DAY,
+      reviewedRun: { kind: 'run', state: 'working' },
+    });
+
+    it('the ceiling is seven days, exported once', () => {
+      expect(REVIEW_CHILD_CEILING_MS).toBe(7 * DAY);
+    });
+
+    it('reviewed run open, review run closed 6 days ago: review-report-live', () => {
+      expect(skip(reviewClosed(NOW - 6 * DAY))).toEqual({ eligible: false, why: 'review-report-live' });
+      expect(skip(reviewClosed(NOW - REVIEW_CHILD_CEILING_MS))).toEqual({ eligible: false, why: 'review-report-live' });
+    });
+
+    it('reviewed run open, review run closed 8 days ago: review-report-stale, class kept', () => {
+      expect(skip(reviewClosed(NOW - 8 * DAY))).toEqual({ eligible: false, why: 'review-report-stale', runId: 7 });
+      expect(skip(reviewClosed(NOW - REVIEW_CHILD_CEILING_MS - 1)))
+        .toEqual({ eligible: false, why: 'review-report-stale', runId: 7 });
+      expect(CHILD_RECLAIM_SKIP['review-report-stale'].class).toBe('kept');
+    });
+
+    it('review run not closed (closedAt null): review-report-live, never stale', () => {
+      expect(skip(reviewClosed(null))).toEqual({ eligible: false, why: 'review-report-live' });
+      // An orphaned review child whose live minting run carries no close either.
+      expect(skip({ ...reviewClosed(null), mintingRun: { ok: true, run: { state: 'working', sessionId: 'demo-b',
+        dispatchStartedAt: NOW - 9 * DAY, openedAt: NOW - 9 * DAY, closedAt: null } } }))
+        .toEqual({ eligible: false, why: 'review-report-live' });
+    });
+
+    it('reviewed run terminal: eligible as today, however long ago the review closed', () => {
+      for (const state of TERMINAL_RUN_STATES) {
+        expect(skip({ ...reviewClosed(NOW - 8 * DAY), reviewedRun: { kind: 'run', state } }), state)
+          .toEqual({ eligible: true, runId: 7 });
+      }
+    });
+
+    it('the stale word’s sentence names the reviewed run and its release', () => {
+      const s = CHILD_RECLAIM_SKIP['review-report-stale'].sentence;
+      expect(s).toContain('the run it reviewed');
+      expect(s).toContain('more than seven days ago');
+      expect(s.endsWith(REVIEW_STALE_ENDING)).toBe(true);
+    });
+
+    it('review-report-stale is in CHILD_RECLAIM_KEPT_WORDS (the L0 table)', () => {
+      expect(CHILD_RECLAIM_KEPT_WORDS).toContain('review-report-stale');
+      expect(isChildReclaimKeptWord('review-report-stale')).toBe(true);
+    });
+  });
+
   it('a reviewed run that is absent or unreadable keeps the review child — doubt waits', () => {
     expect(skip({ reviewedRun: { kind: 'absent' } })).toEqual({ eligible: false, why: 'reviewed-run-absent', runId: 7 });
     expect(skip({ reviewedRun: { kind: 'unreadable', detail: 'run-unreadable' } }))
@@ -283,7 +346,7 @@ describe('childReclaimSweepVerdict', () => {
     // not a way round the review rule.
     expect(skip({
       mintingRun: { ok: true, run: { state: 'working', sessionId: 'demo-b', dispatchStartedAt: NOW - 3_600_000,
-        openedAt: NOW - 3_600_000 } },
+        openedAt: NOW - 3_600_000, closedAt: null } },
       reviewedRun: { kind: 'run', state: 'awaiting-review' },
     })).toEqual({ eligible: false, why: 'review-report-live' });
   });
@@ -296,7 +359,7 @@ describe('childReclaimSweepVerdict', () => {
       expect(skip({
         held: { ...accounted, open: { ok: true, count: 0 } },
         mintingRun: { ok: true, run: { state: 'working', sessionId: 'demo-b', dispatchStartedAt: NOW - 3_600_000,
-          openedAt: NOW - 3_600_000 } },
+          openedAt: NOW - 3_600_000, closedAt: null } },
       })).toEqual({ eligible: false, why: 'held' });
     });
 
@@ -338,7 +401,7 @@ describe('childReclaimSweepVerdict', () => {
         held: { ...accounted, open: { ok: true, count: 1 } },
         childBornAt: NOW - 3_600_000,
         mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: null,
-          openedAt: NOW - 3_600_000 + SKEW + 1 } },
+          openedAt: NOW - 3_600_000 + SKEW + 1, closedAt: null } },
       })).toEqual({ eligible: false, why: 'minting-run-postdates-child', runId: 7 });
     });
   });
@@ -1290,7 +1353,8 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
     for (const w of CHILD_RECLAIM_KEPT_WORDS) {
       const s = keptSentenceOf(w);
       expect(s, w).toBe(sentenceOf(w));
-      expect(s.endsWith(w === 'not-a-workspace' ? MARKER_ENDING : KEPT_ENDING), w).toBe(true);
+      expect(s.endsWith(w === 'not-a-workspace' ? MARKER_ENDING
+        : w === 'review-report-stale' ? REVIEW_STALE_ENDING : KEPT_ENDING), w).toBe(true);
     }
     const rebuild = Object.keys(CHILD_RECLAIM_SKIP).filter((w) => sentenceOf(w).includes(REBUILD)).sort();
     expect(rebuild).toEqual(['minting-run-absent', 'minting-run-postdates-child']);

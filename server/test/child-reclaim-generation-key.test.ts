@@ -76,7 +76,7 @@ describe('an unreadable generation makes the rowâ€™s identity unmeasured (spec Â
     sessionId: 'demo-a', child: { kind: 'child', runId: 7 }, identityMeasured: true, generation: value(G1),
     workspace: 'demo-a', held: { kind: 'none' }, terminal: false,
     mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: NOW - 3_600_000,
-      openedAt: NOW - 3_600_000 } },
+      openedAt: NOW - 3_600_000, closedAt: null } },
     reviewedRun: { kind: 'not-a-review' }, siblings: { ok: true, open: 0 }, coordinatorClaim: undefined,
     childBornAt: NOW - 3_600_000, skewMs: 120_000, nowMs: NOW, ...over,
   });
