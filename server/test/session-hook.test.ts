@@ -9540,6 +9540,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `ccd/ccd:11665-11670`, `ccd/ccd:11669`, `ccd/ccd:13650-13652`, `ccd/ccd:2433-2439`, `ccd/ccd:3037-3089`,
     // `ccd/ccd:3038`, `ccd/ccd:3070` x3, `ccd/ccd:5385-5388`. Measured by diffing the dumped failure sets of the
     // two trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S1 (`ws-add --title` / `--wrapper`, `_ws_lane_why`, two caps tokens), 54 -> 53.
+    // ONE LEFT, NONE ENTERED: the second `ccd/ccd:13573-13575` site. `ccd/ccd` grows above every anchor in this set, so
+    // a line slid under that site whose token the row quotes. Neither frozen corpus document changed, so nothing was
+    // re-pointed and no rule changed; a coincidental pass is not a green anchor. Measured by running this test on the
+    // pre-S1 tree and on this one, never retyped. S6-R11 covers the re-measurement, so no D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -9800,7 +9805,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9874,6 +9878,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:12032-12034` x2, `spec:2209 ccd/ccd:4046` and `spec:2220 ccd/ccd:2874` x2 enter and `spec:2125
     // ccd/ccd:13673`, `spec:2220 ccd/ccd:3050` x2 leave on M's lines. 40, FROM THE SAME RUN as the row-pass set
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S1, 35 -> 34, FROM THE SAME RUN as the row-pass set above: `spec:2210
+    // ccd/ccd:13573-13575` leaves, the one site of that anchor the `|`-row set also lost. Nothing was re-pointed.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -10022,7 +10028,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
