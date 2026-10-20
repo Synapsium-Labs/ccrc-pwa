@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   feedRecordCallSites, reclaimPauseParseSites, markerDefinitions, markerLiteralFiles, filesNaming,
-  type CensusSite,
+  runCcdOldFoldSites, RAN_NARROW_WINDOW, type CensusSite,
 } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
@@ -74,11 +74,13 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
     expect(sites[0]!.text).toContain('deps.coord.recordFeedEvent(log.epoch, ev);');
   });
 
-  it("REAL: it finds pushOne's archive write in watch.ts, and every site is a call", () => {
+  // D-5857 (Task C1c): pushOne's archive write moved into the funnel (`notice.ts` `notify`), so the real-tree anchor
+  // follows it there; the row's other halves are unchanged.
+  it("REAL: it finds the funnel's archive write in notice.ts, and every site is a call", () => {
     const sites = feedRecordCallSites();
     show('feedRecordCallSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/watch.ts' && /\bcoord\?\.recordFeedEvent\(log\.epoch, recorded\)/.test(s.text)),
-      "pushOne's archive write is not among the sites").toBe(true);
+    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev\)/.test(s.text)),
+      "the funnel's archive write is not among the sites").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brecordFeedEvent\s*\(/);
     expect(files(sites)).not.toContain('server/src/coord/store.ts');
   });
@@ -112,11 +114,11 @@ describe('markerDefinitions(name): const definitions of a marker literal under s
       .toEqual(['server/src/coord/rundefs.ts:2', 'server/src/watch.ts:1']);
   });
 
-  it("REAL: mail-disabled is defined in coord/rundefs.ts (exported) and in watch.ts (private)", () => {
+  it("REAL: mail-disabled is defined once, in its shared/switches.ts row (D-5855; 2 -> 1)", () => {
     const sites = markerDefinitions('mail-disabled');
     show('markerDefinitions(mail-disabled)', sites);
-    expect(sites.find((s) => s.file === 'server/src/coord/rundefs.ts')?.text).toMatch(/^export const MAIL_DISABLED_MARKER\b/);
-    expect(sites.find((s) => s.file === 'server/src/watch.ts')?.text).toMatch(/^const MAIL_DISABLED_MARKER\b/);
+    expect(sites.map((s) => s.file)).toEqual(['shared/switches.ts']);
+    expect(sites[0]?.text).toMatch(/^export const MAIL_DISABLED_MARKER\b/);
   });
 });
 
@@ -130,10 +132,60 @@ describe('markerLiteralFiles: quoted marker-name literals on code lines under se
     ]);
   });
 
-  it("REAL: it finds rundefs.ts spelling 'reclaim-paused'", () => {
+  it("REAL: the vocabulary survives the move to shared/switches.ts, and no server/src line defines a marker (D-5855)", () => {
     const sites = markerLiteralFiles();
     show('markerLiteralFiles', sites);
     console.log(`census files spelling a marker literal: ${files(sites).length}`);
-    expect(sites.some((s) => s.file === 'server/src/coord/rundefs.ts' && s.text.includes("'reclaim-paused'"))).toBe(true);
+    // dispatch.ts's refusal CODE spells 'mail-disabled': found only while the vocabulary is still read from shared/.
+    expect(sites.some((s) => s.file === 'server/src/coord/dispatch.ts' && s.text.includes("'mail-disabled'"))).toBe(true);
+    expect(sites.filter((s) => /\bconst\s+[A-Z0-9_]*_MARKER\b/.test(s.text)).map((s) => `${s.file}:${s.line}`)).toEqual([]);
+  });
+});
+
+describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrowed on ran (D-6034; ARCH-10, #543)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'ran-fold-census-'));
+    mkdirSync(path.join(tree, 'server/src/coord'), { recursive: true });
+    writeFileSync(path.join(tree, 'server/src/coord/lane.ts'), [
+      '// const res = await deps.runCcd(argv); is how a lane calls it',       // 1: a comment
+      'export async function oldFold(deps: Deps): Promise<boolean> {',
+      '  const res = await deps.runCcd(argv);',                                 // 3: old fold
+      '  return res.ok;',
+      '}',
+      '// the next declaration\'s narrowing names another `res`: it never counts for line 3',
+      'export async function newFold(deps: Deps): Promise<Read> {',
+      '  const res = await deps.runCcd(argv);',                                 // 8: new fold
+      "  if (res.ran === false) return { kind: 'unreadable' };",
+      '  return parse(res.ok, res.stdout);',
+      '}',
+      'const wrap = (deps: Deps): RunCcd => async (argv) => {',
+      '  return await deps.runCcd(argv);',                                      // 13: a pass-through
+      '};',
+      'export interface Port { runCcd: (argv: CcdArgv) => Promise<CcdResult> }', // 15: a type
+      'export async function tooFar(deps: Deps): Promise<boolean> {',
+      '  const res = await deps.runCcd(argv);',                                 // 17: narrowed past the window
+      ...Array.from({ length: RAN_NARROW_WINDOW }, () => '  step();'),
+      '  if (res.ran === false) return false;',
+      '  return res.ok;',
+      '}',
+    ].join('\n'));
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a comment, a type, a pass-through and a narrowed call are not sites; an un-narrowed call is, and so is one narrowed past the window', () => {
+    // [file, line] pairs, not `file:line` strings: the citations ratchet counts the latter (D-5893).
+    expect(runCcdOldFoldSites(tree).map((s) => [s.file, s.line]))
+      .toEqual([['server/src/coord/lane.ts', 3], ['server/src/coord/lane.ts', 17]]);
+  });
+
+  it('REAL: the four sites step 1 migrated are off the old fold, and the rest still on it are listed for step 2', () => {
+    const sites = runCcdOldFoldSites();
+    show('runCcdOldFoldSites', sites);
+    const migrated = ['server/src/coord/expireArchived.ts', 'server/src/coord/collectTempRoot.ts'];
+    for (const f of migrated) expect(files(sites), `${f} is still on the old fold`).not.toContain(f);
+    // A query that silently matched nothing would read as "step 2 is done": the swap route is a known old-fold site.
+    expect(sites.some((s) => s.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
+    for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brunCcd\s*\(/);
   });
 });

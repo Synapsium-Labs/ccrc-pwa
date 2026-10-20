@@ -1,27 +1,39 @@
 // The base commands (D-5103): the screens, the sessions, the layout and the
-// theme, and the shortcut sheet. "New session" and the per-session actions
-// are W2's: they need the fleet screen's own state, and that screen is held
-// by an in-flight change until it lands.
+// theme, and the shortcut sheet. W2 Task S2b adds "New session" (the fleet
+// flows' own door, D-5468), "Go to Docs" (from the route table) and "Open the
+// command palette" (D-5469: a door runs a command, so the search door needs
+// one); S2d adds the session's (`SESSION_COMMANDS`, D-5466).
 import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
 import { groupFleet } from '../fleet/groupFleet';
 import { nestFleet } from '../fleet/nestFleet';
 import { isRunClosed, runCard } from '../fleet/runWords';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { matchRoute, ROUTES } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 
-/** The screens a "Go to" command opens, each with its `g` chord's second key.
- *  `command-registry.test.ts` holds every path to a route `app.tsx` routes.
- *  Archive has no chord: `a` is Accounts, and the archive is a door off the
- *  fleet rather than a place visited every day. */
-export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = [
-  { id: 'go-fleet', title: 'Go to Fleet', path: '/', chord: 'f' },
-  { id: 'go-inbox', title: 'Go to Inbox', path: '/mail', chord: 'i' },
-  { id: 'go-runs', title: 'Go to Runs', path: '/runs', chord: 'r' },
-  { id: 'go-accounts', title: 'Go to Accounts', path: '/accounts', chord: 'a' },
-  { id: 'go-archive', title: 'Go to Archive', path: '/archive' },
-  { id: 'go-settings', title: 'Go to Settings', path: '/settings', chord: 's' },
-];
+/** The `g` chord's second key per route. Archive and Docs have none: `a` is
+ *  Accounts and `d` is unclaimed, and both are doors off the fleet rather
+ *  than places visited every day. */
+const CHORDS: Readonly<Record<string, string>> = { fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
+
+/** The top row whose page a path sits under (`/settings` for `/settings/updates`), or null. */
+function parentOf(path: string): (typeof ROUTES)[number] | null {
+  return ROUTES.find((p) => p.top && p.path !== null && p.path !== '/' && path.startsWith(`${p.path}/`)) ?? null;
+}
+
+/** The screens a "Go to" command opens: the route table's top rows (D-5466),
+ *  each with its `g` chord's second key, then each page under one that has a
+ *  path of its own, titled under its parent ("Go to Settings › Updates",
+ *  D-5504). A row with no path (a session, the digest, `settings-section`)
+ *  is never offered. `command-registry.test.ts` holds every path to a route
+ *  `app.tsx` routes. */
+export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = ROUTES.flatMap((r) => {
+  if (r.path === null) return [];
+  if (r.top) return [{ id: `go-${r.id}`, title: `Go to ${r.title}`, path: r.path, chord: CHORDS[r.id] }];
+  const parent = parentOf(r.path);
+  return parent === null ? [] : [{ id: `go-${r.id}`, title: `Go to ${parent.title} › ${r.title}`, path: r.path }];
+});
 
 /** The fleet in the order the fleet screen draws it: its cards in
  *  `groupFleet`'s order (which sorts with `sortFleet`), and each card's rows
@@ -41,8 +53,8 @@ export function fleetOrder(
 
 /** The session the path names, or null off a session screen. */
 function currentId(path: string): string | null {
-  const m = /^\/s\/([^/]+)\/?$/.exec(path);
-  return m ? decodeURIComponent(m[1]!) : null;
+  const at = matchRoute(path);
+  return at?.route.id === 'session' ? at.param : null;
 }
 
 /** Step through the fleet from the session in force, wrapping at either end.
@@ -58,6 +70,22 @@ export function stepSession(ctx: CommandContext, step: 1 | -1): void {
   ctx.navigate(`/s/${encodeURIComponent(list[next]!.id)}`);
 }
 
+/** The session's commands (W2 Task S2d, D-5466): the ⋯ menu's items on the base, plus the two header doors that
+ *  open a session flow (the terminal and the PR sheet). Each menu item is built with `commandDoor(id)`, so the menu,
+ *  the palette and any door run one command. Offered only while a session screen's flows are mounted, and only
+ *  where the menu itself would offer the item enabled: the gate is `SessionFlows`', asked through `offers`. */
+export const SESSION_COMMANDS: readonly { id: string; title: string }[] = [
+  { id: 'session-model', title: 'Change model' },
+  { id: 'session-effort', title: 'Change effort' },
+  { id: 'open-history', title: 'Show history' },
+  { id: 'session-docs', title: "Open this session's docs" },
+  { id: 'session-swap', title: 'Move to another account' },
+  { id: 'session-archive', title: 'Archive this session' },
+  { id: 'session-restore', title: 'Restore this session' },
+  { id: 'open-terminal', title: 'Open the terminal' },
+  { id: 'session-pr', title: 'Open the pull request' },
+];
+
 export function baseCommands(): Command[] {
   return [
     ...GO_TO.map((g): Command => ({
@@ -67,6 +95,12 @@ export function baseCommands(): Command[] {
       keys: g.chord === undefined ? undefined : ['g', g.chord],
       run: (ctx) => ctx.navigate(g.path),
     })),
+    {
+      id: 'new-session',
+      title: 'New session',
+      group: 'Sessions',
+      run: (ctx) => ctx.openNewSession(),
+    },
     {
       id: 'open-session',
       title: 'Open session…',
@@ -96,6 +130,13 @@ export function baseCommands(): Command[] {
       keys: ['['],
       run: (ctx) => stepSession(ctx, -1),
     },
+    ...SESSION_COMMANDS.map((c): Command => ({
+      id: c.id,
+      title: c.title,
+      group: 'Session',
+      when: (ctx) => ctx.session !== null && ctx.session.offers(c.id),
+      run: (ctx) => ctx.session?.run(c.id),
+    })),
     {
       id: 'switch-layout',
       title: 'Switch layout →',
@@ -130,6 +171,15 @@ export function baseCommands(): Command[] {
           })),
         ],
       }),
+    },
+    {
+      // Offered by a door (the search door, the command field), never inside
+      // the palette it would open: the palette is already open there.
+      id: 'open-palette',
+      title: 'Open the command palette',
+      group: 'Help',
+      when: (ctx) => !ctx.paletteOpen,
+      run: (ctx) => ctx.openPalette(),
     },
     {
       id: 'show-shortcuts',

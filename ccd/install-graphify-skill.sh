@@ -88,7 +88,7 @@ for dir in "${homes[@]}"; do
   [[ -d "$dir" ]] || continue
   mkdir -p "$dir/skills" 2>/dev/null || { rc=1; continue; }
   skills_real="$(realpath "$dir/skills" 2>/dev/null)" || { rc=1; continue; }
-  # Two rostered homes symlink skills/ into one directory (.claude-gpt/.claude-kimi
+  # Two rostered homes symlink skills/ into one directory (.claude-gpt/.claude-alt2
   # -> ~/.claude/skills on the reference fleet): write each REAL directory once.
   [[ -n "${seen_skills[$skills_real]:-}" ]] && continue
   seen_skills[$skills_real]=1

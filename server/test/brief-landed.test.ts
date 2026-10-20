@@ -200,7 +200,9 @@ describe('the wave brief is confirmed taken (D-5841)', () => {
     expect(n[0]!.fromId).toBe('operator');
     expect(n[0]!.runId).toBe(runId);
     expect(n[0]!.subject).toMatch(new RegExp(`^brief not taken by ${WORKER}, run ${runId}: .+`));
-    expect(n[0]!.subject).toContain('unsent text');
+    // D-5912: the lane stashes a draft rather than waiting on it; this pane never empties after `C-s`, so the send
+    // refuses `stash-failed` and nothing is typed over the human's line.
+    expect(n[0]!.subject).toContain('stash-failed');
     const pushed = sent.filter((p) => p.tag === `brief-not-taken-${runId}`);
     expect(pushed).toHaveLength(1);
     expect(pushed[0]!.body).toContain(`brief not taken by ${WORKER}, run ${runId}`);

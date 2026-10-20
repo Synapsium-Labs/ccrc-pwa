@@ -3,44 +3,38 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
   ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton, useNow,
 } from '@ccrc/ui';
-import { NewSessionSheet } from '../fleet/NewSessionSheet';
-import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { HaltBanner } from '../fleet/HaltBanner';
-import { useFleetHealth } from '../fleet/useFleetHealth';
 import { UpdateBanner } from '../fleet/UpdateBanner';
-import { UPDATES_STALE_TEXT, useUpdatesView } from '../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { fleetTree } from '../fleet/fleetTree';
-import { ArchiveAllConfirm, useArchiveAll } from '../fleet/ArchiveAllPlane';
 import { ProjectCard } from '../fleet/ProjectCard';
-import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
-import { useProjectRows } from '../fleet/useProjectRows';
-import { useActionsSheet } from '../fleet/useActionsSheet';
+import { useFleetChrome } from '../fleet/FleetChrome';
+import { useFleetFlows } from '../fleet/FleetFlows';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
 import { raisesUnread } from '../lib/feed';
-import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
-import { useFleetStore, type FleetStore } from '../stores/fleet';
+import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
-  store = useFleetStore,
+  store: storeProp,
   onOpen,
   onNewSession,
   selectedId = null,
@@ -48,7 +42,8 @@ export function FleetScreen({
   epoch,
   observedEpoch,
 }: {
-  store?: FleetStore; // injectable for tests
+  /** Injectable for tests; it must be the host's own (`FleetChromeProvider store=`), which it defaults to. */
+  store?: FleetStore;
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
@@ -86,6 +81,14 @@ export function FleetScreen({
    *  "not stale"; it still never means "agrees". */
   observedEpoch?: number | null;
 }): ReactNode {
+  // The polls and the sheets' open state live above this screen (D-5468): in W2 a fleet list is a skin's part and
+  // remounts on a skin switch, so an open sheet must outlive it, and a second reader must not start a second poll.
+  // `FleetChromeProvider` holds them once for the shell and `FleetFlows` renders the sheets beside it (`app.tsx`).
+  // The list reads the SAME store the sheets and planes act on: a different one would show one fleet and act on
+  // another, silently, so it throws instead.
+  const chrome = useFleetChrome();
+  if (storeProp !== undefined && storeProp !== chrome.store) throw new Error('FleetScreen store is not the FleetChrome store');
+  const store = storeProp ?? chrome.store;
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
@@ -121,13 +124,13 @@ export function FleetScreen({
   }, [sessions]);
 
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
-  const [newOpen, setNewOpen] = useState(false);
-  const newSession = onNewSession ?? (() => setNewOpen(true));
+  const flows = useFleetFlows();
+  const newSession = onNewSession ?? flows.openNewSession;
   // The `/api/projects` plane — rows, class, placement readers, the `+`'s
   // in-flight set and the pool sheet's selection — lives in its own hook
   // (`useProjectRows`), which is where its generation discipline and its two
-  // deviations are argued.
-  const projects = useProjectRows(pools, useStore.getState().setProjects);
+  // deviations are argued; the chrome calls it once.
+  const projects = chrome.projects;
 
   const projected = useProjectedHome();
   // Once, not three times in one interpolation: the footer's count and its
@@ -170,29 +173,19 @@ export function FleetScreen({
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
-  // (spec §6) — the screen owns it so the two never issue their own requests.
+  // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
-  // view handed down to every reader of the inventory on this screen, none of
-  // which polls on its own.
-  const fleetHealth = useFleetHealth();
-  const updates = useUpdatesView();
+  // view handed down to every reader of the inventory, none of which polls on
+  // its own.
+  const fleetHealth = chrome.health;
+  const updates = chrome.updates;
   // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every reader below says so.
   const stale = updates.view !== null && updates.failure !== null;
-  // The ··· sheet's own lifecycle (`useActionsSheet`) — which session it is
-  // about, and what it does when that session changes or vanishes.
-  const actions = useActionsSheet(sessions);
-  // The guarded reap flow, reachable from the fleet line's ··· regardless of
-  // whether that session's chat screen is currently open — an archived
-  // workspace's only other route to cleanup is a screen there is no reason
-  // to open. Only the id is held: the session it names is looked up fresh
-  // from the live list below, same reasoning as `actionsSession` above.
-  const [reapId, setReapId] = useState<string | null>(null);
-  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1).
-  // The loop and the confirm's sentence live in `ArchiveAllPlane`; the screen
-  // keeps only which project is asking, because the cards read the in-flight
-  // set and a set owned inside the sheet could not reach them.
-  const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
-  const archiveAll = useArchiveAll(store);
+  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1):
+  // the cards read the loop's in-flight set, which the chrome holds (D-5468).
+  // The ··· sheet's lifecycle, the guarded reap flow and the confirm's subject
+  // are the chrome's too; this screen only opens them (`useFleetFlows`).
+  const archiveAll = chrome.archiveAll;
 
   // `bucket`, not `dialogPending` — the LAST client-side re-derivation of the
   // attention bucket, and the one that sat directly above the bucket bar that
@@ -234,7 +227,7 @@ export function FleetScreen({
   // (`runCard`'s docstring has the two fallbacks and why each is load-bearing).
 
   return (
-    <main className="fleet" data-conn={conn}>
+    <section aria-label="Fleet" className="fleet" data-conn={conn}>
       <FleetHead
         countLine={sessions.length > 0 ? countLine : null}
         poolLag={poolLag}
@@ -408,10 +401,10 @@ export function FleetScreen({
                 adding={projects.adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
-                onActions={actions.openFor}
+                onActions={(s) => flows.openActions(s.id)}
                 roster={roster}
                 pools={pools}
-                onPool={projects.openPool}
+                onPool={flows.openPool}
                 /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
                    renders here — `runCard`, never `r.project`. A run kept on
                    its worker's OWN project's card after the row moved would be
@@ -465,7 +458,7 @@ export function FleetScreen({
                 archivedOpen={folded.has(`${g.project}::archived`)}
                 /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
                 releasedOpen={folded.has(`${g.project}::released`)}
-                onArchiveReleased={setArchiveAllFor}
+                onArchiveReleased={flows.openArchiveAll}
                 archivingReleased={archiveAll.archiving.has(g.project)}
               />
             ))}
@@ -500,42 +493,9 @@ export function FleetScreen({
         <span aria-hidden="true">+</span>
       </button>
 
-      <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
-
-      <PoolSheet
-        project={projects.poolSelection?.project ?? null}
-        selectedPool={projects.poolSelection?.pool}
-        open={projects.poolOpen}
-        onClose={projects.closePool}
-        onPoolChanged={projects.notePoolWrite}
-        fleet={store}
-      />
-
-      <SessionActionsSheet
-        session={actions.session}
-        open={actions.open}
-        onClose={actions.close}
-        onReap={setReapId}
-        fleet={store}
-      />
-
-      <ArchiveAllConfirm
-        project={archiveAllFor}
-        sessions={sessions}
-        onClose={() => setArchiveAllFor(null)}
-        onConfirm={(project) => void archiveAll.run(project)}
-      />
-
-      <ReapSheet
-        session={sessions.find((sn) => sn.id === reapId) ?? null}
-        open={reapId !== null}
-        onClose={() => setReapId(null)}
-        onReaped={() => setReapId(null)}
-      />
-
       {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
       <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
-    </main>
+    </section>
   );
 }

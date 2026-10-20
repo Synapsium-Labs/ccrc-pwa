@@ -268,19 +268,13 @@ export function ArchiveSheet({
   }
 
   return (
-    <Sheet open onClose={onClose} title={title} eyebrow={session.project}>
-      <div className="archive-conflict-sheet">
-        {ended.length > 0 && (
-          <p className={QC_CONSEQUENCE}>{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
-        )}
-        {body}
-        {/* After a `stopOnlyClass` refusal: what "Stop only" does, or where it is. */}
-        {stopOnly && (
-          <p className={QC_CONSEQUENCE}>Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
-        )}
-        {stopOnlyClass && !stopOnly && (
-          <p className={QC_CONSEQUENCE}>Stop only is in this session's actions sheet on the board.</p>
-        )}
+    <Sheet
+      open
+      onClose={onClose}
+      title={title}
+      eyebrow={session.project}
+      // The answers are pinned in the Sheet's footer (D-5932).
+      footer={
         <div className={QC_ACTIONS}>
           {primary !== null && (
             <Button variant="danger" disabled={busy} onClick={() => send(primary!.next)}>
@@ -298,6 +292,20 @@ export function ArchiveSheet({
             {primary === null && !stopOnly ? 'Close' : 'Cancel'}
           </Button>
         </div>
+      }
+    >
+      <div className="archive-conflict-sheet">
+        {ended.length > 0 && (
+          <p className={QC_CONSEQUENCE}>{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
+        )}
+        {body}
+        {/* After a `stopOnlyClass` refusal: what "Stop only" does, or where it is. */}
+        {stopOnly && (
+          <p className={QC_CONSEQUENCE}>Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
+        )}
+        {stopOnlyClass && !stopOnly && (
+          <p className={QC_CONSEQUENCE}>Stop only is in this session's actions sheet on the board.</p>
+        )}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

@@ -287,7 +287,7 @@ describe('FleetHostBanner', () => {
     expect(screen.getByText(/fleet — · server v0\.0\.9 \(2985b9d1\)\./)).toBeInTheDocument();
   });
 
-  it('takes an injected health and does not poll — FleetScreen polls once for two readers', async () => {
+  it('takes an injected health and does not poll — FleetChromeProvider polls once for every reader (D-5468)', async () => {
     const spy = vi.spyOn(api, 'fleetHealth');
     render(<FleetHostBanner health={health({ connected: true, downSince: null, roster: 'divergent' })} />);
     expect(await screen.findByText(/different account rosters/i)).toBeInTheDocument();

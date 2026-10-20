@@ -76,8 +76,8 @@ Create `infra/ccrc/pwa/test/compose.test.ts`:
 import { describe, expect, it } from 'vitest';
 import { composePrompt, splitClipPaths } from '../../shared/api';
 
-const P1 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150340-a1b2.png';
-const P2 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150341-c3d4.jpg';
+const P1 = '/home/you/.cc-clips/claude9-project-c/clip-20260726-150340-a1b2.png';
+const P2 = '/home/you/.cc-clips/claude9-project-c/clip-20260726-150341-c3d4.jpg';
 
 describe('composePrompt', () => {
   it('puts each attachment on its own line above the text', () => {
@@ -228,7 +228,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { clipName, clipPath, stageUpload } from '../src/clip.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude9-project-f';
 const cfgFor = () => loadConfig({ CCRC_HOME: mkdtempSync(path.join(tmpdir(), 'ccrc-')) });
 
 describe('clipName', () => {
@@ -421,7 +421,7 @@ describe('upload route id handling', () => {
   it('404s an unknown but well-formed session', async () => {
     const { app } = await makeApp([null]);
     const res = await app.inject({
-      method: 'POST', url: '/api/sessions/claude2-NoSuchProject/upload', payload: png(),
+      method: 'POST', url: '/api/sessions/claude9-NoSuchProject/upload', payload: png(),
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('unknown-session');
@@ -520,7 +520,7 @@ Add to `infra/ccrc/server/test/send.test.ts` (reuse the file's existing tmux/que
 
 ```ts
 describe('sendPrompt with attachments', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('types the paths above the text as one turn', async () => {
     const { deps, sent } = harness({ box: `❯ ${P}`, submitted: true });
@@ -668,7 +668,7 @@ it('rejects an attachment outside this session’s clips dir', async () => {
   for (const bad of [
     '/etc/passwd',
     '/home/u/.cc-clips/other-session/clip-20260726-150340-a1b2.png',
-    '/home/u/.cc-clips/claude2-MekWarLive/../../x/clip-20260726-150340-a1b2.png',
+    '/home/u/.cc-clips/claude9-project-f/../../x/clip-20260726-150340-a1b2.png',
   ]) {
     const res = await app.inject({
       method: 'POST', url: `/api/sessions/${ID}/prompt`,
@@ -1019,8 +1019,8 @@ describe('attachments', () => {
   });
 
   it('builds an origin-qualified clip URL — a bare path breaks openExternal', () => {
-    expect(clipUrl('claude2-Proj', 'clip-1-a1b2.png'))
-      .toBe(`${location.origin}/api/sessions/claude2-Proj/clip/clip-1-a1b2.png`);
+    expect(clipUrl('claude9-Proj', 'clip-1-a1b2.png'))
+      .toBe(`${location.origin}/api/sessions/claude9-Proj/clip/clip-1-a1b2.png`);
   });
 });
 ```
@@ -1148,8 +1148,8 @@ import { useStagedImages } from '../src/session/useAttachImage';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const ID = 'claude2-Proj';
-const CLIP = { path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
+const ID = 'claude9-Proj';
+const CLIP = { path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png' });
 
 /** Renders the hook's state as plain text, so assertions read the hook and not
@@ -1865,20 +1865,20 @@ git commit -m "fix(ccrc): attachments survive retry and draft conflicts"
 
 ```ts
 it('renders a sent clip path as the image, not the path', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-  render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+  render(<ChatListInner id="claude9-Proj" pending={[]} events={[
     { kind: 'user', uuid: 'u1', ts: NOW, text: `${P}\nwhat is this` },
   ]} />);
 
   const img = screen.getByRole('img', { name: 'clip-20260726-150340-a1b2.png' });
-  expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude2-Proj/clip/clip-20260726-150340-a1b2.png`);
+  expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude9-Proj/clip/clip-20260726-150340-a1b2.png`);
   expect(screen.getByText('what is this')).toBeInTheDocument();
   expect(screen.queryByText(new RegExp(P))).not.toBeInTheDocument();
 });
 
 it('falls back to the filename when the clip is gone from disk', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-  render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+  render(<ChatListInner id="claude9-Proj" pending={[]} events={[
     { kind: 'user', uuid: 'u1', ts: NOW, text: P },
   ]} />);
   fireEvent.error(screen.getByRole('img'));
@@ -1895,9 +1895,9 @@ it('leaves a message with no clip path alone', () => {
 it('shows the same thumbnails on the optimistic bubble, from the object URL', () => {
   // chip -> pending -> confirmed must never flicker empty, so the pending bubble
   // renders the blob it inherited rather than waiting on a server round trip.
-  render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+  render(<ChatListInner id="claude9-Proj" events={[]} pending={[{
     key: 'p1', text: 'what is this', state: 'sending',
-    attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
+    attachments: [{ path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
   }]} />);
   expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:mock/1');
   expect(screen.getByText('what is this')).toBeInTheDocument();

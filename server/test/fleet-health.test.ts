@@ -21,7 +21,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
-import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS, readArchivedHeld } from '../../shared/api.js';
+import { EXPIRE_CAP } from '../src/ccdargv.js';
+import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import type { NodeMeasurement } from '../src/coord/store.js';
@@ -47,7 +49,7 @@ function remoteDeps(
 // A COMPLETE FleetSession — the fixture was eight fields short of the type it
 // claims (server/tsconfig.json does not include test/, so nothing said so).
 const session = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -248,7 +250,7 @@ describe('GET /api/fleet — degraded mode', () => {
     writeFileSync(cachePath, JSON.stringify({
       savedAt: 1785300000001,
       sessions: [{
-        id: 'claude-Cached', wrapper: 'claude', home: '/home/rc', project: 'claude-Cached',
+        id: 'claude-Cached', wrapper: 'claude', home: '/home/u', project: 'claude-Cached',
         workdir: '/data/projects/claude-Cached', workspace: null, name: null, status: 'idle',
         statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
         model: null, effort: null, ultracode: false, branch: null,
@@ -607,3 +609,111 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     expect(Object.keys(res.json())).not.toContain('pools');
     await app.close();
   });});
+
+// D-5943 (spec §2.7): the ranked total of bytes archived workspaces hold, composed by the expiry lane once per pass and
+// read by the route ONCE. Absent before the lane's first pass: absence reads as UNKNOWN, never as nothing held.
+describe('/api/fleet/health: the archived-held block (D-5943)', () => {
+  /** Two archived workspaces as the registry reads them — one measured at archive, one whose manifest was absent. */
+  const ARCHIVED = [
+    { id: 'project-a-quiet', workspace: 'quiet', archivedAt: 100, archivedBytes: 2_048, child: { kind: 'none' }, unmeasured: [], held: null },
+    { id: 'project-a-brisk', workspace: 'brisk', archivedAt: 100, archivedBytes: null, child: { kind: 'none' }, unmeasured: [], held: null },
+  ];
+
+  async function lane(env: Record<string, string> = {}) {
+    const home = mkTmp('ccrc-fh-ah-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const health = async (): Promise<Record<string, unknown>> =>
+      (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    return { app, watcher, health };
+  }
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: fleet health has no \`archivedHeld\` before the first pass, then the ranked block — and nothing else moves`, async () => {
+      const { app, watcher, health } = await lane(env);
+      try {
+        const before = await health();
+        expect('archivedHeld' in before, 'a lane that has not run must not render a block, not even an empty one').toBe(false);
+        await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+        const after = await health();
+        // The box answered nothing readable (a dead runner), so each row's audit is a failing report: audited, not unknown.
+        expect(after['archivedHeld']).toEqual({ totalBytes: 2_048, unmeasured: 1, rows: [
+          { sessionId: 'project-a-quiet', bytes: 2_048, verdict: 'failing', kind: 'failing' },
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'failing', kind: 'failing' },
+        ] });
+        const { archivedHeld: _block, ...rest } = after;
+        expect(rest).toEqual(before);
+      } finally { await app.close(); }
+    });
+  }
+
+  // D-6027: the switch (or a box without the capability) stops the lane's ACTS, never its read model — the operator needs
+  // the held bytes exactly while nothing is being reclaimed. The block is composed from this pass's registry and the
+  // lane's standing memory; it never freezes at the last acting pass.
+  it('the cleanup switch stops the acts, not the block: composed from the registry and the lane\'s memory alone (D-6027)', async () => {
+    const { app, watcher, health } = await lane();
+    try {
+      await watcher.sweepArchivedExpiry(ARCHIVED as never, [RECLAIM_PAUSE_MARKER]);
+      expect((await health())['archivedHeld'], 'a switch raised before any pass still reports, every row unaudited').toEqual({
+        totalBytes: 2_048, unmeasured: 1, rows: [
+          { sessionId: 'project-a-quiet', bytes: 2_048, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+        ] });
+    } finally { await app.close(); }
+  });
+
+  for (const [why, names, verbs] of [
+    ['the cleanup switch is raised', [RECLAIM_PAUSE_MARKER], ['ws-audit', 'ws-expire', EXPIRE_CAP]],
+    ['the box loses the capability', [], ['ws-audit']],
+  ] as const) {
+    it(`after an acting pass, ${why}: the block follows the registry and keeps the lane's verdicts — never the last snapshot (D-6027)`, async () => {
+      const { app, watcher, health } = await lane();
+      try {
+        await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+        expect(((await health())['archivedHeld'] as { rows: unknown[] }).rows).toHaveLength(2);
+        (watcher as unknown as { lastArchivedExpirySweep: number }).lastArchivedExpirySweep = 0;
+        (watcher as unknown as { deps: { fleetState: { ccdVerbs: readonly string[] } } }).deps.fleetState.ccdVerbs = [...verbs];
+        await watcher.sweepArchivedExpiry([ARCHIVED[1]] as never, [...names]);
+        expect((await health())['archivedHeld']).toEqual({ totalBytes: 0, unmeasured: 1, rows: [
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'failing', kind: 'failing' },
+        ] });
+      } finally { await app.close(); }
+    });
+  }
+
+  it('a server with no watcher never emits it', async () => {
+    const app = await buildServer(testDeps(mkTmp('ccrc-fh-ah-')));
+    try {
+      expect('archivedHeld' in ((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as object)).toBe(false);
+    } finally { await app.close(); }
+  });
+
+  it('an older reader ignores the block: the single reader answers null on absence or a malformed block, the rest reads as before', async () => {
+    const { app, watcher, health } = await lane();
+    try {
+      await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+      const body = await health();
+      expect(readArchivedHeld(body)).toEqual(body['archivedHeld']);
+      expect(readArchivedHeld({ ...body, archivedHeld: undefined })).toBeNull();
+      expect(readArchivedHeld({ archivedHeld: {} })).toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { unmeasured: 0, rows: [] } }), 'a missing total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: '1', unmeasured: 0, rows: [] } }), 'a non-numeric total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, rows: [] } }), 'a missing unmeasured count').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: '0', rows: [] } }), 'a non-numeric unmeasured count').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: 0, rows: [{ sessionId: 'a', bytes: 'x', verdict: 'v', kind: 'k' }] } })).toBeNull();
+      // An older PWA reads `FleetHealth` field by field: every field it knows is byte-identical with the block present.
+      const older = (h: Record<string, unknown>) => ({ mode: h['mode'], connected: h['connected'], downSince: h['downSince'],
+        roster: h['roster'], build: h['build'], projectPools: h['projectPools'], lifecycle: h['lifecycle'] });
+      const { archivedHeld: _b, ...without } = body;
+      expect(older(body)).toEqual(older(without));
+    } finally { await app.close(); }
+  });
+});

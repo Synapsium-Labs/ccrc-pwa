@@ -15,10 +15,18 @@ export interface SendDeps {
   /** Clock behind the clear's wall-clock budget; injectable so a test can prove
    *  the budget bounds the loop without spending the budget. */
   now?: () => number;
+  /** The egress mask over a box reading (D-5995). The `draft` a 409 hands back reached its client masked, so
+   *  `submitEnter`'s correspondence gate also accepts a claim equal to the box's reading in that masked form. */
+  maskDraft?: (text: string) => string;
 }
 
 export type SendResult =
-  | { ok: true }
+  | { ok: true;
+      // D-5911. Only the `onDraft: 'stash'` path sets it, and only when it stashed a draft: `restored` when the box
+      // read the draft back after the submit, `restore-unverified` when it did not (the message WAS delivered; the
+      // draft is in Claude Code's stash or already back in the box). ADDITIVE and absence-permits. Never named
+      // `draft`: the refusal arm's `draft` carries the box text, and one name must not carry two meanings.
+      draftRestore?: 'restored' | 'restore-unverified' }
   | { ok: false;
       error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'
         // THE CAPTURE HOLDS NO INPUT BOX AT ALL, which is not the same fact as
@@ -51,7 +59,20 @@ export type SendResult =
         // there and pressed no Enter. Not `not-alive`: the session may be
         // alive, with the lines typed before it still in its box. Before this
         // the refusal was ignored and the message submitted without the line.
-        | 'type-failed';
+        | 'type-failed'
+        // D-5911, `onDraft: 'stash'` only. The pane shows Claude Code's held-stash indicator, so a `C-s` would
+        // REPLACE the stash already held (an operator's earlier text). Nothing was pressed.
+        | 'stash-occupied'
+        // D-5911, `onDraft: 'stash'` only. One `C-s` was pressed and the box did not read empty within the budget (a
+        // rebound key, a version without the stash, a menu, a placeholder that escaped the box reader). Nothing
+        // else was pressed, so nothing was typed onto the draft.
+        | 'stash-failed'
+        // D-6010, `onDraft: 'stash'` only. Both Enters were swallowed (`enter-ignored`), and then our own text was
+        // cleared (`giveBackStash`). The stashed draft is popped back when the pop lands; one that does not leaves it
+        // in the stash behind the empty box, with a warn line, and the next send's submit is then gated on the
+        // indicator (D-6011). Not `enter-ignored`: that word says our text is still in the box, which the mail lane's
+        // park hold and dispatch's stranded-`/clear` proof both read. Nothing of ours is left, so a retry types afresh.
+        | 'enter-ignored-restored';
       draft?: string;
       pane?: string;
       /**
@@ -115,13 +136,13 @@ const PANE_TAIL = 2000;
  *  look. A busy session accepts the turn just as fast as an idle one — it
  *  queues the message — so this is bounded by render time, not by Claude. */
 const SUBMIT_POLL_MS = 120;
-const SUBMIT_TRIES = 8;
+export const SUBMIT_TRIES = 8;
 
 /** How long to wait for the input box to echo the typed text (~2.4 s total).
  *  A busy pane re-renders lazily; the old single 200 ms check called that a
  *  failed send. */
 const ECHO_POLL_MS = 200;
-const ECHO_TRIES = 12;
+export const ECHO_TRIES = 12;
 /** Prefix matched against the pane. Short enough to sit on the box's first
  *  visual line, so a wrapped message can't split it across a line break. */
 const ECHO_NEEDLE = 24;
@@ -244,10 +265,33 @@ async function submitted(
   sleep: (ms: number) => Promise<void>,
   still: StillInBox,
 ): Promise<boolean> {
+  return (await watchSubmit(d, id, sleep, (pane, draft) => (still(pane, draft) ? 'ours' : 'gone'))).seen === 'gone';
+}
+
+/**
+ * What one post-Enter capture says about our text. `ours`: still in the box. `gone`: it left (the turn was taken).
+ * `maybe-restored` (D-5911, the stash path only): the box could be the stashed draft Claude Code restores at
+ * submit, so a retry Enter could submit a human's text; see `submitAroundStash`.
+ */
+type SubmitSeen = 'ours' | 'gone' | 'maybe-restored';
+
+/**
+ * `submitted`'s poll, with the reading made a parameter so the stash path shares it. Answers `gone` on the first
+ * capture that reads gone; otherwise `maybe-restored` if any capture read that, else `ours`. `pane` is the last
+ * capture that held a box, `null` if none did.
+ */
+async function watchSubmit(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  classify: (pane: string, draft: string) => SubmitSeen,
+): Promise<{ seen: SubmitSeen; pane: string | null }> {
+  let maybe = false;
+  let last: string | null = null;
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
     const pane = await d.tmux.captureAnsi(id);
-    if (pane === null) return false;
+    if (pane === null) break;
     const read = draftOfMeasured(pane);
     // ABSENCE IS NOT PROOF OF DEPARTURE, and this is the one place where the
     // collapse read as the OPPOSITE of the truth: with no box in the capture
@@ -257,9 +301,12 @@ async function submitted(
     // window between the echo poll and this one. Skip the poll instead; if every
     // poll is blind the loop falls out below and the caller refuses.
     if (read.box === 'absent') continue;
-    if (!still(pane, read.draft)) return true;
+    last = pane;
+    const seen = classify(pane, read.draft);
+    if (seen === 'gone') return { seen, pane };
+    if (seen === 'maybe-restored') maybe = true;
   }
-  return false;
+  return { seen: maybe ? 'maybe-restored' : 'ours', pane: last };
 }
 
 /**
@@ -274,6 +321,42 @@ type StillInBox = (pane: string, draft: string) => boolean;
  *  marker row is still non-empty. See `submitted`. */
 const stillStartsWith = (needle: string): StillInBox => (_pane, draft) =>
   needle === '' ? draft !== '' : draft.startsWith(needle);
+
+/**
+ * D-6011. The submit while a stash this call did NOT make is held (an earlier stash-path send that could not give
+ * it back, or the human's own ctrl+s): Claude Code restores it at our submit, and a restored human draft that starts
+ * with our needle would read as our text and take the retry Enter. A held stash pops only at a submit, so while the
+ * indicator shows the box is still ours and gets the retry Enter. A box that no longer reads as ours (`still` false)
+ * is gone: our text was taken.
+ *
+ * D-6011, post-merge review of #940: a capture where `still` says ours but the indicator does not show is NOT proof
+ * our text left. The indicator is a layout reading (`stashHeld`), and one frame that does not parse (a transient
+ * redraw, a notification taking the row) would otherwise claim an unsent send delivered. It is ambiguous, the way
+ * `submitAroundStash`'s prefix match is: `maybe-restored`, no retry Enter, `ok` only when a turn is running now that
+ * was not running before the call, else `enter-ignored` with no `draft` and no `submittable` (the box may be the
+ * human's restored draft, so no rescue may be offered onto it).
+ */
+async function submitOverHeldStash(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  still: StillInBox,
+  turnWasRunning: boolean,
+): Promise<SendResult> {
+  const classify = (pane: string, draft: string): SubmitSeen =>
+    !still(pane, draft) ? 'gone' : stashHeld(pane) ? 'ours' : 'maybe-restored';
+  for (let press = 0; press < 2; press++) {
+    await d.tmux.sendKey(id, 'Enter');
+    const { seen, pane } = await watchSubmit(d, id, sleep, classify);
+    if (seen === 'gone') return { ok: true };
+    if (seen === 'maybe-restored') {
+      const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
+      if (!turnWasRunning && turnRunning(window)) return { ok: true };
+      return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
+    }
+  }
+  return enterIgnored(d, id);
+}
 
 /**
  * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
@@ -294,6 +377,11 @@ async function pressEnterAndConfirm(
   if (await submitted(d, id, sleep, still)) return { ok: true };
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, still)) return { ok: true };
+  return enterIgnored(d, id);
+}
+
+/** Two Enters pressed and our own text never left: `pressEnterAndConfirm`'s refusal, shared by the stash path. */
+async function enterIgnored(d: SendDeps, id: string): Promise<SendResult> {
   const stuck = await d.tmux.capture(id);
   const last = draftOfMeasured(await d.tmux.captureAnsi(id) ?? '');
   // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
@@ -342,7 +430,7 @@ const CLEAR_BUDGET_MS = 3000;
  */
 const CLEAR_EXTRA_PRESSES = 6;
 /**
- * Press ceiling for `replaceDraft`, where the draft's size is unknowable
+ * Press ceiling for `onDraft: 'replace'`, where the draft's size is unknowable
  * (`draftOf` returns the box's first row only) so there is no floor to compute
  * and every press has to be paid for with a look. This is a BACKSTOP: at
  * CLEAR_POLL_MS a round the budget above stops the loop first (~20 rounds), so
@@ -428,7 +516,7 @@ type ClearOutcome =
  * round reads '' with every row below it untouched, and reporting `cleared`
  * there hands the caller a box it is about to concatenate onto. Since the
  * clobber guard sees the whole box (`hasContentBelowMarker`), that shape is
- * reachable on both clear arms — and `replaceDraft` is operator-reachable from
+ * reachable on both clear arms — and `onDraft: 'replace'` is operator-reachable from
  * the PWA — so the terminator asks the same question the guard does.
  * Detecting PROGRESS from draftOf is
  * impossible for the same reason — its value is unchanged for every press but
@@ -590,8 +678,9 @@ const PASTE_COLLAPSE_FLOOR = 800;
  * What `sendPrompt` PROVED about the box before its type loop, the provenance
  * half of D-5087. `proven-empty`: the clobber guard read an
  * empty box (no marker-row text, no rows below it). `cleared-by-us`: the box
- * held something and this call's own clear emptied it (`replaceDraft`,
- * `clearMailResidue`, `ownStrandedClear`). `unproven` is the starting value, so a
+ * held something and this call's own clear emptied it (`onDraft: 'replace'`,
+ * `clearMailResidue`, `ownStrandedClear`), or this call's own `C-s` stashed it and
+ * the box was verified empty after (`onDraft: 'stash'`, D-5911). `unproven` is the starting value, so a
  * path that forgets to establish the proof submits nothing.
  */
 export type TypeProvenance = 'unproven' | 'proven-empty' | 'cleared-by-us';
@@ -794,11 +883,265 @@ const STRANDED_CLEAR = '/clear';
 const isStrandedClear = (ansiPane: string): boolean =>
   draftOf(ansiPane) === STRANDED_CLEAR && !hasContentBelowMarker(ansiPane);
 
+/** D-5911. How long to wait for the box to empty after `C-s`, and for the draft to come back after the submit
+ *  (~1.8 s each). Measured (plan Task P1b Step 0, Claude Code 2.1.303): both land before a 0.6 s capture. */
+const STASH_POLL_MS = 150;
+export const STASH_TRIES = 12;
+
+/**
+ * D-5911. Does the pane show Claude Code's HELD-STASH INDICATOR? Measured (plan Task P1b Step 0, 2.1.303,
+ * `fixtures/panes/box/stash-*.ansi`): while a stash is held, the notification row reads ` › stashed ·`, on an empty
+ * box, with new text in the box, during a running turn, after a turn ends, and at 80 columns; it goes the moment the
+ * stash pops.
+ *
+ * D-6009: only the MEASURED FORM on the NOTIFICATION ROW answers — the row directly above the rule over the LAST
+ * marker row, reading `›`, `stashed`, then ` ·` or the row's end. A false positive is NOT safe: `stashAwareStill`
+ * reads it as "the stash has not popped, so the box is ours" and presses the retry Enter, which would submit a
+ * restored human draft that starts with our needle. So a transcript, todo or spinner row that merely says
+ * "stashed" (`git stash` output, "Restore the stashed changes") never answers, and a scrollback turn never does.
+ */
+const STASH_HELD_RE = /(?:^|\s)›\s+stashed(?:\s+·|\s*$)/;
+const RULE_ROW = /^─+$/;
+function stashHeld(ansiPane: string): boolean {
+  const lines = ansiPane.split('\n').map((l) => l.replace(SGR, ''));
+  let marker = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i]!.startsWith('❯')) marker = i;
+  if (marker < 2 || !RULE_ROW.test(lines[marker - 1]!.trim())) return false;
+  return STASH_HELD_RE.test(lines[marker - 2]!);
+}
+
+/** The box is in the capture, no menu owns the keyboard, and it holds nothing: no marker-row text (a placeholder
+ *  reads empty, D-5910) and no row below it. */
+const boxEmptyAndFree = (ansiPane: string): boolean => {
+  if (hasMenu(ansiPane.replace(SGR, ''))) return false;
+  const read = draftOfMeasured(ansiPane);
+  return read.box === 'present' && read.draft === '' && !hasContentBelowMarker(ansiPane);
+};
+
+/** The box reads back exactly `text` (`boxText`, so a chip compares as the chip row it rendered as) with no menu up. */
+const boxHolds = (ansiPane: string, text: string): boolean =>
+  !hasMenu(ansiPane.replace(SGR, '')) && draftOfMeasured(ansiPane).box === 'present' && boxText(ansiPane) === text;
+
+/** What the stash path carries from the stash to the submit: the box text it stashed, and whether a turn was
+ *  already running before this call pressed anything (so a running turn afterwards proves nothing of ours). */
+interface HeldStash { text: string; turnWasRunning: boolean }
+
+/** D-6010. What one `sendPrompt` call did on the stash path, for `giveBackStash`: the draft it may have stashed
+ *  (set just before its `C-s`), and the lines it began typing after the box read empty (`null` until then). */
+interface StashCarry { held: HeldStash | null; typed: readonly string[] | null }
+
+/**
+ * D-5911, spec §2.1 steps 2 to 4. Guard on a held stash, press `C-s` once, and verify the box emptied. Called only
+ * on the draft arm, after every proof rung, with the queue slot held.
+ */
+async function stashDraft(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  pane: string,
+  turnWasRunning: boolean,
+  carry: StashCarry,
+): Promise<{ stash: HeldStash } | { refused: SendResult }> {
+  const tail = () => pane.replace(SGR, '').slice(-PANE_TAIL);
+  // Step 2. `stash()` REPLACES a held stash, so a `C-s` here would destroy the earlier text.
+  if (stashHeld(pane)) return { refused: { ok: false, error: 'stash-occupied', pane: tail() } };
+  const text = boxText(pane);
+  // D-6010: recorded BEFORE the key, so a refusal from here on (a capture that fails, a stash that lands after the
+  // budget) is handed to `giveBackStash`. No stash was held a line above, so one held afterwards is this draft.
+  carry.held = { text, turnWasRunning };
+  // Step 3.
+  await d.tmux.sendKey(id, 'C-s');
+  // Step 4. `stash()` either ran whole or did not run, so a box that never reads empty still holds the draft.
+  for (let i = 0; i < STASH_TRIES; i++) {
+    await sleep(STASH_POLL_MS);
+    const now = await d.tmux.captureAnsi(id);
+    if (now === null) return { refused: { ok: false, error: 'not-alive' } };
+    if (boxEmptyAndFree(now)) return { stash: { text, turnWasRunning } };
+  }
+  return { refused: { ok: false, error: 'stash-failed', pane: tail() } };
+}
+
+/**
+ * D-5911, spec §2.1 steps 5 and 6: Enter, with the stash-aware submit proof, then the restore check.
+ *
+ * `stashAwareStill`. Claude Code restores the stash AT SUBMIT (measured: the draft is back before a 0.6 s capture),
+ * so the plain proof (`still`, "the box still starts with our needle") would read a restored draft that starts with
+ * the needle as our unsent text, and the retry Enter would submit the human's draft. So, on a capture where `still`
+ * says ours:
+ *  - D-6008: a box that EQUALS the stashed text while the held-stash indicator shows is ours and unsent (the stash
+ *    has not popped, so it cannot be the restore: our `/clear` around a stashed `/clear` with its Enter lost). Only
+ *    that case: a prefix match while the indicator shows still takes the no-retry arm below, so a misread indicator
+ *    can never buy a retry Enter onto a restored draft;
+ *  - otherwise a box equal to the stashed text is submitted-and-restored;
+ *  - a box that is a prefix of the stashed text, or that it is a prefix of, could be the restore mid-render: no retry
+ *    Enter. `ok` with `restore-unverified` when a turn is running now that was not before, else `enter-ignored`
+ *    with no correspondence claim (the box may be the human's);
+ *  - anything else is ours, and gets the retry Enter exactly as today.
+ */
+async function submitAroundStash(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  still: StillInBox,
+  stash: HeldStash,
+): Promise<SendResult> {
+  const stashAwareStill = (pane: string, draft: string): SubmitSeen => {
+    if (!still(pane, draft)) return 'gone';
+    const now = boxText(pane);
+    if (now === stash.text) return stashHeld(pane) ? 'ours' : 'gone'; // D-6008: held, so not the restore
+
+    if (stash.text.startsWith(now) || now.startsWith(stash.text)) return 'maybe-restored';
+    return 'ours';
+  };
+  for (let press = 0; press < 2; press++) {
+    await d.tmux.sendKey(id, 'Enter');
+    const { seen, pane } = await watchSubmit(d, id, sleep, stashAwareStill);
+    if (seen === 'gone') return verifyRestore(d, id, sleep, stash);
+    if (seen === 'maybe-restored') {
+      const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
+      // D-6010: a turn started, so our text was taken; the restore check below decides, and pops a stash still
+      // held on an empty box rather than answering `restore-unverified` over it.
+      if (!stash.turnWasRunning && turnRunning(window)) return verifyRestore(d, id, sleep, stash);
+      return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
+    }
+  }
+  return enterIgnored(d, id);
+}
+
+function unverifiedRestore(id: string, why: string): SendResult {
+  console.warn(`ccrc-server: sendPrompt ${id}: the stashed draft was not seen restored (${why}); `
+    + 'the message was delivered, and ctrl+s in the session brings the draft back');
+  return { ok: true, draftRestore: 'restore-unverified' };
+}
+
+/**
+ * Spec §2.1 step 6. The box must read back the stashed text. If it does not within the budget, ONE FRESH CAPTURE is
+ * taken immediately before any key, because Claude Code's own late restore may have landed since the last read: only
+ * if it shows no menu, an empty box and the held-stash indicator (D-6009: with no stash held, a `C-s` cannot bring
+ * the draft back) is one `C-s` sent, which pops the stash, and the box read again. Otherwise nothing is pressed.
+ */
+async function verifyRestore(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  stash: HeldStash,
+): Promise<SendResult> {
+  if (await stashRestored(d, id, sleep, stash)) return { ok: true, draftRestore: 'restored' };
+  const popped = await popHeldStash(d, id, sleep, stash);
+  return popped === 'restored' ? { ok: true, draftRestore: 'restored' } : unverifiedRestore(id, popped);
+}
+
+/** The box reads back the stashed text within the budget. */
+async function stashRestored(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  stash: HeldStash,
+): Promise<boolean> {
+  for (let i = 0; i < STASH_TRIES; i++) {
+    await sleep(STASH_POLL_MS);
+    const now = await d.tmux.captureAnsi(id);
+    if (now !== null && boxHolds(now, stash.text)) return true;
+  }
+  return false;
+}
+
+/**
+ * Spec §2.1 step 6's pop, shared by `verifyRestore` and `giveBackStash` (D-6010): ONE FRESH CAPTURE immediately
+ * before any key; only if it shows no menu, an empty box and the held-stash indicator (D-6009) is one `C-s` sent, and
+ * the box read again. Answers `restored`, or why not.
+ */
+async function popHeldStash(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  stash: HeldStash,
+): Promise<string> {
+  const fresh = await d.tmux.captureAnsi(id);
+  if (fresh !== null && boxHolds(fresh, stash.text)) return 'restored';
+  if (fresh === null || !boxEmptyAndFree(fresh)) return 'the box was not empty to pop it into';
+  if (!stashHeld(fresh)) return 'no stash is held to pop'; // D-6009
+  await d.tmux.sendKey(id, 'C-s');
+  return await stashRestored(d, id, sleep, stash) ? 'restored' : 'one pop did not bring it back';
+}
+
+/** A refusal's claims about the box, withdrawn once `giveBackStash` changed what the box holds: `draft` and
+ *  `submittable` described OUR text, and the box now holds the human's. */
+function withoutBoxClaims(res: SendResult): SendResult {
+  if (res.ok) return res;
+  const { draft: _draft, submittable: _submittable, ...rest } = res;
+  return rest;
+}
+
+/**
+ * D-6010. A send on the stash path that FAILS after its `C-s` (`stash-failed` with a stash landing late, `not-alive`,
+ * `type-failed`, `verify-failed`, `box-unreadable`, `enter-ignored`, `dialog-open` or `draft-clear-failed` from the
+ * attachment clear) must not leave the human's draft in Claude Code's stash behind an empty box: ccd's box readers
+ * read an empty box as empty, and a held stash is lost with the session. So, on one fresh capture:
+ *  - no held-stash indicator: the draft is not in the stash (it came back, or the human took it), nothing to do;
+ *  - a menu, or no box in the capture: nothing can be pressed safely; a warn line says where the draft is;
+ *  - the box holds text: it is cleared only when it is provably OURS — this call typed it (`typed`) after the box
+ *    read empty under the stash, and it is a prefix of what we typed. The indicator still showing is what makes that
+ *    proof sound: the stash pops only at a submit, so a held stash means the box cannot be the restored draft. Any
+ *    other text is left alone (the box is not empty, so the draft is not stranded behind an empty one);
+ *  - then the shared pop (`popHeldStash`).
+ * The refusal's word is unchanged; its box claims are withdrawn once a key was pressed (`withoutBoxClaims`).
+ */
+async function giveBackStash(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  carry: StashCarry,
+  res: SendResult,
+): Promise<SendResult> {
+  const stash = carry.held!;
+  const strand = (why: string): SendResult => {
+    console.warn(`ccrc-server: sendPrompt ${id}: the send failed (${res.ok ? 'ok' : res.error}) with the draft still `
+      + `in Claude Code's stash (${why}); ctrl+s on an empty box in the session brings it back`);
+    return res;
+  };
+  const fresh = await d.tmux.captureAnsi(id);
+  if (fresh === null) return strand('the pane could not be read');
+  if (!stashHeld(fresh)) return res;
+  if (hasMenu(fresh.replace(SGR, ''))) return strand('a dialog is open');
+  if (draftOfMeasured(fresh).box === 'absent') return strand('the box is not in the capture');
+  const now = boxText(fresh);
+  if (now !== '' || hasContentBelowMarker(fresh)) {
+    const ours = carry.typed !== null && now !== '' && carry.typed.join('\n').startsWith(now);
+    if (!ours) return strand('the box holds text this send cannot prove its own');
+    const cleared = await clearBox(d, id, sleep,
+      { blind: 2 * visualRows(carry.typed!, paneWidth(fresh)) - 1, look: CLEAR_EXTRA_PRESSES });
+    if (cleared.state !== 'cleared') return withoutBoxClaims(strand(`our text did not clear: ${cleared.state}`));
+  }
+  // From here the box holds nothing of ours, so `enter-ignored`'s claim that it does is no longer true.
+  const gone: SendResult = !res.ok && res.error === 'enter-ignored' ? { ...res, error: 'enter-ignored-restored' } : res;
+  const popped = await popHeldStash(d, id, sleep, stash);
+  if (popped === 'restored') return withoutBoxClaims(gone);
+  strand(popped);
+  return withoutBoxClaims(gone);
+}
+
+/**
+ * D-5911. What `sendPrompt` does with a box that holds text no proof rung
+ * claims as ours (spec §2.1, §2.3). ONE option with one reader, replacing the
+ * old `replaceDraft?: boolean`:
+ *  - `refuse`, the DEFAULT, so a caller that names nothing keeps the safe
+ *    behaviour: `draft-present`, nothing pressed;
+ *  - `replace`: clear it with `C-u` and type (the operator's own send from the
+ *    PWA, when the operator asked for it);
+ *  - `stash`: save it with Claude Code's own prompt stash (`C-s`), verify the box
+ *    emptied, type and submit, then verify Claude Code restored it
+ *    (`draftRestore`). Refuses `stash-occupied` (a stash is already held) or
+ *    `stash-failed` (the box did not empty) with nothing typed onto the draft.
+ *    The lanes take this one (plan Task P1c).
+ */
+export type OnDraft = 'refuse' | 'replace' | 'stash';
+
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
  * session through the KeyedQueue. Refuses to clobber a half-typed draft
- * unless `replaceDraft`, verifies the pane echoed the text before Enter, and
- * verifies the box emptied after it.
+ * unless `onDraft` says otherwise (`OnDraft`), verifies the pane echoed the text
+ * before Enter, and verifies the box emptied after it.
  *
  * `resumeIfOwn` (bug #21 / F3 — the mail lane's own un-submitted injection
  * self-blocking its own retry, dogfood-measured on the build4 program's wave
@@ -813,9 +1156,9 @@ const isStrandedClear = (ansiPane: string): boolean =>
  * lane left behind (`isMailResidue`), clear it and proceed — never a human
  * draft, which `isMailResidue` structurally cannot match." Checked AFTER
  * `resumeIfOwn` (an own stale nudge is resumed, not cleared and retyped) and
- * BEFORE the ordinary `replaceDraft`/`draft-present` fork, so a caller that
+ * BEFORE the ordinary `onDraft: 'replace'`/`draft-present` fork, so a caller that
  * sets both gets: resume own draft > clear+type over recognized residue >
- * replace (if asked) > refuse.
+ * `onDraft` (refuse, replace or stash).
  *
  * `ownStrandedClear` (Task 407, operator ruling): a caller that sets this is
  * stating "I HAVE PROOF this system typed a `/clear` into this box and the
@@ -859,11 +1202,12 @@ export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
+  opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean;
           clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean;
           refuseIfTurnRunning?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
+  const onDraft: OnDraft = opts.onDraft ?? 'refuse';
   // Computed up front, from `text`/`attachments` alone — independent of the
   // pane, and needed BEFORE the draft check below now that `resumeIfOwn`
   // must compare against it there too, not only in the echo-verification
@@ -877,7 +1221,8 @@ export function sendPrompt(
   // Alt+Enter is newline inside the Claude Code input box.
   const parts = composed.split('\n');
   const needle = (parts.find((p) => p.trim().length > 0) ?? '').trim().slice(0, ECHO_NEEDLE);
-  return d.queue.run(id, async (): Promise<SendResult> => {
+  // D-6010: the body is one attempt; a failure after its `C-s` is handed to `giveBackStash` before the slot frees.
+  const attempt = async (carry: StashCarry): Promise<SendResult> => {
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
@@ -938,6 +1283,18 @@ export function sendPrompt(
     // set it: this guard reading an empty box, or one of this call's own clears
     // returning `cleared`.
     let provenance: TypeProvenance = 'unproven';
+    // D-5911: `carry.held` is set only when this call stashed a draft; every submit below then goes through
+    // `submitAroundStash`.
+    // D-6011: a stash already held when this call began (not ours) is restored by Claude Code at OUR submit, so
+    // every submit that does not go around our own stash takes the indicator-gated submit (`submitOverHeldStash`).
+    const heldBefore = stashHeld(pane);
+    const turnBefore = turnRunning(armWindow);
+    const submit = (still: StillInBox): Promise<SendResult> =>
+      carry.held !== null
+        ? submitAroundStash(d, id, sleep, still, carry.held)
+        : heldBefore
+          ? submitOverHeldStash(d, id, sleep, still, turnBefore)
+          : pressEnterAndConfirm(d, id, sleep, still);
     if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
@@ -972,14 +1329,15 @@ export function sendPrompt(
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
       if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
-        return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
+        // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
+        return submit(stillStartsWith(needle));
       }
       // `clearMailResidue`: the box holds MACHINE residue this system's OLD
       // typed-envelope lane left behind (a paste-chip collapse or a stranded
       // ```ccrc-mail fence — `isMailResidue`'s own docstring), and the caller
       // has said it is safe to clear it. Checked before the ordinary
-      // `replaceDraft`/`draft-present` fork so a residue-aware caller need not
-      // also pass `replaceDraft` — clearing recognized machine debris is not
+      // `onDraft: 'replace'`/`draft-present` fork so a residue-aware caller need not
+      // also pass `onDraft: 'replace'` — clearing recognized machine debris is not
       // the same permission as clearing whatever a human is mid-typing.
       //
       // `ownStrandedClear` rides the SAME clear, deliberately: the act is
@@ -1001,7 +1359,14 @@ export function sendPrompt(
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
         provenance = 'cleared-by-us';
-      } else if (!opts.replaceDraft) {
+      } else if (onDraft === 'stash') {
+        // D-5911, spec §2.1: after every proof rung above, so our own text is still resumed or cleared, and after
+        // the auto-continue hold, `turn-running` and the menu check at the top, so `C-s` is never pressed on an
+        // armed pane, a running turn the caller refuses, or a menu.
+        const stashed = await stashDraft(d, id, sleep, pane, turnRunning(armWindow), carry);
+        if ('refused' in stashed) return stashed.refused;
+        provenance = 'cleared-by-us';
+      } else if (onDraft === 'refuse') {
         // `boxText`, not `draft`: the operator is being shown what this refusal
         // is protecting, and every row of it is at stake — the conflict sheet
         // renders this and builds "Append anyway" out of it. On a blank marker
@@ -1039,6 +1404,7 @@ export function sendPrompt(
     // clear below is NOT run on this arm: with `--` in place, what is left to
     // make tmux refuse a literal is the session or the link failing (inferred,
     // not measured), and a clear would meet the same failure.
+    if (carry.held !== null) carry.typed = parts;   // D-6010: from here on the box holds our text over the stash
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
       if (!(await d.tmux.sendLiteral(id, parts[i]!))) return { ok: false, error: 'type-failed' };
@@ -1104,7 +1470,7 @@ export function sendPrompt(
         // into `not-alive`. Only a pane that came back WITHOUT a box lands here.
         if (lastBox !== null && lastBox.box === 'absent') return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
         // A failed send must not stand a bare clip path in the live box — but
-        // C-u can fail just like the replaceDraft clear above can, so clearBox
+        // C-u can fail just like the `onDraft: 'replace'` clear above can, so clearBox
         // re-reads and reports what's left rather than assuming it worked.
         //
         // This used to press `parts.length` times, which under-clears every
@@ -1122,7 +1488,7 @@ export function sendPrompt(
         const floor = 2 * visualRows(parts, paneWidth(pane)) - 1;
         const cleared = await clearBox(d, id, sleep, { blind: floor, look: CLEAR_EXTRA_PRESSES });
         // A pane that died mid-clear is `not-alive`, the same as at the
-        // replaceDraft site: `verify-failed` with no residue is byte-identical
+        // `onDraft: 'replace'` site: `verify-failed` with no residue is byte-identical
         // to a clean clear, so reporting it that way told the caller "cleared"
         // when the truth is "unknown, and the session is gone".
         if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
@@ -1200,7 +1566,7 @@ export function sendPrompt(
         // other shape, chips that fail a guard included, falls through to the
         // refusal below exactly as before.
         const ownChip = ownPasteChip(lastPane, parts, provenance);
-        if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, stillStartsWith(ownChip.slice(0, ECHO_NEEDLE)));
+        if (ownChip !== null) return submit(stillStartsWith(ownChip.slice(0, ECHO_NEEDLE)));
         // D-5088: the box is the RENDERING of what we typed, read
         // whole: a row-capped box whose marker row is a later line (or a blank
         // one), or long lines drawn as chips among our own rows. Proven by
@@ -1208,7 +1574,7 @@ export function sendPrompt(
         // (the last characters in view) left the box, since the marker row of a
         // row-capped box is no part of the message we can name in advance.
         const ownTail = ownRenderedBox(lastPane, parts, provenance);
-        if (ownTail !== null) return pressEnterAndConfirm(d, id, sleep, stillContains(ownTail));
+        if (ownTail !== null) return submit(stillContains(ownTail));
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
@@ -1283,7 +1649,12 @@ export function sendPrompt(
     // it landed. (`pressEnterAndConfirm` — shared with the `resumeIfOwn`
     // branch above, which presses Enter on text already sitting in the box
     // instead of reaching this point at all.)
-    return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
+    return submit(stillStartsWith(needle));
+  };
+  return d.queue.run(id, async (): Promise<SendResult> => {
+    const carry: StashCarry = { held: null, typed: null };
+    const res = await attempt(carry);
+    return res.ok || carry.held === null ? res : giveBackStash(d, id, sleep, carry, res);
   });
 }
 
@@ -1407,7 +1778,7 @@ export function readBoxText(d: SendDeps, id: string): Promise<string | null> {
  * `expect` is the CORRESPONDENCE GATE, and it is not optional. Enter submits
  * whatever the box holds, which is not necessarily what the caller thinks it
  * holds: between the failed send and the tap, a second send can clear the box
- * and type its own message (`sendPrompt`'s `replaceDraft` fires `C-u` and
+ * and type its own message (`sendPrompt`'s `onDraft: 'replace'` fires `C-u` and
  * retypes), or a second `enter-ignored` can leave a DIFFERENT message sitting
  * there. Pressing Enter then sends someone else's text while the caller
  * attributes the outcome — success included — to the message it was rescuing.
@@ -1464,8 +1835,14 @@ export function submitEnter(
         ? { ok: false, error: 'blank-first-row' as const }
         : { ok: false, error: 'nothing-to-submit' as const };
     }
-    // A box holding something, but not what the caller was shown.
-    if (draft !== expect.trim()) return { ok: false, error: 'box-mismatch' as const };
+    // A box holding something, but not what the caller was shown. What it was shown is the 409's `draft`, which
+    // left the server masked (D-5995): a box whose reading masks to the claim holds what the caller was shown. That
+    // 409 was masked as a whole answer under one exact-bytes budget; a reading whose two masked forms differ once that
+    // budget is spent is refused here as a mismatch, the safe refusal.
+    const claim = expect.trim();
+    if (draft !== claim && (d.maskDraft === undefined || d.maskDraft(draft).trim() !== claim)) {
+      return { ok: false, error: 'box-mismatch' as const };
+    }
 
     await d.tmux.sendKey(id, 'Enter');
     // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is

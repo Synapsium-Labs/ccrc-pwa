@@ -285,6 +285,46 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** one parser wrapper, one importer; the version is exact; zero production bytes.
 
+### Task C0m: ccd's function-to-context manifest (D-6054; ARCH-34 (#536); spec §2.1, §5.13) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. It sits before C0g in this file only to stay line-disjoint from the PRs that edited this plan while it was written (#927 and #934, merged since; #931 and #943, open). **Routing:** band 1 for the bulk labelling (prefix rules, then a read of every rule's leftovers); the boundary rows are judgment, so the PR body tables them for the orchestrator's review. **Lane:** tests and data. **Zero production bytes:** `ccd/ccd` is byte-identical, so the launcher's SHA-256 is unchanged; the one new file under `ccd/` is data that no installer reads (D-6055). **Needs:** nothing; no operator ruling (ARCH-34 names none). **Gates:** ARCH-02a (Task C0h, #874) merged; it is. K2 and K18 (W5) read the manifest, so it lands before W5.
+
+**Files:**
+- Create `ccd/contexts.tsv`: a header naming the contexts, then one `<function><TAB><context>` row per function `ccd/ccd` defines, in definition order. The contexts are the 08-10 spec's C1 to C9 and K (kernels and platform, no aggregate). C6 and C8 have no ccd function today: ccd's operator-facing banner is `notify.sh`'s, and ccd holds no passkey or box-token code.
+- Modify `server/test/consolidationCensus.ts`: five named queries, inserted after `markerDefinitions` (line-disjoint from #927's tail append). `ccdFunctionDefinitions` lists every `name() {` at column 0, `ccdContextRows` lists the manifest's rows, `ccdCallGraph` gives one edge per (caller, callee) pair, and `ccdCrossContextCalls` gives the edges whose ends sit in two contexts, where a call into K does not count (a call out of K does), and `ccdHeredocBraces` lists any column-0 `}` inside a heredoc body in a function, plus any heredoc that never closes. The launcher's path comes from `ccdWsHelpers.ts`'s `CCD` (single-definition's "one path to the ccd script"). The known width is written beside them: a region runs to the first column-0 `}`, or to the next definition for a one-liner; comment lines and trailing ` # …` are cut; a `$name`/`${name` expansion and a `name=` assignment are not calls; a name inside a quoted message counts; a column-0 `}` inside a heredoc would end a region early, which is why the CONTROL below holds `ccdHeredocBraces` empty.
+- Create `server/test/ccd-contexts.test.ts`. Its two CONTROLs check that no bash definition uses a shape the census does not read, and that no heredoc hides a column-0 `}`. The coverage rows check that every function has exactly one row, every row names a defined function in a defined context, and the rows run in definition order. A fixture tree holds the call-graph rules. A pin lists the 26 K rows, so relabelling a function K (which lowers the count without removing a call) is a visible diff. The ratchet pins the cross-context count at exactly `BASELINE`: a rise is red with the count by context pair, and a fall is red until `BASELINE` is lowered in the same commit, so a relabel between two non-K contexts that lowers the count without removing a call is a visible diff. The fixture's functions are named `f*`, with no leading underscore, so #943's harness-integrity scan (which reads a test's `_x() {` text as an override of a shipped function) does not read them.
+
+- [ ] **Step 0: Re-ground.** `gh pr view 874 --json state` (merged). Count `name() {` lines in `ccd/ccd` and check for other definition shapes; read the context sections of the 08-10 spec and the consolidation spec's §2.2 and §5.13. Run `gh pr list --state open` with each PR's files: #927 holds this plan's lines after C0i and the tails of `consolidationCensus.ts` and `consolidation-census.test.ts`, #931 holds the lines before C0i and after C0h's D-block and names its task C0k, and #934 holds the lines before C0h and above C0h's D-block and names its task C0l, so this task is C0m, inserts its section above C0g's and its D-block above the coordinator's departure, and does not edit `consolidation-census.test.ts`.
+- [ ] **Step 1: Red.** Run the new suite and census queries on a `git archive` of `origin/main`. With no manifest, coverage lists all 646 functions as unmapped, and the order row, the K pin and the listing row are red.
+- [ ] **Step 2: Green.** Write the manifest. The suite is green, with 646 rows, 1,984 edges and 521 cross-context references (208 more go into K and are not counted).
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `_ws_reap_tail`'s row deleted | coverage | red, naming `_ws_reap_tail` |
+  | a row for `_no_such_fn` | coverage | red, naming it |
+  | `_reg_get` mapped twice (C1 and C4) | coverage | red, naming it |
+  | `cmd_version` mapped to `C10` | coverage | red, naming the row |
+  | `ccd/ccd` gains `_new_fn() { :; }` and no row | coverage | red, naming `_new_fn` |
+  | `ccd/ccd` gains `function _kw_fn { :; }` | CONTROL | red, naming the line |
+  | `cmd_version` gains a `_reg_get` call | ratchet | red: 522 above 521 |
+  | the region ignores the column-0 `}` | fixture; ratchet | red: TOP's `fc` joins `fa`; 559 |
+  | comment lines are kept | fixture; ratchet | red: the comment's `fb` and `fc` become calls; 885 |
+  | calls into K counted | fixture; ratchet; listing | red: 729, and 208 edges into K listed |
+  | a `$name` expansion counted as a call | fixture | red: `fa>fc@6` |
+  | a `name=` assignment counted as a call | fixture | red: `fa>fb@5` |
+  | `cmd_version` gains a heredoc holding a column-0 `}`, then a `_reg_get` call | CONTROL (heredoc) | red, naming the line; with that CONTROL off, all green at 521 (the blind spot) |
+  | the `<<-` tab strip dropped | fixture | red: `fe`'s heredoc never closes |
+  | a heredoc that never closes not reported | fixture | red: `<<JSON never closes` missing |
+  | calls out of K skipped | fixture | red: `fk (K) -> fa (C1)` missing |
+  | `_reg_get` relabelled K | K pin | red: 27 K rows |
+  | `_reg_get` relabelled C1 to C4 (the count falls, no call removed) | ratchet | red: below 521, lower BASELINE |
+  | D-6054 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc -p server/test/tsconfig.tests.json`. Then, one at a time with `--maxWorkers=2`, the new suite, `consolidation-census`, `citations`, and the suites that read every file under `ccd/`: `ccd-reg-id-ok`, `continued-in-parity`, `ccd-child-tmproot-witness`, `install-census` and `build-release`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`. `git diff origin/main -- ccd/ccd` prints nothing.
+
+**Exit (GATES):** every ccd function maps to exactly one context, and a new function without a row is red. The cross-context count is pinned at its landing-day value, 521; it may only shrink, and each fall lowers the pin in its own commit. `ccd/ccd` is byte-identical. **Not in this task:** the registry field table (ARCH-40's pin against this manifest), splitting `ccd/ccd` (spec §5.13: a later operator decision), and moving any function. A row that later proves wrong moves with a reason in its PR.
+
 ### Task C0g: symbol-keyed source slices for W1a's files (D-5854; ARCH-06 (#554), the W1a slice) — GATED: after C0f
 
 **Routing:** band 2. **Lane:** tests only. **Needs:** C0f.
@@ -301,6 +341,90 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 - [ ] **Step 3: Verify** each modified suite alone, then `single-definition.test.ts`.
 
 **Exit (GATES):** the literal source pins over W1a's moved regions: the Step 0 count → 0; the ratchet predicate pinned for W1a's files; zero production bytes. **Not in this slice:** the other files' literal pins (later slices, ahead of the wave that moves their code).
+
+### Task C0l: the ring rules, stage 1 — L4-only fastify, `shared/*.ts` imports only `./`, no builtin in a `.mjs` the PWA reaches (D-6045; ARCH-04 (#545), stage 1) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 2: it writes the first repo-wide ring rules, and which per-file pins they make redundant is a judgment). **Lane:** tests only; zero production bytes. **Needs:** nothing; no operator ruling (ARCH-04 says stage 1 is standalone). **Gates:** ARCH-00 (#915, `scan/parse.ts`), ARCH-02a (#874, the ring rules and the `.mjs` carve-out) and ARCH-03 (#894, #919) merged; all are. #826 edits `lifecycle.test.ts` (≈:1079, ≈:1278), #737 and #929 edit `single-definition.test.ts` (≈:5237; ≈:7538, ≈:7751), and #929 and #931 edit `scan/parse.ts` (≈:10, ≈:51, ≈:85, ≈:98, ≈:137, ≈:181) and `scan-parse.test.ts` (≈:6, ≈:96); this task's hunks in those files are line-disjoint from theirs, and its tree merges cleanly with each (#895, once listed here, merged as c2471e1bd). #927 holds this plan's lines after C0i's exit and around C0i's issued block, and #931 holds the lines after C0h's exit and after C0h's issued block; this section and D-6045's block sit before C0h's section and C0h's issued block, clear of both.
+
+**Files:**
+- Create `server/test/rings/walkSrc.ts`: the rules' one walk, `walkSrc({ roots, min, flat?, match? })`, which throws below its floor, and `REPO`/`rel`.
+- Create `server/test/rings/exemptions.ts`: the `Entry` shape (`reason`, one line; `since`, a `YYYY-MM-DD` day not in the future) every data file uses, and `malformedEntries`.
+- Create one rule per test file, each with its data file beside it:
+  - `rings/fastify-l4.test.ts` + `fastify-l4.data.ts`: the `server/src`, `agent/src`, `pwa/src` and `ui/src` files that import `fastify` or `@fastify/*`, or bind a `Fastify*` name from any module, in any form (type import, per-name `type`, `export … from`, dynamic import, type query), are EXACTLY the allowlist, generated from the tree on the day the rule lands (11 files, all L4 by the ring rules).
+  - `rings/shared-imports.test.ts` + `shared-imports.data.ts`: every edge of every `shared/*.ts` file, a type-only one included, names a `./` sibling. No exemption. The loads `scan/parse.ts` reports no edge for (its KNOWN WIDTH), a `require(…)` call and an `import(…)` whose argument is not a string literal, are refused anywhere in a `shared/*.ts` file's comment-stripped text, with a CONTROL. A `./` sibling that is a `shared/*.mjs` importing a builtin is left to `mjs-node`'s reach and carve-out.
+  - `rings/mjs-node.test.ts` + `mjs-node.data.ts`: a `.mjs` file the PWA's bundle reaches imports no Node builtin (prefixed or bare), and a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`node:crypto`, `node:fs`, `node:url`; the data is pinned to the 08-10 spec's sentence). Reachability follows Vite's resolution, `.mjs` before `.ts` for an extension-less specifier, from every `pwa/src` source over every runtime edge, through `@/` and `@ccrc/ui` into `ui/src`.
+- Modify `server/test/scan/parse.ts`: a type query (`import('x').T`, `typeof import('x')`) is an edge of a new kind, `type-query`, always type-only. Additive: no consumer's verdict changes. `scan-parse.test.ts` gains its row.
+- Delete the per-file L0 pins stage 1 makes redundant: a pin is redundant when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring. Retired: `single-definition`'s "shared/ask-menu.ts is L0: it imports nothing"; `update-semver`'s import row (its describe keeps the parse row); `claude-version`'s "shared/claudeVersion.ts is L0 and imports nothing"; `lifecycle`'s "is L0: imports nothing at all"; `providers`'s two "imports nothing at all" rows (`providers.ts`, `base-url.ts`); `routing-ladder`'s whole-source `node:` belt. **Kept, stricter for a reason of their own:** `docs-shared` (host globals), `base-url.test.ts` (the decision may not learn the table), `pool-rule-core` (type imports only, no clock), `peers-claims-l0` and `collect-lane-l0` (`shared/api.ts`'s exact type-only lines), `token-shared`, `routing-ladder`'s and `providers`'s exact import lists (an addition must be stated).
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: the "Import-direction test" and "No `reply` below L4" status rows name the stage 1 rules.
+- **Not in this task:** stages 2 to 4 (outward edges, the PWA rules, one ring and one context per file), the 60-day re-date meta-rule, and C0a's waiver classifier (D-6046). No `single-definition` row is added.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`, list with `scan/parse.ts` every `server/src`, `pwa/src`, `agent/src`, `shared` and `ui/src` edge to `fastify`, `@fastify/*` or a `Fastify*` name (11 files, all `server/src`), every non-`./` edge in `shared/*.ts` (none) and every builtin in `shared/*.mjs` (`mark.mjs`: the three; `modelenv.mjs`: `node:fs`). Grep the suites for per-file L0 pins over `shared/*` and read each. `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** On a `git archive` of `origin/main` with the new test files copied in: `scan-parse.test.ts`'s type-query row is red (no such edge), and `fastify-l4`'s CONTROL is red on `import('fastify').FastifyReply` and `typeof import('fastify')`. Every rule is green on the tree: stage 1 stops new debt, and the tree has none.
+- [ ] **Step 2: Green.** The `parse.ts` edge kind, the kit, the three rules and their data, the pin deletions, the status rows.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `import type { FastifyReply } from 'fastify'` in `coord/close.ts` (acceptance) | fastify-l4 | red, listing `server/src/coord/close.ts` |
+  | `import fs from 'node:fs'` in `shared/lifecycle.ts` (acceptance) | shared-imports | red, listing `shared/lifecycle.ts` |
+  | `coord/close.ts` names `import('fastify').FastifyReply` in a parameter type | fastify-l4 | red, listing `server/src/coord/close.ts` |
+  | `server/src/refuse.ts` dropped from the allowlist | fastify-l4 | red, listing `server/src/refuse.ts` |
+  | an allowlist entry for `server/src/coord/close.ts`, which imports no fastify | fastify-l4 | red: stale entry |
+  | an allowlist entry's reason blanked | fastify-l4 | red, naming the entry |
+  | `import type { Deps } from '../server/src/deps.js'` in `shared/api.ts` | shared-imports | red: a type-only edge counts |
+  | `import { readFileSync } from 'node:fs'` in `shared/models.mjs` (bundled through `../../../shared/models`) | mjs-node | red, listing `shared/models.mjs` |
+  | `import path from 'node:path'` in `shared/mark.mjs` | mjs-node | red: beyond the carve-out |
+  | a `pwa/src` file imports `../../../shared/mark.mjs` | mjs-node | red: `mark.mjs`'s three builtins reach the bundle |
+  | the resolver tries `.ts` before `.mjs` | mjs-node | red: the CONTROL resolves `shared/models.ts`, and `base-url.mjs` leaves the reach |
+  | `node:path` added to the carve-out data | mjs-node | red: the data is not the spec sentence |
+  | `parse.ts` loses the type-query branch | scan-parse, fastify-l4 | red: the parse row and the CONTROL |
+  | a walk's floor above its count | each rule | red: `walkSrc` throws "below the floor" |
+  | `const fs = require('node:fs');` in `shared/lifecycle.ts` | shared-imports | red, listing `shared/lifecycle.ts` and `require(` |
+  | `export const load = (s: string) => import(s);` in `shared/semver.ts` | shared-imports | red, listing `shared/semver.ts` and `import(` |
+  | `import type { FastifyReply } from 'fastify'` in an `agent/src` file | fastify-l4 | red, listing the file |
+
+- [ ] **Step 4: Verify.** From `server/`, one at a time with `--maxWorkers=2`: the three rules, `scan-parse`, `update-semver`, `claude-version`, `lifecycle`, `providers`, `routing-ladder`, `single-definition`; `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`; then, after `git fetch -q origin main`, `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
+
+**Exit (GATES):** the three stage 1 rules hold the tree with no exemption and an 11-file fastify allowlist; both acceptance mutants are red; seven per-file pins are retired with their reasons; zero production bytes.
+
+### Task C0n: the ring rules, stage 2 — no outward runtime edge in `server/src`, no host import below L4, and exemption sets that cannot go stale (D-6045, extended; ARCH-04 (#545), stage 2) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 2: the classifier decides every server file's ring, and which edges are debt is a judgment). **Lane:** tests and docs only; zero production bytes. **Needs:** nothing; no operator ruling. **Gates:** stage 1 (Task C0l, #934) merged, and with it ARCH-00 (#915), ARCH-02a (#874) and ARCH-03 (#894, #919); all are. #931 holds `scan/parse.ts` (≈:12, ≈:85), `scan-parse.test.ts` and this plan's lines after C0h's exit and after C0h's issued block; #933 holds this plan's lines after C0f's exit and after D-5854. This section sits after C0l's exit and D-6045's extension inside C0l's issued block, and the `parse.ts` hunks sit in its interface's `names` member and its import and export branches (≈:30, ≈:190–205), clear of all of them. No number is issued: the task extends D-6045.
+
+**Files:**
+- Modify `server/test/scan/parse.ts`: an `import` or `export … from` edge carries `typeNames`, the names bound with a per-name `type`. Additive: no consumer's verdict changes. `scan-parse.test.ts` gains its row.
+- Create `server/test/rings/ring.ts`: `serverRing(file)`, the 08-10 spec's server ring rules in order (L5 `index.ts`; L4 fastify in any form, or a scheduler or poller; L3 a runtime `node:*` import other than `node:path`, `node:url`, `node:util` and `node:crypto`, a server I/O package, or a deadline timer; L2 types only; L1 the rest), with the header declaration and the docs ring pin's role table moving a file outward only. A timer's handle on an object field or a module-scope name is a scheduler; a local, or no kept handle, is a deadline. `outwardRuntimeEdges` lists one file's runtime edges to a file in an outer ring; an edge whose every name is a type is not runtime.
+- Create `rings/outward-edges.test.ts` + `outward-edges.data.ts`: the `server/src` outward runtime edges are EXACTLY the exemptions, keyed `<from> -> <to>`, generated by the scanner on the day the rule lands (16 file pairs: 11 from L1, 5 from L3). The 16 are not #545's audit's 27 runtime and 104 type imports, and pairing is not the cause: each pair is one import line today, and all outward edges total 117 (16 runtime, 101 type-only) against the audit's 131. The audit's ring map and its runtime-versus-type test are not recorded, so the gap is unreconciled; the rule holds the scanner's count, from ARCH-02a's written rules. An exemption is a file pair, so a new import line or a new name inside an exempt pair is not red until ARCH-05 drains the pair. CONTROLs: each ring clause, the planted acceptance import, the walk floor, and `DOCS_RING_ROLES` equal to single-definition's.
+- Move `server/test/inner-ring-host-imports.test.ts` to `rings/host-imports.test.ts` (+ `host-imports.data.ts`, empty): its hand list of L4 importers and its regex scan give way to `ring.ts` and `scan/parse.ts`, so an importer is allowed exactly when its ring is L4 or L5. Its `Deps` rows stay, `deps.ts` read as L2 by the classifier.
+- Create `rings/exemption-age.test.ts` + `exemption-age.data.ts`: one stamp per may-only-shrink exemption set (`size`, held exactly; `reason`; `since`), and a non-empty set whose stamp is more than 60 days old is red. It covers every `*_EXEMPTIONS` set under `rings/` (a set without a stamp is red) and deviation-refs' `GRANDFATHERED`, measured from its literal. `GRANDFATHERED` has been unchanged since 2026-08-24, so a stamp of that day would turn main red on 2026-10-24 by the calendar alone; it is re-reviewed and re-dated 2026-10-20 instead (deviation-refs still pins every member as colliding), and the rule next asks on 2026-12-20.
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: the "Import-direction test" status row names the stage 2 rules.
+- **Not in this task:** the PWA rules (stage 3), one ring and one context per file (stage 4, with C0a's waiver list, D-6046), draining any edge (ARCH-05), and the outward type-only edges, which move nothing.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`, compute every `server/src` file's ring with the classifier and check it against ARCH-02a's recorded facts (the three deadline-timer files, the thirteen header declarations); list the outward runtime and type-only edges. `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** On a `git archive` of `origin/main` with the new test files copied in: `scan-parse`'s per-name `type` row is red (no `typeNames`), and `outward-edges`'s CONTROLs are red on `import { type ReadStream } from 'node:fs'` and `import { type Db } from './db.js'`. Every rule's exact set is green on the tree.
+- [ ] **Step 2: Green.** The `parse.ts` field, the classifier, the three rule files and their data, the move, the status row.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | a new `coord/planted.ts`: `import { tx } from './db.js'` (acceptance) | outward-edges | red, listing `server/src/coord/planted.ts -> server/src/coord/db.ts` |
+  | an entry for `server/src/coord/close.ts -> server/src/coord/db.ts`, which does not occur (acceptance) | outward-edges | red: stale entry |
+  | the `coord/store.ts -> coord/db.ts` entry deleted | outward-edges | red, listing the edge |
+  | an exemption's reason blanked | outward-edges | red, naming the entry |
+  | `typeOnlyEdge` ignores per-name `type` | outward-edges | red: the CONTROLs |
+  | the deadline-timer clause dropped from L3 | outward-edges | red: the CONTROL, and `coord/dispatch.ts -> inject/send.ts` goes stale |
+  | the scheduler clause dropped from L4 | host-imports | red: `sessionws.ts` imports a host below L4 |
+  | header declarations ignored | host-imports | red: `hibernateSweep.ts` and `stopDoneSweep.ts` import a host below L4 |
+  | `import type { Deps } from '../server.js'` in `coord/close.ts` | host-imports | red, listing `server/src/coord/close.ts` |
+  | `ring.ts`'s copy of the docs role table puts `ccdsource.ts` in L4 | outward-edges | red: the copy is not single-definition's |
+  | `GRANDFATHERED`'s stamp dated 61 days back | exemption-age | red: unchanged for more than 60 days |
+  | one member deleted from `GRANDFATHERED` | exemption-age | red: the stamp's size |
+  | a new `EXTRA_EXEMPTIONS` export in a `rings/*.data.ts` file | exemption-age | red: a set without a stamp |
+  | a walk's floor above its count | each rule | red: `walkSrc` throws "below the floor" |
+
+- [ ] **Step 4: Verify.** From `server/`, one at a time with `--maxWorkers=2`: the six rule files under `rings/`, `scan-parse`, `deviation-refs`; `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`; then, after `git fetch -q origin main`, `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** the outward runtime edges equal a 16-entry exemption set the scanner generated; no host import below L4, by the classifier; every exemption set stamped, `GRANDFATHERED` included; both acceptance mutants red; zero production bytes.
 
 ### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
 
@@ -339,6 +463,47 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
 
+### Task C0k: wire totality — every exported literal union in `shared/*.ts` has a derived runtime list (D-6048; ARCH-12 (#552)) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. ARCH-12 is a consolidation prerequisite: a wire word with no runtime list is a silent wire change when it gains a member. **Routing:** native (band 1 to 2: the scan is mechanical, the exemption reasons are judgment). **Lane:** a test-scanner fact in `server/test/scan/parse.ts`, three additive lists in `shared/api.ts` and one PWA reader switched to one of them, with no behaviour change (D-6049). **Needs:** nothing; no operator ruling. **Gates:** ARCH-00 (Task C0f, #915) merged; it is. #911 holds `shared/api.ts` (≈:3624, ≈:4156) and #927 holds this plan (after Task C0i and after C0i's issued block); this task's hunks are line-disjoint from both.
+
+**Files:**
+- Modify `server/test/scan/parse.ts`: three syntax facts returned by `wireFacts(p)`, a walk of its own so `ParsedFile` and the shared walk stay as they are. `recordTrueKeys` holds the bare `X` of each `Record<X, true>` (or `Readonly<Record<X, true>>`) that types a non-`declare` variable or a `satisfies`. `guardedTypes` holds the bare `X` of each `v is X` predicate on a function, method or arrow with a body, never `asserts`. `comparedLiterals` holds each string literal that is an equality operand or a `case` label.
+- Modify `server/test/scan-parse.test.ts`: one appended `describe` pins the three facts on a fixture, including what does not count (a `Record<X, string>`, a type alias of the map, a parameter's type, a generic predicate).
+- Create `server/test/rings/wire-totality.test.ts`: every top-level `export type X = …` of two or more literals in `shared/*.ts` has a sibling `Record<X, true>` map or an `is X` guard in the same file, unless it is in `EXEMPT`. A stale entry is red. The same suite pins the three new lists against the parsed unions, `isPoolsEnforcement` over members and non-members, and the fleet store's import and every quoted member word in it (compared or not).
+- Create `server/test/rings/wire-totality.data.ts`: `EXEMPT` as `WIRE_TOTALITY_EXEMPTIONS: EntrySet` in D-6045's shape (keyed `file:Name`, each entry a one-line reason and a `since` date), pinned at its size; the suite checks `malformedEntries` over it.
+- Modify `server/test/rings/exemption-age.data.ts`: one stamp for `WIRE_TOTALITY_EXEMPTIONS` (size 28), so the 60-day staleness rule sees this debt.
+- Modify `shared/api.ts`: `SESSION_STATUS_MAP`/`SESSION_STATUSES`, `SESSION_BUCKET_MAP`/`SESSION_BUCKETS`, and `POOLS_ENFORCEMENT_MAP`/`POOLS_ENFORCEMENTS` with `isPoolsEnforcement`, in `SESSION_ROLE_MAP`'s idiom, appended at the end of the file so that no line other files cite by number moves.
+- Modify `pwa/src/stores/fleet.ts`: the `pools` frame gate reads `isPoolsEnforcement` for `enforcement` and `accountPools`, in place of six hand comparisons. It accepts and rejects exactly the same values.
+
+- [ ] **Step 0: Re-ground.** Re-check the gate with `gh pr view 915`. Measure the listless exported literal unions in `shared/*.ts` with the new facts: 31 of 88 (the issue's "14 of 65" counted `api.ts` alone, at an older sha). `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** Run the new suite with the parser facts in place and `shared/`/`pwa/` untouched. Four rows are red: the totality row names `SessionStatus`, `SessionBucket` and `PoolsEnforcement`, the list and guard rows find no export, and the fleet-store row lists the six compared members.
+- [ ] **Step 2: Green.** Add the lists and switch the fleet store. Both server `tsc` projects and the PWA's are clean. The new suite, `scan-parse` and the PWA's `stores` suite pass.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | a new `export type Fresh = 'a' \| 'b'` in `shared/api.ts`, no list | `wire-totality` | red, naming `api.ts ≈:N Fresh` |
+  | `SESSION_BUCKET_MAP` loses its `Record<SessionBucket, true>` annotation | `wire-totality` | red: `SessionBucket` listless |
+  | `SESSION_STATUS_MAP` typed `Record<SessionStatus, boolean>` | `wire-totality` | red: `SessionStatus` listless (a `boolean` map is not total) |
+  | an exemption's union gains a map, entry kept | `wire-totality` | red: the stale-entry row names it |
+  | a new listless union with an exemption for it | `wire-totality` | red: the pin at 28 (29) |
+  | the fleet store spells `=== 'unknown'` again | `wire-totality` | red: the compared-literals row |
+  | the fleet store holds a hand array `['enforced', 'unavailable', 'unknown']` | `wire-totality` | red: the quoted-member row |
+  | `WIRE_TOTALITY_EXEMPTIONS` loses its stamp | `exemption-age` | red: a set with no stamp |
+  | an exemption entry dated `2026-13-01` | `wire-totality` | red: `malformedEntries` |
+  | an entry added, stamp left at 28 | `exemption-age` | red: size 29, stamp 28 |
+  | the stamp dated 80 days back | `exemption-age` | red: stale |
+  | `isPoolsEnforcement` accepts any string | `wire-totality` | red: `'Enforced'` passes |
+  | the fleet store's `accountPools` gate loses its `undefined` allowance | PWA `stores` | red: five `pools` rows, an older server's frame dropped |
+  | the scanner's map fact also counts a parameter's type | `scan-parse` | red: `Tone` read from `take`'s parameter |
+  | the guard fact drops arrow predicates | `scan-parse` | red: `Kind` missing |
+  | D-6048 defined a second time, with another subject, in another plan | `deviation-refs` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc` for `server/` (both projects) and `pwa/`. Then, one at a time with `--maxWorkers=2`: `rings/wire-totality`, `scan-parse` and the PWA's `stores`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** a new exported literal union in `shared/*.ts` with no list is red. The exemption list goes from 31 (merge day) to 28 and is pinned. `pwa/src/stores/fleet.ts` compares against no `PoolsEnforcement` member. **Not in this task:** the 28 remaining lists, the hand arrays that could derive from them (`PROBE_KINDS`, the PWA's bucket orders), and readers in `shared/api.ts` that cast `status`/`bucket` after their own checks.
+
 ### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 1, literal moves, but every line sits in a file another open PR edits, so the line-disjointness check is the judgment). **Lane:** server types only; zero emitted bytes change. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-03 says none is needed). **Gates:** ARCH-05 (#846) and ARCH-02a (Task C0h, #874) merged; both are. **Not yet:** the `Deps` move, which #850 blocks (D-6004). #434 is not ridden.
@@ -374,6 +539,93 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** inner-ring importers of `server.ts`/`watch.ts` go from 9 to 1 (`commands.ts`, pending, D-6004). The pin holds the count, and the emit is byte-identical. No new `ports/` or `domain/` directory exists. **Not in this task:** `Deps`'s move to a type-only `server/src/deps.ts`, its re-export from `server.ts`, `commands.ts`'s import, and ARCH-02b's justification line. All of these are the second half, after #850 lands.
 
+### Task C0j: the `ran` arm, step 1 of 2 — the runners say a command never ran, and the expiry and collect lanes read it first (D-6034; ARCH-10 (#543), its lower-churn landing path) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. ARCH-10 is a consolidation PREREQUISITE: the spec's mapping table says "the retire executor must tell transport failure from refusal". Both runners forge `code: 1` when the command never ran or the link failed: `remote/runner.ts`'s catch arm (a disconnect, a timeout, `forbidden`) and `exec.ts` (a non-numeric exit becomes 1). `cutShort` answers `UNMEASURED` there, but only `dispatch.ts` consults it, so at every other `runCcd` site an agent drop reads as a ccd refusal. **This step** takes the issue's allowed lower-churn path: `ran` is an ADDITIVE optional arm, and only the two refusal-classifying lanes the issue names read it. **Step 2** (after consolidation W1a lands) makes `ran` required and migrates every other site, with a per-site arm table the orchestrator reviews. **Routing:** native. The lane hunks sit on the destructive path (`ws-expire`, `ws-collect`), so they are band 3 by §Global constraints: written natively, two reviewers. **Lane:** server. Production bytes change (D-6035). **Needs:** nothing; no operator ruling (ARCH-10 names none). **Gates:** ARCH-03 (#894, #919) and working-state Task 12 (D-5240) merged; all three are. **Deploy:** rides the next server release; nothing on a box is touched.
+
+**Files:**
+- Modify `server/src/unmeasured.ts` (the pure vocabulary leaf): `NotRanReason` (`transport`, `spawn`, `timeout`) and `NotRan` (`{ ran: false; reason; detail }`), defined once for both layers.
+- Modify `server/src/exec.ts`: `ExecResult` becomes a union of today's shape with `ran?: true` and the same shape with `NotRan`. `realRunner` answers `ran: false, reason: 'spawn'` for a spawn error only (node names the syscall `spawn <cmd>`), and keeps every field it produced before, both kill halves included.
+- Modify `server/src/remote/runner.ts`: the catch arm adds `ran: false`, the reason and the detail beside the forged `code: 1` and the stderr it already sent, and still sends neither kill half. The reason is read off the error's `name`, because `client.ts` imports this file: `AgentOpError` (the agent declined) is `spawn`, a plain `Error('timeout')` is `timeout`, and everything else is `transport`.
+- Modify `server/src/coord/ports.ts`: `CcdResult` becomes the same two-arm union. On `ran: false` it keeps `ok: false` and every field it had before.
+- Modify `server/src/lifecycle.ts`: `ccd()` carries the arm. A ran answer gains no key, so every reader and every whole-object `toEqual` is unchanged. `cutShort` and `ccdEnding` are untouched.
+- Modify `server/src/coord/expireArchived.ts`: `expireAudit` reads `ran === false` before the document and answers `unreadable`, so the executor answers `audit-failed`. `expireAct` reads it before the box words and the composition dies and answers `failed`, resumable: the verb may have started, so this is the reader's own "may have been cut short" answer.
+- Modify `server/src/coord/collectTempRoot.ts`: `collectAudit` and the act read `ran === false` before their readers and answer `no-document`, exactly as a rejection does. The act may have acted, so the lane keeps the id and the slot; it never reads a recognised die off a runner's words.
+- Create `server/test/helpers/ranFakes.ts`: `ranOk(stdout, stderr)`, `ranExit(code, stdout, stderr)` and `notRan(reason, detail)`, so step 2's churn is mechanical.
+- Create `server/test/ran-arm.test.ts`. Add `runCcdOldFoldSites` to `server/test/consolidationCensus.ts`, with its rows in `consolidation-census.test.ts`.
+- Modify `server/test/remote-runner.test.ts`: the catch-arm pin was source text, because "the arm is unreachable through a client stub that resolves". It now drives a stub that rejects, and keeps its no-kill-claim source check. Modify `server/test/docs-source.test.ts`: the `ccd()` plant anchor moves one line, and the `res` helper takes the five shared fields, because `Partial` of the union would distribute over the new arm.
+
+- [ ] **Step 0: Re-ground.** Re-check the gates with `gh pr view`. List the `runCcd(` sites in `server/src` (44 at `bed67053e`). Run `gh pr list --state open` with each PR's files: no open PR touches a production file this task edits. #911 holds `archived-expiry-lane.test.ts` and `archived-expiry-policy.test.ts`, and #826 holds `lifecycle.test.ts`, so the new rows go in a new file.
+- [ ] **Step 1: Red.** `ran-arm.test.ts` and the fakes, copied onto a `git archive` of `origin/main`. It should give 23 red and 11 green (the controls, and the rows whose bytes do not change). The acceptance rows are red: a disconnect has no `ran`. An act whose runner words spell `ccd: bad token` is `composition` at expiry, which is never asked again, and the die `bad-token` at collect, which "acted nothing" and frees the slot.
+- [ ] **Step 2: Green.** Make the changes above. Both `tsc` projects should be clean.
+- [ ] **Step 3: Census.** `runCcdOldFoldSites` lists every `runCcd(` site not yet narrowed on `ran`. It skips a pass-through wrapper (`return await …runCcd(`) and a site whose assigned name is read as `<name>.ran === false` within 12 lines and before its declaration closes. It reports and pins no count (spec §5.1 rule 3): 44 sites, 1 pass-through and 4 migrated leave **39**, which step 2 drives to 0 and pins.
+- [ ] **Step 4: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | the remote catch arm returns the old shape (no `ran`) | `ran-arm` | red: the disconnect acceptance row and every reason row |
+  | `notRanReason` loses its `timeout` line | `ran-arm` | red: the client's own wait reads `transport` |
+  | `notRanReason` loses its `AgentOpError` line | `ran-arm` | red: `forbidden` reads `transport` |
+  | `realRunner`'s spawn check dropped | `ran-arm` | red: a missing binary has no `ran` |
+  | `realRunner` says `ran: false` for any error | `ran-arm` | red: an exit 1 that ran carries `ran` |
+  | `ccd()` drops the carry | `ran-arm` | red: the `CcdResult` row and both lanes' rows |
+  | `ccd()` adds `ran` to a ran answer | `ran-arm` | red: "a ran answer reaches CcdResult with no new key" |
+  | `expireAudit` loses its `ran` read | `ran-arm` | red: the audit rows' detail does not name the reason |
+  | `expireAct` loses its `ran` read | `ran-arm` | red: `box` and `composition` come back |
+  | `expireAct` answers `resumable: false` | `ran-arm` | red: the act rows want resumable |
+  | the collect act loses its `ran` read | `ran-arm` | red: the die comes back |
+  | the collect audit loses its `ran` read | `ran-arm`; `consolidation-census` | EQUIVALENT at `ran-arm`: `parseCollectAudit` reads an empty stdout as `no-document` with the same stderr, and the read is kept so the order is stated, not inferred. Red at the census: the site returns to the old fold |
+  | the census drops its pass-through skip | `consolidation-census` | red: the fixture lists line 13 |
+  | the census reads past its declaration's close | `consolidation-census` | red: the fixture's line 3 borrows the next declaration's narrowing |
+  | D-6034 defined a second time, with another subject, in another plan | `deviation-refs` | red (one number, two subjects) |
+
+- [ ] **Step 5: Verify.** `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`. Then, one at a time with `--maxWorkers=2`: `ran-arm` and `consolidation-census`; `remote-runner`, `exec`, `lifecycle`, `docs-source` and `dispatch-adopt` (cutShort's readers); `expire-archived`, `expire-id-boundary`, `archived-expiry-lane` and `archived-expiry-policy`; `collect-temp-root`, `collect-switch-executor`, `collect-readers`, `collect-lane-scans`, `collect-id-pins` and `ws-collect-wiring`; `reclaim-pause-pin`, `feed-writers-pin` and `mail-routes` (the kebab scan of `coord/`); `verb-gate`, `coord-policy-rings`, `inner-ring-host-imports` and `single-definition`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
+
+**Exit (GATES):** a remote runner disconnect returns `ran: false` with reason `transport`. At the expiry and collect lanes, `ran: false` is unmeasured and retryable (`audit-failed`, a resumable `failed`, `no-document`) and never a classified refusal, box word, die or composition error. Every other site's behaviour is byte-identical: its suites are green unchanged, and the census lists it on the old fold. **Not in this task:** making `ran` required, the other 39 sites, and the per-site arm table. All of these are step 2, after W1a lands. Step 2's arm table also carries two remote-mode caveats. First, the agent's own exec still answers a spawn failure on the fleet box (ccd missing, not executable) as a ran exit 1, so in remote mode `ran` absent is not yet proof that the command ran; the agent must report spawn errors as their own answer before `ran` becomes required. Second, the remote runner's `spawn` covers every `AgentOpError`, and the agent can fail a request after its exec resolved, so no step-2 site may read `spawn` as "nothing acted, act again" without a fresh audit.
+
+### Task C0k: ccd harness integrity — dead stubs fixed, stubs that fail when their seam is gone, one verb set, every python heredoc parsed, one install path set (D-6051; ARCH-23 (#527)) — lands now
+
+A later W0 slice (spec §5.2; the §4.1 mapping table: "K2 needs honest stubs"), planned here so it has a section. **Routing:** native (band 2: test-only, but the scanner's allow-list and the never-sent list are judgment). **Lane:** server tests only. The one non-new edit outside a test's own assertions is the fix of two dead stubs, which are test text. **Needs:** nothing; no operator ruling. **Gates:** none (ARCH-23 depends on nothing); ARCH-00 (#915) is on `main`, and the scanner reads string text through `server/test/scan/parse.ts`. **Not touched:** `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh` (no byte, so no restamp, and no overlap with #435, #722 or #740).
+
+**Files:**
+- Modify `server/test/ccd-crosspool.test.ts`: the two compaction cases' `_dispatch_compact` stub goes; their `tmux` stub records `send-keys`, and the cases assert no `/compact` keystroke, which is what `_auto_compact_check` sends.
+- Modify `server/test/ccd-actor-flags.test.ts` and `server/test/ccd-session-verbs-dash-id.test.ts`: `ARCHIVE_STUBS` loses `_ws_idle_ok`, and its three ccd stubs go through `stubFn`.
+- Create `server/test/ccdStub.ts`: `stubFn(name, body)` emits `declare -F name >/dev/null || exit 97` (with a sentence on stderr) before the override.
+- Modify `server/test/scan/parse.ts`: `stringPieces(text)`, every string literal and template piece with its line.
+- Modify `server/test/docsHelperPy.ts`: `pythonHeredocs(text)`, whose opener (a `<<TAG` whose tag ends in `PY`, not on a comment line) defines the count.
+- Create `server/test/ccd-harness-integrity.test.ts`: `stubFn`'s rows; the scanner (every `_x() {` in a test's string text names a function a shipped shell script defines or the roster generator emits, or a test-local helper allow-listed by file, exact both ways); every python heredoc in a shipped shell script passes `ast.parse` and `compile` under the host's python3, and the count is pinned.
+- Create `server/test/ccd-verb-sets.test.ts`: the dispatcher's `case … esac` evaluated once per word in a fixture HOME with every `cmd_*` recording; `cmd_caps` called; ccd run with no argv for its usage line; `CCD_ARGV` called with its samples. Arms == caps verbs == usage (first label per arm) == the verbs `CCD_ARGV` sends plus a pinned never-sent set (D-6052).
+- Create `server/test/ccdCapTokens.ts`: `ccd-archive.test.ts`'s capability tokens, moved unchanged so the new suite reads the same list.
+- Create `server/test/ccdArgvSamples.ts`: one sample per `CCD_ARGV` entry, `whitelist-subset.test.ts`'s `SAMPLES` moved unchanged, typed total over `CCD_ARGV`; `whitelist-subset.test.ts` imports it (D-6053).
+- Modify `server/test/install-census.test.ts`: a tail describe holds every destination either installer places outside `.local/bin` and the unit directory equal, as home-relative paths, and requires every `_inst_atomic` call in `ccd/ccrc` to sit in a function it reads or names.
+
+- [ ] **Step 0: Re-ground.** The dead stubs are absent from `ccd/`, `shared/` and `server/src`. List every `_x() {` in a test's string text and resolve it against the shipped shell scripts and `shared/generate.mjs`; every name that resolves nowhere is a dead stub or a test-local helper (measured: 1,248 overrides, 2 dead names at 4 sites, 63 helper names). Count the python heredocs (13). Run `gh pr list --state open` and keep every edit line-disjoint from each open PR's hunks.
+- [ ] **Step 1: Red.** The scanner, run on `origin/main`'s tests, lists exactly the four dead-stub sites. With `_auto_compact_check`'s `status-unreadable` return deleted, `origin/main`'s `not.toContain('compact')` stays green and only the later field assertion reds.
+- [ ] **Step 2: Green.** Fix the stubs, add the harness and the suites.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `_nope() { :; }` planted in `ccd-actor-flags.test.ts`'s `ARCHIVE_STUBS` | the scanner | red, naming the file, line and `_nope` |
+  | the `status-unreadable` return deleted in `_auto_compact_check` | `ccd-crosspool` | red at "compacts nothing", on a `/compact` send-keys |
+  | `stubFn`'s `declare -F` guard removed | `ccd-harness-integrity` | red: exit 0, not 97 |
+  | a `ws-frob` arm added to the dispatcher, with no caps entry | `ccd-verb-sets` | red: caps, usage and never-sent |
+  | a `ws-frob` arm added with four-space indentation, or with a quoted label, and no caps entry | `ccd-verb-sets` | red: the block-completeness row |
+  | `ws-hold` removed from `cmd_caps` | `ccd-verb-sets` | red: caps vs arms |
+  | `ws-hold` removed from the usage line | `ccd-verb-sets` | red: usage vs arms |
+  | the `ws-hold` arm calls `cmd_ws_release` | `ccd-verb-sets` | red: the arm-to-command row |
+  | `ws-hold` added to the never-sent set | `ccd-verb-sets` | red |
+  | a syntax error inside a ccd python heredoc | `ccd-harness-integrity` | red: the parse row names it |
+  | a fourteenth python heredoc added | `ccd-harness-integrity` | red: the pinned count |
+  | a stale `TEST_LOCAL_HELPERS` entry | `ccd-harness-integrity` | red |
+  | deploy.sh stops placing `.tmux.conf` | `install-census` | red: placed by `ccrc install` only |
+  | `_inst_files` places the statusline under another name | `install-census` | red |
+  | an `_inst_atomic` call in an unlisted function | `install-census` | red: the completeness row |
+
+- [ ] **Step 4: Verify.** One at a time with `--maxWorkers=2`: `ccd-harness-integrity`, `ccd-verb-sets`, `install-census`, `ccd-crosspool`, `ccd-actor-flags`, `ccd-session-verbs-dash-id`, `whitelist-subset`, `ccd-archive`, `docs-parity`. Then `tsc -p server` and the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** overrides naming no shipped function: 4 → 0, and a planted one is red; the four verb lists are one set, executed; 13 python heredocs parse and compile; the two installers place one path set. No shipped byte changes. **Not in this task:** moving the 1,248 existing overrides onto `stubFn` (they are checked by the scanner instead), and running ccd's `--json` envelopes through `shared/` decoders (spec §8, a later slice).
+
 ## Operator acts in this wave
 
 - **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
@@ -406,10 +658,37 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
   - **Departs from ARCH-06:** the ticket's exemplar suites (the stall-sweep tick order, the coord-store UPDATE census) are not W1a's and move in a later slice; this slice moves the suites W1a needs.
 
-### A departure entered by the coordinator
+### Issued for Task C0m and defined here
+
+Task C0m was issued three numbers, 6054 to 6056.
+
+- **D-6054** — `ccd-function-context-manifest` (Task C0m; ARCH-34): `ccd/contexts.tsv` maps every function `ccd/ccd` defines (a `name() {` at column 0) to one context of the 08-10 spec, C1 to C9 or K. `server/test/ccd-contexts.test.ts` holds full coverage both ways. The census module's `ccdCallGraph` and `ccdCrossContextCalls` extract the call graph, and the test ratchets the cross-context reference count, which excludes calls into K, so that it may only shrink: the pin is exact, so each fall lowers it in the same commit. The landing-day value is 521. A CONTROL holds that no heredoc in a function hides a column-0 `}` (which would end a region early), and a pin lists the K rows. No byte of `ccd/ccd` changes.
+- **D-6055** — `ccd-manifest-lives-under-ccd` (Task C0m): the manifest is `ccd/contexts.tsv`, the path ARCH-34 names, beside the file it describes.
+  - **Departs from** §Global constraints' "no file under `ccd/` is edited". The file is data, not code. `ccd/ccd` never sources it, and neither installer copies it (`deploy.sh` and `ccrc install` place `ccd/` files by name). It does ride in the release tarball, because `build-release.sh` packs `ccd/` whole, but no box reads it. The launcher's SHA-256 is unchanged.
+
+Issued and unused (Task C0m): 6056.
+
+### Departures entered by the coordinator
 
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
   - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
+
+- **D-6059** — `c0g-no-rescuable-pins` (Task C0g, #929; extends D-5854): Step 0 found no literal pin over a W1a-moved region that symbol keying could rescue, so "each moves onto `symbols.ts`" moved nothing and Step 1's "red before" had no suite to show. The three in-region literal pins are W1a's rewrites (C1a, C1b).
+- **D-6060** — `parse-calls-bindings` (Task C0g, #929; extends D-5853 and D-5854): C0g adds `calls` and `bindings` to C0f's `scan/parse.ts`, which C0g's Files line did not list, because `callsIn` and the counting rule need the syntax tree and only `scan/parse.ts` may import the parser.
+- **D-6061** — `ratchet-counts-tomatch` (Task C0g, #929; extends D-5854): the literal-pin counting rule also counts `toMatch`, the `expect` spelling of the ticket's `match`.
+- **D-6062** — `c0g-censuses-to-c1a` (Task C0g, #929; extends D-5854): the two `single-definition` holder-census blocks that C0g's Files line moved stay for C1a. They are whole-file censuses that W1a rewrites, and the W1a plan gives them to C1a (its Files, A1), so the W1a plan's line supersedes this plan's here.
+- **The parser pin and Dependabot** (Task C0f, #915; D-5853): the `/server` block of `.github/dependabot.yml` ignores `typescript-api`, so a grouped minor or patch PR cannot move the exact pin the scanners rely on. A new version of the parser is a reviewed PR that edits the pin.
+
+### Issued for Task C0l and defined here
+
+Task C0l was issued three numbers, 6045 to 6047.
+
+- **D-6045** — `ring-rules-stage-1` (Task C0l; ARCH-04, #545, stage 1): the repo-wide ring rules live one per test file under `server/test/rings/`, each over `scan/parse.ts` and the shared `walkSrc({ min })` floor, never in `single-definition.test.ts`; each rule's allowed or exempted entries live in its own `*.data.ts`, every entry with a one-line reason and a date, and each set is held exactly, so a stale entry is red. Stage 1 holds three rules: `fastify`, `@fastify/*` and every `Fastify*` name are imported, in any form, only by an L4 allowlist generated on the day the rule landed, across `server/src`, `agent/src`, `pwa/src` and `ui/src` (`fastify-l4`); a `shared/*.ts` file imports only its `./` siblings, a type-only edge included, and calls neither `require(…)` nor a non-literal `import(…)`, the loads `scan/parse.ts` reports no edge for (`shared-imports`); and a `.mjs` file the PWA's bundle reaches, by Vite's `.mjs`-first resolution, imports no Node builtin, while a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`mjs-node`). `scan/parse.ts` reports a type query as a type-only edge of its own kind. A per-file L0 pin is retired when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring; a pin stricter for a reason of its own stays. A `./` sibling that is a `shared/*.mjs` importing a builtin is allowed by `shared-imports`; whether that builtin may reach the PWA is `mjs-node`'s reach and carve-out, not this rule.
+  - **Stage 2 (Task C0n):** a `server/src` runtime edge points inward or sideways, never outward, each file's ring decided by `rings/ring.ts` from its own imports, timers and header under the 08-10 spec's rules (`outward-edges`); an edge whose every bound name is a type moves nothing. The outward edges on the tree the day the rule landed are an exemption set held exactly, which may only shrink. ARCH-03's pin (D-6003) moves to `rings/host-imports.test.ts` and reads "below L4" from the same classifier, with an empty exemption set. Every may-only-shrink exemption set carries a stamp (size, reason, date), and one unchanged for more than 60 days without a re-dated reason is red (`exemption-age`), deviation-refs' `GRANDFATHERED` included. `scan/parse.ts` reports a per-name `type` as `typeNames`.
+- **D-6046** — `growth-waiver-stays-until-stage-4` (Task C0l): C0a's `L1_L2_NEW_FILE_DIRS` waiver list stays.
+  - **Departs from** Task C0a's "until ARCH-04 stage 1 replaces it with its classifier". Stage 1's rules decide no file's ring: they hold three import facts. The classifier that gives every file one ring is stage 4, so the list is replaced there.
+
+Issued and unused (Task C0l): 6047.
 
 ### Issued for Task C0h and defined here
 
@@ -422,19 +701,52 @@ Task C0h was issued three numbers, 6000 to 6002.
 
 Issued and unused (Task C0h): 6002.
 
+### Issued for Task C0k and defined here
+
+Task C0k was issued three numbers, 6048 to 6050.
+
+- **D-6048** — `wire-totality-derived-lists` (Task C0k; ARCH-12, #552): every top-level exported literal union of two or more members in `shared/*.ts` has a sibling `Record<X, true>` map, typing a variable or a `satisfies`, or an `is X` guard in the same file. `server/test/rings/wire-totality.test.ts` holds that through three syntax facts that `server/test/scan/parse.ts` reads. Its exemption list, `WIRE_TOTALITY_EXEMPTIONS` in `server/test/rings/wire-totality.data.ts`, follows D-6045: keyed `file:Name`, each entry a one-line reason and a date, stamped in `exemption-age.data.ts`; it is pinned at its size and only shrinks: 31 on merge day, 28 after this task lists `SessionStatus`, `SessionBucket` and `PoolsEnforcement`. The fleet store's `pools` gate reads `isPoolsEnforcement`, and the store quotes no member word anywhere. The three lists are appended at the end of `shared/api.ts`, so no line other files cite by number moves. The map alone satisfies the rule; deriving a runtime list from it is a convention the rule does not check. Only runtime forms count: a `declare` map, an `asserts v is X` predicate and a type-only guard signature do not. A literal union with a `null` member is not scanned, and a guard's body is not checked, so a hand-written `is X` guard satisfies the rule without being total (stated limits; the map is preferred). The facts come from `wireFacts` in `server/test/scan/parse.ts`, a walk of its own beside the shared one.
+- **D-6049** — `c0k-ships-production-bytes` (Task C0k): this slice edits `shared/api.ts` and `pwa/src/stores/fleet.ts`.
+  - **Departs from** this plan's Deploy class and §Global constraints ("Zero production bytes"). ARCH-12's acceptance needs the lists in `shared/` and the store on one of them. The change is additive and keeps behaviour: four new exports (three lists and a guard), and a gate that accepts and rejects exactly the values it did before. The PWA's `stores` suite pins those values.
+
+Issued and unused (Task C0k): 6050.
+
 ### Issued for Task C0i and defined here
 
 Task C0i was issued three numbers, 6003 to 6005.
 
 - **D-6003** — `consumer-side-ports-coord-and-turn-reads` (Task C0i; ARCH-03): ports that a consumer below L4 takes from an L4 host are declared beside the consumer, in `server/src/coord/ports.ts` (L2). That file holds `CcdResult`, `RunCcd` (which `lifecycle.ts`'s `CcdRunner` aliases) and `FleetWatcherView`. No file below L4 imports `server.ts` or `watch.ts` in any form, and `server/test/inner-ring-host-imports.test.ts` holds that with an exact outer set whose ring each CONTROL proves. Declarations move, nothing is narrowed, and the emitted JS of every existing file is byte-identical.
+  - **Second half (ARCH-03, after #850 merged):** `Deps` and its member `CollectLaneDeps` move to `server/src/deps.ts`, which is type-only (L2 by the ring rules, K by context: a composition-root type, not a domain layer). `server.ts` re-exports both, so no caller breaks, and `commands.ts` imports `deps.ts`. The pin's pending list is gone: no file below L4 imports either host. D-6004's departure is closed.
 - **D-6004** — `arch-03-deps-move-after-850` (Task C0i): this task lands ARCH-03's ports half now. `commands.ts` stays the one pinned pending importer until `Deps` moves.
   - **Departs from ARCH-03 as written**, which moves `Deps` to a type-only `server/src/deps.ts` in the same change. #850 is open and adds a member inside `Deps` (`server.ts` ≈:279–287). Moving the declaration would delete that range, so it cannot stay line-disjoint from #850. The ports half touches no line any open PR changes. The `watch.ts` re-export clause does not apply, because nothing declared in `watch.ts` moves.
 
 Issued and unused (Task C0i): 6005.
 
+### Issued for Task C0j and defined here
+
+Task C0j was issued three numbers, 6034 to 6036.
+
+- **D-6034** — `ran-arm-additive-step-1` (Task C0j; ARCH-10, #543): a runner says when a command never ran, or may not have. `ExecResult` and `CcdResult` each gain an additive arm, `{ ran: false; reason: 'transport' | 'spawn' | 'timeout'; detail }`, defined once in `unmeasured.ts`. On that arm every field a reader had before is unchanged: the forged `code: 1`, `ok: false`, the runner's stderr, and the kill halves or their absence. `spawn` means it was never started, and that is known: a local spawn error, or the agent declining the request. `transport` means the link failed. `timeout` means this server stopped waiting. In both of those, whether it ran is unknown. A ran answer carries no new key. The expiry and collect lanes read `ran === false` before any reader of the runner's words, and answer unmeasured and retryable: `audit-failed`, a resumable `failed`, `no-document`. They never answer a refusal, a box word, a die or a composition error. `ranOk`, `ranExit` and `notRan` (`server/test/helpers/ranFakes.ts`) are the fakes step 2 uses. `runCcdOldFoldSites` counts the sites still on the old fold.
+  - **Step 2 (ARCH-10, after W1a):** `ran` becomes required, every other `runCcd` site narrows on it, and the census pins 0. The PR lists each site's arm.
+- **D-6035** — `c0j-ships-production-bytes` (Task C0j): this slice edits `server/src`.
+  - **Departs from** this plan's Deploy class and §Global constraints ("Zero production bytes"). That rule is W0's characterization discipline: a pin must be green on `main`. ARCH-10 is a fix, not a pin, and the spec lists it among W0's later slices as a consolidation prerequisite. Every other constraint binds it, and its lane hunks are band 3.
+
+Issued and unused (Task C0j): 6036.
+
+### Issued for Task C0k and defined here
+
+Task C0k was issued three numbers, 6051 to 6053.
+
+- **D-6051** — `ccd-harness-integrity` (Task C0k; ARCH-23): a test's stub of a shipped shell function must name one that exists. `stubFn` exits 97 before overriding a function the sourced ccd does not define, and a scanner over every test's string text holds each `_x() {` to a function some shipped shell script defines (or `shared/generate.mjs` emits into the roster), or to a test-local helper allow-listed under its file. ccd's four verb lists are held equal by running each one. Every python heredoc in a shipped shell script (`pythonHeredocs`, whose opener defines the count) parses and compiles, and the count is pinned. `deploy/deploy.sh` and `ccrc install` place one set of paths. The dead `_dispatch_compact` and `_ws_idle_ok` stubs are gone, and the compaction cases assert on the `/compact` keystroke `_auto_compact_check` sends.
+  - **Width:** a name counts as shipped when any shipped shell script defines it, not only the script a test sources: `ccrc` and hook tests override their own scripts' functions, and per-test source tracking would need a shell parser.
+- **D-6052** — `ccd-argv-heads-are-a-pinned-subset` (Task C0k): `CCD_ARGV` sends a strict subset of ccd's verbs by design, so "arms == CCD_ARGV verb heads" is held as "every verb sent is dispatched, and the rest are exactly a pinned never-sent set, each with its reason" (terminal verbs, the agent's own `caps`, the systemd entry point, and the two ungrantable deletes). The usage line names each arm by its first label, so the aliases `list` and `pick` are compared through their arms.
+  - **Departs from ARCH-23 as written**, which states the four lists equal outright.
+- **D-6053** — `ccd-argv-samples-shared` (Task C0k): `whitelist-subset.test.ts`'s `SAMPLES` table moves to `server/test/ccdArgvSamples.ts`, a file the task's Files list does not name, so `ccd-verb-sets.test.ts` reads the same samples instead of keeping its own. `whitelist-subset.test.ts` imports it; there is one table, typed total over `CCD_ARGV`, so a new entry fails `tsc` until it has a sample.
+  - **Departs from Task C0k's Files list as first written**, which moved the table.
+
 ## Out of scope
 
-Every later W0 slice (spec §5.2) except ARCH-02a, which is Task C0h, and ARCH-03's ports half, which is Task C0i: ARCH-02b's programme ruling, ARCH-04, ARCH-23, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte.
+Every later W0 slice (spec §5.2) except ARCH-02a, which is Task C0h, ARCH-03's ports half, which is Task C0i, ARCH-10's first step, which is Task C0j, and ARCH-23, which is Task C0k: ARCH-02b's programme ruling, ARCH-04, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte outside C0j (D-6035).
 
 ## Review log
 

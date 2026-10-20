@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { DatabaseSync } from 'node:sqlite';
+import { Readable } from 'node:stream';
 
 const sent = vi.hoisted(() => [] as string[]);
 vi.mock('web-push', () => {
@@ -39,7 +40,7 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
 import { saveSnapshot } from '../src/fleetstate.js';
@@ -47,6 +48,7 @@ import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -785,10 +787,11 @@ describe('the review findings: every egress of session text is masked (D-5995)',
 
   const session = (id: string): FleetSession => ({
     id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
-    workspace: null, name: `n ${OAT}`, status: 'idle', statusUpdatedAt: null, limits: null,
+    // The live name is the operator's (a server-built field, kept as typed): the keys ride in session text.
+    workspace: null, name: 'n demo', status: 'idle', statusUpdatedAt: null, limits: null,
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-    hookState: null, askSummary: `paste ${ORKEY}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+    hookState: null, askSummary: `paste ${ORKEY} then ${OAT}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
     unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
     started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
   });
@@ -1053,7 +1056,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
   const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
   /** Masked inside the handler (a `maskDeep`/`maskText` call, a masked stream or a drawer): path → what masks it. */
   const INLINE: Record<string, RegExp> = {
-    '/ws/fleet': /mk\.maskDeep\(\{ type: 'fleet'/,
+    '/ws/fleet': /maskedFrame\(sessions, \(mk\) => maskFleetFrame\(mk, \{ type: 'fleet'/,
     '/ws/session/:id': /new SessionStream\(/,   // SessionStream's one `send` masks every frame
     '/ws/pty/:id': /\.drawer\(\(text\) => socket\.send\(text\)\)/,
     '/api/notifications/catchup': /maskDeep\(deps\.notifyLog\.catchUp/,
@@ -1357,11 +1360,12 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     '/api/auth/step-up/passphrase': 'the auth state',
     '/api/token/claim': 'the box token a claim hands out, which its holder needs byte for byte',
     '/api/token/rotate': 'the rotated box token',
+    '/api/sessions/:id/upload': 'the clip path staged from the name of the file the operator picked; no session text',
   };
 
-  it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes', () => {
+  it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes and the upload', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, _reply, payload, done\) => \{\s*done\(null, answerMasked\(req\.method, req\.routeOptions\.url\) \? \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(payload\) : payload\);/);
+    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, reply, payload, done\) => \{\s*if \(!answerMasked\(req\.method, req\.routeOptions\.url\)\) \{ done\(null, payload\); return; \}\s*maskedSend\.add\(reply\);\s*const mk = deps\.masker \?\? SHAPE_ONLY_MASKER;\s*done\(null, req\.routeOptions\.url === '\/api\/fleet' \? maskFleetFrame\(mk, payload\) : mk\.maskDeep\(payload\)\);/);
     const seen: string[] = [];
     for (const f of routeFiles()) {
       for (const m of read(f).matchAll(/app\.(?:post|put|patch|delete)\('(\/[^']*)'/g)) {
@@ -1374,5 +1378,550 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     expect(seen.length).toBeGreaterThan(60);
     for (const p of Object.keys(EXEMPT_WRITES)) expect(seen, `${p} is still registered`).toContain(p);
     for (const p of ['/api/sessions/:id/prompt', '/api/sessions/:id/dialog/text', '/api/claims', '/api/mail']) expect(WRITE_ANSWER_EXEMPT.test(p), p).toBe(false);
+  });
+});
+
+describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const WRAPPED: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  /** A row end and the next row's indent, as the TUI or a tmux redraw writes them. */
+  const INDENTS = ['\r\n    ', '\r\n     ', '\x1b[K\r\n\x1b[5C'];
+
+  it('a shape wrapped onto an indented next row before it can match on its first row leaves no byte of it, at every cut and under every indent form, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (let cut = 1; cut < k.length; cut++) {
+        for (const sep of INDENTS) {
+          const o = m.maskText(`  ⎿  key ${k.slice(0, cut)}${sep}${k.slice(cut)}\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} cut ${cut} ${JSON.stringify(sep)}: ${JSON.stringify(o)}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('a key wrapped early at 80 columns is masked through its last row, and the indented row after it is drawn as it is', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (const cut of [1, 3, 8, 10]) {
+        const head = `${`  ⎿  ${'word '.repeat(15)}`.slice(0, 79 - cut)} `;   // a blank before the key: its boundary
+        const rows = [`${head}${k.slice(0, cut)}`];
+        for (let at = cut; at < k.length; at += 75) rows.push(`     ${k.slice(at, at + 75)}`);
+        const o = m.maskText(`${rows.join('\r\n')}\r\n     next row\r\n`, { rows: true });
+        expect(leaksNone(o, k), `${name} cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+        expect(o, `${name} cut ${cut}`).toContain('\r\n     next row\r\n');
+      }
+    }
+  });
+
+  it('the same wrap split at the row break across two drawer pushes, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (let cut = 1; cut < k.length; cut++) {
+        for (const gap of [0, 3, 9]) {
+          const out: string[] = [];
+          const d = m.drawer((t) => out.push(t));
+          d.push(`  ⎿  key ${k.slice(0, cut)}\r\n`);
+          if (gap > 0) vi.advanceTimersByTime(gap);
+          d.push(`    ${k.slice(cut)}\r\n$ `);
+          vi.advanceTimersByTime(80);
+          expect(leaksNone(screen(out.join('')), k), `${name} cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+          d.dispose();
+        }
+      }
+    }
+    const out: string[] = [];
+    const d = m.drawer((t) => out.push(t));
+    d.push(`  ⎿  key ${OAT.slice(0, 10)}\r\n`);
+    vi.advanceTimersByTime(9);
+    d.push(`    ${OAT.slice(10)}\r\n$ `);
+    vi.advanceTimersByTime(80);
+    expect(screen(out.join(''))).toBe(`  ⎿  key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+    d.dispose();
+  });
+
+  it('with fingerprint rows held, a chunk that ends a compatible key\'s first row with its row end shows none of it when the indented next row follows, back to back or within the row settle', () => {
+    vi.useFakeTimers();
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const cut of [20, 30, CMP.length - 3]) {
+      for (const gap of [0, 9]) {
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        d.push(`key ${CMP.slice(0, cut)}\r\n`);
+        if (gap > 0) vi.advanceTimersByTime(gap);
+        d.push(`    ${CMP.slice(cut)}\r\n$ `);
+        vi.advanceTimersByTime(80);
+        expect(leaksNone(out.join(''), CMP), `cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+        d.dispose();
+      }
+    }
+    m.close();
+  });
+
+  it('a row that ends in an ordinary word goes at once in the shape-only mode, and is drawn as typed once the output goes quiet with fingerprint rows held', () => {
+    vi.useFakeTimers();
+    const { m: held } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const [name, m] of [['shape-only', new SecretMasker()], ['held', held]] as const) {
+      const out: string[] = [];
+      const d = m.drawer((t) => out.push(t));
+      d.push(`Downloading ${'w'.repeat(CMP.length - 2)}\r\n`);
+      if (name === 'shape-only') expect(out.join(''), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}\r\n`);
+      vi.advanceTimersByTime(80);
+      expect(screen(out.join('')), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}`);
+      d.push('$ ');
+      vi.advanceTimersByTime(80);
+      expect(screen(out.join('')), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}\n$`);
+      d.dispose();
+    }
+    held.close();
+  });
+});
+
+describe('the post-merge audit\'s follow-ups: what the answer hook did not see (D-5995)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** A server over a one-session registry whose capture-pane answers `pane()` (read at every capture). */
+  const appOver = async (pane: () => string, masker?: SecretMasker, onKeys?: (args: string[]) => void, extra: Partial<Deps> = {}): Promise<FastifyInstance> => {
+    const home = mkTmp('ccrc-mask-fu-');
+    seedRoster(home);
+    seedSession(home, '');
+    const run: Runner = async (_c, args) => {
+      if (args[0] === 'capture-pane') return { code: 0, stdout: pane(), stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'send-keys') onKeys?.(args);
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker, ...extra }, new Bus());
+  };
+  const clean = (body: string, ...secrets: string[]): void => {
+    expect(body).toContain(SECRET_MASK);
+    for (const s of secrets) expect(leaksNone(body, s), body.slice(0, 300)).toBe(true);
+  };
+
+  it('a thrown error, and a string, Buffer or stream body, on a masked route reach the reader masked; a thrown error on any route too; binary bytes and an exempt answer pass as they are', async () => {
+    app = await appOver(() => '');
+    app.post('/api/test-throw', async () => { throw new Error(`capture failed: KEY=${OAT}`); });
+    app.post('/api/test-string', async (_req, reply) => reply.type('text/plain').send(`pane\nKEY=${OAT}\n`));
+    app.post('/api/test-json-string', async (_req, reply) => reply.type('application/json').send(JSON.stringify({ pane: `KEY=${ORKEY}` })));
+    app.post('/api/test-buffer', async (_req, reply) => reply.type('text/plain').send(Buffer.from(`pane ${OAT} end`)));
+    app.post('/api/test-stream', async (_req, reply) =>
+      reply.type('text/plain').send(Readable.from([Buffer.from(`pane ${OAT.slice(0, 30)}`), Buffer.from(`${OAT.slice(30)} end`)])));
+    app.post('/api/test-png', async (_req, reply) => reply.type('image/png').send(Buffer.from(`\x89PNG ${OAT}`, 'latin1')));
+    app.get('/api/test-get-throw', async () => { throw new Error(`read failed: ${ORKEY}`); });
+    app.post('/api/token/test-raw', async (_req, reply) => reply.type('text/plain').send(`token ${OAT}`));
+
+    const thrown = await app.inject({ method: 'POST', url: '/api/test-throw', payload: {} });
+    expect(thrown.statusCode).toBe(500);
+    clean(thrown.body, OAT);
+    expect(thrown.json().message).toBe(`capture failed: KEY=${SECRET_MASK}`);
+    for (const url of ['/api/test-string', '/api/test-json-string', '/api/test-buffer', '/api/test-stream']) {
+      const r = await app.inject({ method: 'POST', url, payload: {} });
+      expect(r.statusCode, url).toBe(200);
+      clean(r.body, OAT, ORKEY);
+    }
+    expect((await app.inject({ method: 'POST', url: '/api/test-stream', payload: {} })).body).toBe(`pane ${SECRET_MASK} end`);
+    const got = await app.inject({ method: 'GET', url: '/api/test-get-throw' });
+    expect(got.statusCode).toBe(500);
+    clean(got.body, ORKEY);
+    expect((await app.inject({ method: 'POST', url: '/api/test-png', payload: {} })).rawPayload).toEqual(Buffer.from(`\x89PNG ${OAT}`, 'latin1'));
+    expect((await app.inject({ method: 'POST', url: '/api/token/test-raw', payload: {} })).body).toBe(`token ${OAT}`);
+  });
+
+  it('an octet-stream body passes byte for byte, and a thrown non-Error on any route answers 500 with its text masked', async () => {
+    app = await appOver(() => '');
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x41]);
+    app.post('/api/test-octet', async (_req, reply) => reply.type('application/octet-stream').send(bytes));
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- the shape under test
+    app.get('/api/test-throw-string', async () => { throw `read failed: ${OAT}`; });
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- the shape under test
+    app.post('/api/token/test-throw-string', async () => { throw `token failed: ${ORKEY}`; });
+    expect((await app.inject({ method: 'POST', url: '/api/test-octet', payload: {} })).rawPayload).toEqual(bytes);
+    for (const [method, url, k] of [['GET', '/api/test-throw-string', OAT], ['POST', '/api/token/test-throw-string', ORKEY]] as const) {
+      const r = await app.inject({ method, url, payload: method === 'POST' ? {} : undefined });
+      expect(r.statusCode, url).toBe(500);
+      clean(r.body, k);
+    }
+  });
+
+  it('the answer backstop and the error mask are each registered once, on the root, and no other route file sets its own error handler but the exempt docs plugin', () => {
+    const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
+    // Keyed on the composition root's symbol, not a literal read of the file (D-5854's ratchet): `app` is buildServer's own.
+    const server = sourceOfSymbol('server/src/server.ts', 'buildServer');
+    expect(server).toMatch(/app\.addHook\('onSend', \(req, reply, payload, done\) => \{\s*done\(null, maskedSend\.has\(reply\) \|\| !answerMasked\(req\.method, req\.routeOptions\.url\)\s*\? payload : maskBody\(deps\.masker \?\? SHAPE_ONLY_MASKER, payload, reply\.getHeader\('content-type'\)\)\);/);
+    expect(server).toMatch(/app\.setErrorHandler\(\(err, _req, _reply\) => \{\s*throw maskedError\(deps\.masker \?\? SHAPE_ONLY_MASKER, err\);/);
+    expect(server.match(/app\.setErrorHandler\(/g)).toHaveLength(1);
+    expect(server.match(/app\.addHook\('onSend'/g)).toHaveLength(2);   // the step-up's no-store, and the backstop
+    // A parse-based census of the whole file, so a second registration in a helper outside buildServer cannot hide
+    // from the symbol-keyed counts above (D-5857's follow-up).
+    const calls = parsedFile('server/src/server.ts').calls;
+    expect(calls.filter((c) => c.name === 'setErrorHandler')).toHaveLength(1);
+    expect(calls.filter((c) => c.name === 'addHook' && c.args[0]?.kind === 'string' && c.args[0].text === 'onSend')).toHaveLength(2);
+    for (const f of routeFiles()) {
+      if (f.join('/') === 'server.ts' || f[0] === 'docs') continue;
+      expect(read(f), f.join('/')).not.toMatch(/setErrorHandler\(/);
+    }
+  });
+
+  it('"Send it" presses Enter when the box holds the draft the 409 showed masked, and still refuses box-mismatch for any other draft', async () => {
+    let entered = 0;
+    app = await appOver(() => (entered > 0 ? '❯ \n' : `❯ export K=${OAT}\n`), SHAPE_ONLY_MASKER, (args) => { if (args.includes('Enter')) entered++; });
+    const other = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: `export J=${SECRET_MASK}` } });
+    expect(other.statusCode).toBe(409);
+    expect(other.json()).toEqual({ ok: false, error: 'box-mismatch' });
+    expect(entered).toBe(0);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: `export K=${SECRET_MASK}` } });
+    expect(res.json()).toEqual({ ok: true });
+    expect(entered).toBe(1);
+  });
+
+  it('the upload answer carries its clip path as staged, even when the file name holds an sk- run', async () => {
+    app = await appOver(() => '');
+    const form = new FormData();
+    form.append('file', new Blob(['hello'], { type: 'text/markdown' }), 'sk-learn-notes.md');
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form });
+    expect(res.statusCode).toBe(200);
+    const clip = res.json().clip as { name: string; path: string };
+    expect(clip.name).toMatch(/-sk-learn-notes\.md$/);
+    expect(clip.path).toContain(clip.name);
+    expect(res.body).not.toContain(SECRET_MASK);
+  });
+
+  /** A fleet row whose server-built identity fields hold `-sk-` and 8 characters, and whose session text holds keys. */
+  const SKNAME = 'demo-sk-abcdefgh';
+  const fleetRow = (): FleetSession => ({
+    id: `claude-${SKNAME}`, wrapper: 'claude', home: '/home/rc', project: SKNAME, workdir: `/data/projects/${SKNAME}/ws/${SKNAME}`,
+    workspace: SKNAME, name: SKNAME, status: 'idle', statusUpdatedAt: null, limits: null,
+    dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+    branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+    hookState: null, askSummary: `paste ${ORKEY} and ${CMP}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+    started: true, spawnState: null, ask: { state: 'held', parentId: `claude-${SKNAME}-parent`, answeredBy: null }, usage: null, boardProject: SKNAME, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+  } as FleetSession);
+  const KEPT = ['id', 'wrapper', 'home', 'project', 'workdir', 'workspace', 'name', 'boardProject', 'ask'] as const;
+
+  it('a session or workspace name holding -sk- and 8 characters renders as typed in the fleet frame and GET /api/fleet, while its session text stays masked', async () => {
+    const home = mkTmp('ccrc-mask-fu-fleet-');
+    seedRoster(home);
+    const cachePath = path.join(home, 'state-cache.json');
+    await saveSnapshot([fleetRow()], cachePath);
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const bus = new Bus();
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
+    const want = fleetRow();
+    const check = (s: FleetSession): void => {
+      for (const k of KEPT) expect(s[k], k).toEqual(want[k]);
+      expect(s.askSummary).toBe(`paste ${SECRET_MASK} and ${CMP}`);
+    };
+    check((await app.inject({ method: 'GET', url: '/api/fleet' })).json().sessions[0]);
+    const port = await listen(app);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const frame = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no fleet frame')), 5000);
+      ws.on('message', (d) => {
+        const s = String(d);
+        if (s.includes('"hello"')) bus.emit('fleet', [fleetRow()]);
+        if (s.includes('"type":"fleet"')) { clearTimeout(t); resolve(s); }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    check((JSON.parse(frame) as { sessions: FleetSession[] }).sessions[0]!);
+    expect(leaksNone(frame, ORKEY)).toBe(true);
+  });
+
+  it('a fleet, runs, coord or notice broadcast is masked once for every socket, and masked again once the keys change', async () => {
+    const db = openCoordDb(path.join(mkTmp('ccrc-mask-fu-once-'), 'coord.db'));
+    const m = new SecretMasker({ db, token: () => TOKEN_1 });
+    let calls = 0;
+    const deep = m.maskDeep.bind(m);
+    m.maskDeep = <T>(v: T): T => { calls++; return deep(v); };
+    const home = mkTmp('ccrc-mask-fu-ws-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const bus = new Bus();
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker: m }, bus);
+    const port = await listen(app);
+    const N = 4;
+    const frames: string[][] = Array.from({ length: N }, () => []);
+    const sockets = await Promise.all(Array.from({ length: N }, (_, i) => new Promise<WebSocket>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      ws.on('message', (d) => { frames[i]!.push(String(d)); if (String(d).includes('"hello"')) resolve(ws); });
+      ws.on('error', reject);
+    })));
+    await new Promise((r) => setTimeout(r, 100));   // every cold start settled
+    const until = async (pred: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(pred()).toBe(true);
+    };
+    const count = (type: string): number => frames.reduce((n, f) => n + f.filter((s) => s.includes(`"type":"${type}"`)).length, 0);
+    try {
+      const sessions = [fleetRow()];
+      const runs = [{ id: 7, title: `run ${OAT}` }];
+      const coord = { note: `coord ${OAT}` };
+      const notice = { message: `notice ${OAT}` };
+      for (const [type, payload] of [['fleet', sessions], ['runs', runs], ['coord', coord], ['notice', notice]] as const) {
+        const before = calls;
+        const seen = count(type);
+        bus.emit(type as never, payload as never);
+        await until(() => count(type) === seen + N);
+        expect(calls - before, type).toBe(1);
+      }
+      // The same broadcast again: no new mask. The keys change: masked again, with the new key.
+      const seen = count('fleet');
+      let before = calls;
+      bus.emit('fleet', sessions);
+      await until(() => count('fleet') === seen + N);
+      expect(calls - before).toBe(0);
+      expect(frames[0]!.at(-1)).toContain(CMP);
+      m.ingest({ gen: fingerprintGeneration(TOKEN_1), rows: [fingerprintRow(TOKEN_1, 'lane0', CMP)] });
+      before = calls;
+      bus.emit('fleet', sessions);
+      await until(() => count('fleet') === seen + 2 * N);
+      expect(calls - before).toBe(1);
+      for (const f of frames) expect(leaksNone(f.at(-1)!, CMP), f.at(-1)!.slice(0, 200)).toBe(true);
+    } finally {
+      for (const ws of sockets) ws.close();
+      m.close();
+    }
+  });
+});
+
+describe('the final audit: a row measured in columns when its text holds an emoji sequence or a combining mark (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const KEYS: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['JWT', JWT]];
+  const W = 40;
+  /** Text before a key that holds more UTF-16 units than the columns a terminal draws it in: [name, text, columns]. */
+  const WIDE: [string, string, number][] = [
+    ['a flag', '🇬🇧', 2], ['a ZWJ family', '👨‍👩‍👧', 2], ['a skin tone', '👍🏽', 2], ['a keycap', '1️⃣', 1],
+    ['a combining mark', 'é', 1], ['a mathematical letter', '𝐀', 1], ['a zero-width space', '​', 0],
+  ];
+  /** `k` cut after `cut` bytes on a full row of `W` columns that opens with `pre`, its rest on rows indented two columns. */
+  const wrapped = (k: string, cut: number, pre: string, cols: number): string[] => {
+    const rows = [`${pre}${'x'.repeat(W - cols - cut - 1)} ${k.slice(0, cut)}`];
+    for (let at = cut; at < k.length; at += W - 2) rows.push(`  ${k.slice(at, at + W - 2)}`);
+    return rows;
+  };
+
+  it('a key wrapped two or more times after such text leaves no byte of it, at every cut, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const [what, pre, cols] of WIDE) {
+        for (const cut of [1, 3, 9, 20]) {
+          const rows = wrapped(k, cut, pre, cols);
+          if (k.length - cut > W - 2) expect(rows.length, `${name} ${what} cut ${cut}`).toBeGreaterThanOrEqual(3);
+          const o = m.maskText(`hello\r\n${rows.join('\r\n')}\r\n done\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} after ${what}, cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+          expect(o, `${name} after ${what}, cut ${cut}`).toContain(' done\r\n$ ');
+        }
+      }
+    }
+  });
+
+  it('the same wrap written one row per drawer push, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const [what, pre, cols] of WIDE) {
+        for (const cut of [1, 9, 20]) {
+          for (const gap of [0, 9]) {
+            const out: string[] = [];
+            const d = m.drawer((t) => out.push(t));
+            const rows = wrapped(k, cut, pre, cols);
+            d.push(`hello\r\n${rows[0]}`);
+            for (const row of rows.slice(1)) { if (gap > 0) vi.advanceTimersByTime(gap); d.push(`\r\n${row}`); }
+            d.push('\r\n done\r\n$ ');
+            vi.advanceTimersByTime(80);
+            const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;   // item 14: a JWT's signature
+            expect(leaksNone(out.join(''), secret), `${name} after ${what}, cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+            d.dispose();
+          }
+        }
+      }
+    }
+  });
+
+  it('a short row after such a row still ends the value: the next indented row is drawn as typed', () => {
+    const m = new SecretMasker();
+    for (const [what, pre] of WIDE) {
+      const text = `${pre} key ${OAT.slice(0, 20)}\r\n  ${OAT.slice(20, 30)}\r\n  plain words here\r\n`;
+      expect(m.maskText(text, { rows: true }), what).toContain('  plain words here\r\n');
+    }
+  });
+});
+
+describe('the follow-ups\' verification: a key wrapped twice under a cursor-move indent, and inside a bordered box (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const KEYS: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  const W = 40;
+  /** The cursor-move indents a terminal redraw writes before a wrapped row: two columns in, row `r` of the screen. */
+  const MOVES: [string, (r: number) => string][] = [
+    ['CRLF CUF', () => '\r\n\x1b[2C'],
+    ['EL CRLF CUF', () => '\x1b[K\r\n\x1b[2C'],
+    ['CUP', (r) => `\x1b[${r};3H`],
+  ];
+  /** `k` cut after `cut` bytes on a full row of `W` columns, its rest on rows indented two columns, `W - 2` bytes each. */
+  const wrapped = (k: string, cut: number, move: (r: number) => string): string[] => {
+    const rows = [`${'x'.repeat(W - cut - 1)} ${k.slice(0, cut)}`];
+    for (let at = cut, r = 3; at < k.length; at += W - 2, r++) rows.push(`${move(r)}${k.slice(at, at + W - 2)}`);
+    return rows;
+  };
+
+  it('a key wrapped two or more times onto rows indented by a cursor move leaves no byte of it, at every cut, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [1, 2, 3, 5, 9, 20]) {
+        for (const [mv, move] of MOVES) {
+          const rows = wrapped(k, cut, move);
+          if (k.length - cut > 2 * (W - 2)) expect(rows.length, `${name} cut ${cut}`).toBeGreaterThanOrEqual(4);
+          const o = m.maskText(`hello\r\n${rows.join('')} done\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} cut ${cut} ${mv}: ${JSON.stringify(o)}`).toBe(true);
+          expect(o, `${name} cut ${cut} ${mv}`).toContain(' done\r\n$ ');
+        }
+      }
+    }
+  });
+
+  it('the same wrap written one row per drawer push, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [1, 2, 3, 5, 9, 20]) {
+        for (const [mv, move] of MOVES) {
+          for (const gap of [0, 9]) {
+            const out: string[] = [];
+            const d = m.drawer((t) => out.push(t));
+            const rows = wrapped(k, cut, move);
+            d.push(`hello\r\n${rows[0]}`);
+            for (const row of rows.slice(1)) { if (gap > 0) vi.advanceTimersByTime(gap); d.push(row); }
+            d.push(' done\r\n$ ');
+            vi.advanceTimersByTime(80);
+            // A JWT whose header a push split from its first row shows its header and payload, never its signature (item 14).
+            const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+            expect(leaksNone(out.join(''), secret), `${name} cut ${cut} ${mv} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+            d.dispose();
+          }
+        }
+      }
+    }
+  });
+
+  /** `k` after `export K=` inside a box `inner` columns wide with a rule on both sides, wrapped after `cut` bytes. */
+  const boxed = (k: string, cut: number, inner = 40): string[] => {
+    const rows = [`│ ${'x'.repeat(inner - cut - 3)} K=${k.slice(0, cut)} │`];
+    for (let at = cut; at < k.length; at += inner) rows.push(`│ ${k.slice(at, at + inner).padEnd(inner)} │`);
+    return rows;
+  };
+
+  it('a key wrapped inside a box with a right rule leaves no byte of it, at every cut, in rows mode and across one drawer push per row', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (let cut = 1; cut <= 20; cut++) {
+        const rows = boxed(k, cut);
+        const o = m.maskText(`╭${'─'.repeat(42)}╮\r\n${rows.join('\r\n')}\r\n╰${'─'.repeat(42)}╯\r\n`, { rows: true });
+        expect(leaksNone(o, k), `${name} cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+        expect(o, `${name} cut ${cut}`).toContain(`╰${'─'.repeat(42)}╯`);
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        for (const row of rows) d.push(`${row}\r\n`);
+        d.push('$ ');
+        vi.advanceTimersByTime(80);
+        const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;   // item 14: a JWT's signature
+        expect(leaksNone(out.join(''), secret), `${name} cut ${cut} drawer: ${JSON.stringify(out)}`).toBe(true);
+        d.dispose();
+      }
+    }
+  });
+
+  it('a boxed key whose right rule arrives on its own after the hold has expired stays masked through its next row', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [5, 12, 20]) {
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        d.push(`│ export K=${k.slice(0, cut)}`);
+        vi.advanceTimersByTime(9);
+        d.push(' │');
+        vi.advanceTimersByTime(3);
+        d.push(`\r\n│ ${k.slice(cut)} │\r\n$ `);
+        vi.advanceTimersByTime(80);
+        const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+        expect(leaksNone(out.join(''), secret), `${name} cut ${cut}: ${JSON.stringify(out)}`).toBe(true);
+        d.dispose();
+      }
+    }
+  });
+
+  it('a boxed row that ends in an ordinary word, and a row indented by a cursor move under a short row, are drawn as typed', () => {
+    const m = new SecretMasker();
+    const box = `│ ${'plain words here'.padEnd(40)} │\r\n│ ${'more plain words'.padEnd(40)} │\r\n`;
+    expect(m.maskText(box, { rows: true })).toBe(box);
+    const moved = `hello\r\n${'x'.repeat(30)}\r\n\x1b[2Cnext row\r\n\x1b[6;3Hlast row\r\n`;
+    expect(m.maskText(moved, { rows: true })).toBe(moved);
+  });
+});
+
+describe('the final audit: a row joined to the next row never hides a key that row begins (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const KEYS: [string, string][] = [['sk-ant api', API], ['sk-ant oat', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  /** Runs that begin a shape and do not match one: the wrap join glues them to the next row's leading run. */
+  const OPEN_RUNS: [string, string][] = [['a JSON blob in base64', `eyJ${fill(30, 'blob')}`], ['a file name', `${SK}-v1.py`]];
+  /** A row that ends in `run` and the row after it that begins with `k`: in a box, after a shell pipe, indented. */
+  const LAYOUTS: [string, (run: string, k: string) => string][] = [
+    ['a table', (run, k) => `│ ${run} │\r\n│ ${k} │\r\n`],
+    ['a shell pipe', (run, k) => `$ echo ${run} |\r\n    ${k}\r\n`],
+    ['a tool result', (run, k) => `  ⎿  ${run}\r\n     ${k}\r\n`],
+  ];
+
+  it('a key that begins the row after a row ending in an open shape run is masked, in rows mode and through the drawer at every split', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [kn, k] of KEYS) {
+      for (const [rn, run] of OPEN_RUNS) {
+        for (const [ln, layout] of LAYOUTS) {
+          const text = layout(run, k);
+          const secret = kn === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+          const o = m.maskText(text, { rows: true });
+          expect(leaksNone(o, secret), `${kn} after ${rn} in ${ln}: ${JSON.stringify(o)}`).toBe(true);
+          for (let cut = 1; cut < text.length; cut += 5) {
+            for (const gap of [0, 3, 9, 15]) {
+              const out: string[] = [];
+              const d = m.drawer((t) => out.push(t));
+              d.push(text.slice(0, cut));
+              vi.advanceTimersByTime(gap);
+              d.push(`${text.slice(cut)}$ `);
+              vi.advanceTimersByTime(80);
+              expect(leaksNone(out.join(''), secret), `${kn} after ${rn} in ${ln} cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+              d.dispose();
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('the rows around it are drawn as typed', () => {
+    const m = new SecretMasker();
+    for (const [, run] of OPEN_RUNS) {
+      for (const [ln, layout] of LAYOUTS) {
+        const o = m.maskText(layout(run, 'plain words after it'), { rows: true });
+        expect(o, ln).toContain('words after it');
+        expect(o, ln).toContain(run.slice(0, 3));
+      }
+    }
   });
 });

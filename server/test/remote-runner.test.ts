@@ -208,16 +208,20 @@ describe('§1.4 — asExecResult stops narrowing a distinction it received', () 
     expect(r.killed).toBeUndefined();
   });
 
-  it('THE CATCH PATH NEVER CLAIMS A KILL — three facts sit on code 1, not two', () => {
+  it('THE CATCH PATH NEVER CLAIMS A KILL — three facts sit on code 1, not two', async () => {
     // ccd refused, we killed ccd, and WE DO NOT KNOW BECAUSE THE LINK FAILED.
     // `createRunner`'s catch returns `{code:1, stderr: e.message}` for any
     // transport failure — a dropped socket, a client-side wait expiry — and §1.5
-    // must not adopt on it. Pinned as SOURCE because the arm is unreachable
-    // through a client stub that resolves.
+    // must not adopt on it. D-6034: driven through a client stub that REJECTS
+    // (the arm a resolving stub cannot reach), and it now also says `ran: false`;
+    // neither kill half is sent.
+    const client = { request: async () => { throw new Error('disconnected'); } } as unknown as FleetClient;
+    const res = await createRunner(client)('ccd', ['ls']);
+    expect(res).toMatchObject({ code: 1, stdout: '', stderr: 'disconnected', ran: false });
+    expect(res).not.toHaveProperty('killed');
+    expect(res).not.toHaveProperty('signal');
     const src = readFileSync(
       path.join(ccrcRoot, 'server/src/remote/runner.ts'), 'utf8');
-    expect(src).toContain(
-      "return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };");
     expect(src).not.toMatch(/catch[\s\S]{0,200}killed:\s*true/);
   });
 });

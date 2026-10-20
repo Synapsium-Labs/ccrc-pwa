@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
   MARKER_ORDER, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers, sessionFacts, shortenByToken,
   type FactInput,
@@ -194,7 +194,7 @@ describe('shortenByToken — long names shorten by rule, never mid-token', () =>
   });
 });
 
-const headerProps = (over: Partial<SessionHeaderProps>): SessionHeaderProps => ({
+const headerProps = (over: Partial<HeaderHostProps>): HeaderHostProps => ({
   session: null, status: 'idle', statusUpdatedAt: null,
   onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(), onChangeEffort: vi.fn(),
   onMoveAccount: vi.fn(), onArchive: vi.fn(), onRestore: vi.fn(), onOpenHistory: vi.fn(), onReapWorkspace: vi.fn(),
@@ -230,7 +230,7 @@ describe('the rendered card is a glance, and the rendered header holds all of it
 
         const facts = sessionFacts(input);
         const c = cardFacts(facts);
-        render(<SessionHeader {...headerProps({ session: input.session, status: input.session.status, facts, })} />);
+        render(<SessionHeaderHost {...headerProps({ session: input.session, status: input.session.status, facts, })} />);
         const head = document.querySelector('.chat-head')!;
         const toggle = screen.queryByRole('button', { name: /details/i });
         if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
@@ -260,7 +260,7 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
 
   it('a dead row reads `exited` on the card AND in the rendered header (the lamp still speaks "not running")', () => {
     const input = CASES['a dead session that is not hibernated']!;
-    render(<SessionHeader {...headerProps({ session: input.session, status: 'dead', facts: sessionFacts(input) })} />);
+    render(<SessionHeaderHost {...headerProps({ session: input.session, status: 'dead', facts: sessionFacts(input) })} />);
     expect(document.querySelector('.chat-head .status-line')?.textContent).toBe('exited');
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
   });
@@ -288,7 +288,7 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
     const input = { ...CASES['an orphan whose coordinator is gone']!, coordinatorTitle: 'coordinator x is gone — reclaim this programme from the run board' };
     const m = markers(sessionFacts(input)).find((x) => x.key === 'coordinator-gone')!;
     expect(m.title).toContain('reclaim');
-    render(<SessionHeader {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
+    render(<SessionHeaderHost {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
     const toggle = screen.queryByRole('button', { name: /details/i });
     if (toggle !== null) fireEvent.click(toggle);
     expect(document.querySelector('.chat-head [data-marker="coordinator-gone"]')?.getAttribute('title')).toContain('reclaim');
@@ -296,7 +296,7 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
 
   it('a cleanup row names its PR once in the header, not three times', () => {
     const input = CASES['a cleanup row with its merged PR']!;
-    render(<SessionHeader {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
+    render(<SessionHeaderHost {...headerProps({ session: input.session, status: 'idle', facts: sessionFacts(input) })} />);
     const toggle = screen.queryByRole('button', { name: /details/i });
     if (toggle !== null) fireEvent.click(toggle);
     const facts = document.querySelector('.chat-facts')!;
@@ -335,7 +335,7 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
       'a busy session under context pressure'] as const) {
       const input = CASES[name]!;
       const c = cardFacts(sessionFacts(input));
-      render(<SessionHeader {...headerProps({ session: input.session, status: input.session.status, facts: sessionFacts(input) })} />);
+      render(<SessionHeaderHost {...headerProps({ session: input.session, status: input.session.status, facts: sessionFacts(input) })} />);
       const head = visible(document.querySelector('.chat-head')!);
       if (c.marker !== null) expect(head, `${name}: marker`).toContain(c.marker.short ?? c.marker.text);
       if (c.context !== null && c.context.key !== 'programme') expect(head, `${name}: context`).toContain(c.context.text);

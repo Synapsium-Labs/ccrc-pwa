@@ -98,7 +98,7 @@ import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS, STATUS_TEXT } from './fixtures/drawer/synthetic';
 import { declaredValues } from './cssRule';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -582,6 +582,31 @@ describe('the terminal takes the keyboard when its socket opens', () => {
       view.unmount();
     }
   });
+
+  // D-5931: the Sheet owns focus on open, and moves it on that open alone. Opening the drawer puts the focus on its
+  // panel; xterm's own `term.focus()` on the socket's open takes it from there, inside the trap, and the Sheet never
+  // takes it back on a later render.
+  it('opening the drawer: the panel has the focus, then xterm\'s textarea once the fake socket opens, and the Sheet never takes it back', async () => {
+    const t = fakeTerm();
+    const view = render(
+      <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => memStore()} />,
+    );
+    const panel = screen.getByRole('dialog');
+    expect(document.activeElement, 'the panel did not take the focus on open').toBe(panel);
+    const ws = FakeSocket.instances.at(-1)!;
+    act(() => ws.onopen?.());
+    expect(document.activeElement).toBe(t.textarea());
+    // Later renders while open: the socket's state, a chip flip, a resize.
+    fireEvent.click(viewChipEl());
+    resizeWindow();
+    await frame();
+    view.rerender(
+      <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => memStore()} />,
+    );
+    await frame();
+    expect(document.activeElement, 'the Sheet took the focus back from the terminal').toBe(t.textarea());
+    expect(panel.contains(document.activeElement)).toBe(true);
+  });
 });
 
 describe('the chip', () => {
@@ -1004,7 +1029,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
         addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
       }) as unknown as MediaQueryList);
     };
-    const headerProps = (): SessionHeaderProps => ({
+    const headerProps = (): HeaderHostProps => ({
       session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', status: 'busy', bucket: 'working' }),
       status: 'busy', statusUpdatedAt: null,
       onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(),
@@ -1020,7 +1045,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
       const hp = headerProps();
       render(
         <>
-          <SessionHeader {...hp} />
+          <SessionHeaderHost {...hp} />
           <TerminalDrawer id={ID} open onClose={onClose} makeSocket={makeSocket} viewStorage={() => store} />
         </>,
       );
@@ -1047,7 +1072,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
       const hp = headerProps();
       render(
         <>
-          <SessionHeader {...hp} />
+          <SessionHeaderHost {...hp} />
           <TerminalDrawer
             id={ID} open onClose={onClose} makeSocket={makeSocket} makeTerm={t.makeTerm}
             viewStorage={() => memStore()}

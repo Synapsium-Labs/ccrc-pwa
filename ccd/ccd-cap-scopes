@@ -6,7 +6,7 @@
 # Why: Ubuntu tmux is built with systemd support and puts every pane in its own
 # transient tmux-spawn-<uuid>.scope. Those scopes are born uncapped and tmux
 # offers no way to set properties at creation, so this enforcer caps any it
-# finds. Added 2026-07-28 after a MekWarLive jest run (15 workers) drove one
+# finds. Added 2026-07-28 after a project-f jest run (15 workers) drove one
 # pane scope to a 24G peak, exhausting 30G RAM + 8G swap and stalling the whole
 # fleet for ~25 min.
 #

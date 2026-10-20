@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-landing-order-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
-Ticket: `CCR-19` (Linear; mirrored as GitHub issue #198) — the coordinator is created from it
+Ticket: GitHub issue #198 (mirrored from the tracker) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/session-continuity.md`
 
 **What this program is.** The fleet manufactures main churn — ritual syncs, `update-branch`, repeat absorptions —
@@ -18,22 +18,23 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3, queue off (Decisions, 2026-10-20 13:00) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
+| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | — | planned (plan added with this record); to dispatch |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
-gated on CCR-15 wave 3. CCR-15 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
+gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
 carries it (spec §5.1, amended 2026-09-24).
 
 ## Decisions & deviations
 
 - **2026-09-23 — the design, its rulings and the written spec.** Approved in the brainstorm (R1–R8); the operator
   ruled both open decisions on the written spec the same day: break-glass keeps the repository-admin role as the
-  ruleset's only bypass actor (R9); strict protection comes off intake-platform and data-internal after a week of
+  ruleset's only bypass actor (R9); strict protection comes off project-n and project-e after a week of
   coordinator landings with composition tests (R10).
 - **2026-09-23 — stage 2 split into two waves.** The spec's own rollout order puts the `--admin` deny after the
   operator's ruleset change and the proof run (§5.2 steps 2–4), so it ships as wave 2b rather than behind a flag in
@@ -631,6 +632,76 @@ carries it (spec §5.1, amended 2026-09-24).
     - (d) is read before each run's final close, because the close reclaims the child workspace.
     - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
       open run (at `awaiting-review`, not `merging`). It is recorded as found.
+- **2026-10-20 13:00 — Task 7's proof run, stopped by stop rule 3; the queue is off.** This is Step 7's record.
+  - **Arming.** The operator chose "Run Task 7 now" on 2026-10-20. Step 1 was clean: a trusted full run on `main`
+    (daily run 39364571048), both boxes on one release, the payload cap in the installed hook, doctor's
+    `PASS jq_regex`, the canary's `deny` and a clean census. Step 2's read differed from the runbook's in one setting:
+    the repository allows auto-merge, an operator change covered by the ruling. Step 4 wrote the queue ruleset at
+    08:59:54Z, removing the maintain role's bypass (Step 3) at both writes; each rollback restored it. The fleet's
+    daily dispatch cap then refused the proof dispatches, so the coordinator rolled the ruleset back at 09:07:30Z
+    (nothing had merged) and wrote it again at 11:53:33Z, once slots A, B and C were green and D was open. The queue
+    was on from 11:53:33Z to 12:56:47Z.
+  - **Departures.** Slot C was this coordinator's continuity ledger PR, #409, because its other ledger PR conflicted
+    with `main`. The proof slots wrote new one-line files under `docs/superpowers/programs/landing-order-proof/`
+    instead of the proof ledger's slot lines, which another run's claim held. Runs 690 and 691 went to `merging`
+    before the enqueue, as ruled on 2026-10-07.
+  - **Readings.**
+    - (a0), twice (09:00 and 11:53), on #409: the wrong sha was refused ("expected head oid does not match the
+      current head oid"), and nothing was queued or armed. Stop rule 7 did not fire.
+    - (a1), on D (#965): an empty commit started its checks, and `gh pr merge --match-head-commit` answered rc 0 and
+      printed nothing (no TTY). The read showed an armed auto-merge request (method MERGE), not a queue entry. A
+      second empty push from the same login left the request armed: a push by the arming login does not disarm it,
+      so clause 15's disarm rule carries weight. It was disarmed with `--disable-auto`. Both pushes were made
+      outside D's workspace, so the PR's head left the workspace's own tip, and `pr-state` stopped binding D.
+    - The enqueue: #942 (`abafcd696`), #963 (`d82ccb0e2`) and #409 (`b5efafba3`) within 9 s. Each entry read back
+      non-null within about 2 s.
+    - (a) while waiting: A and B read `open queued <time>`. C read `unknown`, its known branch drift.
+    - (a2), (b), (c) and (d) were not reached: nothing merged.
+    - **What stopped it.** At 12:01 another programme's ledger PR, #964, was merged through the admin bypass while
+      the queue was on. `main` moved, and the queue rebuilt #942's group on the new base. In that group one server
+      shard ran only `ccd-tick-diet-equivalence.test.ts` and hit the 30-minute job bound (run 39419159770). That
+      shard is slow everywhere: measured while planning wave 3c, its median over the day's successful runs was 20.9
+      minutes and its 90th percentile 26.7, and one pull-request run hit the same bound. GitHub removed #942 at 12:32:35Z (`failed_checks`), and the
+      coordinator enqueued it again at 12:52:04Z, after reading why. #963's group failed in `fleetws.test.ts`:
+      `ENOTEMPTY` from the `afterEach` removal of the test's home, which reads as a race with a write still landing
+      (run 39423071534). GitHub removed it at 12:54:52Z (`failed_checks`). Neither failure was its PR's own.
+    - **The lane was blind.** `ccd pr-state --project` read #942 as `dequeued 12:32:35Z`, correctly. Yet no `queue`
+      feed event appeared and this coordinator got no `dequeued:` mail, although run 690 was waiting at `merging`.
+      Measured afterwards, under heavy load: that call takes about 60 s on the fleet box, against the server's 25 s
+      bound for `pr-state` (the same bound in both releases the boxes ran during the window). So most likely every
+      sweep of this project timed out. That was not measured on the server side, because a failed sweep backs off
+      as if the agent were down and logs nothing. The cost is in `ccd`: for each workspace, `is_ours` runs two `git` calls for every listed PR,
+      while only the rows that name that workspace's own branch can ever bind it. The `merged:` notice could not be
+      measured, and on this project neither notice wakes a coordinator until this is fixed.
+    - (e), on D: enqueued, then removed with `dequeuePullRequest`; the timeline reads Added, then Removed
+      (`manual`). No feed event appeared, which was expected twice over: D no longer bound, and the lane was blind.
+      #965 was closed unmerged and run 692 closed.
+    - (f): D's held worker ran `gh pr merge` and the wave-hold arm refused it, live. Pass.
+  - **Stop rule 3 fired** on the second queue run that failed for a reason not its PR's own. After the first, the
+    coordinator ruled it not fired: one slow file over a job bound, measured passing twice that hour. The second
+    failure, and the blind lane, decided it: with no lane the proof could not be clean this round, so more queue
+    time only exposed other sessions' landings. The ruleset was rolled back at 12:56:47Z, and its writable projection
+    equals `ruleset-rollback.json` (one approval, both bypass roles). Landing is back on the pre-queue path.
+  - **Finding: turning the queue requirement off drops every entry silently.** #409, #942 (enqueued again) and two
+    other sessions'
+    PRs (#936, #947) then read open, not queued and not armed, and each timeline's last queue act is still its
+    `AddedToMergeQueueEvent`. GitHub records no removal, so no lane can announce one. This coordinator commented on
+    #936 and #947.
+  - **The 2026-10-07 order for slot D is superseded.** Running (a1) and then (e) on one PR spent (e): (a1)'s pushes
+    unbound the PR. Wave 3c's runbook runs (e) on the fourth PR right after (a0), before (a1) and before any landing,
+    and never runs (e) on a PR that (a1) has pushed to.
+  - **State.** Runs 690 and 691 wait at `merging` with #942 and #963 open, unqueued, and their own checks green; they
+    are held for wave 3c's re-run. Wave 2b is not planned, because the proof is not clean.
+  - **Next: wave 3c, Task 7's re-run preconditions.**
+    - `pr-state --project` reads each workspace's rows with one batched object check and one ancestry list, with
+      the same answers.
+    - The server reports a failed sweep.
+    - The two flakes are fixed.
+    - The runbook changes:
+      - before arming, the project's sweep is measured finishing within its bound;
+      - inside the window, (e) comes first, and a silent lane is a stop;
+      - every entry is dequeued before any rollback;
+      - a bypass merge during the window is recorded, not a stop.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -667,33 +738,30 @@ carries it (spec §5.1, amended 2026-09-24).
 - **The deny's stopping line (2026-10-03, review 247).** The hook's `gh pr merge` deny is contract-grade. A later
   wave closes a bypass only if it is a regression or an ordinary spelling, and lists a deliberate evasion. Task 7
   starts only once its runbook carries the listed classes, the payload cap and a quote-dense timing pin.
+- **From Task 7's proof run (2026-10-20).** Never switch the queue requirement off while entries are in it: dequeue
+  each entry first, so that GitHub records the removal and the lane can announce it. A queue window on this project
+  starts only once the project's sweep is measured finishing within its bound, and inside it (e) is read first: a
+  removal the lane does not announce within one sweep ends the window.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1 and 2 are merged (#231 `10f32755`, #234 `0087a045`).
+Waves 1–3 are merged (#231 `10f32755`, #234 `0087a045`, #248 `9a255a74`). Task 7's proof run on 2026-10-20 stopped
+on stop rule 3, and the queue is off (Decisions, 2026-10-20 13:00).
 
-**Task 7 (the operator's: the queue ruleset, approvals at 0, the proof run) WAITS.** It starts only once these
-preconditions are on `main`:
-- the deny's listed classes in its runbook (done, in #234);
-- a payload cap on what the deny inspects;
-- a quote-dense timing pin;
-- review 249's F1, a live H40 row whose payload has a terminator.
-Until then, nothing in #234 changes how a PR lands.
-
-Run 250, wave 3, is dispatched (2026-10-04 22:21, `ccrc-pwa-still-delta`; deviation numbers 3906 to 3920, written
-bare). It is the small preconditions wave:
-- review 249 F1–F4;
-- the payload cap and the quote-dense timing pin, with the coordinator's word-bounded over-cap amendment;
-- the review-241 carries: closed-unmerged reads `none`, the doctor check for jq's lookaround, and the `--squash` span;
-- Task 7's runbook text.
+**Wave 3c, Task 7's re-run preconditions, is planned next.** Its plan is
+`docs/superpowers/plans/2026-10-20-landing-order-wave3c-task7-rerun-preconditions.md`. It carries:
+- `pr-state --project`'s per-workspace cost, with every answer unchanged;
+- a failed PR sweep that the server reports rather than hides;
+- the two suite flakes that the queue turned into removals;
+- the runbook's changes for the re-run.
 
 Then, in order:
-1. ccrc's updater moves both boxes onto wave 3's build;
-2. a trusted full CI run passes on `main`;
-3. this coordinator runs Task 7 (delegated 2026-10-04 12:41).
+1. ccrc's updater moves both boxes onto wave 3c's build;
+2. the project's sweep is measured finishing within its bound (Task 7's Step 1, as wave 3c amends it);
+3. this coordinator re-runs Task 7 (delegated 2026-10-04 12:41), with runs 690 and 691 as slots A and B.
 
-**Wave 3b (stage 3, `ccd-land-probe`)** is planned after wave 3 merges.
-- **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned only on Task 7's proof result.
+**Wave 3b (stage 3, `ccd-land-probe`)** stays planned after wave 3c, run 310 open.
+- **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned only on a clean proof.

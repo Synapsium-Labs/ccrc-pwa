@@ -449,7 +449,7 @@ import { CANONICAL_COLS, CANONICAL_ROWS } from '../../shared/api.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 
-const ID = 'claude2-mekwarlive';
+const ID = 'claude9-project-f';
 
 const sizerOn = (verbs: string[] | null, run: Runner) => {
   const calls: string[][] = [];
@@ -625,7 +625,7 @@ Expected: PASS, both files.
 
 Change `capSupported` to `verbSupported` in `unpin` (and its import) and re-run `./node_modules/.bin/vitest run test/pane-sizer.test.ts`: **"answers unsupported on NO EVIDENCE"** must FAIL with `expected 'ok' to be 'unsupported'`. Restore it.
 
-Then delete the `if (!pinned)` block and re-run: **"says so when the pin fails"** must FAIL with `expected '' to contain 'claude2-mekwarlive'`. Restore it.
+Then delete the `if (!pinned)` block and re-run: **"says so when the pin fails"** must FAIL with `expected '' to contain 'claude9-project-f'`. Restore it.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -674,7 +674,7 @@ import type { PtyLike } from '../src/pty.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 
-const ID = 'claude2-mekwarlive';
+const ID = 'claude9-project-f';
 
 /** Stub in place of node-pty: records writes/resizes/kill, emits nothing. */
 class StubPty implements PtyLike {
@@ -1258,7 +1258,7 @@ Expected: PASS. The timer-specific cases arrive in Task 4; nothing here advances
 
 - [ ] **Step 5: Mutation check, then commit**
 
-1. In `release`, change `if (reg.remove(id, socket) === 0)` to `if (true)` and re-run: **"an INTERMEDIATE close re-pins nothing"** must FAIL with `expected [ 'pin:claude2-mekwarlive' ] to deeply equal []`. Restore it.
+1. In `release`, change `if (reg.remove(id, socket) === 0)` to `if (true)` and re-run: **"an INTERMEDIATE close re-pins nothing"** must FAIL with `expected [ 'pin:claude9-project-f' ] to deeply equal []`. Restore it.
 2. In `onFrame`, change `if (cols === null || rows === null) return;` to `const c = cols ?? clientCols; const r = rows ?? clientRows;` (and use those): the `it.each` **"a resize frame that fails the validator…"** table must FAIL on every row. Restore it.
 3. Delete the `if (first)` guard around the pin and re-run: **"a SECOND drawer does not re-pin…"** must FAIL. Restore it.
 3b. Delete the re-floor from `onFrame` — the `floor = fitFloor(lastProbe, cols);` line, leaving `Math.max(cols, floor.cols)` against the attach-time floor — and re-run: **"a resize frame resizes the pty and is CLAMPED by the floor, which the grid frame says"** must FAIL with `expected [ { cols: 60, rows: 18 } ] to deeply equal [ { cols: 44, rows: 18 } ]`. Restore it. (Task 5's pre-existing `it` reds on the same mutation, from the other side: its `{ cols: 90, rows: 28 }` becomes `{ cols: 120, rows: 28 }`. Two suites, one guard.)
@@ -1574,9 +1574,9 @@ fail on assertions that have nothing to do with what they are testing:
 
 | case | assertion that breaks | why |
 |---|---|---|
-| `WS /ws/pty/:id streams output, …` | `expect(spawned).toEqual({ id: 'claude2-MekWarLive', cols: 120, rows: 40 })` | the floor is 220, so the spawn is `220x40` |
+| `WS /ws/pty/:id streams output, …` | `expect(spawned).toEqual({ id: 'claude9-project-f', cols: 120, rows: 40 })` | the floor is 220, so the spawn is `220x40` |
 | `WS /ws/pty/:id streams output, …` | `expect(stub.resized).toContainEqual({ cols: 90, rows: 28 })` | `max(90, 220)` — the resize is clamped to 220 |
-| `PINS the canonical grid BEFORE the pty attaches, …` | `expect(log).toContain('spawnPty claude2-MekWarLive 43x40')` | the floor is 220, so the spawn is `220x40` and the log never carries that line |
+| `PINS the canonical grid BEFORE the pty attaches, …` | `expect(log).toContain('spawnPty claude9-project-f 43x40')` | the floor is 220, so the spawn is `220x40` and the log never carries that line |
 
 The fix is one line in each Runner: **answer the probe with a MEASURED row** instead of silence. Give
 each of the two its own `list-panes` arm, immediately after the `calls`/`log` push and before the
@@ -1595,7 +1595,7 @@ blanket return:
 
 With that row in place, **re-assert both cases unchanged** — do not relax them:
 
-- `spawned` is `{ id: 'claude2-MekWarLive', cols: 120, rows: 40 }`: 120 < 220, and
+- `spawned` is `{ id: 'claude9-project-f', cols: 120, rows: 40 }`: 120 < 220, and
   `need(120) = (0 + 50) * ceil(220/120) = 100 <= 2000`, so the floor is 120 and the client gets it.
 - `stub.resized` contains `{ cols: 90, rows: 28 }`: this one is true **only because `onFrame`
   re-floors** (Task 3). At 90 columns `need(90) = 50 * 3 = 150`, the floor is 90, and
@@ -1639,20 +1639,20 @@ With that row in place, **re-assert both cases unchanged** — do not relax them
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-mekwarlive?cols=43&rows=20`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=43&rows=20`);
     const control: unknown[] = [];
     ws.on('message', (d, isBinary) => { if (isBinary) control.push(JSON.parse(String(d))); });
     await opened(ws);
 
     // The pin is the FIRST tmux argv, and it is spent before the pty exists.
     await vi.waitFor(() => expect(order).toHaveLength(1), wait);
-    expect(calls[0]).toEqual(['tmux', 'resize-window', '-t', 'cc-claude2-mekwarlive', '-x', '220', '-y', '50']);
+    expect(calls[0]).toEqual(['tmux', 'resize-window', '-t', 'cc-claude9-project-f', '-x', '220', '-y', '50']);
     expect(order[0]).toBe('spawn:43x20:after:2');    // pin, then probe, then spawn
 
     // The un-pin is the ccd verb, not a tmux option.
     await vi.waitFor(() =>
       expect(calls.some((c) => c[1] === 'win-size'
-        && c.slice(1).join(' ') === 'win-size --session claude2-mekwarlive --mode smallest')).toBe(true), wait);
+        && c.slice(1).join(' ') === 'win-size --session claude9-project-f --mode smallest')).toBe(true), wait);
 
     // `narrowed: true` end to end: this is the ONE case in the wave where the
     // flag is earned by a real `ccd win-size` round trip rather than by a stub
@@ -1682,7 +1682,7 @@ With that row in place, **re-assert both cases unchanged** — do not relax them
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-mekwarlive?cols=43&rows=20`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=43&rows=20`);
     const control: unknown[] = [];
     ws.on('message', (d, isBinary) => { if (isBinary) control.push(JSON.parse(String(d))); });
     await opened(ws);
@@ -1729,7 +1729,7 @@ With that row in place, **re-assert both cases unchanged** — do not relax them
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-mekwarlive?cols=0&rows=nope`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=0&rows=nope`);
     await opened(ws);
     await vi.waitFor(() => expect(spawned).toEqual({ cols: 80, rows: 24 }), wait);
     ws.close();
@@ -2457,7 +2457,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:project-c';
 
 class FakeSocket {
   static instances: FakeSocket[] = [];

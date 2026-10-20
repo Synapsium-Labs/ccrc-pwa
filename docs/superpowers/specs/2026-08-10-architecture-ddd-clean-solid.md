@@ -153,6 +153,10 @@ reviewer checks a file by reading its import block.
   and boring; not allowed to **decide**. One-reading test: *if a function here has two
   guards whose order matters, it belongs in L1.*
 - **L5 composition root** — `index.ts` only.
+  `deps.ts` holds `Deps`, the bag `index.ts` builds and `buildServer` and `FleetWatcher` take. It is a
+  composition-root type, not a domain layer: every statement in it is a type, so it emits nothing and is L2 by
+  the ring rules, and it sits in K. `server.ts` re-exports it (ARCH-03, #541; the justification ARCH-02b, #537,
+  records).
 
 Cross-cutting, each checkable by eye:
 (a) **Config is data, not code** — no literal list of account names outside L0's roster;
@@ -241,7 +245,7 @@ never name one file. Paths are relative to the package's `src/`.
 | C7 Update control plane | `update/**`, `buildinfo.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `screens/updates.tsx` |
 | C8 Auth & box token | `auth/**`, `token/**` | `accounts/**`, `components/LoginScreen.tsx`, `fleet/PasskeyNotice.tsx`, `lib/auth.ts`, `lib/passkey.ts`, `screens/AuthSection.tsx` |
 | C9 Docs | `docs/**` | `docs/**`, `screens/DocsScreen.tsx` |
-| K Kernels and platform | `index.ts`, `server.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/Settings*.tsx`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `screens/settingsText.ts` |
+| K Kernels and platform | `index.ts`, `server.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/Settings*.tsx`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `screens/settingsText.ts` |
 <!-- ring-context-map:end -->
 
 A new file takes its directory's row, or needs a file row in the same PR when its
@@ -292,8 +296,8 @@ pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 
 | Item | Status | Held by, or finished by |
 |---|---|---|
-| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, and its exemptions drain in ARCH-05 (#551); no file below L4 imports `server.ts` or `watch.ts`, even for a type: `inner-ring-host-imports.test.ts` (D-6003; `commands.ts` pending until `Deps` moves, D-6004) |
-| No `reply` below L4 | open | ARCH-04 stage 1 (L4-only fastify) |
+| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, one rule per file under `server/test/rings/` (stage 1, D-6045: `shared-imports.test.ts` holds L0's `shared/*.ts` to `./` imports and `mjs-node.test.ts` the `.mjs` carve-out; stage 2, D-6045: `outward-edges.test.ts` holds every `server/src` runtime edge inward of the rules above, `ring.ts` deciding each file's ring, with the outward edges on the tree in an exemption set that may only shrink, and `exemption-age.test.ts` reds an exemption set unchanged for more than 60 days without a re-dated reason, deviation-refs' `GRANDFATHERED` included), and its exemptions drain in ARCH-05 (#551); no file below L4 imports `server.ts` or `watch.ts`, even for a type: `rings/host-imports.test.ts` (D-6003, folded onto the ring classifier by D-6045; none pending since `Deps` moved to `deps.ts`) |
+| No `reply` below L4 | done | `server/test/rings/fastify-l4.test.ts` (ARCH-04 stage 1, D-6045): `fastify` and every `Fastify*` name only in an exact L4 allowlist |
 | `single-definition` over the account roster | done | single-definition's "the account roster — runtime data, no compile-time copies" and "the account roster — config dir is data, joined in one place" |
 | Cross-language fixture test (ccd's bash copies against the roster) | done | `wrapper-roster-fixture.test.ts`, `roster-exec-parity.test.ts` |
 | Totality test for every wire union | open | ARCH-12 (#552) |

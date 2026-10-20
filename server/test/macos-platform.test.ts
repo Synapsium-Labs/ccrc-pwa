@@ -1613,3 +1613,77 @@ describe('a platform-asserting test title owes the other platform an answer (D-2
     ).toEqual([]);
   });
 });
+
+// Accounts plan Task A11 (D-5513's backups row; G33; D-5755). APPENDED. On darwin, the verb that creates
+// `~/.cc-secrets` excludes it from Time Machine with `tmutil addexclusion`; on Linux it calls nothing. The darwin arm
+// runs anywhere: `ccrc` is sourced and `CCD_OS` set after the source (this file's rule above), with a stub `tmutil`
+// first on PATH that records its argv. HOME is a throwaway directory and the credential a fixed non-secret string.
+describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwin (G33)', () => {
+  function writeTwice(os: 'darwin' | 'linux', opts: { preexisting?: boolean } = {}):
+  { home: string; calls: string[]; status: number | null; stderr: string } {
+    const home = mkTmp(`ccrc-a11-tmutil-${os}-`);
+    if (opts.preexisting) mkdirSync(path.join(home, '.cc-secrets'), { mode: 0o700 });
+    const bin = path.join(home, '.stub-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
+      { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    // A constant script: the source and the platform arrive in the environment, never in the command or its argv.
+    env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+    env['A11_OS'] = os;
+    const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; '
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN; '
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN'],
+    { env, encoding: 'utf8' });
+    const log = path.join(home, 'tmutil-calls');
+    return { home, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [], status: r.status, stderr: r.stderr };
+  }
+
+  it('creating `~/.cc-secrets` calls `tmutil addexclusion` on it', () => {
+    const r = writeTwice('darwin');
+    expect(r.status, r.stderr).toBe(0);
+    // Every write that ensures the directory excludes it (D-5756): `addexclusion` is sticky and idempotent, so the
+    // second call is harmless, and it is what covers a directory some other path created first.
+    const dir = path.join(r.home, '.cc-secrets');
+    expect(r.calls).toEqual([`addexclusion ${dir}`, `addexclusion ${dir}`]);
+  });
+
+  // D-5756. On an upgraded node `~/.cc-secrets` is already there: an older ccrc, `ccrc token sync` or the
+  // setup-token sign-in made it, and none of those excludes it. The next write must still exclude it.
+  it('an existing, unexcluded `~/.cc-secrets` is excluded by the next write', () => {
+    const r = writeTwice('darwin', { preexisting: true });
+    expect(r.status, r.stderr).toBe(0);
+    const dir = path.join(r.home, '.cc-secrets');
+    expect(r.calls[0]).toBe(`addexclusion ${dir}`);
+  });
+
+  // D-5756. The install spine's backfill step excludes an existing `~/.cc-secrets` on darwin, so a node that
+  // takes an update but runs no account verb afterwards stops backing its lane secrets up too.
+  it('the install backfill excludes an existing `~/.cc-secrets` on darwin, and calls nothing on Linux', () => {
+    for (const os of ['darwin', 'linux'] as const) {
+      const home = mkTmp(`ccrc-a11-tmutil-inst-${os}-`);
+      const bin = path.join(home, '.stub-bin');
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(path.join(home, '.cc-secrets'), { mode: 0o700 });
+      writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
+        { mode: 0o755 });
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
+      for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+      env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+      env['A11_OS'] = os;
+      const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; _inst_lane_state'],
+        { env, encoding: 'utf8', timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      const log = path.join(home, 'tmutil-calls');
+      const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
+      expect(calls, os).toEqual(os === 'darwin' ? [`addexclusion ${path.join(home, '.cc-secrets')}`] : []);
+    }
+  });
+
+  it('on Linux it calls nothing', () => {
+    const r = writeTwice('linux');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toEqual([]);
+  });
+});

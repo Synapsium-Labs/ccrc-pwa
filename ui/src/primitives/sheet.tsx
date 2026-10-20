@@ -2,12 +2,13 @@
 // trapped and Esc dismisses) wearing the Phosphor & Ink chrome: scrim,
 // spring-up panel with r-xl top corners, grabber, safe-area padded.
 import { Drawer } from 'vaul';
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
 import { SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 
-export interface SheetProps {
+interface SheetBaseProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
@@ -16,10 +17,6 @@ export interface SheetProps {
    *  element so callers can hang a chip off it. Falsy renders no kicker line at
    *  all — an empty <p> is invisible but still spends its margin. */
   eyebrow?: ReactNode;
-  /** Full-height variant — the terminal drawer's chrome: a --bg-well panel
-   *  rising to the safe-area line on --z-drawer, body as a flex column. The
-   *  title goes screen-reader-only so the glass keeps its full height. */
-  full?: boolean;
   className?: string;
   /** Called with a physical Escape before the sheet dismisses on it, as
    *  Radix's `onEscapeKeyDown` (vaul passes it through). `preventDefault()`
@@ -27,6 +24,97 @@ export interface SheetProps {
    *  Escape dismisses as it always has. The terminal drawer passes one so an
    *  Esc typed into its terminal goes to the session and never closes it. */
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
+  /** What takes the focus when the sheet opens (D-5931). Absent, or empty when the panel mounts, the panel itself
+   *  takes it: never an input, so a phone's keyboard never rises unasked. A danger confirm passes its Cancel
+   *  (`useCancelFirst`). The terminal drawer passes nothing: xterm focuses its own textarea when its socket opens. */
+  initialFocus?: RefObject<HTMLElement | null>;
+}
+
+/** `full` and `footer` are exclusive (D-5932): the terminal drawer's glass runs to the safe-area line and has no
+ *  answers to pin, so the type refuses a footer on it rather than the Sheet ignoring one. */
+export type SheetProps = SheetBaseProps & (
+  | {
+      full?: false;
+      /** The sheet's answers, PINNED (D-5932, spec §2.5): drawn after the scrolling body as a row of the panel that
+       *  does not shrink, so a tall body scrolls and the answers stay in reach, at every width. It sits inside the
+       *  panel's own side padding and safe-area bottom. Every confirm's `QC_ACTIONS` row goes here, never in the
+       *  children. */
+      footer?: ReactNode;
+    }
+  | {
+      /** Full-height variant — the terminal drawer's chrome: a --bg-well panel
+       *  rising to the safe-area line on --z-drawer, body as a flex column. The
+       *  title goes screen-reader-only so the glass keeps its full height. */
+      full: true;
+      footer?: never;
+    }
+);
+
+/** A field that raises a phone's keyboard when focused. */
+const isTextField = (el: HTMLElement): boolean =>
+  el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement || el.isContentEditable;
+
+/** A mouse or a trackpad, where focusing a field raises no on-screen keyboard. */
+const finePointer = (): boolean => window.matchMedia?.('(pointer: fine)').matches === true;
+
+/** THE SHEET OWNS FOCUS (D-5931, spec §2.4 (b)). In on open, trapped while open (Radix's modal scope), back to the
+ *  opener on close. One owner: no caller moves the focus into or out of a sheet.
+ *
+ *  It moves the focus on exactly two events, and never again while open, so a child that takes the focus later
+ *  (xterm on its socket's open) keeps it:
+ *  - THE PANEL MOUNTS WHILE OPEN (the returned callback ref, stable, so it fires on a mount and on nothing else).
+ *    A first open mounts the panel one pass after the opening commit (Radix's `Portal` waits for a layout effect of
+ *    its own), and so does every open of a sheet whose parent mounts it already open (`UpdateMoveSheet`). Child refs
+ *    attach before the parent's, so `initialFocus` is already set.
+ *  - `open` TURNS TRUE (the effect). It runs before that mount pass, while the opener still has the focus, so it
+ *    reads the opener there. On a REOPEN DURING THE CLOSE TRANSITION the closing panel is still mounted and no ref
+ *    fires, so the effect moves the focus itself.
+ *  Every focus passes `preventScroll`: the body is its own scroller and a Cancel at its foot must not scroll the
+ *  question away (D-5610). Radix's own open focus stays suppressed (`onOpenAutoFocus`); it would pick the first
+ *  tabbable, an input on the new-session and free-text sheets.
+ *
+ *  The give-back is the effect's cleanup: the dialog's trap (`trapped={open}`) is released by then, and a focus moved
+ *  outside a live trap is pulled back in. Radix gives the focus back only to its own `Dialog.Trigger`, which no sheet
+ *  uses. An opener that has left the document is left alone, and a disabled one ignores the call (an Ack in flight:
+ *  `AckConfirm`'s effect, its parent's, runs after this one and places the focus). A text field gets it back only on a
+ *  fine pointer: on a phone that would raise the keyboard unasked, and one tap on the field resumes typing. */
+function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null> | undefined): (el: HTMLElement | null) => void {
+  const panel = useRef<HTMLElement | null>(null);
+  const isOpen = useRef(open);
+  isOpen.current = open;
+  const target = useRef(initialFocus);
+  target.current = initialFocus;
+  // The opener as the focus left it for this sheet: read by whichever of the two events runs first.
+  const opener = useRef<HTMLElement | null>(null);
+  const focusIn = useCallback((el: HTMLElement): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && !el.contains(active)) opener.current = active;
+    const want = target.current?.current ?? null;
+    (want !== null && el.contains(want) ? want : el).focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    if (!open) return undefined;
+    const el = panel.current;
+    if (el !== null && el.isConnected) {
+      // A reopen during the close transition: the panel is mounted already and no ref fires.
+      if (!el.contains(document.activeElement)) focusIn(el);
+    } else {
+      const active = document.activeElement;
+      opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    }
+    const from = opener;
+    return () => {
+      const back = from.current;
+      from.current = null;
+      if (back === null || !back.isConnected) return;
+      if (isTextField(back) && !finePointer()) return;
+      back.focus({ preventScroll: true });
+    };
+  }, [open, focusIn]);
+  return useCallback((el: HTMLElement | null): void => {
+    panel.current = el;
+    if (el !== null && isOpen.current) focusIn(el);
+  }, [focusIn]);
 }
 
 export function Sheet({
@@ -38,7 +126,10 @@ export function Sheet({
   full,
   className,
   onEscapeKeyDown,
+  initialFocus,
+  footer,
 }: SheetProps): ReactNode {
+  const panelRef = useSheetFocus(open, initialFocus);
   // The visible title rides INSIDE the scroller, above the children it heads.
   // Outside it, the header row is flex-none and uncapped while only the body
   // scrolls — so a long title (a real AskUserQuestion runs to ~15 lines on a
@@ -96,15 +187,24 @@ export function Sheet({
           onClick={onClose}
         />
         <Drawer.Content
+          ref={panelRef}
+          // Focusable from script only, and named by its title (Radix's `aria-labelledby`): the panel is what takes
+          // the focus when nothing else is asked for (D-5931).
+          tabIndex={-1}
           aria-describedby={undefined}
           onEscapeKeyDown={onEscapeKeyDown}
+          // Radix's own open focus stays off; the focus is `useSheetFocus`'s, never this event's (D-5931).
+          onOpenAutoFocus={(event) => { event.preventDefault(); }}
           className={cn(
             // NO z-index HERE, on purpose: each arm states its own. `z-sheet` and
             // `z-drawer` are custom utilities cn() cannot tell apart, so both
             // survived on the full panel and the alphabetical emit order of Tailwind
             // let `z-sheet` (40) win — the terminal drawer sank to the level of
             // the sheets it is meant to sit above (main: 50).
-            'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none',
+            // `outline-none!` is IMPORTANT because the panel takes the focus (D-5931): after a keyboard open Chrome
+            // marks it `:focus-visible`, and the app's page-wide `:focus-visible` ring is unlayered, so it beats a
+            // layered utility. A ring round the whole panel says nothing; the panel is a container, not a control.
+            'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none!',
             // vaul slides the panel with KEYFRAMES, which no transition utility
             // reaches: retimed that way it slid for vaul's own half second, and
             // under reduced motion too. 'lib/motion.ts' puts the keyframes on the
@@ -180,6 +280,20 @@ export function Sheet({
             {inBody ? heading : null}
             {children}
           </div>
+          {/* THE FOOTER IS NOT IN THE BODY (D-5932). The panel is a column capped below the viewport and the body may
+              shrink below its content (`min-h-0`) and scrolls what it lost; this row may not shrink, so the answers
+              stay inside the panel however tall the body is. The panel's `px-card` and safe-area `pb` are its side
+              padding and bottom; `pt-4` parts it from the body's last line.
+              A ROW THAT MAY NOT SHRINK NEEDS ITS OWN CEILING (D-6030): uncapped, a tall footer (the resume sheet's
+              five reclaim controls) took the whole panel in a landscape phone and left the body, title and question
+              0px. Past half the viewport its rows scroll inside `.sheet-footer-rows`, which sits below the `pt-4` gap
+              so a half-scrolled row never butts against the body's clip edge, and moves its own clip edge out by the
+              focus ring's reach on all four sides (`-m-1 p-1`, as the body does at its sides). */}
+          {footer != null && footer !== false && !full ? (
+            <div className="sheet-footer flex-none pt-4">
+              <div className="sheet-footer-rows max-h-[50dvh] -m-1 p-1 overflow-y-auto overscroll-contain">{footer}</div>
+            </div>
+          ) : null}
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>

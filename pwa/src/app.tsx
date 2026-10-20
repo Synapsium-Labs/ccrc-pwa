@@ -1,12 +1,18 @@
-// Router shell. Three path routes: `/` (FleetScreen), `/s/:id`
-// (SessionScreen), `/archive` (ArchiveScreen — Task 19, the fleet-wide list
-// every archived workspace routes to from the footer row). On phones this is
-// a full-screen swap (one pane at a time); on desktop it's a two-pane
+// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/` is the
+// fleet, and every other route fills the detail pane. On phones this is a
+// full-screen swap (one pane at a time); on desktop it's a two-pane
 // master–detail — the fleet as a persistent sidebar beside the active detail
 // pane (styles/shell.css does the responsive layout, the same DOM serves
-// both). `/archive` shares the SAME detail slot and the SAME [data-view]
-// swap `/s/:id` already uses — CSS never learned a third state, it only
-// needed to know "fleet" vs "something else is in the detail pane".
+// both). Every non-fleet route shares the SAME detail slot and the SAME
+// [data-view] swap — CSS never learned a third state, it only needs to know
+// "fleet" vs "something else is in the detail pane".
+//
+// THE ONE BRANCH ON THE SKIN (D-5469): `SKIN_SETS[useSkin()]` here and nowhere
+// else in shared code (`skin-identity.test.ts` (m) and (o)). The skin chooses
+// the frame's parts; the frame itself, and everything mounted above it — the
+// fleet chrome and its flows, the command layer (D-5467), the login and block
+// screens and the toasts — is the same element in both skins, so a switch
+// remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
@@ -14,23 +20,34 @@ import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
 import { ToastHost } from '@ccrc/ui';
-import { AccountsStrip } from './fleet/AccountsStrip';
+import { CommandLayer } from './command/CommandLayer';
+import { FleetChromeProvider } from './fleet/FleetChrome';
+import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { useMediaQuery } from './lib/useMediaQuery';
+import { matchRoute } from './lib/routes';
+import { useSkin } from './lib/skin';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
 import { DigestScreen } from './screens/DigestScreen';
 import { DocsScreen } from './screens/DocsScreen';
-import { FleetScreen } from './screens/FleetScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
+import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
+import { SettingsScreen } from './screens/settings/SettingsFrame';
+import { ShellFrame } from './skins/frame';
+import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
 import './styles/shell.css';
 
 export { navigate } from './lib/router';
+
+/** The command layer under the fleet chrome, so "New session" runs the fleet
+ *  flows' own door (D-5468). */
+function ShellCommands(): ReactNode {
+  return <CommandLayer openNewSession={useFleetFlows().openNewSession} />;
+}
 
 export function App(): ReactNode {
   const { path, search } = useLocation();
@@ -41,16 +58,8 @@ export function App(): ReactNode {
     useFleetStore.getState().connect();
   }, []);
   const sessions = useFleetStore((s) => s.sessions);
-  // T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
-  // `epoch`/`observedEpoch` props were fully tested but had no producer — this
-  // was the ONE place `<FleetScreen>` renders, and it passed neither, so a
-  // tested component could never actually render in production. The `pools`
-  // frame is the existing carrier (no second poll, no new route call): `?.`
-  // preserves THE THREE-VALUED RULE at this hop too — `pools === null` (no
-  // frame has arrived yet) and a `pools` object simply missing the key both
-  // read as `undefined`, exactly like an absent key on the wire itself, and
-  // `pools.observedEpoch === null` (never synced) passes through unchanged.
-  const pools = useFleetStore((s) => s.pools);
+  // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
+  // with the fleet column into `screens/FleetColumn.tsx`.
   // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
   // store on an incompatible `hello`, cleared by a later compatible one.
   // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a
@@ -65,27 +74,21 @@ export function App(): ReactNode {
   // With `CCRC_AUTH` off this can never be true: nothing on a dark box produces
   // an auth refusal, and `raiseAuthLostFrom` demands positive evidence of one.
   const { lost: authLost } = useAuthLost();
-  const m = /^\/s\/([^/]+)\/?$/.exec(path);
-  const sessionId = m ? decodeURIComponent(m[1]!) : null;
-  const archive = /^\/archive\/?$/.test(path);
-  const accounts = /^\/accounts\/?$/.test(path);
-  const mail = /^\/mail\/?$/.test(path);
-  const runs = /^\/runs\/?$/.test(path);
-  const settings = /^\/settings\/?$/.test(path);
-  // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link, and any past day's digest. The screen
-  // validates nothing about `day` itself: the server answers 400 for a day that is not a UTC date.
-  const digest = /^\/digest\/?$/.test(path);
-  const digestDay = digest ? new URLSearchParams(search).get('day') : null;
-  // Docs (design 2026-10-01 section 4.2): `/docs` and every page under it, never `/docsearch`, so the pattern is
-  // `/docs` followed by a slash or the end, not a bare prefix.
-  const docs = new RegExp('^/docs(?:/|$)').test(path);
-  // On desktop the accounts strip is a full-width top bar (rendered here, once);
-  // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
-  // instance either way — no duplication, no double polling.
-  const desktop = useMediaQuery('(min-width: 900px)');
+  // The ladder's one source of routes (D-5466): a path outside the table is
+  // the fleet's placeholder, never a screen the table does not name.
+  const at = matchRoute(path);
+  const route = at?.route.id ?? null;
+  const sessionId = route === 'session' ? at!.param : null;
+  // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback.
+  const settings = route === 'settings' || (route?.startsWith('settings-') ?? false);
+  // `/digest?day=YYYY-MM-DD` (D-5300): the screen validates nothing about
+  // `day` itself: the server answers 400 for a day that is not a UTC date.
+  const digestDay = route === 'digest' ? new URLSearchParams(search).get('day') : null;
+  const set = SKIN_SETS[useSkin()];
   // A ROUTE CHANGE PUTS THE DETAIL PANE BACK AT THE TOP (D-161).
   //
-  // `.shell-detail` is ONE persistent DOM node whose CHILDREN swap per route
+  // `.shell-detail` is ONE persistent DOM node (the frame's keyed `detail`
+  // child, the same node in both skins) whose CHILDREN swap per route
   // (the ternary below is inside it), so React reconciles the contents and
   // leaves the pane's own scroll offset exactly where the last screen left it.
   // Before D-161 gave the pane a scroll region that offset was always 0 and
@@ -128,23 +131,23 @@ export function App(): ReactNode {
   // all outside it, stay mounted. Its reset key is `path + search`, so any
   // navigation draws the ladder again; it is not a React `key`, so it never
   // remounts a screen and the pane reset above stays the shell's.
-  const ladder = sessionId ? (
+  const ladder = sessionId !== null ? (
     // key remounts per session so per-session UI state (terminal drawer,
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />
-  ) : archive ? (
+  ) : route === 'archive' ? (
     <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
-  ) : accounts ? (
+  ) : route === 'accounts' ? (
     <AccountsScreen />
-  ) : mail ? (
+  ) : route === 'inbox' ? (
     <MailScreen />
-  ) : runs ? (
+  ) : route === 'runs' ? (
     <RunsScreen />
   ) : settings ? (
     <SettingsScreen />
-  ) : digest ? (
+  ) : route === 'digest' ? (
     <DigestScreen day={digestDay} />
-  ) : docs ? (
+  ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
     // page, ref and view the visit opens.
     <DocsScreen path={path} search={search} />
@@ -156,32 +159,26 @@ export function App(): ReactNode {
       <p className="shell-placeholder-copy">Select a session</p>
     </div>
   );
+  // The fleet's polls and sheets sit ABOVE the shell (D-5468): one health, updates and projects poll for every
+  // reader, and the five fleet sheets rendered by `FleetFlows` beside `.app-shell`, so a fleet list that remounts
+  // never closes a sheet it opened.
+  // SETTINGS' READS, MADE ONCE (D-5504): the provider wraps the whole shell on EVERY route and reads only while
+  // `active`. Mounted only on Settings routes it would change the tree above `.app-shell`, so the frame would
+  // remount on each entry and exit, losing the sidebar's scroll (D-161) and the detail node (D-5466).
   return (
-    <>
+    <FleetChromeProvider store={useFleetStore}>
+      <SettingsDataProvider active={settings}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings || digest || docs ? 'session' : 'fleet'}>
-        {desktop && (
-          <div className="shell-accounts">
-            <AccountsStrip />
-          </div>
-        )}
-        <aside className="shell-nav">
-          {/* Always mounted so it's the desktop sidebar; hidden on mobile when a
-              session is open. selectedId marks the active card in the sidebar;
-              showAccounts is false on desktop (they're in the top bar instead). */}
-          <FleetScreen
-            selectedId={sessionId}
-            showAccounts={!desktop}
-            epoch={pools?.epoch}
-            observedEpoch={pools?.observedEpoch}
-          />
-        </aside>
-        <section className="shell-detail" ref={detail}>
-          <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
-        </section>
-      </div>
+      <ShellFrame set={set} view={route === null || route === 'fleet' ? 'fleet' : 'session'} detailRef={detail}>
+        <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
+      </ShellFrame>
+      <FleetFlows />
+      {/* The ⌘K palette, the shortcut sheet and the global keys (D-5103),
+          above the frame so a skin switch keeps an open palette (D-5467). */}
+      <ShellCommands />
       <ToastHost />
-    </>
+      </SettingsDataProvider>
+    </FleetChromeProvider>
   );
 }

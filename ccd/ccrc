@@ -311,8 +311,8 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # false on macOS — the total EQUALLED the row sum and overstated the
 # reclaim. `-type l` rides along because `du -sb` counts a symlink's own
 # st_size too (directories need nothing: GNU du charges a directory 0 in
-# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
-# identity to dedup on (device:inode) and the size in one exec batch.
+# byte totals — measured, coreutils 9.4). `find -ls` hands awk inode ($1) and size ($7) from find's own lstat;
+# `-exec stat` cost ~6 ms a file on macOS, minutes per worktree. Dedup by inode: one workspace, one filesystem.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a
@@ -359,8 +359,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   local p errf err out rc
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
-  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
+  out=$(find "$@" \( -type f -o -type l \) -ls 2>"$errf" \
+        | awk '{ if (!seen[$1]++) s+=$7 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
@@ -876,7 +876,7 @@ _svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>AbandonProcessGroup</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -4044,9 +4044,9 @@ _ccrc_foreign_remedy() {
 #   - Measured: with `claude` flipped to "generated" and another account made
 #     upstream, `ccrc wrappers --force` overwrote `~/.local/bin/claude` — a
 #     2741-byte launcher — with a generated wrapper, and exited 0. Because
-#     claude2, claude-corp and claude-dev0 all end
+#     claude9, claude-acme and claude-lab0 all end
 #     `exec "$HOME/.local/bin/claude" "$@"`, that closed an exec loop across
-#     EVERY LANE AT ONCE: `claude2 --version` went from rc=127 to rc=124, i.e.
+#     EVERY LANE AT ONCE: `claude9 --version` went from rc=127 to rc=124, i.e.
 #     it stopped terminating at all. Lock 4 does not catch it — the staged
 #     wrapper execs the OTHER account, so it is not self-referential, and lock
 #     4 tests only self-reference.
@@ -4348,7 +4348,7 @@ cmd_wrappers() {
   # Each refusal below ends "nothing was written", and this loop is what makes
   # that sentence TRUE rather than merely reassuring. These checks used to live
   # inside the action loop, where a manifest whose SECOND record was bad printed
-  # `WRITE claude2 …` and then, two lines later, `… and nothing was written` —
+  # `WRITE claude9 …` and then, two lines later, `… and nothing was written` —
   # two statements about one run, contradicting each other, with the first one
   # right. (It was invisible to the tests because every stub manifest that
   # reached these branches carried a single record.) These are all statements
@@ -4368,7 +4368,7 @@ cmd_wrappers() {
     # The id off the manifest is about to become a FILENAME under
     # $HOME/.local/bin. The gate is on the ID, before any path is built from it,
     # which is what makes it hold for a traversing id (`../../.bashrc`) as well
-    # as for a merely illegal one (`claude2.bak`) — a check on the resulting
+    # as for a merely illegal one (`claude9.bak`) — a check on the resulting
     # path would have to enumerate the ways a path can escape.
     [[ "$id" =~ $WRAPPER_ID_RE ]] \
       || _ccrc_die "the manifest from $gen names \"$id\", which is not a legal account id, and this verb will not build a path under $WRAPPER_BIN_DIR out of it — this is a bug in ccrc, not a fact about your box, and nothing was written"
@@ -4602,8 +4602,8 @@ cmd_wrappers() {
           #     `OVERSIZE_BYTES` so `$gen` reads it; no ccrc marker so it
           #     classifies `foreign`; and one `--force` under a mis-edited
           #     roster overwrote it with a wrapper exec'ing
-          #     `$HOME/.local/bin/claude` — itself — while claude-corp, claude2
-          #     and claude-dev0 all end `exec "$HOME/.local/bin/claude" "$@"`.
+          #     `$HOME/.local/bin/claude` — itself — while claude-acme, claude9
+          #     and claude-lab0 all end `exec "$HOME/.local/bin/claude" "$@"`.
           #     A FLEET-WIDE EXEC LOOP, from one flag. Until 2026-08-20 the
           #     only thing stopping it was that the file was ~334 MB and
           #     classified `oversize`; shrinking it to 2.7 KB removed a lock
@@ -4685,7 +4685,7 @@ cmd_wrappers() {
       # id would be adopted as a second account fighting the first over one
       # CLAUDE_CONFIG_DIR, and doctor would report a wrapper the roster never
       # declared. (It is the same "." that drops the `ccd.bak-<date>` and
-      # `claude2.bak-<date>` files a real box accumulates — see
+      # `claude9.bak-<date>` files a real box accumulates — see
       # `ccd/ccrc-wrapper-shape:63-67`.)
       # `cp -p` so the backup keeps the mode and timestamps of what it replaced,
       # and `-P` so it keeps WHAT it replaced (Plan 3a Task 9): the rename below
@@ -4788,14 +4788,14 @@ cmd_wrappers() {
 # operator sees exactly what would happen before it happens.
 #
 # HOMES ARE ENUMERATED FROM THE FILESYSTEM, NOT FROM THE ROSTER. Measured
-# 2026-09-09: `.claude-glm` and `.claude-kimi` are on disk, hold memory, and
+# 2026-09-09: `.claude-alt1` and `.claude-alt2` are on disk, hold memory, and
 # are in no roster entry. The roster describes accounts ccrc PLACES WORK ON;
 # it was never a census of homes, and using it as one is how the design's own
 # first draft came to list five homes when there were eight.
 _mem_homes() {   # -> one agent-home path per line
   local d
   for d in "$HOME"/.claude*/; do
-    # A named `.claude-docserver` skip used to sit here. REMOVED (final
+    # A named `.claude-docs-preview` skip used to sit here. REMOVED (final
     # whole-branch review, completeness critic item 4): the docserver is a
     # private, box-local operator tool this tree does not know about
     # (CLAUDE.md says so explicitly, for the same reason it forbids reading
@@ -4803,7 +4803,7 @@ _mem_homes() {   # -> one agent-home path per line
     # its directory name into general enumeration logic in a repo bound for
     # public release is identity residue, and it was provably dead code: the
     # very next line already excludes it on the one box it was written for
-    # (`.claude-docserver` has no `projects/`), so no test could ever pin it
+    # (`.claude-docs-preview` has no `projects/`), so no test could ever pin it
     # without manufacturing a `projects/` dir the real tool does not have.
     [ -d "${d}projects" ] || continue
     printf '%s\n' "${d%/}"
@@ -4907,12 +4907,12 @@ _mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
 # `_mem_state` calls `converged`, so a relative-but-correct link is LEFT AS
 # WRITTEN rather than normalised … only the link's own spelling is left alone."
 # The second half is what was false. `-ef` follows a CHAIN, so the pairs left
-# alone included `.claude-corp -> .claude's link -> store` — not a spelling but
+# alone included `.claude-acme -> .claude's link -> store` — not a spelling but
 # a shape the design forbids, in which one account's link is load-bearing for
 # another's, permanently (re-running `--apply` never repaired it) and invisibly
 # (`_check_memory` printed PASS). It is also an ordering a real box
 # plausibly produces under its actual locale (`en_US.UTF-8`: `.claude`
-# sorts before `.claude-corp`), so its own pair can converge first and
+# sorts before `.claude-acme`), so its own pair can converge first and
 # manufacture the chain mid-run — but see the CORRECTION below: this is not
 # a universal ordering rule, and an earlier version of this comment claimed
 # it was.
@@ -5093,9 +5093,9 @@ _mem_rebuild_index() {   # <store> -> prints the count of *.md files DROPPED
 _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
                    # stdout; returns 1 (with its own stderr diagnostics) if
                    # any copy failed, 0 otherwise.
-  # R6: `tag` strips a leading dot from the home basename (`.claude-corp` ->
-  # `claude-corp`) — every agent home starts with one, so leaving it in would
-  # make a conflict suffix read `same..claude-corp.md` (a double dot). Purely
+  # R6: `tag` strips a leading dot from the home basename (`.claude-acme` ->
+  # `claude-acme`) — every agent home starts with one, so leaving it in would
+  # make a conflict suffix read `same..claude-acme.md` (a double dot). Purely
   # cosmetic: it changes nothing about which files collide or how.
   #
   # I3 (review round 1): this function is deliberately narrow — a "memory
@@ -5207,7 +5207,7 @@ _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
     # C2 (review round 1): differs from what's there — keep BOTH, but the
     # suffixed slot may ALREADY be taken by an earlier, unrelated absorption
     # (M1's forbidden silent winner, one filename later — measured: a
-    # pre-existing `same.claude-corp.md` was destroyed, unconditionally
+    # pre-existing `same.claude-acme.md` was destroyed, unconditionally
     # overwritten, by a same-named suffix from a genuinely different file).
     # Never overwrite it blind: walk forward to the next free — or
     # byte-identical — numbered slot instead.
@@ -5251,15 +5251,15 @@ _mem_apply() {
       # because the memory genuinely IS shared into the one store. But
       # "resolves to" admits a shape the design forbids: a CHAIN. With
       # `.claude/projects/<slug>/memory` -> the store and
-      # `.claude-corp/projects/<slug>/memory` -> `.claude`'s link, `-ef`
+      # `.claude-acme/projects/<slug>/memory` -> `.claude`'s link, `-ef`
       # follows the whole chain and answers true, so a bare
       # `= converged && continue` here skipped that pair FOREVER — `--apply`
       # never repaired it and `_check_memory` printed `PASS memory`.
       #
       # IT IS AN ORDERING A REAL BOX PLAUSIBLY PRODUCES, not a contrived one —
       # under the box's actual `en_US.UTF-8` locale, `.claude` sorts before
-      # `.claude-corp`, so `.claude`'s own plain-directory pair converges
-      # FIRST and turns the very directory `.claude-corp` points at into a
+      # `.claude-acme`, so `.claude`'s own plain-directory pair converges
+      # FIRST and turns the very directory `.claude-acme` points at into a
       # link to the store. The pair that was going to be repaired becomes a
       # pair that reads converged, in the same run, by construction.
       #
@@ -5268,7 +5268,7 @@ _mem_apply() {
       # claimed. Bash sorts the expanded glob strings INCLUDING the trailing
       # `/`, so under `LC_ALL=C` (what a stripped systemd environment, and
       # this suite's own `doctorEnv`, actually set) `-` (0x2D) beats `/`
-      # (0x2F) and `.claude-corp/` sorts BEFORE `.claude/` — the opposite
+      # (0x2F) and `.claude-acme/` sorts BEFORE `.claude/` — the opposite
       # order, attributing a conflict copy to the wrong home. The chain
       # shape this arm repairs is real prior art on this box regardless of
       # which order manufactures it mid-run; only the false universal
@@ -6777,13 +6777,18 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # rule this function is written to obey — see the paragraph above.
   mkdir -p -m 0700 "$ACCT_SECRETS_DIR" \
     || _acct_refuse 1 secrets-dir "cannot create $ACCT_SECRETS_DIR (0700) — nothing was written"
+  # EVERY ENSURE EXCLUDES, NOT ONLY A CREATE (D-5756): on an upgraded node the
+  # directory is already there, made by an older ccrc, `ccrc token sync` or the
+  # setup-token sign-in, none of which exclude it. `addexclusion` is sticky and
+  # idempotent, so repeating it is harmless.
+  _acct_backup_exclude "$ACCT_SECRETS_DIR"
   # THE NAME SAYS WHAT THE FILE CARRIES, and it is derived from the THIRD
   # argument rather than from the second, for the reason `check-add` derives it
   # the same way (Task 23's plan literal, `secretTag`): a lane exporting
   # `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token and its file is
   # `<id>-oauth.env` — §6:507, §7:472, §11 and §12.5's spelling, and the one
   # every anthropic lane on this fleet already has
-  # (`server/test/helpers.ts:69`) — while an api-key lane's file is
+  # (`server/test/adopt.test.ts`'s generated lanes) — while an api-key lane's file is
   # `<id>-<provider>.env`, §4.3:318's spelling. §5:413's `X-P.env` is the
   # general shape both obey. THE TWO DERIVATIONS MUST STAY ONE RULE: `add`
   # writes this path into `exec.secretsFile`, the generated wrapper sources
@@ -6802,6 +6807,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   tag="$ACCT_SECRET_TAG"
   dest="$ACCT_SECRETS_DIR/$id-$tag.env"
   tmp="$ACCT_SECRETS_DIR/.$id-$tag.env.tmp.$$"
+  _acct_own_temp "$tmp"
   # `%q`, NOT `%s`, AND THE FILE IS THE REASON (D-1984, review round 1). This
   # file is SOURCED, not read: `shared/wrapper.mjs:141-143` generates
   # `[ -r "$HOME/<secretsFile>" ] && . "$HOME/<secretsFile>"` into every
@@ -6832,7 +6838,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     ACCT_CREDENTIAL=""
-    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. What nothing cleans up is a temp left by a run that was KILLED between the create and the mv: it is .$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential, and no retry ever reuses the name because it carries the pid. Remove one by hand if you find it."
+    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. A temp left by a run that was KILLED between the create and the mv (.$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential) is removed by the next 'ccrc account add', 'credential' or 'remove' on this lane, under its lock (D-5755 (4))."
   fi
   # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123) — AND
   # RECORD THE PATH, never the value (D-2051: `_acct_add`'s `add-entry` refusal
@@ -7122,6 +7128,7 @@ _acct_settings_env() {   # <cfgdir> <set|clear> <what-still-stands> [<base-url>]
       || _acct_refuse 1 settings-merge "could not back up $f to $bdir — refusing to rewrite it, so that file is exactly as it was. $stands"
   fi
   tmp="$f.tmp.$$"; [ -n "$fmode" ] || fmode=644
+  _acct_own_temp "$tmp"
   jq . <<<"$next" > "$tmp" && chmod "$fmode" "$tmp" && mv -f "$tmp" "$f" \
     || { rm -f "$tmp"; _acct_refuse 1 settings-merge "writing $f failed — the write is tmp + mv, so that file is exactly as it was. $stands"; }
   # THE ONE WRITER OF THIS VARIABLE, and it sits after the `mv` that landed the file
@@ -7268,6 +7275,7 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
   # it. `-f && ! -L` is then the exact postcondition: ccd reads `-f`, and accepting
   # a link here would re-introduce the write-through path on the next converge.
   local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
+  _acct_own_temp "$tmp"
   mkdir -p "$_SVC_REG" \
     || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
   rm -f -- "$tmp"
@@ -7304,6 +7312,8 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
 ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
 _acct_add() {
   _acct_add_parse "$@"
+  _acct_lane_lock "$ACCT_ID" "Nothing was written."
+  _acct_sweep_secret_temps "$ACCT_ID"
 
   # The check is side-effect-free and its `plan` is what every later step
   # writes from, so no step re-derives a decision this one already made. It runs
@@ -7453,6 +7463,9 @@ _acct_add() {
   # validated `models` object, or `{}`, which is what `--argjson` needs.
   _acct_provision "$HOME/$ACCT_SUFFIX" "$ACCT_BASE_URL_RESOLVED" "$ACCT_MODELS_RESOLVED"
   _acct_operator_steps "$ACCT_ID"
+  # THE LANE STATE, FRESH (accounts plan Task A11): a new lane's state starts
+  # over, so a stale file under a re-used id lends it nothing.
+  _acct_lane_state "$ACCT_ID" --mode fresh
 
   # ── 7. THE ANSWER ───────────────────────────────────────────────────────
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`
@@ -7714,6 +7727,107 @@ _acct_placeable() {   # [<id to exclude>] -> fills global placeable lanes
   done <<<"$listed"
 }
 
+# ── ONE ACT PER LANE, A VERB THAT DIES HALFWAY, AND THE LANE STATE ────────
+# Accounts plan Task A11 (spec §3.4, §3.9; D-5517, D-5518, D-5755).
+#
+# THE LANE LOCK. Every mutating `ccrc account` verb takes `flock -n` on
+# `~/.ccrc/locks/<id>.lock` (the directory 0700) before it writes anything, and
+# refuses `lane-busy` when another verb holds it, so a retry can never race an
+# add that is still running. The box-wide `_acct_marker_lock` stays, and is
+# ALWAYS taken after this one: a verb that took the marker lock first and then
+# waited here would hold the whole box's placement floor while it waited. The
+# order is checked, not hoped for: asking for the lane lock while the marker
+# lock is held is refused as the bug it is. The lock is held on an fd until the
+# process exits, so a SIGKILL releases it too.
+#
+# THE TERM TRAP. The agent ends a sub that outlives its bound with SIGTERM to
+# the process group, then SIGKILL after 5 s (D-5621). Every temp this verb
+# stages is registered with `_acct_own_temp` BEFORE it is created, and the
+# trap `cmd_account` installs removes them all and exits 143. bash runs the
+# trap once the foreground child it is waiting on has died, which the group
+# signal arranges. A SIGKILL runs no trap; what it strands is what the sweep
+# below exists for.
+#
+# THE SWEEP. `add`, `credential` and `remove` each delete the secret temps an
+# earlier KILLED run left for THIS lane, under this lane's lock, so no live
+# writer's temp can be among them. The spec writes the pattern `.<id>-*.tmp.*`;
+# this sweep matches `_acct_write_secret`'s temp name exactly instead,
+# `.<id>-<tag>.env.tmp.<pid>` with a tag that carries no `-`, because the
+# glob alone would also match lane `<id>-a`'s live temp, and that lane's lock
+# is not held here (D-5755).
+ACCT_LANE_LOCK_FD=""
+ACCT_OWN_TEMPS=()
+
+_acct_own_temp() {   # <path> — this verb's temp, removed by the TERM trap
+  ACCT_OWN_TEMPS+=("$1")
+}
+
+_acct_on_term() {    # the TERM trap `cmd_account` installs
+  local t=""
+  for t in ${ACCT_OWN_TEMPS[@]+"${ACCT_OWN_TEMPS[@]}"}; do rm -f -- "$t" 2>/dev/null; done
+  exit 143
+}
+
+# THE LOCKS DIRECTORY IS SPELLED ONCE in this file, on `_models_lock_path`'s
+# line (auto-advance spec D21's single-definition pin); a lane lock lives
+# beside the models locks, so its directory is derived from that one spelling
+# (D-5755 (14)).
+_acct_locks_dir() { local p; p="$(_models_lock_path _)"; printf '%s' "${p%/*}"; }
+
+_acct_lane_lock() {   # <id> <what-still-stands> -> lock held on ACCT_LANE_LOCK_FD until exit
+  local id="$1" stands="$2" dir
+  dir="$(_acct_locks_dir)"
+  [ -z "$ACCT_LANE_LOCK_FD" ] || return 0
+  [ -z "$ACCT_MARKER_LOCK_FD" ] \
+    || _acct_refuse 1 lock-order "this verb asked for lane $id's lock while it already held the box-wide placement lock, which is the order that lets two verbs wait on each other. This is a bug in ccrc, not a fact about your box. $stands"
+  mkdir -p -m 0700 "$dir" \
+    || _acct_refuse 1 lane-lock "cannot create $dir (0700), so lane $id cannot be locked against a second verb. $stands"
+  command -v flock >/dev/null 2>&1 \
+    || _acct_refuse 1 lane-lock "flock is unavailable, so lane $id cannot be locked against a second verb. Install flock, then retry. $stands"
+  exec {ACCT_LANE_LOCK_FD}>>"$dir/$id.lock" \
+    || _acct_refuse 1 lane-lock "cannot open $dir/$id.lock, so lane $id cannot be locked against a second verb. $stands"
+  flock -n "$ACCT_LANE_LOCK_FD" \
+    || _acct_refuse 1 lane-busy "another ccrc account verb is acting on lane $id right now, and one lane takes one act at a time. Retry once it has finished. $stands"
+}
+
+_acct_sweep_secret_temps() {   # <id> — under that lane's lock only
+  local id="$1" f="" rest=""
+  [ -d "$ACCT_SECRETS_DIR" ] || return 0
+  for f in "$ACCT_SECRETS_DIR/.$id-"*.tmp.*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } || continue
+    rest="${f##*/}"; rest="${rest#".$id-"}"
+    [[ "$rest" =~ ^[a-z]+\.env\.tmp\.[0-9]+$ ]] || continue
+    rm -f -- "$f"
+  done
+}
+
+# THE WRITE IS ADVISORY TO THE VERB (D-5755). The lane-state file is for
+# display and an accident guard (spec §3.4): an absent file reads Not checked
+# and is never Signed in, and the verb's own answer carries what it measured.
+# So a verb whose act landed does not turn into a refusal because this file
+# could not be written (a registry directory the operator made unreadable, a
+# full disk); the writer's sentence and this one go to stderr, and the answer
+# stands. The writer itself refuses, and is pinned to, everything it guards.
+_acct_lane_state() {   # <id> [--mode m] [--check-verdict v --check-at t]
+  local rc=0
+  _acct_node lane-state --id "$@" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] \
+    || printf '%s\n' "$PROG: account: lane $1's state file under $_SVC_REG/.accounts was not written (exit $rc); this verb's answer stands, and the next account verb on the lane writes it" >&2
+  return 0
+}
+
+# BACKUPS (D-5513's backups row; G33). On darwin a directory that holds lane
+# secrets is excluded from Time Machine by the verb that ensures it exists.
+# Advisory: a refusal here is said on stderr and changes no verb's answer;
+# `ccrc doctor`'s `secrets-backup-excluded` (A11b) is what reports the posture.
+_acct_backup_exclude() {   # <dir>
+  [ "$CCD_OS" = darwin ] || return 0
+  if ! command -v tmutil >/dev/null 2>&1 || ! tmutil addexclusion "$1" >/dev/null 2>&1; then
+    printf '%s\n' "$PROG: account: could not exclude $1 from Time Machine backups; 'ccrc doctor' reports it" >&2
+  fi
+  return 0
+}
+
 ACCT_MARKER_LOCK_FD=""
 _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_FD until the caller returns
   # `$1` IS THE CALLER'S CLAUSE, bound positionally — `_acct_mark_off`'s rule
@@ -7749,6 +7863,7 @@ _acct_enable() {   # [--id X]
   _acct_one_id enable "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
+  _acct_lane_lock "$ACCT_ONE_ID" "Nothing was written."
   _acct_marker_lock "Nothing was written."
   # Membership may have changed while this process waited for a removal.
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -7761,6 +7876,7 @@ _acct_enable() {   # [--id X]
     || _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written."
   [ ! -e "$marker" ] && [ ! -L "$marker" ] \
     || _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written."
+  _acct_lane_state "$ACCT_ONE_ID"
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
   printf '%s\n' "$ACCT_OUT"
@@ -7772,6 +7888,7 @@ _acct_disable() {   # [--id X]
   id="$ACCT_ONE_ID"
   _acct_id_or_refuse "$id"
   _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
   _acct_marker_lock "Nothing was written."
   # Membership may have changed while this process waited for a removal.
   _acct_known_or_refuse "$id"
@@ -7794,6 +7911,7 @@ _acct_disable() {   # [--id X]
   _acct_mark_off "$id" "No marker was written, so account $id remains switched on. No other file was written."
   { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
     || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so account $id cannot be proved switched off. No other file was written."
+  _acct_lane_state "$id"
   _acct_read_op "The marker for account $id was written and the lane is switched off. Only this report failed." \
     switched --id "$id" --disabled true
   printf '%s\n' "$ACCT_OUT"
@@ -7995,6 +8113,7 @@ _acct_declare() {
   # standing there — `_acct_declarable` refuses a rostered id again, because a
   # launcher is always `-ef` itself — but it is the one that names the condition.
   _acct_id_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
   [ -n "$label" ] || _acct_refuse 2 missing-value "declare needs a human label: pass --label. The roster carries one for every account. Nothing was written."
   [ -n "$hue" ]   || _acct_refuse 2 missing-value "declare needs a hue: pass --hue. The roster carries one for every account. Nothing was written."
   # ON A SUFFIX THE OPERATOR GAVE, AND ONLY THEN. The DEFAULT is `declaredEntry`'s
@@ -8079,6 +8198,7 @@ _acct_declare() {
   # Captured with this site's own clause rather than passed straight through
   # (D-2130): by this line the entry, the projection and the marker all stand, so
   # a shared "Nothing was written." would state the opposite of what happened.
+  _acct_lane_state "$id" --mode fresh
   _acct_read_op "This lane is fully declared and nothing rolls back: the roster entry for \"$id\", \$HOME/.ccrc/accounts.sh and the $_SVC_REG/$id-disabled marker that keeps it switched off all stand, and the launcher was never touched. Only this report failed: run 'ccrc account roster' to read the entry back." \
     declared --file "$(_acct_roster_path)" --id "$id" --disabled true
   printf '%s\n' "$ACCT_OUT"
@@ -8504,6 +8624,8 @@ _acct_credential() {
     shift
   done
   _acct_id_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
 
   # THE LANE KIND IS THE FIRST QUESTION, because spec:419's sentence asks it
@@ -8599,6 +8721,10 @@ _acct_credential() {
   # one value in this run that must never be read for a request the box was
   # going to refuse anyway.
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
+  # A verdict measured on the old secret says nothing about this one (D-5755
+  # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
+  # after the rename fails safe: the lane reads Not checked either way.
+  _acct_lane_state "$id" --clear check
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
   _acct_live "$id"
 
@@ -8747,6 +8873,8 @@ _acct_remove() {
   done
 
   _acct_id_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
   [ "$ACCT_KIND" != upstream ] \
     || _acct_refuse 1 upstream "$id is the upstream account - every generated wrapper on this box execs it, so removing it would leave those lanes pointing at nothing. Nothing was written."
@@ -9061,6 +9189,14 @@ _acct_remove() {
     operator_steps+=("This lane's files under \$HOME/.ccrc/models/ were kept, and they are reaped by their own verb rather than by hand: ccrc models $id rm")
   fi
 
+  # THE LANE STATE GOES WITH THE LANE (accounts plan Task A11; D-5755): a
+  # re-add under this id starts from nothing rather than from this lane's
+  # identity or key hash. Reported like every other path this verb removed.
+  local lane_state="$_SVC_REG/.accounts/$id.json"
+  if [ -e "$lane_state" ] || [ -L "$lane_state" ]; then
+    _acct_lane_state "$id" --mode delete
+    { [ -e "$lane_state" ] || [ -L "$lane_state" ]; } && kept+=("$lane_state") || removed+=("$lane_state")
+  fi
   local -a args=(--file "$(_acct_roster_path)" --id "$id")
   for f in ${rehomed[@]+"${rehomed[@]}"}; do args+=(--rehomed "$f"); done
   for f in ${kept[@]+"${kept[@]}"}; do args+=(--kept "$f"); done
@@ -9749,6 +9885,7 @@ _acct_check() {
     shift
   done
   _acct_id_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was measured or written."
   _acct_lane "$id"
   ACCT_HEALTH=""
   ACCT_NOTES=()
@@ -9804,6 +9941,16 @@ _acct_check() {
     stands="$(_acct_quick_stands)"
   fi
 
+  # THE MEASUREMENT IS RECORDED IN THE LANE STATE (accounts plan Task A11):
+  # `check: {verdict, at}`, read out of the row with jq rather than re-spelled.
+  # A row with no verdict records nothing; the `health` op below refuses it in
+  # its own words.
+  local verdict="" at=""
+  verdict="$(jq -r 'if (.verdict|type)=="string" then .verdict else empty end' <<<"$ACCT_HEALTH" 2>/dev/null)" || verdict=""
+  at="$(jq -r 'if (.measuredAt|type)=="string" then .measuredAt else empty end' <<<"$ACCT_HEALTH" 2>/dev/null)" || at=""
+  if [ -n "$verdict" ] && [ -n "$at" ]; then
+    _acct_lane_state "$id" --check-verdict "$verdict" --check-at "$at"
+  fi
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
   local n=""
   for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$(_acct_note_cap "$n")"); done
@@ -9852,6 +9999,11 @@ cmd_account() {
   for s in $ACCT_SUBS; do [ "$s" = "$sub" ] && known=1; done
   [ "$known" -eq 1 ] \
     || _acct_refuse 2 unknown-subcommand "ccrc account has no subcommand \"$sub\". This build implements: ${ACCT_SUBS:-nothing yet — this commit is the dispatch skeleton}"
+
+  # A KILLED VERB REMOVES ITS OWN TEMPS (accounts plan Task A11; spec §3.9).
+  # `_acct_on_term` states the rule; every stager registers with
+  # `_acct_own_temp` before it creates.
+  trap _acct_on_term TERM
 
   case "$sub" in
     add)
@@ -12694,6 +12846,7 @@ CCRC_INST_SPINE=(
   _inst_ws_build_excludes
   _inst_graph_hooks_off
   _inst_wrappers
+  _inst_lane_state
   _inst_installed
 )
 
@@ -16664,6 +16817,68 @@ _inst_legacy_verified_parent() {
   args="$(ps -o args= -p "$PPID" 2>/dev/null)" || return 1
   [ -n "$args" ] || return 1
   [[ "$args" =~ ^(([^[:space:]]*/)?(bash|sh)[[:space:]]+)?[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
+}
+
+# ── _inst_lane_state — the lane-state backfill (accounts plan Task A11) ────
+# D-5518, G35: a lane rostered before the lane-state file existed has none, and
+# `enable`'s readiness (A13) reads it, so every rostered lane that lacks one
+# gets one here, with `check` absent ("Check it once to turn it on"). `ccrc
+# update` runs the staged tree's install spine, so it backfills through this
+# same step. A file that exists, whatever it holds, is left byte for byte (the
+# writer's `if-absent` mode). Each write takes that lane's lock the way the
+# verbs do; a lane a verb is acting on right now is left to that verb, which
+# writes its own state.
+# ADVISORY, AS THE VERBS' WRITE IS (D-5755 (2), (9)). The file is for display
+# and an accident guard, and an absent file reads Not checked, so a box whose
+# lane-state files cannot be written (a registry that is not a directory, a
+# full disk) still takes its update: each failure is said on stderr, counted on
+# the summary line, and the next account verb on the lane writes it.
+_inst_lane_state() {
+  if [ "$INST_ROLE" = server ]; then echo "install: lane-state: skipped — a server-role box hosts no sessions"; return 0; fi
+  # D-5756: an upgraded darwin node's existing `~/.cc-secrets` was never
+  # excluded from Time Machine; this step excludes it (advisory, silent on Linux).
+  [ ! -d "$ACCT_SECRETS_DIR" ] || _acct_backup_exclude "$ACCT_SECRETS_DIR"
+  local sh="$HOME/.ccrc/accounts.sh" op="$CCRC_HERE/../deploy/account-op.mjs" locks
+  locks="$(_acct_locks_dir)"
+  local listed="" id="" rc=0 wrote=0 kept=0 busy=0 failed=0
+  if ! listed="$(
+    . "$sh" >/dev/null || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
+    for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$a"; done
+  )"; then
+    printf '%s\n' "$PROG: install: lane-state: $sh could not be sourced as an account projection, so no lane's state was backfilled; each lane's next account verb writes its own" >&2
+    echo "install: lane-state: not backfilled — the account projection could not be read"
+    return 0
+  fi
+  if ! mkdir -p -m 0700 "$locks"; then
+    printf '%s\n' "$PROG: install: lane-state: cannot create $locks (0700), so no lane's state was backfilled; each lane's next account verb writes its own" >&2
+    echo "install: lane-state: not backfilled — $locks could not be created"
+    return 0
+  fi
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    if [ -e "$_SVC_REG/.accounts/$id.json" ] || [ -L "$_SVC_REG/.accounts/$id.json" ]; then
+      kept=$((kept + 1)); continue
+    fi
+    rc=0
+    # No flock (a stock macOS box): the write is `if-absent`, which is
+    # no-clobber, so racing a verb can only lose to the verb's own write.
+    if command -v flock >/dev/null 2>&1; then
+      flock -n -E 75 "$locks/$id.lock" node "$op" lane-state --id "$id" --mode if-absent >/dev/null || rc=$?
+    else
+      node "$op" lane-state --id "$id" --mode if-absent >/dev/null || rc=$?
+    fi
+    case "$rc" in
+      0) wrote=$((wrote + 1)) ;;
+      75) busy=$((busy + 1)) ;;
+      *) failed=$((failed + 1))
+         printf '%s\n' "$PROG: install: lane-state: lane $id's state file under $_SVC_REG/.accounts was not written (exit $rc; the line above says why); the lane's next account verb writes it" >&2 ;;
+    esac
+  done <<<"$listed"
+  local tail=""
+  [ "$busy" -eq 0 ] || tail=", $busy left to the account verb acting on it"
+  [ "$failed" -eq 0 ] || tail="$tail, $failed not written"
+  echo "install: lane-state: wrote $wrote, kept $kept$tail"
 }
 
 # ── _inst_installed — the completed-install record, the spine's LAST write ─
@@ -24556,11 +24771,11 @@ console.log("restamped");
 # only isolation boundary, ccrc.env carries tokens and a fleet box may have
 # none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
 # other word is named on stderr and reads as Background — each arm prints its
-# own literal, so nothing from the file can reach a plist. Only the server job
-# reads it so far; the session plist writers (inside the platform block, in ccd
-# and here) adopt it together in a follow-up change. Deliberately OUTSIDE the
-# platform block (no _svc_/_plat_ prefix) so the block's line citations stay
-# put; the writer calls it behind `declare -F`.
+# own literal, so nothing from the file can reach a plist. The server job and
+# the session plist writer (`_svc_write_session_plist`, inside the platform
+# block, in ccd and here) read it; ccd carries the same helper, byte for byte.
+# Deliberately OUTSIDE the platform block (no _svc_/_plat_ prefix) so the
+# block's line citations stay put; the writers call it behind `declare -F`.
 _launchd_class() {
   local f="$HOME/.ccrc/launchd-class" v=""
   if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi

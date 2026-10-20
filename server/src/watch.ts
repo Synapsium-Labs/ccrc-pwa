@@ -37,7 +37,7 @@ import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
+  ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -48,11 +48,9 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // form is invisible to it.
 import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
-// The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
-// NOT imported beside it: this file holds its own module-local literal
-// (`sweepMail` already uses it), a second `const` of that name in one scope is
-// a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
-// literals exist. `single-definition.test.ts` pins both halves of that split.
+import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
+// The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
+// `single-definition.test.ts` pins that this file holds no copy.
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
@@ -127,6 +125,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
+import { notify } from './notice.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -162,7 +161,7 @@ import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
   archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
-  type ArchivedExpiryEntry, type ExpiryStoreRead,
+  rankArchivedHeld, type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
@@ -731,7 +730,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
   return box === parkBox ? 'same' : 'changed';
 }
 
-/** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
+/* The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
  *  registry directory, never by reading the file — and that stays true even
@@ -750,16 +749,17 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  because the marker itself couldn't be seen. `limits.ts:134-142` already
  *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
  *  this name cannot fabricate an account row there. */
-const MAIL_DISABLED_MARKER = 'mail-disabled';
+// `MAIL_DISABLED_MARKER` is imported: its one definition is its `shared/switches.ts` row (D-5855). The read discipline
+// above is this file's own mapping of an unlistable registry, which `readSwitches` leaves to each reader.
 
-/** The hold's own kill switch, `$REG/asks-disabled` — same family, same read
+/* The hold's own kill switch, `$REG/asks-disabled` — same family, same read
  *  discipline as `MAIL_DISABLED_MARKER` immediately above: LISTED, never
  *  statted directly, and an unlistable registry (`listing === null`, "can't
  *  tell") reads as disabled rather than as license to keep holding. Touch to
  *  stop every FUTURE hold from deferring (an already-held ask still waits out
  *  its own `until`, and `sweepAsks` still releases it on schedule); `rm` to
  *  resume. */
-const ASKS_DISABLED_MARKER = 'asks-disabled';
+// `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
 /** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
  *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
@@ -813,6 +813,11 @@ function mergeBreakerMembers(
   }
   return [...out.values()];
 }
+
+/** `pushOne`'s two flags narrowed to the three combinations a lane can reach, each one `NoticeMode` (D-5857): neither
+ *  (`'push'`), `recordAlways` (`'record-always'`), or `recordAlways` with `recordOnly` (`'record-only'`). `recordOnly`
+ *  without `recordAlways` had no caller and is not a type. */
+type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
@@ -1526,6 +1531,11 @@ export class FleetWatcher {
    *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
    *  first pass. */
   private expiryAttentionList: readonly ExpiryAttention[] = [];
+  /** The ranked total of bytes archived workspaces hold (D-5943), as the expiry lane's last pass composed it beside the
+   *  attention list — shadow and armed alike. `null` until that first pass, which the wire renders as an ABSENT block
+   *  (unknown). A pass the cleanup switch or a missing capability stops still composes it, from that pass's registry
+   *  and the lane's standing memory (D-6027), so it never freezes at the last acting pass. */
+  private archivedHeldBlock: ArchivedHeld | null = null;
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
@@ -2119,6 +2129,12 @@ export class FleetWatcher {
    *  applier: absence on the wire reads as UNKNOWN, never as healthy. */
   currentDelegationHealth(): DelegationObservationHealth | undefined {
     return this.delegationLane().health();
+  }
+
+  /** The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943), as the
+   *  lane's last pass composed it, stopped or not (D-6027). `null` before that pass: absence on the wire reads as UNKNOWN. */
+  archivedHeld(): ArchivedHeld | null {
+    return this.archivedHeldBlock;
   }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
@@ -3321,7 +3337,7 @@ export class FleetWatcher {
       if (step === 'wait') continue;
       if (step === 'retry') {
         if (!store.recordStallObservation(b.runId, BRIEF_RETRY_DETAIL, now).recorded) continue;
-        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now)) woke = true;
+        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now).changed) woke = true;
         continue;
       }
       const reason = briefNotTakenReason(b);
@@ -3335,7 +3351,8 @@ export class FleetWatcher {
       if (!told) continue;
       // The notice is the more specific word on this delivery: it absorbs the
       // lane's own park escalation, now or at a later park (its push and its
-      // sender mail).
+      // sender mail). Its `changed: false` is ordinary, not a race: the park had
+      // already escalated, or the row was delivered or finished (D-5997).
       store.absorbParkEscalation(b.deliveryId, now);
       this.pushOne({
         kind: 'mail', sessionId: b.toId,
@@ -3348,6 +3365,15 @@ export class FleetWatcher {
       }, projects);
     }
     return woke;
+  }
+
+  /** D-5997 (ARCH-15, #532): the sweep CONSUMES a delivery writer's answer. A
+   *  write the store's one guarded writer refused means another path finished
+   *  the row while this sweep held it (an ack, a park, a run close); it is
+   *  logged and the step that assumed it is skipped. Answers whether it landed. */
+  private landed(w: { changed: boolean; state: string }, writer: string, id: number): boolean {
+    if (!w.changed) console.warn(`ccrc-server: mail sweep: ${writer} refused on delivery ${id} (row is ${w.state}) — skipped`);
+    return w.changed;
   }
 
   /** Tell the SENDING session, by system mail (D-5838), that its mail parked —
@@ -3405,49 +3431,23 @@ export class FleetWatcher {
     /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
      *  push's deep link to its day's screen (D-5300). */
     url?: string;
-  }, projects: Set<string>): void {
-    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
-    if (visible && !e.recordAlways) return;
+  } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
     // (run-less mail whose recipient session could not be resolved either,
     // `pushNewMail`'s own fallback chain) must degrade to no decoration at
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
-    const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
-      runId: e.runId ?? null });
-    void log?.flush();
-    // The durable feed archive — same record, same point, ALL kinds (Task
-    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
-    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
-    // pair exists to mirror, and a feed row that mirrors nothing is not an
-    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
-    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
-    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
-    // timeout) and this call sits directly on the poll, reached from every
-    // kind this method ever raises (the `done` push above, the ask push in
-    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
-    // that one bad lane must not kill the others — every neighbouring lane
-    // already earns that non-throwing property one way or another (see
-    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
-    // was the one exception reachable from every push, not just two lanes.
-    // The ring record and the push below are UNAFFECTED by a failure here —
-    // only the archive row is lost.
-    if (log && recorded) {
-      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
-      catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
-      }
-    }
-    if (visible) return;                       // recorded, not pushed
-    if (e.recordOnly) return;                   // recorded, deliberately never pushed
-    void this.deps.push?.notify({
-      title, body: e.body, sessionId: e.sessionId,
-      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
-      ...(e.actions ? { actions: e.actions } : {}),
-      ...(e.url !== undefined ? { url: e.url } : {}),
-    });
+    // D-5857: the presence gate, the ring record, its flush, the GUARDED durable archive (review finding 1: one bad
+    // lane must not kill the others, and `node:sqlite` throws synchronously from every kind this method raises) and
+    // the push are `notify`'s (`notice.ts`), in the mode the two flags name. The ring record and the push are
+    // UNAFFECTED by an archive failure; only the archive row is lost.
+    notify(this.deps, { kind: e.kind, sessionId: e.sessionId, title, body: e.body, runId: e.runId ?? null },
+      e.recordOnly ? 'record-only' : e.recordAlways ? 'record-always' : 'push', {
+        ...(e.tag !== undefined ? { tag: e.tag } : {}),
+        ...(e.actions ? { actions: e.actions } : {}),
+        ...(e.url !== undefined ? { url: e.url } : {}),
+      });
   }
 
   /**
@@ -5246,41 +5246,23 @@ export class FleetWatcher {
   }
 
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
-   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
-   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+   *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
+   *  a failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordFeed(coord: CoordStore, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord },
+      { kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body },
+      'record-only', { degraded: `temp-root collector ${row.title}, feed archive degraded` });
   }
 
   /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
    *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
-   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed. A failed
-   *  archive write is said and never stops the lane, and the log is flushed whatever happened (`collectRecordFeed`'s
-   *  idiom). */
+   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed (`notify`'s
+   *  `'record-only'`, D-5857). A failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'coord', sessionId: '', runId: null, title, body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord }, { kind: 'coord', sessionId: '', runId: null, title, body },
+      'record-only', { degraded: `temp-root collector ${title}, feed archive degraded` });
   }
 
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
@@ -5530,15 +5512,18 @@ export class FleetWatcher {
         if (e.eligibleSince !== null) this.archivedExpiryState.set(id, { ...e, eligibleSince: null });
       }
     };
+    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     // ONE — the switch and the capability. Either way the twice-observed sightings are dropped: a row needs two
     // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
+    // The ranked held bytes are still composed (D-6027): they need neither the store nor the capability, and the
+    // operator needs them exactly while the lane is not acting — a block left from the last acting pass would freeze.
     if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
       forgetSightings();
+      this.archivedHeldBlock = rankArchivedHeld(archived, this.archivedExpiryState);
       return;
     }
     // TWO — the population, and the store's answers for it, read ONCE (`lastRunBySession`). A read that fails makes
     // every row ineligible this pass. (The executor re-reads them for its one row at the act.)
-    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     let store: { ok: true; workers: ReadonlySet<string>; claimants: ReadonlySet<string> } | { ok: false; detail: string };
     try {
       const last = coord.lastRunBySession(archived.map((r) => r.id));
@@ -5584,6 +5569,7 @@ export class FleetWatcher {
     // FOUR — the act: at most ONE per pass, fleet-wide, never on a box that answered `flock-unavailable`. Never asked
     // first: the row whose `nextAskAt` is earliest, then the oldest instant. No other pass runs meanwhile, so the
     // answer is folded onto the very entry the act was asked for.
+    let left: string | null = null;
     if (this.archivedExpiryBoxRefused === null && due.length > 0) {
       const pick = due.map((id) => [id, this.archivedExpiryState.get(id)!] as const)
         .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
@@ -5600,12 +5586,16 @@ export class FleetWatcher {
         }
         const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
         if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
+        if (result.kind === 'expired' || result.kind === 'gone') left = id;
       } catch (err) {
         console.warn(`ccrc-server: sweepArchivedExpiry: the expiry of ${id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
       }
     }
-    // FIVE — the attention list, from the lane's memory alone.
+    // FIVE — the attention list, from the lane's memory alone; and the ranked held bytes (D-5943), this pass's archived
+    // rows joined to that same memory — read once here, never re-derived by a route. A row the act expired (or found
+    // gone) this pass holds nothing, so it leaves the block now, not at the next registry read.
     this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
+    this.archivedHeldBlock = rankArchivedHeld(left === null ? archived : archived.filter((r) => r.id !== left), this.archivedExpiryState);
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run
@@ -5622,7 +5612,7 @@ export class FleetWatcher {
 
   /**
    * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
-   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and #166 then reclaims its marked
    * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
    * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
    * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list
@@ -6948,8 +6938,9 @@ export class FleetWatcher {
       console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
       return;
     }
+    // D-5912: a human's draft is stashed around the nudge and restored, never a reason to skip it.
     const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
-      { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
+      { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
     console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
     // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
     // nudge that typed nothing.
@@ -7232,22 +7223,27 @@ export class FleetWatcher {
    *      and this lane is now the only place the rule still has work to do.
    *
    * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
-   * `draft-present` refused, `dialog-open` refused — inside the session's own
+   * a draft stashed and restored, `dialog-open` refused — inside the session's own
    * `KeyedQueue` slot, injecting `renderMailNudge(d.toId)` — a tiny, single-
    * line, ID-AGNOSTIC reference (robust-mail-delivery spec §1), NEVER
    * `d.envelope` — with `resumeIfOwn: true` (F3 / bug #21, fix-round): a box
    * already holding this session's own un-submitted nudge (a prior sweep's
    * lost Enter) is recognized and its Enter finished, rather than misread as
-   * `draft-present` and backed off forever — the exact self-block the build4
+   * a human's draft — the exact self-block the build4
    * dogfood measured live (`docs/superpowers/programs/build4.md`). See
    * `sendPrompt`'s own docstring for the discrimination. NOTHING HERE TEACHES
    * IT TO RETYPE OR PRESS BLINDLY: the two-Enter budget and `submitEnter`'s
    * one-Enter doctrine (`inject/send.ts:456-460`) are load-bearing, and the
    * escalation for a stuck box is the human.
    *
-   * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
-   * agent-to-agent finding in this system; `draft-present` is a back-off, and
-   * the mail is still there in two minutes. `clearMailResidue` IS passed, but
+   * `onDraft: 'stash'` (D-5912), NEVER `replace`. A half-typed human message
+   * outranks every agent-to-agent finding in this system, so it is never typed
+   * over and never cleared: Claude Code's own stash (`C-s`) holds it around the
+   * nudge and gives it back, verified (D-5911), and a send that fails after the
+   * stash gives it back too (D-6010). A draft is therefore no reason to wait:
+   * there is no `draft-present` back-off and no "unsent text" sender notice on
+   * this lane. The two stash refusals (`stash-failed`, `stash-occupied`) are
+   * gates that back off and park like `dialog-open`. `clearMailResidue` IS passed, but
    * only once this delivery has provably been attempted before (spec §2.2) —
    * see the send site's own comment — and it can never clear a human draft
    * either (`isMailResidue`'s own docstring, `inject/send.ts`).
@@ -7421,7 +7417,7 @@ export class FleetWatcher {
       if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
       if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
-        store.markIngested(row.id, hs.updatedAt);
+        this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
       }
     }
 
@@ -7445,13 +7441,13 @@ export class FleetWatcher {
     const probeFor = new Map<string, (typeof parkedRows)[number][]>();
     for (const p of parkedRows) {
       if (now - p.parkedAt >= MAIL_PARK_CEILING_MS) {
-        store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason));
-        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
         ceilinged = true;
+        if (!this.landed(store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason)), 'rejectDelivery', p.id)) continue;
+        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
         continue;
       }
       if (p.parkEscalatedAt === null && now - p.parkedAt >= MAIL_PARK_ESCALATE_MS
-          && store.markParkEscalated(p.id, now)) {
+          && store.markParkEscalated(p.id, now).changed) {
         this.escalatePark(store, p, sessionProjects, projects);
       }
       if (p.nextAttemptAt <= now || this.mailInFlight.has(p.toId)) continue;
@@ -7473,8 +7469,8 @@ export class FleetWatcher {
       if (box === null) continue;
       for (const p of rows) {
         const seen = parkBoxSeen(box, p.parkBox);
-        if (seen === 'baseline') store.baselineParkBox(p.id, box);
-        else if (seen === 'changed' && store.wakeParked(p.id, now)) woke = true;
+        if (seen === 'baseline') this.landed(store.baselineParkBox(p.id, box), 'baselineParkBox', p.id);
+        else if (seen === 'changed' && store.wakeParked(p.id, now).changed) woke = true;
       }
     }
 
@@ -7508,7 +7504,7 @@ export class FleetWatcher {
     // may this be retried" and "what refused it" are different questions.
     const gated = (d: { id: number; lastGate: string | null; gateSince: number | null },
                    gate: MailGate): void => {
-      store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince);
+      this.landed(store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince), 'noteGate', d.id);
     };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
@@ -7674,15 +7670,15 @@ export class FleetWatcher {
           // so the only party that could ever walk through that door is a
           // re-minted stranger wearing the same id.
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            store.rejectDelivery(d.id, 'undeliverable',
+            this.landed(store.rejectDelivery(d.id, 'undeliverable',
               d.deliveredAt === null
                 ? 'recipient not in registry'
-                : 'recipient purged after this message was delivered, and never acked');
+                : 'recipient purged after this message was delivered, and never acked'), 'rejectDelivery', d.id);
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-            store.backOff(d.id,
+            this.landed(store.backOff(d.id,
               unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step, !unmeasurable);
+              now + step, !unmeasurable), 'backOff', d.id);
           }
           continue;
         }
@@ -7787,16 +7783,17 @@ export class FleetWatcher {
           const attempts = d.attempts + 1;
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
           if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
-            store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
+            this.landed(store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`), 'rejectDelivery', d.id);
           } else {
-            store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
+            this.landed(store.backOff(d.id, `recipient session is ${lc}`, now + step, true), 'backOff', d.id);
           }
           continue;
         }
         if (sv.verdict === 'unknown') {
           gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
-          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          this.landed(store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false),
+            'backOff', d.id);
           continue;
         }
         const hs = await hookStateFor(d.toId);
@@ -7890,8 +7887,8 @@ export class FleetWatcher {
         // `resumeIfOwn: true` (F3 / bug #21): if a PRIOR sweep's Enter for
         // this session's nudge was lost, the box now holds our own
         // un-submitted text — `sendPrompt` recognizes it (see its own
-        // docstring) and presses Enter rather than reading it as
-        // `draft-present` and backing off forever. Because the nudge carries
+        // docstring) and presses Enter rather than reading it as a human's
+        // draft and stashing it. Because the nudge carries
         // no per-delivery identity, resuming it is always correct regardless
         // of which due row this sweep is actually attempting.
         //
@@ -7921,7 +7918,7 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // refuses `draft-present` exactly as it does today.
+        // stashes the `/clear` as a draft and restores it (D-5912).
         const ownStrandedClear = store.strandedClear(d.toId);
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
         // different from what it held at the park (`parkBoxSeen`) — or, on this
@@ -7938,10 +7935,10 @@ export class FleetWatcher {
           const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
           this.parkProbeAt.set(d.id, now);
           const seen = parkBoxSeen(box, d.parkBox);
-          if (seen === 'baseline') store.baselineParkBox(d.id, box!);
+          if (seen === 'baseline') this.landed(store.baselineParkBox(d.id, box!), 'baselineParkBox', d.id);
           if (seen !== 'changed' && box !== renderMailNudge(d.toId)) {
             gated(d, 'parked');   // D-5840
-            store.holdParked(d.id, now + MAIL_PARK_RETRY_MS);
+            this.landed(store.holdParked(d.id, now + MAIL_PARK_RETRY_MS), 'holdParked', d.id);
             continue;
           }
         }
@@ -7952,11 +7949,11 @@ export class FleetWatcher {
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+          { onDraft: 'stash', resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
-          store.markDelivered(d.id, now);
+          if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own
@@ -7970,7 +7967,7 @@ export class FleetWatcher {
             // own guard exists to refuse.
             const bumped = store.bumpReplayCount(d.id);
             if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
-              store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
+              this.landed(store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR), 'rejectDelivery', d.id);
             }
           }
           continue;
@@ -8011,12 +8008,12 @@ export class FleetWatcher {
 
         if (res.error === 'auto-continue-armed') {
           // D-2369. Before the attempts ceiling on purpose: a held delivery is
-          // not a failed one. Told once per hold, like draft-present.
+          // not a failed one. Told once per hold.
           if (d.lastError !== 'auto-continue-armed') {
             tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
               `mail-blocked-${d.id}`);
           }
-          store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
 
@@ -8027,9 +8024,19 @@ export class FleetWatcher {
           // failed send. There is NO `tellSender`: a running turn is not a
           // blocked recipient, and the first sweep after the hold reads the
           // live word again.
-          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
+
+        // D-5912: the two stash refusals are the delivery's GATE as well as its
+        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port
+        // carries no `lastError`, D-792). They then take the path `dialog-open`
+        // and `box-unreadable` take: the back-off, the park at the attempts
+        // ceiling, the operator's one `mail-parked` push, and the 24 h ceiling.
+        // No hold arm exempts them: with the stash armed a draft is no reason to
+        // wait, so either word means something abnormal the operator should hear.
+        if (res.error === 'stash-failed') gated(d, 'stash-failed');
+        if (res.error === 'stash-occupied') gated(d, 'stash-occupied');
 
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
@@ -8052,23 +8059,21 @@ export class FleetWatcher {
           // re-parks on every failure, keeping its first `parkedAt`.
           // `MAIL_PARK_RETRY_MS`'s docstring has the whole contract.
           if (d.parkedAt !== null && now - d.parkedAt >= MAIL_PARK_CEILING_MS) {
-            store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error));
+            if (!this.landed(store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error)), 'rejectDelivery', d.id)) continue;
             this.tellParkedSender(store, d.mailId, d.toId, 'rejected', res.error);
             continue;
           }
-          // What the box holds NOW, for the probe to compare against. A
-          // `draft-present` refusal already carries it (`boxText`, the probe's
-          // own reading); every other refusal is read once more.
-          const box = res.error === 'draft-present' && typeof res.draft === 'string'
-            ? res.draft
-            : await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
-          store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS);
+          // What the box holds NOW, for the probe to compare against, read once
+          // more. (D-5912: no refusal on this lane carries the box any more; the
+          // lane's sends stash a draft, so `draft-present` cannot reach here.)
+          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+          if (!this.landed(store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS), 'parkDelivery', d.id)) continue;
           this.parkProbeAt.set(d.id, now);
           if (d.parkedAt === null) {
             this.tellParkedSender(store, d.mailId, d.toId, 'parked', res.error);
             // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been
             // stuck about `MAIL_PARK_ESCALATE_MS`: the operator hears it now.
-            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now)) {
+            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now).changed) {
               this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: res.error },
                 sessionProjects, projects);
             }
@@ -8080,11 +8085,13 @@ export class FleetWatcher {
         // so a repeat of the same refusal does not re-raise — the tray is not
         // a ticker. What stays live across every back-off tick is the strip,
         // via `attempts` on the wire (Task 408).
-        if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
-          tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
-        }
+        // D-5997: told only once the back-off LANDED — an ack that beat it means
+        // the mail arrived, and its sender hears nothing about a blocked box.
+        // D-5912: no sender notice here any more. The one this lane had was for
+        // `draft-present`, which its sends can no longer produce (they stash the
+        // draft); a long wait is the park's `mail-parked` push (spec §2.4).
         const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-        store.backOff(d.id, res.error, now + step);
+        if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
       } finally {
         this.mailInFlight.delete(d.toId);
       }

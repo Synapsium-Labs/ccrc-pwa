@@ -8,13 +8,14 @@
 // `vi.mock` is hoisted file-wide and must not touch the real-sheet cases in fleet-screen.test.tsx.
 // Delete the guard (`if (archivingRef.current.has(project)) return;`) and this goes red: the first assertion to fail is the duplicate summary toast (`findByText` sees two "Archived 2, skipped 0, refused 0." toasts).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, UpdatesView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { ToastHost } from '@ccrc/ui';
 
 // QuickConfirm lives in @ccrc/ui now, so the mock moved with it — and it is a
@@ -44,7 +45,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/home/u/projects/ProjectC', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 const makeStore = (): FleetStore =>
   createFleetStore({
@@ -60,7 +61,7 @@ describe("Archive all's in-flight guard (workspace lifecycle spec §5.1)", () =>
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = makeStore();
-    render(<><FleetScreen store={store} /><ToastHost /></>);
+    renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
     act(() => {
       store.setState({
         conn: 'open',

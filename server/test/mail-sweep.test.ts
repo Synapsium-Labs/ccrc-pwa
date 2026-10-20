@@ -621,11 +621,13 @@ describe('sweepMail: hard cases', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE); // attempts: 0, deliveredAt: null
 
     await w.sweepMail();
-    expect(keyPresses(h.calls)).toEqual([]); // no C-u at all — never even attempted a clear
+    // D-5912: the lane passes `onDraft: 'stash'`. This scripted pane never empties after `C-s`, so the one key is
+    // that `C-s`, and the refusal is `stash-failed`: nothing cleared, nothing typed.
+    expect(keyPresses(h.calls)).toEqual(['C-s']); // no C-u at all — never even attempted a clear
     expect(literalSends(h.calls)).toEqual([]);
     const row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
-    expect(row.lastError).toBe('draft-present');
+    expect(row.lastError).toBe('stash-failed');
   });
 
   it('(d) a genuine human draft is STILL never cleared or typed over, even with a prior attempt on record — clearMailResidue does not widen what counts as human text', async () => {
@@ -640,11 +642,13 @@ describe('sweepMail: hard cases', () => {
     coord.db.prepare('UPDATE mail_deliveries SET attempts = 3 WHERE id = ?').run(id); // prior = true
 
     await w.sweepMail();
-    expect(keyPresses(h.calls)).toEqual([]);
+    // D-5912: the lane passes `onDraft: 'stash'`. This scripted pane never empties after `C-s`, so the one key is
+    // that `C-s`, and the refusal is `stash-failed`: nothing cleared, nothing typed.
+    expect(keyPresses(h.calls)).toEqual(['C-s']);
     expect(literalSends(h.calls)).toEqual([]);
     const row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
-    expect(row.lastError).toBe('draft-present');
+    expect(row.lastError).toBe('stash-failed');
   });
 });
 
@@ -788,7 +792,7 @@ describe('sweepMail: the send', () => {
     expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
-  it('never passes replaceDraft — a human mid-sentence wins, every time', async () => {
+  it('never passes replace — a human mid-sentence is stashed, never cleared or typed over', async () => {
     const h = harness({ panes: ['❯ mid-sentence draft\n'] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
@@ -798,12 +802,11 @@ describe('sweepMail: the send', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    // draft-present with NO key pressed at all is reachable only when
-    // `replaceDraft` was never passed: sendPrompt's replace branch would have
-    // fired at least one C-u instead of refusing outright.
-    expect(keyPresses(h.calls)).toEqual([]);
+    // D-5912: `onDraft: 'stash'`, never `replace`: the only key is the stash's `C-s` (this scripted pane never
+    // empties, so `stash-failed`). `replace` would have fired a C-u.
+    expect(keyPresses(h.calls)).toEqual(['C-s']);
     expect(literalSends(h.calls)).toEqual([]);
-    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+    expect(deliveryRow(coord, id).lastError).toBe('stash-failed');
   });
 
   it('F3 / bug #21: resumes its OWN unsubmitted nudge rather than self-blocking with draft-present', async () => {
@@ -836,7 +839,7 @@ describe('sweepMail: the send', () => {
     // Enter on a box that matches THIS delivery's OWN needle. Unrelated
     // human text — including text that, like this fixture, sits in the box
     // the moment the sweep looks — must fall straight through to the
-    // ordinary `draft-present` refusal, with NO key pressed at all.
+    // stash (D-5912): the one key is `C-s`, never an Enter, a C-u or a retype.
     const h = harness({ panes: ['❯ can you also check the staging deploy\n'] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
@@ -846,10 +849,10 @@ describe('sweepMail: the send', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(keyPresses(h.calls)).toEqual([]);
+    expect(keyPresses(h.calls)).toEqual(['C-s']);
     expect(literalSends(h.calls)).toEqual([]);
     const row = deliveryRow(coord, id);
-    expect(row.lastError).toBe('draft-present');
+    expect(row.lastError).toBe('stash-failed');
     expect(row.state).toBe('queued');
   });
 
@@ -892,8 +895,8 @@ describe('sweepMail: the send', () => {
     expect(deliveryRow(coord, secondId).state).toBe('queued');
   });
 
-  it('backs off with exponential spacing on draft-present / dialog-open / verify-failed', async () => {
-    const h = harness({ panes: ['❯ half-typed draft\n'] }); // draft-present every time it's read
+  it('backs off with exponential spacing on stash-failed / dialog-open / verify-failed', async () => {
+    const h = harness({ panes: ['❯ half-typed draft\n'] }); // stash-failed every time (the pane never empties)
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -905,7 +908,7 @@ describe('sweepMail: the send', () => {
     let row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
     expect(row.attempts).toBe(1);
-    expect(row.lastError).toBe('draft-present');
+    expect(row.lastError).toBe('stash-failed');
     expect(row.nextAttemptAt).toBe(NOW + MAIL_BACKOFF_BASE_MS);
 
     advance(MAIL_BACKOFF_BASE_MS + 1_000); // clears the lane gate AND this row's own backoff
@@ -1774,6 +1777,9 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
   /** The pane script for a box holding `/clear`: the guard's read, then the
    *  post-C-u read, then the echo, then the box after Enter. */
   const STRANDED_PANES = [CLEAR_BOX, emptyBox, echoedBox(NUDGE), emptyBox];
+  /** D-5912: the same box with NO proof — the `/clear` is stashed (`C-s`, the box reads empty), the nudge echoed,
+   *  and after Enter Claude Code gives the `/clear` back. */
+  const STASHED_CLEAR_PANES = [CLEAR_BOX, emptyBox, echoedBox(NUDGE), CLEAR_BOX];
 
   /** A run dispatched onto `ID` whose post-resume `/clear` was refused with
    *  `code` — the durable record `CoordStore.strandedClear` reads. */
@@ -1804,8 +1810,8 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
   // THE SAME BOX, NO RECORD. `/clear` is four characters an operator types
   // too, and nothing about the text tells them apart — so the default is the
   // refusal, not the clear.
-  it('refuses a byte-identical /clear with no such record — not one keystroke', async () => {
-    const h = harness({ panes: STRANDED_PANES });
+  it('never clears a byte-identical /clear with no such record — stashed, not one C-u', async () => {
+    const h = harness({ panes: STASHED_CLEAR_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -1814,14 +1820,15 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
+    // D-5912: an operator's own `/clear` is stashed around the nudge and given back, never cleared.
     expect(keyPresses(h.calls)).not.toContain('C-u');
-    expect(literalSends(h.calls)).toEqual([]);
-    expect(deliveryRow(coord, id).state).toBe('queued');
-    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+    expect(keyPresses(h.calls)).toEqual(['C-s', 'Enter']);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
-  it('refuses when the recorded refusal is a code that proves nothing about the box', async () => {
-    const h = harness({ panes: STRANDED_PANES });
+  it('never clears when the recorded refusal is a code that proves nothing about the box', async () => {
+    const h = harness({ panes: STASHED_CLEAR_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
@@ -1831,8 +1838,10 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
-    expect(literalSends(h.calls)).toEqual([]);
-    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+    // No clear licence: the `/clear` is stashed and given back (D-5912), never C-u'd.
+    expect(keyPresses(h.calls)).not.toContain('C-u');
+    expect(keyPresses(h.calls)).toContain('C-s');
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 
   // THE PROOF IS SPENT BY THE DELIVERY THAT INHERITS THE WEDGE (review, W4c
@@ -1866,7 +1875,7 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
 
     await w.sweepMail();
     expect(deliveryRow(coord, second.id).state).toBe('queued');
-    expect(deliveryRow(coord, second.id).lastError).toBe('draft-present');
+    expect(deliveryRow(coord, second.id).lastError).toBe('stash-failed');
     // The FIRST send's keystrokes, and only those: one C-u, one nudge.
     expect(keyPresses(h.calls).filter((k) => k === 'C-u')).toHaveLength(1);
     expect(literalSends(h.calls)).toEqual([NUDGE]);
@@ -1922,26 +1931,25 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   };
 
   const BLOCKED_PANES = ['❯ half-typed human draft\n'];
+  /** D-5912: the sender-resolution cases below need a notice to resolve, and the draft notice is gone; the
+   *  auto-continue hold's notice (D-2369) goes through the same `tellSender`. */
+  const NOTICE_PANES = ['Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n'];
 
-  it('emits ONE notification to the sender on the FIRST draft-present back-off', async () => {
+  it('D-5912: a back-off on a draft pane tells the sender nothing', async () => {
     const h = harness({ panes: BLOCKED_PANES });
     const coord = store(h.home);
     const { sent, push } = pushSpy();
     const { w } = await primedWatcher(h, coord, { push: push as never });
     seedRecipient(h, ID);
-    queueFrom(coord, 'demo-boss', null);
+    const d = queueFrom(coord, 'demo-boss', null);
 
+    // D-5912: the "unsent text" notice is deleted with the `draft-present` arm. A draft is stashed, so it is no
+    // reason to wait; a stash refusal backs off silently, and a long wait is the park's one push.
     await w.sweepMail();
-    const toBoss = sent.filter((p) => p.sessionId === 'demo-boss');
-    expect(toBoss).toHaveLength(1);
-    expect(toBoss[0]!.body).toContain('input box');
-
-    // SECOND back-off: the row is already known-blocked, so it does not
-    // re-notify. The strip is what stays live across every back-off tick
-    // (`attempts` is on the wire since Task 408); the tray is not a ticker.
+    expect(deliveryRow(coord, d.id).lastError).toBe('stash-failed');
     advance(MAIL_SWEEP_MS + 60_000);
     await w.sweepMail();
-    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toHaveLength(1);
+    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toEqual([]);
   });
 
   it('says nothing to the sender when the send SUCCEEDS', async () => {
@@ -1981,7 +1989,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // System mail (`queueSystemMail`) writes the literal fromId 'coordinator',
     // which is a ROLE, not a session. Pushing to it would tag and
     // presence-gate against an id no registry row carries.
-    const h = harness({ panes: BLOCKED_PANES });
+    const h = harness({ panes: NOTICE_PANES });
     const coord = store(h.home);
     const { sent, push } = pushSpy();
     const { w } = await primedWatcher(h, coord, { push: push as never });
@@ -1998,7 +2006,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // No run, so `resolveCoordinator(null)` has no single active program to
     // read and answers null. Degrade, never guess: inventing a session id
     // would tag and presence-gate against a row nothing carries.
-    const h = harness({ panes: BLOCKED_PANES });
+    const h = harness({ panes: NOTICE_PANES });
     const coord = store(h.home);
     const { sent, push } = pushSpy();
     const { w } = await primedWatcher(h, coord, { push: push as never });
@@ -2029,7 +2037,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   //     to the else branch and be pushed at AS IF it were a session id, the
   //     exact failure the resolution's own comment forbids.
   it('never pushes a role AS a session: a run-less operator mail notifies nobody', async () => {
-    const h = harness({ panes: BLOCKED_PANES });
+    const h = harness({ panes: NOTICE_PANES });
     const coord = store(h.home);
     const { sent, push } = pushSpy();
     const { w } = await primedWatcher(h, coord, { push: push as never });
@@ -2048,7 +2056,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   });
 
   it('will not name a coordinator for a mail that names no run, even when exactly one program is active', async () => {
-    const h = harness({ panes: BLOCKED_PANES });
+    const h = harness({ panes: NOTICE_PANES });
     const coord = store(h.home);
     const { sent, push } = pushSpy();
     const { w } = await primedWatcher(h, coord, { push: push as never });
@@ -3799,7 +3807,8 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(parkCols(coord, d.id)).toEqual({ parkedAt: null, parkReason: null });
   }, 10_000);
 
-  it('draft-present at the ceiling PARKS instead of rejecting, and retries on the park timer', async () => {
+  it('stash-failed at the ceiling PARKS instead of rejecting, and retries on the park timer', async () => {
+    // This harness ignores `C-s` (a rebound key): every attempt is `stash-failed` (D-5912).
     const st = { box: 'half-typed human draft', enterWorks: true };
     const h = liveHarness(st);
     const coord = store(h.home);
@@ -3811,14 +3820,14 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     const row = deliveryRow(coord, d.id);
     expect(row.state).toBe('queued');
     expect(row.rejectCode).toBeNull();
-    expect(parkCols(coord, d.id).parkReason).toBe('draft-present');
+    expect(parkCols(coord, d.id).parkReason).toBe('stash-failed');
     // Still being retried: more ceilings' worth of sweeps never reject it.
     await toCeiling(w);
     expect(deliveryRow(coord, d.id).state).toBe('queued');
     expect(literalSends(h.calls)).toEqual([]);   // never typed over the human's draft
-  }, 20_000);
+  }, 60_000);   // every `stash-failed` spends the stash's real poll budget
 
-  it('a draft-present park wakes when the draft is cleared and delivers without waiting out the timer', async () => {
+  it('a stash-failed park wakes when the draft is cleared and delivers without waiting out the timer', async () => {
     const st = { box: 'half-typed human draft', enterWorks: true };
     const h = liveHarness(st);
     const coord = store(h.home);
@@ -4032,7 +4041,7 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
       .toEqual({ n: 0 });
   }, 20_000);
 
-  it('a draft-present park never wakes on an unchanged draft, never types over a changed one, and its attempts stay flat between retries', async () => {
+  it('a stash-failed park never wakes on an unchanged draft, never types over a changed one, and its attempts stay flat between retries', async () => {
     const st = { box: 'half-typed human draft', enterWorks: true };
     const h = liveHarness(st);
     const coord = store(h.home);
@@ -4052,7 +4061,7 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(deliveryRow(coord, d.id).attempts).toBeLessThanOrEqual(att + 1);
   }, 20_000);
 
-  it('a draft-present park keeps its FIRST parkedAt across re-parks and rejects 24 h after it', async () => {
+  it('a stash-failed park keeps its FIRST parkedAt across re-parks and rejects 24 h after it', async () => {
     const st = { box: 'half-typed human draft', enterWorks: true };
     const h = liveHarness(st);
     const coord = store(h.home);
@@ -4068,7 +4077,7 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     await w.sweepMail();
     const row = deliveryRow(coord, d.id);
     expect(row.state).toBe('rejected');
-    expect(row.lastError).toBe('parked 24 h, never delivered: draft-present');
+    expect(row.lastError).toBe('parked 24 h, never delivered: stash-failed');
   }, 20_000);
 
   it('a self-addressed mail that parks mails nobody', async () => {
@@ -4137,5 +4146,129 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(deliveryRow(coord, d.id).state).toBe('delivered');
     expect(coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'mail rejected%'").get())
       .toEqual({ n: 0 });
+  }, 10_000);
+
+  // D-5997 (ARCH-15, #532): the sweep CONSUMES each writer's {changed, state}. A
+  // write the guard refused — an ack landed while the send was in flight — is
+  // logged and skipped, never assumed: no park notice, no back-off.
+  const ackOnFirst = (h: Harness, when: (args: string[]) => boolean) => {
+    const inner = h.run;
+    const arm: { coord: CoordStore | null; id: number } = { coord: null, id: 0 };
+    h.run = async (cmd, args) => {
+      if (arm.coord !== null && when(args)) {
+        expect(arm.coord.markAcked(arm.id, Date.now())).toEqual({ ok: true, state: 'acked' });
+        arm.coord = null;
+      }
+      return inner(cmd, args);
+    };
+    return arm;
+  };
+
+  it('an ack landing mid-send refuses the enter-ignored park — the sender is told nothing, the refusal is logged (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'send-keys' && a[3] === '-l');
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(parkCols(coord, d.id)).toEqual({ parkedAt: null, parkReason: null });
+      expect(noticesTo(coord, SENDER)).toEqual([]);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`parkDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  it('an ack landing before a stash-failed back-off: backOff answers changed:false and the sweep records no back-off and tells no sender (D-5997)', async () => {
+    const st = { box: 'a human draft', enterWorks: true };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'capture-pane');
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      const row = deliveryRow(coord, d.id);
+      expect(row.state).toBe('acked');
+      expect(row.attempts).toBe(0);
+      expect(row.lastError).toBeNull();
+      expect(sent.filter((p) => p.tag === `mail-blocked-${d.id}`)).toEqual([]);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`backOff refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  // The park ceiling's reject (D-5997): a row acked after the sweep read it is
+  // refused, and its sender is never mailed 'rejected' for a message that landed.
+  const rejectedTo = (coord: CoordStore, toId: string): number =>
+    (coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE toId = ? AND subject LIKE 'mail rejected%'")
+      .get(toId) as { n: number }).n;
+
+  it('an ack landing after the parked pass read its rows: the ceiling reject is refused, the sender is not told rejected (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();                          // parks enter-ignored
+    coord.db.prepare('UPDATE mail_deliveries SET parkedAt = ?, nextAttemptAt = ? WHERE id = ?')
+      .run(Date.now() - MAIL_PARK_CEILING_MS - 1_000, Date.now() + 3_600_000, d.id);
+    // The ack lands between the parked-pass snapshot and its ceiling write —
+    // the awaited registry and hook-state reads sit in that window.
+    const read = coord.parkedDeliveries.bind(coord);
+    coord.parkedDeliveries = () => {
+      const rows = read();
+      coord.parkedDeliveries = read;
+      expect(coord.markAcked(d.id, Date.now())).toEqual({ ok: true, state: 'acked' });
+      return rows;
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      advance(MAIL_SWEEP_MS + 1_000);
+      await w.sweepMail();
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(rejectedTo(coord, SENDER)).toBe(0);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`rejectDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  it('an ack landing during the in-flight send of a row past the ceiling: the reject is refused, the sender is not told rejected (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'send-keys');
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();                          // parks enter-ignored, our nudge in the box
+    // Due and past the ceiling. The parked pass's snapshot misses the row (a
+    // lane parked it after that read), so the due loop's own ceiling reject
+    // is the one that runs — after the awaited send.
+    coord.db.prepare('UPDATE mail_deliveries SET parkedAt = ?, nextAttemptAt = ? WHERE id = ?')
+      .run(Date.now() - MAIL_PARK_CEILING_MS - 1_000, Date.now() - 1, d.id);
+    const read = coord.parkedDeliveries.bind(coord);
+    coord.parkedDeliveries = () => read().filter((p) => p.id !== d.id);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      advance(MAIL_SWEEP_MS + 1_000);
+      await w.sweepMail();
+      expect(arm.coord).toBeNull();               // the ack did land mid-send
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(rejectedTo(coord, SENDER)).toBe(0);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`rejectDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); coord.parkedDeliveries = read; }
   }, 10_000);
 });

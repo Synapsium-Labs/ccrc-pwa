@@ -463,6 +463,8 @@ async function collectAudit(
     return { value: { kind: 'no-document', stderr: said(err) }, composed, arrived };
   }
   const arrived = deps.lane.clock();
+  // D-6034: a call that never ran is read FIRST, as the rejection above is: an audit with no document, never a probe.
+  if (res.ran === false) return { value: { kind: 'no-document', stderr: res.stderr }, composed, arrived };
   return { value: parseCollectAudit(id, res.ok, res.stdout, res.stderr), composed, arrived };
 }
 
@@ -575,6 +577,12 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: said(err) }, arrived };
   }
   const arrived = deps.lane.clock();
+  // D-6034: read FIRST, before a recognised pre-lock die is read off the runner's stderr. A die "acted nothing"; a call
+  // that may not have reached ccd, or reached it and lost the answer, MAY have acted, so it is `no-document` — the lane
+  // keeps the id and the slot — exactly as the rejection above is.
+  if (act.ran === false) {
+    return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: act.stderr }, arrived };
+  }
   return { kind: 'acted', audit: observed, composedMono: now.mono,
     result: parseCollectResult(job.id, act.ok, act.stdout, act.stderr), arrived };
 }

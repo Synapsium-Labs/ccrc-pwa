@@ -263,7 +263,7 @@ describe('the coordinator skill: its contract', () => {
     expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
     expect(s6).toContain('it stays until a human cleans it up');
     // Workspace lifecycle wave 3b: an ARCHIVED workspace with no child marker is the server's to clean up seven days
-    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (CCR-15).
+    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (#166).
     expect(s6).toContain('or — when it carries no child marker — until the server cleans it up seven days after it is archived');
     // …and says WHEN (the coordinator's ruling): only once the operator has armed the lane; until then it only records. The
     // skill files never name the lane's marker file, so the condition is told in words.
@@ -982,6 +982,10 @@ describe('the skill on `final:true` — a release is now conditional', () => {
   // enforces it is the shipped test, and this file runs whole.
 });
 
+/** D-5913: mail-envelope.md's draft contract, verbatim (whitespace-collapsed). */
+const DRAFT_STASH_REFUSALS_ROUTE = "Either one backs off and retries, as `dialog-open` (a menu on the pane) does; it does **not** give up immediately.";
+const DRAFT_NEVER_BLOCKS = "A draft never stops mail. When the recipient has unsent text in its Claude Code input box, the lane saves it with Claude Code's own prompt stash (ctrl+s), types and submits the delivery, and checks that Claude Code restored the draft afterwards; the recipient sees `Draft restored`, and that is why.";
+
 describe('the skill tells a SENDER what a blocked delivery obliges them to do', () => {
   // MEASURED at the frozen ref, not assumed: the corpus is NOT silent about
   // undeliverable mail — `undeliverable` ×3 and `rejected` ×4 across
@@ -994,9 +998,21 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
   // the false premise this describe is written NOT to repeat.
   const envelope = (): string => refs('mail-envelope.md');
 
-  it('names what lastError === draft-present means for the sender', () => {
-    expect(allSkillText).toContain('draft-present');
-    expect(allSkillText).toMatch(/input box/i);
+  // D-5913 (spec §2.5): the lane stashes a recipient's draft around a delivery
+  // (D-5911, D-5912), so the corpus may no longer tell a sender that a draft
+  // blocks mail. Pinned verbatim, whitespace-collapsed, in the file that owns it.
+  it('says a draft in the recipient\'s box never blocks mail, and names the two stash refusals', () => {
+    const env = flat(envelope());
+    expect(env).toContain(flat(DRAFT_NEVER_BLOCKS));
+    expect(env).toContain('`lastError: "stash-occupied"`');
+    expect(env).toContain('`lastError: "stash-failed"`');
+    expect(env, 'the old contract (the lane refuses a draft) is back').not.toMatch(/refuses to type over it/);
+    // Both refusals take `dialog-open`'s path in watch.ts (`gated(...)`): back
+    // off, then park at the ceiling — never an immediate rejection.
+    expect(env).toContain(flat(DRAFT_STASH_REFUSALS_ROUTE));
+    expect(env, 'the removed first-back-off notice is claimed again').not.toMatch(/first `draft-present` back-off/);
+    expect(env, 'the old "ask them to discard their draft" step is back').not.toMatch(/half-typed message/);
+    expect(env, 'an unproven /clear is stashed, never refused').not.toMatch(/refused like any\s+other draft/);
   });
 
   it('names the attempt ceiling, so a first block reads differently from the last', () => {
@@ -2564,16 +2580,16 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     });
   });
 
-  it('keeps the superseded 2026-08-11 specification byte-identical to origin/main', () => {
+  it('keeps the superseded 2026-08-11 specification byte-identical to its swept record', () => {
     const historicalPath = 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md';
     const historical = readFileSync(path.join(root, historicalPath));
-    const baseline = execFileSync('git', ['show', `origin/main:${historicalPath}`], { cwd: root });
-    expect(historical).toEqual(baseline);
+    const blob = execFileSync('git', ['hash-object', '--no-filters', historicalPath], { cwd: root }).toString().trim();
+    expect(blob, 'the frozen 2026-08-11 ruling record was edited').toBe('33025c763bb16faaa06c55cd53359eda65f0dce5');
 
-    // The comparison above is against a MOVING ref, and it says nothing about
-    // WHAT the file holds: once this branch merges it compares the file to
-    // itself, so from that moment it pins "unchanged since whatever main says"
-    // rather than the ruling this document exists to preserve. The literals
+    // The blob id above is this record as the private-name sweep left it (run
+    // 561: neutral stand-ins, line-neutral, no ruling touched), so any later
+    // edit reds it. It replaced a comparison with origin/main, which the sweep
+    // had to change and which, once merged, compares the file to itself. The literals
     // below are the content half — Q1's refusal and Q2's requirement, the two
     // rulings every later wave cites — so an edit that lands on main and then
     // propagates here still reds.

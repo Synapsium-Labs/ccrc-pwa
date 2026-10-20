@@ -15,7 +15,10 @@
  *     (D-5995). A shape's boundary is a non-alphanumeric byte, a literal JSON escape (`\n` `\r` `\t`) or a
  *     percent-escape (D-5995). In ROWS mode (the drawer and pane history, where Claude Code's TUI hard-wraps a long
  *     line into indented rows) a shape that reaches the end of its row also masks the leading token run of the next
- *     row, and on through every row that run fills.
+ *     row, and on through every row that run fills; and a row whose last run has begun a shape (or ends in a prefix
+ *     of one that the next row completes) is joined to the next indented row's leading run before the shapes are
+ *     matched, so a key wrapped before its first row could match is matched whole; the shapes are matched on the
+ *     joined text and on the text as drawn, so a join never hides a key that begins the joined row (D-5995).
  *   - EXACT BYTES. A `compatible` key has no shape, so each lane secret has a fingerprint row (D-5996): the secret
  *     with its trailing `=` stripped, `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ that)`, and its byte length,
  *     computed on the box and stored in `secret_fingerprints` with the box-token generation it was keyed with. A
@@ -65,6 +68,9 @@ const DRAWER_HELD_MAX = RUN_MAX_BYTES + 1024;
 const REKEY_FIRST_MS = 1_000;
 const REKEY_MAX_MS = 600_000;
 const MAX_PREVIOUS_KEYS = 4;
+/** How long a fingerprint write waits on a locked coord.db before it is held and retried: `ingest` runs on the event
+ *  loop, so the connection's own 5 s timeout would stall every request behind it (D-5995 (10); accounts plan Task A12). */
+export const INGEST_BUSY_MS = 50;
 
 /** One fingerprint row as the table holds it. */
 export interface FingerprintRow { readonly laneId: string; readonly fp: string; readonly gen: string }
@@ -124,13 +130,18 @@ export function fingerprintAnswerOf(stdout: string): FingerprintAnswer | null {
 
 /** Every ECMA-48 escape: CSI; OSC to BEL or ST; DCS, SOS, PM and APC to ST; ESC + intermediates + final. */
 const ESC_SEQ = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
-/** A row move's stand-in (D-5995): a newline, with a NUL indent when it lands past the first column. */
+/** The most columns of indent a cursor move stands for in a view: a wider move is a screen's, never a wrap's. */
+const INDENT_COLUMNS_MAX = 512;
+/** `n` columns of indent: one NUL per column, so a row's view length is its width in columns (D-5995). */
+const indentOf = (n: number): string => '\0'.repeat(Math.min(Math.max(n, 0), INDENT_COLUMNS_MAX));
+/** A row move's stand-in (D-5995): a newline, with a NUL per column of indent when it lands past the first column
+ *  (a CUP or HVP's column is known; a move down keeps an unknown column, one NUL). */
 function rowMove(e: string): string | null {
   if (e.length === 2) return e === '\x1bE' ? '\n' : e === '\x1bD' ? '\n\0' : null;
   if (e[1] !== '[' || !'HfEFdB'.includes(e[e.length - 1]!)) return null;   // the common escape: no regex (D-5995)
   const m = /^\x1b\[([0-9;]*)([HfEFdB])$/.exec(e);
   if (m !== null) {
-    if (m[2] === 'H' || m[2] === 'f') return Number(m[1]!.split(';')[1] || '1') > 1 ? '\n\0' : '\n';
+    if (m[2] === 'H' || m[2] === 'f') return `\n${indentOf(Number(m[1]!.split(';')[1] || '1') - 1)}`;
     return m[2] === 'E' || m[2] === 'F' ? '\n' : '\n\0';
   }
   if (e === '\x1bE') return '\n';
@@ -149,21 +160,39 @@ function viewOf(s: string, sep: '' | '\0'): View {
   const k = sep === '' ? 0 : 1;
   return viewMemo.v[k] ??= buildView(s, sep);
 }
+/** A cursor move forward (CUF) of `n` columns, or null. */
+function cursorForward(e: string): number | null {
+  if (e[1] !== '[' || e[e.length - 1] !== 'C') return null;
+  const m = /^\x1b\[([0-9]*)C$/.exec(e);
+  return m === null ? null : Number(m[1] || '1');
+}
 function buildView(s: string, sep: '' | '\0'): View {
   const parts: string[] = [];
-  const map = new Int32Array(s.length + 1);
+  let map = new Int32Array(s.length + 1);
   let n = 0;
   let from = 0;
+  // Whether nothing but escapes lies between the last row break and here: a cursor move forward there is an indent,
+  // drawn as one NUL per column in both views, so a wrapped row measures as wide as the terminal drew it (D-5995).
+  let rowStart = true;
   const copy = (a: number, b: number): void => {
     if (b <= a) return;
     parts.push(s.slice(a, b));
     for (let i = a; i < b; i++) map[n++] = i;
+    rowStart = s[b - 1] === '\n' || s[b - 1] === '\r';
   };
   ESC_SEQ.lastIndex = 0;
   for (let m = ESC_SEQ.exec(s); m !== null; m = ESC_SEQ.exec(s)) {
     copy(from, m.index);
-    const put = rowMove(m[0]) ?? sep;
+    const move = rowMove(m[0]);
+    const cuf = move === null && rowStart ? cursorForward(m[0]) : null;
+    const put = move ?? (cuf === null ? sep : indentOf(cuf));
+    if (move !== null) rowStart = true;
     if (put !== '') parts.push(put);
+    if (n + put.length + s.length - m.index >= map.length) {   // an indent wider than its escape: room for the rest
+      const grown = new Int32Array(map.length * 2 + put.length);
+      grown.set(map.subarray(0, n));
+      map = grown;
+    }
     for (let k = 0; k < put.length; k++) map[n++] = m.index;
     from = m.index + m[0].length;
   }
@@ -192,7 +221,18 @@ const SHAPES = shapeMatchers();
  *  wrap is INDENTED (Claude Code indents the rows a long line wraps into; tmux may draw that indent as a cursor move,
  *  which both views read as a NUL), so a next row with no indent is a new line, never a wrap. Sticky expressions:
  *  nothing is sliced, so a text with many matches stays linear (D-5995). */
-const ROW_END = /[ \t\0]*(?:\r\n|\r|\n)/y;
+const ROW_END = /[ \t\0]*(?:[│┃|][ \t\0]*)?(?:\r\n|\r|\n)/y;
+/** Where a row's text ends before its row end at `e` (D-5995): back over blanks, a box's right rule (a side-bordered
+ *  dialog draws one on every row a key wraps across, mirroring `ROW_INDENT`'s left rule) and the blanks before it. */
+function rowTextEnd(t: string, e: number): number {
+  const blank = (c: string | undefined): boolean => c === ' ' || c === '\t' || c === '\0';
+  while (e > 0 && blank(t[e - 1])) e--;
+  if (e > 0 && (t[e - 1] === '│' || t[e - 1] === '┃' || t[e - 1] === '|')) {
+    e--;
+    while (e > 0 && blank(t[e - 1])) e--;
+  }
+  return e;
+}
 const ROW_INDENT = /(?:[ \t\0]|│|┃|\|)+/y;
 const TOKEN_RUN = /[A-Za-z0-9_+/.-]+/y;
 const TEXT_END = /[ \t\0]*(?:\r\n|\r|\n)?$/y;
@@ -210,55 +250,175 @@ function leadingRun(t: string, from: number): [number, number] | null {
   const run = TOKEN_RUN.exec(t);
   return run === null ? null : [at, at + run[0].length];
 }
-/** The row lengths of one text, from one index of its line breaks (D-5995: built once, in rows mode only). */
+/** A code point a terminal draws in no column of its own (D-5995): a mark (a variation selector among them), a format
+ *  character (a zero-width joiner or space, a tag), an emoji skin-tone modifier, a conjoining jamo vowel or final. */
+const ZERO_COLUMN = /^[\p{M}\p{Cf}\u{1F3FB}-\u{1F3FF}\u1160-\u11FF\uD7B0-\uD7FF]$/u;
+/** The columns of `t`'s span [a, b), never more than a terminal draws it in (D-5995): a row's UTF-16 length is its
+ *  width only in ASCII, and an emoji sequence (a flag, a ZWJ family, a skin tone, a keycap), a combining mark or a
+ *  surrogate pair holds more units than columns, so the row before a wrapped key read as fuller than the key's own
+ *  rows and its third and later rows were drawn in clear. A pair, and a code point a ZWJ joins, counts once at most;
+ *  a wide character counts one, which only reads a row as less full (the join goes on, never stops early). */
+function columnsOf(t: string, a: number, b: number): number {
+  let n = 0;
+  for (let i = a; i < b; i++) {
+    const c = t.charCodeAt(i);
+    if (c < 0x300) { n++; continue; }   // ASCII, Latin and a NUL indent: one column each (the common case)
+    if (c >= 0xdc00 && c <= 0xdfff) continue;   // a pair's second unit
+    if (i > a && t.charCodeAt(i - 1) === 0x200d) continue;   // joined to the code point before it
+    if (!ZERO_COLUMN.test(String.fromCodePoint(t.codePointAt(i)!))) n++;
+  }
+  return n;
+}
+/** The row widths of one text, in columns, from one index of its line breaks (D-5995: built once, in rows mode only;
+ *  each row is measured once, on first use). */
 class Rows {
   private readonly breaks: number[] = [];
+  private readonly widths = new Map<number, number>();
   constructor(private readonly t: string) {
     const re = /[\r\n]/g;
     for (let m = re.exec(t); m !== null; m = re.exec(t)) this.breaks.push(m.index);
   }
-  /** The length of the row `i` sits on. */
+  /** The width of the row `i` sits on. */
   length(i: number): number {
     const b = this.breaks;
     let lo = 0; let hi = b.length;   // first break at or after i
     while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid]! < i) lo = mid + 1; else hi = mid; }
-    const start = lo > 0 ? b[lo - 1]! + 1 : 0;
-    const end = lo < b.length ? b[lo]! : this.t.length;
-    return end - start;
+    let w = this.widths.get(lo);
+    if (w === undefined) {
+      const start = lo > 0 ? b[lo - 1]! + 1 : 0;
+      const end = lo < b.length ? b[lo]! : this.t.length;
+      this.widths.set(lo, (w = columnsOf(this.t, start, end)));
+    }
+    return w;
   }
 }
 
 /** Every shape starts with one of these, so a text holding none of them holds no shape. */
 const SHAPE_HINT = /sk-|eyJ|_token"|OPENAI_API_KEY"/;
+/** A shape's start at a boundary (D-5995): `sk-` or `eyJ`. */
+const SHAPE_STARTED = new RegExp(`${BOUNDARY}(?:sk-|eyJ)`);
+/** A row's trailing token run, read back from its row end. */
+const isRunByte = (c: number): boolean => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)
+  || c === 0x5f || c === 0x2b || c === 0x2f || c === 0x2e || c === 0x2d;
+
+/** A rows-mode view with the TUI's early wraps joined (D-5995): `t` is the view's text with each JOINED row end and
+ *  its indent removed, `map` takes a `t` index to a view index, and `seams` are the `t` indices where a removed row
+ *  end lay. A row end is joined when the run that ends its row has begun a shape (`sk-` or `eyJ` at a boundary, or
+ *  a prefix of one that the next row's leading run completes) and the next row is indented with a leading run; the
+ *  join goes on through every further row while the row before was as full as the first and its run filled it. So a
+ *  key wrapped before its first row holds enough of it to match is matched whole. Null: nothing to join. */
+interface Joined { readonly t: string; readonly map: Int32Array; readonly seams: number[] }
+function joinWraps(t: string): Joined | null {
+  const cuts: [number, number][] = [];   // view spans [row end, next run start) removed
+  LINE_BREAK_ANY.lastIndex = 0;
+  for (let b = LINE_BREAK_ANY.exec(t); b !== null; b = LINE_BREAK_ANY.exec(t)) {
+    if (cuts.length > 0 && b.index < cuts[cuts.length - 1]![1]) continue;   // inside a join already made
+    const e = rowTextEnd(t, b.index);
+    let a = e;
+    while (a > 0 && e - a < RUN_MAX_BYTES && isRunByte(t.charCodeAt(a - 1))) a--;
+    if (a === e) continue;
+    const next = continuationAfter(t, e);
+    if (next === null) continue;
+    const probe = t.slice(a, e) + t.slice(next[0], Math.min(next[1], next[0] + 3));
+    const sh = SHAPE_STARTED.exec(probe);
+    if (sh === null || sh.index >= e - a) continue;
+    if (matchesShape(t.slice(a, e))) continue;   // matched on its own row: the shape's own continuation follows it
+    cuts.push([e, next[0]]);
+    // On through every row the run fills, while each is as full as the first.
+    const rowStart = Math.max(t.lastIndexOf('\n', e - 1), t.lastIndexOf('\r', e - 1)) + 1;
+    const full = columnsOf(t, rowStart, e);
+    let [from, end] = next;
+    for (;;) {
+      const nextRowStart = Math.max(t.lastIndexOf('\n', from - 1), t.lastIndexOf('\r', from - 1)) + 1;
+      if (columnsOf(t, nextRowStart, end) < full) break;
+      const more = continuationAfter(t, end);
+      if (more === null) break;
+      cuts.push([end, more[0]]);
+      [from, end] = more;
+    }
+    LINE_BREAK_ANY.lastIndex = end;
+  }
+  if (cuts.length === 0) return null;
+  const parts: string[] = [];
+  const map = new Int32Array(t.length + 1);
+  const seams: number[] = [];
+  let n = 0; let at = 0;
+  for (const [a, b] of cuts) {
+    parts.push(t.slice(at, a));
+    for (let i = at; i < a; i++) map[n++] = i;
+    seams.push(n);
+    at = b;
+  }
+  parts.push(t.slice(at));
+  for (let i = at; i < t.length; i++) map[n++] = i;
+  map[n] = t.length;
+  return { t: parts.join(''), map: map.subarray(0, n + 1), seams };
+}
+const LINE_BREAK_ANY = /\r\n|\r|\n/g;
+/** Whether a run holds a whole shape on its own. */
+const matchesShape = (run: string): boolean => SHAPES.some((re) => { re.lastIndex = 0; return re.test(run); });
+/** Whether a seam lies strictly inside [a, b): one binary search over the sorted seams. */
+function seamWithin(seams: readonly number[], a: number, b: number): boolean {
+  const k = firstSeamAfter(seams, a);
+  return k < seams.length && seams[k]! < b;
+}
+/** The index of the first seam past `a`. */
+function firstSeamAfter(seams: readonly number[], a: number): number {
+  let lo = 0; let hi = seams.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (seams[mid]! <= a) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+
 function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): { spans: [number, number][]; carry: boolean } {
   const spans: [number, number][] = [];
   let carry = false;
   const hasEsc = s.includes('\x1b');
-  if (!SHAPE_HINT.test(hasEsc ? s.replace(ESC_SEQ, '') : s)) return { spans, carry };
+  // In rows mode a shape the TUI wrapped early may hold no hint until its rows are joined.
+  if (!rows && !SHAPE_HINT.test(hasEsc ? s.replace(ESC_SEQ, '') : s)) return { spans, carry };
   for (const sep of ['', '\0'] as const) {
     if (sep === '\0' && !hasEsc) break;   // with no escape the two views are one
     const v = viewOf(s, sep);
-    const r = rows ? new Rows(v.t) : null;
-    for (const re of masks) {
-      re.lastIndex = 0;
-      for (let m = re.exec(v.t); m !== null; m = re.exec(v.t)) {
-        if (m[0].length === 0) { re.lastIndex++; continue; }
-        let end = m.index + m[0].length;
-        spans.push(spanIn(v, m.index, end));
-        if (r === null) continue;
-        // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
-        // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
-        const full = r.length(m.index);
-        for (let first = true; ; first = false) {
-          if (!first && r.length(end - 1) < full) break;
-          const next = continuationAfter(v.t, end);
-          if (next === null) {
-            TEXT_END.lastIndex = end;
-            if (TEXT_END.test(v.t)) carry = true;   // the next row is in the next text
-            break;
+    const joined = rows ? joinWraps(v.t) : null;
+    // The joined text AND the text as drawn (D-5995): a join glues a run that has begun a shape and matches none (a
+    // base64 JSON blob's `eyJ…`, a name like `sk-v1.py`) to the next row's leading run, so a key that begins that row
+    // loses its left boundary in the joined text; the text as drawn keeps it. The union of both is masked.
+    for (const j of joined === null ? [null] : [joined, null]) {
+      const t = j === null ? v.t : j.t;
+      if (!SHAPE_HINT.test(t)) continue;
+      /** A span of `t` as original spans: split at each joined seam, so a row end between its rows is kept. */
+      const put = (a: number, b: number): void => {
+        if (j === null) { spans.push(spanIn(v, a, b)); return; }
+        let p = a;
+        for (let k = firstSeamAfter(j.seams, a); k < j.seams.length && j.seams[k]! < b; k++) {
+          spans.push(spanIn(v, j.map[p]!, j.map[j.seams[k]! - 1]! + 1));
+          p = j.seams[k]!;
+        }
+        spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
+      };
+      const r = rows ? new Rows(t) : null;
+      for (const re of masks) {
+        re.lastIndex = 0;
+        for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+          if (m[0].length === 0) { re.lastIndex++; continue; }
+          let end = m.index + m[0].length;
+          put(m.index, end);
+          // A match across a joined row end already ran through every row its run fills: the join chain stopped at the
+          // row the value ends on.
+          if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
+          // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
+          // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
+          const full = r.length(m.index);
+          for (let first = true; ; first = false) {
+            if (!first && r.length(end - 1) < full) break;
+            const next = continuationAfter(t, end);
+            if (next === null) {
+              TEXT_END.lastIndex = end;
+              if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
+              break;
+            }
+            put(next[0], next[1]);
+            end = next[1];
           }
-          spans.push(spanIn(v, next[0], next[1]));
-          end = next[1];
         }
       }
     }
@@ -359,7 +519,6 @@ const TRIM_MAX = 16;
  *  of `floor` bytes or more that could still be one. Nothing else: an ordinary run is never masked for being open. An
  *  index into `t`, or null. The floor is 20 for a run typed key by key (a keystroke's echo is never delayed, ruling a)
  *  and 1 for a run a burst of output left open (a key a chunk boundary split shows none of its bytes). */
-const SHAPE_STARTED = new RegExp(`${BOUNDARY}(?:sk-|eyJ)`);
 const CODEX_VALUE_OPEN = /"(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*"((?:[^"\\\n]|\\.)*)$/;
 const OPEN_DELIM = /[\s"'=:,;&}\]`\0]/;
 function failClosedStart(t: string, fpMax: number | null, floor = RUN_MIN_BYTES): number | null {
@@ -422,6 +581,9 @@ export class SecretMasker {
   private rekeyTimer: ReturnType<typeof setTimeout> | null = null;
   private rekeyInFlight = false;
   private rekeyDelay = REKEY_FIRST_MS;
+  /** Moves whenever the keys or the rows change, so a mask computed once and reused (a broadcast's, D-5995) is
+   *  recomputed under the keys that hold now. */
+  private epoch = 0;
 
   constructor(opts: SecretMaskerOpts = {}) {
     this.db = opts.db ?? null;
@@ -436,6 +598,7 @@ export class SecretMasker {
   }
 
   private load(): void {
+    this.epoch++;
     this.rows = new Map();
     if (this.db === null) return;
     const all = this.db.prepare('SELECT fp, gen, len FROM secret_fingerprints').all() as unknown as
@@ -464,6 +627,7 @@ export class SecretMasker {
     const key = { gen: fingerprintGeneration(tok), token: tok };
     this.keys = [key, ...this.keys.filter((k) => k.gen !== key.gen && this.rows.has(k.gen))]
       .slice(0, 1 + MAX_PREVIOUS_KEYS);
+    this.epoch++;
     if (this.staleRows()) this.scheduleRekey(true);
   }
 
@@ -496,38 +660,110 @@ export class SecretMasker {
     (answer as Promise<FingerprintAnswer | null>).then(settle, () => settle(null));
   }
 
-  /** Stops the re-key retries (a test, or a server closing). */
+  /** Which keys and rows a mask is computed under: equal versions, equal masks of the same value (D-5995). The box
+   *  token is read first, so a rotation moves it. */
+  get version(): number {
+    this.syncKeys();
+    return this.epoch;
+  }
+
+  /** Stops the re-key retries and a held offer's (a test, or a server closing). */
   close(): void {
     if (this.rekeyTimer !== null) clearTimeout(this.rekeyTimer);
     this.rekeyTimer = null;
+    if (this.heldTimer !== null) clearTimeout(this.heldTimer);
+    this.heldTimer = null;
   }
 
-  /** Writes the CURRENT generation's fingerprints (A12's `reloadRoster` calls it with every answer's
+  /** Writes the CURRENT generation's fingerprints (A12's `reloadRoster` calls it, through `offer`, with every answer's
    *  `fingerprints`, and the re-key lands here). An answer keyed with any other generation is refused and changes
-   *  nothing (D-5995). Rows of every other generation are deleted in the same transaction, and the previous tokens
-   *  are forgotten. True: it landed. */
+   *  nothing (D-5995). Each lane the answer NAMES has every row of every generation replaced by the answer's; a lane
+   *  it does not name keeps its rows, and the previous token that keys them is kept while they last, so a re-key
+   *  answered without one lane (its secret file unreadable at that moment) never unmasks that lane's key (D-5995 (10),
+   *  D-6057 (2)). True: it landed. Throws when coord.db stays locked past `INGEST_BUSY_MS`. */
   ingest(answer: FingerprintAnswer): boolean {
     this.syncKeys();
     const cur = this.keys[0];
     if (cur === undefined || this.db === null || answer.gen !== cur.gen) return false;
     const at = this.now();
-    const db = this.db;
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      // Every other generation's rows go; each lane named here has its current rows replaced by this answer's.
-      db.prepare('DELETE FROM secret_fingerprints WHERE gen <> ?').run(cur.gen);
-      const del = db.prepare('DELETE FROM secret_fingerprints WHERE gen = ? AND laneId = ?');
+    this.write((db) => {
+      const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
       const ins = db.prepare('INSERT OR REPLACE INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)');
-      for (const lane of new Set(answer.rows.map((r) => r.laneId))) del.run(cur.gen, lane);
+      for (const lane of new Set(answer.rows.map((r) => r.laneId))) del.run(lane);
       for (const r of answer.rows) if (validRow(r)) ins.run(r.laneId, r.fp, cur.gen, r.len, at);
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
-    this.keys = [cur];
-    this.load();
+    });
     return true;
+  }
+
+  /** Deletes every row of every lane outside `keep` (a lane the roster no longer has, or one whose entry holds no
+   *  secret): A12's `reloadRoster` calls it, through `offer`. Throws as `ingest` does. */
+  retain(keep: ReadonlySet<string>): void {
+    if (this.db === null) return;
+    const lanes = (this.db.prepare('SELECT DISTINCT laneId FROM secret_fingerprints').all() as unknown as { laneId: string }[])
+      .map((r) => r.laneId).filter((l) => !keep.has(l));
+    if (lanes.length === 0) return;
+    this.write((db) => {
+      const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
+      for (const l of lanes) del.run(l);
+    });
+  }
+
+  /**
+   * THE ROSTER'S ONE ENTRY (A12's `reloadRoster`; D-6057 (2)): ingests `answer` (when it carries fingerprints) and prunes every
+   * lane outside `keep`, never blocking the event loop on a locked coord.db for more than `INGEST_BUSY_MS`. A write
+   * that finds the database locked is held (the latest offer replaces an older held one, whose prune it subsumes and
+   * whose fingerprints it carries forward when it names none) and retried on an unref'd timer with the re-key's
+   * backoff until it lands. Never throws.
+   */
+  offer(answer: FingerprintAnswer | null, keep: ReadonlySet<string>): void {
+    const held = this.held;
+    this.held = { answer: answer ?? held?.answer ?? null, keep };
+    if (this.heldTimer === null) this.flushHeld();
+  }
+
+  private held: { answer: FingerprintAnswer | null; keep: ReadonlySet<string> } | null = null;
+  private heldTimer: ReturnType<typeof setTimeout> | null = null;
+  private heldDelay = REKEY_FIRST_MS;
+
+  private flushHeld(): void {
+    const h = this.held;
+    if (h === null) return;
+    try {
+      if (h.answer !== null) this.ingest(h.answer);
+      this.retain(h.keep);
+      this.held = null;
+      this.heldDelay = REKEY_FIRST_MS;
+    } catch {
+      this.log('[mask] coord.db was busy; the roster\'s fingerprints are held and retried');
+      const delay = Math.round(this.heldDelay * (0.75 + Math.random() * 0.5));
+      this.heldDelay = Math.min(this.heldDelay * 2, REKEY_MAX_MS);
+      this.heldTimer = setTimeout(() => { this.heldTimer = null; this.flushHeld(); }, delay);
+      this.heldTimer.unref?.();
+    }
+  }
+
+  /** One write transaction on coord.db under a short busy timeout (`INGEST_BUSY_MS`), the connection's own restored
+   *  after, then the in-memory mirror reloaded and the previous keys trimmed to those whose rows remain. A
+   *  `BEGIN IMMEDIATE` that stays busy throws and changes nothing (D-5995 (10)). */
+  private write(body: (db: DatabaseSync) => void): void {
+    const db = this.db!;
+    const prior = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number } | undefined)?.timeout ?? 0;
+    db.exec(`PRAGMA busy_timeout = ${INGEST_BUSY_MS}`);
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        body(db);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    } finally {
+      db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(prior))}`);
+    }
+    this.load();
+    const cur = this.keys[0];
+    this.keys = this.keys.filter((k) => k === cur || this.rows.has(k.gen));
   }
 
   /** The keys whose generation has rows to match. */
@@ -630,8 +866,7 @@ export class SecretMasker {
       seen = 0;
       LINE_BREAK.lastIndex = 0;
       for (let m = LINE_BREAK.exec(t); m !== null && seen < limit; m = LINE_BREAK.exec(t)) {
-        let e = m.index;
-        while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+        const e = rowTextEnd(t, m.index);
         const aFine = runStartBefore(t, e, true, longest + 1);
         if (e - aFine > longest) continue;
         const aCoarse = runStartBefore(t, aFine, false, longest + 1 - (e - aFine));
@@ -685,8 +920,7 @@ export class SecretMasker {
     LINE_BREAK.lastIndex = 0;
     for (let b = LINE_BREAK.exec(t); b !== null; b = LINE_BREAK.exec(t)) {
       if (best !== null && b.index >= best) break;
-      let e = b.index;
-      while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+      const e = rowTextEnd(t, b.index);
       const a = runStartBefore(t, e, false, Infinity);
       if (a < e) { best = Math.min(best ?? Infinity, a); break; }
     }
@@ -820,13 +1054,41 @@ function codexValueOpenAt(t: string): number | null {
 }
 
 /** Where a drawer chunk's open tail begins (D-5995): an unfinished escape, a run that has begun a shape (`sk-` or
- *  `eyJ` at a boundary), an open Codex token value, or, while fingerprints are held, any open run. In the shape-only
+ *  `eyJ` at a boundary), an open Codex token value, a run that ends the chunk's last row (`rowTailAt`), or, while
+ *  fingerprints are held, any open run. In the shape-only
  *  mode an ordinary run (a word, a path, a keystroke's echo) is never held: a shape a cut splits ahead of `sk-` is
  *  matched across the cut by the drawer's context. `null`: that tail is longer than a drawer holds. Only the end of
  *  the text is scanned. */
 /** An escape whose final byte has not arrived yet, at the end of a text. */
 const UNFINISHED_ESC = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*|[PX^_][^\x1b]*|[ -/]*)?$/;
-function openTailAt(s: string, fingerprints: boolean, ctx = ''): number | null {
+/** The shortest run before a row end the drawer holds while fingerprints are held (D-5995): fewer bytes never
+ *  identify a key, and a quiet line end of a shorter last word is drawn at once. */
+const ROW_TAIL_MIN_BYTES = 8;
+/** Where a text that ends in a run, its row end and the next row's indent (nothing of that row's run yet) should be
+ *  held from (D-5995), or null: a run that has begun a shape (from its `sk-` or `eyJ`), or, while fingerprints are
+ *  held (`fpMax`), a run of a length that could be a key's first row. The TUI writes the wrapped next row after it,
+ *  and a held run is masked together with that row's leading run; one sent at once would show its bytes. */
+function rowTailAt(t: string, fpMax: number | null): number | null {
+  let j = t.length;
+  while (j > 0 && ' \t\0│┃|'.includes(t[j - 1]!)) j--;
+  if (j === 0) return null;
+  if (t[j - 1] === '\n') { j--; if (j > 0 && t[j - 1] === '\r') j--; } else if (t[j - 1] === '\r') j--; else return null;
+  j = rowTextEnd(t, j);
+  let i = j;
+  while (i > 0 && j - i <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[i - 1]!)) i--;
+  if (i === j) return null;
+  const run = t.slice(i, j);
+  const sh = SHAPE_STARTED.exec(run);
+  // A run that already matches a shape is masked on its own, and its wrapped next row by the shape's carry.
+  if (sh !== null) return matchesShape(run) ? null : i + sh.index;
+  if (fpMax === null) return null;
+  const n = Buffer.byteLength(run, 'utf8');
+  return n >= ROW_TAIL_MIN_BYTES && n <= fpMax + TRIM_MAX ? i : null;
+}
+
+/** `rowTail`: also hold a run that ends its row (`rowTailAt`); off when a settled row end is being drawn. */
+function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): number | null {
+  const fingerprints = fpMax !== null;
   const base = Math.max(0, s.length - (DRAWER_HELD_MAX + 64));
   // What was sent just before is read with the text (a run `sk-` began in it is still open), never held again.
   const lead = base === 0 ? ctx.slice(-64) : '';
@@ -844,6 +1106,11 @@ function openTailAt(s: string, fingerprints: boolean, ctx = ''): number | null {
       const sh = SHAPE_STARTED.exec(run);
       if (sh !== null) hold = i + sh.index;
     }
+  }
+  if (run === '' && rowTail) {
+    // A run that ends its row, held only when it lies in this text: a row end alone never delays (an Enter's echo).
+    const rt = rowTailAt(v.t, fpMax);
+    if (rt !== null && origin(v, rt) >= lead.length) hold = rt;
   }
   const cx = codexValueOpenAt(v.t);
   if (cx !== null && (hold === null || cx < hold)) hold = cx;
@@ -965,13 +1232,19 @@ export class DrawerMask {
       if (h === '') { this.held = tail; return; }
     }
     const v = viewOf(lead + h, '\0');
-    const p = failClosedStart(v.t, this.masker.fingerprintMax(), this.heldTyped ? RUN_MIN_BYTES : 1);
+    const fpMax = this.masker.fingerprintMax();
+    let p = failClosedStart(v.t, fpMax, this.heldTyped ? RUN_MIN_BYTES : 1);
+    // A run held at its row end (D-5995): drawn as the provisional mask, and settled after the row settle when no
+    // wrapped next row follows.
+    const rowEnded = p === null && tail === '' ? rowTailAt(v.t, fpMax) : null;
+    if (rowEnded !== null && origin(v, rowEnded) >= lead.length) p = rowEnded;
     // A start inside the context: the run began before the held text, which is all of it.
     const cut = p === null ? null : Math.max(0, origin(v, p) - lead.length);
     if (cut === null) { this.out(h, false, ''); this.held = tail; return; }
     if (cut > 0) this.out(h.slice(0, cut), false, '');
     this.emit(SECRET_MASK);
     this.pending = h.slice(cut) + tail;
+    if (p === rowEnded) this.timer = setTimeout(() => { this.timer = null; this.settlePending(); }, ROW_SETTLE_HOLDS * this.holdMs);
   }
 
   /** The provisional mask's run ended in blanks that nothing followed within the hold: resolve it now. */
@@ -979,7 +1252,7 @@ export class DrawerMask {
     if (this.pending === null) return;
     const s = this.pending;
     this.pending = null;
-    this.resolve(s);
+    this.route(s, ERASE_MASK, false);   // settled: a run that ended its row is drawn, never held again
   }
 
   dispose(): void {
@@ -996,9 +1269,9 @@ export class DrawerMask {
   }
 
   /** Sends `s` up to its open tail (prefixed by `lead`, raw), and holds the tail. */
-  private route(s: string, lead: string): void {
+  private route(s: string, lead: string, rowTail = true): void {
     this.held = '';
-    const cut = openTailAt(s, this.masker.fingerprintMax() !== null, this.ctx);
+    const cut = openTailAt(s, this.masker.fingerprintMax(), this.ctx, rowTail);
     if (cut === null) {   // an open tail past the bound: sent now, failing closed on a begun secret
       this.stopTimer();
       this.out(s, true, lead);

@@ -407,7 +407,7 @@ describe('sendPrompt', () => {
       '❯ new text\n',   // verify
       '❯ \n',           // after Enter — box emptied
     ]);
-    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'new text', { replaceDraft: true });
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'new text', { onDraft: 'replace' });
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
       ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
@@ -422,7 +422,7 @@ describe('sendPrompt', () => {
     // this test is really about is unchanged — nothing but C-u is sent, and the
     // residual draft is reported instead of being typed over.
     const { tmux, calls } = fakeTmux(['❯ stubborn\n', '❯ stubborn\n']);
-    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true });
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { onDraft: 'replace' });
     expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
     expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(
       new Set(['tmux send-keys -t =cc-x: C-u']),
@@ -1364,7 +1364,7 @@ describe('DIM_SPAN does not swallow real text after a tmux combined reset (\\e[0
 });
 
 describe('sendPrompt with attachments', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('types the paths above the text as one turn', async () => {
     const { tmux, calls } = fakeTmux([
@@ -1423,7 +1423,7 @@ describe('sendPrompt with attachments', () => {
     // from the first frame: it would stop at one press and strand the text,
     // which is exactly what happens when a stale render is why the echo failed.
     // So the floor is fired blind, and this pane can't talk it out of it.
-    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const P2 = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep },
@@ -1472,7 +1472,7 @@ describe('sendPrompt with attachments', () => {
 // live box — the next send then came back `draft-present` carrying exactly the
 // thing this cleanup exists to remove. Judged against box STATE, not a press count.
 describe('the failed-send cleanup actually empties the box', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('empties the box even though the pane NEVER re-renders — the reason the verify failed', async () => {
     // `staleFrames: Infinity` is the case that matters: the pane goes on showing
@@ -1495,7 +1495,7 @@ describe('the failed-send cleanup actually empties the box', () => {
   });
 
   it('a 3-line attachment prompt needs 5 presses and gets them, stale pane or not', async () => {
-    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const P2 = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [P, P2] },
@@ -1518,7 +1518,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // or more lines, so choosing "replace" in the conflict sheet failed loudly.
     const { tmux, calls, box } = boxTmux({ initial: ['line one', 'line two', 'line three'] });
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh text', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh text', { onDraft: 'replace' },
     );
     expect(res).toEqual({ ok: true });
     expect(cuPresses(calls)).toBe(5);
@@ -1535,7 +1535,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // ceiling low — the clear exits on the first empty read either way.
     const { tmux, calls, box } = boxTmux({ initial: ['l1', 'l2', 'l3', 'l4', 'l5'] });
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'fresh', { onDraft: 'replace' },
     );
     expect(res).toEqual({ ok: true });
     expect(cuPresses(calls)).toBe(9);   // 2*5-1
@@ -1545,7 +1545,7 @@ describe('the failed-send cleanup actually empties the box', () => {
   it('a pane that dies mid-clear is not-alive, not draft-clear-failed', async () => {
     const { tmux } = fakeTmux(['❯ old draft\n', null]);
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { onDraft: 'replace' },
     );
     expect(res).toEqual({ ok: false, error: 'not-alive' });
   });
@@ -1571,14 +1571,14 @@ describe('the failed-send cleanup actually empties the box', () => {
 // the menu and then hand the user "1. Yes" back as their own leftover draft.
 describe('a menu that opens mid-clear stops the clear', () => {
   const MENU = 'some scrollback\n\n❯ 1. Yes\n  2. No\n  Enter to select\n';
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('replaceDraft answers dialog-open, the same as a menu that was already up', async () => {
     // capture 1 = a real draft (passes the guard at the top), everything after
     // = a live menu.
     const { tmux, calls } = fakeTmux(['❯ my draft\n', MENU]);
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { onDraft: 'replace' },
     );
     expect(res).toEqual({ ok: false, error: 'dialog-open' });
     expect(cuPresses(calls)).toBe(1);  // bails on the first read, instead of 24 into a live menu
@@ -1603,7 +1603,7 @@ describe('a menu that opens mid-clear stops the clear', () => {
 // message: a 200-line prompt bought 402 presses and a minute of sleeps, and a
 // 500-line one several minutes, all with the lock held.
 describe('a clear cannot hold the session queue open', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
   /** Wall clock the clear itself spent, i.e. from the last typed keystroke on. */
   const clearElapsed = (clock: { now: () => number }, before: number) => clock.now() - before;
 
@@ -1630,7 +1630,7 @@ describe('a clear cannot hold the session queue open', () => {
     const queue = new KeyedQueue();
     const order: string[] = [];
     const send = sendPrompt(
-      { tmux, queue, sleep: clock.sleep, now: clock.now }, 'x', 'hi', { replaceDraft: true },
+      { tmux, queue, sleep: clock.sleep, now: clock.now }, 'x', 'hi', { onDraft: 'replace' },
     ).then((r) => { order.push('send'); return r; });
     const second = queue.run('x', async () => { order.push('interrupt'); }); // same session key
     const res = await send;
@@ -1707,7 +1707,7 @@ describe('clearBox reports on the whole box, not on one row', () => {
   it('does not report cleared while rows below the marker still hold text', async () => {
     const { tmux } = fakeTmux([BLANK_MARKER_WITH_CONTENT]);
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { onDraft: 'replace' },
     );
     // It must NOT sail through to the type loop. Whatever it reports, it does
     // not report success on a box it never emptied.
@@ -1725,7 +1725,7 @@ describe('clearBox reports on the whole box, not on one row', () => {
       empty,                 // after Enter
     ]);
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { onDraft: 'replace' },
     );
     // The clear succeeded, so the send proceeded past it — whatever the echo
     // then did, `draft-clear-failed` is what must NOT appear.
@@ -2032,7 +2032,7 @@ describe('a box that has scrolled out of the capture window is UNMEASURED, not e
   it('stops a replace-clear the moment the box leaves the capture, instead of hammering C-u blind', async () => {
     const { tmux, calls } = fakeTmux(['scrollback\n❯ the operator’s own draft\n', BOX_TALLER_THAN_THE_WINDOW]);
     const res = await sendPrompt(
-      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { onDraft: 'replace' },
     );
     expect(res.ok === false && res.error).toBe('box-unreadable');
     // One blind press, then the look round read no box and stopped. The old

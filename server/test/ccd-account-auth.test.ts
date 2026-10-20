@@ -14,6 +14,7 @@ import {
 } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
@@ -194,6 +195,17 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
       + "os.path.join(reg, '.prstate-' + id_ + '.lock')",
   };
 
+  /** Written by a bash file the scan sees, and NOT YET in the paragraph, because
+   *  the paragraph lives in `ccd/ccd`, which an open PR holds (the accounts
+   *  plan's freeze; D-5755 (13f)). Each entry is checked in both directions: it
+   *  must be in the scan (or it names nothing) and still absent from the
+   *  paragraph (or the amendment landed and the entry is stale). The cardinal
+   *  check below leaves these out until that amendment counts them. */
+  const PENDING_PARAGRAPH: Record<string, string> = {
+    accounts: "`ccrc account`'s lane-state DIRECTORY (`ccd/ccrc`, accounts plan Task A11) — "
+      + "unreachable for `.reaped/`'s reason, as `.auth/` is",
+  };
+
   /** And two the paragraph names in prose that NO literal scan can ever reach,
    *  because their name is an interpolated id rather than a literal:
    *  `_reg_set`'s own tmps and session-hook.sh's `.$id.$$.hookstate.tmp`. */
@@ -231,7 +243,13 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
     // finding.
     expect(found.length, 'the scan found no dot-prefixed registry artifact at all')
       .toBeGreaterThanOrEqual(7);
-    for (const name of found) {
+    for (const [name, why] of Object.entries(PENDING_PARAGRAPH)) {
+      expect(found, `$REG/.${name} is no longer written by ccd's bash — drop its PENDING_PARAGRAPH entry (${why})`)
+        .toContain(name);
+      expect(region, `the R-3 paragraph now names $REG/.${name} — drop its PENDING_PARAGRAPH entry`)
+        .not.toContain(`.${name}`);
+    }
+    for (const name of found.filter((n) => !(n in PENDING_PARAGRAPH))) {
       expect(region, `$REG/.${name} is written by ccd's own bash and the R-3 boundary paragraph does not name it`)
         .toContain(`.${name}`);
     }
@@ -248,7 +266,8 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
     // The cardinal is DERIVED, not remembered: what the scan found, plus the
     // declared blind spots, plus the two whose name is an interpolated id.
     // That arithmetic is what keeps the written number tied to a measurement.
-    const total = found.length + Object.keys(UNSCANNABLE).length + VARIABLE_NAMED;
+    const total = found.length - Object.keys(PENDING_PARAGRAPH).length + Object.keys(UNSCANNABLE).length
+      + VARIABLE_NAMED;
     expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${VARIABLE_NAMED} variable-named)`)
       .toContain(`${CARDINAL[total]} dot-prefixed`);
   });
@@ -1907,22 +1926,14 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
   });
 
   it('the capability is named in the list that partitions caps output', () => {
-    // `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS is HAND-MAINTAINED and is
-    // what tells a capability token apart from a verb. Said here too, because
-    // the file that adds the token and the file that classifies it are two
-    // packages apart in a reader's head even though they are not on disk.
+    // The capability-token list (`ccdCapTokens.ts`, D-6051; `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS is
+    // it) is HAND-MAINTAINED and is what tells a capability token apart from a verb. Said here too, because the
+    // file that adds the token and the file that classifies it are two packages apart in a reader's head.
     //
-    // MEMBERSHIP, NOT THE WHOLE ARRAY (D-2595). This quoted the entire literal
-    // until the
-    // account-pools merge added `pools-v1` to it — a false red over a list
-    // doing its job. What this test is FOR is that `account-v1` is classified
-    // at all; the exactness of the rest is `ccd-archive.test.ts`'s own business
-    // and it holds the set equal to the advertised one in both directions.
-    const arr = /const KNOWN_CAPABILITY_TOKENS = \[([^\]]*)\]/
-      .exec(read('server', 'test', 'ccd-archive.test.ts'));
-    expect(arr, 'ccd-archive.test.ts has no KNOWN_CAPABILITY_TOKENS array').not.toBeNull();
-    expect(arr![1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')))
-      .toContain('account-v1');
+    // MEMBERSHIP, NOT THE WHOLE ARRAY (D-2595): what this test is FOR is that `account-v1` is classified at all;
+    // the exactness of the rest is `ccd-archive.test.ts`'s own business, and it holds the set equal to the
+    // advertised one in both directions.
+    expect(CCD_CAPABILITY_TOKENS).toContain('account-v1');
   });
 
   it('_inst_bins places the helper on BOTH platform arms', () => {

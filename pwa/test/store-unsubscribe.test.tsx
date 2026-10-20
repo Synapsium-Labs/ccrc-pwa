@@ -54,7 +54,7 @@ function wrapped(
 // Imported after the mock is declared (vi.mock is hoisted above these).
 const { initTheme, setTheme } = await import('../src/lib/theme');
 const { initSkin, setSkin } = await import('../src/lib/skin');
-const { AppearanceSection } = await import('../src/screens/SettingsScreen');
+const { AppearanceSection } = await import('../src/screens/settings/AppearanceSection');
 const { SkinFieldset } = await import('../src/screens/SkinFieldset');
 
 const media = (matches: boolean) => ({ matches, addEventListener: () => {} });

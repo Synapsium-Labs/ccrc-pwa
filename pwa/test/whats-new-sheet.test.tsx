@@ -126,6 +126,20 @@ describe("the banner's See what's new opens the sheet in place", () => {
     expect(button).toBeDisabled();
     expect(button.getAttribute('aria-describedby')).toBeTruthy();
   });
+
+  // D-6031: the reason sits in the pinned footer, straight above the button it explains. Left at the end of the
+  // scrolling body it was thousands of pixels below the greyed button whenever several releases scrolled.
+  it('while a node halts the fleet, the reason line is in the footer, above Update all', () => {
+    const halted = view({ nodes: [fleetNode({ update: { state: 'failed', target: 'v0.0.9', startedAt: 1, detail: 'gate' } }), serverNode()] });
+    render(<UpdateBanner updates={halted} />);
+    fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
+    const button = within(sheet()).getByRole('button', { name: 'Update all' });
+    const line = document.getElementById(button.getAttribute('aria-describedby') ?? '');
+    expect(line, 'aria-describedby names no element').not.toBeNull();
+    expect(line!.closest('.sheet-footer'), 'the reason line is not in the footer').not.toBeNull();
+    expect(line!.closest('.sheet-body'), 'the reason line is in the scrolling body').toBeNull();
+    expect(line!.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe('the notes, as plain text in groups', () => {

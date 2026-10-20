@@ -138,7 +138,7 @@ counts.
 
 **Merged, never rebased.** A rebase would have rewritten the twelve cherry-picked commits and
 silently re-authored work belonging to PR #96's author. Verified at the merged tip: 12 commits still
-carry Oleksandr Zakharov as Author and 12 still carry their `cherry picked from commit` lines.
+carry a colleague as Author and 12 still carry their `cherry picked from commit` lines.
 
 Guards at the merged tip: 7 files / 359 tests green (auth-gate, box-token-census, single-definition,
 deviation-refs, pane-history-route, pty, dtbd). CI **six of six green** at `9b472a20` (run 34979756360), `test-macos` included — the independent answer to the local flakes above.

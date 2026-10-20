@@ -34,7 +34,7 @@ One line per task:
 **Tech Stack:**
 - bash (`ccd/ccd`, `ccd/ccrc`).
 - systemd's `systemctl(1)`. On `--no-reload`, the systemd 255 man page on the drafting box says: "When used with enable and disable, do not implicitly reload daemon configuration after executing the changes."
-- `shared/mark.mjs` for the stamp; vitest 4.1 in `server/`; node `>=22.13.0`; no new dependency.
+- `shared/mark.mjs` for the stamp; vitest 4.1 in `server/`; node `>=22.16.0` (the drafting base `8b0547b48` declared `>=22.13.0`; #300 raised it later that day, before the dispatch base `0b3ff2f62`); no new dependency.
 
 **Measured by the attack on a real user manager.** This was a throwaway `ubuntu:24.04` container with systemd 255.4, run privileged with `--cgroupns=private --rm` and tmpfs mounts, as a lingering test user. It was removed afterwards. It touched no fleet unit.
 - (a) `enable` and `enable --no-reload` create byte-identical wants links.

@@ -38,6 +38,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
     collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
     bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
+  // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
+  // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
+  { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
+    creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
+    collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
+    bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -98,6 +104,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (through card.mjs)'],
     collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the prediction is ingested, or when the id\'s next prediction names another uuid; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days, the record included)',
     bound: 'one prediction per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=512 B per session', ruling: null },
+  // ccrc history, W2-4 (spec 2026-10-05 §9.4, §10.2; W2-D9, W2-D53): the replay driver's --out. The operator names it;
+  // the driver creates it 0700 under umask 077 with its marker, or reuses one that still passes every check, so a
+  // stopped batch resumes. Nothing in the tree removes it: it holds one W2 run's evidence until the decision is recorded.
+  { name: 'history-replay-out', root: 'the W2 driver\'s --out directory, operator-chosen outside any git tree, mode 0700, marked by .ccrc-history-replay', pattern: 'O',
+    creators: ['deploy/history-replay.mjs'], collector: null,
+    bound: 'one W2 run, until the W2 decision is recorded', tier: 'one W2 run\'s transcripts and scores',
+    ruling: 'operator-made; removed by hand once the W2 decision is recorded' },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.

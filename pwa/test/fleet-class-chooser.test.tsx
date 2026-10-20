@@ -7,11 +7,12 @@
 // (D-2854) — this suite asserts against those exact rendered words, not a
 // paraphrase.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
@@ -29,7 +30,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:alpha', home: '/home/rc', project: 'alpha', workdir: '/home/rc/projects/alpha', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:alpha', home: '/home/u', project: 'alpha', workdir: '/home/u/projects/alpha', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>
@@ -64,7 +65,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       if (String(url).includes('/api/projects?class=fable')) {
         return new Response(JSON.stringify({
           roots: [], projects: [{
-            name: 'alpha', workdir: '/home/rc/projects/alpha',
+            name: 'alpha', workdir: '/home/u/projects/alpha',
             pool: { state: 'untagged' },
             placement: { kind: 'none', pool: null, class: 'fable' },
           }],
@@ -77,7 +78,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -104,7 +105,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -132,7 +133,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -162,7 +163,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -180,7 +181,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
 
   it('offers the four classes in capability order, plus Coordinator row and Default', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session()] });
 
     const select = screen.getByLabelText('Class') as HTMLSelectElement;
@@ -210,7 +211,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     }));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', pools: { listed: true, byProject: {}, enforcement: 'enforced' },
       sessions: [session()] });
 

@@ -15,8 +15,8 @@ skips**. Both halves of the parent's ruling R2 are now measured live:
 | landing | kind | what the destination transcript shows |
 |---|---|---|
 | ccrc-pwa-quiet-summit 22:06:56 | auto-home of an IDLE session (turn ended 22:06:21) | no META prompt, no synthetic pair — a completed turn is not re-driven |
-| ccrc-pwa-clear-meadow 09:29:54 | rescue (claude-expoai weekly limit) | 09:29:56 META `Continue from where you left off. Note: ccd restarted …`; 09:30:07 the assistant: "Session restarted on a different account — the previous process's sweep died on a weekly limit …" |
-| expoAI-assistant-swift-meadow 10:13:14 | rescue (same storm) | 10:12:21 the banner row; 10:13:16 META prompt; 10:13:27 the assistant working |
+| ccrc-pwa-clear-meadow 09:29:54 | rescue (claude-ext1 weekly limit) | 09:29:56 META `Continue from where you left off. Note: ccd restarted …`; 09:30:07 the assistant: "Session restarted on a different account — the previous process's sweep died on a weekly limit …" |
+| project-h-swift-meadow 10:13:14 | rescue (same storm) | 10:12:21 the banner row; 10:13:16 META prompt; 10:13:27 the assistant working |
 
 `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` and ccd's prompt were read from the live process
 environment of a landed session (`/proc/<pid>/environ`). The fallback keystroke has not been
@@ -140,9 +140,9 @@ lane ran on 2026-09-10), from `ccd/ccd` at `24f32a18`, from `server/src`, and fr
 ## 4. Out of scope, observed 2026-09-10
 
 - **A delayed dispatch does not re-check its subject (D-2372).** 10:14:20 the affinity arm
-  dispatched quiet-summit `claude-expoai -> claude-dev0 (in 43s)`; 10:14:35 a swap
-  `claude-expoai -> gpt` landed from elsewhere; 10:15:05 the delayed dispatch fired and moved it
-  again, `gpt -> claude-dev0`. Two restarts in thirty seconds. D-2232's neighbour; its own
+  dispatched quiet-summit `claude-ext1 -> claude-lab0 (in 43s)`; 10:14:35 a swap
+  `claude-ext1 -> gpt` landed from elsewhere; 10:15:05 the delayed dispatch fired and moved it
+  again, `gpt -> claude-lab0`. Two restarts in thirty seconds. D-2232's neighbour; its own
   investigation.
 - **A gpt-lane landing at ctx 100% ran no turn (D-2373).** bright-meadow landed on `gpt` at
   10:13:39 with the META prompt written and nothing after it within twelve minutes, while the
