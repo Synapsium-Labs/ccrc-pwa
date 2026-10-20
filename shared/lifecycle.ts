@@ -43,7 +43,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
-    bound: 'the child\'s lifetime; a root kept in use, until ws-collect finds it idle', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+    bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for

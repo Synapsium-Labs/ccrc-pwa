@@ -31787,7 +31787,8 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # Measurement (a)): a child spawned with `_child_tmpdir`'s TMPDIR keeps it under its
   # own `$HOME/.cc-tmp/<id>/claude-<uid>/`, which dies with that root. What lands here
   # is the scratch of a child spawned WITHOUT that TMPDIR (`_child_tmpdir`'s rc 2), under
-  # whatever TMPDIR the ccd process runs under, so this is the root to measure (D-5888). A bare
+  # whatever TMPDIR the ccd process runs under, so this is the root to measure (D-5888).
+  # Non-child sessions (rc 1) land here too, but ws-reclaim never measures them. A bare
   # `/tmp/claude-$(id -u)` measured nothing on a box whose TMPDIR points elsewhere —
   # macOS scan, mail 2375.
   local root="${CCD_RECLAIM_RESIDUE_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}" d b
