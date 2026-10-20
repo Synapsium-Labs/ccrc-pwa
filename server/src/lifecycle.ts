@@ -21,11 +21,14 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
   // The one hop that turns the optional shape into the token shape. `=== undefined`
   // is the whole test: absence — and ONLY absence — becomes `UNMEASURED`. A
   // measured `false` stays `false`, and a measured `null` signal stays `null`.
-  return {
+  const answer: CcdResult = {
     ok: r.code === 0, stdout: r.stdout, stderr: r.stderr,
     killed: r.killed === undefined ? UNMEASURED : r.killed,
     signal: r.signal === undefined ? UNMEASURED : r.signal,
   };
+  // D-6034: the runner's `ran: false` arm is CARRIED, beside every field above, unchanged; a ran answer gains no key.
+  // `ok: false` is the arm's own claim, never derived from the forged code.
+  return r.ran === false ? { ...answer, ok: false, ran: false, reason: r.reason, detail: r.detail } : answer;
 }
 
 /** How one ccd call ENDED, as its two kill halves together say (docs W2, refinement (g)):
