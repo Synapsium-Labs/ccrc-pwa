@@ -1296,7 +1296,7 @@ function checkpointWithoutSessions(cp: DelegationCheckpointV1, drifted: readonly
  * With `evidence` (recovery's per-sequence count) the repair knows BEFORE reading whether the journal has anything to tell SQLite: a
  * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees, or a max the journal holds no evidence
  * at (D-5836, review 705 F1), goes straight to the one full pass instead of a counting pass followed by a full one. Without it, the
- * repair counts as it reads (two passes when counts disagree).
+ * repair counts as it reads (two passes when the counts disagree, or when the counting pass meets no evidence record at SQLite's max).
  * The journal is read as a stream through `journal()`, a fresh async iterable per pass.
  */
 export async function repairDelegationProjection(input: {
