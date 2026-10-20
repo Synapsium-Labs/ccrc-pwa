@@ -2,7 +2,7 @@ import { constants as fsConstants, createReadStream, watch, type FSWatcher } fro
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
-import { isReadFromRange, LANE_STATE_DIR_NAME } from '../../shared/agent-protocol.js';
+import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
  *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
@@ -258,7 +258,8 @@ export const localIO: FleetIO = {
   // The agent's `read` op's rule, on this arm too (D-6058; accounts plan Task A12): open with `O_NONBLOCK`, so a FIFO
   // never waits for a writer, and answer anything that is not a regular file `unreadable`, closed unread; a name
   // directly in `~/.cc-sessions/.accounts` (a lane-state file) is opened with `O_NOFOLLOW`, so a symlink planted at
-  // a lane's name is `unreadable`, never its target's bytes (D-5755 (13d)). Both arms answer one path alike.
+  // a lane's name is `unreadable`, never its target's bytes (D-5755 (13d)), and so is a hardlink there or a `.accounts`
+  // that is a symlink (`laneStateOpenHolds`, D-6058 (5)). Both arms answer one path alike.
   async readFileMeasured(p, _timeoutMs, signal) {
     const laneState = path.basename(path.dirname(p)) === LANE_STATE_DIR_NAME
       && path.basename(path.dirname(path.dirname(p))) === '.cc-sessions';
@@ -269,7 +270,12 @@ export const localIO: FleetIO = {
       return { ok: false, reason: failureFor(err) };
     }
     try {
-      if (!(await fh.stat()).isFile()) return { ok: false, reason: 'unreadable' };
+      const st = await fh.stat();
+      if (!st.isFile()) return { ok: false, reason: 'unreadable' };
+      // A lane-state file is the one file at its name, with no second name, in a real directory (D-6058 (5)).
+      if (laneState && !laneStateOpenHolds(st, await lstat(p), await lstat(path.dirname(p)))) {
+        return { ok: false, reason: 'unreadable' };
+      }
       return { ok: true, content: await fh.readFile({ encoding: 'utf8', signal }) };
     } catch (err) {
       return { ok: false, reason: failureFor(err) };

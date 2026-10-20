@@ -6,7 +6,7 @@
 // unreadable rather than its target's bytes.
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, mkdirSync, openSync, readSync, rmSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, linkSync, mkdirSync, openSync, readSync, rmSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { boot, makeFixture, TestClient, type Fixture } from './helpers.js';
@@ -120,5 +120,30 @@ describe('the agent reads regular files only (A12)', () => {
     expect(res).not.toHaveProperty('absent');
     // The same target read by its own name still reads: only the lane-state name refuses to follow.
     expect(await client!.req<Res>(++id, { op: 'read', path: target })).toMatchObject({ data: 'what-the-target-holds' });
+  });
+  it('a `.accounts` directory that is a symlink out of the read roots reads as unreadable, never its file', async () => {
+    const f = await open();
+    const away = path.join(f.outside, 'accounts-elsewhere');
+    mkdirSync(away, { recursive: true });
+    writeFileSync(path.join(away, 'lane-a.json'), '{"identity":"what-the-outside-holds"}');
+    mkdirSync(path.join(f.home, '.cc-sessions'), { recursive: true });
+    symlinkSync(away, path.join(f.home, '.cc-sessions', '.accounts'));
+    const res = await client!.req<Res>(++id, { op: 'read', path: path.join(f.home, '.cc-sessions', '.accounts', 'lane-a.json') });
+    expect(res).toMatchObject({ ok: true, data: null });
+    expect(res).not.toHaveProperty('absent');
+  });
+
+  it('a hardlink at a lane-state file\'s name reads as unreadable, never as the other file\'s bytes (D-6058 (2))', async () => {
+    const f = await open();
+    const other = path.join(f.home, '.claude', 'x.json');
+    mkdirSync(path.dirname(other), { recursive: true });
+    writeFileSync(other, '{"identity":"what-the-other-file-holds"}');
+    const dir = path.join(f.home, '.cc-sessions', '.accounts');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const name = path.join(dir, 'lane-a.json');
+    linkSync(other, name);
+    const res = await client!.req<Res>(++id, { op: 'read', path: name });
+    expect(res).toMatchObject({ ok: true, data: null });
+    expect(res).not.toHaveProperty('absent');
   });
 });

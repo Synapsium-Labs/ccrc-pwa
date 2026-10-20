@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, chmodSync, mkdirSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, linkSync, mkdirSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -426,5 +426,46 @@ describe('localIO.readFileMeasured reads regular files only (D-6058)', () => {
     expect(await localIO.readFileMeasured(path.join(home, '.cc-sessions', 'elsewhere.json')))
       .toEqual({ ok: true, content: '{"identity":"the-target"}' });
     expect(await localIO.readFileMeasured(path.join(dir, 'lane-b.json'))).toEqual({ ok: false, reason: 'absent' });
+  });
+  it('a FIFO with no writer is unreadable at once: the open never waits for one', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { closeSync, constants, openSync } = await import('node:fs');
+    const fifo = path.join(mktempDir(), 'in');
+    execFileSync('mkfifo', [fifo]);
+    try {
+      const t0 = Date.now();
+      const r = await Promise.race([
+        localIO.readFileMeasured(fifo),
+        new Promise<'blocked'>((res) => setTimeout(() => res('blocked'), 1_000)),
+      ]);
+      expect(r).toEqual({ ok: false, reason: 'unreadable' });
+      expect(Date.now() - t0).toBeLessThan(1_000);
+    } finally {
+      // A blocked open (the mutant) is released by a writer; with none blocked there is no reader, and ENXIO is fine.
+      try { closeSync(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK)); } catch { /* no reader waiting */ }
+    }
+  }, 4_000);
+
+  it('a hardlink at a lane-state name is unreadable, never the other file\'s bytes; the other file still reads', async () => {
+    const home = mktempDir();
+    const dir = path.join(home, '.cc-sessions', '.accounts');
+    mkdirSync(dir, { recursive: true });
+    const other = path.join(home, '.claude', 'x.json');
+    mkdirSync(path.dirname(other), { recursive: true });
+    writeFileSync(other, '{"identity":"the-other-file"}');
+    linkSync(other, path.join(dir, 'lane-a.json'));
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-a.json'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await localIO.readFileMeasured(other)).toEqual({ ok: true, content: '{"identity":"the-other-file"}' });
+  });
+
+  it('a `.accounts` directory that is a symlink reads as unreadable, never the file it points at', async () => {
+    const home = mktempDir();
+    const away = path.join(mktempDir(), 'accounts-elsewhere');
+    mkdirSync(away, { recursive: true });
+    writeFileSync(path.join(away, 'lane-a.json'), '{"identity":"the-outside"}');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync(away, path.join(home, '.cc-sessions', '.accounts'));
+    expect(await localIO.readFileMeasured(path.join(home, '.cc-sessions', '.accounts', 'lane-a.json')))
+      .toEqual({ ok: false, reason: 'unreadable' });
   });
 });

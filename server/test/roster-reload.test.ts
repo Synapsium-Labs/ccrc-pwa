@@ -224,22 +224,23 @@ describe('fingerprint ingestion (D-5513, A10\'s table)', () => {
 });
 
 describe('reconcile (D-5518)', () => {
-  const setup = (answer: (sub: string) => AccountOpResult) => {
+  const setup = (answer: (sub: string) => AccountOpResult | Promise<AccountOpResult>,
+    identity: () => string | null = () => NODE) => {
     const cfg = remoteCfg();
     mkdirSync(path.join(cfg.home, '.ccrc'), { recursive: true });
     const db = openCoordDb(path.join(cfg.home, '.ccrc', 'coord.db'));
     const calls: string[] = [];
     const inner: AccountOps = { arm: 'remote', run: async (sub) => { calls.push(sub); return answer(sub); } };
     const ops = reconcilingAccountOps(inner, {
-      reload: (a) => reloadRoster(cfg, a, { fleetIdentity: () => NODE }),
-      audit: new AccountAudit(db), fleetIdentity: () => NODE,
+      reload: (a) => reloadRoster(cfg, a, { fleetIdentity: identity }),
+      audit: new AccountAudit(db), fleetIdentity: identity,
     });
     const events = (): { act: string; laneId: string | null; outcome: string }[] =>
       db.prepare('SELECT act, laneId, outcome FROM account_events ORDER BY id').all() as never;
     return { cfg, calls, ops, events };
   };
-  const rosterAnswer = (roster: unknown): AccountOpResult =>
-    ({ kind: 'exited', code: 0, stdout: JSON.stringify({ ok: true, roster, fleetIdentity: NODE }) });
+  const rosterAnswer = (roster: unknown, node: string = NODE): AccountOpResult =>
+    ({ kind: 'exited', code: 0, stdout: JSON.stringify({ ok: true, roster, fleetIdentity: node }) });
 
   it('a failed op triggers one `roster` sub and a `reconcile` row', async () => {
     for (const failed of [{ kind: 'timeout' }, { kind: 'lost' }, { kind: 'too-large' },
@@ -285,5 +286,52 @@ describe('reconcile (D-5518)', () => {
     expect(s.calls).toEqual(['roster']);
     expect(s.events()).toEqual([{ act: 'reconcile', laneId: null, outcome: 'ok' }]);
     expect(s.cfg.roster.byId.has('claude-e')).toBe(true);
+  });
+  // D-6057 (6), as reviewed: the ready frame that measures the fleet's roster fingerprint also invalidates the fleet
+  // identity, so the divergence reconcile must neither run nor latch until the identity is known, and a reconcile
+  // that did not land is tried again on the next chance with the same fingerprint.
+  it('a divergence seen while the fleet identity is unknown runs nothing and latches nothing, and reconciles once the identity is known', async () => {
+    let identity: string | null = null;
+    const s = setup((sub) => sub === 'roster' ? rosterAnswer(GROWN) : { kind: 'timeout' }, () => identity);
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    expect(s.calls).toEqual([]);
+    expect(s.events()).toEqual([]);
+    identity = NODE;
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    expect(s.calls).toEqual(['roster']);
+    expect(s.events()).toEqual([{ act: 'reconcile', laneId: null, outcome: 'ok' }]);
+    expect(s.cfg.roster.byId.has('claude-e')).toBe(true);
+  });
+
+  it('a failed divergence reconcile is retried on the next ready with the same fingerprint, and latches once it lands', async () => {
+    let fail = true;
+    const s = setup((sub) => sub === 'roster' && !fail ? rosterAnswer(GROWN) : { kind: 'timeout' });
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    fail = false;
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    expect(s.calls).toEqual(['roster', 'roster']);
+    expect(s.events()).toEqual([
+      { act: 'reconcile', laneId: null, outcome: 'failed' }, { act: 'reconcile', laneId: null, outcome: 'ok' },
+    ]);
+  });
+
+  it('a divergence answered by another fleet\'s roster is refused once and latched, so it is never polled again', async () => {
+    const s = setup((sub) => sub === 'roster' ? rosterAnswer(GROWN, OTHER_NODE) : { kind: 'timeout' });
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    await s.ops.reconcileDivergence('fleet-fp-1');
+    expect(s.calls).toEqual(['roster']);
+    expect(s.events()).toEqual([{ act: 'reconcile', laneId: null, outcome: 'failed' }]);
+    expect(s.cfg.roster.byId.has('claude-e')).toBe(false);
+  });
+
+  it('concurrent failed ops share one `roster` sub, and each lane gets its own row', async () => {
+    const s = setup(async (sub) => {
+      await new Promise((r) => setTimeout(r, 5));
+      return sub === 'roster' ? rosterAnswer(GROWN) : { kind: 'timeout' };
+    });
+    await Promise.all([s.ops.run('check', 'claude-a', {}), s.ops.run('check', 'claude-b', {}), s.ops.reconcileDivergence('fleet-fp-1')]);
+    expect(s.calls.filter((c) => c === 'roster')).toEqual(['roster']);
+    expect(s.events().map((e) => `${e.laneId}:${e.outcome}`).sort()).toEqual(['claude-a:ok', 'claude-b:ok', 'null:ok']);
   });
 });

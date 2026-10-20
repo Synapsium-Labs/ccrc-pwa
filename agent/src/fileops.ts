@@ -1,7 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import { lstat, mkdir, open, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
-import type { ReadFailure } from '../../shared/agent-protocol.js';
+import { laneStateOpenHolds, type ReadFailure } from '../../shared/agent-protocol.js';
 
 /** The agent's half of `server/src/io.ts`'s `failureFor` (D-1397) — the ONE place
  *  an errno becomes a `ReadFailure` on this side. Only a PROVEN `ENOENT` may
@@ -28,7 +28,8 @@ type Opened = { ok: true; fh: FileHandle; size: number } | { ok: false; reason: 
  * (`~/.cc-sessions/.auth/<id>.run/{in,out,in.child}`) sit inside the `.cc-sessions` read root: a plain `readFile` on
  * `in` blocked a threadpool thread for as long as the helper held it open, and took the relayed code from the helper.
  * `noFollow` adds `O_NOFOLLOW` for a lane-state file (`checkReadTarget`), so a symlink at its name is `unreadable`
- * (ELOOP), never its target's bytes (D-5755 (13d)).
+ * (ELOOP), never its target's bytes (D-5755 (13d)); and the open handle must still be the one regular file at that name,
+ * with no second name, in a real directory (`laneStateOpenHolds`, D-6058 (5)).
  */
 async function openRegular(p: string, noFollow: boolean): Promise<Opened> {
   let fh: FileHandle;
@@ -39,8 +40,11 @@ async function openRegular(p: string, noFollow: boolean): Promise<Opened> {
   }
   try {
     const st = await fh.stat();
-    if (st.isFile()) return { ok: true, fh, size: st.size };
-  } catch { /* an fstat that fails is unreadable, as a non-regular file is */ }
+    // A lane-state file must also be the one file at its name, with no second name, in a real directory (D-6058
+    // (5)): no hardlink and no directory swapped between `checkReadTarget`'s canonicalization and this open.
+    const holds = !noFollow || laneStateOpenHolds(st, await lstat(p), await lstat(path.dirname(p)));
+    if (st.isFile() && holds) return { ok: true, fh, size: st.size };
+  } catch { /* an fstat or lstat that fails is unreadable, as a non-regular file is */ }
   await fh.close().catch(() => {});
   return { ok: false, reason: 'unreadable' };
 }

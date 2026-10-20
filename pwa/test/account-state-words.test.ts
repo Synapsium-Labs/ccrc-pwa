@@ -4,7 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, MINTED_KEY_EXPIRING_MS, MINTED_TOKEN_EXPIRING_MS,
-  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, stateWordFor, type LaneState, type StateWordInput,
+  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, laneStateOf, stateWordFor, type LaneState,
+  type StateWordInput,
 } from '../../shared/accounts';
 
 const DAY = 86_400_000;
@@ -134,5 +135,58 @@ describe('one state word per lane (D-5517)', () => {
   it('a key with no limit (`limit: null`) is never credit-Expiring', () => {
     expect(stateWordFor(openrouter({ ...okAt(60_000), credit: { limit: null, remaining: null } })).word).toBe('signed-in');
     expect(stateWordFor(openrouter({ ...okAt(60_000), credit: { limit: null, remaining: 1 } })).word).toBe('signed-in');
+  });
+});
+
+// D-5755 (11), D-6058 (3): any fleet-user process can write the lane-state file, so `laneStateOf` holds every field to
+// its grammar and keeps only what the wire carries. These pin the grammar itself, not only the mask downstream.
+describe('the lane-state file is read as untrusted (D-5755 (11), D-6058 (3))', () => {
+  const AT = '2026-10-19T08:00:00Z';
+  /** A key with no credential shape, assembled at run time. */
+  const WHOLE_KEY = ['compat', 'q'.repeat(30), '7Hd2'].join('-');
+
+  it('a key hint is a short prefix, an ellipsis and the last four; a whole key or a longer prefix is dropped', () => {
+    expect(laneStateOf({ keyHint: 'sk-or-v1-…a3f9' })?.keyHint).toBe('sk-or-v1-…a3f9');
+    for (const bad of [WHOLE_KEY, `${'a'.repeat(17)}…a3f9`, 'sk-or-v1-…a3f9x', 'sk-or-v1-...a3f9', `${WHOLE_KEY}…a3f9`, '…a3f9']) {
+      expect(laneStateOf({ keyHint: bad }), bad).toEqual({});
+    }
+  });
+
+  it('an identity is 1 to 120 printable characters; 121, blank, or any C0, C1, bidi or format character is dropped', () => {
+    const at120 = 'a'.repeat(LANE_IDENTITY_MAX - '@example.invalid'.length) + '@example.invalid';
+    expect(at120.length).toBe(120);
+    expect(laneStateOf({ identity: at120 })?.identity).toBe(at120);
+    expect(laneStateOf({ identity: 'someone@example.invalid' })?.identity).toBe('someone@example.invalid');
+    for (const bad of [`${at120}x`, '', '   ', 'some\u0007one', 'some\u0085one', 'some\u202eone', 'some\u200bone',
+      'some\u2028one', 'some\u00adone', 'some\ufeffone', 42]) {
+      expect(laneStateOf({ identity: bad }), JSON.stringify(bad)).toEqual({});
+    }
+  });
+
+  it('a verdict or a time off its grammar is dropped, and so is the check it belongs to', () => {
+    expect(laneStateOf({ check: { verdict: 'ok', at: AT } })?.check).toEqual({ verdict: 'ok', at: Date.parse(AT) });
+    for (const verdict of ['OK', 'ok; rm', '', 'a'.repeat(33), '-ok', 7]) {
+      expect(laneStateOf({ check: { verdict, at: AT } }), JSON.stringify(verdict)).toEqual({});
+    }
+    for (const at of ['2026-10-19 08:00:00Z', '2026-10-19T08:00:00+01:00', '2026-10-19', '2026-13-45T99:99:99Z', 1_760_000_000_000]) {
+      expect(laneStateOf({ check: { verdict: 'ok', at } }), JSON.stringify(at)).toEqual({});
+      expect(laneStateOf({ validatedAt: at, mintedAt: at }), JSON.stringify(at)).toEqual({});
+    }
+  });
+
+  it('only the fields the wire carries or the word reads survive: hashes, the identity of the fleet and unknown fields never do', () => {
+    const full = laneStateOf({
+      check: { verdict: 'ok', at: AT }, identity: 'someone@example.invalid', identitySource: 'stated', keyHint: 'sk-…a3f9',
+      keySource: 'minted', validatedAt: AT, mintedAt: AT, keyExpiresAt: AT, seedVerifiedAt: AT, lastRunAt: AT,
+      credit: { limit: 20, limit_remaining: 1.2 },
+      keyHash: 'h'.repeat(64), retiredKeyHash: 'r'.repeat(64), fleetIdentity: '11111111-2222-4333-8444-555555555555',
+      keyLimit: 20, limitReset: 'monthly', secret: WHOLE_KEY,
+    });
+    expect(Object.keys(full ?? {}).sort()).toEqual(['check', 'credit', 'identity', 'identitySource', 'keyExpiresAt', 'keyHint',
+      'keySource', 'lastRunAt', 'mintedAt', 'seedVerifiedAt', 'validatedAt']);
+    for (const k of ['keyHash', 'retiredKeyHash', 'fleetIdentity', 'keyLimit', 'limitReset', 'secret']) expect(full, k).not.toHaveProperty(k);
+    expect(JSON.stringify(full)).not.toContain(WHOLE_KEY);
+    expect(laneStateOf([])).toBeNull();
+    expect(laneStateOf('{}')).toBeNull();
   });
 });

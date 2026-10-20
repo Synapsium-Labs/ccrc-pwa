@@ -290,11 +290,14 @@ const accountOps = reconcilingAccountOps(accountOpsFor(cfg, { client: fleetClien
 });
 deps.accountOps = accountOps;
 // A roster the fleet holds that is not this server's (its `ready` frame's fingerprint) is reconciled once per
-// disagreement (spec §3.9: "whenever FleetHostBanner sees a roster mismatch").
-fleetClient?.onConnected(() => {
+// disagreement (spec §3.9: "whenever FleetHostBanner sees a roster mismatch"). The ready frame also invalidates the
+// fleet identity, which `reloadRoster` needs, so the check runs again when the inventory publishes it (D-6057 (6)).
+const reconcileRosterDivergence = (): void => {
   const fleetFp = deps.fleetState?.rosterFp ?? null;
   if (fleetFp !== null && fleetFp !== bodyDigest(generateAccountsSh(cfg.roster))) void accountOps.reconcileDivergence(fleetFp);
-});
+};
+fleetClient?.onConnected(reconcileRosterDivergence);
+if (fleetClient !== null) fleetClient.identity.onKnown(reconcileRosterDivergence);
 // The egress mask (D-5513, accounts plan Task A10) over the same coord.db and the box token's holder: every server
 // egress of session-derived text passes it. It follows the holder's current value, keeps every previous generation
 // whose rows it holds in memory across a rotation, and asks for the re-keying `roster` sub, whose answer it ingests,

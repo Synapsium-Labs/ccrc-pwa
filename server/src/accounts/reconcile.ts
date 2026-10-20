@@ -14,7 +14,9 @@ import { rosterAnswerOf, type RosterAnswer, type RosterReload } from '../config.
  *  - a refusal before anything ran (`refused`, `unsupported`, `not-started`) changes nothing on the box, so it
  *    reconciles nothing;
  *  - `reconcileDivergence(fleetFp)` does the same when the fleet's roster fingerprint disagrees with this server's,
- *    once per distinct fleet fingerprint, with a laneless row (D-6057).
+ *    with a laneless row (D-6057). Only while the fleet identity is known, and latched per fingerprint only once the
+ *    roster landed or was refused as another fleet's; a failed one is retried at the next chance (D-6057 (6));
+ *  - concurrent reconciles share one `roster` sub (D-6057 (8)).
  * A reconcile never blocks an account switch or the auto-swap: it runs only the read-only `roster` sub.
  */
 export interface ReconcileDeps {
@@ -36,33 +38,51 @@ const unknownOrFailed = (r: AccountOpResult): boolean =>
   r.kind === 'timeout' || r.kind === 'lost' || r.kind === 'too-large' || (r.kind === 'exited' && r.code !== 0);
 
 export function reconcilingAccountOps(inner: AccountOps, deps: ReconcileDeps): ReconcilingAccountOps {
-  /** Feeds a successful answer's roster to `reloadRoster`; true when one landed. */
-  const take = (r: AccountOpResult): boolean => {
-    if (r.kind !== 'exited' || r.code !== 0) return false;
+  /** Feeds a successful answer's roster to `reloadRoster`: its verdict, or null when the answer carried none. */
+  const take = (r: AccountOpResult): RosterReload | null => {
+    if (r.kind !== 'exited' || r.code !== 0) return null;
     const answer = rosterAnswerOf(r.stdout);
-    return answer !== null && deps.reload(answer).ok;
+    return answer === null ? null : deps.reload(answer);
   };
-  const reconcile = async (laneId: string | null): Promise<void> => {
-    let landed = false;
-    try { landed = take(await inner.run('roster', null, {})); } catch { landed = false; }
+  // Concurrent reconciles share ONE `roster` sub (D-6057 (8)): N ops failing at once on a busy fleet box start one
+  // read-only run, not N; each caller still writes its own row.
+  let inflight: Promise<RosterReload | null> | null = null;
+  const rosterOnce = (): Promise<RosterReload | null> => {
+    if (inflight !== null) return inflight;
+    const p = (async () => {
+      try { return take(await inner.run('roster', null, {})); } catch { return null; }
+    })();
+    inflight = p;
+    void p.then(() => { if (inflight === p) inflight = null; });
+    return p;
+  };
+  const reconcile = async (laneId: string | null): Promise<RosterReload | null> => {
+    const verdict = await rosterOnce();
     deps.audit?.write({
-      act: 'reconcile', laneId, provider: null, outcome: landed ? 'ok' : 'failed',
+      act: 'reconcile', laneId, provider: null, outcome: verdict?.ok === true ? 'ok' : 'failed',
       fleetIdentity: deps.fleetIdentity(), actor: SERVER_ACTOR,
     });
+    return verdict;
   };
   let reconciledFp: string | null = null;
   return {
     arm: inner.arm,
     async run(sub: AccountSub, id: string | null, fields: AccountOpFields, stdin?: Buffer): Promise<AccountOpResult> {
       const r = await inner.run(sub, id, fields, stdin);
-      if (take(r)) return r;
+      if (take(r)?.ok === true) return r;
       if (sub !== 'roster' && unknownOrFailed(r)) await reconcile(id);
       return r;
     },
     async reconcileDivergence(fleetFp: string): Promise<void> {
       if (reconciledFp === fleetFp) return;
-      reconciledFp = fleetFp;
-      await reconcile(null);
+      // The ready frame that measured `fleetFp` also invalidated the fleet identity, and `reloadRoster` refuses
+      // while it is unknown: run nothing and latch nothing, so the inventory's publish (or the next ready) retries
+      // it (D-6057 (6)).
+      if (deps.fleetIdentity() === null) return;
+      const verdict = await reconcile(null);
+      // Latched only when the roster landed, or was refused as another fleet's against a KNOWN identity, which a
+      // retry cannot change. A sub that failed or timed out is tried again on the next chance.
+      if (verdict !== null && (verdict.ok || verdict.why === 'fleet-identity')) reconciledFp = fleetFp;
     },
   };
 }
