@@ -8,7 +8,7 @@ import { AUTH_VERDICTS } from '../../shared/api';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { actionDoor, commandDoor, doorMark } from '../src/command/door';
 import { CHORD_MS } from '../src/command/useShortcuts';
-import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
@@ -501,6 +501,13 @@ describe('a door runs its command, through this layer', () => {
     expect(window.location.pathname).toBe('/');
   });
 
+  it("a door runs under its command's `when`: Open session… with no sessions does nothing", () => {
+    useFleetStore.setState({ sessions: [] });
+    render(<><Doors ids={['open-session']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'open-session' }));
+    expect(palette()).toBeNull();
+  });
+
   it('doorMark and actionDoor: the attribute alone, and a flow with its own handler', () => {
     const fn = vi.fn();
     render(<><fieldset {...doorMark('switch-layout')} /><button type="button" {...actionDoor('open-actions', fn)}>row</button></>);
@@ -538,6 +545,40 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
     expect(document.activeElement).toBe(document.body);
     await wait(120);
     expect(document.activeElement).toBe(field);
+  });
+
+  it('never behind a cover: auth lost with the palette open leaves the composer alone (D-5679)', async () => {
+    // The login screen's passphrase field sits over a NON-inert app. Handing
+    // focus back to the composer behind it would route the passphrase into
+    // the composer, and Enter would send it as a chat message.
+    function Cover(): ReactNode {
+      const { lost } = useAuthLost();
+      return lost ? <div role="dialog" aria-modal="true"><input type="password" aria-label="Passphrase" /></div> : null;
+    }
+    render(<><Cover /><textarea aria-label="Message" /><CommandLayer openNewSession={vi.fn()} /></>);
+    const composer = screen.getByRole('textbox', { name: 'Message' });
+    act(() => composer.focus());
+    fireEvent.keyDown(composer, { key: 'k', metaKey: true });
+    expect(palette()).not.toBeNull();
+    act(() => raiseAuthLost(AUTH_VERDICTS[0]!));
+    // The palette's trap had taken focus; its close drops it on the body.
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    await wait(1300);
+    expect(document.activeElement).not.toBe(composer);
+  });
+
+  it('to the main landmark when the element that opened it can no longer take focus', async () => {
+    // The phone swap hides the fleet column (display: none) while the opener
+    // stays connected; focus() on it does nothing. A disabled button is jsdom's
+    // stand-in for an element that refuses focus.
+    render(<><main id="content" tabIndex={-1} /><button type="button">Opener</button><CommandLayer openNewSession={vi.fn()} /></>);
+    const opener = screen.getByRole('button', { name: 'Opener' });
+    act(() => opener.focus());
+    fireEvent.keyDown(opener, { key: 'k', metaKey: true });
+    (opener as HTMLButtonElement).disabled = true;
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(document.activeElement).toBe(document.getElementById('content'));
   });
 
   it('to the main landmark when the element that opened it is gone', async () => {

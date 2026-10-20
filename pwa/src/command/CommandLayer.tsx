@@ -59,6 +59,12 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // command took that away (a route change, a skin switch that replaced a
   // part), on the main landmark.
   const opener = useRef<Element | null>(null);
+  // NEVER BEHIND A COVER (D-5679). The login and block screens cover a
+  // non-inert app: a restore while one is up would put the passphrase's
+  // keystrokes into the composer behind it. Read at restore time, not closed
+  // over, because the cover arrives in the same commit that closes the palette.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const openPalette = useCallback((): void => {
     if (!open) opener.current = document.activeElement;
     setOpen(true);
@@ -87,12 +93,15 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
         t = window.setTimeout(restore, RESTORE_TICK_MS);
         return;
       }
+      if (!enabledRef.current) return;
       const active = document.activeElement;
       if (active !== null && active !== document.body) return;
-      const target = back instanceof HTMLElement && back !== document.body && back.isConnected
-        ? back
-        : document.getElementById(CONTENT_ID);
+      const content = document.getElementById(CONTENT_ID);
+      const target = back instanceof HTMLElement && back !== document.body && back.isConnected ? back : content;
       target?.focus({ preventScroll: true });
+      // An opener still connected can refuse focus (the phone swap hides the
+      // fleet column with display: none): the main landmark, not the body.
+      if (document.activeElement === document.body) content?.focus({ preventScroll: true });
     };
     t = window.setTimeout(restore, 0);
     return () => window.clearTimeout(t);
@@ -140,6 +149,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // stays open over them.
   useEffect(() => {
     if (enabled) return;
+    opener.current = null;
     close();
     setSheet(false);
   }, [enabled]);
