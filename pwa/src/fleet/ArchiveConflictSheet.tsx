@@ -27,7 +27,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
-import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
+import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api, apiErrorText, isRegistryUnmeasurable } from '../lib/api';
 import './fleet.css';
 
 /** One run named by a `409 run-open` body. DEGRADE, NEVER INVENT: if `runs`
@@ -115,6 +115,8 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
  *  because a failed forced archive has nowhere else to be said. */
 function archiveErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return 'the archive was refused, for a reason this build does not recognise';
+  // D-5971: the word, at any status — the box never ran the archive, so the 502 arm's "failed on the box" is wrong.
+  if (isRegistryUnmeasurable(err)) return apiErrorText(err);
   if (err.status === 404) return 'that session is gone — the fleet will catch up';
   // Workspace lifecycle §5.2: the door's typed refusals, in the words every archive surface uses.
   const code = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;

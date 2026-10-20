@@ -200,8 +200,11 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       .map((m) => [m[1], m[2]] as const));
     const cat = /^export const SKINS\b[^=]*= \[([\s\S]*?)^\];/m.exec(src);
     expect(cat, 'skins.ts no longer spells `export const SKINS … = [ … ];`').not.toBeNull();
-    const ids = [...cat![1].matchAll(/\bid: (\w+)/g)].map((m) => {
-      const id = consts.get(m[1]);
+    // Every `id:` in the body counts, whatever follows it: a quoted literal
+    // (`id: 'nord'`) or any other spelling that is not an exported constant
+    // fails here rather than being skipped (D-5093).
+    const ids = [...cat![1].matchAll(/\bid:\s*([^,\s}]+)/g)].map((m) => {
+      const id = /^\w+$/.test(m[1]) ? consts.get(m[1]) : undefined;
       expect(id, `SKINS names ${m[1]}, which is no string constant in skins.ts`).toBeDefined();
       return id!;
     });

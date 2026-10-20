@@ -192,19 +192,19 @@ describe('POST /api/sessions/:id/kickoff — the four pre-queue arms', () => {
   // exist" when the truth is "this box could not read its registry", and the
   // sheet — having lost its toast-only retry — would have nothing to act on.
   // Same split, same two bodies, as `POST /api/sessions/:id/stop`.
-  it('503 registry-unmeasurable when the registry DIRECTORY cannot be listed', async () => {
+  it('502 registry-unmeasurable when the registry DIRECTORY cannot be listed', async () => {
     const home = mkTmp('ccrc-kick-');
     seed(home, ID);
     const { run } = makeRunner();
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const w = await openApp(home, run, { io: unlistable }); app = w.app;
     const res = await post(app);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
   });
 
   it('STILL QUEUES when the row is listed but a field will not read — this route needs presence, not identity', async () => {
-    // Written first as a 503, to mirror `/api/sessions/:id/stop`, and MEASURED
+    // Written first as a refusal, to mirror `/api/sessions/:id/stop`, and MEASURED
     // 200 — the code was right and the expectation was wrong, so the
     // expectation moved. `readSessionRecord` answers `found: true` with a
     // degraded record for an unreadable FIELD; `reason: 'unlistable'` is the
@@ -329,7 +329,7 @@ describe('POST /api/sessions/:id/kickoff — what it queues, and what it answers
 
     // Exact size reaches the registry read; that measurement is deliberately
     // unlistable here, proving body validation accepted it.
-    expect((await post(app, ID, { slug, title: exactTitle })).statusCode).toBe(503);
+    expect((await post(app, ID, { slug, title: exactTitle })).statusCode).toBe(502);
 
     // ONE character over — but a TWO-BYTE one, which is what makes this case
     // discriminate. A cap that measured `String.length` would report 8,193 and

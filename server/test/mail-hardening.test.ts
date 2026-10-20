@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { queueSystemMail } from '../src/coord/rundefs.js';
+import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>

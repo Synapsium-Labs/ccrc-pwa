@@ -28,6 +28,7 @@ import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER } from '../src/collectLane
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
+import type { PushPayload } from '../src/push.js';
 import { COLLECT_BOX_LABELS, type ChildReclaimAttention, type ChildReclaimCollectAttention } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -50,6 +51,9 @@ export interface CollectRigOpts {
   readonly mono?: number;
   /** The live marker already stands when the watcher is built. */
   readonly armed?: boolean;
+  /** A push sink, so a case can see the lane never pushes (D-5850's feed writers' pin). Omitted, the watcher has none,
+   *  as a box with no VAPID keys runs. */
+  readonly push?: { readonly notify: (p: PushPayload) => Promise<void> };
 }
 
 /** The rig's WALL-clock origin. Module-private: Task 6's fixture exports a monotonic `T0`, and one name must not mean
@@ -183,6 +187,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   // watcher built with no fleet link reads `NO_FLEET_IDENTITY`, until a case measures a node or reconnects.
   const identity = new FleetIdentityCell();
   const deps = { ...base, fleetIdentity: identity, cfg, io, coord, notifyLog, fleetState,
+    ...(opts.push !== undefined ? { push: opts.push } : {}),
     presence: { isVisible: (id: string) => visible(id) },
     monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
