@@ -4575,20 +4575,22 @@ the old licence by a licensed request, nor by any request on a ccd whose audit b
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
 
-**A finished run's worker is put to sleep once idle (D-5370, D-5427, D-6091).** A wave that is not the programme's last
+**A finished run's worker is put to sleep once idle (D-5370, D-5427, D-6091, D-6092).** A wave that is not the programme's last
 leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
 Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
 (`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
 transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
 dispatched child (a `.child` marker — never an operator's own session), whose newest placed run (a `planned` run, a
-wave not yet dispatched, does not count) is `done` and closed at least 10 minutes ago, which no other placed open run
-names as worker or claimant, with no live claim, no outstanding mail, nobody viewing it, no hold but its programme's
+wave not yet dispatched, does not count) is finished — `done` or `failed` and closed at least 10 minutes ago, or a
+producer's run parked at `awaiting-review`, `merging` or `closing` (D-6092, F5 (b)) — which no active run names as
+worker and no open run as claimant, with no live claim, no outstanding mail, nobody viewing it, no hold but its programme's
 (below), no pane menu, background work or subagents, a bucket of `idle`, a measured live
 word and fail-closed turn verdict of `idle`, and a turn marker that reads `done` with no background task (`bg` exactly
 0, so a shell or Monitor left running is never killed with the pane) and nothing scheduled (`crons` exactly 0) at its
 last Stop at least 10 minutes ago, and no `$REG/<id>.no-hibernate`. Its clock is the run's close, not hibernation's N
 (D-6091, the operator's ruling "stop workers at run close"): a finished worker sleeps about ten minutes after its run
-reads `done`. A programme hold (`program:<p> wave:<n>`, naming no run or a `done` or `failed` one) guards the
+reads `done` or `failed`. A parked producer has no close, so its clock is the marker alone: it sleeps once its last
+Stop is 30 minutes old, and a send-back or a merge step wakes it as any sleeping session is woken. A programme hold (`program:<p> wave:<n>`, naming no run or a `done` or `failed` one) guards the
 workspace's retirement, not its sleep: the lane passes it as `ccd hibernate --hold-ok <the exact text>` on a box whose
 `ccd caps` lists `hibernate-hold-ok`, and ccd re-reads the file byte for byte at the act. An operator's own hold, a hold
 naming an open or unreadable run, and a box without the token keep the worker awake (`held`). Immediately before the act, on
