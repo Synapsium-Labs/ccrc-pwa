@@ -71,7 +71,7 @@ make_bar() {
 segments=()
 
 # ── 0. Account/config — CLAUDE_CONFIG_DIR is inherited from the wrapper
-#      (claude2/claude-corp export it; the upstream account leaves it unset).
+#      (claude9/claude-acme export it; the upstream account leaves it unset).
 #
 #      Sourcing the roster projection is best-effort on purpose. This hook runs
 #      on EVERY render of EVERY session's status bar, so a box without ccrc

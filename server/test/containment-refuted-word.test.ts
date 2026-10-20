@@ -2,7 +2,7 @@
 // tail's word for a PROVEN refusal at its removal-time re-ask. It is declared
 // with its ccd emission (`_ws_reclaim_tail`'s literal `_ws_reclaim_fail …
 // containment-refuted`). Its sentence says only what is true under any server.
-// Both parsers class it `stuck`: the reclaim parser since CCR-15 wave 8, the
+// Both parsers class it `stuck`: the reclaim parser since #166 wave 8, the
 // expiry parser since workspace lifecycle wave 6 (ruling B), in a describe of
 // its own below. Wave 8 changed the reclaim parser's pin below on purpose.
 import { describe, it, expect } from 'vitest';
@@ -51,7 +51,7 @@ describe('the reclaim parser reads it as a stuck failure', () => {
   });
 });
 
-describe('the expiry lane reads it as STUCK, whatever crumb says (workspace lifecycle wave 6, ruling B; CCR-15’s R76 and R77)', () => {
+describe('the expiry lane reads it as STUCK, whatever crumb says (workspace lifecycle wave 6, ruling B; #166’s R76 and R77)', () => {
   it('parseExpireResult: stuck — listed at once and asked again on the persistent tier, never at +∞', () => {
     for (const extra of [{}, { crumb: true }, { crumb: false }, { crumb: 'yes' }]) {
       expect(parseExpireResult('demo-quiet-dune', JSON.stringify({ failed: W, detail: 'd', ...extra }), ''), JSON.stringify(extra))

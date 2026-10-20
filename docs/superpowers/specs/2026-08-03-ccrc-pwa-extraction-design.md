@@ -6,7 +6,7 @@
 
 ## Goal
 
-Move ccrc out of the `OpenClawHetzner` monorepo into a standalone private repo
+Move ccrc out of the `project-c` monorepo into a standalone private repo
 called **`ccrc-pwa`**, changing **no behaviour whatsoever**. Same code, new
 address.
 
@@ -31,7 +31,7 @@ Three independent facts, each of which alone stops a colleague from running it:
    deployed. On 2026-08-02 the installed copy measured 1,181 lines against
    main's 5,439.
 3. **The only way to get it is to clone 36 MB of someone's personal monorepo**,
-   including `MekWarLive`, `infra/handoff`, `infra/mac-account-swap`, and every
+   including `project-f`, `infra/handoff`, `infra/mac-account-swap`, and every
    plan and spec in `docs/superpowers/`.
 
 ## Scope
@@ -47,7 +47,7 @@ three test suites green in the new location.
 Each of these is real work that belongs to a later spec. None of it happens
 here, and a reviewer should reject this work if any of it appears:
 
-- **No de-personalisation.** `FleetHostBanner.tsx:6` keeps saying "rp-llm".
+- **No de-personalisation.** `FleetHostBanner.tsx:6` keeps saying "project-j".
   `README.md` keeps naming `<server-host>.<tailnet>.ts.net` and
   `you@<server-host>`. `agent/src/server.ts:58` keeps
   `DEFAULT_PROJECTS_ROOT = '/srv/projects'`. → Spec 1.

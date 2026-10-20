@@ -317,7 +317,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // fix round 1, finding 3. Before this, a cold offline start hydrated
     // `sessions` from the snapshot but `roster` stayed at its bare `[]`
     // default, so every account rendered as its raw wrapper id
-    // (`claude2`, `claude-corp`) instead of the jargon-free label this
+    // (`claude9`, `claude-acme`) instead of the jargon-free label this
     // whole module exists to restore — a real regression against the
     // compile-time roster this replaced, which never had an "unarrived"
     // state to begin with.

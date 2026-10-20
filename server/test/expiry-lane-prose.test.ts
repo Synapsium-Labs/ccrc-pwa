@@ -72,12 +72,12 @@ describe('README: what happens to an archived workspace now', () => {
 describe('the coordinator’s reference, §6', () => {
   it('a child that has coordinated stays a human’s; an unmarked workspace is the server’s seven days after its archive', () => {
     const s = flat('ccd/coordinator-skill/references/wave-lifecycle.md');
-    // `has-coordinated` keeps its `.child` marker, and neither lane ever expires a marked child (CCR-15; spec §5.3).
+    // `has-coordinated` keeps its `.child` marker, and neither lane ever expires a marked child (#166; spec §5.3).
     expect(s).toContain('`has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human. No');
     expect(s).toContain('it stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
   });
   it('clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child', () => {
-    // A nested coordinator's own workspace is a CHILD, CCR-15's, never expired (review 313, parked item 3).
+    // A nested coordinator's own workspace is a CHILD, #166's, never expired (review 313, parked item 3).
     const clause = flat('ccd/coordinator-skill/SKILL.md');
     expect(clause).toContain('this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).');
   });
@@ -91,7 +91,7 @@ describe('the coordinator’s reference, §6', () => {
 });
 
 describe('the specs', () => {
-  it('CCR-15 §5.8: the pause is the fleet’s one cleanup switch now — the expiry stops with it', () => {
+  it('#166 §5.8: the pause is the fleet’s one cleanup switch now — the expiry stops with it', () => {
     const s = flat('docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md');
     expect(s).not.toContain('Pausing stops reclamation fleet-wide and nothing else;');
     expect(s).toContain('Pausing stops reclamation fleet-wide, and — since workspace lifecycle wave 3b — the expiry of archived workspaces too');

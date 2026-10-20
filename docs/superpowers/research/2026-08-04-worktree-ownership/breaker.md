@@ -1,7 +1,7 @@
 # Adversarial review — worktree adoption + child descent (D1–D5)
 
 Sources read (not summarised from memory):
-`/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` (5,439 lines),
+`/srv/projects/project-c/infra/<server-host>-portability/ccd` (5,439 lines),
 `infra/ccrc/server/src/{lifecycle,fleet,registry,watch,wsaudit,server,ccdargv}.ts`,
 `infra/ccrc/agent/src/whitelist.ts`, `infra/ccrc/shared/api.ts`.
 
@@ -18,13 +18,13 @@ fleet those patterns are already in the projects' committed `.gitignore`**, so t
 creates is the state that already exists:
 
 ```
-custom-tools/.gitignore:18  .worktrees/
-custom-tools/.gitignore:21  .claude/worktrees/
-rp-llm/.gitignore:59,63     .worktrees/ , .claude/worktrees/
+project-d/.gitignore:18  .worktrees/
+project-d/.gitignore:21  .claude/worktrees/
+project-j/.gitignore:59,63     .worktrees/ , .claude/worktrees/
 acme-platform-ts:16      .claude/worktrees/
-intake-platform:17,20       .worktrees/ , .claude/worktrees/
-data-internal:42            .worktrees/
-synapsium-platform:45,51    .worktrees/ , .claude/*
+project-n:17,20       .worktrees/ , .claude/worktrees/
+project-e:42            .worktrees/
+project-k:45,51    .worktrees/ , .claude/*
 ```
 
 Which means the destruction path below is **live in ccd as shipped, today**, not something D2
@@ -138,14 +138,14 @@ overriding.
 **Census of tracked, non-noise, secret-shaped filenames per project (`git ls-files`, read-only):**
 
 ```
-data-internal 116   rp-llm 20   MekWarLive 7
-custom-tools 0   acme-platform-ts 0   synapsium-platform 0   intake-platform 0   OpenClawHetzner 0
+project-e 116   project-j 20   project-f 7
+project-d 0   acme-platform-ts 0   project-k 0   project-n 0   project-c 0
 ```
 
-So in `data-internal`, `rp-llm` and `MekWarLive` **every session that has ever had a child worktree
+So in `project-e`, `project-j` and `project-f` **every session that has ever had a child worktree
 becomes permanently un-reapable**, with a refusal whose remedy ("move them") means "delete your
-repository's committed migrations". Meanwhile in `custom-tools` / `acme-platform-ts` /
-`intake-platform` the guard does not fire — which is precisely why F1 is reachable there.
+repository's committed migrations". Meanwhile in `project-d` / `acme-platform-ts` /
+`project-n` the guard does not fire — which is precisely why F1 is reachable there.
 
 The guard is inverted from its purpose: it refuses on the projects where deletion is *safe* and
 waves through the projects where the child is destroyed.
@@ -293,7 +293,7 @@ explicitly). Refuse adoption outright for a detached worktree rather than adopti
 
 ## F11 — A2 answered: drift is terminal and there is no verb that ends it. SERIOUS
 
-Measured on this box: `custom-tools-warm-meadow` moved `ws/warm-meadow → feat/… → main` within
+Measured on this box: `project-d-warm-meadow` moved `ws/warm-meadow → feat/… → main` within
 hours. `_ws_reap_eval` rung 1 (ccd:2534) refuses `registry-branch-drift` and the surrounding
 comment is explicit that the disagreement "is never resolved, it is refused".
 
@@ -351,7 +351,7 @@ Consumers found by grep:
 | `shared/api.ts:9,622` | on the wire; PWA fleet line falls back `name ?? branch ?? workspace ?? id` |
 
 Two break:
-- **`ccd:4414`.** An adopted id is `<wrapper>-<project>` (e.g. `claude-custom-tools`), so
+- **`ccd:4414`.** An adopted id is `<wrapper>-<project>` (e.g. `claude-project-d`), so
   `"$project-$slug"` can never equal it. Every adopted session whose directory vanishes emits a
   `reg-broken` row forever and is never purged by `--prune`'s dead-reg arm. Registry rows leak.
 - **`_ws_slug_free`** (ccd:791) only inspects `$REG/$project-$slug.*`. An adopted session's label
@@ -399,7 +399,7 @@ checkout**. `git worktree remove` handles that fine, but the branch step does no
 **ws-gc already sees them.** `_ws_gc_scan` (ccd:4369) iterates `$PROJECTS_ROOT/*` and reads each
 main's `git worktree list`. Measured: `/data/projects` resolves to `/srv/projects`
 and `ccrc-wt/exec/.git` contains
-`gitdir: /srv/projects/OpenClawHetzner/.git/worktrees/exec` — so both the 37
+`gitdir: /srv/projects/project-c/.git/worktrees/exec` — so both the 37
 `.claude/worktrees/*` trees and the 34 `ccrc-wt/*` trees **are linked worktrees of mains under
 PROJECTS_ROOT and are already enumerated**, classified `foreign` by `_ws_gc_row` (ccd:4346-4347),
 reported and never pruned. The "34 invisible" premise should be corrected before it drives design.
@@ -407,9 +407,9 @@ reported and never pruned. The "34 invisible" premise should be corrected before
 **What is genuinely uncovered:**
 - A worktree whose main is *not* under `$PROJECTS_ROOT` — nothing enumerates it.
 - `wt-model-rates-sync`: **MEASURED**, `/data/projects/wt-model-rates-sync/.git` is the file
-  `gitdir: /srv/projects/data-internal/.git/worktrees/wt-model-rates-sync`. It is
+  `gitdir: /srv/projects/project-e/.git/worktrees/wt-model-rates-sync`. It is
   a *worktree masquerading as a project*, so `_ws_gc_scan` iterates it as its own project and
-  enumerates `data-internal`'s entire worktree list **a second time under a different project label**
+  enumerates `project-e`'s entire worktree list **a second time under a different project label**
   — with different `ours` classification, and `_ws_gc_prune_row`'s `stale-meta` arm would run
   repo-wide `git worktree prune` from the nested main. `listProjects` also offers it as a `ws-add`
   target (`server.ts:326` passes `:project` straight through with no validation; ccd only checks

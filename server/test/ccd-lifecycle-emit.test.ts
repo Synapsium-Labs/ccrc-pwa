@@ -231,9 +231,9 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
     const o = JSON.parse(h.sh(`${OBS}
       _lc_cgroup_read() { printf '%s' '/x'; }
       export _lc_test_self=$$
-      tmux() { echo "cc-claude2 $_lc_test_self"; }
+      tmux() { echo "cc-claude9 $_lc_test_self"; }
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect.soft(o['pane']).toBe('cc-claude2');
+    expect.soft(o['pane']).toBe('cc-claude9');
     expect.soft(o['paneWhy']).toBe('ok');
   });
 

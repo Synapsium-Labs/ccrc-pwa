@@ -28,14 +28,14 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 3 | W1-B2 "recall": read verbs, parser, native leaves, the skill, operator verbs (`prune`, `doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate`, `reparse`), recovery step; from its reviews, schema v2 (heavy) and doctor's pass-aware freshness | fleet + skills | #404 | **merged** 2026-10-15 06:15Z as `de0ab03e1` at head `15af45165` (run 354, after reviews 441, 462, 466 and 467 and fix rounds 1–3) |
 | 4 | W1-B3 "card line": scope marker, `_hook_history_card`, the S6-R11 census re-measure | fleet (hook) | #425 | **merged** 2026-10-18 05:52Z as `7284c8501` (run 468; reviews 476, 479, 495, 503 and 586; four fix rounds and a landing round) |
 | 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | #623 | **merged** 2026-10-19 04:14Z as `ad65fb394` at head `2eca753d7` (run 587; reviews 614, 621, 623, 624 and 625; four fix rounds); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
-| 5h-1 | B4's export hardening ("Owed from B4", items 1–8): the check after a bind in bounded, resumable batches, with doctor's rule for a check that cannot finish; a carried segment that counts only when whole and this store's; a vanished segment that re-arms the check; replay that marks by the last carrier; `expand`'s variants and `ENTRY_UPSERT`'s tie; the history-off advice for a carry; B4's errata | fleet | — | run 626, dispatched once this ledger merges (brief below) |
+| 5h-1 | B4's export hardening ("Owed from B4", items 1–8): the check after a bind in bounded, resumable batches, with doctor's rule for a check that cannot finish; a carried segment that counts only when whole and this store's; a vanished segment that re-arms the check; replay that marks by the last carrier; `expand`'s variants and `ENTRY_UPSERT`'s tie; the history-off advice for a carry; B4's errata | fleet | #737 | run 626; fix round 3 under way, after review 689 |
 | 5h-2 | B2's owed items 1–5 ("Owed from B2") and B3's errata ("Owed from B3"): the named value class widened (the `Bearer` and box-token header classes stay as they are), with stored text re-cleaned as a sweep phase; the relay's look-behind window; the op marker's identity; `lag-high`'s remedy; the errata. B2's item 6 stays later | fleet | — | plan merged with this ledger's update; dispatched after 5h-1 lands: the re-clean shares the run budget with 5h-1's bounded check, and both edit `lib.mjs`'s `deriveHealth` and `HEALTH_REMEDIES` |
 | 6 | W2: the replay eval and its gate (ruled Q7, Q14), in eight PRs on two lanes (rows below); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5) |
 | W2-1 | the recall-off verb and its generation checks, the per-tick presence record, the exports the deploy lane reads | fleet | — | after 5h-2 (the fleet lane runs one PR at a time) |
 | W2-2a | the as-of cut | fleet | — | after W2-1 |
 | W2-2b | the headless seam | fleet | — | after W2-2a |
-| W2-3 | `deploy/history-gate.mjs`, pure: windows, bootstrap, assignment, the gate, the quiz's labeller and admission, the open-record validator; `measure-history.py`'s raw rows and census | deploy | — | run 636, dispatched once this ledger merges |
-| W2-4 | `deploy/history-replay.mjs`, the driver core: the spawn contract, account admission, `--out`, limits and budget, preflights, step 0a and the probe | deploy | — | run 637, dispatched once this ledger merges |
+| W2-3 | `deploy/history-gate.mjs`, pure: windows, bootstrap, assignment, the gate, the quiz's labeller and admission, the open-record validator; `measure-history.py`'s raw rows and census | deploy | #856 | **merged** 2026-10-20 08:27Z as `36d0a92c1` at head `99325dc26` (run 636; reviews 664, 680 and 686; two fix rounds) |
+| W2-4 | `deploy/history-replay.mjs`, the driver core: the spawn contract, account admission, `--out`, limits and budget, preflights, step 0a and the probe | deploy | #826 | run 637; fix round 3 under way, after review 696; merges once this ledger's amendments to the decisions document land |
 | W2-5a | reconstruction, admission, the quiz builder and the open-record subcommands | deploy | — | after W2-1 and W2-4 |
 | W2-5b | the arms, the judge, the hand-check, uptake, the marker and the report | deploy | — | after W2-2b, W2-3 and W2-5a; merges before open-record part 1 |
 | W2-6 | the report-only counters | deploy | — | after W2-5b |
@@ -370,6 +370,55 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       and W2-5a's entry.
   - **5h-2's brief** carries the fix of the stale "six PRs" comment in `server/test/lifecycle.test.ts`, which W2-4 left
     as it was, because 5h-2 edits that file.
+  - **5h-1 (run 626, PR #737), fix rounds 2 and 3.**
+    - Review 675 read fix round 1: 4 important findings and 7 minor. Fix round 2 is ruled by the coordinator, under the
+      operator's directive of 2026-10-19, after three Opus checkers read the draft. The replay's layout is measured at the phase advance into the export phase, not at a chunk, and
+      history-off is re-checked just before that advance. A put-back under a name the check recorded damaged keeps
+      another whole copy outside the export directory. The forked-directory remedy is retired: no measurement tells an
+      operator whether the current store holds a forked directory's old writers' rows whole, so no readable segment of
+      the store is moved out.
+    - Review 689 read fix round 2: 8 minor findings, 7 refuted, none a loss path. Fix round 3 is under way. Its F8, the coordinator's
+      ruling under the same directive: a full run red only on an advisory macOS leg is accepted as green for a wave-done, because macOS is advisory by
+      standing ruling.
+    - Its departures are recorded here when it lands.
+  - **W2-3 (run 636), fix round 2, from review 680:** 2 minor findings, 10 refuted. The rulings, after two Opus
+    checkers read the draft:
+    - The validator refuses every q18_settings value on which `q18Power` throws or never returns, whatever the
+      families: W2-D25's "a q18_settings value that Q18's procedure cannot honour".
+    - The power list holds every level part 2's figures read, and `lookback_days` is at least 1.
+    - Part 2's registry drops and quiz families bind to part 1's nodes, a drop's reason is one of W2-D20's set, and a
+      family both dropped and assigned is refused.
+    - The labeller's command rule also refuses `or` in any case or bracket, a flag after any Unicode dash, and a
+      spaced slash; `LABELLER.boundaries` becomes `'v2'`. D-5789 states each clause's cost.
+    - The plan's entries leave W2-D25, section 4's rows and section 7's labeller costs and residuals for the
+      coordinator to amend in the decisions document.
+  - **W2-3 landed:** #856 merged on 2026-10-20 at 08:27Z as `36d0a92c1`. Every ruling in its two fix rounds was the
+    coordinator's, or the worker's and confirmed by the coordinator, under the operator's directive of 2026-10-19.
+    - Review 686 (at `99325dc26`), a narrow re-review of fix round 2, confirmed no finding and refuted 11.
+    - It judged the worker's five rulings in that round, and the coordinator confirmed each: power levels 0.5 and 0.8
+      frozen as `Q18_FIGURE_POWER`, so they are no longer defaults the operator can drop (which narrows section 4's
+      q18_settings row); a family both dropped and assigned refused at `assignment[j]`, keyed by store, id and
+      generation; an NFD letter beside `or` as a stated cost; the grid check's reason text in place of "does not
+      divide 1 - x"; and four line citations turned into symbol citations.
+    - Departures D-5786, D-5787, D-5788, D-5789, D-5790 and D-5791, each defined in the W2-3 plan. The rest of run
+      636's block is unused.
+  - **W2-4 (run 637), fix rounds 2 and 3.**
+    - Review 681 read fix round 1: 5 important findings and 6 minor, and no sequence that loses a charge. Fix round 2
+      is ruled on it by the coordinator, under the operator's directive of 2026-10-19.
+    - Mail 7140, the coordinator's ruling under the same directive: creating `--out` refuses `out-refused create-failed <code>`, and writing
+      its marker refuses `out-refused marker-unwritable <code>`. It overturns the coordinator's own qualifier on the
+      worker's fix-round-1 ruling, which let a failed creation of `--out` exit 1.
+    - Review 696 read fix round 2: 5 findings, 3 refuted, and the worker's four rulings in that round confirmed. Fix
+      round 3 is under way:
+      - a hand-set file-size limit is the seam that pins the write arms of the ledger and of the lock, and a FIFO
+        with a reader pins the ledger's regular-file check;
+      - the window from a lane's yield to its spawn is stated as up to c children, each stopped and charged;
+      - an escapee's stream (a setsid grandchild, or a group member with no pipe to the driver) is stated truly: a
+        resume runs the job again beside it;
+      - a marker that cannot be written is a stated cost, and its refusal says to remove `--out` before a re-run.
+    - The decisions document is amended in place by this PR, before #826 merges: W2-D53, W2-D55, W2-D59, W2-D80
+      and section 7.
+    - Neither round takes a new number.
 - **Later (coordinator), from the build:**
   - The check after a bind runs two DISTINCT scans, over `blobs.exported_seg` and `entries.exported_seg`, on every
     check step. `exported_seg` sits after `z` and has no index, so a check spanning N steps likely reads the blob table
@@ -380,6 +429,9 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     timeout while the box was starved of CPU. Each pass used about 3.75 CPU-minutes back to back, most likely the FTS
     catch-up that the stopped backfill left (`fts-pending`). Read-only status at the time: health ok, lag 341 s,
     export nothing due. Re-measure once the backfill question is answered.
+  - A measured fork-provenance signal, so that a remedy for a forked export directory can return. 5h-1's fix round 2
+    retired that remedy (review 675 F4), because nothing measured tells an operator whether the store holds a forked
+    directory's old writers' rows whole.
 - **Later, for the operator.**
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.

@@ -1,14 +1,14 @@
-# Workspace lifecycle wave 6 — the resumed expiry's `crumb`, the stuck word, a counted restart, the journal re-read, and the arming close-out (CCR-17) Implementation Plan
+# Workspace lifecycle wave 6 — the resumed expiry's `crumb`, the stuck word, a counted restart, the journal re-read, and the arming close-out (#196) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The execution method is chosen (a dispatched fleet worker, subagent-driven); there is no hand-off question.
 
-**Goal:** Close the programme's last wave. FIRST, question (k) — the expiry lane's last arming blocker: `ws-expire` says CCR-15 wave 7's `crumb` on its own `failed` documents, and `parseExpireResult` reads the word, then `crumb`, so a resumed expiry's `probe-unmeasured` is retried, never final. Then: `containment-refuted` is STUCK on the expiry lane (listed at once, the persistent tier, never +∞); a `restart` that recurs is counted on the shared failure run; the symbolic-HEAD control case and its ccd comment; `stillCrashed` re-reads the mirror's health and gap list after the claimant's measure; wave 5's worker residuals (the standing entry's cadence in true words and `flock-unavailable`'s halt said plainly, the shadow feed row over a standing entry, the census bound at `_ws_tombstone`, a lane case for a hold after the fleet act); rung 8's and 4458's checks; and one "Before arming" section in the spec. Both lanes stay SHADOWED.
+**Goal:** Close the programme's last wave. FIRST, question (k) — the expiry lane's last arming blocker: `ws-expire` says #166 wave 7's `crumb` on its own `failed` documents, and `parseExpireResult` reads the word, then `crumb`, so a resumed expiry's `probe-unmeasured` is retried, never final. Then: `containment-refuted` is STUCK on the expiry lane (listed at once, the persistent tier, never +∞); a `restart` that recurs is counted on the shared failure run; the symbolic-HEAD control case and its ccd comment; `stillCrashed` re-reads the mirror's health and gap list after the claimant's measure; wave 5's worker residuals (the standing entry's cadence in true words and `flock-unavailable`'s halt said plainly, the shadow feed row over a standing entry, the census bound at `_ws_tombstone`, a lane case for a hold after the fleet act); rung 8's and 4458's checks; and one "Before arming" section in the spec. Both lanes stay SHADOWED.
 
-**Architecture:** One ccd region, `_ws_expire_locked` (ruling A's three-line `crumb` block, ruling D's comment), plus one comment in CCR-15's region that would otherwise be false (Task 1: wider than ruling A's "inside `_ws_expire_locked` ONLY", comment only, consent to be carried in the brief). Server-side, every change lives in files wave 5 shipped: the L1 verdicts (`server/src/archivedExpiry.ts`), the two executors (`server/src/coord/expireArchived.ts`, `server/src/coord/endDeadCoordinator.ts`) and their two passes in `server/src/watch.ts`. No wire word is added — a stuck entry rides the wire as `failing`, CCR-15's precedent (R77: no new chip word) — so `shared/api.ts` and the PWA are not touched. No route, no `FLEET_PROTO` bump, and no arming path; as planned there was no migration, but fix round 4 adds one, coord.db's user_version 19 (D-4857, by the operator's ruling): `expire-lane-live` and `dead-coordinator-lane-live` keep NO writer in the tree.
+**Architecture:** One ccd region, `_ws_expire_locked` (ruling A's three-line `crumb` block, ruling D's comment), plus one comment in #166's region that would otherwise be false (Task 1: wider than ruling A's "inside `_ws_expire_locked` ONLY", comment only, consent to be carried in the brief). Server-side, every change lives in files wave 5 shipped: the L1 verdicts (`server/src/archivedExpiry.ts`), the two executors (`server/src/coord/expireArchived.ts`, `server/src/coord/endDeadCoordinator.ts`) and their two passes in `server/src/watch.ts`. No wire word is added — a stuck entry rides the wire as `failing`, #166's precedent (R77: no new chip word) — so `shared/api.ts` and the PWA are not touched. No route, no `FLEET_PROTO` bump, and no arming path; as planned there was no migration, but fix round 4 adds one, coord.db's user_version 19 (D-4857, by the operator's ruling): `expire-lane-live` and `dead-coordinator-lane-live` keep NO writer in the tree.
 
 **Tech Stack:** TypeScript (Node ≥ 22.16, `node:sqlite`), vitest, bash (`ccd/ccd`), git ≥ 2.43.
 
-**Spec:** `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` §5.3 (`ws-expire` and the expiry lane), §5.4 (the dead-coordinator lane), §8, §9; CCR-15's contract `docs/superpowers/programs/child-reclamation-contract.md` R76–R81; the programme ledger (the coordinator's worktree copy) — its 2026-10-08 20:00 and 21:55 entries, its 2026-10-09 07:00, 07:50 and 08:20 entries, its 2026-10-10 21:50 and 2026-10-11 01:00 entries, its Carried constraints and its Next-wave brief; wave 5's evidence (`.superpowers/sdd/coordinator-evidence/run345/`: reviews 355–357, `final-fix-report.md`, `progress.md`).
+**Spec:** `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` §5.3 (`ws-expire` and the expiry lane), §5.4 (the dead-coordinator lane), §8, §9; #166's contract `docs/superpowers/programs/child-reclamation-contract.md` R76–R81; the programme ledger (the coordinator's worktree copy) — its 2026-10-08 20:00 and 21:55 entries, its 2026-10-09 07:00, 07:50 and 08:20 entries, its 2026-10-10 21:50 and 2026-10-11 01:00 entries, its Carried constraints and its Next-wave brief; wave 5's evidence (`.superpowers/sdd/coordinator-evidence/run345/`: reviews 355–357, `final-fix-report.md`, `progress.md`).
 
 > **Departure numbers.** This plan names its departures by SLUG under `## Deviations found` and defines no number. The run's brief issues the numbers (block 4617–4632): the worker writes them bare, in the order `## Deviations found` lists the slugs, each in the entry that defines it, in the commit of the first task that makes the change — never a guessed number. Sixteen departures are defined and the block issued is sixteen, so every number is used; a departure found while executing is reported for a further number, never typed.
 
@@ -30,8 +30,8 @@
   Measured: `5 passed | 445 skipped (450)` on the final prototype. README's edits (Task 11) sit below README's `shared/api.ts` citations, so nothing is re-pointed.
 - **Deviation numbers.** No `D-<n>` token is written for a new number in any code comment, test title or doc this plan touches: comments name the ruling (`wave 6, ruling B`) or the finding (`review 355, F7`).
 - **No hostnames, IPs, tailnet names or docserver URLs** anywhere in the diff (`topology-clean.test.ts`).
-- **Overlap (ruling J).** CCR-15 wave 8 (run 348, calm-mesa; dispatched 2026-10-11 00:59Z to quiet-prairie, mail 4202) is in flight. It touches `server/src/watch.ts` (its child-reclaim arms), `shared/api.ts` (Task 1's L0 grammar, and the MOVE of `keptLeafWord` to L0 as `leafKeptWord` — Order A of R81: wave 8 makes that move, NOT this wave), `server/src/archivedExpiry.ts` (that move's import and its word half) and `server/test/containment-refuted-word.test.ts` (its reclaim assertion and the shared describe's title). Run 354 (ccrc-history, brisk-meadow) holds claims on `README.md`, `CLAUDE.md`, `server/test/ws-expire-prose.test.ts`, `server/test/expiry-lane-prose.test.ts` and `server/test/dead-coordinator-prose.test.ts` (they may lapse or renew): Task 11 edits README and the last two, so it claims them, or asks the holder for a region split on a 409. This plan's `ccd/ccd` regions are `_ws_expire_locked` (Tasks 1 and 5) and one comment above `_ws_reclaim_failed_json` (Task 1, CCR-15's region: see Task 1's consent note). Task 1 also edits `server/test/ccd-child-reclaim-crumb.test.ts` (CCR-15 wave 7's file: its ws-expire describe asserts the keyless documents this wave replaces). CCR-15 AGREED the `containment-refuted-word.test.ts` split (mail 4202, answering 4200): this wave moves its `parseExpireResult` case into a describe of its own and flips it there, and whichever wave lands SECOND makes the shared describe speak of the reclaim parser only (its title and wave 8's comment), with CCR-15's consent to edit exactly those lines of wave 8's. Mail 4202 does not answer the two `ccd`-side edits (the `_WS_RCL_CRUMB` comment and the crumb test's describe): the brief carries that consent, or Task 1 drops block 6 (question (o)). **Whichever lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-stamps `ccd/ccd`, re-runs the five citation cases, `cite-remeasure` and the `_reg_get` census, and re-points by content.** `## Re-measure at dispatch` lists every block in a shared file, and what each becomes if wave 8 lands first.
-- **The stuck word is read from L0, never listed again (ruling B).** `containment-refuted`'s home is `LcRefusalToken` in `shared/api.ts`. `archivedExpiry.ts` is L1 and imports L0 alone, so it cannot import CCR-15 wave 8's `CHILD_RECLAIM_STUCK_TOKENS` (spelled in `server/src/coord/childReclaim.ts`, L3, by R77). It declares the one word it reads as `EXPIRE_STUCK_WORD: Extract<LcRefusalToken, 'containment-refuted'>` — the L0 member's own type, so a rename or removal there leaves `never` and the build fails. If wave 8 lands first, Task 12's merge step adds one assertion holding the two equal (Re-measure at dispatch).
+- **Overlap (ruling J).** #166 wave 8 (run 348, calm-mesa; dispatched 2026-10-11 00:59Z to quiet-prairie, mail 4202) is in flight. It touches `server/src/watch.ts` (its child-reclaim arms), `shared/api.ts` (Task 1's L0 grammar, and the MOVE of `keptLeafWord` to L0 as `leafKeptWord` — Order A of R81: wave 8 makes that move, NOT this wave), `server/src/archivedExpiry.ts` (that move's import and its word half) and `server/test/containment-refuted-word.test.ts` (its reclaim assertion and the shared describe's title). Run 354 (ccrc-history, brisk-meadow) holds claims on `README.md`, `CLAUDE.md`, `server/test/ws-expire-prose.test.ts`, `server/test/expiry-lane-prose.test.ts` and `server/test/dead-coordinator-prose.test.ts` (they may lapse or renew): Task 11 edits README and the last two, so it claims them, or asks the holder for a region split on a 409. This plan's `ccd/ccd` regions are `_ws_expire_locked` (Tasks 1 and 5) and one comment above `_ws_reclaim_failed_json` (Task 1, #166's region: see Task 1's consent note). Task 1 also edits `server/test/ccd-child-reclaim-crumb.test.ts` (#166 wave 7's file: its ws-expire describe asserts the keyless documents this wave replaces). #166 AGREED the `containment-refuted-word.test.ts` split (mail 4202, answering 4200): this wave moves its `parseExpireResult` case into a describe of its own and flips it there, and whichever wave lands SECOND makes the shared describe speak of the reclaim parser only (its title and wave 8's comment), with #166's consent to edit exactly those lines of wave 8's. Mail 4202 does not answer the two `ccd`-side edits (the `_WS_RCL_CRUMB` comment and the crumb test's describe): the brief carries that consent, or Task 1 drops block 6 (question (o)). **Whichever lands second runs `git merge origin/main` (never a rebase), keeps both sides, re-stamps `ccd/ccd`, re-runs the five citation cases, `cite-remeasure` and the `_reg_get` census, and re-points by content.** `## Re-measure at dispatch` lists every block in a shared file, and what each becomes if wave 8 lands first.
+- **The stuck word is read from L0, never listed again (ruling B).** `containment-refuted`'s home is `LcRefusalToken` in `shared/api.ts`. `archivedExpiry.ts` is L1 and imports L0 alone, so it cannot import #166 wave 8's `CHILD_RECLAIM_STUCK_TOKENS` (spelled in `server/src/coord/childReclaim.ts`, L3, by R77). It declares the one word it reads as `EXPIRE_STUCK_WORD: Extract<LcRefusalToken, 'containment-refuted'>` — the L0 member's own type, so a rename or removal there leaves `never` and the build fails. If wave 8 lands first, Task 12's merge step adds one assertion holding the two equal (Re-measure at dispatch).
 
 ## Review Focus
 
@@ -49,14 +49,14 @@ What a reviewer looking for a workspace deleted, or a programme ended, that shou
 
 | File | Tasks | What changes |
 |---|---|---|
-| `ccd/ccd` | 1, 5 | `_ws_expire_locked`: the `crumb` block (A) and the attached-HEAD sentence in the consent-branch comment (D); the `_WS_RCL_CRUMB` comment (CCR-15's region, comment only) |
+| `ccd/ccd` | 1, 5 | `_ws_expire_locked`: the `crumb` block (A) and the attached-HEAD sentence in the consent-branch comment (D); the `_WS_RCL_CRUMB` comment (#166's region, comment only) |
 | `server/src/archivedExpiry.ts` (L1) | 2, 3, 4, 8 | `parseExpireResult` reads the word, then `crumb`; `EXPIRE_STUCK_WORD` and the `stuck` read, outcome, report, entry arm and sentence; `stuck` in `expiryReportStands`; the restart counted and the learn's carry; `halted` on `flock-unavailable` over a row with no standing entry; `STANDING_ASKS_AGAIN` |
 | `server/src/coord/expireArchived.ts` | 2, 3, 8 | the `restart` feed row's words; the `stuck` outcome and feed row (its cadence in the standing entry's terms); `expireFeedBody`/`recordExpireFeed` take `standing`; `flock-unavailable`'s feed row says the halt |
 | `server/src/coord/endDeadCoordinator.ts` | 6 | the `journalReread` port; `rereadDeadCoordinatorJournalTrust` (health state, gaps, and the write-error count); `stillCrashed` re-reads after the measure |
 | `server/src/watch.ts` | 6, 8 | wires `journalReread`; passes `expiryReportStands(entry.report)` to the feed row |
 | tests: `ccd-child-reclaim-crumb`, `archived-expiry-policy`, `archived-expiry-lane`, `containment-refuted-word`, `ccd-ws-expire-consent-branch`, `end-dead-coordinator`, `dead-coordinator-lane`, `expire-archived`, `expiry-lane-prose`, `dead-coordinator-prose` | 1–11 | the cases below |
 | `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md` | 11 | §5.3 "As wave 6 closes the lane" and three corrected wave-5 sentences; §5.4 "As wave 6 closes the lane"; a new §12 "Before arming" |
-| `README.md` | 11 | the expiry paragraph's cadence and new sentences; one dead-coordinator sentence; the `crumb` sentence in CCR-15's paragraph |
+| `README.md` | 11 | the expiry paragraph's cadence and new sentences; one dead-coordinator sentence; the `crumb` sentence in #166's paragraph |
 
 D-4916 amends the Architecture paragraph and the table above: `server/src/shutdownseal.ts` (D-4916) holds the shutdown handler and `server/src/index.ts` one additive block that installs it; both are named here by D-4916, and neither is listed there.
 
@@ -64,7 +64,7 @@ Not edited: `shared/api.ts`, the PWA, the agent, `single-definition.test.ts`, `s
 
 ## Measured while planning
 
-Everything below was measured on a prototype of this plan at `origin/main` `7609221a4` (CCR-15 wave 7, #344, on top of wave 5's #335), in an isolated worktree, one test file per process, `TMPDIR` on the volume outside the checkout, `CCD_DISK_FLOOR_GB=1`, load average 12–18. The revision after the four review lenses rebuilt that prototype stage by stage with its changes folded in (Tasks 1, 3, 6, 8, 9 and 11) and re-measured every count those stages report. The prototype was then reverted: only this file is committed.
+Everything below was measured on a prototype of this plan at `origin/main` `7609221a4` (#166 wave 7, #344, on top of wave 5's #335), in an isolated worktree, one test file per process, `TMPDIR` on the volume outside the checkout, `CCD_DISK_FLOOR_GB=1`, load average 12–18. The revision after the four review lenses rebuilt that prototype stage by stage with its changes folded in (Tasks 1, 3, 6, 8, 9 and 11) and re-measured every count those stages report. The prototype was then reverted: only this file is committed.
 
 1. **The crumb census — every `failed` document `ws-expire` prints, against its breadcrumb** (read off ccd/ccd and measured by Task 1's cases):
 
@@ -86,7 +86,7 @@ Everything below was measured on a prototype of this plan at `origin/main` `7609
 
 4. **Wave 5's census residual, measured.** Moving the expiry's `failed` `state-changed` producer to just after `_ws_tombstone` (and renaming the original) leaves `main`'s census green (`74 passed (74)`), because it bounds at the breadcrumb; with Task 9's bound at `_ws_tombstone` it reds (`1 failed | 73 passed (74)`).
 
-5. **Rung 8 (ruling G), measured: nothing pins the old answer.** `git grep -n "gitdir\|no-worktree-record"` over `server/test/archived-expiry-*.test.ts`, `server/test/expire-archived.test.ts`, `server/test/expiry-lane-prose.test.ts`, `server/test/ws-expire-prose.test.ts`, the spec and README finds no expiry-lane case, journal word or operator sentence that pins a terminal `no-worktree-record`, or a blank head, for an admin `gitdir` naming no path. The ccd side is CCR-15's and pinned (`ccd-child-reclaim-silent-omission.test.ts`, its describe "ws-expire runs the same ladder, so it answers the same": unmeasured, exit 1, journaled nowhere). On the server an exit-1 audit is `unreadable` (learning) or `audit-failed` (the act), each retried; `archivedExpiry.ts`'s `no-worktree-record → terminal` stays right for a record that is truly absent. Nothing to fix.
+5. **Rung 8 (ruling G), measured: nothing pins the old answer.** `git grep -n "gitdir\|no-worktree-record"` over `server/test/archived-expiry-*.test.ts`, `server/test/expire-archived.test.ts`, `server/test/expiry-lane-prose.test.ts`, `server/test/ws-expire-prose.test.ts`, the spec and README finds no expiry-lane case, journal word or operator sentence that pins a terminal `no-worktree-record`, or a blank head, for an admin `gitdir` naming no path. The ccd side is #166's and pinned (`ccd-child-reclaim-silent-omission.test.ts`, its describe "ws-expire runs the same ladder, so it answers the same": unmeasured, exit 1, journaled nowhere). On the server an exit-1 audit is `unreadable` (learning) or `audit-failed` (the act), each retried; `archivedExpiry.ts`'s `no-worktree-record → terminal` stays right for a record that is truly absent. Nothing to fix.
 
 6. **4458 (ruling H), measured: the pin exists and reds.** `_ws_expire_cwd_users` resolves its parent with `_ws_dir_physical "$parent" && preal="$_WS_PHYS" \` (ccd/ccd:31549 at `7609221a4`). `ccd-leaf-root-newline.test.ts` is `13 passed (13)`; with that line mutated back to `preal=$(cd -- "$parent" 2>/dev/null && pwd -P) \` it is `2 failed | 11 passed (13)` (× a FAKE process table on any host …; × a LIVE process of this uid …). No new pin is owed.
 
@@ -106,11 +106,11 @@ Each edit is a block headed by an HTML comment, `<!-- replay: replace <path> -->
 
 **Model routing:** `sonnet`, effort `high` — the destructive verb's locked body.
 
-**Files:** `ccd/ccd` (`_ws_expire_locked`; the `_WS_RCL_CRUMB` comment above `_ws_reclaim_failed_json`); tests `server/test/ccd-child-reclaim-crumb.test.ts` (CCR-15 wave 7's: its ws-expire describe), `server/test/ccd-ws-expire-consent-branch.test.ts` (wave 5's: its DELETED-in-the-window case).
+**Files:** `ccd/ccd` (`_ws_expire_locked`; the `_WS_RCL_CRUMB` comment above `_ws_reclaim_failed_json`); tests `server/test/ccd-child-reclaim-crumb.test.ts` (#166 wave 7's: its ws-expire describe), `server/test/ccd-ws-expire-consent-branch.test.ts` (wave 5's: its DELETED-in-the-window case).
 
 **Interfaces:** `_ws_expire_locked` sets the global `_WS_RCL_CRUMB` right after the fork, exactly as `_ws_reclaim_locked` does (`ccd/ccd`, its `# `crumb` (spec §5.6)` block): `true` when `phase` (an `expire:` breadcrumb's) is non-empty; `''` when `$REG/<id>.reaping` stands (file or link) but read empty; `false` otherwise. `_ws_reclaim_failed_json` prints `"crumb":true|false` only for those two literals, so the key is additive and an older server ignores it (it reads named keys only). The tail sets `true` at its own top, unchanged.
 
-**Consent (ruling J), and scope.** The `_WS_RCL_CRUMB` comment (block 6) sits in CCR-15's region, OUTSIDE `_ws_expire_locked` — wider than ruling A's "inside `_ws_expire_locked` ONLY", so the coordinator rules on it knowingly (the departure `expire-documents-say-crumb` says so); after block 5 its sentence "So `ws-expire`'s own pre-breadcrumb documents, its resumed arm's `probe-unmeasured` …, carry no key" is false. The block changes that comment only. The brief carries CCR-15's consent (asked with mail 4200's split; mail 4202 agreed the test-file split and did not answer this one); if it is refused, drop block 6, keep the stale comment, and report it to CCR-15 for its next ccd edit. The test file's ws-expire describe is CCR-15 wave 7's too, and its two keyless assertions are exactly what this ruling replaces.
+**Consent (ruling J), and scope.** The `_WS_RCL_CRUMB` comment (block 6) sits in #166's region, OUTSIDE `_ws_expire_locked` — wider than ruling A's "inside `_ws_expire_locked` ONLY", so the coordinator rules on it knowingly (the departure `expire-documents-say-crumb` says so); after block 5 its sentence "So `ws-expire`'s own pre-breadcrumb documents, its resumed arm's `probe-unmeasured` …, carry no key" is false. The block changes that comment only. The brief carries #166's consent (asked with mail 4200's split; mail 4202 agreed the test-file split and did not answer this one); if it is refused, drop block 6, keep the stale comment, and report it to #166 for its next ccd edit. The test file's ws-expire describe is #166 wave 7's too, and its two keyless assertions are exactly what this ruling replaces.
 
 - [ ] **Step 0: Install each package's own modules, and the scratch directory**
 
@@ -119,7 +119,7 @@ Each edit is a block headed by an HTML comment, `<!-- replay: replace <path> -->
 mkdir -p <the volume's mount>/scratch-<run>-tmp   # OUTSIDE every git checkout; export TMPDIR to it, and CCD_DISK_FLOOR_GB=1
 ```
 
-**A breadcrumb that stands but cannot be read stays keyless (argued; the departure `an-unreadable-breadcrumb-stays-keyless`).** Ruling A reads "every failed document ws-expire's resumed arm prints carries crumb:true". A `.reaping` that stands but cannot be read is neither arm: the fork cannot tell whose breadcrumb it is or whether this expiry wrote it, and stops at `_ws_reclaim_unmeasured`. `_ws_reclaim_locked` says nothing in exactly that shape, and CCR-15's reader then falls back to its pre-crumb word set (R76) as this wave's parser falls back to `main`'s rule, and ccd's own comment defines `true` as "printed past the act's breadcrumb", which ccd cannot claim here. So the key stays unsaid, the server reads `main`'s word rule (a final `probe-unmeasured`: listed, nothing deleted, asked again after a restart), and §12 says so to the operator (Task 11). Saying `true` instead would retry it on the tier forever against the same unreadable file; that is question (p).
+**A breadcrumb that stands but cannot be read stays keyless (argued; the departure `an-unreadable-breadcrumb-stays-keyless`).** Ruling A reads "every failed document ws-expire's resumed arm prints carries crumb:true". A `.reaping` that stands but cannot be read is neither arm: the fork cannot tell whose breadcrumb it is or whether this expiry wrote it, and stops at `_ws_reclaim_unmeasured`. `_ws_reclaim_locked` says nothing in exactly that shape, and #166's reader then falls back to its pre-crumb word set (R76) as this wave's parser falls back to `main`'s rule, and ccd's own comment defines `true` as "printed past the act's breadcrumb", which ccd cannot claim here. So the key stays unsaid, the server reads `main`'s word rule (a final `probe-unmeasured`: listed, nothing deleted, asked again after a restart), and §12 says so to the operator (Task 11). Saying `true` instead would retry it on the tier forever against the same unreadable file; that is question (p).
 
 - [ ] **Step 1: The tests (red).** The ws-expire describe is rewritten: the fresh arm's `pin-failed` (with `_WS_RCL_CRUMB=true` exported, so the value is the verb's, never the environment's), its `probe-unmeasured` and its `tombstone-unwritable` each say `false`; the resumed arm's `probe-unmeasured` (an interrupted expiry at `expire:worktree`, its tombstone at mode 000) says `true`; a breadcrumb that stands but cannot be read carries no key. The consent-branch file's DELETED-in-the-window case (the fresh arm's `state-changed`) asserts `crumb: false`.
 
@@ -304,7 +304,7 @@ Replace with:
 ````bash
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
-  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # `crumb` (#166 spec §5.6), said as ws-reclaim says it (workspace lifecycle
   # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
   # so its `probe-unmeasured` below is printed past it and the server reads it
   # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
@@ -509,14 +509,14 @@ In `server/src/archivedExpiry.ts`, find (block 10):
 ````ts
 
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
- *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is #166's 4457). Each is
  *  READ its own way (`parseExpireResult`):
  *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
  *     on EVERY arm. Read FINAL: reported at once and not asked again for this archive (review 313's parked item 4).
  *     On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its tree may be
  *     part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did
  *     not answer), and the word reads final there too. That is main's reading, kept in this wave: the fix is this
- *     programme's wave 6, once CCR-15 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
+ *     programme's wave 6, once #166 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
  *     arm, and a failed document with `crumb: true` reads resumable — and until then it is an ARMING BLOCKER for the
  *     expiry lane;
  *   - `state-changed`: the consent binding — the in-lock recompute and the pin read the branch differently — printed
@@ -528,7 +528,7 @@ Replace with:
 ````ts
 
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
- *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Since
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is #166's 4457). Since
  *  wave 6 this is the FALLBACK: a document that carries `crumb` is read by it (`parseExpireResult`), and these words
  *  decide only a document without it — an older ccd's. Each is READ its own way there:
  *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
@@ -601,7 +601,7 @@ Replace with:
 ````ts
       const detail = typeof v.detail === 'string' ? v.detail : '';
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
-      // `crumb` (CCR-15 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
+      // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
       // breadcrumb, the resumed arm's `probe-unmeasured` among them — is resumed. Only the two booleans are read: an
       // absent key (an older ccd) or any other value falls back to the word rule below, exactly as `main` reads it.
@@ -705,10 +705,10 @@ Replace with:
 - `export const EXPIRE_STUCK_WORD: Extract<LcRefusalToken, 'containment-refuted'>` (the word, typed by its L0 member; `LcRefusalToken` joins the L0 import).
 - `ExpireVerbRead` and `ArchivedExpiryOutcome` gain `{ kind: 'stuck'; detail }`; `parseExpireResult` reads `v.failed === EXPIRE_STUCK_WORD` FIRST, whatever `crumb` says (R76's order); the executor passes it through; `EXPIRY_OUTCOME_KINDS` admits `stuck` (the kebab scan); the feed title `archived workspace cleanup stuck`, and its body "ccd stopped part-way (<detail>) — the session was stopped and nothing further was deleted. It is listed at once, and asked again 4 hours after each failed attempt, until an attempt completes or the workspace is archived again." — the cadence in the standing entry's own terms (Task 8's `STANDING_ASKS_AGAIN`), derived from `EXPIRE_PERSISTENT_RETRY_MS`, never "every four hours".
 - `ExpiryReport` gains `{ kind: 'stuck'; at; detail; attempts }`, and `expiryReportStands` holds it STANDING (so `standingThrough` keeps it through every answer that ends no attempt, and a hold never replaces it).
-- `archivedExpiryNextEntry`'s `stuck` arm: both runs counted, `nextAskAt = now + EXPIRE_PERSISTENT_RETRY_MS` (never +∞), the report's `at` the first stuck answer and `attempts` + 1. A later resumable failure or box word under a stuck entry keeps the entry and the four-hour cadence (it outranks failing; `flock-unavailable` too, once Task 8 adds its arm); a `restart` keeps it too, with its instant and cadence (the departure `stuck-stands-through-a-restart`). An attempt that completes ends it (the kept report replaces it, if a leaf was kept), and so does a new archive; a terminal refusal, a failure ccd says will not resume and a composition error still replace it (the departure `a-terminal-verdict-outranks-stuck`; CCR-15's R77: terminal outranks stuck).
+- `archivedExpiryNextEntry`'s `stuck` arm: both runs counted, `nextAskAt = now + EXPIRE_PERSISTENT_RETRY_MS` (never +∞), the report's `at` the first stuck answer and `attempts` + 1. A later resumable failure or box word under a stuck entry keeps the entry and the four-hour cadence (it outranks failing; `flock-unavailable` too, once Task 8 adds its arm); a `restart` keeps it too, with its instant and cadence (the departure `stuck-stands-through-a-restart`). An attempt that completes ends it (the kept report replaces it, if a leaf was kept), and so does a new archive; a terminal refusal, a failure ccd says will not resume and a composition error still replace it (the departure `a-terminal-verdict-outranks-stuck`; #166's R77: terminal outranks stuck).
 - On the wire a stuck entry is `kind: 'failing'` (`expiryAttention` maps it): no new word, no `shared/api.ts` or PWA edit (the departure `a-stuck-expiry-rides-the-failing-word`).
 - The sentence: "cleanup stopped part-way: <detail>. ccd found that what it would remove is not only this workspace’s own (first at <instant>, <n> attempts). The session was stopped and nothing further was deleted; what is left on disk stays as it is, and a retry finds the same thing until that other tree or row is moved. The lane asks again …" (Task 8 replaces the cadence clause's words).
-- **`containment-refuted-word.test.ts` (the coordinator's proposal to CCR-15, mail 4200, AGREED in mail 4202):** the `parseExpireResult` case LEAVES the shared describe "today’s parsers read it as a resumable failure — retried" — which CCR-15 wave 8's Task 6 retitles, flipping only its reclaim assertion — and a describe of its own at the file's foot flips it: `stuck`, for four `crumb` values. The header's last two sentences say which parser classes it.
+- **`containment-refuted-word.test.ts` (the coordinator's proposal to #166, mail 4200, AGREED in mail 4202):** the `parseExpireResult` case LEAVES the shared describe "today’s parsers read it as a resumable failure — retried" — which #166 wave 8's Task 6 retitles, flipping only its reclaim assertion — and a describe of its own at the file's foot flips it: `stuck`, for four `crumb` values. The header's last two sentences say which parser classes it.
 
 - [ ] **Step 1: The tests (red).**
 
@@ -834,7 +834,7 @@ Replace with:
       .toMatchObject({ kind: 'kept' });
     expect(archivedExpiryEntryFor(x, x.archivedAt + 60).report, 'a new archive').toBeNull();
     expect(archivedExpiryNextEntry(x, { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, t + PASS, PASS)!.report,
-      'a terminal refusal (CCR-15’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
+      'a terminal refusal (#166’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
   });
 
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
@@ -918,7 +918,7 @@ Replace with:
   });
 });
 
-describe('the expiry lane reads it as STUCK, whatever crumb says (workspace lifecycle wave 6, ruling B; CCR-15’s R76 and R77)', () => {
+describe('the expiry lane reads it as STUCK, whatever crumb says (workspace lifecycle wave 6, ruling B; #166’s R76 and R77)', () => {
   it('parseExpireResult: stuck — listed at once and asked again on the persistent tier, never at +∞', () => {
     for (const extra of [{}, { crumb: true }, { crumb: false }, { crumb: 'yes' }]) {
       expect(parseExpireResult('demo-quiet-dune', JSON.stringify({ failed: W, detail: 'd', ...extra }), ''), JSON.stringify(extra))
@@ -1014,7 +1014,7 @@ Replace with:
 ````ts
 export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRUMB_FAILED as readonly string[]).includes(word);
 
-/** THE STUCK WORD on the expiry lane (workspace lifecycle wave 6, ruling B; CCR-15's R76 and R77, the reclaim side's
+/** THE STUCK WORD on the expiry lane (workspace lifecycle wave 6, ruling B; #166's R76 and R77, the reclaim side's
  *  ruling of the same word). The shared tail prints it, past the breadcrumb, when its removal-time re-ask PROVES that
  *  what it would remove is not only this workspace's own; it stopped there, and a retry finds the same thing until
  *  another tree or row moves. Read FIRST, whatever `crumb` says, as `stuck`: listed at once, asked again on the
@@ -1055,7 +1055,7 @@ In `server/src/archivedExpiry.ts`, find (block 27):
 ````ts
       const detail = typeof v.detail === 'string' ? v.detail : '';
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
-      // `crumb` (CCR-15 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
+      // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
 ````
 
@@ -1066,7 +1066,7 @@ Replace with:
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
       // The WORD first (R76's order): the stuck word is stuck whatever `crumb` says (wave 6, ruling B).
       if (v.failed === EXPIRE_STUCK_WORD) return { kind: 'stuck', detail: said };
-      // `crumb` (CCR-15 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
+      // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
 ````
 
@@ -1089,7 +1089,7 @@ Replace with:
   | { readonly kind: 'kept'; readonly at: number; readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept }
   /** STUCK (wave 6, ruling B): ccd stopped the act part-way on `EXPIRE_STUCK_WORD`. Listed at once and STANDING — it
    *  outranks a failing entry and stands through every answer until an attempt completes, the archive changes, or a
-   *  terminal verdict (which outranks it, as on the reclaim side, CCR-15's R77). `at` is the first stuck answer,
+   *  terminal verdict (which outranks it, as on the reclaim side, #166's R77). `at` is the first stuck answer,
    *  `detail` the last, `attempts` how many. On the wire it is a `failing` entry (`expiryAttention`): no new word. */
   | { readonly kind: 'stuck'; readonly at: number; readonly detail: string; readonly attempts: number };
 
@@ -1201,7 +1201,7 @@ Replace with:
         ...(o.kind === 'audit-failed' ? standingThrough(entry) : {}) };
     }
     case 'stuck': {
-      // STUCK (wave 6, ruling B; CCR-15's R76 and R77): the act stopped part-way, and a retry finds the same until another
+      // STUCK (wave 6, ruling B; #166's R76 and R77): the act stopped part-way, and a retry finds the same until another
       // tree or row moves. Listed AT ONCE — never after the hour or the day — and on the persistent tier from the first
       // answer: one fresh audit every `EXPIRE_PERSISTENT_RETRY_MS`, never +∞, never stopping. It counts on both runs.
       const prev = entry.report?.kind === 'stuck' ? entry.report : null;
@@ -2992,14 +2992,14 @@ Restore and re-stamp.
 
 **Files:** none.
 
-- [ ] **Step 1: Rung 8 (ruling G).** Run the grep below; it prints nothing that pins a terminal `no-worktree-record`, or a blank head, for an admin `gitdir` naming no path on the expiry lane (the spec's §5.3 ladder sentence names `no-worktree-record (terminal)` for a record that is truly absent, which stays right). Then run CCR-15's pin of the ccd side.
+- [ ] **Step 1: Rung 8 (ruling G).** Run the grep below; it prints nothing that pins a terminal `no-worktree-record`, or a blank head, for an admin `gitdir` naming no path on the expiry lane (the spec's §5.3 ladder sentence names `no-worktree-record (terminal)` for a record that is truly absent, which stays right). Then run #166's pin of the ccd side.
 
 ```bash
 git grep -n "gitdir\|no-worktree-record\|head=''" -- server/test/archived-expiry-policy.test.ts server/test/archived-expiry-lane.test.ts server/test/expire-archived.test.ts server/test/expiry-lane-prose.test.ts server/test/ws-expire-prose.test.ts README.md docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md
 ( cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-silent-omission.test.ts --maxWorkers=1 -t 'ws-expire runs the same ladder' )
 ```
 
-Measured: the grep prints only the spec's §5.3 ladder line and README's CCR-15 paragraph ("`no-worktree-record` becomes a retried unmeasured answer when an entry could not be read"), both true; the suite's expiry describe green.
+Measured: the grep prints only the spec's §5.3 ladder line and README's #166 paragraph ("`no-worktree-record` becomes a retried unmeasured answer when an entry could not be read"), both true; the suite's expiry describe green.
 
 - [ ] **Step 2: 4458 (ruling H).** `grep -n '_ws_dir_physical "$parent" && preal="$_WS_PHYS"' ccd/ccd` names one line, in `_ws_expire_cwd_users`. Mutate it to `  preal=$(cd -- "$parent" 2>/dev/null && pwd -P) \`, re-stamp, run `ccd-leaf-root-newline.test.ts`, restore, re-stamp.
 
@@ -3261,7 +3261,7 @@ In `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`, find (bloc
     there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
     With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
     `pin-failed`, which is resumable. A branch already absent when the token was minted reads absent twice and expires
-    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of CCR-15
+    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of #166
     left it: its tip was pinned at the fresh pin.
 ````
 
@@ -3271,7 +3271,7 @@ Replace with:
     there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
     With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
     `pin-failed`, before the breadcrumb: resumable on a ccd older than wave 6, audited afresh since (below). A branch already absent when the token was minted reads absent twice and expires
-    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of CCR-15
+    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of #166
     left it: its tip was pinned at the fresh pin.
 ````
 
@@ -3282,7 +3282,7 @@ In `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`, find (bloc
     feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
     resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
     answer), so there it can stop the lane on a part-expired archive until a restart. That is a known gap, routed to
-    this programme's wave 6 once CCR-15 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
+    this programme's wave 6 once #166 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
     then. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
     breadcrumb too; the `crumb` field is what can tell those apart.
   - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
@@ -3295,7 +3295,7 @@ Replace with:
     feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
     resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
     answer), so there it could stop the lane on a part-expired archive until a restart. That was a known gap and an
-    arming blocker for the lane; wave 6 closes it with CCR-15 wave 7's `crumb` field (below). Without `crumb` (an older
+    arming blocker for the lane; wave 6 closes it with #166 wave 7's `crumb` field (below). Without `crumb` (an older
     ccd), `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
     breadcrumb too; the `crumb` field is what tells those apart.
   - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
@@ -3332,7 +3332,7 @@ Replace with:
 - **As wave 6 closes the lane** (each a departure named in the wave-6 plan,
   `docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md`).
   - **`ws-expire` says `crumb`, and the lane reads it first.** Every `failed` document `ws-expire` prints carries
-    CCR-15's `crumb`: `false` on a fresh expiry, before its breadcrumb (`probe-unmeasured`, `pin-failed`,
+    #166's `crumb`: `false` on a fresh expiry, before its breadcrumb (`probe-unmeasured`, `pin-failed`,
     `state-changed`, `tombstone-unwritable`), `true` on a resumed one (its `probe-unmeasured`, printed while its
     `expire:` breadcrumb stands) and, as before, in the shared tail; a breadcrumb that stands but cannot be read leaves
     it unsaid, as `ws-reclaim` does. The parser reads the word, then `crumb`: `false` is audited afresh, `true` is
@@ -3430,7 +3430,7 @@ collects them.
 - **Its arming blockers are closed.** A pre-breadcrumb `state-changed` is audited afresh (wave 5). A resumed expiry's
   `probe-unmeasured` is retried (wave 6, through `crumb`), and a fresh one's is audited afresh, counted and listed after
   the hour if it recurs, where it was final before. `_ws_expire_cwd_users` resolves its parent through
-  `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (CCR-15 wave 6; its
+  `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (#166 wave 6; its
   case in `ccd-leaf-root-newline.test.ts` goes red when the bare `pwd -P` is put back, measured in wave 6).
 - **One residual of question (k).** A breadcrumb that stands but cannot be read (a `$REG/<id>.reaping` that is not a
   readable file) leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word: listed
@@ -3439,13 +3439,13 @@ collects them.
 - **One archived tree holds a leaked test tmux server** (the ledger's pre-arming item (d)). The lane refuses that row
   `in-use` on every pass and lists it after three, naming the process; it never ends it. End that server first, once
   you know what it is, or arm knowing the row stays listed.
-- **A branch already gone now expires.** Since CCR-15 wave 6, an archived workspace whose branch is gone when its token
+- **A branch already gone now expires.** Since #166 wave 6, an archived workspace whose branch is gone when its token
   is minted expires with its work in the attic, where `main` stopped at `pin-failed`, and its ignored and secret-shaped
   files go with the tree, as the standing policy says. A branch deleted between the fresh pin and the tail's settle has
   its tip pinned at the fresh pin. With HEAD still symbolic to a deleted branch the pin fails before the breadcrumb, and
   the lane audits it afresh each time, counted and listed after the hour.
 - **A branch deleted or made inside the lock stops the act** before the breadcrumb, in both directions (question (j)).
-- **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (CCR-15
+- **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (#166
   wave 7, rung 8); a record that is truly absent stays terminal.
 - **What each answer does to a row.** A person viewing it defers it with no ceiling. A process working in it is refused
   every pass and listed after three, naming the process; the lane never kills. A held row past its instant is listed,
@@ -3487,7 +3487,7 @@ collects them.
 - (i) A kept-leaf entry lives until a server restart. Is that the life you want?
 - (j) `ws-expire` refuses a branch made inside the lock as well as one deleted. Keep both directions?
 - Wave 2's three: the PR sheet's "Archive now" offers no consent for a busy or coordinating workspace; a real worktree
-  check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for CCR-15's
+  check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for #166's
   children.
 - Wave 6's own are in its plan's questions for the operator.
 ````
@@ -3502,7 +3502,7 @@ collects them.
 
 **Model routing:** `opus`, effort `high` for the whole-branch review (act-safety lens: nothing arms, nothing deletes or ends what it should not); `sonnet` for the runs.
 
-- [ ] **Step 1: Merge `origin/main` if it moved** (never a rebase), keep both sides, re-stamp `ccd/ccd`, and re-point by content — `## Re-measure at dispatch` lists every block in a shared file and what it becomes if CCR-15 wave 8 has landed. Re-run the five citation cases, `cite-remeasure` and `ccd-reg-get-census`.
+- [ ] **Step 1: Merge `origin/main` if it moved** (never a rebase), keep both sides, re-stamp `ccd/ccd`, and re-point by content — `## Re-measure at dispatch` lists every block in a shared file and what it becomes if #166 wave 8 has landed. Re-run the five citation cases, `cite-remeasure` and `ccd-reg-get-census`.
 
 - [ ] **Step 2: The full server suite, sharded, one worker each, in the foreground** (twenty-four shards measured ~3–12 minutes each on the loaded box; one or two shards per command):
 
@@ -3526,7 +3526,7 @@ Measured: PWA shard 1/2 `55 passed (55)` files, `1762 passed (1762)` tests; shar
 
 - [ ] **Step 5: The no-writer check by hand.** `git grep -n "expire-lane-live\|dead-coordinator-lane-live" -- server/src ccd agent pwa/src deploy` names only the two definers and their readers; the diff adds no write of either.
 
-- [ ] **Step 6: The PR.** Title: `Workspace lifecycle wave 6: the resumed expiry's crumb, the stuck word, a counted restart, the journal re-read, and the arming close-out (CCR-17)`. The body lists each task with its red/green counts, every mutation row, the departures with their issued numbers, the crumb census, the restart's recurrence, rung 8's and 4458's checks, and the questions below, and says both lanes stay SHADOWED. The worker opens it; the coordinator rules.
+- [ ] **Step 6: The PR.** Title: `Workspace lifecycle wave 6: the resumed expiry's crumb, the stuck word, a counted restart, the journal re-read, and the arming close-out (#196)`. The body lists each task with its red/green counts, every mutation row, the departures with their issued numbers, the crumb census, the restart's recurrence, rung 8's and 4458's checks, and the questions below, and says both lanes stay SHADOWED. The worker opens it; the coordinator rules.
 
 ## Re-measure at dispatch
 
@@ -3574,25 +3574,25 @@ Drafted on `origin/main` `7609221a4`. Before Task 1, `git fetch origin` and, if 
 
 `shared/api.ts`, `server/test/single-definition.test.ts`: no block (nothing here moves).
 
-**If CCR-15 wave 8 (run 348) lands first** (Order A of R81 either way: wave 8 moves `keptLeafWord`, this wave does not):
+**If #166 wave 8 (run 348) lands first** (Order A of R81 either way: wave 8 moves `keptLeafWord`, this wave does not):
 - `server/src/archivedExpiry.ts`: wave 8's Task 1 deletes `KEPT_LEAF_WORDS`, `KeptLeafWord` and `keptLeafWord`, re-points `expireLeafKept` at `leafKeptWord` and adds `leafKeptWord, type LeafKeptWord` to the file's one `../../shared/api.js` import. This plan's Task 3 adds `type LcRefusalToken` to that same import (its block's anchor is the import's three lines): re-point it to the merged import, keeping both names. No block of this plan touches the word half's lines.
-- `server/test/containment-refuted-word.test.ts`: wave 8's Task 6 retitles the shared describe to "the parsers read it as a failure: the reclaim parser as stuck, the expiry parser as resumable", retitles its reclaim `it`, flips the reclaim assertion, and adds a four-line comment above the describe saying `parseExpireResult`'s case "below" is workspace-lifecycle's and left as found. This plan's Task 3 removes the expire `it` (block anchored on that `it`'s three lines and the line before) and appends its own describe at the foot: both are by content and survive the retitle. Then, as the SECOND lander (mail 4202: CCR-15's consent to edit exactly these lines of wave 8's), make the shared describe speak of the reclaim parser only — its title (for example "the reclaim parser reads it as a stuck failure"), and wave 8's comment without its `parseExpireResult` sentence — and put the file header's last sentence (Task 3's block, "Until the reclaim side classes it … wave 8's `stuck` class changes that pin on purpose") in the past tense: both parsers now class it `stuck`. Add, in this wave's describe, `expect([EXPIRE_STUCK_WORD]).toEqual([...CHILD_RECLAIM_STUCK_TOKENS]);` (importing `CHILD_RECLAIM_STUCK_TOKENS` from `../src/coord/childReclaim.js`), so the two lanes' stuck word is held equal — one class, two carriers (ruling B: never re-listed). Wave 8's Task 8 text still expects this `parseExpireResult` case to read `resumable: true`; the coordinator tells CCR-15 (the mail 4200/4202 thread).
+- `server/test/containment-refuted-word.test.ts`: wave 8's Task 6 retitles the shared describe to "the parsers read it as a failure: the reclaim parser as stuck, the expiry parser as resumable", retitles its reclaim `it`, flips the reclaim assertion, and adds a four-line comment above the describe saying `parseExpireResult`'s case "below" is workspace-lifecycle's and left as found. This plan's Task 3 removes the expire `it` (block anchored on that `it`'s three lines and the line before) and appends its own describe at the foot: both are by content and survive the retitle. Then, as the SECOND lander (mail 4202: #166's consent to edit exactly these lines of wave 8's), make the shared describe speak of the reclaim parser only — its title (for example "the reclaim parser reads it as a stuck failure"), and wave 8's comment without its `parseExpireResult` sentence — and put the file header's last sentence (Task 3's block, "Until the reclaim side classes it … wave 8's `stuck` class changes that pin on purpose") in the past tense: both parsers now class it `stuck`. Add, in this wave's describe, `expect([EXPIRE_STUCK_WORD]).toEqual([...CHILD_RECLAIM_STUCK_TOKENS]);` (importing `CHILD_RECLAIM_STUCK_TOKENS` from `../src/coord/childReclaim.js`), so the two lanes' stuck word is held equal — one class, two carriers (ruling B: never re-listed). Wave 8's Task 8 text still expects this `parseExpireResult` case to read `resumable: true`; the coordinator tells #166 (the mail 4200/4202 thread).
 - `server/src/watch.ts`: wave 8 edits the child-reclaim arms and the file's imports; this plan's three `watch.ts` blocks are the dead-coordinator act's deps, the expiry pass's feed call and two import lines. Merge keeps both sides.
 - `server/test/archived-expiry-policy.test.ts`: wave 8's Step 4 (d) re-points that file's `keptLeafWord` import; this plan's blocks there touch no import.
 
-**If this wave lands first:** wave 8 is the second lander, and mail 4202 says it writes the shared describe reclaim-only itself (CCR-15 tells quiet-prairie): its planned title "… the expiry parser as resumable" and its comment's "`parseExpireResult`'s, below, is workspace-lifecycle's and is left as found" would otherwise merge false, silently — wave 8's own "leave its version too" keeps its replay working, so nothing reds. Wave 8 then also adds the equality assertion above, and reads `parseExpireResult`'s case as `stuck`, in this wave's describe. The coordinator carries this paragraph to CCR-15 with the brief.
+**If this wave lands first:** wave 8 is the second lander, and mail 4202 says it writes the shared describe reclaim-only itself (#166 tells quiet-prairie): its planned title "… the expiry parser as resumable" and its comment's "`parseExpireResult`'s, below, is workspace-lifecycle's and is left as found" would otherwise merge false, silently — wave 8's own "leave its version too" keeps its replay working, so nothing reds. Wave 8 then also adds the equality assertion above, and reads `parseExpireResult`'s case as `stuck`, in this wave's describe. The coordinator carries this paragraph to #166 with the brief.
 
 ## Deviations found
 
 Named by slug, in the order the brief's numbers are written against them (the callout at the top). Each reaches the spec by its effect — §5.3's and §5.4's "As wave 6 closes the lane" and §12 (Task 11) — one short sentence each, no number spelled there.
 
-- **D-4617** — `expire-documents-say-crumb` (Task 1) — `ws-expire`'s own `failed` documents carry CCR-15's `crumb` (`false` before its breadcrumb, `true` on its resumed arm, no key over an unreadable breadcrumb), where CCR-15 wave 7 left `_ws_expire_locked` unedited and keyless (R72); the crumb test's ws-expire describe follows, and the `_WS_RCL_CRUMB` comment above `_ws_reclaim_failed_json` is corrected too — OUTSIDE `_ws_expire_locked`, so wider than ruling A's "inside `_ws_expire_locked` ONLY" (comment only, droppable, CCR-15's consent owed). Fix round 1 (review 381, F7): the `_WS_RCL_CRUMB` comment edit was narrowed to the consented sentence (CCR-15 4208, accepted in 4214), so the comment is corrected in that one sentence only.
+- **D-4617** — `expire-documents-say-crumb` (Task 1) — `ws-expire`'s own `failed` documents carry #166's `crumb` (`false` before its breadcrumb, `true` on its resumed arm, no key over an unreadable breadcrumb), where #166 wave 7 left `_ws_expire_locked` unedited and keyless (R72); the crumb test's ws-expire describe follows, and the `_WS_RCL_CRUMB` comment above `_ws_reclaim_failed_json` is corrected too — OUTSIDE `_ws_expire_locked`, so wider than ruling A's "inside `_ws_expire_locked` ONLY" (comment only, droppable, #166's consent owed). Fix round 1 (review 381, F7): the `_WS_RCL_CRUMB` comment edit was narrowed to the consented sentence (#166 4208, accepted in 4214), so the comment is corrected in that one sentence only.
 - **D-4618** — `an-unreadable-breadcrumb-stays-keyless` (Task 1) — a `probe-unmeasured` over a `.reaping` that stands but cannot be read carries no `crumb` (as `ws-reclaim`'s does), though ruling A asked `true` of "the resumed arm": neither arm can be told there, so the server reads `main`'s word rule and lists it final until a restart; §12 says so (question (p)).
 - **D-4619** — `crumb-false-audits-afresh-whatever-the-word` (Task 2) — `parseExpireResult` reads `crumb` after the word: `false` is `restart` for every word — a fresh `probe-unmeasured`, which `main` read final, and a fresh `pin-failed` or `tombstone-unwritable`, which it read resumable — and `true` is resumable, a resumed `probe-unmeasured` among them; absent or non-boolean falls back to `main`'s word rule (ruling A, R76's order).
 - **D-4620** — `a-fresh-pin-failure-audits-afresh` (Task 2, Task 5) — ruling D called the attached HEAD's `pin-failed` "resumable"; under ruling A's `crumb:false` a current server reads it `restart` (an older ccd's keyless document stays resumable); both end in a fresh audit before any act (question (l)).
 - **D-4621** — `the-restart-row-names-no-cause` (Task 2) — the `restart` feed row's title and body say ccd stopped before the attempt started anything, not that the branch changed inside the lock: a fresh `pin-failed` is a restart too.
-- **D-4622** — `the-expiry-stuck-word-is-typed-against-l0` (Task 3) — the expiry lane reads `containment-refuted` through `EXPIRE_STUCK_WORD`, typed `Extract<LcRefusalToken, 'containment-refuted'>`, because L1 `archivedExpiry.ts` cannot import CCR-15 wave 8's set in L3 `coord/childReclaim.ts`; a test holds the two equal once both exist.
-- **D-4623** — `a-stuck-expiry-rides-the-failing-word` (Task 3) — a stuck entry is an internal report kind and rides the wire as `failing`, with its own sentence: no new `ExpiryAttention.kind`, no `shared/api.ts` or PWA edit (CCR-15's R77: no new chip word).
+- **D-4622** — `the-expiry-stuck-word-is-typed-against-l0` (Task 3) — the expiry lane reads `containment-refuted` through `EXPIRE_STUCK_WORD`, typed `Extract<LcRefusalToken, 'containment-refuted'>`, because L1 `archivedExpiry.ts` cannot import #166 wave 8's set in L3 `coord/childReclaim.ts`; a test holds the two equal once both exist.
+- **D-4623** — `a-stuck-expiry-rides-the-failing-word` (Task 3) — a stuck entry is an internal report kind and rides the wire as `failing`, with its own sentence: no new `ExpiryAttention.kind`, no `shared/api.ts` or PWA edit (#166's R77: no new chip word).
 - **D-4624** — `stuck-stands-through-a-restart` (Task 3) — a `restart` under a stuck entry keeps the entry, its instant and the four-hour cadence, where wave 5 lets a restart end a standing entry (ruling B: until an attempt completes or the archive changes).
 - **D-4625** — `a-terminal-verdict-outranks-stuck` (Task 3) — a terminal refusal, a failure ccd says will not resume and a composition error replace a stuck entry (ruling B names kept and failing as outranked; R77: terminal outranks stuck).
 - **D-4626** — `a-recurring-restart-climbs-the-shared-ladder` (Task 4) — a `restart` counts on the shared failure run (backed off, listed after the hour), the learn after it carries the run and its report, the verb's run is reset, and it never reaches the persistent tier (ruling C, argued: its sentence would be false).
@@ -3624,9 +3624,9 @@ Named by slug, in the order the brief's numbers are written against them (the ca
 
 Lettered to continue the programme ledger's own (a)–(k). The coordinator ruled (l), (m), (n) and (p) on 2026-10-11, before dispatch; none of them loosens a gate.
 
-- **(l) Ruled: the attached HEAD's fresh `pin-failed` is audited afresh** (ruling A's `crumb:false`, as this plan has it). Nothing had started, so a fresh audit is the truer reading, Task 4 counts it, and it matches CCR-15's R76, which reads a pre-breadcrumb `pin-failed` as not resumable on the reclaim side. Ruling D's "(resumable)" was the word-only reading of wave 5's lens; D's ccd half stands as Task 5 pins it: the act ends at the PIN as `pin-failed`, never `state-changed`. An older ccd's keyless document still reads resumable (Task 2's fallback). Task 2 gains no arm.
+- **(l) Ruled: the attached HEAD's fresh `pin-failed` is audited afresh** (ruling A's `crumb:false`, as this plan has it). Nothing had started, so a fresh audit is the truer reading, Task 4 counts it, and it matches #166's R76, which reads a pre-breadcrumb `pin-failed` as not resumable on the reclaim side. Ruling D's "(resumable)" was the word-only reading of wave 5's lens; D's ccd half stands as Task 5 pins it: the act ends at the PIN as `pin-failed`, never `state-changed`. An older ccd's keyless document still reads resumable (Task 2's fallback). Task 2 gains no arm.
 - **(m) Ruled: a stuck entry stands through a `restart`.** Ruling B's "until an attempt completes or the archive changes" governs. A restart says nothing about whether the leaf that refused containment is gone, and an entry that stays listed is never the unsafe direction.
 - **(n) Ruled: `flock-unavailable` is final for a row with no standing entry**, as planned. A stuck or tier entry keeps its place, and the feed row says the halt. The process already halts every act on that answer; lifting it after a delay would loosen a guard.
-- **(o) CCR-15's consent** for two edits in its files: the `_WS_RCL_CRUMB` comment in `ccd/ccd` (Task 1, block 6, comment only) and `ccd-child-reclaim-crumb.test.ts`'s ws-expire describe (Task 1). The coordinator has asked for it; the dispatch brief carries the answer. If the comment edit is refused, Task 1 drops block 6 and CCR-15 owns the stale sentence. The describe must change with Task 1's behaviour, so a refusal there would come with CCR-15's own wording, which the brief carries. Mail 4202 (CCR-15, answering 4200) agreed the third edit: moving `parseExpireResult`'s case in `containment-refuted-word.test.ts` (Task 3), with the second lander making the shared describe reclaim-only. Wave 8 touches nothing under `ccd/`, so the `ccd/ccd` restamp is this wave's alone.
+- **(o) #166's consent** for two edits in its files: the `_WS_RCL_CRUMB` comment in `ccd/ccd` (Task 1, block 6, comment only) and `ccd-child-reclaim-crumb.test.ts`'s ws-expire describe (Task 1). The coordinator has asked for it; the dispatch brief carries the answer. If the comment edit is refused, Task 1 drops block 6 and #166 owns the stale sentence. The describe must change with Task 1's behaviour, so a refusal there would come with #166's own wording, which the brief carries. Mail 4202 (#166, answering 4200) agreed the third edit: moving `parseExpireResult`'s case in `containment-refuted-word.test.ts` (Task 3), with the second lander making the shared describe reclaim-only. Wave 8 touches nothing under `ccd/`, so the `ccd/ccd` restamp is this wave's alone.
 - **(p) Ruled: an unreadable breadcrumb's `probe-unmeasured` stays keyless**, as `ws-reclaim`'s does. ccd defines `true` as "printed past the act's breadcrumb", which it cannot claim of a `.reaping` it cannot read, and the server then reads `main`'s word rule. That holds only for a breadcrumb that turns unreadable between the act's audit and the in-lock fork (review 381, F9): one already unreadable at the lane's audit makes the audit answer `unmeasured` (exit 1): on a learned row that is read as `audit-failed`, backed off and listed after the hour; on a row not yet learned (every row after a server restart, and any but a stuck one after a `restart` answer) `learnExpiry` lists it at once as a non-final `failing` ("its expiry could not be learned"); neither is final, and nothing is deleted (fix round 2, R7). In that window the row is listed final, nothing deleted, asked again after a restart or a new archive. §12 states it as the expiry lane's one fail-safe residual. Whether this rare shape should rather be retried on the persistent tier (the operator's standing preference for tolerance over freezing) is the operator's question; answering it is a later change, not this wave's.
 - **Still open from earlier waves, listed in the spec's §12:** (b) the archive-confirm copy, (f) an abandoned programme's row, (g) F4's two halves, (i) the life of a kept-leaf entry, (j) both directions of the in-lock branch check, and wave 2's three (the PR sheet's "Archive now", a real worktree check in remote mode, L5's sentence).

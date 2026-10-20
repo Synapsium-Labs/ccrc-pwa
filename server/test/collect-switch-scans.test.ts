@@ -1,4 +1,4 @@
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's final re-read, read as TEXT. These are the
+// #166 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's final re-read, read as TEXT. These are the
 // orderings a type cannot hold:
 //   - nothing is awaited from the final listing's answer to the argv, the latch, the reads and the resolution included;
 //   - the control and identity reads stand after the job's last await;

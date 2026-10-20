@@ -68,7 +68,7 @@ _(allocated from `POST /api/ledger/deviations` via `ccrc-api ledger allocate`, 2
   worktrees device. Closed by Task 11's `WORKTREES_ROOT` df arm.
 - **D-996** (spec G-2) — `ccrc-pwa` has no `graphify-out` ignore rule; 5 live worktrees. Closed by
   Task 4's exclude writer.
-- **D-997** (spec G-3) — graphify skill drift invisible (absent `.claude-dev0`/`.claude-glm`, no
+- **D-997** (spec G-3) — graphify skill drift invisible (absent `.claude-lab0`/`.claude-alt1`, no
   doctor check). Closed by Tasks 3 + 11.
 - **D-998** — census vocabulary extended beyond spec §C.3: `skipped-budget` (O2), `skipped-audit`
   (O5), pass status `paused` (O4). The spec's list predates the O-rulings.
@@ -314,7 +314,7 @@ import fs from 'node:fs'; import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-graphify-skill.sh');
-const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
 let home: string; let pkg: string;
 const skill = (d: string, ...rest: string[]) => path.join(home, d, 'skills', 'graphify', ...rest);
 
@@ -435,7 +435,7 @@ for dir in "${homes[@]}"; do
   [[ -d "$dir" ]] || continue
   mkdir -p "$dir/skills" 2>/dev/null || { rc=1; continue; }
   skills_real="$(realpath "$dir/skills" 2>/dev/null)" || { rc=1; continue; }
-  # Two rostered homes symlink skills/ into one directory (.claude-gpt/.claude-kimi
+  # Two rostered homes symlink skills/ into one directory (.claude-gpt/.claude-alt2
   # -> ~/.claude/skills on the reference fleet): write each REAL directory once.
   [[ -n "${seen_skills[$skills_real]:-}" ]] && continue
   seen_skills[$skills_real]=1
@@ -1454,7 +1454,7 @@ function graphifyHealthy(home: string): void {
   writeFileSync(join(venvBin, 'graphify'),
     '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
-  for (const d of ['.claude', '.claude-personal']) {
+  for (const d of ['.claude', '.claude-home']) {
     const s = join(home, d, 'skills', 'graphify');
     mkdirSync(s, { recursive: true });
     writeFileSync(join(s, '.graphify_version'), '0.9.9');
@@ -1476,10 +1476,10 @@ describe('ccrc doctor: graphify', () => {
   });
   it('FAILs naming the home when a rostered skill stamp is missing (D-997)', () => {
     const home = healthy('ccrc-doctor-gfx-drift-'); graphifyHealthy(home);
-    rmSync(join(home, '.claude-personal', 'skills', 'graphify'), { recursive: true });
+    rmSync(join(home, '.claude-home', 'skills', 'graphify'), { recursive: true });
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^FAIL graphify:/);
-    expect(line).toContain('.claude-personal');
+    expect(line).toContain('.claude-home');
   });
   it('WARNs on version drift between engine and pin', () => {
     const home = healthy('ccrc-doctor-gfx-ver-'); graphifyHealthy(home);
@@ -1629,14 +1629,14 @@ are appended here with ledger-allocated numbers.)_
 
 ## Task 0 findings
 
-Measured 2026-08-28 on `openclaw` (live fleet box), read-only. Full commands + raw output:
+Measured 2026-08-28 on `<fleet-host>` (live fleet box), read-only. Full commands + raw output:
 `.superpowers/sdd/2026-08-28-graphify-fleet-integration/task-0-report.md`.
 
 **Resolver verdict: CONFIRMED.** Chain `<id>.hookstate.json` (pid) → `<id>.wrapper` →
 `_ccrc_cfg_dir` (`~/.ccrc/accounts.sh`) → `<cfg>/sessions/<pid>.json` resolved for 6/6 fresh
 (mtime < 30 min) registry entries — the sessions actually live at measurement time, out of 23
 total registry entries (17 stale, 3 of which show `exists=NO`, expected for dead sessions). Cross-
-checked 1 of the 6 (`claude-rp-llm`) against ccd's own tmux pane-pid derivation
+checked 1 of the 6 (`claude-project-j`) against ccd's own tmux pane-pid derivation
 (`ccd/ccd:10492-10493`, one `tmux list-panes` call): pid and resulting status-file path matched
 byte-for-byte. `<id>.wrapper` is confirmed a genuine registry field (present in the field-suffix
 enumeration `ls ~/.cc-sessions/ | sed 's/^[^.]*\.//' | sort -u`); no substitute derivation was
@@ -1644,9 +1644,9 @@ needed. **R2 gap: none.** The resolver touches only `<id>.hookstate.json`, `<id>
 `<id>.workdir`, informational-only), and the live status file under the wrapper home's `sessions/`
 — entirely inside R2's set. Task 9 needs no R2 extension.
 
-**Hook inventory (all 9 repos: `claude-skills`, `custom-tools`, `data-internal`,
-`expoAI-assistant`, `orchard-api-new-ts`, `intake-platform`, `OpenClawHetzner`, `rp-llm`,
-`synapsium-platform`):**
+**Hook inventory (all 9 repos: `project-v`, `project-d`, `project-e`,
+`project-h`, `orchard-api-new-ts`, `project-n`, `project-c`, `project-j`,
+`project-k`):**
 
 | Repo | post-commit | post-checkout | Wholly graphify-gen? | `_PINNED` interpreter |
 |---|---|---|---|---|

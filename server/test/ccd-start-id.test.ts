@@ -53,14 +53,14 @@ describe('ccd start — the one-argument id form', () => {
   it('starts the id it was given whole, without re-deriving one', () => {
     // Kills the mutant that still runs `_id "$1" "$2"` on a single argument:
     // that starts `<id>-` (or dies), never the row the operator named.
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a-expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a-project-h`);
     expect(r.code).toBe(0);
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
-    expect(r.stdout).toContain('started claude-a-expoAI-assistant (resume)');
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
+    expect(r.stdout).toContain('started claude-a-project-h (resume)');
     // A workspace id (`<project>-<slug>`, no wrapper prefix) is the case the
     // two-argument form cannot express at all.
-    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
+    expect(h.reg('claude-a-project-h', 'wrapper')).toBe('claude-d');
   });
 
   it('refuses a single argument it has no row for, and says how to create one', () => {
@@ -90,25 +90,25 @@ describe('ccd start — the one-argument id form', () => {
 
 describe('ccd start — the registry account wins over the argument', () => {
   it('leaves wrapper alone and warns when the two-argument form disagrees', () => {
-    // THE INCIDENT, exactly: auto-swap moved claude-a-expoAI-assistant to
+    // THE INCIDENT, exactly: auto-swap moved claude-a-project-h to
     // claude-d; the operator typed the account off the board back in; the
     // unconditional `_reg_set wrapper` pointed the row at a config dir that
     // does not hold the transcript. Kills the mutant that keeps the write.
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a project-h`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
+    expect(h.reg('claude-a-project-h', 'wrapper')).toBe('claude-d');
     expect(r.stderr).toContain('lives on claude-d, not claude-a');
-    expect(r.stderr).toContain('ccd swap claude-a-expoAI-assistant claude-a');
+    expect(r.stderr).toContain('ccd swap claude-a-project-h claude-a');
     // And it really started — a refusal here would strand the row.
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
   });
 
   it('does not warn when the argument agrees with the row', () => {
     // Kills the mutant that warns unconditionally, which teaches the operator
     // to ignore the one warning that matters.
-    seedRow('claude-a-expoAI-assistant', 'claude-a', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-a', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a project-h`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('warn');
   });
@@ -136,10 +136,10 @@ describe('ccd start — the registry account wins over the argument', () => {
 
 describe('ccd enable', () => {
   it('takes the id form too — after §3.1 the two verbs are one act', () => {
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_enable claude-a-expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_enable claude-a-project-h`);
     expect(r.code).toBe(0);
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
   });
 
   it('keeps its own usage line rather than borrowing start\'s', () => {
