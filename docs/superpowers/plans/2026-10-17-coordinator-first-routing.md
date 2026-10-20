@@ -1194,7 +1194,8 @@ task folds is one of them or sits beside them.
   `sweepMail` consumes each answer through `FleetWatcher.landed`: a refused `markDelivered`, `markIngested`, `backOff`,
   `noteGate`, `rejectDelivery`, `parkDelivery`, `holdParked` or `baselineParkBox` is logged (`mail sweep: <writer>
   refused on delivery <id> (row is <state>)`) and the step that assumed it is skipped (the park's sender mail and
-  escalation, the ceiling's rejected mail, the replay count). `wakeParked`, `markParkEscalated` and
+  escalation, the ceiling's rejected mail, the replay count, and the `draft-present` blocked notice, now sent only
+  after its back-off lands). `wakeParked`, `markParkEscalated` and
   `absorbParkEscalation` refuse in the ordinary course, so their `changed` is read without a log. No other behaviour
   changes: every SQL predicate is the one it replaces, and the bound `lastError` values are the strings that were
   interpolated.
@@ -1202,7 +1203,7 @@ task folds is one of them or sits beside them.
 **Files.** `shared/api.ts` (`outstandingDeliveryStates`, `OUTSTANDING_DELIVERY_STATES`); `server/src/coord/store.ts`
 (`writeDeliveries`, `writeDelivery`, `DeliveryWrite`, `DeliveryBulkWrite`, the nineteen writers, the derived
 `OUTSTANDING_STATES_SQL`, the reader walk); `server/src/watch.ts` (`landed` and its call sites in `sweepMail` and the
-brief pass); `server/test/mail-deliveries-writer.test.ts` (new); `server/test/mail-sweep.test.ts` (two race tests);
+brief pass); `server/test/mail-deliveries-writer.test.ts` (new); `server/test/mail-sweep.test.ts` (four race tests);
 `server/test/mail-hardening.test.ts` (the census as one writer and no `void`); `server/test/single-definition.test.ts`
 (the negative-form count is exact); `server/test/child-reclaim-mail-store.test.ts` and `hibernate-sweep.test.ts` (the
 new result shapes); `CLAUDE.md` (the "Open on `main`" paragraph).
@@ -1216,9 +1217,13 @@ and leaves the row as it was; `noteGate` on a rejected row the same; `markDelive
 `rejectDelivery` on an acked row; the park writers refuse a delivered row and a terminal one; an absent row answers
 `absent`; every one-row writer answers `{changed: true, state}` on a live row; `cancelDeliveriesTo` answers
 `{changed: n}`; a member added to the terminal list leaves the outstanding list; `store.ts` holds exactly one
-`UPDATE mail_deliveries` in code and no hand-typed outstanding literal. `mail-sweep.test.ts`: an ack landing mid-send
-refuses the `enter-ignored` park, so the sender gets no `mail parked` mail and the refusal is logged; an ack landing
-before a `draft-present` back-off leaves the row with no back-off and the refusal logged.
+`UPDATE mail_deliveries` in code, still one `UPDATE` and one `mail_deliveries SET` once string concatenations are
+folded, and no hand-typed outstanding literal. `mail-sweep.test.ts`: an ack landing mid-send refuses the
+`enter-ignored` park, so the sender gets no `mail parked` mail and the refusal is logged; an ack landing before a
+`draft-present` back-off leaves the row with no back-off, pushes the sender no blocked notice and logs the refusal; an
+ack landing after the parked pass read its rows refuses that pass's ceiling reject, and an ack landing during the
+in-flight send of a row past the ceiling refuses the due loop's ceiling reject: in both the sender gets no `mail
+rejected` mail and the refusal is logged.
 
 **Mutation table** (each against the suites named): M1 the guard dropped from `writeDeliveries`; M2 `where` ORed into
 the guard; M3 `OUTSTANDING_STATES_SQL` back to a literal; M4 the derivation no longer removes the terminal states; M5
@@ -1226,8 +1231,13 @@ the guard; M3 `OUTSTANDING_STATES_SQL` back to a literal; M4 the derivation no l
 always; M7 `writeDelivery` never reads the state back; M8 `sweepMail` ignores `parkDelivery`'s refusal; M9 `landed`
 logs nothing; M10 `markAcked`'s replay-ceiling exception dropped; M11 the first park's escalation `.changed` dropped
 (an object is always truthy; held by `brief-landed.test.ts`, where D3's notice has already absorbed the escalation).
-Recorded as equivalent: the parked pass's own `.changed` dropped (M11b), since that pass reads `parkEscalatedAt IS NULL`
-first and nothing else stamps the column between that read and the write.
+Review round: M12 the parked pass's ceiling-reject skip dropped (the sender is mailed `rejected` for an acked row); M13
+the due loop's ceiling-reject skip dropped, the same; M14 the `draft-present` back-off's skip dropped (the blocked
+notice is pushed for an acked row); M15 a writer rewritten as `'UPDATE ' + 'mail_deliveries SET …'` outside the one
+writer (the folded census). Recorded as equivalent: the parked pass's own `.changed` dropped (M11b), since that pass
+reads `parkEscalatedAt IS NULL` first and nothing else stamps the column between that read and the write; and
+`markDelivered`'s skip dropped (M16), since a refused `markDelivered` means the row is terminal, so the
+`bumpReplayCount` that follows refuses too.
 
 **Verify.** `mail-deliveries-writer`, `mail-hardening`, `mail-sweep`, `coord-store`, `brief-landed`, `stall-store`,
 `child-reclaim-mail-store`, `hibernate-sweep`, `single-definition`; `tsc --noEmit -p .` in `server/` and `pwa/`

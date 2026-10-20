@@ -146,6 +146,15 @@ describe('store.ts writes mail_deliveries in exactly one place (D-5997)', () => 
     expect((code.match(/UPDATE mail_deliveries\b/g) ?? []).length).toBe(1);
   });
 
+  it('a split string does not hide a second writer: concatenations collapsed, still one UPDATE and one SET', () => {
+    // `'UPDATE ' + 'mail_deliveries SET ...'` reads as one statement once the
+    // literal joins are folded away, across lines too.
+    const joined = code.replace(/(['"`])\s*\+\s*(['"`])/g, '');
+    expect(joined).not.toBe(code);   // the fold is real: store.ts joins SQL literals
+    expect((joined.match(/UPDATE\s+mail_deliveries\b/g) ?? []).length).toBe(1);
+    expect((joined.match(/\bmail_deliveries\s+SET\b/g) ?? []).length).toBe(1);
+  });
+
   it('the hand-typed outstanding literal is gone', () => {
     expect(code).not.toMatch(/OUTSTANDING_STATES_SQL\s*=\s*["'`]\('queued/);
     expect(code).toMatch(/const OUTSTANDING_STATES_SQL = `\('\$\{OUTSTANDING_DELIVERY_STATES\.join\("','"\)\}'\)`;/);

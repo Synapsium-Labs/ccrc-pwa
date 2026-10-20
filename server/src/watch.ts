@@ -8091,11 +8091,13 @@ export class FleetWatcher {
         // so a repeat of the same refusal does not re-raise — the tray is not
         // a ticker. What stays live across every back-off tick is the strip,
         // via `attempts` on the wire (Task 408).
+        // D-5997: told only once the back-off LANDED — an ack that beat it means
+        // the mail arrived, and its sender hears nothing about a blocked box.
+        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+        if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
         if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
           tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
         }
-        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-        this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id);
       } finally {
         this.mailInFlight.delete(d.toId);
       }
