@@ -111,6 +111,18 @@ describe('spawnSyncGroup: a child that can fork runs in its own process group (s
     expect(gone, 'the helper threw but left the member running').toBe(true);
   });
 
+  it('the stray error carries the child\'s exit status and output, so a nested run\'s own leak report reaches the failure (D-6112)', () => {
+    let msg = '';
+    try {
+      spawnSyncGroup('sh', ['-c', 'sleep 3 >/dev/null 2>&1 & echo nested-out; echo nested-report >&2; exit 4'],
+        { encoding: 'utf8', timeout: 10_000 });
+    } catch (e) { msg = (e as Error).message; }
+    expect(msg).toMatch(/left processes in its group/);
+    expect(msg).toMatch(/status 4/);
+    expect(msg).toContain('nested-out');
+    expect(msg).toContain('nested-report');
+  });
+
   it('a caller that strands a member ON PURPOSE (strays: end): the helper returns, and the member is dead', () => {
     const dir = mkTmp('ccrc-spawngroup-');
     const pidFile = path.join(dir, 'stranded.pid');
