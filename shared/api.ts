@@ -15,11 +15,6 @@ import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
-/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom, below): a member added
- *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
- *  literal union in `shared/` to that. */
-const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
-export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
 
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
@@ -28,12 +23,6 @@ export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_ST
  *  runs on a cached snapshot that predates the field. */
 export type SessionBucket =
   | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
-/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
- *  which `pwa/src/fleet/sortFleet.ts` owns). */
-const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
-  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
-};
-export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
 
 /** The identity triple a registry read either measures or does not:
  *  `uuid`/`wrapper`/`workdir`, together — the fields `server/src/registry.ts`'s
@@ -2253,15 +2242,6 @@ export type ProjectPoolWire =
  * because a banner on no evidence is a banner nobody can act on.
  */
 export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
-/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
- *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
- *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
-const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
-export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
-  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
-export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
-  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
-}
 
 /**
  * The fleet-level pool census, as one frame carries it.
@@ -11894,3 +11874,28 @@ export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
+
+/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
+ * files cite by number. */
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
+ *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
+ *  literal union in `shared/` to that. */
+const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
+export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
+
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
+ *  which `pwa/src/fleet/sortFleet.ts` owns). */
+const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
+  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
+};
+export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
+ *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
+ *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
+const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
+export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
+  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
+export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
+  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}
