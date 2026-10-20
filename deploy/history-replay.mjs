@@ -177,10 +177,16 @@ export function paneRefusal(env) {
 // signal's default action); a
 // driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
 // charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds
-// the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a resume then
-// refuses the changed stream); a process in the run's group that holds no pipe to the driver, whether or not it ignores
-// SIGTERM: close fires at once, the timer is cleared, and it can outlive its leader; if it kept the run's stdout it can
-// still write into the stream after the charge, and a resume then refuses the changed stream; and a group id reused by an
+// the driver (if it inherited the run's stdout, it can still write into the stream after the charge: for a RECORDED run,
+// with its run.json written and its stream renamed to `<name>.jsonl`, a resume then refuses the changed stream; but on the
+// stop path launchRun charges the run and removes its `.part`, and settleLeftover does the same to a leftover it charges, so
+// the escapee's later writes go to an unlinked file that no batch sees, and a resume spawns the job again beside the escapee
+// that is still running; it is not the process that spends, since the Claude Code leader is killed and charged); a process
+// in the run's group that holds no pipe to the driver (on the stop path, one that also ignores SIGTERM; the leftover path
+// settles a driver that was SIGKILLed, where no group signal was sent, so any member that keeps the stream survives): close
+// fires at once, the timer is cleared, and it can outlive its leader; if it kept the run's stdout it can still write into
+// the stream after the charge, with the same two outcomes, a refused resume for a recorded run and a re-spawned job beside
+// it after a stop or a leftover's charge; and a group id reused by an
 // unrelated process after the run's group emptied (the setsid case leaves it empty), which the bound's, the stop's and the
 // timeout's group SIGKILL would then reach: it needs a pid wrap within the grace, and only the registry check, which
 // catches a reuse by our own sibling, stands in the way.
@@ -1028,7 +1034,9 @@ export function spentSoFar(out) {
 // windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
 // says, even if the child lives on), and a grandchild that calls setsid (it escapes every group kill and keeps running, and
 // the bounded wait after the leader's exit, spawnGroup, no longer lets it hold the driver; if it inherited the run's stdout
-// it can still write into the stream after the charge, and a resume then refuses the changed stream). The over-count
+// it can still write into the stream after the charge: a resume refuses the changed stream only for a recorded run, and
+// after a stop or a leftover's charge, which removes the `.part`, its late writes go to an unlinked file that no batch
+// sees, and a resume spawns the job again beside it; the leader, which spends, was killed and charged). The over-count
 // windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s removal (the `.pid`
 // goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
