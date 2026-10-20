@@ -2442,6 +2442,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         pass (21:57:12 to 21:58:28, block 27.5 s). The 21:00 hour's block mean is 28.7 s, level with 20:00, max 50.5 s;
         `coord.db` is 727M. STATUS: fleet and server v0.0.493, newest v0.0.498, stable v0.0.328, intent dev/auto=off,
         backups fleet 185M/server 8951M, disk free fleet 189G/work volume 58G/server 23G, no anomalies.
+      - **22:10 UTC: #1032 merged; the promotion's second full run is dispatched, on v0.0.502.** Mail 7409: #1032 merged
+        as `47f95987c`, `main`'s head, tagged v0.0.502; its review 717 found nothing in code. `stable` (v0.0.328,
+        `c44bea401`) is an ancestor, so the promotion is a fast-forward, and no before-stable item is open. Dispatched:
+        full run 39506481859 on `main` at `47f95987c`. On a green `full-suite` I fast-forward `stable` to it; a red
+        that is a recorded or timing flake gets one job re-run, and any other red is reported first.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
