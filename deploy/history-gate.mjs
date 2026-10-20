@@ -1255,7 +1255,7 @@ const CMD_EDGE = /[A-Za-z0-9_./:=@+-]/;
 const CMD_ALTERNATIVE = /\s(or|OR)\s/;
 /** An `or` standing as a word in any case (D-5789): beside the start, the end or any character that is not a letter,
  *  a digit or `_`. It covers ` or `, `(or`, `or:`, `[or`, `{or`, a quoted "or", `OR:`, `Or`, `oR` and a dash glued to
- *  `or`, and leaves "for", "color", "ORM" and "se\u00f1or" alone. Only the command kind reads it. */
+ *  `or`, and leaves "for", "color", "ORM" and "señor" alone. Only the command kind reads it. */
 const CMD_OR = /(^|[^\p{L}\p{N}_])or(?=[^\p{L}\p{N}_]|$)/iu;
 /** The five tests a COMMAND answer may not pass outside F's own occurrence (D-5789), as one list: an `or` as a word
  *  in any case, a flag token (one or two of any Unicode dash or U+2212 at a word start, then a letter or digit), a
@@ -1314,7 +1314,7 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   an em-dash then `x`); a spaced slash /\s\/\s/; any of `; | & > < ,` or a backtick; or `$(` (D-5789, amending
  *   W2-D63): W2-D64 asks for one exact value, so an answer that carries a further command-shaped piece is not that
  *   command. Costs, as they now stand. Too strict for prose holding a comma, `;`, `|`, `>`, `<`, `&`, a second
- *   code span (`npm run test` followed by (in `server/`)), a negative number or a typographic minus before one,
+ *   code span (`npm run test` (in `server/`)), a negative number or a typographic minus before one,
  *   `or` as a hyphenated word or path segment (`or-tools`, `/or/`, `either/or`, `and/or`), a dash glued to the
  *   next word right after F (unspaced em-dash prose), or a spaced slash (`1 / 2`). Too lenient for an extra
  *   operand, a `sudo` or `VAR=` prefix, and a second command before F separated only by a space, which cannot be

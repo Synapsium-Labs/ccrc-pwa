@@ -3602,7 +3602,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
   describe('review fix round 2: the command rule closes its lenient shapes (D-5789)', () => {
     const cmd = (F: string, a: string) => t7Gate.labelCorrect('command', F, a, pathAt7);
     const F = 'npm run test';
-    // U+2014 em dash, U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2212 minus sign: written as escapes.
+    // U+2014 em dash, U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2212 minus sign: written as the literal characters (checked with od).
     const EM = '—';
     const FULL = '－';
     const TWO_EM = '⸺';
@@ -3622,6 +3622,14 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(cmd(F, `${F} - the whole suite`)).toBe(true);
       expect(cmd(F, `${F} in the dry-run mode`)).toBe(true);
       expect(cmd(F, `${F} ${EM} runs vitest`)).toBe(true);
+    });
+
+    it('CMD_OR is anchored at both ends and by letters, digits and _: an or at the start or end of the text is refused, 2or3, or3 and x_or_y are not an or', () => {
+      expect(cmd(F, `${F} or`), 'or at the end of the text').toBe(false);
+      expect(cmd(F, 'Or `npm run test`'), 'Or at the start of the text').toBe(false);
+      expect(cmd(F, `${F} 2or3`), 'digits around it').toBe(true);
+      expect(cmd(F, `${F} or3`), 'a digit after it').toBe(true);
+      expect(cmd(F, `${F} x_or_y`), 'underscores around it').toBe(true);
     });
 
     it('error kind: the split is still pinned, W2-D63 reads only " or " and " OR " there', () => {
