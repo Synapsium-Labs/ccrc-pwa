@@ -707,8 +707,10 @@ export function spendTokens(facts) {
 // answer, either on a path that is already refusing or after the work is done (writePlain's tmp cleanups; takeLock's
 // stale and tmp removals; the claim's release). Still a raw error and exit 1, each only through a race: prepareOut's
 // checkOut lstat (--out removed between prepareOut's lstat and checkOut's) and its realpath (the same removal, a step
-// later); readPlain's O_NONBLOCK (a regular file swapped for a FIFO between the lstat and the open); and the reads outside
-// --out (/proc, the roster, the release stamp, the wrapper). The marker's read, and HOME's limits row, go through readPlain.
+// later). Not under --out, each answering its own state or refusal: the reads outside --out (/proc, the roster, the
+// release stamp, the wrapper, the gate_code files). readPlain's O_NONBLOCK is reached only through a race too (a regular
+// file swapped for a FIFO between the lstat and the open), but it never exits 1: the open passes and the fstat answers
+// not-regular. The marker's read, and HOME's limits row, go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
