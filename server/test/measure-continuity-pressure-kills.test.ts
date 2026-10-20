@@ -192,8 +192,8 @@ describe('well-formed notifications that are not pressure kills read as non-even
     expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
   });
 
-  // A known non-killed envelope is asked nothing beyond its status: a reminder and a stray second `</task-notification>`
-  // after it are swallowed by the lazy body, and it is still a known non-event.
+  // A known non-killed envelope is asked nothing beyond its status: the lazy body runs past the first closing tag to the
+  // stray second `</task-notification>`, taking the reminder in, and it is still a known non-event.
   it('a known non-killed envelope followed by a reminder and a stray second closing tag stays a known non-event', () => {
     transcript(U1, [row(`${batched('stopped', ['b1', 'b2'])}\n${reminder()}\n</task-notification>`)]);
     expect(read()).toEqual(clean(0, 0, 1));

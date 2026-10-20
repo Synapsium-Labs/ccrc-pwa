@@ -613,8 +613,8 @@ def stage4(ctx):
 # closing tag, and with trailing reminder blocks it is unmeasured, the strict
 # envelope the kill count was read under as Task 4 shipped it (the coordinator's R1
 # ruling). A known quirk kept as at the base (parked, O4): the lazy envelope match
-# lets a killed body swallow a stray second `</task-notification>` and anything
-# before it, so such text can still count a kill.
+# lets a killed body extend past its first closing tag to a stray later
+# `</task-notification>`, taking in what lies between, so such text can still count a kill.
 # The kill rule has its own non-pressure case: a single-task `killed` envelope (one
 # readable status, one readable task id) with exactly one summary element, readable
 # and not the verified pressure reason, and nothing after its closing tag, is read as
@@ -841,9 +841,9 @@ def s6_pressure_comparison(reading, baseline):
 # non-event shapes keep that tolerance; a `killed` envelope does not: one with any
 # trailing reminder block is unmeasured, the strict envelope the kill count was read
 # under as Task 4 shipped it (`trailing` names those blocks). The lazy body match
-# is the base's and is kept as it was (parked, O4): a killed body swallows a stray
-# second `</task-notification>` and anything before it, so such text, with no
-# `trailing` left, can still count a kill. A status or task-id or summary element
+# is the base's and is kept as it was (parked, O4): a killed body can extend past
+# its first closing tag to a stray later `</task-notification>`, so such text, with
+# no `trailing` left, can still count a kill. A status or task-id or summary element
 # is counted by its OPENER (`<status\b`, `<task-id\b`, `<summary\b`, which also
 # counts an attribute and a longer name: the fail-safe direction) as well as by its
 # readable value, so an element the scanner cannot read is never a missing one.
@@ -943,8 +943,8 @@ def s6_pressure_kills(ctx):
                         if envelope.group("trailing"):
                             # The killed arm keeps the strict envelope: trailing reminder blocks
                             # leave it unmeasured, whatever its summary (it only moves readings
-                            # toward unmeasured). The lazy body match, which can swallow a stray
-                            # second closing tag, is the base's and is not asked more (O4).
+                            # toward unmeasured). The lazy body match, which can run past the first
+                            # closing tag to a stray later one, is the base's and is not asked more (O4).
                             file_unmeasured += 1
                             continue
                         if id_openers != 1 or len(ids) != 1:
