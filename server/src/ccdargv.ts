@@ -47,6 +47,10 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
  */
 const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
 
+/** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
+ *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
+const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
+
 /**
  * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
  * flags carry it. Self-asserted by construction — ccd cannot authenticate a
@@ -354,7 +358,7 @@ export const CCD_ARGV = {
    *  `hibernate-verb-dec-and-idempotence` (D-5424)).
    *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
   hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null) =>
-    argv(['hibernate', ...(holdOk === null ? [] : ['--hold-ok', holdOk]), id, ...decFlags(dec)]),
+    argv(['hibernate', ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
