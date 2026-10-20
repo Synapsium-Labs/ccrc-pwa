@@ -394,7 +394,6 @@ export function refusedLine(r: ReleaseWire, nodes: readonly NodeWire[]): string 
   return `Refused by ${by.size} of ${m} node${m === 1 ? '' : 's'}`;
 }
 
-
 /** One move control — Install, Update, Roll back, Ack. FOUR CALL SITES, and what they
  *  share is the styling triple (`size="fit"` on `.settings-move`, in one of two
  *  variants), not the decision: each carries its own label, its own disabled
