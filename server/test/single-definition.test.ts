@@ -7732,7 +7732,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('every marker literal is a SWITCHES row: no const *_MARKER under server/src or shared/ names a marker without one', () => {
     const DEF = /\bconst\s+([A-Z0-9_]*_MARKER)\s*(?::[^=]+)?=\s*(['"])([a-z][a-z0-9-]*)\2/g;
-    const rows = new Set(Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : [])));
+    const rows = new Set<string>(Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : [])));
     expect([...'const X_MARKER = \'x-y\';'.matchAll(DEF)].map((m) => m[3]), 'CONTROL: the pattern sees a definition')
       .toEqual(['x-y']);
     const rowless = ALL.filter((f) => /^(?:server\/src|shared)\//.test(rel(f)))
