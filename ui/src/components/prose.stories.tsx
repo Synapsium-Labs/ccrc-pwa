@@ -119,7 +119,12 @@ export const Structure: Story = {
  *  paragraph) the done item is dimmed and struck just the same, its box on
  *  its first line; that the quote's numbered list stands apart from the
  *  bullets above it while its heading keeps its own top margin; and that the
- *  number inside the warning callout is legible on its tint. */
+ *  number inside the warning callout is legible on its tint.
+ *
+ *  Each box carries the name the app gives it (`aria-label` "done" or "to do",
+ *  `SHARED_COMPONENTS.input` in pwa's `lib/markdown.tsx`): remark-gfm emits it
+ *  with no label, and pwa's markdown-task-label.test.tsx holds this mirror to
+ *  the app's words. */
 export const Lists: Story = {
   args: {
     children: (
@@ -156,33 +161,33 @@ export const Lists: Story = {
           </li>
         </ol>
         <ul className="contains-task-list">
-          <li className="task-list-item"><input type="checkbox" checked disabled /> A finished task.</li>
+          <li className="task-list-item"><input type="checkbox" checked disabled aria-label="done" /> A finished task.</li>
           <li className="task-list-item">
-            <input type="checkbox" disabled /> One still open, whose child is done.
+            <input type="checkbox" disabled aria-label="to do" /> One still open, whose child is done.
             <ul className="contains-task-list">
-              <li className="task-list-item"><input type="checkbox" checked disabled /> The done child.</li>
+              <li className="task-list-item"><input type="checkbox" checked disabled aria-label="done" /> The done child.</li>
               <li className="task-list-item">
-                <input type="checkbox" disabled /> An open child.
+                <input type="checkbox" disabled aria-label="to do" /> An open child.
                 <ul className="contains-task-list">
-                  <li className="task-list-item"><input type="checkbox" disabled /> An open grandchild.</li>
+                  <li className="task-list-item"><input type="checkbox" disabled aria-label="to do" /> An open grandchild.</li>
                 </ul>
               </li>
             </ul>
           </li>
           <li className="task-list-item">
-            <input type="checkbox" checked disabled /> A done parent, whose open child is not struck.
+            <input type="checkbox" checked disabled aria-label="done" /> A done parent, whose open child is not struck.
             <ul className="contains-task-list">
-              <li className="task-list-item"><input type="checkbox" disabled /> Still open.</li>
+              <li className="task-list-item"><input type="checkbox" disabled aria-label="to do" /> Still open.</li>
             </ul>
           </li>
         </ul>
         <p>A loose task list, blank lines between its items:</p>
         <ul className="contains-task-list">
           <li className="task-list-item">
-            <p><input type="checkbox" checked disabled /> A loose item that is done, so dimmed and struck.</p>
+            <p><input type="checkbox" checked disabled aria-label="done" /> A loose item that is done, so dimmed and struck.</p>
           </li>
           <li className="task-list-item">
-            <p><input type="checkbox" disabled /> A loose item still open.</p>
+            <p><input type="checkbox" disabled aria-label="to do" /> A loose item still open.</p>
             <p>Its second paragraph, under the label.</p>
           </li>
         </ul>
