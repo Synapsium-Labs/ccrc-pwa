@@ -139,6 +139,16 @@ describe('a name starts a workspace on the account that was picked', () => {
     expect(screen.getByText('new workspace demo-eng-1234 · branch ws/eng-1234')).toBeInTheDocument();
   });
 
+  it('cuts a long name out of the confirm with an ellipsis, so the account stays in sight', async () => {
+    // jsdom lays nothing out: `browser/name-field.browser.test.tsx` measures the rects; this holds the mechanism.
+    await openAt();
+    await pickDemo();
+    type('Investigate the flaky upload test on the staging runner');
+    const label = start(/^Start Investigate/).querySelector('span');
+    expect(label).toHaveClass('truncate');
+    expect(label).toHaveClass('min-w-0');
+  });
+
   it('toasts the title the box gave it, and closes', async () => {
     vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' });
     const { onClose } = await openAt();

@@ -481,7 +481,7 @@ export function NewSessionSheet({
             disabled={project === null || starting || preview.kind === 'refused'}
             onClick={() => void start()}
           >
-            <span className="min-w-0 truncate">
+            <span className={NAME_FIELD_CLASS.confirmLabel}>
               {starting
                 ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
                 : project === null

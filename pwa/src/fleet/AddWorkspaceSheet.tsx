@@ -108,11 +108,17 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
       eyebrow={ADD_WORKSPACE_TEXT.eyebrow}
       title={`Add a workspace to ${name}`}
       footer={
-        <div className={QC_ACTIONS}>
+        // `QC_ACTIONS` is a grid with one `auto` column, which grows to its widest child's min-content: a long name's
+        // confirm would push past the panel (measured at 360 and 390: the button ran to 632px). `minmax(0, 1fr)` is
+        // the column that never sizes past its container, the `.acct-list` rule's own fix (D-5570).
+        <div className={`${QC_ACTIONS} grid-cols-[minmax(0,1fr)]`}>
           <Button variant="primary" disabled={preview.kind === 'refused' || adding} onClick={() => void submit()}>
-            {adding
-              ? ADD_WORKSPACE_TEXT.adding
-              : confirmLabel(preview, { empty: ADD_WORKSPACE_TEXT.empty, named: (short) => `Add ${short}` })}
+            {/* A long name is cut with an ellipsis, never wrapped: the confirm stays one line and whole. */}
+            <span className={NAME_FIELD_CLASS.confirmLabel}>
+              {adding
+                ? ADD_WORKSPACE_TEXT.adding
+                : confirmLabel(preview, { empty: ADD_WORKSPACE_TEXT.empty, named: (short) => `Add ${short}` })}
+            </span>
           </Button>
           <Button variant="ghost" onClick={onClose}>{ADD_WORKSPACE_TEXT.cancel}</Button>
         </div>

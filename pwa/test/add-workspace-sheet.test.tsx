@@ -202,6 +202,24 @@ describe('every refusal keeps the sheet open and the text in the field', () => {
   });
 });
 
+describe('a long name cannot widen the confirm', () => {
+  // jsdom lays nothing out; `browser/name-field.browser.test.tsx` measures the rects in Chrome (the confirm ran to 632px
+  // at a 390px phone before this). These two hold the mechanism: a column that never sizes past the panel, and a label
+  // that is cut with an ellipsis instead of wrapping.
+  it('pins the footer to a minmax(0, 1fr) column', () => {
+    mount(props());
+    expect(confirm().parentElement).toHaveClass('grid-cols-[minmax(0,1fr)]');
+  });
+
+  it('cuts the confirm\'s label instead of wrapping it', () => {
+    mount(props());
+    type('Investigate the flaky upload test on the staging runner');
+    const label = confirm(/^Add Investigate/).querySelector('span');
+    expect(label).toHaveClass('truncate');
+    expect(label).toHaveClass('min-w-0');
+  });
+});
+
 describe('in flight', () => {
   it('stands the confirm down and says what it is doing', () => {
     mount(props({ adding: true }));

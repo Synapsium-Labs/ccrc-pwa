@@ -32,6 +32,8 @@ export const NAME_FIELD_CLASS = {
   stack: 'grid gap-2',
   hint: 'm-0 text-meta text-ink-secondary',
   refusal: 'm-0 text-ui text-status-dead-text',
+  /** A confirm's label, cut with an ellipsis instead of wrapping: a long name must not push its account out of sight. */
+  confirmLabel: 'min-w-0 truncate',
 } as const;
 
 const BADGE: Record<Exclude<Lookup, 'none'>, { text: string; tone: string }> = {
