@@ -149,7 +149,17 @@ const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 // starts with `0` (a reset, bare or combined) via a negative lookahead, so a
 // reset — combined or not — always ends the span instead of being absorbed
 // by it, and the terminator itself accepts the combined form.
-const DIM_SPAN = /\x1b\[2m(?:\x1b\[(?!0[;m])[0-9;]*m|[^\x1b])*?\x1b\[0[0-9;]*m/g;
+//
+// D-5910: every dim ENCODING is a dim run, not only the bare `\e[2m…\e[0m` pair
+// (corpus `test/fixtures/panes/box/`, held by `send-box-corpus.test.ts`). The
+// open also takes a combined code that turns dim on with other attributes
+// (`\e[2;3m`), and one that resets first (`\e[0;2m`, D-6006: tmux writes any
+// attribute removal as a reset, so dim after a bold cell captures that way).
+// Its first parameters must be `0`, `1`, then `2`, so a truecolour `38;2;…`
+// is never read as dim. The close also takes the dim-off `\e[22m` (bare or
+// combined), which the interleaved alternative excludes for the same reason it
+// excludes a reset: a close must end the run, never be absorbed by it.
+const DIM_SPAN = /\x1b\[(?:0;)?(?:1;)?2(?:;[0-9;]*)?m(?:\x1b\[(?!0[;m]|22[;m])[0-9;]*m|[^\x1b])*?\x1b\[(?:0[0-9;]*|22(?:;[0-9;]*)?)m/g;
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.

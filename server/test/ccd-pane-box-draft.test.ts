@@ -18,7 +18,9 @@ import { spawnSync } from 'node:child_process';
 // `server/package.json` is `"type":"module"`, so `require` is NOT defined in
 // this scope — a CommonJS read here throws ReferenceError and the mutation
 // guard at the bottom of this file asserts nothing at all.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 // The OTHER reader. "One reader for the box row" is this file's whole thesis,
 // and until now it was asserted only in prose: the parity table below makes it
@@ -152,6 +154,15 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
       `❯ ${ESC}[2mghost${ESC}[0;1mBOLD REAL${ESC}[0m`, 'BOLD REAL'],
     ['an empty coloured box is empty',
       `${ESC}[39m❯${NBSP}`, ''],
+    // D-5910: the widened encodings still end at the FIRST close, never past it.
+    ['a combined dim open (\\e[2;3m) is a dim run that a combined reset ends',
+      `${ESC}[39m❯${NBSP}${ESC}[2;3mghost${ESC}[0;1mREAL${ESC}[0m`, 'REAL'],
+    ['a reset-first dim open (\\e[0;2m) is a dim run that a dim-off (\\e[22m) ends',
+      `${ESC}[39m❯${NBSP}${ESC}[0;2mghost${ESC}[22mREAL${ESC}[0m`, 'REAL'],
+    ['a combined dim-off (\\e[22;1m) ends the run, it is not absorbed by it',
+      `${ESC}[39m❯${NBSP}${ESC}[2mghost${ESC}[22;1mREAL${ESC}[0m`, 'REAL'],
+    ['a truecolour code holding a 2 is not a dim open',
+      `❯ ${ESC}[38;2;10;20;30mreal colour${ESC}[0m`, 'real colour'],
   ];
 
   for (const [name, row, expected] of ROWS) {
@@ -179,4 +190,31 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     expect(calls, 'all five synthesized-action guards use the whole-box reader').toHaveLength(5);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
+});
+
+/**
+ * D-5910: the box reader's corpus (`fixtures/panes/box/`, recorded and described in `send-box-corpus.test.ts`) holds
+ * one verdict column per caller. This is ccd's: `_pane_box_draft` answers only the last marker row, so its column is
+ * that row's text, and `null` where a capture asks it nothing (no `absent` verdict, no multi-line read, nothing below
+ * the marker). Its dim strip must take every encoding `DIM_SPAN` takes, or a placeholder reads as a draft here and
+ * every synthesized ccd action refuses an idle box for ever.
+ */
+describe("ccd's `_pane_box_draft` answers its column on every capture (D-5910)", () => {
+  const boxDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', 'box');
+  const column = (JSON.parse(readFileSync(path.join(boxDir, 'verdicts.json'), 'utf8')) as {
+    captures: Record<string, { _pane_box_draft: string | null }>;
+  }).captures;
+
+  it('the column covers the whole corpus', () => {
+    const files = readdirSync(boxDir).filter((f) => f.endsWith('.ansi')).sort();
+    expect(Object.keys(column).sort()).toEqual(files);
+    expect(Object.values(column).filter((v) => v._pane_box_draft !== null).length).toBeGreaterThanOrEqual(10);
+  });
+
+  for (const [name, verdict] of Object.entries(column)) {
+    if (verdict._pane_box_draft === null) continue;
+    it(name, () => {
+      expect(draft(readFileSync(path.join(boxDir, name), 'utf8'))).toBe(verdict._pane_box_draft);
+    });
+  }
 });

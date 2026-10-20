@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=84e7415fa9bd328d3231fb974cf95d1dc9e4537330dcdf872272b2f6b4fc9eff
+# ccrc:generated 1 sha256=ec918fbcf7be0eca1ee5fe1d66942815e5fde0b66e66ab589655a1e954979268
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21729,8 +21729,15 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
 # is needed (and ERE has none): the interleaved alternative cannot match a reset
 # and `[^\e]` cannot match an ESC, so the match physically cannot run past the
 # first terminator.
+#
+# D-5910 widens both ends to `DIM_SPAN`'s encodings, held by the shared corpus
+# (server/test/fixtures/panes/box/, ccd's verdict column in
+# ccd-pane-box-draft.test.ts). The open is any code whose leading parameters are
+# `0;`, `1;` then `2` (`\e[2;3m`, and `\e[0;2m` after a bold cell, D-6006); the
+# close also takes a dim-off `22` (bare or combined), so the interleaved case
+# excludes a first parameter of exactly `22` as well as one starting with `0`.
 _pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghosts and SGR removed
-  LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g'
+  LC_ALL=C sed -E $'s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)m//g; s/\033\\[[0-9;]*m//g'
 }
 
 _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty
