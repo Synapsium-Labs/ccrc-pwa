@@ -4,8 +4,8 @@ Epic: #752 (coordinator↔worker durability: messages land, rosters survive comp
 Spec (the tail): `docs/superpowers/specs/2026-10-20-coordinator-durability-tail-epic-ledger-d7-recon-design.md`
 Plan (the tail): `docs/superpowers/plans/2026-10-20-coordinator-durability-tail-epic-ledger-d7-recon.md`
 Home project: `ccrc-pwa`   Workspace: **a fresh child per task**
-**Status: planning.** D1 to D5 are designed by their own specs; D7 and D8 by the tail spec above; D6 and D8 are inputs
-to the consolidation wave's W6.
+**Status: building** (D1 merged as #853; the tail's DT1 in review). D1 to D5 are designed by their own specs; D7 and
+D8 by the tail spec above; D6 and D8 are inputs to the consolidation wave's W6.
 
 **What this program is.** The investigation behind #752 found that restarts and account swaps do **not** lose the
 coordinator↔worker link (12 coordinators, 108 spawns, 48 swaps, 0 lost claims). What does lose it, ranked: mail parked
@@ -21,12 +21,12 @@ cluster K10), not standalone builds (decision D-5920).
 
 | # | item | issue | gate | state |
 |---|---|---|---|---|
-| 1 | D1 mail: never park a message as undeliverable while its recipient is alive; tell the sender | #754 | none | in review, PR #853 |
+| 1 | D1 mail: never park a message as undeliverable while its recipient is alive; tell the sender | #754 | none | merged, PR #853 (`9ff90740`, 2026-10-20) |
 | 2 | D3 dispatch: confirm the wave brief was taken within 5 min, retry, then tell the coordinator | #755 | D1 (its retry rides D1's parked path) | to spec |
 | 3 | D2 mail: surface pending mail inside a running turn (hook); the `busy` gate | #756 | D1; arming is OA-D2 | to spec |
 | 4 | D4 coordinator: re-inject its run roster on compaction, resume, clear and wake | #757 | none (ordered after D2) | to spec |
 | 5 | D5 worker restart: re-attach notice and a coordinator heads-up | #759 | none (ordered after D4) | to spec |
-| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #853 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P7 for DT4 (P4a merged, #701); DT5 none | specced and planned (tail spec rev 2, Tasks DT1 to DT5); DT5 built (D-5925: held questions and approvals re-seeded from their rows after a restart) |
+| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #853 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P7 for DT4 (P4a merged, #701); DT5 none | specced and planned (tail spec rev 2, Tasks DT1 to DT5); DT5 built (D-5925: held questions and approvals re-seeded from their rows after a restart); DT1, the drift decider (D-5921), in review |
 | W6 input | D6 parent derivation checks the worker's birth; runs released when their coordinator is archived | #758 | the consolidation's W6 | input to W6's `bindingOf`; its listing half is D7's `claimant-gone` |
 | W6 input | D8 the coordinator's uuid on the claim; an attributed reclaim offered after an id-changing revive | #761 | the consolidation's W6 | specced and planned (Tasks DT6, DT7); DT7 (`openRun` only) conditional on the 30-day rule, which starts once 5 open programmes carry a stored uuid and is recorded with its denominator |
 
@@ -55,7 +55,9 @@ cluster K10), not standalone builds (decision D-5920).
 
 ## Next-wave brief
 
-Land D1 (#754, PR #853): D3 depends on it, and so does the tail's DT1 (its mail kinds read #853's park columns). Task DT5
-(held questions and approvals across a restart) is built (D-5925): its suite, `server/test/ask-restart.test.ts`, is the
-characterization pin W3's move of `heldAsks` into `coord/questions.ts` must keep green. DT1 follows #853; DT2 waits
-for W1a's C1c and W1b.
+D1 (#754) merged as #853, which opens D3 and the tail's DT1. Task DT5 (held questions and approvals across a restart) is
+built (D-5925): its suite, `server/test/ask-restart.test.ts`, is the characterization pin W3's move of `heldAsks` into
+`coord/questions.ts` must keep green. DT1 (the pure drift decider, `server/src/coord/drift.ts`, and the store's four
+`drift*` reads; D-5921) is in review. DT2 waits for W1a's C1c, W1b and DT1. DT2 (on record or push) or DT3 (digest
+lines) must pass `DriftFinding.detail` through `redactCommand` (spec §9): DT1's import rule keeps `coord/redact.ts` out
+of `drift.ts`.

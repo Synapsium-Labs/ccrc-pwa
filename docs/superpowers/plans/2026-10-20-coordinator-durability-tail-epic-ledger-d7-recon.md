@@ -288,6 +288,8 @@ This programme's block is D-5920 to 5929. This plan defines D-5920 to D-5927, on
 - **D-5926** — `claimant-uuid-on-claim` (Task DT6; spec §6.1, §6.3): the coordinator's uuid is stored beside `runs.claimedBy`, not in the worker's incarnation key, by the claim's existing writers; the heir's uuid is measured from the registry at reclaim; queued mail keeps moving through `reclaimProgram` unchanged.
 - **D-5927** — `claimant-revived-offer` (Task DT7; spec §6.2, §6.5): `openRun`'s `claimed-by-another` is refined to `409 claimant-revived` through the L1 `claimantContinuity` in `coord/drift.ts`; the asks and approvals doors are not refined (no stored uuid, no measured case); the door pushes nothing (the reconciler's `claimant-revived` finding is the one push); built only if a revival is recorded within 30 days that start once 5 open programmes carry a stored uuid, with the denominator recorded beside the count.
 
+**Issued and unused** (Task DT1's spares, without the prefix): 6014, 6015.
+
 ## Out of scope
 
 D1 to D5 (their own specs); D6's design (W6's `bindingOf`); the consolidation's waves themselves; arming any lane or gate; auto-acting on a finding; a "resolve" button on a finding; changing the stall watch's arms or the digest's correction door.

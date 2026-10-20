@@ -52,6 +52,7 @@ import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
+import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
@@ -188,6 +189,20 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 const UPLOAD_EXT_RE = new RegExp(`\\.(${CLIP_EXT_ALT})$`, 'i');
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
+/** D-5995: the write routes whose answers are never masked: the auth ceremonies and the box-token claim and rotation,
+ *  whose answers a reader needs byte for byte and which carry no session text. */
+export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth|token)\//;
+/** D-5995: the GET routes whose answers carry session-written text (a name, an ask summary, a reason, a run's or a
+ *  claim's text), masked by the one answer hook. Every other GET route is masked inline or exempt, with its reason,
+ *  in `secret-mask.test.ts`'s egress inventory. */
+export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
+  '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
+  '/api/runs', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/approvals/:id',
+]);
+/** Whether the one answer hook masks a route's answer (D-5995). */
+export const answerMasked = (method: string, url: string | undefined): boolean =>
+  (method === 'GET' || method === 'HEAD' ? MASKED_GET_ROUTES.has(url ?? '') : !WRITE_ANSWER_EXEMPT.test(url ?? ''));
 
 /**
  * Which `AuthStatus` fields an UNAUTHENTICATED caller may see on the exempt
@@ -278,6 +293,9 @@ export interface Deps {
    *  type is the enforcement now — see task 13S and `CcdArgv`. */
   runCcd: (argv: CcdArgv) => Promise<CcdResult>;
   tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
+  /** The egress mask (D-5513, accounts plan Task A10): every server egress of session-derived text passes it. Absent
+   *  (a test, mainly): `SHAPE_ONLY_MASKER`, so the shapes are masked even where nothing wires the table. */
+  masker?: SecretMasker;
   /** Remote-mode reachability, straight from `connectFleet().state` — its
    *  `connected`/`downSince` fields are ignored in local mode (the fleet is
    *  always "connected" there; every reader gates on `cfg.fleetMode ===
@@ -1228,11 +1246,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
+  // D-5995: route answers are masked as one frame each, in ONE hook, so no route can forget it: EVERY write route's
+  // answer (an inject answer carries the pane tail, the box's draft or the next dialog; a claim conflict carries its
+  // intent), and the GET routes in `MASKED_GET_ROUTES`, whose answers carry session-written text. Exempt writes are
+  // only those whose answers must reach their reader byte for byte: the auth ceremonies' challenges and options, and
+  // the box token a claim hands out (`WRITE_ANSWER_EXEMPT`; none carries session text). A callback hook, never an
+  // async one: it completes in the tick of the route's `reply.send`, so a handler that sends and then resolves is
+  // answered once.
+  app.addHook('preSerialization', (req, _reply, payload, done) => {
+    done(null, answerMasked(req.method, req.routeOptions.url) ? (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload) : payload);
+  });
 
   // Degraded mode: while the remote fleet host is unreachable, serve the
   // last-known-good snapshot (fleetstate.ts, written by FleetWatcher on every
   // successful poll) instead of a live assemble that would otherwise read as
   // an empty fleet. `stale`/`downSince` let the PWA bannner explain why.
+  // D-5995: session text in a fleet answer (a name, an ask summary, a task's active form) is masked before it is
+  // serialized, on every arm of the route.
   app.get('/api/fleet', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
@@ -1430,7 +1460,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!deps.notifyLog) return reply.code(501).send({ error: 'not-configured' });
     const q = req.query as { epoch?: string; seq?: string };
     const seq = Number(q.seq);
-    return deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0);
+    // Each event's `title` and `body` came off a session (a pane-parsed ask, a mail subject): masked before they leave
+    // (D-5513).
+    return (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0));
   });
 
   // Account usage read straight from telemetry (cc-limits), independent of which
@@ -1531,8 +1563,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
+    // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized.
+    const mk = deps.masker ?? SHAPE_ONLY_MASKER;
     const sendFleet = (sessions: FleetSession[]) =>
-      socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'fleet', sessions } satisfies FleetMsg)));
     // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
     // (`currentFleet`), and a snapshot is assembled only before it. The watcher
     // re-emits only on change (`lastJson`), so a cold frame that differs from
@@ -1548,11 +1582,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       broadcastSeen = true;
       sendFleet(sessions);
     };
-    const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
+    const onNotice = (n: Notice) => socket.send(JSON.stringify(mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
     const onRuns = (runs: RunSummary[]) =>
-      socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
     const onCoord = (coord: CoordStatus) =>
-      socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
       socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
@@ -1932,7 +1966,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
-    const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
+    // server->client: raw utf8 frames, each masked first (D-5513, accounts plan Task A10). HERE, not in `pty.ts`:
+    // this is the one point both drawer arms pass, the local `attachPty` and the remote `createSpawnPty`. A chunk that
+    // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
+    const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
+    const sub = p.onData((data) => drawerMask.push(data));
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -1947,6 +1985,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
       // not leave the session shrunken (wrapped panes break capture parsing).
@@ -2020,9 +2059,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
     // the census holds a 302-column window, so the multiplier is measured
     // rather than assumed (spec §5.4).
+    // The text is masked before it leaves (D-5513), in rows mode: `-J` joins the pane's own wraps, and Claude Code's
+    // TUI hard-wraps a long line into indented rows of its own. In slices, so a 2,000-line history never blocks the
+    // event loop past the 25 ms bound (D-5995).
+    const text = await (deps.masker ?? SHAPE_ONLY_MASKER).maskTextSliced(r.text, { rows: true });
     return probe.ok
-      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
-      : { ok: true, text: r.text, lines: asked };
+      ? { ok: true, text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text, lines: asked };
   });
 
   // Write routes: serialized per session through one KeyedQueue; injection

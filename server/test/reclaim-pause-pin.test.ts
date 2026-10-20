@@ -6,7 +6,7 @@
 //   1. one row per parse site (`reclaimPauseParseSites()`, the census module's named query) and per caller of
 //      `childReclaimPauseRead`, each over FOUR registry listings: the marker present, the marker absent, a listing of
 //      `null` (both shipped `FleetIO` adapters fold every failure to it) and a `readdir` that REJECTS. The watch.ts lane
-//      sites take the tick's listing, so their `null` and rejecting legs are the tick's own fold, pinned once below;
+//      sites take the tick's listing, so their `null` and rejecting legs are the tick's own fold, pinned once below (D-5865);
 //   2. the late reads, "a pause raised during the act holds": the fake `readdir` is scripted per call, clean for the
 //      executor's first read and raised only from its late read on, so a row cannot pass on the first read alone;
 //   3. the coord frame's `MarkerState` bytes, and the two spellings of `mail-disabled`.
@@ -584,7 +584,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
   });
 });
 
-// ── 1g. the watch.ts sites, and the tick's fold of a null or rejecting listing ─────────────────────────────────
+// ── 1g. the watch.ts sites, and the tick's fold of a null or rejecting listing (D-5865) ────────────────────────
 
 const T0 = 1_790_000_000_000;
 const GEN = '1790000000000000000';
