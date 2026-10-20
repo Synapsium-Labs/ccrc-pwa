@@ -6966,12 +6966,38 @@ describe('the children\'s deny list, its switch and the spawn record\'s readers 
     expect(decl('CHILD_DENY_RULES').test('expect(CHILD_DENY_RULES).toEqual(x);')).toBe(false);
   });
   it('each constant is declared once, in shared/api.ts', () => {
-    for (const c of ['CHILD_DENY_RULES', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
+    for (const c of ['CHILD_DENY_RULES', 'childDenyRules', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
       expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
     }
   });
   it('each reader is declared once, in server/src/registry.ts', () => {
     for (const c of ['denySettingsOf', 'childShellOf']) expect(holders(decl(c)), c).toEqual(['server/src/registry.ts']);
+  });
+});
+
+// D-5695 / D-5696 (plan docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w1-observe.md, CB1a's Frozen clause,
+// carried into CB1b). The Claude Code build grammar and the version-untrusted floor are defined once, in
+// `shared/claudeVersion.ts`. Comment lines are skipped (`stallCodeText`): a sentence ABOUT the floor is not a copy of
+// it. `liveStatusCoversDelegation` (`server/src/livestate.ts`) asks the lexicon rather than parsing and comparing on
+// its own.
+describe('the Claude Code version grammar and its floor are defined once, in shared/claudeVersion.ts (D-5695, D-5696)', () => {
+  const FLOOR = /(?<![\d.])2\.1\.277(?![\d.])/;
+  const BODY = String.raw`(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`;
+  it('CONTROL: the scan sees a code line and passes over a comment line', () => {
+    expect(FLOOR.test(stallCodeText("const F = '2.1.277';"))).toBe(true);
+    expect(FLOOR.test(stallCodeText(' * below 2.1.277 (unmeasured)'))).toBe(false);
+    expect(FLOOR.test('2.1.2770')).toBe(false);
+  });
+  it('the floor is defined once: one code line in the four roots spells 2.1.277', () => {
+    const holders = ALL.filter((f) => FLOOR.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+  });
+  it('the grammar\'s body is spelled once, and livestate parses no version of its own', () => {
+    const holders = ALL.filter((f) => stallCode(f).includes(BODY)).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+    const live = stallCode(path.join(ccrcRoot, 'server', 'src', 'livestate.ts'));
+    expect(live).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
+    expect(live).toMatch(/from '\.\.\/\.\.\/shared\/claudeVersion\.js'/);
   });
 });
 
