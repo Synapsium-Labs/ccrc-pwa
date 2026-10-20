@@ -48,6 +48,7 @@ import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -1549,7 +1550,8 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
 
   it('the answer backstop and the error mask are each registered once, on the root, and no other route file sets its own error handler but the exempt docs plugin', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    const server = read(['server.ts']);
+    // Keyed on the composition root's symbol, not a literal read of the file (D-5854's ratchet): `app` is buildServer's own.
+    const server = sourceOfSymbol('server/src/server.ts', 'buildServer');
     expect(server).toMatch(/app\.addHook\('onSend', \(req, reply, payload, done\) => \{\s*done\(null, maskedSend\.has\(reply\) \|\| !answerMasked\(req\.method, req\.routeOptions\.url\)\s*\? payload : maskBody\(deps\.masker \?\? SHAPE_ONLY_MASKER, payload, reply\.getHeader\('content-type'\)\)\);/);
     expect(server).toMatch(/app\.setErrorHandler\(\(err, _req, _reply\) => \{\s*throw maskedError\(deps\.masker \?\? SHAPE_ONLY_MASKER, err\);/);
     expect(server.match(/app\.setErrorHandler\(/g)).toHaveLength(1);
