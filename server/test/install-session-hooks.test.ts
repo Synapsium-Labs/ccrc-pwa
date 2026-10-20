@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
-import { CHILD_DENY_RULES } from '../../shared/api.js';
+import { CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -380,6 +380,23 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     expect(Object.keys(doc.permissions)).toEqual(['deny']);
     expect(doc.permissions.deny).toHaveLength(CHILD_DENY_RULES.length);
     CHILD_DENY_RULES.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
+  });
+  // D-5696 (spec §7.6): the bash twin names `claude install` and `claude update` under the roster's upstream id too,
+  // read from the generated roster this installer already sources, and is held equal to `childDenyRules` of it.
+  it('with a roster whose upstream id is upstream-a, holds exactly childDenyRules(upstream-a), iterated', () => {
+    const roster = { ...DEFAULT_TEST_ROSTER, accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => (a.id === 'claude' ? { ...a, id: 'upstream-a', label: 'upstream-a' } : a)) };
+    seedAccountsSh(home, roster);
+    run();
+    const doc = JSON.parse(fs.readFileSync(denyFile(), 'utf8'));
+    const want = childDenyRules('upstream-a');
+    expect(want.length).toBeGreaterThan(CHILD_DENY_RULES.length);
+    expect(doc.permissions.deny).toHaveLength(want.length);
+    want.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
+  });
+  it('with the default roster (upstream id claude), holds exactly CHILD_DENY_RULES', () => {
+    seedAccountsSh(home);
+    run();
+    expect(JSON.parse(fs.readFileSync(denyFile(), 'utf8')).permissions.deny).toEqual([...CHILD_DENY_RULES]);
   });
   it('touches no home\'s own settings.json: no permissions key, and a home\'s own deny list survives as it was', () => {
     const own = { ...EXISTING, permissions: { deny: ['Bash(rm -rf /:*)'] } };

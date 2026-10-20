@@ -245,3 +245,52 @@ describe("zsh's own parameters (D-5360 round 7)", () => {
     for (const n of [...ZSH_STARTUP_VARIABLES, ...ZSH_DOCUMENTED_VARIABLES, 'ZSH_FOO', 'ZLE_RPROMPT_INDENT']) expect(isUserVariable(n), n).toBe(false);
   });
 });
+
+// D-5696 (spec §7.6): rolling, installing and selecting a Claude Code build are the operator's acts or ccrc's own,
+// never a session's. `ccd roll` and the operator's `ccd claude …` verbs are forbidden (under default-escalate a child's
+// `ccd roll` is a deny, not an approvable prompt), and so is a write into the build directory or onto the launcher.
+// Account switching is not touched (operator ruling 2026-10-19): `ccd swap` stays exactly what it was.
+describe('who may roll, install or select a build (D-5696)', () => {
+  it('a child\'s `ccd roll <id> --to <build> --expect <t>` is forbidden, in every spelling the verb list reaches', () => {
+    for (const c of ['ccd roll project-a-calm-mesa --to 2.1.302 --expect t', '~/.local/bin/ccd roll project-a-calm-mesa', 'ccd --json roll x']) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+  });
+  it('a child\'s `ccd claude roll-live on` (an operator switch verb) is forbidden', () => {
+    for (const c of ['ccd claude roll-live on', 'ccd claude self-update keep', 'cd x && ccd claude mode off']) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a write into ~/.local/share/claude/versions/ is forbidden, by Bash and by an edit tool', () => {
+    for (const c of [
+      'cp /tmp/x ~/.local/share/claude/versions/2.1.302', 'mv build/claude "$HOME/.local/share/claude/versions/2.1.302"',
+      'ln -sf /tmp/x /rig/home/.local/share/claude/versions/2.1.302', 'echo x > ~/.local/share/claude/versions/2.1.302',
+      'rm -f ~/.local/share/claude/versions/2.1.296', 'truncate -s 0 ~/.local/share/claude/versions/2.1.302',
+    ]) expect(bash(c), c).toBe('forbidden');
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/share/claude/versions/2.1.302`, content: 'x' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+    expect(approvalClass('Edit', { file_path: `${HOME}/.local/share/claude/versions`, old_string: 'a', new_string: 'b' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+  });
+  it('reading the build directory is not newly forbidden (the rule is about writes)', () => {
+    expect(bash('ls ~/.local/share/claude/versions')).not.toBe('forbidden');
+    expect(bash('ls ~/.local/share/claude/versions > build/list.txt')).not.toBe('forbidden');
+  });
+  it('a write onto the launcher is forbidden; a write to ~/.local/bin/ccd or a generated wrapper is not newly forbidden', () => {
+    for (const c of ['cp /tmp/x ~/.local/bin/claude', 'ln -sf /tmp/x "$HOME/.local/bin/claude"', 'echo x > /rig/home/.local/bin/claude']) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/bin/claude`, content: 'x' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+    for (const c of ['cp /tmp/x ~/.local/bin/ccd', 'cp /tmp/x ~/.local/bin/claude-a', 'cp /tmp/x ~/.local/bin/claude.bak']) {
+      expect(bash(c), c).not.toBe('forbidden');
+    }
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/bin/ccd`, content: 'x' }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
+  });
+  it('~/.ccrc/claude-intent and $REG/claude-roll-live writes are already forbidden by the registry-path pattern', () => {
+    for (const c of ['echo x > ~/.ccrc/claude-intent', 'touch ~/.cc-sessions/claude-roll-live']) {
+      expect(bash(c), c).toBe('forbidden');
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toContain('a registry path');
+    }
+  });
+  it('`ccd swap` and the account verbs are unchanged by this rule (the 2026-10-19 ruling)', () => {
+    for (const c of ['ccd swap project-a-calm-mesa claude-a', 'ccd swap-self claude-a']) {
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toEqual([]);
+    }
+  });
+});

@@ -20,7 +20,7 @@ Home project: `ccrc-pwa`   Brief: GitHub #218   Workspace: **a fresh child per w
 
 | # | scope | deploy class | tasks | PRs | state |
 |---|---|---|---|---|---|
-| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | #726 (CB1a) | in progress |
+| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | #726 (CB1a); CB1b (D-5696) in review | in progress |
 | 2 | the roll: strict resume, the spawn carrier, `ccd roll` gate, act, canary health; the server's argv, holds, token and route; Restart onto | AGENT-FIRST (fleet), then server; PWA after S2d | CB2a to CB2h | — | not started |
 | 2a | the first manual canary, per (node, lane kind) | operator act | OA-2, OA-3 | — | not started |
 | 3 | install: intent and projection, pull, routes, canary approval, installer live, launcher adopted, descriptor, prune, bootstrap, Settings controls | AGENT-FIRST (the launcher is every lane's exec path), deployed by OA-4 | CB3a to CB3j | — | not started |
@@ -32,8 +32,8 @@ Home project: `ccrc-pwa`   Brief: GitHub #218   Workspace: **a fresh child per w
 | Gate | Holds | Tasks it gates |
 |---|---|---|
 | #435 (session continuity wave 4b; `ccd/ccd`, `ccdWsHelpers.ts`, the doctor checks, the spawn and resume tests) | open | CB1c, CB1d, CB2a to CB2e, CB3f, CB3g, CB4a |
-| #397 (path identity W1a; `fleet.ts`, `server.ts`, `ccdargv.ts`, `shared/api.ts`, `single-definition`, `whitelist-subset`) | open, `CONFLICTING` | CB1b, CB1f, CB2f, CB2g, CB3c, CB5a, CB5b |
-| #700 (a coordinator names its child; `ccdargv.ts`, `coord/routes.ts`, `shared/api.ts`) | open | CB1b, CB1f, CB2f, CB2g, CB3c |
+| #397 (path identity W1a; `fleet.ts`, `server.ts`, `ccdargv.ts`, `shared/api.ts`, `single-definition`, `whitelist-subset`) | merged | CB1b, CB1f, CB2f, CB2g, CB3c, CB5a, CB5b |
+| #700 (a coordinator names its child; `ccdargv.ts`, `coord/routes.ts`, `shared/api.ts`) | merged | CB1b, CB1f, CB2f, CB2g, CB3c |
 | skins W2 S7a, S16 | unbuilt | CB1g |
 | skins W2 S2d | unbuilt | CB2h |
 | Settings R2b1, R2b2 | unbuilt | CB1h, CB3j, CB5c |
