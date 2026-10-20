@@ -11,12 +11,30 @@
 // (its `.uuid` read proven absent), listed with its identity degraded, and an
 // unlistable registry; plus a stale uuid, and the mail route's recipient arms.
 // It was green on the code before the move and stays byte-identical after it.
+//
+// The one-read rows spy on the registry module's two readers, never on a raw
+// `readdir` count: `readRegistryMeasured` may list a second time to settle a
+// reap race, and that second listing is its own business. On a listable
+// registry each route calls `readRegistryMeasured` once and `readRegistry`
+// never.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { appFor, recorder, seedRow, ID_GATE_TOKEN } from './idGateFixture.js';
 import { absentField, unreadableField } from './ioDoubles.js';
+import * as registry from '../src/registry.js';
+
+vi.mock('../src/registry.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/registry.js')>();
+  return {
+    ...real,
+    readRegistry: vi.fn(real.readRegistry),
+    readRegistryMeasured: vi.fn(real.readRegistryMeasured),
+  };
+});
+const readRegistrySpy = vi.mocked(registry.readRegistry);
+const readMeasuredSpy = vi.mocked(registry.readRegistryMeasured);
 
 const SENDER = 'demo-quiet-mesa';
 const RCPT = 'demo-coordinator';
@@ -88,6 +106,8 @@ afterEach(async () => {
   await app?.close();
   app = null;
   vi.restoreAllMocks();
+  readRegistrySpy.mockClear();
+  readMeasuredSpy.mockClear();
 });
 
 const post = (a: FastifyInstance, url: string, payload: Record<string, unknown>) =>
@@ -101,6 +121,8 @@ async function answer(f: Fixture, route: Route) {
   const w = await appFor(home, recorder().run, f.io ? { io: f.io } : {});
   app = w.app;
   const uuid = f.staleUuid ? 'u-someone-else' : `u-${f.from}`;
+  readRegistrySpy.mockClear();
+  readMeasuredSpy.mockClear();
   const res = route === 'mail'
     ? await post(w.app, '/api/mail', {
       fromId: f.from, fromUuid: uuid, toId: f.to ?? RCPT,
@@ -123,5 +145,17 @@ describe('characterization: each mail-ingress ladder answers as it did before th
       if (route === 'attribution' || status < 400) expect(recorded).toEqual([]);
       else expect(recorded).toEqual([JSON.parse(body).error]);
     });
+  }
+});
+
+describe('one read: on a listable registry each ladder calls readRegistryMeasured once and readRegistry never (D-5863)', () => {
+  for (const route of ['mail', 'ack', 'attribution'] as const) {
+    for (const fixture of ['sender present', 'sender absent', 'sender listed, row unreadable']) {
+      it(`${route}: ${fixture}`, async () => {
+        await answer(FIXTURES[fixture]!, route);
+        expect(readRegistrySpy, 'the wrapper is not called').not.toHaveBeenCalled();
+        expect(readMeasuredSpy, 'one measured read').toHaveBeenCalledTimes(1);
+      });
+    }
   }
 });
