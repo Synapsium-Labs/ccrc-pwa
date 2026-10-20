@@ -15,6 +15,8 @@ import { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
 import type { Presence } from '../src/presence.js';
+import type { SecretMasker } from '../src/accounts/mask.js';
+import type { DatabaseSync } from 'node:sqlite';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { approvalDigestBytes, CHILD_DENY_SETTINGS_FILE } from '../../shared/api.js';
@@ -87,7 +89,10 @@ export interface Approvals {
 const DENY_FILE = '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n';
 export const DENY_DIGEST = sha256(DENY_FILE);
 
-export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}): Promise<Approvals> {
+/** Fixture options: the box's role, and (accounts plan Task A12) an egress masker built over the fixture's coord.db. */
+export interface ApprovalsFixtureOpts { role?: 'server' | 'both'; masker?: (db: DatabaseSync) => SecretMasker }
+
+export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise<Approvals> {
   const home = mkTmp('ccrc-approvals-');
   const reg = path.join(home, '.cc-sessions');
   const cfgDir = path.join(home, '.claude');
@@ -123,6 +128,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
     // A two-box server is `server` over CCRC_FLEET=remote; `both` is the single box, CCRC_FLEET=local.
     ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' as const : 'remote' as const },
     mailToken: TOKEN, coord, notifyLog: log,
+    ...(over.masker ? { masker: over.masker(coord.db) } : {}),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
   const watcher = new FleetWatcher(deps, new Bus(), 10_000);
@@ -178,7 +184,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
 
 /** The standard family: a parent and its child in `project-a`, a second child, an operator-created session of the
  *  same project, and sessions in two other projects; the child dispatched by an attributed run of the parent. */
-export async function standardFixture(over: { role?: 'server' | 'both' } = {}): Promise<Approvals & { runId: number }> {
+export async function standardFixture(over: ApprovalsFixtureOpts = {}): Promise<Approvals & { runId: number }> {
   const f = await approvalsFixture(over);
   f.seed(PARENT, 'project-a');
   f.seed(CHILD, 'project-a');
