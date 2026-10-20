@@ -48,7 +48,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   };
 
   // FOCUS GOES BACK WHERE IT CAME FROM, never to <body> (spec §5.4, W2 Task
-  // S2b). The palette's close leaves focus on the body (measured in jsdom on
+  // S2b, D-5679). The palette's close leaves focus on the body (measured in jsdom on
   // main: Escape from a palette opened in the composer left it there), so the
   // layer puts it back on what had it when the palette opened, or, when a
   // command took that away (a route change, a skin switch that replaced a

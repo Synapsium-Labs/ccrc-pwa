@@ -5,7 +5,7 @@
 // would lose the composer's text, every open sheet and the terminal's socket on a switch (spec §5.4). So the frame
 // (`frame.tsx`) is shared and keyed, and a set only says which component fills each keyed slot.
 //
-// A part takes no props: it reads what it shows from the shared stores, hooks and models, so a part can never be
+// A part takes no props (D-5678): it reads what it shows from the shared stores, hooks and models, so a part can never be
 // handed a value the other skin computes differently. A part that is `null` leaves its slot empty.
 import type { ComponentType } from 'react';
 import type { SkinId } from '@ccrc/ui';

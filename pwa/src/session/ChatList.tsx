@@ -618,7 +618,7 @@ export function ChatList(props: ChatListProps): ReactNode {
     return () => column.detach();
   }, [column]);
   // A SKIN SWITCH KEEPS THIS LIST MOUNTED (the frame's ladder never remounts,
-  // D-5466) but re-wraps its rows: a reader following a running turn is still
+  // D-5466, D-5679) but re-wraps its rows: a reader following a running turn is still
   // following once they re-measure. The set's identity is the signal, never
   // its id: nothing here branches on the skin (D-5469).
   const set = useFrameSet();

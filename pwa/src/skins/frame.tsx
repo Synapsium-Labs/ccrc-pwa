@@ -64,11 +64,11 @@ export interface ShellFrameProps {
 }
 
 export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps): ReactNode {
-  // The bar is a desk part in both of today's sets: on a phone the accounts strip lives in the fleet screen
+  // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
   // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden.
   const desk = useMediaQuery(DESK_QUERY);
   const { Bar, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
-  // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4). What had focus in the
+  // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
   // ladder or above the frame keeps it, because none of it remounts; a control
   // inside a part the switch replaced is gone, and the browser leaves focus on
   // the body, so it moves to the main landmark instead. Layout effect: before
