@@ -12,13 +12,20 @@
 // the environment; set GROWTH_CHECK=1 to run it locally) or with no
 // `origin/main`, the growth rows skip with a printed notice and never fail
 // falsely. The stripper's own rows below always run.
+//
+// D-6119 (ARCH-01 acceptance 3): when the rows measure, the absolute code lines
+// of every listed file and FleetWatcher's method count go to the CI job summary
+// (`$GITHUB_STEP_SUMMARY`), never into an assertion.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   stripTs, measureBash, codeLines, netGrowth, growthOver, addedFiles,
   GROWTH_LIMIT, L1_L2_NEW_FILE_DIRS,
+  classMethodCount, growthSummary, appendJobSummary, fileAt, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
 } from './growthCheck.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -129,6 +136,67 @@ describe('growthCheck: the stripper (D-5848)', () => {
   });
 });
 
+describe('growthCheck: the CI job summary (D-6119)', () => {
+  it('counts a class\'s own methods by ARCH-00\'s parser: no getter, arrow property, constructor or nested method', () => {
+    const src = [
+      'export class Watcher {',
+      '  constructor() {}',
+      '  get size() { return 1; }',
+      '  private onTick = () => 1;',
+      '  tick() { const inner = { run() {} }; return inner; }',
+      '  private async sweep(): Promise<void> { function helper() {} helper(); }',
+      '  static make() { return new Watcher(); }',
+      '  build() { const K = class Inner { run() {} }; return K; }',
+      '}',
+      'class Other { tick() {} }',
+      'function tick() {}',
+      '',
+    ].join('\n');
+    expect(classMethodCount(src, 'Watcher')).toBe(4);
+    expect(classMethodCount(src, 'Other')).toBe(1);
+    expect(classMethodCount(src, 'Missing')).toBe(0);
+  });
+
+  it(`${METHOD_COUNT_FILE} declares ${METHOD_COUNT_CLASS} with methods, so the summary's count is not a silent 0`, () => {
+    const src = readFileSync(path.join(ROOT, METHOD_COUNT_FILE), 'utf8');
+    expect(classMethodCount(src, METHOD_COUNT_CLASS)).toBeGreaterThan(0);
+  });
+
+  it('the summary carries every row\'s absolute code lines, the method count and GROWTH_OVER', () => {
+    const rows = [
+      { file: 'server/src/watch.ts', base: 900, head: 950, delta: 50, atBoth: true },
+      { file: 'ccd/ccd', base: 300, head: 290, delta: -10, atBoth: true },
+    ];
+    const md = growthSummary({ base: 'abcdef1234567', rows, over: ['server/src/watch.ts'],
+      methods: { base: 12, head: 14 }, armed: false });
+    expect(md).toContain('| `server/src/watch.ts` | 900 | 950 | +50 |');
+    expect(md).toContain('| `ccd/ccd` | 300 | 290 | -10 |');
+    expect(md).toContain(`${METHOD_COUNT_CLASS} methods`);
+    expect(md).toMatch(/base 12, head 14, delta \+2/);
+    expect(md).toContain('GROWTH_OVER: `server/src/watch.ts`');
+    expect(md).toContain('abcdef1');
+    expect(md).toMatch(/reporting only/);
+    const none = growthSummary({ base: 'abcdef1234567', rows, over: [], methods: { base: 12, head: 12 }, armed: true });
+    expect(none).toContain('GROWTH_OVER: (none)');
+    expect(none).not.toMatch(/reporting only/);
+  });
+
+  it('the summary is appended to $GITHUB_STEP_SUMMARY when set, and nothing is written when it is not', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-summary-'));
+    try {
+      const file = path.join(dir, 'summary.md');
+      writeFileSync(file, 'earlier step\n');
+      expect(appendJobSummary('## one\n', { GITHUB_STEP_SUMMARY: file })).toBe(true);
+      expect(readFileSync(file, 'utf8')).toBe('earlier step\n## one\n');
+      expect(appendJobSummary('## two\n', {})).toBe(false);
+      expect(appendJobSummary('## two\n', { GITHUB_STEP_SUMMARY: '' })).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe('earlier step\n## one\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 /** The base, or why the growth rows cannot measure. */
 function resolveBase(): { base: string } | { skip: string } {
   if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
@@ -153,7 +221,14 @@ const measured = 'base' in resolved
       const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
       const rows = GROWTH_FILES.map((f) => netGrowth(f, resolved.base, head, ROOT));
       const over = growthOver(rows, addedFiles(resolved.base, head, ROOT));
-      return { rows, over };
+      const methodsAt = (sha: string): number => {
+        const src = fileAt(METHOD_COUNT_FILE, sha, ROOT);
+        return src === null ? 0 : classMethodCount(src, METHOD_COUNT_CLASS);
+      };
+      // D-6119: absolute numbers go to the job summary only, never an assertion.
+      const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows, over,
+        methods: { base: methodsAt(resolved.base), head: methodsAt(head) }, armed: GROWTH_ARMED }));
+      return { rows, over, summaryWritten };
     })()
   : null;
 
@@ -169,6 +244,9 @@ if (measured === null) {
 }
 
 describe.skipIf(measured === null)('growth-check: the listed files against the merge-base (D-5848)', () => {
+  it('the job summary is written whenever the runner names a summary file (D-6119)', () => {
+    expect(measured!.summaryWritten).toBe(Boolean(process.env['GITHUB_STEP_SUMMARY']));
+  });
   for (const r of measured?.rows ?? []) {
     const over = measured!.over.includes(r.file);
     it(`${r.file}: delta ${r.delta >= 0 ? '+' : ''}${r.delta}${over ? ' (GROWTH_OVER)' : ''}`, () => {

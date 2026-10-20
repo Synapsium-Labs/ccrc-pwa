@@ -9,7 +9,15 @@
 // `<<"EOF"`, `<<-EOF`) are counted separately, so a `#` line inside one is
 // content, not a comment. A file's code lines are its code plus its heredoc
 // lines: an embedded script grows the file as much as the shell around it.
+//
+// D-6119 (ARCH-01 (#526) acceptance 3): the absolute numbers go to the CI job
+// summary only, never into an assertion: each listed file's code lines at the
+// merge-base and at HEAD, and FleetWatcher's method count by ARCH-00's parser
+// (`scan/parse.ts`). `growthSummary` renders them; `appendJobSummary` appends
+// to `$GITHUB_STEP_SUMMARY` when the runner sets it.
 import { execFileSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { parseSource } from './scan/parse.js';
 
 /** A listed file may grow by this many net code lines before it is named. */
 export const GROWTH_LIMIT = 40;
@@ -149,7 +157,7 @@ export function codeLines(file: string, src: string): number {
 export interface GrowthRow { file: string; base: number; head: number; delta: number; atBoth: boolean }
 
 /** `file`'s blob at `sha`, or null when the file does not exist there. */
-function blobAt(file: string, sha: string, cwd: string): string | null {
+export function fileAt(file: string, sha: string, cwd: string): string | null {
   try {
     return execFileSync('git', ['show', `${sha}:${file}`],
       { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
@@ -161,7 +169,7 @@ function blobAt(file: string, sha: string, cwd: string): string | null {
 /** Net code lines of `file` at `baseSha` and `headSha` (0 where it is absent). */
 export function netGrowth(file: string, baseSha: string, headSha: string, cwd: string): GrowthRow {
   const at = (sha: string): number | null => {
-    const text = blobAt(file, sha, cwd);
+    const text = fileAt(file, sha, cwd);
     return text === null ? null : codeLines(file, text);
   };
   const base = at(baseSha);
@@ -189,4 +197,56 @@ export function growthOver(rows: readonly GrowthRow[], added: readonly string[])
     .filter((r) => !newRingFile)
     .filter((r) => !rows.some((o) => o.file !== r.file && o.atBoth && -o.delta >= r.delta))
     .map((r) => r.file);
+}
+
+/** The class whose method count the summary reports, and the file that declares it. */
+export const METHOD_COUNT_CLASS = 'FleetWatcher';
+export const METHOD_COUNT_FILE = 'server/src/watch.ts';
+
+/** `cls`'s own methods in `src`, by ARCH-00's parser: kind `method` keyed
+ *  `cls.name` (static ones included). A getter, setter, arrow property, the
+ *  constructor and a function nested inside a method are not counted. */
+export function classMethodCount(src: string, cls: string): number {
+  const prefix = `${cls}.`;
+  return parseSource(src, 'source.ts').symbols
+    .filter((s) => s.kind === 'method' && s.name.startsWith(prefix) && !s.name.slice(prefix.length).includes('.'))
+    .length;
+}
+
+export interface GrowthSummaryInput {
+  base: string;
+  rows: readonly GrowthRow[];
+  over: readonly string[];
+  methods: { base: number; head: number };
+  armed: boolean;
+}
+
+const signed = (n: number): string => `${n >= 0 ? '+' : ''}${n}`;
+
+/** The CI job summary: one row per listed file with its absolute code lines,
+ *  the method count, and GROWTH_OVER. Markdown. */
+export function growthSummary(i: GrowthSummaryInput): string {
+  return [
+    '### God-file growth check (D-5848, D-6119)',
+    '',
+    `Net code lines against the merge-base \`${i.base.slice(0, 7)}\`${i.armed ? '' : '; reporting only until OA-C2'}.`,
+    '',
+    '| File | Base | Head | Delta |',
+    '| --- | ---: | ---: | ---: |',
+    ...i.rows.map((r) => `| \`${r.file}\` | ${r.base} | ${r.head} | ${signed(r.delta)} |`),
+    '',
+    `${METHOD_COUNT_CLASS} methods (\`${METHOD_COUNT_FILE}\`): base ${i.methods.base}, head ${i.methods.head}, delta ${signed(i.methods.head - i.methods.base)}`,
+    '',
+    `GROWTH_OVER: ${i.over.length ? i.over.map((f) => `\`${f}\``).join(', ') : '(none)'}`,
+    '',
+  ].join('\n');
+}
+
+/** Appends `md` to the job summary file the runner names; false (and nothing
+ *  written) when `GITHUB_STEP_SUMMARY` is unset or empty. */
+export function appendJobSummary(md: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const file = env['GITHUB_STEP_SUMMARY'];
+  if (!file) return false;
+  appendFileSync(file, md);
+  return true;
 }
