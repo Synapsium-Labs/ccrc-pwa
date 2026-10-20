@@ -76,25 +76,32 @@ written. That is the whole DDD argument, measured rather than asserted.
    each node runs), **intent** (what the operator asked for), **dispatch** and **converge**
    leases, **server-caps**, **halt** (a failed move stops every move until it is acked).
    Allowed dependencies: L0 (`shared/api.ts`, `agent-protocol.ts`, `semver.ts`,
-   `update-move.ts`, `buildinfo.ts`, `base-url.ts`, `refusal.ts`); the shared adapters
-   (`io.ts`, `remote/client.ts`, `config.ts`, `fleetidentity.ts`, `fleetstate.ts`,
-   `pools.ts`); context 8's route gate (`auth/gate.ts`) at its routes; coord.db only
-   through the deps it is handed, never the handle (single-definition's "the update ring"
-   pin). Its type imports of `server.ts`/`watch.ts` are outward edges ARCH-03 drains.
+   `update-move.ts`, `buildinfo.ts`, `base-url.ts`, `refusal.ts`); K's `io.ts` adapter and
+   its `remote/client.ts` (the agent link, an L4 platform file); context 1's `config.ts`,
+   `fleetidentity.ts`, `fleetstate.ts` and `pools.ts`; context 8's route gate
+   (`auth/gate.ts`) at its routes; context 5's `coord/store.ts` (its row types and
+   `NODE_ID_RE`) and, at its routes, `coord/token.ts` (`checkMailToken`,
+   `MAIL_TOKEN_HEADER`); `fastify` in its L4 files; `node:*` modules as the ring rules
+   allow. It reaches coord.db only through the deps it is handed, never the handle
+   (single-definition's "the update ring" pin). Its type imports of `server.ts`/`watch.ts`
+   are outward edges ARCH-03 drains.
 8. **Auth & box token** (ARCH-02a) — `server/src/auth/`, `server/src/token/`: who may
    talk to this server and which box holds the fleet's token. Language: **passkey**
    (a WebAuthn credential), **session** (a signed-in browser), **step-up** ("confirm it's
    you" before an account op), **box token**, **hold** (the token's single holder).
    Allowed dependencies: L0 (`shared/api.ts`, `accounts.ts`, `box-token.ts`,
-   `agent-protocol.ts`, `refusal.ts`); `node:crypto` and `node:fs` in its adapters; the
-   shared adapters; context 1's account audit (`accounts/audit.ts`); context 5's
-   `coord/token.ts` and store for the token rows; context 7's inventory
-   (`update/inventory.ts`) for which nodes exist.
+   `agent-protocol.ts`, `refusal.ts`); `node:*` modules as the ring rules allow; `fastify`
+   in its L4 files; K's `refuse.ts`, `io.ts` and `remote/client.ts`; context 1's
+   `config.ts`, `pools.ts` and account audit (`accounts/audit.ts`); context 5's
+   `coord/token.ts` and `coord/store.ts` (`NODE_ID_RE` and the node row type); context 7's
+   inventory (`update/inventory.ts`) for which nodes exist. Its type import of `server.ts`
+   is an outward edge ARCH-03 drains.
 9. **Docs** (ARCH-02a) — `server/src/docs/` and `shared/docs.ts`: a project's docs read
    through ccd's docs verbs. Language: **ref** (bare or qualified), **section**, **leaf**,
    **draft branch**, **fingerprint**. Allowed dependencies: L0 `shared/docs.ts`; context
-   2's `ccdargv.ts`, `lifecycle.ts` and `exec.ts` for the verbs; `fleetstate.ts`;
-   `node:crypto` (single-definition's "the docs ring" pin holds the L3 import list).
+   2's `ccdargv.ts`, `lifecycle.ts` and `exec.ts` for the verbs; context 1's
+   `fleetstate.ts`; `node:crypto`; `fastify` in its L4 files (single-definition's "the docs
+   ring" pin holds the L3 import list).
 
 Every non-test file under `server/src` and `pwa/src` maps to exactly one of these nine
 contexts, or to **K**, the shared kernels and platform files (the composition root,
@@ -133,10 +140,14 @@ reviewer checks a file by reading its import block.
   `{ok:false,err}` and `{missing:true}` from the wire and throws both away to match
   `localIO`. That downgrade is the single highest-yield rule in this document.
   A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A timer is
-  a deadline inside one adapter call when its handle is a local of that call; a timer whose
-  handle is stored on an object field or at module scope is a scheduler or poller.
-  (`io.ts`'s tail fallback poll is a local of one `tailFile` call and stops through the
-  handle that call returns, so `io.ts` stays L3.)
+  a deadline inside one adapter call when its handle is a local of that call or is not kept
+  at all; a timer whose handle is stored on an object field or at module scope is a
+  scheduler or poller. A timer is a `setTimeout` or `setInterval` call; `setImmediate` is a
+  yield, not a timer, and decides no ring. A function a scheduler calls on each tick is not
+  a poller; the poller is the code that keeps the repeating timer's handle, and a poll whose
+  stop handle is returned to its caller is that caller's to schedule. (By this definition
+  `io.ts`'s tail fallback poll is a deadline: its handle is a local of one `tailFile` call,
+  which returns the stop handle, so `io.ts` stays L3.)
 - **L4 delivery** — `server.ts`, `coord/routes.ts`, `sessionws.ts`, `watch.ts`. Owns
   Fastify, sockets, schedulers and pollers, and union→status mapping. Allowed to be big
   and boring; not allowed to **decide**. One-reading test: *if a function here has two
@@ -158,7 +169,8 @@ five scanners pin paths, and stepping outside a walk **silently deletes coverage
 
 Every non-test file under `server/src` and `pwa/src` has exactly one ring and exactly one
 context. Both are decided by the rules below, from facts a reader can see in the file, so
-two readers cannot disagree. The predicates within each package exclude each other: a file
+two readers cannot disagree. The predicates within each package exclude each other by
+construction (each clause applies only to a file no earlier clause matched), so a file
 matches one ring, never two. A ring is decided from the file's **own** imports and timers.
 A runtime import of a file in an outer ring does not move the file outward; it is an
 outward edge, which ARCH-04 stage 2 counts and ARCH-05 drains. A type-only import moves
@@ -171,30 +183,42 @@ nothing.
 - **L3:** any other file with a runtime import of a `node:*` module other than
   `node:path`, `node:url`, `node:util` and `node:crypto` (which do no I/O and are allowed in
   L1, as `coord/delegation-model.ts`'s hashing is), or of a server I/O package (`ws`,
-  `web-push`, `node-pty`; a new I/O package joins this list).
+  `web-push`, `node-pty`; a new I/O package joins this list), or that holds a deadline
+  timer (the timer rule under L3).
 - **L2:** any other file whose every top-level statement is a type, an interface, or a
   type-only import or export.
 - **L1:** every other file.
 
 In either package, a file that does its I/O or its acting only through the deps it is
-handed looks like L1 by its imports. Such a file states its ring in its **header**: the
-lines before its first top-level statement that is not an import. A declaration is the
-token `L0` to `L5` at the start of a comment line, or right after `: ` or `. `, and
-followed by `:`, `,`, `.` or ` —` (for example `hibernateSweep.ts`'s "…: L4, it reads, logs and … acts" or
-`coord/mirror.ts`'s "L3. It EXECUTES …"). The first declaration counts. A ring pin's role
+handed looks like L1 by its imports and timers. Such a file states its ring in its
+**header**: the lines before its first top-level statement that is not an import. A
+declaration is the token `L0` to `L5` at the start of a comment line or right after `: `,
+`. `, `— `, `ring ` or `is ` (either case), and followed by `:`, `,`, `.`, ` —`, ` (` or one
+of the words `policy`, `port`, `ports`, `adapter`, `adapters`, `delivery`, `composition`
+and `decision`. Examples: `hibernateSweep.ts`'s "…: L4, it reads, logs and … acts",
+`coord/mirror.ts`'s "L3. It EXECUTES …", `update/converge.ts`'s "— L3, D-3383",
+`token/link.ts`'s "ring L3:" and `accounts/audit.ts`'s "L3 adapter over the coord.db
+handle". A token in any other place (a reference to another file's ring, such as
+"(`coord/stall.ts`, L1)") is not a declaration. The first declaration counts. A ring pin's role
 table counts the same way (today single-definition's `DOCS_RING_ROLES`, which puts
 `docs/ccdsource.ts` in L3). A declaration moves a file **outward** of what its facts give,
 never inward: one inward of the facts is refused, and the facts decide (today
 `accounts/ops.ts` declares its port L2 beside two L3 arms, so the file is L3).
 
+A ring pin may be stricter than these rules inside its own directory (single-definition's
+docs ring forbids every timer below L4 and every non-`shared/` import in L1). A pin never
+loosens them, and ARCH-04's scanner applies the rules here.
+
 **PWA rings** (`pwa/src`): `*Words.ts`, policy and pure lib modules are L1; `lib/api.ts`
 is L3; stores, hooks, components and screens are L4. Decided as:
 - **L5:** `main.tsx`, the PWA's composition root.
-- **L4:** any other `.tsx` or `.css` file, any file under `stores/`, and any file that
-  exports a hook (an exported function or const named `use` plus a capital letter).
+- **L4:** any other `.tsx` or `.css` file, any file under `stores/`, any file that
+  exports a hook (an exported function or const named `use` plus a capital letter), and
+  any file that holds a scheduler or poller (the server's timer rule; `lib/ws.ts` keeps its
+  reconnect timer on `this.timer`, so it is L4).
 - **L3:** `lib/api.ts`, and any other file that names a browser I/O global (`fetch(`,
   `WebSocket`, `navigator.`, `localStorage`, `sessionStorage`, `indexedDB`, `new Worker`,
-  `caches.`, `document.`, `window.`, `location.`, `history.`).
+  `caches.`, `document.`, `window.`, `location.`, `history.`) or holds a deadline timer.
 - **L2:** any other file whose every top-level statement is a type, an interface, or a
   type-only import or export.
 - **L1:** every other file: the `*Words.ts` files, the policy modules and the pure lib
@@ -208,13 +232,13 @@ never name one file. Paths are relative to the package's `src/`.
 <!-- ring-context-map:start -->
 | Context | `server/src` | `pwa/src` |
 |---|---|---|
-| C1 Fleet Registry & Accounts | `accounts/**`, `registry.ts`, `config.ts`, `fleet.ts`, `fleetidentity.ts`, `divergence.ts`, `limits.ts`, `usage.ts`, `pools.ts`, `poolrule.ts`, `shares.ts`, `swapguard.ts`, `hookstate.ts`, `livestate.ts`, `coord/placement.ts`, `coord/pooledgelog.ts` | `fleet/**`, `stores/fleet.ts`, `lib/accounts.ts`, `lib/pools.ts`, `screens/AccountsScreen.tsx`, `screens/FleetScreen.tsx` |
+| C1 Fleet Registry & Accounts | `accounts/**`, `registry.ts`, `config.ts`, `fleet.ts`, `fleetidentity.ts`, `fleetstate.ts`, `divergence.ts`, `limits.ts`, `usage.ts`, `pools.ts`, `poolrule.ts`, `shares.ts`, `swapguard.ts`, `hookstate.ts`, `livestate.ts`, `coord/placement.ts`, `coord/pooledgelog.ts` | `fleet/**`, `stores/fleet.ts`, `lib/accounts.ts`, `lib/pools.ts`, `screens/AccountsScreen.tsx`, `screens/FleetScreen.tsx` |
 | C2 Fleet Mutation | `ccdargv.ts`, `exec.ts`, `lifecycle.ts`, `pty.ts`, `localcaps.ts`, `refreshcaps.ts`, `remote/runner.ts`, `remote/pty.ts` | (none) |
 | C3 Session Conversation | `inject/**`, `transcript/**`, `pane/**`, `tasks/**`, `workflows/**`, `sessionws.ts`, `munge.ts`, `commands.ts`, `clip.ts`, `askkey.ts`, `bus.ts`, `turnverdict.ts`, `turnmark.ts`, `turnidle.ts`, `skillstate.ts`, `idlenudge.ts` | `session/**`, `stores/session.ts`, `lib/models.ts`, `screens/SessionScreen.tsx` |
-| C4 Workspace Lifecycle | `archivedExpiry.ts`, `childReclaimSweep.ts`, `collectLane.ts`, `hibernateSweep.ts`, `naming.ts`, `prstate.ts`, `wsaudit.ts`, `coord/archiveDoor.ts`, `coord/childReclaim.ts`, `coord/childSpent.ts`, `coord/collectLaneJournal.ts`, `coord/collectTempRoot.ts`, `coord/expireArchived.ts`, `coord/hibernate.ts`, `coord/landing.ts`, `coord/prhistory.ts`, `coord/released.ts`, `coord/wakeBudget.ts` | `fleet/Archive*.tsx`, `fleet/archiveReleased.ts`, `fleet/ChildReclaimBanner.tsx`, `fleet/childReclaimWords.ts`, `fleet/CollectLaneSection.tsx`, `fleet/collectLaneWords.ts`, `fleet/useCollectLaneView.ts`, `fleet/ExpiryAttention.tsx`, `fleet/expiryWords.ts`, `fleet/hibernated.ts`, `fleet/HoldControl.tsx`, `fleet/lifecycleWords.ts`, `fleet/orphanWords.ts`, `session/Pr*.tsx`, `session/Reap*.tsx`, `session/reapWords.ts`, `screens/ArchiveScreen.tsx` |
-| C5 Coordination | `coord/**`, `deadCoordinator.ts`, `stopDone.ts`, `stopDoneSweep.ts`, `readiness.ts` | `fleet/AbandonSheet.tsx`, `fleet/ResumeSheet.tsx`, `fleet/CapsControl.tsx`, `fleet/CoordBanner.tsx`, `fleet/coordWords.ts`, `fleet/DeadCoordinatorAttention.tsx`, `fleet/deadCoordinatorWords.ts`, `fleet/HotFilesStrip.tsx`, `fleet/KickoffRecovery.tsx`, `fleet/MailBadge.tsx`, `fleet/readinessWords.ts`, `fleet/runGroups.ts`, `fleet/runWords.ts`, `fleet/StartProgramSheet.tsx`, `fleet/startProgramPolicy.ts`, `fleet/useProgramAttempt.ts`, `fleet/useStallWatchView.ts`, `screens/MailScreen.tsx`, `screens/Run*.tsx`, `screens/useColdRuns.ts`, `screens/StallWatchSection.tsx` |
+| C4 Workspace Lifecycle | `archivedExpiry.ts`, `childReclaimSweep.ts`, `collectLane.ts`, `hibernateSweep.ts`, `stopDone.ts`, `stopDoneSweep.ts`, `naming.ts`, `prstate.ts`, `wsaudit.ts`, `coord/archiveDoor.ts`, `coord/childReclaim.ts`, `coord/childSpent.ts`, `coord/collectLaneJournal.ts`, `coord/collectTempRoot.ts`, `coord/expireArchived.ts`, `coord/hibernate.ts`, `coord/landing.ts`, `coord/prhistory.ts`, `coord/released.ts`, `coord/wakeBudget.ts` | `fleet/Archive*.tsx`, `fleet/archiveReleased.ts`, `fleet/ChildReclaimBanner.tsx`, `fleet/childReclaimWords.ts`, `fleet/CollectLaneSection.tsx`, `fleet/collectLaneWords.ts`, `fleet/useCollectLaneView.ts`, `fleet/ExpiryAttention.tsx`, `fleet/expiryWords.ts`, `fleet/hibernated.ts`, `fleet/HoldControl.tsx`, `fleet/lifecycleWords.ts`, `fleet/orphanWords.ts`, `session/Pr*.tsx`, `session/Reap*.tsx`, `session/reapWords.ts`, `screens/ArchiveScreen.tsx` |
+| C5 Coordination | `coord/**`, `deadCoordinator.ts`, `readiness.ts` | `fleet/AbandonSheet.tsx`, `fleet/ResumeSheet.tsx`, `fleet/CapsControl.tsx`, `fleet/CoordBanner.tsx`, `fleet/coordWords.ts`, `fleet/DeadCoordinatorAttention.tsx`, `fleet/deadCoordinatorWords.ts`, `fleet/HotFilesStrip.tsx`, `fleet/KickoffRecovery.tsx`, `fleet/MailBadge.tsx`, `fleet/readinessWords.ts`, `fleet/runGroups.ts`, `fleet/runWords.ts`, `fleet/StartProgramSheet.tsx`, `fleet/startProgramPolicy.ts`, `fleet/useProgramAttempt.ts`, `fleet/useStallWatchView.ts`, `screens/MailScreen.tsx`, `screens/Run*.tsx`, `screens/useColdRuns.ts`, `screens/StallWatchSection.tsx` |
 | C6 Attention & Notification | `push.ts`, `notifylog.ts`, `interruptlog.ts`, `presence.ts`, `askbody.ts`, `askwindow.ts`, `coord/approval*.ts`, `coord/heldFor.ts`, `coord/digest.ts`, `coord/redact.ts` | `fleet/AttentionList.tsx`, `fleet/BucketBar.tsx`, `fleet/NotificationBell.tsx`, `fleet/inboxTarget.ts`, `session/AskParts.tsx`, `session/DialogSheet.tsx`, `session/EnvelopeSheet.tsx`, `session/ask*.ts`, `session/useAskKeys.ts`, `lib/push.ts`, `lib/notifymark.ts`, `lib/seen.ts`, `lib/feed.ts`, `lib/restart.ts`, `screens/Digest*.tsx`, `screens/digest.css` |
-| C7 Update control plane | `update/**`, `buildinfo.ts`, `fleetstate.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `screens/updates.tsx` |
+| C7 Update control plane | `update/**`, `buildinfo.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `screens/updates.tsx` |
 | C8 Auth & box token | `auth/**`, `token/**` | `accounts/**`, `components/LoginScreen.tsx`, `fleet/PasskeyNotice.tsx`, `lib/auth.ts`, `lib/passkey.ts`, `screens/AuthSection.tsx` |
 | C9 Docs | `docs/**` | `docs/**`, `screens/DocsScreen.tsx` |
 | K Kernels and platform | `index.ts`, `server.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `remote/client.ts`, `remote/io.ts` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/Settings*.tsx`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `screens/settingsText.ts` |

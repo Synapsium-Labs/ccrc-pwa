@@ -114,7 +114,7 @@ A pin like this is the right answer when the two copies have to live in two lang
 
 - **The rings are unchanged.** L0 shared kernel, L1 policy, L2 ports, L3 adapters, L4 delivery, L5 composition root. Ring membership is still a property of a file's imports.
 - **ARCH-02a's wording is adopted as written** (D-6000). It lives in the 08-10 spec's rings and its "Deciding a file's ring and context" section, and CLAUDE.md copies it word for word:
-  - A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A timer is a deadline inside one adapter call when its handle is a local of that call; a timer whose handle is stored on an object field or at module scope is a scheduler or poller.
+  - A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a timer whose handle is stored on an object field or at module scope is a scheduler or poller.
   - The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a `shared/*.ts` file imports no `node:*` module at all.
   - PWA: `*Words.ts`, policy and pure lib modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4.
   - Every non-test file under `server/src` and `pwa/src` has one ring and one context (C1 to C9, or K for the kernels and platform files), decided by that section's rules and its path table.

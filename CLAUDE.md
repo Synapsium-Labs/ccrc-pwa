@@ -256,8 +256,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
   distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/schedulers but is NOT allowed to
   DECIDE; L5 = `index.ts` only. A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A
-  timer is a deadline inside one adapter call when its handle is a local of that call; a timer whose handle is
-  stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
+  timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
+  timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
   modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
   `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
   context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
