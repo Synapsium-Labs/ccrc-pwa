@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { componentFamily } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
@@ -6162,7 +6163,8 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
     expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
       'the executor file’s call is not in collectTempRoot').toBe(1);
-    expect(count(bodyAfter(code(WATCH), /^[ \t]*private async collectPass\(/m), calls),
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so C1h's rewrite of the pass moves the slice with it.
+    expect(count(stallCodeText(sourceOfSymbol(path.join(ccrcRoot, WATCH), 'FleetWatcher.collectPass')), calls),
       'watch.ts’s call is not in the pass').toBe(1);
   });
 
