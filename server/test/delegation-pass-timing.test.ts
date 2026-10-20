@@ -1320,12 +1320,12 @@ describe('D-5832 R5: the real loop: a 50 ms synchronous stall inside the store\'
   });
 });
 
-describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s thread clock where it has one, else the real process clock (green by design at main)', () => {
+describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s thread clock where it has one, else the real process clock (green by design at bdc3baebb; red at main, where the CPU keys are absent)', () => {
   /** The production-clock pass: no CPU seam (the world's virtual one is taken off), a line written by the 1,001 ms in `noteSessions`. */
   const productionPass = (setup?: ScenarioX['setup']) =>
     scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
 
-  it('D-5832 R6 (i) (M-CPUsrc): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, and the production CPU keys are whole non-negative numbers', async () => {
+  it('D-5832 R6 (i): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, and the production CPU keys are whole non-negative numbers', async () => {
     const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
     const sc = await productionPass();
     const m = theLine(sc.lines);
@@ -1337,7 +1337,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
     }
   });
 
-  it('D-5832 R6 (ii) (M-CPUthread): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
+  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
     const holder = process as unknown as { threadCpuUsage?: unknown };
     const had = Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage');
     const desc = Object.getOwnPropertyDescriptor(process, 'threadCpuUsage');
@@ -1662,7 +1662,7 @@ describe('D-5835 R4: a turn\'s time is in yields and in total, and in no other t
 });
 
 describe('D-5835 R5 (review 677 F3): the turn before the repair keeps its CPU in the phases that enclose it, and its elapsed time leaves them', () => {
-  it('D-5835 R5: pins the approved "CPU while open" reading: 61 ms of CPU and 97 ms of elapsed time in turn 3 are in effectsCpu, reconcileCpu and blockCpu, and the 97 ms is in yields and total and not in effects, reconcile or block (green by design at main)', async () => {
+  it('D-5835 R5: pins the approved "CPU while open" reading: 61 ms of CPU and 97 ms of elapsed time in turn 3 are in effectsCpu, reconcileCpu and blockCpu, and the 97 ms is in yields and total and not in effects, reconcile or block (green by design at bdc3baebb; red at main, where the turns and CPU keys are absent; MturnCpu reds it)', async () => {
     let active = false;
     let turns = 0;
     let w!: World;

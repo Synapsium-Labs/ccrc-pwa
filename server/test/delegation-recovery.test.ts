@@ -3975,8 +3975,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectShort(l, 'just inside the interval of the earlier full repair');
     const recovered = await l.dur.recover();
     expect(recovered.failure).toBeNull();
-    // Not due measured from the recover (FULL_MS-1000 on). The clock restarts at the recover by three equivalent lines (its start, its own
-    // full repair, and the first per-pass repair after it, full by the first-after-recover rule), so no row reds one alone (MrecClock survives).
+    // Not due measured from the recover (FULL_MS-1000 on). The clock restarts at recover()'s start and again at every successful full repair
+    // (recovery's own, then the first per-pass repair after it), so the restart at recover()'s start alone is equivalent (MrecClock survives).
     l.vclock.ms += FULL_MS - 1000;
     await expectFull(l, 'the first per-pass repair after the recover, FULL_MS-1000 on');
     await expectShort(l, 'the second per-pass repair at that point');
@@ -3992,7 +3992,7 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectFull(l, 'the first per-pass repair right after the recover');
     await expectShort(l, 'the second, right after the recover');
     l.vclock.ms += FULL_MS - 1000;
-    await expectShort(l, 'just inside the interval counted from the recover and its full repairs (recover()\'s own restart is one of three equivalent lines)');
+    await expectShort(l, 'just inside the interval counted from the recover and its full repairs (the restart at recover()\'s start is backed by the full repairs\' own)');
     l.vclock.ms += 2000;
     await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
   });
