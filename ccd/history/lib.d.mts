@@ -313,10 +313,11 @@ export const RELAY_LOOKBEHIND_BYTES: 16384;
 export function redactAfter(lookBehind: string, text: string, idx: PairIndex): { emit: string; keep: string };
 /** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
  *  rules over the base reading's output (`v2`); null for any other function. A display window's and a snippet's also carry
- *  `whole`, the door they return: the widened rules read over the margin-widened text before the cut (D-6071). A test seam:
+ *  `whole`, the door they return, answering `{ base, out }` from one read: the widened rules read over the margin-widened text
+ *  before the cut (D-6071). A test seam:
  *  no shipped file calls it. */
 export function redactDoorReadings(door: (...args: never[]) => unknown):
-  { base: (...args: any[]) => any; v2: (out: any, idx: PairIndex | null) => any; whole?: (...args: any[]) => any } | null;
+  { base: (...args: any[]) => any; v2: (out: any, idx: PairIndex | null) => any; whole?: (...args: any[]) => { base: any; out: any } } | null;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
 export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
 export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;

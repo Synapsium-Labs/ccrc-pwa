@@ -2960,6 +2960,7 @@ function redactFinalTextWith(text, idx, rs) {
  *  A display window's or a snippet's v2 reading is redactForDisplay's reading of its base output. The door they return is not
  *  v2(base): `whole` reads the widened rules over the margin-widened text before the cut, so a NAME the cut removed still masks
  *  its value's tail (composedTokens and maskUnprinted, D-6071, review 711 F1). On a window of the whole text it is v2(base) (displayWindow's step 0).
+ *  `whole` answers `{ base, out }` from one read, so composeDoor's base is not computed twice.
  *  nodeIndexTexts, the --regex child, the node fields and the relay read these doors, so they are composed through them. */
 const DOOR_READINGS = (() => {
   const door = (impl, over = impl) => Object.freeze({
@@ -2973,7 +2974,10 @@ const DOOR_READINGS = (() => {
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
-    whole: (...args) => shown(impl(...args, BASE_RULES, true), args[args.length - 1], CONTEXT_RULES),
+    whole: (...args) => {
+      const r = impl(...args, BASE_RULES, true);
+      return { base: r.base, out: shown(r.out, args[args.length - 1], CONTEXT_RULES) };
+    },
   });
   return Object.freeze({
     redactField: door((text, idx, rs) => redactFieldIn(text, idx, rs.field)),
@@ -3001,8 +3005,8 @@ const DOOR_READINGS = (() => {
  *  sequences removed, or only at a JSON-decoded level, the door returns that reading, so a value the base printed split by
  *  a sequence, or only JSON-escaped, prints whole. The cost is about two passes of the door. */
 function composeDoor(r, args, idx) {
-  const base = r.base(...args);
-  const out = r.whole !== undefined ? r.whole(...args) : r.v2(base, idx);
+  // a display door answers its base and its composed text from one read (`whole`); every other door is v2 over its base
+  const { base, out } = r.whole !== undefined ? r.whole(...args) : (() => { const b = r.base(...args); return { base: b, out: r.v2(b, idx) }; })();
   // D-5746: under a re-derivation probe, a text this build writes otherwise than its rev 3.6 door wrote it is an owed hit
   if (out !== base && typeof out === 'string' && idx !== null) {
     const hit = beltHit(idx);
@@ -5072,17 +5076,24 @@ function cutBefore(s, n) {
  *  displayed window's indices. */
 export function snippetWindow(text, terms) {
   const content = String(text);
+  const b = snippetBounds(content, terms);
+  return `${b.pre}${content.slice(b.start, b.end).trim()}${b.suf}`;
+}
+
+/** snippetWindow's cut, as positions: the snippet is `pre`, then `content.slice(start, end).trim()`, then `suf` (`pre` and `suf` are
+ *  `...` or empty). With no hit the first 80 characters of the trimmed text. Module-private; snippetWindow is built on it so the
+ *  composed snippet (D-6071) can mask the sliced text before it trims, with the cut the base's. */
+function snippetBounds(content, terms) {
   const { at, len } = snippetSpan(content, terms);
   if (at === -1) {
     const head = content.trim();
-    return head.length <= 80 ? head : `${head.slice(0, cutBefore(head, 77)).trimEnd()}...`;
+    if (head.length <= 80) return { start: 0, end: content.length, pre: '', suf: '' };
+    return { start: 0, end: content.length - content.trimStart().length + cutBefore(head, 77), pre: '', suf: '...' };
   }
   let start = Math.max(0, at - 24);
   if (start > 0 && cutBefore(content, start) !== start) start -= 1;
   const end = cutBefore(content, Math.min(content.length, at + Math.max(len, 1) + 40));
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < content.length ? '...' : '';
-  return `${prefix}${content.slice(start, end).trim()}${suffix}`;
+  return { start, end, pre: start > 0 ? '...' : '', suf: end < content.length ? '...' : '' };
 }
 
 /** `--since` / `--before` (§8.4), plan-chosen grammar: `<n>d`, `<n>h` or
@@ -7689,7 +7700,9 @@ function displayWindow(text, from, to, idx, rs) {
 
 /** displayWindow, and with it `read`: the reading of the margin-widened text t[a, b) that the cut was made from (step 2's
  *  `d`), or null where there is none (step 0's whole text, and a window longer than DISPLAY_WINDOW_MAX, which reads no
- *  margin). An inexact window whose cut could not be shown exact still has its `read` (D-6071's union reads it). */
+ *  margin). An exact window also has `at`, where its text starts in `read` (after the lead drop), so `text` is
+ *  `read.slice(at, at + text.length)` and a cut edge can be decided by the whole token of `read` it split (D-6071's
+ *  union). An inexact window whose cut could not be shown exact has its `read` and no `at`. */
 function displayWindowRead(text, from, to, idx, rs) {
   const t = String(text);
   const lo = pairStart(t, Math.max(0, Math.min(from, t.length)));
@@ -7712,49 +7725,93 @@ function displayWindowRead(text, from, to, idx, rs) {
   const s = pairStart(d, s0);
   const e = Math.max(s, pairStart(d, e0));
   let out = d.slice(s, e);
-  if (leadCut) out = dropLeadingWhile(out, isTokenByte);
+  let ds = s;
+  if (leadCut) {
+    const n = out.length;
+    out = dropLeadingWhile(out, isTokenByte);
+    ds += n - out.length;
+  }
   if (tailCut) out = dropTrailingWhile(out, isTokenByte);
   if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return { ...inexactWindow(t, lo, hi, idx, rs), read: d };
-  return { text: out, exact: true, read: d };
+  return { text: out, exact: true, read: d, at: ds };
 }
 
-/** D-6071 (review 711 F1): a display window or snippet that composes the widened rules BEFORE its cut. The cut stays the base
- *  door's, byte for byte (the margins are read through BASE_RULES alone, so every alignment is the one rev 3.6 made, and a
- *  snippet's cut is made from the base window text). The widened rules are then read over the base reading of the
- *  margin-widened text, `read`, which holds the NAME a cut removed (composedTokens), and a token (DISPLAY_SPAN_RE's span, a mark
- *  apart) of what is shown that the widened reading no longer prints is replaced by the mark (maskUnprinted). relayUnion's
- *  pattern, over tokens: the output only replaces spans of the base output with marks, so it is subtractive over it and
- *  never prints a value the base masked. A token is kept when the widened reading prints the same characters anywhere
- *  (relayUnion's same-characters residual); an edge token the cut may have split is kept when the widened reading prints a
- *  token that ends (at the left edge) or starts (at the right edge) with it. A span holding an ANSI sequence or a backslash
- *  the widened reading decoded or joined is absent from it, so it is masked: over-masking, never a leak. Nothing changes when
- *  the widened reading changes nothing. A window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left alone. */
+/** D-6071 (review 711 F1; the scoped review's FR1-A and FR1-C): a display window or snippet that composes the widened rules
+ *  BEFORE its cut. The cut stays the base door's, byte for byte (the margins are read through BASE_RULES alone, so every
+ *  alignment is the one rev 3.6 made, and a snippet's cut is snippetBounds' over the base window text). The widened rules are
+ *  then read over the base reading of the margin-widened text, `read`, which holds the NAME a cut removed (composedTokens),
+ *  and a token of what is shown that the widened reading no longer prints is replaced by the mark (maskUnprinted).
+ *  relayUnion's pattern, over tokens: the output only replaces spans of the base output with marks, so it is subtractive over
+ *  it and never prints a value the base masked.
+ *  A token (UNION_TOKEN_RE) is a mark, or a maximal run of characters that are neither whitespace nor one of `"`, `'`, `` ` ``,
+ *  `,`, `;` and `&` (TOKEN_BREAK_RE's sense) and hold no mark, so a word in any script, and the punctuation of a value, are
+ *  masked with it. What can still print between tokens is whitespace and those six break characters: a value's separators,
+ *  never its words. A token is kept when the widened reading prints the same characters anywhere (relayUnion's
+ *  same-characters residual). A token the cut itself split at an edge is decided by the WHOLE token of `read` around that
+ *  edge, not by the fragment: kept only when that token is printed (a split mark is kept as written); an inexact window, whose
+ *  text is not a slice of `read`, has no edge leniency. A token with an ANSI sequence the widened reading joined or decoded is
+ *  absent from it, so it is masked: over-masking, never a leak. Nothing changes when the widened reading changes nothing; a
+ *  window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left alone. Residuals: a NAME more than
+ *  ENTRY_REDACT_MARGIN before the window, and a closing quote more than ENTRY_REDACT_MARGIN past its end (the value reads
+ *  unquoted in `read`), are not in the margin the widened reading reads. */
+const UNION_TOKEN_RE = new RegExp(`${MARK_RE_SRC}|(?:(?!${MARK_RE_SRC})[^\\s"'\`,;&])+`, 'g');
+
 function composedTokens(read, idx) {
   if (read === null) return null;
   const dc = redactForDisplayWith(read, idx, CONTEXT_RULES);
   if (dc === read) return null;
-  const printed = [];
-  for (const m of dc.matchAll(DISPLAY_SPAN_RE)) if (m[0] !== REDACTED_MARK) printed.push(m[0]);
-  return { printed, whole: new Set(printed) };
+  const printed = new Set();
+  for (const m of dc.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) printed.add(m[0]);
+  return { printed };
 }
 
-/** `text` with each token composedTokens' `view` does not print replaced by the mark. `lead` and `trail` are the lengths of a
- *  non-token prefix and suffix that stand for a cut (a snippet's `...`): a token that begins at `lead`, or ends `trail` before
- *  the end, is an edge token, which a cut may have split. */
-function maskUnprinted(text, view, lead, trail) {
-  const { printed, whole } = view;
-  let out = '';
-  let at = 0;
-  for (const m of text.matchAll(DISPLAY_SPAN_RE)) {
-    const tok = m[0];
-    out += text.slice(at, m.index);
-    at = m.index + tok.length;
-    let kept = tok === REDACTED_MARK || whole.has(tok);
-    if (!kept && m.index === lead) kept = printed.some((x) => x.endsWith(tok));
-    if (!kept && at === text.length - trail) kept = printed.some((x) => x.startsWith(tok));
-    out += kept ? tok : REDACTED_MARK;
+/** What a cut at position `p` of `d` splits: null when it splits no token (an end of `d`, a break either side, or a mark's
+ *  edge); `{ mark }` (where that mark starts) when it falls inside a mark; else `{ token }`, the whole token of `d` around it. */
+function splitAt(d, p) {
+  if (p <= 0 || p >= d.length) return null;
+  if (!isTokenByte(d.charCodeAt(p - 1)) || !isTokenByte(d.charCodeAt(p))) return null;
+  const j = d.lastIndexOf(REDACTED_MARK, p - 1);
+  if (j !== -1) {
+    if (p < j + REDACTED_MARK.length) return { mark: j };
+    if (p === j + REDACTED_MARK.length) return null;
   }
-  return out + text.slice(at);
+  const k = d.indexOf(REDACTED_MARK, p);
+  if (k === p) return null;
+  let a = p;
+  while (a > 0 && isTokenByte(d.charCodeAt(a - 1))) a -= 1;
+  let b = p;
+  while (b < d.length && isTokenByte(d.charCodeAt(b))) b += 1;
+  if (j !== -1 && j + REDACTED_MARK.length > a) a = j + REDACTED_MARK.length;
+  if (k !== -1 && k < b) b = k;
+  return { token: d.slice(a, b) };
+}
+
+/** `piece` with each token composedTokens' `view` does not print replaced by the mark. `piece` is `d.slice(p0, p0 + piece.length)`
+ *  (`d` null for an inexact window, which is not a slice of its read: no edge leniency). A token the cut at either end splits is
+ *  decided by its whole token in `d` (splitAt); a mark it splits is kept as written. */
+function maskUnprinted(piece, view, d, p0) {
+  const { printed } = view;
+  const m0 = d === null ? null : splitAt(d, p0);
+  const m1 = d === null ? null : splitAt(d, p0 + piece.length);
+  let lo = 0;
+  let hi = piece.length;
+  if (m0 !== null && m0.mark !== undefined) lo = Math.min(hi, m0.mark + REDACTED_MARK.length - p0);
+  if (m1 !== null && m1.mark !== undefined) hi = Math.max(lo, m1.mark - p0);
+  const mid = piece.slice(lo, hi);
+  const leftFull = lo === 0 && m0 !== null && m0.token !== undefined ? m0.token : null;
+  const rightFull = hi === piece.length && m1 !== null && m1.token !== undefined ? m1.token : null;
+  let out = piece.slice(0, lo);
+  let at = 0;
+  for (const m of mid.matchAll(UNION_TOKEN_RE)) {
+    const tok = m[0];
+    out += mid.slice(at, m.index);
+    at = m.index + tok.length;
+    let full = tok;
+    if (leftFull !== null && m.index === 0) full = leftFull;
+    else if (rightFull !== null && at === mid.length) full = rightFull;
+    out += tok === REDACTED_MARK || printed.has(full) ? tok : REDACTED_MARK;
+  }
+  return out + mid.slice(at) + piece.slice(hi);
 }
 
 /** text[from, to) as a read verb shows it (displayWindow): the exact cut of its redacted context, or an inexact window
@@ -7770,13 +7827,16 @@ export function redactDisplayWindow(text, from, to, idx) {
  *  prints replaced by the mark. A window of the whole text is redactForDisplay's reading and is left to v2. */
 function composedWindow(w, idx) {
   const view = w.whole === true ? null : composedTokens(w.read, idx);
-  return view === null ? w : { ...w, text: maskUnprinted(w.text, view, 0, 0) };
+  return view === null ? w : { ...w, text: maskUnprinted(w.text, view, w.at === undefined ? null : w.read, w.at ?? 0) };
 }
 
-/** redactDisplayWindow's body over one rule set (R11); `union` is the composed door's (D-6071, composedWindow). */
-function redactDisplayWindowWith(text, from, to, idx, rs, union = false) {
-  const w = union ? composedWindow(displayWindowRead(text, from, to, idx, rs), idx) : displayWindow(text, from, to, idx, rs);
-  return w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`;
+/** redactDisplayWindow's body over one rule set (R11). With `composed` it answers `{ base, out }`: the base door's text and
+ *  the composed door's (D-6071, composedWindow), both from the one displayWindowRead, so the base is computed once. */
+function redactDisplayWindowWith(text, from, to, idx, rs, composed = false) {
+  const fmt = (w) => (w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`);
+  if (!composed) return fmt(displayWindow(text, from, to, idx, rs));
+  const w = displayWindowRead(text, from, to, idx, rs);
+  return { base: fmt(w), out: fmt(composedWindow(w, idx)) };
 }
 
 /** How far past the snippet's hit, each way, grep's snippet reads its RAW window (*chosen*): SNIPPET_MAX, more than
@@ -7793,23 +7853,27 @@ export function displaySnippet(text, terms, idx) {
   return composeDoor(DOOR_READINGS.displaySnippet, [text, terms, idx], idx);
 }
 
-/** displaySnippet's body over one rule set (R11); `union` is the composed door's (D-6071, composedTokens). */
-function displaySnippetWith(text, terms, idx, rs, union = false) {
+/** displaySnippet's body over one rule set (R11). With `composed` it answers `{ base, out }` (redactDisplayWindowWith's): the
+ *  composed snippet cuts the base window text at snippetBounds' positions, masks that slice (composedTokens, maskUnprinted;
+ *  the edge tokens are the whole tokens of the reading around the cut) and then trims and adds `...` as snippetWindow does. */
+function displaySnippetWith(text, terms, idx, rs, composed = false) {
   const content = String(text);
   const { at, len } = snippetSpan(content, terms);
   const from = at === -1 ? 0 : Math.max(0, at - SNIPPET_READ);
   const to = at === -1 ? Math.min(content.length, 2 * SNIPPET_READ) : Math.min(content.length, at + Math.max(len, 1) + SNIPPET_READ);
-  const w = union ? displayWindowRead(content, from, to, idx, rs) : displayWindow(content, from, to, idx, rs);
-  let shown = snippetWindow(w.text, terms);
-  // the cut is the base's; the widened reading of the text the window was cut from (the whole text, on step 0) masks what it
-  // prints no more (D-6071)
-  if (union) {
-    const view = composedTokens(w.whole === true ? w.text : w.read, idx);
-    if (view !== null) shown = maskUnprinted(shown, view, shown.startsWith('...') ? 3 : 0, shown.endsWith('...') ? 3 : 0);
-  }
-  const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
-  const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
-  return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
+  const w = composed ? displayWindowRead(content, from, to, idx, rs) : displayWindow(content, from, to, idx, rs);
+  const fmt = (shown) => {
+    const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
+    const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
+    return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
+  };
+  const shown = snippetWindow(w.text, terms);
+  if (!composed) return fmt(shown);
+  const view = composedTokens(w.whole === true ? w.text : w.read, idx);
+  if (view === null) return { base: fmt(shown), out: fmt(shown) };
+  const b = snippetBounds(w.text, terms);
+  const sliced = maskUnprinted(w.text.slice(b.start, b.end), view, w.whole === true ? w.text : w.at === undefined ? null : w.read, (w.whole === true ? 0 : w.at ?? 0) + b.start);
+  return { base: fmt(shown), out: fmt(`${b.pre}${sliced.trim()}${b.suf}`) };
 }
 
 // ── describe: arguments (W1-B2 Task 15; spec §8.4) ────────────────────────────────────────────────────

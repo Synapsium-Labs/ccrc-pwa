@@ -2904,6 +2904,12 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(libRedact.redactForDisplay(t, idx), 'CONTROL: the whole-text door masks the tail').not.toContain('SECRETX');
     // the widened class cannot read a NAME the margin does not hold: this is D-6071's residual (spec 8.3 residual 1), as a quoted value always was
     expect(libRedact.redactDisplayWindow(t, from, from + 12, idx)).toContain('SECRETX');
+    // the second named residual (scoped review FR1-B): a quoted value whose closing quote lies more than the margin PAST the window's end
+    // reads unquoted in the margin text, so its tail prints
+    const longTail = `x password="a b SECRETX c ${'word '.repeat(Math.ceil((libRedact.ENTRY_REDACT_MARGIN + 4000) / 5))}" after`;
+    const lf = longTail.indexOf('SECRETX');
+    expect(libRedact.redactForDisplay(longTail, idx), 'CONTROL: the whole-text door masks it').not.toContain('SECRETX');
+    expect(libRedact.redactDisplayWindow(longTail, lf, lf + 12, idx)).toContain('SECRETX');
     // CONTROL: the same text with the NAME a few characters before the window does not
     const near = 'x password="a b SECRETX c" after';
     expect(libRedact.redactDisplayWindow(near, near.indexOf('SECRETX'), near.indexOf('SECRETX') + 12, idx)).not.toContain('SECRETX');
@@ -2934,6 +2940,60 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     }
     expect(h.digest('hex')).toBe('afbb04e790d3878de2135b558331ebed89f967c26e800ee89170b53f54794e79');
   }, 120_000);
+  // D-6071, scoped review (round 2): the union's unit is a token span in TOKEN_BREAK_RE's sense (a mark, or a run of characters that are
+  // neither whitespace nor one of "'`,;& and hold no mark), and a cut edge is decided by the WHOLE token the cut split.
+  const d6071Both = (t: string, anchor: string, len: number, terms: string[]): { win: string; snip: string } => {
+    const idx = idxOf([]);
+    const from = t.indexOf(anchor);
+    return { win: libRedact.redactDisplayWindow(t, from, from + len, idx), snip: libRedact.displaySnippet(t, terms, idx) };
+  };
+  it('(j15) a widened value of non-ASCII words or punctuation is masked whole, not word by word: Cyrillic, CJK and `p@ss.w0rd!+/=` (D-6071, scoped review FR1-A)', () => {
+    const idx = idxOf([]);
+    const cases: Array<[string, string, string[], string[]]> = [
+      ['some prose here token: "abc пароль секрет ключ" and more text after it', 'секрет', ['секрет'], ['пароль', 'секрет', 'ключ']],
+      ['some prose here token: "abc 密码 秘密钥匙 ok" and more text after it', '秘密钥匙', ['秘密钥匙'], ['密码', '秘密钥匙']],
+      ['some prose here token: "abc p@ss.w0rd!+/= ghi" and more text after it', 'w0rd', ['ghi'], ['p@ss', 'w0rd', '!+/=', 'ghi']],
+    ];
+    for (const [t, anchor, terms, words] of cases) {
+      expect(libRedact.redactForDisplay(t, idx), `CONTROL: the whole-text door masks the value of ${JSON.stringify(t)}`).not.toContain(words[0]!);
+      const { win, snip } = d6071Both(t, anchor, 12, terms);
+      for (const w of words) {
+        expect(win, `window of ${JSON.stringify(t)} prints ${w}`).not.toContain(w);
+        expect(snip, `snippet of ${JSON.stringify(t)} prints ${w}`).not.toContain(w);
+      }
+      // CONTROL: the rev 3.6 reading printed them
+      expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, terms, idx), 'CONTROL: base snippet').toContain(words[1]!);
+    }
+  });
+  it('(j16) a cut edge is decided by the whole token it split, not by any printed token that shares its suffix or prefix (D-6071, scoped review FR1-C)', () => {
+    const idx = idxOf([]);
+    // left edge: the window starts inside the value's `Zq9k_db_password_reset_flow`, whose tail another, printed token also ends with
+    const left = 'see staging_db_password_reset_flow here; password="x Zq9k_db_password_reset_flow c" after';
+    const p = left.indexOf('Zq9k_');
+    expect(libRedact.redactForDisplay(left, idx), 'CONTROL: the whole-text door masks it').not.toContain('Zq9k_db');
+    expect(libRedact.redactDisplayWindow(left, p + 4, p + 40, idx), 'left edge, window').not.toContain('db_password_reset_flow');
+    expect(libRedact.displaySnippet(left, ['flow'], idx), 'left edge, snippet').not.toContain('Zq9k_db');
+    // right edge: the window ends inside `deploy_token_for_prod_Zq9kXY`, whose head another, printed token also starts with
+    const right = 'see deploy_token_for_prod_x here; password="x deploy_token_for_prod_Zq9kXY c" after';
+    const q = right.indexOf('deploy_token_for_prod_Zq9kXY');
+    const r = libRedact.redactDisplayWindow(right, q - 12, q + 22, idx);
+    expect(r, 'right edge, window').not.toContain('deploy_token_for_prod_');
+    expect(libRedact.displaySnippet(right, ['prod_Zq9kXY', 'Zq9kXY'], idx), 'right edge, snippet').not.toContain('deploy_token_for_prod_Zq9kXY');
+    // CONTROL: a filler word the window cuts keeps its fragment when the whole word prints
+    const filler = 'x lorem ipsum dolor sit; password="a b Zq9kSECRET c" after';
+    const f = libRedact.redactDisplayWindow(filler, filler.indexOf('lorem') + 2, filler.indexOf('Zq9kSECRET') + 4, idx);
+    expect(f.startsWith('rem ipsum dolor sit'), JSON.stringify(f)).toBe(true);
+    expect(f).not.toContain('Zq9k');
+  });
+  it('(j17) a mark the snippet\'s cut splits at its left edge is kept as written, never `]]` (D-6071, scoped review FR1-E)', () => {
+    const idx = idxOf([]);
+    const t = 'intro text. password="abc p@ss.w0rd!+/= ghi" after more words here';
+    const snip = libRedact.displaySnippet(t, ['ghi'], idx);
+    expect(snip).not.toContain(']]');
+    expect(snip).not.toContain('w0rd');
+    // CONTROL: the base snippet's cut does split the mark (it starts `...redacted]`)
+    expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, ['ghi'], idx).startsWith('...redacted]')).toBe(true);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
