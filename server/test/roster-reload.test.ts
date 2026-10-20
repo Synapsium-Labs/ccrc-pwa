@@ -338,7 +338,92 @@ describe('reconcile (D-5518)', () => {
       return sub === 'roster' ? rosterAnswer(GROWN) : { kind: 'timeout' };
     });
     await Promise.all([s.ops.run('check', 'claude-a', {}), s.ops.run('check', 'claude-b', {}), s.ops.reconcileDivergence('fleet-fp-1')]);
-    expect(s.calls.filter((c) => c === 'roster')).toEqual(['roster']);
+    // At most two (D-6057 (8), revised): the one in flight, and one trailing run every later arrival shares.
+    expect(s.calls.filter((c) => c === 'roster').length).toBeLessThanOrEqual(2);
     expect(s.events().map((e) => `${e.laneId}:${e.outcome}`).sort()).toEqual(['claude-a:ok', 'claude-b:ok', 'null:ok']);
+  });
+
+  // D-6057 (8), revised after #950: a reconcile that arrives while a `roster` sub is in flight must not take that
+  // sub's answer, which was read before its own op changed the box. It waits for one fresh trailing sub, which every
+  // caller arriving in the meantime shares, so the lane its op half-added still reaches the server's roster and its
+  // fingerprints still reach the masker.
+  it('a reconcile arriving while a `roster` sub is in flight reloads a fresh sub started after it, never the stale one', async () => {
+    let box = 'S0';
+    const reloaded: string[] = [];
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    const calls: string[] = [];
+    let opBRan!: () => void;
+    const opBDone = new Promise<void>((r) => { opBRan = r; });
+    const inner: AccountOps = {
+      arm: 'remote',
+      run: async (sub, id) => {
+        calls.push(id === null ? sub : `${sub}:${id}`);
+        if (sub === 'roster') {
+          const seen = box;
+          if (calls.filter((c) => c === 'roster').length === 1) await gate;
+          return { kind: 'exited', code: 0, stdout: seen };
+        }
+        if (id === 'lane-a') return { kind: 'timeout' };
+        await new Promise((r) => setTimeout(r, 1));
+        box = 'S1';
+        opBRan();
+        return { kind: 'exited', code: 1, stdout: '{"ok":false}' };
+      },
+    };
+    const ops = reconcilingAccountOps(inner, {
+      reload: (stdout) => { reloaded.push(stdout); return { ok: true } as never; },
+      fleetIdentity: () => NODE, actor: actorOf('ccrc server', ''),
+    });
+    const a = ops.run('check', 'lane-a', {});
+    const b = ops.run('credential', 'lane-b', {});
+    await opBDone;
+    await new Promise((r) => setTimeout(r, 1));
+    open();
+    await Promise.all([a, b]);
+    expect(reloaded).toEqual(['S0', 'S1']);
+    expect(calls.filter((c) => c === 'roster')).toEqual(['roster', 'roster']);
+  });
+
+  it('every caller arriving while a `roster` sub is in flight shares ONE trailing sub', async () => {
+    let open!: () => void;
+    let gate = new Promise<void>((r) => { open = r; });
+    let n = 0;
+    const inner: AccountOps = {
+      arm: 'remote',
+      run: async (sub) => {
+        if (sub !== 'roster') return { kind: 'timeout' };
+        n += 1;
+        if (n === 1 || n === 4) await gate;
+        return { kind: 'exited', code: 0, stdout: `R${n}` };
+      },
+    };
+    const reloaded: string[] = [];
+    const ops = reconcilingAccountOps(inner, {
+      reload: (stdout) => { reloaded.push(stdout); return { ok: true } as never; },
+      fleetIdentity: () => NODE, actor: actorOf('ccrc server', ''),
+    });
+    const first = ops.run('check', 'lane-a', {});
+    await new Promise((r) => setTimeout(r, 1));
+    const later = [ops.run('check', 'lane-b', {}), ops.run('check', 'lane-c', {}), ops.run('check', 'lane-d', {})];
+    await new Promise((r) => setTimeout(r, 1));
+    open();
+    await Promise.all([first, ...later]);
+    expect(n).toBe(2);
+    expect(reloaded).toEqual(['R1', 'R2']);
+    // Once both settled, the next failed op starts its own fresh sub, never a settled one's answer.
+    await ops.run('check', 'lane-e', {});
+    expect(n).toBe(3);
+    expect(reloaded).toEqual(['R1', 'R2', 'R3']);
+    // A second overlapping round gets its own trailing sub, never the first round's settled one.
+    gate = new Promise<void>((r) => { open = r; });
+    const lead = ops.run('check', 'lane-f', {});
+    await new Promise((r) => setTimeout(r, 1));
+    const late = ops.run('check', 'lane-g', {});
+    await new Promise((r) => setTimeout(r, 1));
+    open();
+    await Promise.all([lead, late]);
+    expect(n).toBe(5);
+    expect(reloaded).toEqual(['R1', 'R2', 'R3', 'R4', 'R5']);
   });
 });
