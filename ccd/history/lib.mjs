@@ -6706,7 +6706,9 @@ export function decideBelt(state, live, mark) {
   const genOk = state.gen !== null && state.gv === BELT_VERSION;
   const next = { v: state.v, rids: state.v === BELT_VERSION ? keep(state.rids) : [], gen: genOk ? keep(state.gen) : null, ...(genOk ? { gv: BELT_VERSION } : {}) };
   const covered = new Set(next.rids);
-  const due = state.v !== BELT_VERSION || live.some((r) => r <= mark && !covered.has(r));
+  // D-6068: a generation another version opened is due. Its walk ran partly under other code, so the stamp it would leave
+  // (this version's, once it completes) would claim rows it never re-cleaned: a roll forward over a rolled-back build's open walk.
+  const due = state.v !== BELT_VERSION || (state.gen !== null && state.gv !== BELT_VERSION) || live.some((r) => r <= mark && !covered.has(r));
   return { due, restart: due && !genOk, next };
 }
 /** The state a completed generation leaves: the units live at every one of its ticks (`gen`), at the version its walk

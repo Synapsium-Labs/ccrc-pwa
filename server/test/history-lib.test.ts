@@ -9658,4 +9658,23 @@ describe('W5h-2 Task 2: a re-derivation probe counts each row the composed index
     expect(libRedact.rederivePlan(0, 0, 9, { target: 0, cursor: 5, end: 9, belt: true }, true, true)).toEqual({ target: 0, cursor: 0, end: 9, belt: true });
     expect(libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [], gen: null }, [], 0).due, 'CONTROL: a store at this version is not due').toBe(false);
   });
+
+  // D-6068 (history-belt-forward-restarts-other-version-generation): a v2 generation completed, a rollback's v1 build opened its own
+  // generation ({ v: 2, gen: [...], gv: 1 }) and the box rolled forward before that walk completed. The forward build must not
+  // continue the v1 walk and stamp v 2 over rows it never re-cleaned: the generation another version opened is due and restarts.
+  it('a roll forward over a generation a BELT_VERSION 1 build left open (the store still stamped v 2) is due and restarts at cursor 0', () => {
+    for (const live of [[], [1]]) {
+      const d = libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [...live], gen: [...live], gv: 1 }, live, 1);
+      expect(d.due, `live ${JSON.stringify(live)}`).toBe(true);
+      expect(d.restart, `live ${JSON.stringify(live)}`).toBe(true);
+    }
+    expect(libRedact.rederivePlan(1, 1, 9, { target: 1, cursor: 5, end: 9, belt: true }, true, true), 'the walk begins again').toEqual({ target: 1, cursor: 0, end: 9, belt: true });
+  });
+
+  it('CONTROL: a generation of this version, open with no live unit, is not due and continues; a B1-opened one (gen null) is unchanged', () => {
+    const own = libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [], gen: [], gv: libRedact.BELT_VERSION }, [], 0);
+    expect(own.due).toBe(false);
+    expect(own.restart).toBe(false);
+    expect(libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [], gen: null }, [], 0)).toEqual({ due: false, restart: false, next: { v: libRedact.BELT_VERSION, rids: [], gen: null } });
+  });
 });
