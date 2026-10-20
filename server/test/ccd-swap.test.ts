@@ -420,17 +420,27 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     //
     // The killer subshell is what keeps `while :` from hanging the suite
     // instead of failing it: a beat that had to be killed comes back 137.
+    // Killed itself once the beat ends, it takes its own sleep with it (the
+    // TERM trap): a bare `( command sleep 20; … )` left the sleep running past
+    // the suite, and the run's orphan check (D-3533) fails on it.
     const out = h.sh(`sleep() { :; }; _reg_set() { echo tick >> "$HOME/beats"; }
       _swap_beat ${ID} $$ & beat=$!
-      ( command sleep 20; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
+      ( command sleep 20 & s=$!; trap 'kill "$s"; exit 0' TERM; wait "$s"; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
       wait "$beat"; rc=$?
+      for _ in $(seq 100); do ks=$(pgrep -P "$killer") && break; command sleep 0.05; done
       kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
+      left=yes; for _ in $(seq 40); do kill -0 "$ks" 2>/dev/null || { left=no; break; }; command sleep 0.05; done; [ "$left" = no ] || kill "$ks" 2>/dev/null
+      echo "killer_sleep=\${ks:+found} left=$left"
       echo "rc=$rc ticks=$(wc -l < "$HOME/beats" | tr -d ' ') max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
     // The window is asserted, not just the counter: "bounded twice over" is a
     // claim about TWO HOURS, and 240 ticks means two hours only while the
     // interval is 30s. Turning either constant into something a leaked stamper
     // could live inside fails here.
-    expect(out).toBe('rc=0 ticks=240 max=240 window=7200');
+    // The killer's own sleep is gone too (D-6113): the leak check (D-3533)
+    // failed a CI run on exactly this `sleep 20`, orphaned by `kill "$killer"`.
+    // Its pid is read before the kill, after polling until it exists, so the
+    // check cannot pass vacuously; the 2s poll lets the TERMed sleep be reaped.
+    expect(out).toBe('killer_sleep=found left=no\nrc=0 ticks=240 max=240 window=7200');
   });
 
   /** The refusal fixture's stubs, with ONE difference from `SWAP`: the beat's

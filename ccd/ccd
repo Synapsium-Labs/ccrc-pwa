@@ -26162,10 +26162,12 @@ _swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTER
   # running, reparented, still holding the stdout it inherited from `cmd_swap` —
   # so anything capturing `ccd swap`'s output (the agent's execFile, a `$(…)`)
   # waited for EOF up to SWAP_BEAT_INTERVAL after every swap. `wait` is
-  # interruptible by a trapped signal, a foreground child is not. The trap is
-  # dropped on the way out so a foreground call leaves its caller's untouched.
+  # interruptible by a trapped signal, a foreground child is not. The trap
+  # also waits on the sleep it kills, so the stamper is gone only once its
+  # sleep is. The trap is dropped on the way out so a foreground call leaves
+  # its caller's untouched.
   local id="$1" parent="$2" i=0 s=''
-  trap '[[ -n "$s" ]] && kill "$s" 2>/dev/null; exit 0' TERM
+  trap '[[ -n "$s" ]] && { kill "$s"; wait "$s"; } 2>/dev/null; exit 0' TERM
   while (( i < SWAP_BEAT_MAX )); do
     sleep "$SWAP_BEAT_INTERVAL" & s=$!
     wait "$s"; s=''
