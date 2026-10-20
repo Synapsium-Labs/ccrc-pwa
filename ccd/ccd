@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f70f322b5f0f256f4c6cfcb2821a02ed46bd65ad1566818edd52a02b5fd6b76b
+# ccrc:generated 1 sha256=93af085048fb6eb40c0116ae7b94d8b49251965fd3e19b37502911ecf90e246b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5700,14 +5700,13 @@ def git(main, *args):
     return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
 
 def ours_of(main, tip, oids):
-    """Proof 0 for every row at once: the PR's head commit exists locally AND, where we have a tip to reach from, is
-    reachable from it, which a recycled slug and a stranger's fork both fail. The SAME answers as `one_ours`, from ONE
-    `cat-file --batch-check` and at most ONE `rev-list`, where the row loop cost a --project sweep ~200 spawns per
-    workspace (landing-order wave 3c). Oids go on STDIN, never an argv (spec §7), and only after `fullmatch`: `OID.match`
-    lets a trailing newline through, which on stdin would shift every later answer. Each is asked peeled (`X^{commit}`,
-    as cat-file -e asked) and bare (as merge-base resolves it), so a name ambiguous bare answers False where merge-base
-    refused it. `tip is None` (the registry's branch did not resolve) skips reachability, as before, and a tip rev-list
-    cannot read answers False. A batch that does not answer cleanly falls back to `one_ours` row by row."""
+    """Proof 0 for every row at once: the PR's head commit exists locally AND, with a tip to reach from, is reachable from it. The
+    SAME answers as `one_ours` from ONE `cat-file --batch-check` and at most ONE `rev-list`, not ~200 spawns a workspace. Oids go
+    on STDIN, never an argv (spec §7), only after `fullmatch`: `OID.match` lets a trailing newline through and shifts every later
+    answer. Each is asked peeled (`X^{commit}`) and bare (as merge-base resolves it), so a name ambiguous bare answers False. `tip
+    is None` (a hand rename or delete, which deviation 7 measured and calls ORDINARY) SKIPS reachability: False would demote a
+    bound MERGED row and clear its persisted number, a LOCAL fact erasing GitHub's answer; a recycled slug always resolves, so
+    gets the full proof. A tip rev-list cannot read answers False; an unclean batch falls back to `one_ours`."""
     cands = sorted({o for o in oids if isinstance(o, str) and OID.fullmatch(o)})
     full, amb = {}, set()
     if cands:
@@ -5729,8 +5728,9 @@ def ours_of(main, tip, oids):
     return [isinstance(o, str) and o in full and (reach is None or (full[o] in reach and o not in amb)) for o in oids]
 
 def one_ours(main, tip, oid):
-    """The one-row proof, kept for a batch that did not answer cleanly (its answers define ours_of's)."""
-    if not isinstance(oid, str) or not OID.match(oid) or git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
+    """The one-row proof, kept for a batch that did not answer cleanly (its answers define ours_of's). The cat-file rung stays
+    apart from the ancestry call: git's exit 128 means "could not", 1 means "no"."""
+    if not isinstance(oid, str) or not OID.fullmatch(oid) or git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
         return False
     return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
