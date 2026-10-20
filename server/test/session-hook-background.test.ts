@@ -206,7 +206,7 @@ describe('the Stop records delegated background work (D-5231)', () => {
 // stop counting. This case reads the two `IN(...)` lists out of `ccd/session-hook.sh` as text and asserts each equals
 // its TypeScript list as a set, with no duplicate and no entry that is not a plain string literal.
 describe('the hook’s jq lists equal the TypeScript lists as sets (D-6117)', () => {
-  /** The one `IN(...)` list after `<subject> | IN(` in the delegated-task program; every match, so a copy reds. */
+  /** The one `IN(...)` list after `<subject> | IN(` in the delegated-task program; every match, so a second list of the same `<subject> | IN(...)` shape reds (an exclusion written another way, e.g. `select(kind != ...)`, is out of reach). */
   const inLists = (text: string, subject: string): string[] => {
     const esc = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return [...text.matchAll(new RegExp(`\\(${esc} \\| IN\\(([^)]*)\\)\\) \\| not\\)`, 'g'))].map((m) => m[1]!);
