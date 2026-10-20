@@ -26,6 +26,7 @@ import { configDirFor } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(here, '..', 'src');
@@ -232,17 +233,8 @@ const blankComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, pre: string) => pre + ' '.repeat(m.length - pre.length));
 
-const sweepMailCode = (): string => {
-  const src = blankComments(readFileSync(path.join(srcDir, 'watch.ts'), 'utf8'));
-  const head = src.indexOf('async sweepMail(): Promise<void> {');
-  const open = src.indexOf('{', head);
-  let depth = 0, i = open;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}' && --depth === 0) break;
-  }
-  return src.slice(open, i);
-};
+/** `sweepMail`'s code, keyed on its symbol (D-5854: no literal source pin over a W1a file), comments blanked. */
+const sweepMailCode = (): string => blankComments(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepMail'));
 
 type Policy = 'stash' | 'refuse-or-replace';
 interface Site { file: string; fn: string; policy: Policy }
