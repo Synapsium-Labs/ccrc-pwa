@@ -1212,6 +1212,89 @@ describe('D-5832 R4 (owed from review 642 F6): a pass that throws out of run, an
   });
 });
 
+/**
+ * Review 677 F6: `run` has two more not-ready returns than R4's cases above, R109's "cut before the owners" exits: the one after the `root`
+ * phase and the one after the `load` phase. Each is reached the way the lane reaches it in production: the pass budget (a global timer)
+ * fires while the phase's read is still open, `sweep` returns at the cut, and the cut pass's `run` takes the exit when the read answers
+ * late. Under `noteSessions: 1001` its block is over the threshold before either exit, so the `finally` must write the one line (cut=1).
+ * Green by design at main; MX2 (no line on a not-ready return) reds both rows on their line-count assertion.
+ */
+describe('D-5832 R4 (review 677 F6): the two R109 cut-before-owners exits each write their one line at the late settle', () => {
+  const lineAtTheLateSettle = async (
+    w: World, warn: ReturnType<typeof quietWarn>, r: Rig, started: () => boolean, release: () => void, stuck: Promise<void>, exit: string,
+  ): Promise<Map<string, number>> => {
+    await vi.waitFor(() => expect(started(), `the pass is inside ${exit}'s read`).toBe(true), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await stuck;                                                      // the pass ended although the read did not
+    expect(slowLines(warn), 'a pass that has not settled has written nothing, though its block is already over the threshold').toEqual([]);
+    expect(r.fired, 'no owner was reached').not.toContain('owners');
+    release();                                                        // the late answer arrives: the cut pass takes the R109 exit and settles
+    await vi.waitFor(() => expect(slowLines(warn), 'one line, at the late settle').toHaveLength(1), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(10);
+    const lines = slowLines(warn);
+    expect(lines, 'and exactly one').toHaveLength(1);
+    const m = parse(lines[0]!);
+    expect(m.get('cut')).toBe(1);
+    expect(m.get('noteSessions')).toBe(1001);
+    expect(m.get('block'), 'only noteSessions took block time').toBe(1001);
+    expect(m.has('reconcile'), 'a cut pass reconciles nothing').toBe(false);
+    expect(laneOf(w)['notReady'], 'the lane is not ready after the exit').toBe(true);
+    expect(w.calls.listings, 'no owner was listed').toEqual([]);
+    return m;
+  };
+  const setUp = (): { w: World; warn: ReturnType<typeof quietWarn>; r: Rig } => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    const r = rig(w);
+    r.arm({ noteSessions: 1001 });                                    // block is over the threshold before either exit
+    setNow(NOW);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
+    return { w, warn, r };
+  };
+
+  it('D-5832 R4 (review 677 F6; green by design at main; MX2 reds it): a pass cut while the projects root resolves takes the exit after the root phase and writes one line, cut=1', async () => {
+    const { w, warn, r } = setUp();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // `resolveProjectsRoot` awaits this read; when it answers late its own `if (pass.signal.aborted) return;` returns into `run`, whose check
+    // right after the `root` phase takes the exit (the load phase was never announced).
+    const io = (laneOf(w)['deps'] as { io: FleetIO }).io;
+    const real = io.realpath.bind(io);
+    vi.spyOn(io, 'realpath').mockImplementation(async (p: string) => { started = true; await gate; return real(p); });
+    const passesBefore = laneOf(w)['passes'];
+    const stuck = pass(w, DEMO_A);
+    const m = await lineAtTheLateSettle(w, warn, r, () => started, release, stuck, 'the root phase');
+    expect(r.fired, 'the root phase was announced and the load phase was not').toEqual(expect.arrayContaining(['noteSessions', 'open', 'root']));
+    expect(r.fired).not.toContain('load');
+    expect(r.fired.filter((k) => ['expire', 'flush', 'reconcile'].includes(k)), 'nothing after the exit ran').toEqual([]);
+    expect(laneOf(w)['passes'], 'the pass count (incremented after the exit) did not move').toBe(passesBefore);
+    expect(m.has('load'), 'no load phase is on the line').toBe(false);
+  });
+
+  it('D-5832 R4 (review 677 F6; green by design at main; MX2 reds it): a pass cut while the evidence loads takes the exit after the load phase and writes one line, cut=1', async () => {
+    const { w, warn, r } = setUp();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // `loadEvidence` awaits the journal visit; when it answers late the load completes and `run`'s check right after the `load` phase takes
+    // the exit (`pass.reachedOwners` was never set; the owners phase was never announced).
+    const visit = DelegationDurability.prototype.visitRetainedRecords;
+    vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockImplementation(async function (this: DelegationDurability, ...args: Parameters<typeof visit>) {
+      started = true; await gate; return visit.apply(this, args);
+    });
+    const passesBefore = laneOf(w)['passes'] as number;
+    const stuck = pass(w, DEMO_A);
+    const m = await lineAtTheLateSettle(w, warn, r, () => started, release, stuck, 'the load phase');
+    expect(r.fired, 'the root and load phases were announced').toEqual(expect.arrayContaining(['noteSessions', 'open', 'root', 'load']));
+    expect(r.fired.filter((k) => ['expire', 'flush', 'reconcile'].includes(k)), 'nothing after the exit ran').toEqual([]);
+    expect(laneOf(w)['passes'], 'the pass count (incremented before the load) moved by one').toBe(passesBefore + 1);
+    expect(m.has('load'), 'the load phase is on the line').toBe(true);
+  });
+});
+
 describe('D-5832 R5: the real loop: a 50 ms synchronous stall inside the store\'s projection reads in the stretch it was made in', () => {
   it.each([
     { arm: 'repair', key: 'stallRepair' },
