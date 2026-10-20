@@ -98,7 +98,9 @@ function typeOnly(src: string): boolean {
   const c = codeOnly(src);
   const tops = c.split('\n').filter((l) => /^\S/.test(l) && !/^\}/.test(l));
   return tops.length > 0 && tops.every((l) =>
-    /^import type\s/.test(l) || /^export (?:type|interface)\s/.test(l) || /^(?:type|interface)\s/.test(l));
+    /^import type\s/.test(l) || /^export (?:type|interface)\s/.test(l) || /^(?:type|interface)\s/.test(l))
+    // and no runtime declaration hides anywhere: indented, or on the line a closing brace ends
+    && !/(^|[;}])\s*(?:export\s+)?(?:const|let|var|function|class|enum|default)\b|\bexport\s*\{(?!\s*type\b)/m.test(c);
 }
 
 describe('the scan itself (CONTROL)', () => {
@@ -135,6 +137,9 @@ describe('the scan itself (CONTROL)', () => {
     expect(typeOnly(`import type { A } from './a.js';\n\nexport interface B {\n  a: A;\n}\nexport type C = B;\n`)).toBe(true);
     expect(typeOnly(`import type { A } from './a.js';\nexport const b = 1;\n`)).toBe(false);
     expect(typeOnly(`import { A } from './a.js';\nexport type C = A;\n`)).toBe(false);
+    // A runtime statement that is indented, or that shares a line with a closing brace, is still one.
+    expect(typeOnly(`export interface B {\n  a: 1;\n}\n  export const b = 1;\n`)).toBe(false);
+    expect(typeOnly(`export interface B {\n  a: 1;\n} export const b = 1;\n`)).toBe(false);
   });
 });
 
