@@ -2429,24 +2429,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
     // `settleAsk` then throws, at least one durable trace of the answer
     // survives. Independently optional, same as that route: a box with no
-    // `notifyLog` configured still answers the request.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: id, runId: null,
-          title: 'question answered',
-          body: `operator answered ${id}'s question: ${held.question} → ` +
-                `${held.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // `notifyLog` configured still answers the request. Recorded whatever the
+    // presence, never pushed, and a failed archive never fails the answer
+    // (the notice sink's `'record-only'`, D-5857).
+    notice({
+      kind: 'ask', sessionId: id, runId: null,
+      title: 'question answered',
+      body: `operator answered ${id}'s question: ${held.question} → ` +
+            `${held.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
 
     // GUARDED (Task 9's own lesson): the digit already landed above, so a
     // failure to record it must never turn a successful press into a 500.
