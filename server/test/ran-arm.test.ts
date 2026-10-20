@@ -116,6 +116,12 @@ describe('the local runner says ran:false only for a spawn error', () => {
     const res = await realRunner('sh', ['-c', 'exit 1']);
     expect(res).toEqual({ code: 1, stdout: '', stderr: '', killed: false, signal: null });
   });
+
+  it('a child that ran and overflowed maxBuffer (a string code, not a spawn syscall) carries no ran key', async () => {
+    const res = await realRunner(process.execPath, ['-e', "process.stdout.write('x'.repeat(9 * 1024 * 1024))"]);
+    expect(res.code).toBe(1);
+    expect('ran' in res).toBe(false);
+  });
 });
 
 // ── the carry into CcdResult ─────────────────────────────────────────────────
@@ -129,6 +135,11 @@ describe('ccd() carries the arm, and nothing else moves', () => {
     expect(res).toEqual({ ok: false, stdout: '', stderr: 'disconnected', killed: UNMEASURED, signal: UNMEASURED,
       ran: false, reason: 'transport', detail: 'disconnected' });
     expect(cutShort(res)).toBe(UNMEASURED);
+  });
+
+  it('ok:false is the arm\'s own claim: a not-ran answer with code 0 still reaches CcdResult as ok:false', async () => {
+    const res = await via({ code: 0, stdout: '', stderr: '', ran: false, reason: 'transport', detail: 'disconnected' });
+    expect(res).toMatchObject({ ok: false, ran: false, reason: 'transport' });
   });
 
   it('a local spawn error keeps its measured halves: cutShort false, as before', async () => {
