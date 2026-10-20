@@ -1278,7 +1278,7 @@ describe('W2-4 Task 5: RP1-contract on the stub, launch per kind (W2-D50, W2-D51
     expect(t5drv.spentSoFar(b.out)).toBe(T5_TOKENS);
   }, 60_000);
 
-  it('a run that outlives its timeout is killed on its own pid and recorded with its signal', async () => {
+  it('a run that outlives its timeout is killed with its process group and recorded with its signal', async () => {
     const b = t5Box('ccrc-replay-t5-timeout-');
     t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '8000');
     const o = await claimedRun(t5job(b, b.up, 'box', 'rp1-timeout', { timeoutMs: 300 }));

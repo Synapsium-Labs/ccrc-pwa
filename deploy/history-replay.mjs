@@ -895,8 +895,8 @@ export function spentSoFar(out) {
 // that the next batch (or launchRun) settles before any gate reads it (settleLeftover, D-5984); a driver that died
 // between the spend line and the rename leaves a `.part` that is charged again (an over-count); one that died between the
 // rename and the run.json leaves a `.jsonl` and its ledger line, and the re-spawn's spend adds to it (an over-count).
-// Over-counting is the budget's safe direction; a spawn the ledger never saw is the unsafe one. What the code now says is
-// true, and no more: a leftover whose writer is alive (its `.pid` record reads alive or unmeasured) refuses `run-live` and
+// Over-counting is the budget's safe direction; a spawn the ledger never saw is the unsafe one. What the code does: a
+// leftover whose writer is alive (its `.pid` record reads alive or unmeasured) refuses `run-live` and
 // is never charged, removed or spawned again; a dead writer's `.part` is charged once and removed. The named residual
 // windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
 // says, even if the child lives on), and a grandchild that calls setsid itself (it escapes the group kill and writes no
