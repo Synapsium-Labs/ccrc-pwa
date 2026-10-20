@@ -348,7 +348,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 - Create `pwa/src/screens/settings/ClaudeCodeCard.tsx`: a `Section({ scope: 'Whole fleet', title: 'Claude Code', purpose, children })`, prop-fed from the provider's `SettingsView`, no request of its own. Shows the channel and mode (read-only words in this wave), and per node: candidate, target per kind, latest and stable, installed builds with signature, checksum, smoke and halted words, the session counts, the last run with its `why` and failures, lane self-update off or kept, memory headroom and swap use (swap shown, never called a hold: decision 6), intent freshness, and the switches, read-only.
 - Modify `pwa/src/screens/settings/UpdatesSection.tsx` (R2b1 creates it): one entry in R2b2's ordered list, between Nodes and Update policy (C5, answered).
 - Modify `pwa/src/screens/settings/SettingsDataProvider.tsx`: `SettingsView.claude` from the existing `/api/updates` read.
-- Modify `pwa/src/screens/settingsText.ts`: the card's words (purpose, the `why` sentences, one per enum member, a total record).
+- Modify `pwa/src/fleet/settingsText.ts` (moved from `screens/` by D-5897): the card's words (purpose, the `why` sentences, one per enum member, a total record).
 - Create `pwa/test/claude-code-card.test.tsx`.
 - Modify `pwa/test/settings-updates.test.tsx` (R2b2 creates it): its order case becomes "the cards are Fleet version, Nodes, Claude Code, Update policy, in that order, from one list".
 
