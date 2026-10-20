@@ -46,7 +46,8 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  run whose post-close stretch is under way when a signal arrives is recorded, and the subcommand then refuses; a run
  *  stopped in flight is charged once, by its spend line; a signal that arrives in the synchronous stretch between a yield
  *  and a spawn is handled at the next turn, and that child is stopped and charged; a signal that arrives after the batch's
- *  last check, when every child has closed, is not handled: the result is written and the driver exits 0: D-5984). */
+ *  last check, when every child has closed, is not handled: the result is written, and the driver exits 0, or ends by
+ *  that signal if it comes after main has removed its listeners: D-5984). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -166,7 +167,8 @@ export function paneRefusal(env) {
 // cannot hold the driver, its lock or a signal's answer.
 // Residuals, named: that yield-to-spawn window; the post-last-check window (a signal that arrives after runBatch's last
 // check, when every child has closed, is not handled: main removes its listeners before the loop polls, the result is
-// written and the driver exits 0); a driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
+// written, and the driver exits 0, or, when the signal comes after that removal, ends by the signal's default action); a
+// driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
 // charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds
 // the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a resume then
 // refuses the changed stream); a process in the run's group that holds no pipe to the driver, whether or not it ignores
@@ -1718,7 +1720,8 @@ export async function runBatch(jobs, opts = {}) {
   // D-5984: the batch's last check. A lane's final iteration returns at the re-read with no stop check of its own, so a
   // signal handled at that last yield is caught here. Nothing awaits between this return and the subcommand's
   // step0a.json or probe.json write, so no handler can run in between: this check covers those writes. A signal that arrives
-  // after it, when every child has closed, is not handled (the post-last-check window): the result is written, exit 0.
+  // after it, when every child has closed, is not handled (the post-last-check window): the result is written, and the
+  // driver exits 0, or ends by that signal if it comes after main has removed its listeners.
   refuseIfStopping();
   return outcomes;
 }
