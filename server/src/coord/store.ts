@@ -22,8 +22,8 @@ import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from 
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
 import {
-  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
-  type ChildReclaimLeafSourceRow,
+  CHILD_RECLAIM_LEAF_END_ACTS, CHILD_RECLAIM_LEAF_FAILED_TOKENS, childReclaimLeafEndRead,
+  type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow, type ChildReclaimLeafSourceRow,
 } from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
@@ -6306,26 +6306,33 @@ export class CoordStore {
   /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
    *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
   static lifecycleLeafEndsSql(sessions: number): string {
-    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    return 'SELECT id, sessionId, act, at, truncated, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
       `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
   }
 
   /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
    *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
    *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
-   *  and whether a create is placed, are L1's. */
+   *  and whether a create is placed, are L1's.
+   *
+   *  A `collect` row's line goes to L1 RAW (path-identity spec §3.4): the stored `measJson` and the cut flag are
+   *  handed to `childReclaimLeafEndRead`, never a value revived from them, because the reader needs the cut flag
+   *  beside the text. The store decides nothing: what the line says of the leaf, and whether that ends the item,
+   *  are L1's. The two acts are L1's one spelling, `CHILD_RECLAIM_LEAF_END_ACTS`. */
   lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
     const ids = [...new Set(sessionIds)];
     const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
     if (ids.length === 0) return out;
-    const create: ChildReclaimLeafEndRow['act'] = 'create';
-    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const { create, collect } = CHILD_RECLAIM_LEAF_END_ACTS;
     const done: LifecycleOutcome = 'done';
     const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
-      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+      .all(...ids, create, collect, done) as
+        { id: number; sessionId: string; act: string; at: number | null; truncated: number; measJson: string | null }[];
     for (const r of rows) {
-      const act = r.act === create ? create : r.act === collect ? collect : null;
-      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
+      if (r.act === create) out.get(r.sessionId)?.push({ id: r.id, act: create, at: r.at });
+      else if (r.act === collect) {
+        out.get(r.sessionId)?.push({ id: r.id, act: collect, at: r.at, leaf: childReclaimLeafEndRead(r.measJson, r.truncated !== 0) });
+      }
     }
     return out;
   }

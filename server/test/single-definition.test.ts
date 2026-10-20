@@ -7320,3 +7320,30 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
     expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
   });
 });
+
+// PATH IDENTITY W2 (spec 2026-10-12 §3.4). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
+// citation audit cites this file by line. A `collect` `done`'s leaf words (`meas.leaf`) are ONE L0 table's keys in
+// `shared/api.ts`, and the runtime list derives from it. A second hand copy (a reader in `childReclaimSweep.ts` that
+// lists the two words itself, say) would drift from ccd's emit census, which reads the L0 list. KNOWN WIDTH: the two
+// words as a pair (a table, a union or an array) are seen; either word alone is ordinary copy and is not scanned.
+describe('path identity W2: the collect leaf words are spelled once, in shared/api.ts', () => {
+  const PAIR = /\bremoved:\s*true\b[^}]*\babsent:\s*true\b|\babsent:\s*true\b[^}]*\bremoved:\s*true\b|['"]removed['"]\s*[,|]\s*['"]absent['"]|['"]absent['"]\s*[,|]\s*['"]removed['"]/;
+  const api = (): string => readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+
+  it('CONTROL: the pair pattern sees a table, a union and an array, either way round, and passes over two comparisons', () => {
+    expect(PAIR.test('const T = { removed: true, absent: true };')).toBe(true);
+    expect(PAIR.test("type W = 'absent' | 'removed';")).toBe(true);
+    expect(PAIR.test("const W = ['removed', 'absent'];")).toBe(true);
+    expect(PAIR.test("x.word === 'removed' || x.word === 'absent'")).toBe(false);
+  });
+
+  it('COLLECT_LEAF_END_WORDS derives from its table', () => {
+    expect(api()).toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\n?\s*Object\.keys\(COLLECT_LEAF_END_TABLE\)/);
+    expect(api(), 'a hand-written array').not.toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\[/);
+  });
+
+  it('the two words are spelled as a vocabulary in shared/api.ts alone', () => {
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+});
