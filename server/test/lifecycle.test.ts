@@ -1074,7 +1074,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   });
 
   // ── ccrc history (spec 2026-10-05 §9.4, pin O17) ────────────────────────
-  // Thirteen classes, landed across six PRs. `LifecycleClass` has no "lands in" field — the manifest says what
+  // Thirteen classes, landed across seven PRs. `LifecycleClass` has no "lands in" field — the manifest says what
   // IS, not what a plan will add — so which PR adds which row lives here, beside the assertion that reads it.
   // Each later PR appends its key to HISTORY_LANDED in the commit that adds its rows.
   const HISTORY_ROWS_BY_PR = {
