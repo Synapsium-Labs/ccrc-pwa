@@ -7,9 +7,9 @@
 // The scan is syntax only, through `../scan/parse.js` (ARCH-00's one parser wrapper; never a parser imported here).
 // A union counts when it is a top-level `export type X = 'a' | 'b' | …` of two or more literals. The map or guard
 // must be in the SAME file (that is what "sibling" means), and the map must type a variable or a `satisfies`.
-// Stated limits: the map alone satisfies the rule (a list derived from it is the convention, not checked); a union
-// with a `null` member is not scanned; a type-only guard signature, an `asserts v is X` predicate or a `declare const`
-// map would count although none gives a runtime list.
+// Only forms that exist at runtime count: a `declare` map, an `asserts v is X` predicate and a type-only guard
+// signature do not. Stated limits: the map alone satisfies the rule (a list derived from it is the convention, not
+// checked); a literal union with a `null` member (today `api.ts:PrChecks`) is not scanned.
 //
 // EXEMPT is the merge-day debt. It started at the merge-day count (31) minus this PR's three lists, it may only
 // shrink, and every entry carries its reason. Adding a list to an exempt union makes the stale-entry row red until its
@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
+import { parseFile, parseSource, wireFacts, type ParsedFile } from '../scan/parse.js';
 import {
   POOLS_ENFORCEMENTS, SESSION_BUCKETS, SESSION_STATUSES, isPoolsEnforcement,
 } from '../../../shared/api.js';
@@ -73,7 +73,8 @@ function literalUnions(file: string, p: ParsedFile): Union[] {
 
 /** The unions in one parsed file with neither a sibling `Record<X, true>` map nor an `is X` guard. */
 function listless(file: string, p: ParsedFile): Union[] {
-  return literalUnions(file, p).filter((u) => !p.recordTrueKeys.includes(u.name) && !p.guardedTypes.includes(u.name));
+  const f = wireFacts(p);
+  return literalUnions(file, p).filter((u) => !f.recordTrueKeys.includes(u.name) && !f.guardedTypes.includes(u.name));
 }
 
 const SHARED_FILES = readdirSync(SHARED).filter((f) => /\.ts$/.test(f) && !/\.d\.ts$/.test(f)).sort();
@@ -136,10 +137,12 @@ describe('wire totality: every exported literal union in shared/*.ts has a deriv
     }
   });
 
+  // Any hand comparison in fleet.ts against a member word fails this row, even an unrelated `=== 'unknown'`: the
+  // acceptance is that the store spells none of them, so such a comparison reads its word from a list too.
   it('pwa/src/stores/fleet.ts no longer spells the PoolsEnforcement members: it reads the shared guard', () => {
     const fleet = parseFile(path.join(ROOT, 'pwa', 'src', 'stores', 'fleet.ts'));
     const members = PARSED.get('api.ts')!.exportedTypeAliases.find((a) => a.name === 'PoolsEnforcement')!.literals!;
-    expect(fleet.comparedLiterals.filter((l) => members.includes(l))).toEqual([]);
+    expect(wireFacts(fleet).comparedLiterals.filter((l) => members.includes(l))).toEqual([]);
     const shared = fleet.imports.filter((i) => /shared\/api$/.test(i.specifier)).flatMap((i) => i.names);
     expect(shared).toContain('isPoolsEnforcement');
   });

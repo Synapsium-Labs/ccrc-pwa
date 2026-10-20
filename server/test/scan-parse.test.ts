@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseFile, parseSource, type ParsedFile } from './scan/parse.js';
+import { parseFile, parseSource, wireFacts, type ParsedFile } from './scan/parse.js';
 
 const FIXTURE = [
   "import { readFileSync, type Stats } from 'node:fs';",
@@ -103,7 +103,7 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
 });
 
 describe('scan/parse.ts reads the totality facts: Record<X, true> maps, type guards, compared literals (D-6048)', () => {
-  const FACTS = parseSource([
+  const FACTS = wireFacts(parseSource([
     "export type Mode = 'on' | 'off';",
     "export type Kind = 'a' | 'b';",
     "export type Tone = 'x' | 'y';",
@@ -119,7 +119,7 @@ describe('scan/parse.ts reads the totality facts: Record<X, true> maps, type gua
     'export function check(v: string): string {',
     "  switch (v) { case 'left': return v !== 'right' ? 'up' : 'down'; default: return v; }",
     '}',
-  ].join('\n'));
+  ].join('\n')));
 
   it('a Record<X, true> counts as a variable annotation (bare or Readonly) or a satisfies type, nowhere else', () => {
     expect(FACTS.recordTrueKeys).toEqual(['Mode', 'Kind', 'Tone']);
@@ -131,5 +131,18 @@ describe('scan/parse.ts reads the totality facts: Record<X, true> maps, type gua
 
   it('a compared literal is an equality operand or a case label, in source order', () => {
     expect(FACTS.comparedLiterals).toEqual(['on', 'off', 'left', 'right']);
+  });
+
+  it('a form that gives nothing at runtime counts as neither: a declare map, an asserts predicate, a type-only guard', () => {
+    const none = wireFacts(parseSource([
+      "export type Mode = 'on' | 'off';",
+      'declare const M: Record<Mode, true>;',
+      'export function assertMode(v: unknown): asserts v is Mode {}',
+      'type G = (v: unknown) => v is Mode;',
+      'interface H { isMode(v: unknown): v is Mode }',
+      'declare function isMode(v: unknown): v is Mode;',
+    ].join('\n')));
+    expect(none.recordTrueKeys).toEqual([]);
+    expect(none.guardedTypes).toEqual([]);
   });
 });

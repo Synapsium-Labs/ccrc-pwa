@@ -58,14 +58,6 @@ export interface ParsedFile {
   imports: ImportEdge[];
   exportedTypeAliases: TypeAlias[];
   symbols: SymbolSpan[];
-  /** D-6048 (ARCH-12): the `X` of every `Record<X, true>` (bare or inside `Readonly<…>`) that types a variable or a
-   *  `satisfies` expression: a map that fails to compile when `X` gains a member. Bare type names only. */
-  recordTrueKeys: string[];
-  /** D-6048 (ARCH-12): the `X` of every `v is X` / `asserts v is X` type predicate, bare type names only. */
-  guardedTypes: string[];
-  /** D-6048 (ARCH-12): every string literal a file compares against by hand: an operand of `===`, `!==`, `==` or
-   *  `!=`, or a `case` label. In source order, repeats kept. */
-  comparedLiterals: string[];
 }
 
 const scriptKindOf = (file: string): ts.ScriptKind =>
@@ -105,6 +97,54 @@ const recordTrueKey = (t: ts.TypeNode): string | null => {
     && ts.isLiteralTypeNode(v) && v.literal.kind === ts.SyntaxKind.TrueKeyword ? k.typeName.text : null;
 };
 
+/** D-6048 (ARCH-12): the wire-totality facts of one parsed file, read by a walk of their own (kept out of
+ *  `ParsedFile` so the shared walk stays one owner's). Runtime-bearing forms only. */
+export interface WireFacts {
+  /** The `X` of every `Record<X, true>` (bare or inside `Readonly<…>`) typing a non-`declare` variable or a
+   *  `satisfies` expression: a map that fails to compile when `X` gains a member. Bare type names only. */
+  recordTrueKeys: string[];
+  /** The `X` of every `v is X` predicate on a function, method or arrow WITH a body; not `asserts v is X`, not a
+   *  type-only signature. Bare type names only. */
+  guardedTypes: string[];
+  /** Every string literal the file compares against by hand: an operand of `===`, `!==`, `==` or `!=`, or a `case`
+   *  label. In source order, repeats kept. */
+  comparedLiterals: string[];
+}
+
+const EQUALITY = new Set<ts.SyntaxKind>([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
+
+const isDeclared = (d: ts.VariableDeclaration): boolean => {
+  const stmt = d.parent?.parent;
+  return !!stmt && ts.isVariableStatement(stmt)
+    && !!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword);
+};
+
+const hasBody = (n: ts.Node): boolean =>
+  (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n))
+  && n.body !== undefined;
+
+/** The wire-totality facts of `p` (D-6048). */
+export function wireFacts(p: ParsedFile): WireFacts {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const out: WireFacts = { recordTrueKeys: [], guardedTypes: [], comparedLiterals: [] };
+  const visit = (node: ts.Node): void => {
+    const rk = ts.isVariableDeclaration(node) && node.type && !isDeclared(node) ? recordTrueKey(node.type)
+      : ts.isSatisfiesExpression(node) ? recordTrueKey(node.type) : null;
+    if (rk !== null) out.recordTrueKeys.push(rk);
+    if (ts.isTypePredicateNode(node) && !node.assertsModifier && node.type && ts.isTypeReferenceNode(node.type)
+      && ts.isIdentifier(node.type.typeName) && !node.type.typeArguments && hasBody(node.parent)) {
+      out.guardedTypes.push(node.type.typeName.text);
+    }
+    const operands = ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind) ? [node.left, node.right]
+      : ts.isCaseClause(node) ? [node.expression] : [];
+    for (const o of operands) if (ts.isStringLiteralLike(o)) out.comparedLiterals.push(o.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];
   const out = members.map(literalText);
@@ -118,11 +158,6 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const imports: ImportEdge[] = [];
   const exportedTypeAliases: TypeAlias[] = [];
   const symbols: SymbolSpan[] = [];
-  const recordTrueKeys: string[] = [];
-  const guardedTypes: string[] = [];
-  const comparedLiterals: string[] = [];
-  const EQUALITY = new Set<ts.SyntaxKind>([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
-    ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
 
   const addSymbol = (name: string, kind: SymbolKind, node: ts.Node): void => {
     const start = node.getStart(sf);
@@ -157,14 +192,6 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
 
   const visit = (node: ts.Node, scope: readonly string[]): void => {
     const q = (n: string): string => [...scope, n].join('.');
-    const rk = ts.isVariableDeclaration(node) && node.type ? recordTrueKey(node.type)
-      : ts.isSatisfiesExpression(node) ? recordTrueKey(node.type) : null;
-    if (rk !== null) recordTrueKeys.push(rk);
-    if (ts.isTypePredicateNode(node) && node.type && ts.isTypeReferenceNode(node.type)
-      && ts.isIdentifier(node.type.typeName) && !node.type.typeArguments) guardedTypes.push(node.type.typeName.text);
-    const operands = ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind) ? [node.left, node.right]
-      : ts.isCaseClause(node) ? [node.expression] : [];
-    for (const o of operands) if (ts.isStringLiteralLike(o)) comparedLiterals.push(o.text);
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const a = node.arguments[0];
       if (a && ts.isStringLiteralLike(a)) {
@@ -215,8 +242,7 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   visit(sf, []);
   imports.sort((a, b) => a.line - b.line);
 
-  return { path: fileName, text, imports, exportedTypeAliases, symbols, recordTrueKeys, guardedTypes,
-    comparedLiterals };
+  return { path: fileName, text, imports, exportedTypeAliases, symbols };
 }
 
 /** Read and parse one file. */
