@@ -336,6 +336,42 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     record's part 1 is signed. From that rollout to close, the named nodes' trees do not move (W2-D6).
 - **Later (coordinator), from 5h-1's first review:** close the successor-premise residual in code with bind facts
   (the names each bind replayed whole), so a segment absent or skipped at a bind can never read as a predecessor.
+- **The build, 2026-10-19 to 2026-10-20 (coordinator rulings under the operator's directive).**
+  - **5h-1 (run 626), fix round 1, from review 644.**
+    - F1: a held mark naming an unlisted segment of another writer stays for the check, and comes off at once in a
+      forked directory. Writers are ranged over the listed names plus the names the store's marks hold. This rides
+      D-5726.
+    - The worker's probe M then showed that the layout must hold across a replay's steps: a take-off can remove the
+      last mark that witnesses a fork. That became D-5727, ruled after three Opus lenses with Sonnet refuters:
+      - one meta key per replay, tagged with the recover row's version;
+      - measured at the first export chunk, from the listing and the marks;
+      - widened by each later step's listing, and never narrowed;
+      - the widest layout taken when the key is missing or stale past that point;
+      - deleted when the recovery completes.
+    - The residuals after it are three: the successor premise (widened by F2), a segment moved into the export
+      directory part-way through a replay, and one the worker traces and states.
+  - **W2-4 (run 637).**
+    - The wave-done at `619f1aa6b` was re-measured and accepted. Review 657 found 4 important findings and 12 minor.
+    - Fix round 1 is ruled: no live child is left spending unseen; one driver per `--out`; the budget is stated as a
+      soft stop; type-safe reads and writes under `--out`; the sha on stderr.
+    - The decisions document is amended in place: W2-D25, W2-D52, W2-D55, W2-D57, W2-D59, section 5 act 7, and
+      section 7.
+    - Numbers for the fix round: D-5815, which was unused, and a block of eight issued at the ruling. Each is defined
+      in W2-4's plan by the commit that first cites it. They are not named here before that commit lands, so this
+      file never names a number above the plans' high-water mark.
+  - **W2-3 (run 636)** takes W2-4's F4: part 1 requires `box_init` to be non-null.
+  - **5h-2's brief** carries the fix of the stale "six PRs" comment in `server/test/lifecycle.test.ts`, which W2-4 left
+    as it was, because 5h-2 edits that file.
+- **Later (coordinator), from the build:**
+  - The check after a bind runs two DISTINCT scans, over `blobs.exported_seg` and `entries.exported_seg`, on every
+    check step. `exported_seg` sits after `z` and has no index, so a check spanning N steps likely reads the blob table
+    N times. It is a cost, not a loss, and it runs only after a bind or a vanished segment. Measure it on a large store;
+    an index or a per-check snapshot is the remedy. 5h-1's replay already pays its own scans once per replay
+    (D-5727).
+  - The sweep's per-pass cost under load. On 2026-10-19, two passes on a fleet node hit the unit's 10-minute start
+    timeout while the box was starved of CPU. Each pass used about 3.75 CPU-minutes back to back, most likely the FTS
+    catch-up that the stopped backfill left (`fts-pending`). Read-only status at the time: health ok, lag 341 s,
+    export nothing due. Re-measure once the backfill question is answered.
 - **Later, for the operator.**
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.
