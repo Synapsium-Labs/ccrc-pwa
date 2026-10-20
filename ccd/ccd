@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=11f1f2946feb7d35d241d8c93f4f6f33482f96f443df9d71287942ab2b2370a4
+# ccrc:generated 1 sha256=00e520b1f478339bf6a2b63227cf296b941102d51c6d66b9d523bfc4ac0b154a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -678,7 +678,7 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # a fix for the WHOLE call-site population, not for one new call site. The
   # population is measured in ccrc-account.test.ts rather than counted here, so
   # the claim cannot rot back into a claim about one caller.
-  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( s=''; trap '[ -n "$s" ] && kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" 2>/dev/null & s=$!; wait "$s" || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
