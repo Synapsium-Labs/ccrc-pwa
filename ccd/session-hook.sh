@@ -4413,6 +4413,11 @@ fi
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
 # deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, and by an edit tool. So spec §7.6's registry sentence holds for a child here too.
+# The roster's upstream id (D-6066) comes from that deny file, passed to this arm alone as `--rawfile deny` when it is
+# a regular file and not a symlink (the class-mode call passes none, so `$ARGS.named.deny // ""` reads empty there):
+# every head the file pairs as `Bash(<p> install:*)` AND `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands
+# alone in every file, so one verb is not enough). `UPRE` is then a `claude…`-like head and a `~/.local/bin/<p>`
+# launcher; with no such head, or a missing, symlinked or unparsable file (`try`), it never matches, as on main.
 # A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
@@ -4468,6 +4473,10 @@ def xmatch:
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
+([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
+| ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
+    | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
+| def UPRE: if ($ups | length) == 0 then "(?!)" else "(?:" + ($ups | join("|")) + ")" end;
 def SEPP: "/(?:\\.?/){0,8}";
 def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
 def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
@@ -4476,7 +4485,7 @@ def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
 def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + VERS;
 def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
 def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
-def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + WB + UPRE + "|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
 def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + NW + ")";
 def META: ";&|()<>`" + $q + "\"";
 def BT: "(?![A-Za-z0-9_.-])";
@@ -4484,7 +4493,7 @@ def LOC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))\\.local" + SEPP;
 def GLOBW: "[^" + WS + "/" + META + "]{0,64}";
 def BUILDX: "(?:" + LOC + "share" + SEPP + "claude" + SEPP + "versions" + BT
   + "|" + LOC + "share" + SEPP + "claude(?:" + SEPP + GLOBW + "[*?\\[{]" + GLOBW + ")?/{0,8}(?=$|[" + WS + META + "])"
-  + "|" + LOC + "bin" + SEPP + "claude" + BT + ")";
+  + "|" + LOC + "bin" + SEPP + "(?:claude|" + UPRE + ")" + BT + ")";
 def SEG: "\n|;|(?<!>)&(?!>)|(?<!>)\\|";
 def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}/dev/null" + NW + ")";
 def BWR: "(?:" + RDR + "|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB
@@ -4508,7 +4517,7 @@ def TNS: "(?:claude-roll-[A-Za-z0-9_.-]{1,64}|[A-Za-z0-9_.-]{1,128}\\.(?:claude-
 def TRUST: "(?:" + SEPP + "\\.ccrc" + SEPP + TNC + "|" + SEPP + "\\.cc-sessions" + SEPP + TNS + ")";
 def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN;
 def CLOP: "claude(?=$|[" + WS + "/;&|)])";
-def LBOP: "bin" + SEPP + "claude(?=$|[" + WS + ";&|)])";
+def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
 def bmatch:
   (select(test(BUILDX) and hbt(SEG; BWR; BUILDX)) | BW),
   (select(test(NB + "find" + NA) and test(BUILDX) and any(split(SEG; null)[]; test(NB + "find" + NA) and test(BUILDX)
@@ -4523,7 +4532,7 @@ def bmatch:
      hb1(BWR; OPW + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
   (select(cdthen("(?:" + CDH + "(?:~|\\$\\{?HOME\\}?)/{0,8}" + END + "|(?:^|[" + WS + "(])cd" + SP + "*$)"; "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
      hb1(BWR; OPW + "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
-  (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "claude" + END; hb1(BWR; OPW + "claude" + END))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "(?:claude|" + UPRE + ")" + END; hb1(BWR; OPW + "(?:claude|" + UPRE + ")" + END))) | BW),
   (select(test(BUILDX) and test("=") and (. as $c | [match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
      | select(.captures[1].string | test(BUILDX)) | .captures[0].string] | unique
      | any(.[]; . as $n | $c | hbt(SEG; BWR; "\\$\\{?" + $n + NA)))) | BW),
@@ -4531,7 +4540,7 @@ def bmatch:
   (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
   (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
   (select(test(CLI + CRUN)) | BI),
-  (select(test(WB + "claude" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
+  (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
   (select(cdthen(VERSD; VERW; test(VERW))) | BI),
   (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai")) | BI),
   (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
@@ -4574,7 +4583,11 @@ fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
     Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
-      afw=$(jq -r --arg q "'" --arg mode deny "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      adeny=()
+      if [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
+        adeny=(--rawfile deny "$REG/child-deny.settings.json")
+      fi
+      afw=$(jq -r --arg q "'" --arg mode deny "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       areason=""
       case "$afw" in
         verb$'\t'*)

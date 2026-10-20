@@ -498,3 +498,103 @@ describe('build guard D-6065: a write to a file the launcher, the roll or the gu
     for (const c of denied) expect(bash(c), c).toBeNull();
   }, 60_000);
 });
+
+describe('build guard D-6066: the upstream id, read from the deny file the installer writes', () => {
+  // The deny file is built by the REAL installer in a fixture HOME, invoked as install-session-hooks.test.ts invokes it
+  // (`--homes <home>/.claude`, HOME set to the fixture), with `~/.ccrc/accounts.sh` naming the upstream id or not.
+  const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
+  const built = new Map<string, string>();
+  const denyFileText = (upstream: string | null): string => {
+    const key = upstream ?? '';
+    const have = built.get(key);
+    if (have !== undefined) return have;
+    const h = mkTmp('ccrc-aprdeny-inst-');
+    try {
+      fs.mkdirSync(path.join(h, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(h, '.claude', 'settings.json'), '{}');
+      fs.mkdirSync(path.join(h, 'ccrc-backups'), { recursive: true });
+      if (upstream !== null) {
+        fs.mkdirSync(path.join(h, '.ccrc'), { recursive: true });
+        fs.writeFileSync(path.join(h, '.ccrc', 'accounts.sh'), `CCRC_UPSTREAM=${upstream}\n`);
+      }
+      const r = spawnSync('bash', [INSTALLER, '--homes', path.join(h, '.claude')], { env: { ...process.env, HOME: h }, encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      const text = fs.readFileSync(path.join(h, '.cc-sessions', 'child-deny.settings.json'), 'utf8');
+      built.set(key, text);
+      return text;
+    } finally { fs.rmSync(h, { recursive: true, force: true }); }
+  };
+  const DENY = (): string => path.join(home, '.cc-sessions', 'child-deny.settings.json');
+  const useDenyFile = (upstream: string | null): void => { fs.writeFileSync(DENY(), denyFileText(upstream)); };
+
+  it('the fixture is the real installer\'s: the upstream-a file pairs install and update for upstream-a, the default one does not', () => {
+    const rules = (u: string | null): string[] => (JSON.parse(denyFileText(u)) as { permissions: { deny: string[] } }).permissions.deny;
+    expect(rules('upstream-a')).toEqual(expect.arrayContaining(['Bash(upstream-a install:*)', 'Bash(upstream-a update:*)']));
+    expect(rules(null).some((r) => r.includes('upstream-a'))).toBe(false);
+    expect(rules(null)).toContain('Bash(ccrc update:*)');
+  });
+
+  const denied = [
+    'upstream-a update', 'upstream-a install 2.1.302', 'upstream-a --verbose upgrade', 'FOO=1 upstream-a update',
+    'env upstream-a update', 'true; upstream-a update', 'bash -c "upstream-a install 2.1.302"',
+    'cd ~/.local/bin && ./upstream-a update', 'U=upstream-a; $U update',
+    'cp /tmp/x ~/.local/bin/upstream-a', 'echo x > "$HOME/.local/bin/upstream-a"',
+    'cd ~/.local/bin && ln -sf /tmp/x upstream-a', 'cd ~/.local/bin && cp /tmp/x ./upstream-a',
+  ];
+  it.each(denied)('with the upstream-a deny file, denied: %s', (c) => {
+    useDenyFile('upstream-a');
+    expect(bash(c), c).toContain(BUILD_WHY);
+  });
+  it.each(['Write', 'Edit'] as const)('with the upstream-a deny file, denied: %s on /home/u/.local/bin/upstream-a', (tool) => {
+    useDenyFile('upstream-a');
+    const input = tool === 'Write' ? { file_path: '/home/u/.local/bin/upstream-a', content: 'x' }
+      : { file_path: '/home/u/.local/bin/upstream-a', old_string: 'a', new_string: 'b' };
+    expect(fire(tool, input)).toContain(BUILD_WHY);
+  });
+  it.each([
+    'upstream-a --version', 'upstream-a -p "update the changelog"', 'upstream-ab update',
+    'cp /tmp/x ~/.local/bin/upstream-a.bak', 'cat ~/.local/bin/upstream-a',
+  ])('with the upstream-a deny file, allowed: %s', (c) => {
+    useDenyFile('upstream-a');
+    expect(bash(c), c).toBeNull();
+  });
+  // Every deny file holds `Bash(ccrc update:*)` alone: only a head the file pairs with BOTH verbs is Claude Code's.
+  it.each(['ccrc install --help', 'ccrc upgrade --help', 'cp /tmp/x ~/.local/bin/ccrc'])(
+    'with the default deny file, no Claude Code build reason: %s', (c) => {
+      useDenyFile(null);
+      expect(bash(c) ?? '', c).not.toContain(BUILD_WHY);
+    });
+  it('parity: every head the generated file pairs is denied bare and as a launcher, for both verbs', () => {
+    useDenyFile('upstream-a');
+    const rules = (JSON.parse(denyFileText('upstream-a')) as { permissions: { deny: string[] } }).permissions.deny;
+    const paired = [...new Set(rules.flatMap((r) => /^Bash\(([a-z][a-z0-9-]{0,31}) install:\*\)$/.exec(r)?.[1] ?? []))]
+      .filter((p) => rules.includes(`Bash(${p} update:*)`));
+    expect(paired).toEqual(expect.arrayContaining(['claude', 'upstream-a']));
+    const missed = paired.flatMap((p) => [`${p} install`, `${p} update`, `~/.local/bin/${p} install`, `~/.local/bin/${p} update`])
+      .filter((c) => !(bash(c) ?? '').includes(BUILD_WHY));
+    expect(missed).toEqual([]);
+  });
+  it('regression: with no deny file, a symlinked one or an unparsable one, upstream-a update is allowed and main\'s denies stand', () => {
+    for (const setup of ['none', 'symlink', 'unparsable'] as const) {
+      fs.rmSync(DENY(), { force: true });
+      if (setup === 'symlink') {
+        const real = path.join(home, 'real-deny.json');
+        fs.writeFileSync(real, denyFileText('upstream-a'));
+        fs.symlinkSync(real, DENY());
+      }
+      if (setup === 'unparsable') fs.writeFileSync(DENY(), '{"permissions":{"deny":["Bash(upstream-a install:*)",');
+      expect(bash('upstream-a update'), setup).toBeNull();
+      expect(bash('claude update'), setup).toContain(BUILD_WHY);
+      expect(bash('ccd ws-rm x'), setup).toContain('ccd ws-rm');
+    }
+  });
+  it('a top-level session is not denied any of them', () => {
+    useDenyFile('upstream-a');
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    for (const c of denied) expect(bash(c), c).toBeNull();
+  }, 60_000);
+  it('timing: a 40 KB run of `upstream-a -a ` with no verb, reading the deny file, is judged in under 1 s', () => {
+    useDenyFile('upstream-a');
+    expect(denyJqMs(`${'upstream-a -a '.repeat(2900)}x`, DENY())).toBeLessThan(1000);
+  });
+});
