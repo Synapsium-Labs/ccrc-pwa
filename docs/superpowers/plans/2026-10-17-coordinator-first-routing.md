@@ -1206,7 +1206,9 @@ task folds is one of them or sits beside them.
 brief pass); `server/test/mail-deliveries-writer.test.ts` (new); `server/test/mail-sweep.test.ts` (four race tests);
 `server/test/mail-hardening.test.ts` (the census as one writer and no `void`); `server/test/single-definition.test.ts`
 (the negative-form count is exact); `server/test/child-reclaim-mail-store.test.ts` and `hibernate-sweep.test.ts` (the
-new result shapes); `CLAUDE.md` (the "Open on `main`" paragraph).
+new result shapes); `server/test/mail-routes.test.ts` (`non-terminal`, a guard name, joins the non-code kebab
+allowlist); `server/test/session-hook.test.ts` and `README.md` (the citation census re-measured and README's four
+`shared/api.ts` anchors re-pointed past the 11 new lines); `CLAUDE.md` (the "Open on `main`" paragraph).
 
 **Steps.** (1) The red tests, seen failing on `origin/main`; the mail suites' baseline green. (2) The L0 derivation.
 (3) The primitive and the nineteen writers. (4) `sweepMail` consumes the results. (5) The censuses and `CLAUDE.md`.
