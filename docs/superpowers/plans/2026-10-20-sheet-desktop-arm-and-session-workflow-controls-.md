@@ -541,6 +541,8 @@ The block 5930 to 5939 was issued to this programme. This plan defines all ten, 
 
 ### Departures made while landing
 
+- **D-6018** — `popover-pwa-copy` (Task P3-5, extends D-5934): pwa carries its own `@radix-ui/react-popover`, on the Radix line its own vaul resolves (1.1.20 beside dialog 1.1.20; `ui/` takes 1.1.23 beside its dialog 1.1.23, both under `~1.1.20`), and `vite.config.ts` lists it in `dedupe` and `alias` as it does vaul. Without that copy ui's source resolves the popover from `ui/node_modules` and reaches a second React, which the config's own header says fails only under test as "Invalid hook call". The plan's Files named only `ui/`.
+- **D-6019** — `shadow-pop-interim` (Task P3-5, extends D-5934): `theme.css` maps `--shadow-pop` here, as `var(--elev-sheet)`, because P3-5 lands before P3-4 declares `--elev-pop`, an unmapped `shadow-pop` emits no CSS, and the theme-bridge and css-vars guards refuse a `var()` onto a token no palette declares, even as a fallback. Until P3-4 lands a popover wears the sheet's elevation; P3-4 declares `--elev-pop` and repoints this one line to it.
 - **D-6022** — `workflow-control-census-whole-ccd` (Task P3-7, extends D-5936): the no-composer census scans every tracked file under `ccd/`, not only the four surfaces P3-7 names, so the worker, reviewer and history skills and every script are covered as spec §4.5 states; the four named surfaces must each stay tracked. Its coverage row pins only that every composing verb has a child deny rule and a classifier row, so a defensive workflow deny rule added with no composer stays green.
 
 ## Review log
