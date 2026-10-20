@@ -716,6 +716,52 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   return "$rc"
 }
 
+# ── THE STRICT DEADLINE: two neighbours of `_plat_timeout` (auto-advance Codex arm, plan W2 Task 11) ──
+# The hourly advance step runs AUTOMATIC work - a lock wait, a writer, a canary, a notify hook - and none of it may
+# run where no escalating deadline exists: the pure-bash arm above sends one TERM and cannot promise the program
+# is gone. So the step asks THE OWNER of the deadline, and these two neighbours put the question and the refusal
+# in this block; neither detects anything. THE QUESTION IS ASKED OF `_plat_timeout` ITSELF: the ONE `-k` probe (the
+# child's own bytes), the ONE first-selected-binary policy (`timeout`, then `gtimeout`) and the ONE cache
+# (`_CCD_TIMEOUT_K`). They are NEIGHBOURS and not modes of `_plat_timeout` because that body is pinned byte for byte
+# against two more copies (`ccd-account-auth`'s `_auth_timeout`, `ccgpt-runtime`'s `_rt_timeout`), which this
+# change does not touch: a mode inside it would have moved all three.
+#
+# `_plat_timeout_capability` prints `strong` (the selected utility's `-k` is proved), `weak` (one is selected and its
+# `-k` is not proved: escalation is not promised) or `none` (no `timeout` and no `gtimeout`: the pure-bash arm
+# would run; whether that arm's lone TERM lands is not asked), rc 0, and leaves the same word in
+# CCD_TIMEOUT_CAPABILITY. It DROPS the cached proof first and re-primes it with one instant call, so the answer is
+# about the utility selected NOW, never an assertion inherited from an earlier selection; the PATH it proved is
+# kept in `_CCD_TIMEOUT_PROVED_PATH`, the key a strict call checks. CALL IT IN THE PARENT SHELL: inside `$( )` the
+# cache and the record it fills are lost with the subshell. A `none` costs one instant pure-bash call (a watcher
+# whose `sleep` ends by itself within the second); nothing is signalled.
+#
+# `_plat_timeout_strict <seconds> <cmd> [args...]` is today's deadline, today's grace clamp, today's escalation
+# (it IS `_plat_timeout`) and rc 125 with NO program run unless the deadline reads as whole seconds, the
+# capability is `strong`, and the PATH is the one it was proved for. It never falls back. It is an installed-tool
+# check, not a defence against a hostile replacement binary.
+_plat_timeout_capability() {   # -> prints strong|weak|none; sets CCD_TIMEOUT_CAPABILITY; rc 0
+  unset _CCD_TIMEOUT_K
+  _plat_timeout 1 true >/dev/null 2>&1 || :
+  case "${_CCD_TIMEOUT_K:-}" in
+    yes) CCD_TIMEOUT_CAPABILITY=strong ;;
+    no)  CCD_TIMEOUT_CAPABILITY=weak ;;
+    *)   CCD_TIMEOUT_CAPABILITY=none ;;
+  esac
+  _CCD_TIMEOUT_PROVED_PATH="$PATH"
+  printf '%s\n' "$CCD_TIMEOUT_CAPABILITY"
+  return 0
+}
+_plat_timeout_strict() {   # <seconds> <cmd> [args...] -> rc 125, nothing run, unless the capability is strong
+  local secs="${1-}"
+  case "${secs%%[.,]*}" in ''|*[!0-9]*|??????????*) return 125 ;; esac
+  [ "${CCD_TIMEOUT_CAPABILITY:-}" = strong ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] \
+    && [ "${_CCD_TIMEOUT_PROVED_PATH-}" = "$PATH" ] || return 125
+  _plat_timeout "$@"
+}
+# A capability is something THIS shell proved, never something it inherited: an exported value would make a strict
+# call run on a substrate nobody asked.
+unset CCD_TIMEOUT_CAPABILITY _CCD_TIMEOUT_PROVED_PATH
+
 
 # ── THE SERVICE LAYER — systemd on Linux, launchd on macOS ───────────────
 # Every ccd session is a supervised unit, and `claude-session@.service` states
