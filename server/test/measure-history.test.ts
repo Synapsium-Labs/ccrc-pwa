@@ -3983,7 +3983,10 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     // Clusters of unequal shares and sizes, so the pooled denominators vary and a replicate stream can be told from another by its nearest-rank bounds.
     const live: Inputs['live'] = { families: [1, 3, 5, 7, 9, 2, 6, 4].map((n, i) => liveFam(fk(100 + i), 'treatment', 10 - (i % 3), n)) };
     const clusters = live.families.map((f) => ({ num: f.windows.filter((w) => w.with_call).length, den: f.windows.length }));
-    const quiz = quizOf(20, (i) => Array.from({ length: 3 + (i % 3) }, (_, j) => q(j < (i * 7) % 6 ? R() : U(), j < (i * 5) % 4 ? R() : U())));
+    const rawQuiz = quizOf(20, (i) => Array.from({ length: 3 + (i % 3) }, (_, j) => q(j < (i * 7) % 6 ? R() : U(), j < (i * 5) % 4 ? R() : U())));
+    // decideGate bootstraps the families in key order (D-5787), and fk(i)'s code-unit order is not index order past 9: keys padded to two digits keep this
+    // case's cluster order the index order it was measured in, which `paired` below mirrors.
+    const quiz: Inputs['quiz'] = { families: rawQuiz.families.map((f, i) => ({ ...f, key: JSON.stringify(['store-a', `demo-${String(i).padStart(2, '0')}`, 'gen']) })) };
     const paired = quiz.families.map((f) => ({ t: f.questions.filter((x) => x.treatment.label === 'correct').length,
       c: f.questions.filter((x) => x.control.label === 'correct').length, n: f.questions.length }));
     for (const seed of [SEED, SEED2, 'ef'.repeat(32)]) {
@@ -4138,6 +4141,82 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     expect(v.criteria.uptake).toBeNull();
     const w = decide({ quiz: quizOf(20, () => [q(ans('uncertain'), U(), true)]) });
     expect(w.criteria.accuracy).toBeNull();
+  });
+
+  describe('review fix round 1: decideGate is independent of input order (D-5787)', () => {
+    // clusterBootstrap draws clusters by index, so the order the caller lists the families in used to move the nearest-rank bounds.
+    // Each fixture below is CHECKED to be order-sensitive on the raw bootstrap (the control), so the pins cannot pass vacuously.
+    const isPerm = (p: number[]): boolean => [...p].sort((a, b) => a - b).every((v, i) => v === i);
+    const keyOrder = <T extends { key: string }>(xs: T[]): T[] => [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    /** A fixed interleaving of 17 positions, a literal permutation (no randomness). */
+    const WEAVE = [3, 12, 0, 9, 15, 6, 1, 13, 4, 16, 8, 2, 11, 5, 14, 7, 10];
+    const ordersOf = <T extends { key: string }>(sorted: T[], weave: number[]): Array<[string, T[]]> => {
+      expect(isPerm(weave) && weave.length === sorted.length, 'the interleaving is a permutation of the families').toBe(true);
+      return [['by key', [...sorted]], ['reversed', [...sorted].reverse()], ['interleaved', weave.map((i) => sorted[i])]];
+    };
+    const distinct = (xs: Fr[]): number => new Set(xs.map((x) => `${x.num}/${x.den}`)).size;
+
+    it('criterion 3: three orders of 14 treatment families (and 3 control) give one bound, one verdict, and the key-ordered bootstrap', () => {
+      const withCalls = [1, 9, 2, 8, 3, 7, 0, 10, 5, 4, 6, 2, 9, 1];
+      const dens = [10, 10, 9, 10, 8, 10, 10, 10, 7, 10, 10, 9, 10, 8];
+      const sorted: LiveFam[] = [
+        ...withCalls.map((w, i) => liveFam(fk(100 + i), 'treatment', dens[i], Math.min(w, dens[i]))),
+        ...[0, 1, 2].map((i) => liveFam(fk(200 + i), 'control', 10, 0)),
+      ];
+      expect(sorted.map((f) => f.key), 'the fixture is listed in key order').toEqual(keyOrder(sorted).map((f) => f.key));
+      const orders = ordersOf(sorted, WEAVE);
+      const treatmentOf = (fams: LiveFam[]) => fams.filter((f) => f.arm === 'treatment')
+        .map((f) => ({ num: f.windows.filter((w) => w.with_call).length, den: f.windows.length }));
+      const raw = (fams: LiveFam[]) => gateT8.clusterBootstrap({ clusters: treatmentOf(fams), B: gateT8.BOOTSTRAP.B, rng: gateT8.substream(SEED, 'live-ci'), mode: 'share' });
+      // CONTROL: the raw bootstrap over the treatment clusters depends on the order they are listed in.
+      expect(distinct(orders.map(([, fams]) => raw(fams).lower)), 'non-vacuous: the raw order moves the lower bound').toBeGreaterThanOrEqual(2);
+      const want = raw(sorted);
+      const verdicts = orders.map(([name, fams]) => {
+        const listed = fams.map((f) => f.key);
+        const v = decide({ live: { families: fams } });
+        expect(fams.map((f) => f.key), `${name}: decideGate sorts a copy, never the array it was given`).toEqual(listed);
+        return v;
+      });
+      for (const [i, v] of verdicts.entries()) {
+        expect(v.criteria.uptake!.lower, orders[i][0]).toEqual(want.lower);
+        expect(v.criteria.uptake!.upper, orders[i][0]).toEqual(want.upper);
+        expect(v.criteria.uptake, orders[i][0]).toEqual(verdicts[0].criteria.uptake);
+        expect(v.verdict, orders[i][0]).toBe(verdicts[0].verdict);
+      }
+    });
+
+    it('criterion 1: three orders of 14 quiz families give one paired bound, one verdict, and the key-ordered bootstrap', () => {
+      // Family i holds 3 + (i % 3) questions; its treatment and control correct counts differ per family, so the paired clusters differ.
+      const sizes = Array.from({ length: 14 }, (_, i) => 3 + (i % 3));
+      const treatmentCorrect = [3, 1, 5, 0, 4, 2, 3, 3, 0, 4, 1, 5, 2, 3];
+      const controlCorrect = [1, 1, 1, 3, 0, 2, 2, 0, 0, 1, 1, 2, 0, 3];
+      const fams = sizes.map((n, i) => ({
+        key: JSON.stringify(['store-a', `demo-${String(i).padStart(2, '0')}`, 'gen']),
+        questions: Array.from({ length: n }, (_, j) => q(j < Math.min(treatmentCorrect[i], n) ? R() : U(), j < Math.min(controlCorrect[i], n) ? R() : U())),
+      }));
+      const clustersOf = (xs: typeof fams) => xs.map((f) => ({ t: f.questions.filter((x) => x.treatment.label === 'correct').length,
+        c: f.questions.filter((x) => x.control.label === 'correct').length, n: f.questions.length }));
+      const orders: Array<[string, typeof fams]> = [['by key', [...fams]], ['reversed', [...fams].reverse()],
+        ['interleaved', [3, 12, 0, 9, 6, 1, 13, 4, 8, 2, 11, 5, 10, 7].map((i) => fams[i])]];
+      expect(isPerm([3, 12, 0, 9, 6, 1, 13, 4, 8, 2, 11, 5, 10, 7])).toBe(true);
+      expect(fams.map((f) => f.key), 'the fixture is listed in key order').toEqual(keyOrder(fams).map((f) => f.key));
+      const raw = (xs: typeof fams) => gateT8.clusterBootstrap({ clusters: clustersOf(xs), B: gateT8.BOOTSTRAP.B, rng: gateT8.substream(SEED, 'quiz-ci'), mode: 'paired' });
+      expect(distinct(orders.map(([, xs]) => raw(xs).lower)), 'non-vacuous: the raw order moves the paired lower bound').toBeGreaterThanOrEqual(2);
+      const want = raw(fams);
+      const verdicts = orders.map(([name, xs]) => {
+        const listed = xs.map((f) => f.key);
+        const v = decide({ quiz: { families: xs } });
+        expect(xs.map((f) => f.key), `${name}: decideGate sorts a copy, never the array it was given`).toEqual(listed);
+        return v;
+      });
+      for (const [i, v] of verdicts.entries()) {
+        const a = v.criteria.accuracy!;
+        expect(a.lower, orders[i][0]).toEqual(want.lower);
+        expect(a.upper, orders[i][0]).toEqual(want.upper);
+        expect(a, orders[i][0]).toEqual(verdicts[0].criteria.accuracy);
+        expect(v.verdict, orders[i][0]).toBe(verdicts[0].verdict);
+      }
+    });
   });
 });
 

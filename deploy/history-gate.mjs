@@ -1446,6 +1446,8 @@ export function parseLabelLine(reply) {
 //     and assignment-unrealised drops (W2-D23) reach the comparison block only, never criterion 3. Report-only inputs
 //     ride through untouched. A question still not-run at gate time is not a halt (W2-D89, amended 2026-10-19):
 //     decideGate refuses with question-not-run, naming the questions, and the operator runs or records them first.
+//     Its two bootstraps read their clusters in family-key order, by code unit, whatever order the caller listed the
+//     families in (D-5787).
 
 /** The `error` value Claude Code's stream-json carries on an assistant message whose credential the API refused.
  *  It is the stream format's word, not a driver word (W2-D80's "an authentication error"). */
@@ -1466,6 +1468,10 @@ const ZERO = frac(0, 1);
 export const HALT_DEFAULTS = Object.freeze({ handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05 });
 
 const cmpId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+/** The clusters of a keyed list, in key order by code unit, without their keys: the order decideGate hands each
+ *  bootstrap (D-5787). It sorts a copy, and the keys are already proven unique, so the order is total.
+ *  @template {{key: string}} T @param {ReadonlyArray<T>} entries @returns {Array<Omit<T, 'key'>>} */
+const inKeyOrder = (entries) => [...entries].sort((a, b) => cmpId(a.key, b.key)).map(({ key: _key, ...cluster }) => cluster);
 const isObj = (v) => v !== null && typeof v === 'object';
 
 /**
@@ -1649,6 +1655,10 @@ function fracOrNull(v, name) {
  * never counted, held or halted. decideGate answers {ok: false, reason: 'question-not-run', detail, questions}, the
  * qids sorted, and computes no verdict; a verdict carries ok: true. Any other answer state outside ANSWER_STATES throws.
  *
+ * Order (D-5787): the bootstraps draw clusters by index, so criterion 1's paired clusters and criterion 3's share
+ * clusters reach clusterBootstrap sorted by family `key`, by code unit (W2-5b passes familyKey(store_id, ccrc_id,
+ * generation) as each key); the order the caller lists the families in moves no bound and no verdict, and no input is sorted in place.
+ *
  * Unruled inputs throw, on every path (a hold or a halt included): a seedHex that is not a non-empty string, a B that is not
  * a positive safe integer (only an undefined B takes the default), a missing live section, a missing handcheck section or
  * arm key (an explicit null is "no hand-checked pair"), an agreement outside [0, 1], and a repeated or non-string qid.
@@ -1740,7 +1750,7 @@ export function decideGate(inputs) {
       if (q.treatment.label === 'correct') t += 1;
       if (q.control.label === 'correct') c += 1;
     }
-    if (n > 0) paired.push({ t, c, n });   // a family whose every question is run-failed is no cluster
+    if (n > 0) paired.push({ key: fam.key, t, c, n });   // a family whose every question is run-failed is no cluster
   }
   // W2-D89, amended 2026-10-19: a question still not-run at gate time is refused, naming the questions.
   if (notRun.size > 0) {
@@ -1768,7 +1778,7 @@ export function decideGate(inputs) {
   if (!held && !absentHalt && !runFailedHalt && paired.length > 0) {
     const pointT = frac(tally.treatment.correct, Q);
     const pointC = frac(tally.control.correct, Q);
-    const boot = clusterBootstrap({ clusters: paired, B, rng: substream(seedHex, 'quiz-ci'), mode: 'paired' });
+    const boot = clusterBootstrap({ clusters: inKeyOrder(paired), B, rng: substream(seedHex, 'quiz-ci'), mode: 'paired' });
     accuracy = { point_t: pointT, point_c: pointC, lower: boot.lower, upper: boot.upper,
       holds: cmpFrac(pointT, ACCURACY_MIN) >= 0 && cmpFrac(boot.lower, ZERO) > 0 };
   }
@@ -1799,11 +1809,11 @@ export function decideGate(inputs) {
       den += 1;
       if (w.with_call) num += 1;
     }
-    if (den > 0) shares.push({ num, den });              // W2-D18: a family with no measured window is no cluster
+    if (den > 0) shares.push({ key: f.key, num, den });              // W2-D18: a family with no measured window is no cluster
   }
   let uptake = null;
   if (shares.length > 0) {
-    const ub = clusterBootstrap({ clusters: shares, B, rng: substream(seedHex, 'live-ci'), mode: 'share' });
+    const ub = clusterBootstrap({ clusters: inKeyOrder(shares), B, rng: substream(seedHex, 'live-ci'), mode: 'share' });
     uptake = { point: ub.point, lower: ub.lower, upper: ub.upper, holds: cmpFrac(ub.lower, X) >= 0 };
   }
   // An empty arm (the coordinator's W2-3 ruling): criterion 1's or criterion 3's treatment set with no cluster left
