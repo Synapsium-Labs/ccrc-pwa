@@ -217,6 +217,10 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     { why: 'reboot or shutdown', re: new RegExp(`${WB}(?:reboot|shutdown|poweroff|halt)(?=$|[\\s;&|)'"])`) },
     { why: 'ccrc update or rollback', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback)(?![\\w-])`) },
     { why: 'the approval surface', re: /(?:ccrc-api|\$\{?API\}?)['"]?\s+(?:-\S+\s+)*approvals(?![\w-])|\/api\/approvals(?![\w-])|approval-signing|approval-verify\.mjs/ },
+    // D-5936: the workflow control verb is the operator's. Each segment tolerates one quote either side, as the row
+    // above does, so a quote-split `".../workflows/$RUN"/control` still matches; no segment may hold a `/`, so the
+    // match stays linear. Bash text and MCP string leaves only: any other tool naming it escalates (spec §4.5).
+    { why: 'a workflow control', re: /\/api\/sessions\/['"]?[^/\s'"]+['"]?\/workflows\/['"]?[^/\s'"]+['"]?\/control(?![\w-])/ },
   ].map(({ why, re }) => ({ why, test: (t: string) => re.test(t) })),
   ...[
     { why: 'a session unit or the tmux scope', sep: /\n/,
