@@ -34,6 +34,7 @@
 // (recorders and poisons only). No secret value is ever printed or asserted.
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { killGroup } from './spawnGroup.js';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
@@ -13878,7 +13879,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     const lock = join(home, '.ccrc', 'update.lock');
     writeFileSync(lock, '');
-    const holder = spawn(FLOCK, ['-n', lock, 'sleep', '60'], { stdio: 'ignore' });
+    // `flock` FORKS its command, so killing `flock` alone left `sleep 60` running past the run (#172, D-5894): the
+    // holder leads a process group of its own, and the `finally` ends that group through the handle this test holds.
+    const holder = spawn(FLOCK, ['-n', lock, 'sleep', '60'], { stdio: 'ignore', detached: true });
     try {
       // Wait (bounded) until the holder really has the lock: a fresh `flock -n` on it must fail.
       const t0 = Date.now();
@@ -13899,7 +13902,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // `validate` reads only and takes no lock.
       expect(run(['validate', '--from', dir]).code).toBe(0);
     } finally {
-      if (holder.pid !== undefined) holder.kill('SIGKILL');   // the PID this test itself started
+      if (holder.pid !== undefined) killGroup(holder.pid);   // the group this test itself started
     }
   });
 });

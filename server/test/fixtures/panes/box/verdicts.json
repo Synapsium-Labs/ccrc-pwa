@@ -1,0 +1,98 @@
+{
+  "columns": {
+    "draftOfMeasured": "server/src/inject/send.ts: the measured box read, {box, draft}; draft is the last marker row only",
+    "_pane_box_draft": "ccd/ccd: the last marker row's text, or empty; null where the capture asks it nothing (it has no absent verdict)"
+  },
+  "captures": {
+    "placeholder-dim.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "placeholder-dim-combined.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "placeholder-dim22.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "placeholder-dim-after-reset.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "placeholder-dim-mid-reset.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "draft-one-line.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "fix the flaky retry test in the queue module"
+      },
+      "_pane_box_draft": "fix the flaky retry test in the queue module"
+    },
+    "draft-multi-line.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "first line of the draft"
+      },
+      "_pane_box_draft": "first line of the draft"
+    },
+    "draft-paste-chip.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "[Pasted text #4]"
+      },
+      "_pane_box_draft": "[Pasted text #4]"
+    },
+    "draft-image-chip.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "[Image #5]"
+      },
+      "_pane_box_draft": "[Image #5]"
+    },
+    "stranded-clear.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "/clear"
+      },
+      "_pane_box_draft": "/clear"
+    },
+    "box-taller-than-capture.ansi": {
+      "draftOfMeasured": {
+        "box": "absent"
+      },
+      "_pane_box_draft": null
+    },
+    "box-capped-tall.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "tall draft line 42"
+      },
+      "_pane_box_draft": "tall draft line 42"
+    },
+    "empty-nbsp.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    }
+  }
+}

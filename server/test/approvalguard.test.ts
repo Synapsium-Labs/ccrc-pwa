@@ -177,7 +177,8 @@ describe('bounded cost (D-5299)', () => {
 
   it('every forbidden pattern is linear: a 256 KB adversarial line is matched in under 250 ms', () => {
     const big = (unit: string): string => unit.repeat(Math.floor((256 * 1024) / unit.length));
-    const units = [' x>', 'cat ', 'rm ', 'kill ', 'systemctl ', 'ccd ws-gc a ', 'ccd -a ', 'sed -a ', 'perl -a ', 'tee '];
+    const units = [' x>', 'cat ', 'rm ', 'kill ', 'systemctl ', 'ccd ws-gc a ', 'ccd -a ', 'sed -a ', 'perl -a ', 'tee ',
+      '/api/sessions/a', '/api/sessions/"a"/workflows/b', '/api/sessions/a/workflows/b/contro'];
     for (const p of FORBIDDEN_PATTERNS) {
       for (const u of units) {
         const t0 = performance.now();
@@ -297,5 +298,39 @@ describe('who may roll, install or select a build (D-5696)', () => {
     for (const c of ['ccd swap project-a-calm-mesa claude-a', 'ccd swap-self claude-a']) {
       expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toEqual([]);
     }
+  });
+});
+
+// D-5936 (spec 2026-10-20 §4.5): the workflow control verb is the operator's. The classifier forbids any Bash or MCP
+// request naming its path, in every spelling a shell builds it in; the auth gate is the wall for any other tool.
+describe('the workflow control verb is operator-only (D-5936)', () => {
+  it('a `curl` naming the path is `forbidden`', () => {
+    expect(bash('curl -sS -X POST "$API_URL"/api/sessions/project-a/workflows/wf_fixture01/control')).toBe('forbidden');
+    expect(FORBIDDEN_PATTERNS.filter((p) => p.test('curl -X POST /api/sessions/project-a/workflows/wf_fixture01/control')).map((p) => p.why))
+      .toEqual(['a workflow control']);
+  });
+  it('a path with a variable for the id is `forbidden`', () => {
+    for (const c of [
+      'curl -X POST "$API_URL/api/sessions/$ID/workflows/wf_fixture01/control"',
+      'curl -X POST "$API_URL/api/sessions/${ID}/workflows/${RUN}/control" -d \'{"act":"stop-run"}\'',
+    ]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a quote-split path (`"$API/api/sessions/$ID/workflows/$RUN"/control`) is `forbidden`', () => {
+    for (const c of [
+      'curl -X POST "$API/api/sessions/$ID/workflows/$RUN"/control',
+      'curl -X POST "$API/api/sessions/"$ID"/workflows/"$RUN"/control"',
+      "curl -X POST '/api/sessions/'project-a'/workflows/'wf_fixture01'/control'",
+    ]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('an MCP call naming the path in a string leaf is `forbidden`', () => {
+    expect(approvalClass('mcp__x__fetch', { url: 'http://h/api/sessions/project-a/workflows/wf_fixture01/control', method: 'POST' },
+      ctxFor({ cwd: WT }))).toBe('forbidden');
+  });
+  it('a read of `shared/workflows.ts` is unchanged, and so is the read-only workflows path', () => {
+    for (const c of ['cat shared/workflows.ts', 'grep -n control shared/workflows.ts', 'curl -sS "$API/api/sessions/project-a/workflows"',
+      'curl -sS "$API/api/sessions/project-a/workflows/wf_fixture01/controls"']) {
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toEqual([]);
+    }
+    expect(approvalClass('Read', { file_path: `${WT}/shared/workflows.ts` }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
   });
 });

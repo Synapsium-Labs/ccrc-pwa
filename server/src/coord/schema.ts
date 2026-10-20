@@ -1735,6 +1735,30 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail_deliveries ADD COLUMN parkBox TEXT;
   ALTER TABLE mail_deliveries ADD COLUMN parkEscalatedAt INTEGER;
   `,
+  // ── 28: user_version 27 -> 28 ─────────────────────────────────────────────
+  // D-5513 (accounts-connect spec 2026-10-18 §3.3, plan Task A10): `secret_fingerprints`, the exact-bytes half of the
+  // egress mask. One row per lane secret: `fp` is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)` in
+  // lowercase hex over the secret with its trailing `=` stripped, and `len` that stripped secret's byte length (D-5996:
+  // only a run of a held length is hashed), computed ON THE BOX by the account verbs (which hold both); `gen` names the box-token
+  // generation it was keyed with (D-5975), so a rotation can keep matching the previous generation's rows until the
+  // re-keyed ones land. `at` is epoch ms. The server never holds a lane secret, and this table is never served: its
+  // ONE reader and writer is `SecretMasker` (`server/src/accounts/mask.ts`); A12's `reloadRoster` fills it through it.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 28` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE secret_fingerprints (
+    laneId TEXT    NOT NULL,
+    fp     TEXT    NOT NULL CHECK (length(fp) = 64),
+    gen    TEXT    NOT NULL,
+    len    INTEGER NOT NULL CHECK (len BETWEEN 20 AND 8192),
+    at     INTEGER NOT NULL,
+    PRIMARY KEY (laneId, gen, fp)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
