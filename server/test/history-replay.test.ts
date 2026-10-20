@@ -1703,7 +1703,7 @@ describe('fix round 1 (D-5984): a leftover whose writer is alive is never charge
     expect(stubLog(b.home), 'nothing spawned').toBeNull();
   }, 60_000);
 
-  it('a .pid that is not exactly {pid, start} (or is no regular file) refuses run-live naming the file: nothing is charged, removed or spawned', async () => {
+  it('a regular .pid that is not exactly {pid, start} refuses run-live naming the file: nothing is charged, removed or spawned', async () => {
     const malformed: Array<[string, string]> = [['not json', 'not json\n'], ['empty', ''], ['pid zero', recText(0, null)], ['pid missing', '{"start":null}\n'],
       ['start missing', '{"pid":5}\n'], ['start a number', '{"pid":5,"start":7}\n'], ['start not digits', '{"pid":5,"start":"1x"}\n'],
       ['extra key', '{"extra":1,"pid":5,"start":null}\n'], ['not whole (no newline)', '{"pid":5,"start":null}'], ['an array', '[5,null]\n']];
@@ -1716,16 +1716,50 @@ describe('fix round 1 (D-5984): a leftover whose writer is alive is never charge
       expect(ledgerOf(b.out), label).toEqual([]);
       expect(stubLog(b.home), label).toBeNull();
     }
+  }, 60_000);
+
+  it('a .pid that is no regular file (a directory, a symlink either way, a FIFO) beside a .part refuses out-refused naming the file: nothing is charged, removed or spawned, through the batch and through launchRun (D-5984, D-5986)', async () => {
     for (const [label, make] of [
       ['directory', (p: string) => mkdirSync(p)],
       ['symlink', (p: string) => symlinkSync(path.join(path.dirname(p), 'target.pid'), p)],
+      ['dangling symlink', (p: string) => symlinkSync(path.join(path.dirname(p), 'nowhere.pid'), p)],
+      ['fifo', (p: string) => { const r = spawnSync('mkfifo', [p], { encoding: 'utf8' }); expect(r.status, r.stderr).toBe(0); }],
     ] as const) {
-      const b = t5Box(`ccrc-replay-d5984-notfile-${label}-`);
-      plant(b.out, 'bad-1', { part: null });
+      const b = t5Box(`ccrc-replay-d5984-notfile-${label.replace(' ', '-')}-`);
+      plant(b.out, 'bad-1', {});
       writeFileSync(path.join(b.out, 'target.pid'), recText(5, null));
       make(path.join(b.out, 'bad-1.pid'));
-      await expect(claimedRun(t5job(b, b.up, 'box', 'bad-1'), { liveness: notAsked }), label).rejects.toMatchObject({ word: 'run-live' });
+      for (const via of ['launchRun', 'runBatch'] as const) {
+        const call = via === 'launchRun'
+          ? claimedRun(t5job(b, b.up, 'box', 'bad-1'), { liveness: notAsked })
+          : claimedBatch([t5job(b, b.up, 'box', 'bad-1')], { gate: noGate, liveness: notAsked });
+        await expect(call, `${label} via ${via}`).rejects.toMatchObject({ word: 'out-refused', detail: 'bad-1.pid is not a regular file' });
+      }
+      expect(lstatSync(path.join(b.out, 'bad-1.pid')), `${label}: the .pid stays`).toBeTruthy();
+      expect(readFileSync(path.join(b.out, 'bad-1.jsonl.part'), 'utf8'), `${label}: the stream is untouched`).toBe(L_STREAM);
+      expect(ledgerOf(b.out), label).toEqual([]);
       expect(stubLog(b.home), label).toBeNull();
+    }
+  }, 60_000);
+
+  it('a mode-000 .pid beside a .part (skipped as root) refuses out-refused <name>.pid unreadable EACCES: nothing is charged or removed, though liveness would say dead (D-5986)', async () => {
+    if (process.getuid?.() === 0) return;   // root reads a mode 000 file
+    const b = t5Box('ccrc-replay-d5986-pid-eacces-');
+    plant(b.out, 'eacces-0', { pid: recText(424262, '1') });
+    const pidFile = path.join(b.out, 'eacces-0.pid');
+    chmodSync(pidFile, 0o000);
+    try {
+      for (const via of ['launchRun', 'runBatch'] as const) {
+        const call = via === 'launchRun'
+          ? claimedRun(t5job(b, b.up, 'box', 'eacces-0'), { liveness: () => 'dead' })
+          : claimedBatch([t5job(b, b.up, 'box', 'eacces-0')], { gate: noGate, liveness: () => 'dead' });
+        await expect(call, via).rejects.toMatchObject({ word: 'out-refused', detail: 'eacces-0.pid unreadable EACCES' });
+      }
+      expect(existsSync(pidFile) && existsSync(path.join(b.out, 'eacces-0.jsonl.part')), 'both files stay').toBe(true);
+      expect(ledgerOf(b.out), 'nothing charged').toEqual([]);
+      expect(stubLog(b.home), 'nothing spawned').toBeNull();
+    } finally {
+      chmodSync(pidFile, 0o600);
     }
   }, 60_000);
 
@@ -2487,7 +2521,7 @@ process.stdout.write(JSON.stringify(results));
       append: 'out-refused: spend.jsonl is not a regular file',
       read: 'budget-exhausted: ledger-unreadable',
       lock: 'out-in-use: .driver.lock is not a regular file; remove it only after confirming no driver runs on this --out',
-      pid: 'run-live: a.pid is not a regular file; remove it only after confirming no Claude Code from this --out is running',
+      pid: 'out-refused: a.pid is not a regular file',
       part: 'out-refused: run-stream-invalid b',
     });
   });
@@ -2505,7 +2539,7 @@ const sha = 'a'.repeat(64);
       fifo: 'input-invalid: step0a not-regular', link: 'input-invalid: step0a not-regular', dir: 'input-invalid: step0a not-regular' });
   });
 
-  it('a .pid or a lock the driver cannot tell is a record tells its cause: a type, an unreadable file (mode 000, skipped as root) and a malformed one say different things', async () => {
+  it('a .pid or a lock the driver cannot tell is a record tells its cause: a malformed one, a type (a .pid out-refused, a lock out-in-use) and an unreadable file (mode 000, skipped as root) say different things', async () => {
     const lockOut = freshOut();
     writeFileSync(path.join(lockOut, '.driver.lock'), 'junk\n');
     expect(() => replay.claimOut(lockOut)).toThrow(/out-in-use: \.driver\.lock is not a lock record/);
@@ -2515,7 +2549,7 @@ const sha = 'a'.repeat(64);
     await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'run-live', detail: expect.stringContaining('p-0.pid is not a pid record') });
     rmSync(path.join(b.out, 'p-0.pid'));
     mkdirSync(path.join(b.out, 'p-0.pid'));
-    await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'run-live', detail: expect.stringContaining('p-0.pid is not a regular file') });
+    await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'out-refused', detail: 'p-0.pid is not a regular file' });
     if (process.getuid?.() === 0) return;   // root reads a mode 000 file
     const lock = freshOut();
     writeFileSync(path.join(lock, '.driver.lock'), recText(424260, '1'), { mode: 0o600 });
@@ -2526,7 +2560,7 @@ const sha = 'a'.repeat(64);
     writeFileSync(path.join(b.out, 'p-0.pid'), recText(424261, '1'), { mode: 0o600 });
     chmodSync(path.join(b.out, 'p-0.pid'), 0o000);
     await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'), { liveness: () => 'dead' })).rejects.toMatchObject({
-      word: 'run-live', detail: expect.stringContaining('p-0.pid is unreadable (EACCES)') });
+      word: 'out-refused', detail: 'p-0.pid unreadable EACCES' });
     expect(replay.spentSoFar(b.out), 'nothing charged for an unreadable record').toBe(0);
     expect(stubLog(b.home), 'nothing spawned').toBeNull();
   }, 60_000);

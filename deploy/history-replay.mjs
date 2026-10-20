@@ -39,7 +39,7 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  --version that cannot be measured), `tree-unmeasured` (a release stamp that cannot be read; `tree-moved` stays
  *  for a measured mismatch) and `wrapper-unmeasured` (a generated account's wrapper that cannot be read;
  *  `wrapper-moved` stays for a measured mismatch). The last three are fix round 1's (D-5984, D-5985): `run-live` (a
- *  leftover `.part` whose writer is alive or unmeasured, or a `.pid` record that is not one), `out-in-use` (another
+ *  leftover `.part` whose writer is alive or unmeasured, or a regular `.pid` whose content is not a record), `out-in-use` (another
  *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
  *  the driver: no further spawn starts, and no run.json, step0a.json or probe.json is written; a run stopped in flight
  *  is charged once, by its spend line). */
@@ -1177,7 +1177,11 @@ function lstatOrNull(out, rel) {
  *     leaves a `.part` with no `.pid`, charged again: an over-count, never a lone record);
  *   - `.part` with no `.pid`: charge and remove it (D-5811; the named residual window of a driver killed before its record);
  *   - a lone `.pid`: remove it;
- *   - a `.pid` that is not a regular file or not a record: refuse `run-live` naming it (records are written whole);
+ *   - a `.pid` that is not a regular file (a link, a FIFO, a directory, or a file that changed type before the open): refuse
+ *     `out-refused` `<name>.pid is not a regular file`, and one that cannot be read (EACCES, EIO, or gone between the lstat
+ *     and the read): refuse `out-refused` `<name>.pid unreadable <code>` (D-5986: the wrong type or a failed read under
+ *     --out); a regular `.pid` that is not exactly `{pid, start}` (records are written whole, so it is tampering): refuse
+ *     `run-live` naming it (D-5984);
  *   - a `.part` that is not a regular file, or one over OUT_STREAM_CAP (never read, so never charged): refuse `out-refused`
  *     (`run-stream-invalid <name>`). The over-cap case wedges the --out until the file is removed by hand, and its spend is
  *     then lost: a named residual (D-5811), not a distinct word.
@@ -1192,9 +1196,13 @@ function settleLeftover(out, name, live) {
   if (pid !== null) {
     const read = readPidRecord(pidPath);
     if (read.state !== 'record') {
-      // D-5986: the word stays run-live; the detail tells a type, an unreadable file (an ENOENT here: it went between the lstat and the read) and a malformed one apart.
-      const bad = read.state === 'absent' ? { why: 'unreadable', code: 'ENOENT' } : read;
-      refuse('run-live', `${recordBadDetail(`${name}.pid`, 'pid record', bad)}; remove it only after confirming no Claude Code from this --out is running`);
+      // The three cases (D-5984, D-5986): the wrong type, and a file that cannot be read (an ENOENT here: it went between the
+      // lstat and the read), are failures under --out and refuse out-refused; a regular file whose content is not exactly
+      // {pid, start} is tampering and refuses run-live, naming the file.
+      if (read.state === 'absent') refuse('out-refused', `${name}.pid unreadable ENOENT`);
+      if (read.why === 'not-regular') refuse('out-refused', `${name}.pid is not a regular file`);
+      if (read.why === 'unreadable') refuse('out-refused', `${name}.pid unreadable ${read.code}`);
+      refuse('run-live', `${recordBadDetail(`${name}.pid`, 'pid record', read)}; remove it only after confirming no Claude Code from this --out is running`);
     }
     rec = read;
   }
