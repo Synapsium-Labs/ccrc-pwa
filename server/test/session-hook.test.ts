@@ -12678,11 +12678,11 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // (`test-macos`) proves the withhold there, never the mutant's red.
     ['a generation record behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-nbsp', 'fail-closed'],
     // D-5063 (review 495 F1, review 503 F2 and F5): `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … ||
-    // return 0`. The guards' only unique work is a non-regular file: drop either and only a FIFO changes the verdict, because the
-    // seed would withhold an unreadable file too (the probes' `x=.`). A FIFO present at `_ct_read`'s `-f` test is refused there, so
-    // the probe's `<` never opens it; without the guards it would block, SessionStart(compact) would hang to the hook timeout and the
-    // whole compact card be lost. The tests are builtin, so one swapped in after the test still blocks, a window no row can measure.
-    // These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
+    // return 0`. The guards' only unique work is a non-regular file: drop either and only a FIFO (or a device node, which only root can
+    // plant) changes the verdict, because the seed would withhold an unreadable file too (the probes' `x=.`). A FIFO present at `_ct_read`'s
+    // `-f` test is refused there, so the probe's `<` never opens it; without the guards it would block, SessionStart(compact) would hang to
+    // the hook timeout and the whole compact card be lost. The tests are builtin, so one swapped in after the test still blocks, a window no
+    // row can measure. These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
     ['a FIFO .generation is unusable: the hook returns at once and withholds (fail-closed: the CLI recalls)', '', 'fifo', 'G2', 'G', 'fail-closed'],
     ['a FIFO generation record is no record: the hook returns at once and withholds', '', 'absent', 'G2', 'fifo'],
     // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
