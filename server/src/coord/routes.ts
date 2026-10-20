@@ -82,6 +82,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
+import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -544,6 +545,12 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
+  /**
+   * D-5858: the notice sink this file's five feed writers raise their rows through (`notice.ts`, D-5857), the one
+   * `buildServer` builds and passes. Defaulted to a sink over these same `deps`, which is what `buildServer`'s is, so a
+   * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
+   */
+  notice: NoticeSink = noticeSink(deps),
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -2509,44 +2516,17 @@ export function registerCoordRoutes(
     // skips outright — the row would land and be seen by nobody. The durable
     // feed is where a coordination change with no run belongs.
     //
-    // A missing `NotifyLog` degrades the RECORD and never the write; and
-    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
-    // operator's write because the feed archive is unavailable would be the
-    // collapse, not the safety.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'coord', sessionId: '',
-          title: 'caps changed',
-          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
-          runId: null,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
-      } finally {
-        // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
-        // gives: `record()` bumps the in-memory seq, and a seq handed to a
-        // client but never persisted lets a restart re-mint the same
-        // `{epoch, seq}` pair for a different event — the stale-but-valid
-        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
-        // flush never rejects, and the caps write must not wait on it.
-        //
-        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
-        // inside the try, one line below `recordFeedEvent` — which throws
-        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
-        // the flush was skipped on precisely the path that needed it: the seq
-        // was already spent, the client already had it, and the file still
-        // held the older number. The seq is minted by `record()`, so its
-        // persistence must follow `record()` and nothing else.
-        void log.flush();
-      }
-    }
+    // Through the notice sink (D-5858), `'record-only'`: recorded whatever the presence, never pushed. A missing
+    // `NotifyLog` degrades the RECORD and never the write; the archive's synchronous throw (`node:sqlite`) is caught
+    // inside `notify`, and the seq `record()` minted is flushed whatever the archive does (D-1213). Refusing an
+    // operator's write because the feed archive is unavailable would be the collapse, not the safety.
+    notice({
+      kind: 'coord', sessionId: '',
+      title: 'caps changed',
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
+            `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+      runId: null,
+    }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
   });
 
