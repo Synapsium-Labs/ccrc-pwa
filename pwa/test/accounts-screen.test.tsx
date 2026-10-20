@@ -89,7 +89,7 @@ describe('AccountsScreen — the waiting state, before any poll answers (review 
 describe('AccountsScreen — a roster entry the operator declared plumbing', () => {
   it('renders no row for it, while every real account still gets one', async () => {
     const roster = TEST_ROSTER.map((a) => (a.id === 'claude' ? { ...a, hidden: true } : a));
-    stubAccounts([acct({ wrapper: 'claude2', five: 12, seven: 4 })], null, roster);
+    stubAccounts([acct({ wrapper: 'claude9', five: 12, seven: 4 })], null, roster);
     render(<AccountsScreen />);
     // The real accounts, including the overflow lane and ones telemetry has
     // never mentioned — the invariant below, unchanged.
@@ -116,7 +116,7 @@ describe('AccountsScreen — a roster entry the operator declared plumbing', () 
 
 describe('AccountsScreen — every account, never hidden', () => {
   it('renders a row for every known account, including one with no telemetry at all', async () => {
-    // Only claude ever reported; claude2/claude-corp/gpt are absent from the
+    // Only claude ever reported; claude9/claude-acme/gpt are absent from the
     // wire entirely (never run, never markered) — the strip would simply
     // never show them, but "show me my accounts" means they still get a row.
     stubAccounts([acct({ wrapper: 'claude', five: 12, seven: 4 })]);
@@ -130,7 +130,7 @@ describe('AccountsScreen — every account, never hidden', () => {
   it('shows a disabled lane greyed with its reason — never drops the row', async () => {
     stubAccounts([
       acct({ wrapper: 'claude', five: 30 }),
-      acct({ wrapper: 'claude2', five: null, seven: null, ts: null, disabled: true }),
+      acct({ wrapper: 'claude9', five: null, seven: null, ts: null, disabled: true }),
     ]);
     render(<AccountsScreen />);
     expect(await screen.findByText('team·alt')).toBeInTheDocument();
@@ -169,12 +169,12 @@ describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\
         seven: 57, sevenRolledOver: false,
       }),
       acct({
-        wrapper: 'claude2', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false,
+        wrapper: 'claude9', five: 0, fiveResetAt: nowSec + 9000, fiveRolledOver: false,
         seven: null, sevenRolledOver: false,
       }),
     ]);
     render(<AccountsScreen />);
-    // Rows are scoped with `within` — the screen also renders claude-corp and
+    // Rows are scoped with `within` — the screen also renders claude-acme and
     // gpt as blank (never-reported) rows in the same fixture, each carrying
     // its OWN unmeasured "—", so an unscoped getByText('—') is ambiguous by
     // construction here. That is exactly the "never hides it" behaviour under
@@ -183,9 +183,9 @@ describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\
     expect(within(claudeRow).getByText('reset')).toBeInTheDocument();  // rolled-over 5h
     expect(within(claudeRow).getByText('57%')).toBeInTheDocument();    // measured 7d
 
-    const claude2Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
-    expect(within(claude2Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h
-    expect(within(claude2Row).getByText('—')).toBeInTheDocument();    // never-measured 7d
+    const claude9Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
+    expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h
+    expect(within(claude9Row).getByText('—')).toBeInTheDocument();    // never-measured 7d
   });
 });
 
@@ -199,7 +199,7 @@ describe('AccountsScreen — freshness ("last reported")', () => {
   it('renders — when a sample has never landed', async () => {
     stubAccounts([acct({ wrapper: 'claude', ts: null, five: null, seven: null })]);
     render(<AccountsScreen />);
-    // Scoped to claude's row: claude2/claude-corp/gpt never reported at all in
+    // Scoped to claude's row: claude9/claude-acme/gpt never reported at all in
     // this fixture either, so an unscoped query is ambiguous by construction
     // (the exact "never hides it" behaviour under test elsewhere in this file).
     const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
@@ -214,13 +214,13 @@ describe('AccountsScreen — sessions on this account', () => {
       conn: 'open',
       sessions: [
         sess({ id: 'a', wrapper: 'claude', project: 'alpha', workspace: 'quiet-basin', name: 'alpha work' }),
-        sess({ id: 'b', wrapper: 'claude2', project: 'beta', workspace: 'still-cove', branch: 'ws/still-cove' }),
+        sess({ id: 'b', wrapper: 'claude9', project: 'beta', workspace: 'still-cove', branch: 'ws/still-cove' }),
       ],
     }));
     render(<AccountsScreen />);
     const claudeRow = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
     const link = within(claudeRow).getByRole('button', { name: 'alpha work' });
-    // The other account's session shows up under ITS OWN row (claude2, tested
+    // The other account's session shows up under ITS OWN row (claude9, tested
     // implicitly by the label existing at all) but must not leak into claude's.
     expect(within(claudeRow).queryByText('ws/still-cove')).not.toBeInTheDocument();
     fireEvent.click(link);
@@ -362,7 +362,7 @@ describe('AccountsScreen — tagging an account into a pool', () => {
   // A roster WITH a pool, because `poolOptions` is roster-derived: the list
   // offers only pools an account already belongs to (fleet.css's own note —
   // a free-text pool with no member would strand every constrained session).
-  const POOLED = TEST_ROSTER.map((a) => (a.id === 'claude2' ? { ...a, pool: 'pool-a' } : a));
+  const POOLED = TEST_ROSTER.map((a) => (a.id === 'claude9' ? { ...a, pool: 'pool-a' } : a));
 
   const open = async (): Promise<void> => {
     vi.spyOn(api, 'accounts').mockResolvedValue(

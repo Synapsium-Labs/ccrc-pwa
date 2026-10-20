@@ -158,6 +158,9 @@ export const EXPORT_DIR = 'export';
 export const EXPORT_SEGMENT_MAX_BYTES = 256 * 1024 * 1024;
 export const EXPORT_PASS_INTERVAL_MS = 60 * 60 * 1000;
 export const EXPORT_SEGMENT_FORMAT = 1;
+/** SQLite's database header, the first 100 bytes of every database file: store.mjs segmentFileFacts reads this much of a
+ *  segment, and a shorter segment is short (decideSegmentWhole). D-5634 (history-export-segment-whole-check). */
+export const SEGMENT_HEADER_BYTES = 100;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
 /** The largest decompressed size (raw_len) a reader that must hold a whole stored body will decode. A body stored
  *  from a row Claude Code wrote (JSON.stringify output) re-encodes at no more than its line's length, so it is within
@@ -333,7 +336,7 @@ export const PASS_WORDS = Object.freeze([
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
  *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`, and D-4347's
- *  `spool-planted`. */
+ *  `spool-planted`, and D-5633's `export-marks-unchecked` and `export-marks-stalled`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -342,15 +345,15 @@ const healthEntries = [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
-    'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
-    'drain-rejected', 'spool-planted',
+    'export-segment-missing', 'export-segment-damaged', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
+    'drain-rejected', 'spool-planted', 'export-marks-unchecked',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
     'store-not-wal', 'store-unmeasured', 'recovery-stalled', 'store-root-dangling', 'store-missing',
     'store-mismatch', 'store-unbound', 'store-unreachable', 'store-recoverable', 'store-wal-orphaned',
     'store-zero-byte', 'store-schema-missing', 'migration-refused', 'migration-needs-op', 'journal-unwritable',
-    'export-segment-newer', 'export-overdue', 'status-unreadable',
+    'export-segment-newer', 'export-overdue', 'export-marks-stalled', 'status-unreadable',
   ]),
 ];
 export const HEALTH_WORDS = Object.freeze(Object.fromEntries(healthEntries));
@@ -3308,11 +3311,17 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  // D-5634 (history-export-segment-whole-check): the listed segments the last check after a bind found not whole or not this
+  // store's (a JSON list of names, in (seq, writer) order), read back by readSegmentNameList.
+  exportSegmentDamaged: 'export_segment_damaged',
   exportPassMs: 'export_pass_ms',               // W1-B4: when the last export pass ran (doctor's last-pass rule)
   exportDueOldestMs: 'export_due_oldest_ms',    // W1-B4: the census's oldest due-since (doctor's wait rule)
   exportPaused: 'export_paused',                // W1-B4: the export's pause for room on the home filesystem
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
+  // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): why the check after a bind stopped short, since when, and the
+  // marks it has cleared so far, at least ('<word> <sinceMs> <cleared>', lib formatMarkCheckState; display only, and a thrown failure adds 0 for its step, so the batches it committed before the throw go uncounted); deleted by its done stamp.
+  exportMarksCheck: 'export_marks_check',
 });
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
@@ -3377,7 +3386,7 @@ const SWEEP_LOG = 'journalctl --user -u ccd-history-sweep -n 50';
  *  SWITCHES and STORE_DB_REL are their one spellings (O13, O14), so a text
  *  naming the store's directory interpolates `~/${STORE_DB_REL}`. */
 export const HEALTH_REMEDIES = Object.freeze({
-  off: `remove ~/${SWITCHES.off} when capture should resume`,
+  off: `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole`,
   recovering: 'none needed: the recovery step runs within each tick\'s budget, and FAILs recovery-stalled if its cursor stops moving',
   'op-running': 'none needed: an operator pass holds the sweep lock, and ticks resume when it exits',
   'catching-up': 'none needed: the backlog is falling every tick',
@@ -3394,7 +3403,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
   'store-missing': `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
-  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`,
+  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then); ${adoptCarryAdvice(null)}`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
   'store-recoverable': 'the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from what was found, from a terminal outside any session; or moves that evidence aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
@@ -3418,6 +3427,10 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
+  'export-segment-damaged': `put a whole copy of each named file back if one exists (the source box or a backup), and keep another copy of it outside ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ for good, but not while a recovery is open: text the store pruned that only that file held cannot be exported again; otherwise move each named file out of ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ (its live rows export again by themselves); a later ccrc history doctor --restore or --rebuild stops at a segment it cannot read`,
+  // D-5633 (history-export-bind-check-doctor): the fallback texts; remedyFor answers by the word the check stopped on.
+  'export-marks-unchecked': `none needed while the check resumes each tick; otherwise act on the word it stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
+  'export-marks-stalled': `act on the word the check stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
   'journal-record-skipped': `none needed if the journal came from a newer build; otherwise read the sweep: ${SWEEP_LOG} (no operator verb clears this count: the journal audit recounts it from the journal each time it runs)`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; the operator runs ccrc history doctor --repair, which checks the store's integrity and re-reads every blob to re-measure this count, from a terminal outside any session`,
@@ -3457,7 +3470,7 @@ function remedyFor(word, h) {
         ? `the operator runs ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}; keep them) or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
         : 'the operator runs ccrc history doctor --rebuild, which rebuilds from the journal, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
     case 'store-unbound':
-      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`;
+      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then); ${adoptCarryAdvice(h.storeId ?? null)}`;
     case 'store-recoverable':
       return `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from ${evidenceOf(h)}, from a terminal outside any session; or moves that evidence aside to start a new store`;
     case 'migration-refused':
@@ -3476,6 +3489,9 @@ function remedyFor(word, h) {
       return exportDueRemedy(h);
     case 'export-overdue':
       return exportOverdueRemedy(h);
+    case 'export-marks-unchecked':
+    case 'export-marks-stalled':
+      return markCheckRemedy(word, h);
     default:
       return HEALTH_REMEDIES[word] ?? '';
   }
@@ -3674,6 +3690,10 @@ export function deriveHealth(h) {
   if (h.exportSegmentNewer.length > 0) fail.push(item('export-segment-newer', `export segment(s) ${h.exportSegmentNewer.join(', ')} are in a newer format than this build reads`));
   // D-4207 (history-export-due-escalates): the overdue FAIL on measured source loss, and export-due below.
   if (h.exportOverdue > 0) fail.push(item('export-overdue', `${h.exportOverdue} unexported blob(s) whose source text is gone or past its deletion date: the store may be their only copy`));
+  // D-5633 (history-export-bind-check-doctor): a check after a bind that has stopped on escalating words (wal-held,
+  // unlistable, failed) for over EXPORT_MARKS_STALL_MS FAILs in place of its WARN below (coordinator ruling R5, as amended).
+  const markCheck = markCheckArm(h);
+  if (markCheck === 'stalled') fail.push(item('export-marks-stalled', markCheckDetail(markCheck, h)));
 
   // 5. the WARNs.
   if (h.fts === 'fts5-absent' || h.fts === 'probe-failed') warn.push(item('fts-unavailable', `search unavailable (${h.fts}); capture continues`));
@@ -3693,6 +3713,9 @@ export function deriveHealth(h) {
     warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
   }
   if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
+  // D-5634 (history-export-segment-whole-check): a listed segment the check after a bind found not whole or not this store's.
+  if (h.exportSegmentDamaged.length > 0) warn.push(item('export-segment-damaged', `export segment(s) ${h.exportSegmentDamaged.join(', ')} are not whole or not this store's; the check after a bind treated them as missing, so their marks were cleared and their rows export again`));
+  if (markCheck === 'unchecked') warn.push(item('export-marks-unchecked', markCheckDetail(markCheck, h)));   // D-5633: the stalled FAIL above replaces it
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
   if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
     warn.push(item('journal-growth', `the journal grew ${h.journalGrowth30d} bytes in 30 days (over ${JOURNAL_GROWTH_BYTES})`));
@@ -8166,8 +8189,193 @@ export function orderSegmentNames(names) {
     const p = parseSegmentName(n);
     if (p !== null) parsed.push({ n, ...p });
   }
-  parsed.sort((a, b) => a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0));
+  parsed.sort(segmentPartsOrder);
   return parsed.map((p) => p.n);
+}
+
+/** Replay's (seq, writer) order over two parsed names: seq numerically, then the writer token in code-unit order. One
+ *  comparator for orderSegmentNames and segmentOrdersAfter, so the order replay walks in and the order its marks follow
+ *  are one order. */
+function segmentPartsOrder(a, b) {
+  return a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0);
+}
+
+/** Whether segment `a` orders strictly after `b` in replay's (seq, writer) order (orderSegmentNames'), so that replay
+ *  moves a mark naming `b` to `a`, the later carrier (D-5637 (history-export-replay-last-carrier), wave 5h-1). `b` is
+ *  the mark the store holds: null (no mark) or a name off the segment grammar names no carrier, and any segment orders
+ *  after it. `a` is the segment being replayed, a name from the listing: off the grammar it is a caller's bug and
+ *  throws. The same name is not after itself, so a page replayed again after a kill moves nothing. */
+export function segmentOrdersAfter(a, b) {
+  const pa = parseSegmentName(a);
+  if (pa === null) throw new TypeError(`segmentOrdersAfter: not a segment name: ${JSON.stringify(a)}`);
+  if (b === null) return true;
+  const pb = parseSegmentName(b);
+  return pb === null ? true : segmentPartsOrder(pa, pb) > 0;
+}
+
+/** The writers of a replay's segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1;
+ *  D-5727 (history-export-replay-layout-once) says where the layout comes from). `listed` is the segment names the directory
+ *  holds; `marked` is the distinct segment names the store's marks hold (blobs.exported_seg and entries.exported_seg), which may
+ *  name a segment that is no longer listed (moved aside after a recovery); `stored` is the ranges a replay already measured (the
+ *  kept layout, parseReplayLayout's `ranges`), or null for none.
+ *  `ranges` maps a writer token to its lowest and highest seq over ALL THREE, so a fork hidden by a missing segment reads as a fork
+ *  and not as succession, and a range a replay has kept never narrows; a name off the segment grammar is dropped. `listed` is the
+ *  set of listed names (the grammar ones), so that decideReplayMark can ask whether a held mark names a segment that is there, and
+ *  every listed name's writer is ranged, whatever `stored` holds. `widened` is whether the listed and marked names widened `stored`
+ *  (a writer it lacked, a lower lo or a higher hi); false when none was given. A writer minted by a rebind (rebuild, restore,
+ *  adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on disk or recorded, so every seq of
+ *  it lies above every seq of theirs, and its store held everything their segments carried (except through D-5726's named residuals). Writer W2 succeeds W1 when W2's lowest
+ *  seq is above W1's highest. Two writers neither of which succeeds the other are a FORK: their ranges interleave or touch (an equal
+ *  seq included): two writers whose ranges touch or interleave ran at once, while two that did run at once can also read as succession (D-5726's residual of a segment carried in after the later writer's bind). `forked` is whether any pair of the directory's writers is a
+ *  fork. */
+export function replayWriterLayout(listed, marked = [], stored = null) {
+  const names = new Set();
+  const fresh = new Map();
+  const range = (n) => {
+    const p = parseSegmentName(n);
+    if (p === null) return null;
+    const r = fresh.get(p.writer);
+    if (r === undefined) fresh.set(p.writer, { lo: p.seq, hi: p.seq });
+    else {
+      if (p.seq < r.lo) r.lo = p.seq;
+      if (p.seq > r.hi) r.hi = p.seq;
+    }
+    return p;
+  };
+  for (const n of listed) if (range(n) !== null) names.add(n);
+  for (const n of marked) range(n);
+  const { ranges, widened } = widenReplayRanges(stored ?? new Map(), fresh);
+  const all = [...ranges.values()];
+  let forked = false;
+  for (let i = 0; i < all.length && !forked; i += 1) {
+    for (let j = i + 1; j < all.length; j += 1) {
+      if (!(all[i].lo > all[j].hi || all[j].lo > all[i].hi)) { forked = true; break; }
+    }
+  }
+  return { ranges, forked, listed: names, widened: stored === null ? false : widened };
+}
+
+/** `base` widened by `add` (D-5727): each writer of either, over the lowest lo and the highest hi of the two. Never narrows, and
+ *  touches neither argument. `widened` is whether the answer differs from `base` (a writer it lacked, a lower lo, a higher hi). */
+export function widenReplayRanges(base, add) {
+  const ranges = new Map();
+  for (const [w, r] of base) ranges.set(w, { lo: r.lo, hi: r.hi });
+  let widened = false;
+  for (const [w, r] of add) {
+    const have = ranges.get(w);
+    if (have === undefined) { ranges.set(w, { lo: r.lo, hi: r.hi }); widened = true; continue; }
+    if (r.lo < have.lo) { have.lo = r.lo; widened = true; }
+    if (r.hi > have.hi) { have.hi = r.hi; widened = true; }
+  }
+  return { ranges, widened };
+}
+
+/** Every writer the segment names give, over the whole seq line (D-5727): the layout a replay takes when it cannot know what it
+ *  measured, which ranges every pair of writers as a fork. Names off the segment grammar are dropped. */
+export function widestReplayRanges(names) {
+  const ranges = new Map();
+  for (const n of names) {
+    const p = parseSegmentName(n);
+    if (p !== null) ranges.set(p.writer, { lo: 0, hi: Number.MAX_SAFE_INTEGER });
+  }
+  return ranges;
+}
+
+/** The replay layout's meta value (D-5727): the recover row's version (its bind ms) and each writer's `[lo, hi]`, writers in code-unit
+ *  order, as JSON. `ranges` is a Map of writer token to { lo, hi }. */
+export function formatReplayLayout({ version, ranges }) {
+  const w = {};
+  for (const k of [...ranges.keys()].sort()) w[k] = [ranges.get(k).lo, ranges.get(k).hi];
+  return JSON.stringify({ version, ranges: w });
+}
+
+/** A replay layout's meta value back to `{ version, ranges }` (ranges a Map of writer token to { lo, hi }), or null for anything
+ *  malformed (D-5727): not text, not JSON, not exactly the two keys, a version that is not a safe integer of at least 1, a writer
+ *  token off WRITER_RE's grammar, or a range that is not two safe integers 0 <= lo <= hi. The sweep treats null as a layout it
+ *  cannot trust (planReplayLayout), never as a throw. */
+export function parseReplayLayout(text) {
+  if (typeof text !== 'string') return null;
+  let j;
+  try { j = JSON.parse(text); } catch { return null; }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) return null;
+  const keys = Object.keys(j);
+  if (keys.length !== 2 || !keys.includes('version') || !keys.includes('ranges')) return null;
+  if (!Number.isSafeInteger(j.version) || j.version < 1) return null;
+  const r = j.ranges;
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return null;
+  const ranges = new Map();
+  for (const [w, v] of Object.entries(r)) {
+    if (!WRITER_RE.test(w) || !Array.isArray(v) || v.length !== 2) return null;
+    const [lo, hi] = v;
+    if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || lo < 0 || lo > hi) return null;
+    ranges.set(w, { lo, hi });
+  }
+  return { version: j.version, ranges };
+}
+
+/** What a replay does about its writer layout at one export chunk (D-5727 (history-export-replay-layout-once)). The layout is
+ *  MEASURED once, at the replay's phase advance into export-blobs (the sweep's measureReplayLayout, which opens no segment), and
+ *  every export chunk after it plans from the kept key. `text` is the kept layout's meta value or null; `version` is this replay's
+ *  (the recover row's).
+ *  - `widen`: a key that parses and carries this replay's version is the layout so far (`ranges`), and the chunk's listing widens
+ *    it; the key is written back only when the union widens it. A chunk never re-measures, a re-entered one included (the
+ *    export-blobs cursor stored with no file: a stalled last segment moved aside), which would read the marks after this replay's
+ *    take-offs consumed them, narrower than the first measure;
+ *  - `widest`: a key that is missing, malformed or of another version means this replay passed its phase advance under a build that
+ *    kept none (a rollout or rollback across an open recovery, or a cursor an older build advanced into export-blobs), and the marks
+ *    that witnessed a fork may be gone. The layout is the widest, never a fresh measure, which would be narrower than the truth.
+ *    Widening a range can only turn a 'mark' into a 'keep' or a 'take-off', or a 'keep' into a 'take-off' (decideReplayMark), so a
+ *    layout too wide costs re-exports only. */
+export function planReplayLayout({ text, version }) {
+  const kept = parseReplayLayout(text);
+  if (kept !== null && kept.version === version) return { word: 'widen', ranges: kept.ranges };
+  return { word: 'widest' };
+}
+
+/** What replay does with an export mark when the segment `seg` carries the row (D-5726 (history-export-replay-mark-one-writer),
+ *  wave 5h-1, amending D-5637). A mark moves within one writer, where every export writes everything the store held of a row at
+ *  the time and nothing deletes those rows, so a later segment holds all an earlier one did; and to a SUCCESSOR writer (a rebind's
+ *  new token), whose store held all its predecessor's segments carried. Across a FORK (two writers whose seqs interleave or
+ *  touch; replayWriterLayout) the content order is unknown in either direction, so a mark moved to the other writer's segment
+ *  could name one that lacks a row only the earlier carrier holds: it comes off instead, and the row exports again. Answers,
+ *  in this order:
+ *  - `fresh` (this segment's row inserted the row): 'mark';
+ *  - `held` null: 'keep' when the directory holds a fork (the row stays unmarked and owed to the next pass, so a take-off is
+ *    sticky for the rest of the replay: a later segment of either writer cannot re-mark a row whose earlier carriers disagree),
+ *    else 'mark' (D-5637's rule);
+ *  - `held` names `seg`: 'keep' (the same page replayed again after a kill);
+ *  - `held` names the same writer's segment: 'mark' when `seg` orders after it (segmentOrdersAfter), else 'keep'. This holds
+ *    whether or not `held` is still listed: within one writer every export wrote all the store held, and nothing deletes it;
+ *  - `held` names a segment the listing does not hold (moved aside after a recovery) of ANOTHER writer: 'take-off' in a directory
+ *    that holds a fork, else 'keep'. The mark is not moved onto another writer's segment, which may lack what the missing one
+ *    carried; it stays on the missing name, so the check after a bind clears it and the row exports again (one re-export, even
+ *    when a successor carries the row). In a fork it comes off at once, as the fork rule below would, because a plain 'keep' there
+ *    would let a later segment of the held writer carry the mark past an intervening fork segment;
+ *  - `seg`'s writer is a successor of the held one: 'mark' (the mark moves forward to the superset);
+ *  - the held writer is a successor of `seg`'s: 'keep' (the held mark already names the later superset, as a restore's backup
+ *    marked by a later writer's segment does);
+ *  - otherwise a fork: 'take-off'.
+ *  From the unlisted-held rule on, `held` is listed, so its writer is ranged (replayWriterLayout ranges the listed names), as is
+ *  `seg`'s: a writer the layout does not range there is a caller's bug and throws, as an off-grammar `seg` does. `held` is the
+ *  row's mark as the store holds it; a name off the segment grammar names no carrier and counts as null. `layout` is
+ *  replayWriterLayout's answer: the replay's KEPT layout (D-5727, planReplayLayout: measured once, at the phase advance into export-blobs, from the listing and the store's
+ *  marked names, then only widened) merged with the segments listed now. 'held is not listed' reads the current listing, never the
+ *  kept ranges. `seg` is a listed name: off the grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
+export function decideReplayMark({ seg, held, fresh, layout }) {
+  const ps = parseSegmentName(seg);
+  if (ps === null) throw new TypeError(`decideReplayMark: not a segment name: ${JSON.stringify(seg)}`);
+  if (fresh) return 'mark';
+  const ph = held === null ? null : parseSegmentName(held);
+  if (ph === null) return layout.forked ? 'keep' : 'mark';
+  if (held === seg) return 'keep';
+  if (ph.writer === ps.writer) return segmentOrdersAfter(seg, held) ? 'mark' : 'keep';
+  if (!layout.listed.has(held)) return layout.forked ? 'take-off' : 'keep';
+  const rs = layout.ranges.get(ps.writer);
+  const rh = layout.ranges.get(ph.writer);
+  if (rs === undefined || rh === undefined) throw new TypeError(`decideReplayMark: a writer is not in the layout: ${JSON.stringify(seg)}, ${JSON.stringify(held)}`);
+  if (rs.lo > rh.hi) return 'mark';
+  if (rh.lo > rs.hi) return 'keep';
+  return 'take-off';
 }
 
 /** The next segment number (§9.15 "Write"): one past the highest seq on disk under export/<store_id>/, of any
@@ -8316,13 +8524,15 @@ const BIND_FACT_RE = /^bound:[0-9]{1,16}$/;
  *  the last check recorded (a JSON list of keys) or null. A step checks when a bind fact exists that the record does
  *  not hold: by KEY, never by comparing a bind's clock with the check's, because the two may be two boxes' clocks (an
  *  adopt) or one clock either side of a step back. A record that does not parse, or is not a list, covers nothing, so
- *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it. */
-export function decideMarkCheck({ metaKeys, checkedRecord }) {
+ *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it.
+ *  `vanished` (W5h-1 Task 4, D-5636 (history-export-vanished-rearm)) is lib segmentListingVanished's answer for this step:
+ *  true checks whatever the bind facts say; absent or false leaves the bind rule as it was. */
+export function decideMarkCheck({ metaKeys, checkedRecord, vanished = false }) {
   const facts = metaKeys.filter((k) => typeof k === 'string' && BIND_FACT_RE.test(k)).sort();
   let parsed;
   try { parsed = JSON.parse(checkedRecord ?? '[]'); } catch { parsed = []; }
   const have = new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
-  return { check: facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
+  return { check: vanished === true || facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
 }
 
 /** The segment names the store's marks give that export/<store_id>/ on this box does not hold, once each, sorted:
@@ -8331,6 +8541,74 @@ export function decideMarkCheck({ metaKeys, checkedRecord }) {
 export function missingSegmentNames({ named, present }) {
   const here = new Set(present);
   return [...new Set(named)].filter((n) => !here.has(n)).sort();
+}
+
+// ── W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): the listing record ─────────────────────────────────────
+// What the last check saw of export/<store_id>/, and every segment a pass published since, kept as meta
+// export_marks_checked_listing: `<count> <digest>`, never the names (coordinator ruling R7). A step re-arms the check when
+// the segment names it lists now, damaged ones included, differ from it, so a segment moved aside or deleted after the
+// first tick has its marks cleared and its rows export again, with no bind.
+
+/** The value grammar of the listing record: a count, one space, 32 lowercase hex digits. */
+const SEGMENT_LISTING_RE = /^(0|[1-9][0-9]{0,15}) ([0-9a-f]{32})$/;
+
+/** An order-independent digest of a set of segment names: the XOR of the first 16 bytes of each distinct name's
+ *  sha256, as 32 lowercase hex digits ('0' x 32 for none). Additive: a pass XORs its own name into the record without
+ *  listing the directory (addSegmentToListing). A name is never published twice (link() never replaces one, and the
+ *  sequence only grows), so the XOR never cancels a name it added. */
+export function segmentListingDigest(names) {
+  const acc = Buffer.alloc(16);
+  for (const n of new Set(names)) {
+    const h = createHash('sha256').update(String(n), 'utf8').digest();
+    for (let i = 0; i < 16; i += 1) acc[i] ^= h[i];
+  }
+  return acc.toString('hex');
+}
+
+/** The listing record of a set of names, `<count> <digest>`: the value the check's done stamp writes. */
+export function segmentListingRecord(names) {
+  const set = new Set(names);
+  return `${set.size} ${segmentListingDigest(set)}`;
+}
+
+/** A listing record's count and digest, or null when it does not parse. */
+function parseSegmentListing(v) {
+  const m = typeof v === 'string' ? SEGMENT_LISTING_RE.exec(v) : null;
+  return m === null ? null : { count: Number(m[1]), digest: m[2] };
+}
+
+/** The record after a pass published `name`, written in its mark transaction: one more, its digest XORed in. A pass
+ *  never creates the record (D-5725 (history-export-listing-record-born-at-a-check)): over no record it answers null (write
+ *  nothing), so the record is born only at a check's done stamp, from the listing that check measured, and a store with no
+ *  record owes one check. Over a record that does not parse it answers null too: the next step re-arms on it anyway and the
+ *  check writes a true one. Never a re-measurement of the directory: a segment gone before the pass stays in the record, so
+ *  the next step still re-arms on it. */
+export function addSegmentToListing(recorded, name) {
+  if (recorded === null) return null;
+  const r = parseSegmentListing(recorded);
+  if (r === null) return null;
+  const add = Buffer.from(segmentListingDigest([name]), 'hex');
+  const acc = Buffer.from(r.digest, 'hex');
+  for (let i = 0; i < 16; i += 1) acc[i] ^= add[i];
+  return `${r.count + 1} ${acc.toString('hex')}`;
+}
+
+/** Whether a segment the last record saw may be gone (decideMarkCheck's `vanished`). `measured` is the record of every
+ *  segment name listed now, damaged ones included, or null when the directory could not be listed (an unreadable
+ *  directory is never a vanished segment); `recorded` is meta's. The record holds a count and a digest, never the names,
+ *  so it cannot tell a segment gone from one added: any difference answers true, and the check, keyed on the marks,
+ *  clears only what a mark names and this box lacks (a segment carried in clears nothing). No record answers true
+ *  whatever the listing holds, an empty one included (D-5725 (history-export-listing-record-born-at-a-check)): a store
+ *  with no record owes one check, which writes it at its done stamp, because marks may name segments the listing has lost;
+ *  a record that does not parse answers true. */
+export function segmentListingVanished({ recorded, measured }) {
+  if (measured === null) return false;
+  const now = parseSegmentListing(measured);
+  if (now === null) throw new TypeError(`segmentListingVanished: not a listing record: ${JSON.stringify(measured)}`);
+  if (recorded === null) return true;
+  const was = parseSegmentListing(recorded);
+  if (was === null) return true;
+  return was.count !== now.count || was.digest !== now.digest;
 }
 
 /** Whether an entry may hold its export mark, from the states of the blobs it references as the store holds them now
@@ -8353,7 +8631,7 @@ export function entryMayHoldMark({ blobs }) {
  *  refining D-5395), from the states of the blobs the entry references as the store holds them now, each with `carried`:
  *  whether THAT segment's blobs hold the blob, as bytes or as a stub. entryMayHoldMark's rule, narrowed where a mark names a
  *  segment. An `exported` blob has its bytes where its own mark names, so it licenses the mark whichever segment is replayed
- *  (the entry is marked by the first segment that carries it), and the loss of that segment clears the blob's referrers with
+ *  (replay gives the mark to the entry's last carrier, D-5637), and the loss of that segment clears the blob's referrers with
  *  it (a bind check). A `pruned` blob that is not exported has no mark of its own, and its stub is held only by the segments
  *  that carry it: the entry's mark is the one thing that names a segment holding it, so the blob licenses the mark only when
  *  this segment carries it, as the pass's does (planSegment stubs every pruned, unmarked blob the entry names in the segment
@@ -8512,6 +8790,52 @@ export function decideSegmentReplay({ meta, storeId }) {
   return meta.format > EXPORT_SEGMENT_FORMAT ? 'newer' : 'replay';
 }
 
+// ── W5h-1 Task 3: a carried segment counts only when it is whole and this store's (§9.15 "After a bind"; D-5634
+// (history-export-segment-whole-check)). store.mjs segmentFileFacts measures a segment file's length and its SQLite
+// header without opening it; the two verdicts below judge those facts and the meta a whole file then gives. The check
+// after a bind (sweep.mjs checkSegmentMarks) counts a listed name present only when both answer whole and own; any
+// other name is treated as missing, so its marks clear and its rows export again. Nothing here renames or removes it.
+
+/** Whether a segment file is whole, from store.mjs segmentFileFacts: `unreadable` when it could not be measured;
+ *  `short` when it is shorter than SQLite's header, or than the page size times the in-header page count; `not-sqlite`
+ *  when it does not begin with SQLite's magic (a file of zeros, or another kind of file); `header-invalid` when the
+ *  header's page count is not one SQLite trusts (its version-valid-for number differs from its change counter, or it is
+ *  0) or its page size is not a power of two from 512 to 65536; `long` when it is longer than those pages; `whole`
+ *  otherwise. A length check only: damage inside a file of the right length is not seen here (only quick_check or
+ *  replay sees it, and neither runs in the tick). */
+export function decideSegmentWhole(facts) {
+  if (facts.unreadable !== undefined) return 'unreadable';
+  if (facts.size < SEGMENT_HEADER_BYTES) return 'short';
+  if (!facts.magic) return 'not-sqlite';
+  const ps = facts.pageSize;
+  if (!facts.headerValid || !(facts.pageCount > 0) || !(ps >= 512 && ps <= 65536 && (ps & (ps - 1)) === 0)) return 'header-invalid';
+  const expect = ps * facts.pageCount;
+  if (facts.size < expect) return 'short';
+  if (facts.size > expect) return 'long';
+  return 'whole';
+}
+
+/** Whether a whole segment file is this store's, under its own name, from the meta store.mjs segmentMeta read back
+ *  (`meta`), or null when that open or read failed: `meta-unreadable`; `foreign` when its store_id is not this store's
+ *  (decideSegmentReplay's rule); `renamed` when the name its seq and writer give is not the name it is listed under (a
+ *  copy of another segment, or a file moved between names); `own` otherwise. */
+export function decideSegmentOwn({ meta, storeId, name }) {
+  if (meta === null) return 'meta-unreadable';
+  if (meta.storeId !== storeId) return 'foreign';
+  return segmentName({ seq: meta.seq, writer: meta.writer }) === name ? 'own' : 'renamed';
+}
+
+/** HEALTH_META.exportSegmentDamaged read back: null (never written) is []; otherwise a JSON list of segment names
+ *  (parseSegmentName's grammar). Anything else throws, so status names the key unmeasured and never reads a damaged
+ *  record as "nothing damaged". */
+export function readSegmentNameList(v) {
+  if (v === null) return [];
+  let a;
+  try { a = JSON.parse(v); } catch { a = null; }
+  if (!Array.isArray(a) || !a.every((n) => parseSegmentName(n) !== null)) throw new TypeError(`not a list of segment names: ${JSON.stringify(v)}`);
+  return a;
+}
+
 // ── W1-B4 Task 9: export-due on a build with the export writer (spec §9.6, §9.15 "The gap guard") ──────────────
 // B1 shipped the ruled arm for a build without the writer: WARN from the first due blob. With the writer (this
 // build), rows cross the horizon continuously and the pass runs at most hourly, so a due count alone is the pass's
@@ -8597,4 +8921,221 @@ export function readExportDueOldest(v) {
   if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;
   if (v === '') return null;
   return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
+
+// ── W5h-1 Task 1: the check after a bind, in bounded batches (D-5632 (history-export-bind-check-batched)) ──────────
+// The check of §9.15 "After a bind" clears the marks naming a segment this box lacks a batch at a time, each batch one
+// NORMAL transaction with a TRUNCATE checkpoint after it, and may span steps: a step that stops records why
+// (HEALTH_META.exportMarksCheck) and the next step recomputes the missing set and starts again from the first row. lib
+// decides when a batch may start, what a batch takes and what a stop records (RD2); sweep.mjs measures and acts.
+
+/** The stored bytes (length(z)) one batch of the check clears the marks of, at most. A cleared mark rewrites its whole row
+ *  and z's overflow pages, so a batch's WAL is about 1.1 times this for 8 KiB blobs (measured: a full 16 MiB batch
+ *  peaked at 17.4 MiB at its commit) and more per stored byte for small ones (measured: a batch of 50,000 blobs of 300 B,
+ *  14.3 MiB stored, with their 50,000 referrers, peaked at 23.2 MiB), well under EXPORT_BIND_WAL_CEILING. A batch still takes its first row whatever its size. */
+export const EXPORT_BIND_BYTES = 16 * 1024 * 1024;
+/** The WAL left after a batch's checkpoint answered busy (bytes) past which the check stops, worded `wal-held`: a reader on
+ *  an older snapshot keeps every frame, so batching alone bounds nothing while it stays (measured: the WAL grew to the
+ *  unbatched size). */
+export const EXPORT_BIND_WAL_CEILING = 64 * 1024 * 1024;
+/** Rows one batch reads at most (a page of the keyset): the check's memory bound and its row bound. Moved here from
+ *  sweep.mjs (D-5395's batch); an in-process test's ctx.deps.exportBindBatch overrides it (D-4247). */
+export const EXPORT_BIND_BATCH = 50_000;
+/** How long a check's escalating stop (MARK_CHECK_STALL_WORDS) may stand before doctor fails it (export-marks-stalled;
+ *  read by deriveHealth). */
+export const EXPORT_MARKS_STALL_MS = 24 * 60 * 60 * 1000;
+/** Why a check after a bind stopped short. `budget`: the run's budget was spent before a batch (it resumes each tick);
+ *  `off`: history-off was planted; `wal-held`: a checkpoint answered busy and the WAL stands past EXPORT_BIND_WAL_CEILING;
+ *  `unlistable`: export/<store_id>/ could not be listed; `failed`: another caught error. */
+export const MARK_CHECK_WORDS = Object.freeze(['budget', 'off', 'wal-held', 'unlistable', 'failed']);
+/** The escalating stop words (coordinator ruling R5, as amended): no later tick moves the check past them by itself, so
+ *  doctor FAILs one that has stood past EXPORT_MARKS_STALL_MS (Task 2's deriveHealth arm reads this list). `budget`
+ *  resumes each tick, and `off` is the operator's switch, which holds back every other freshness FAIL (D-4314), so
+ *  neither escalates. A stop's clock restarts when its word moves between this class and the other (nextMarkCheckState). */
+const MARK_CHECK_STALL_WORDS = Object.freeze(['wal-held', 'unlistable', 'failed']);
+
+/** Whether the check may start its next batch: null, or the word it stops with. A non-progress word wins over `budget`,
+ *  so a check that is both starved and blocked says what blocks it: `off` (history-off exists), then `wal-held` (the
+ *  WAL the last checkpoint could not truncate, `walBytes`, is past `walCeiling`), then `budget` (`budgetLeft` false). */
+export function markCheckStop({ budgetLeft, off, walBytes, walCeiling }) {
+  if (off) return 'off';
+  if (walBytes > walCeiling) return 'wal-held';
+  if (!budgetLeft) return 'budget';
+  return null;
+}
+
+/** One batch of the check from one page of its keyset (`rows`, ascending ids, each `{ id, bytes }` with `bytes` the
+ *  stored length of z, 0 for a pruned blob or an entry): rows in order while the stored bytes stay within `maxBytes` and
+ *  the rows within `maxRows`, always at least the first row. `after` is the LAST TAKEN id, where the next page starts
+ *  (null for an empty page: the phase is done). A row that is not two non-negative safe integers is a caller's bug and
+ *  throws, so a NULL length never reads as 0. */
+export function planMarkCheckBatch({ rows, maxBytes, maxRows }) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new TypeError(`planMarkCheckBatch: bounds must be positive integers, not ${JSON.stringify({ maxBytes, maxRows })}`);
+  }
+  for (const r of rows) {
+    if (!Number.isSafeInteger(r.id) || r.id < 1 || !Number.isSafeInteger(r.bytes) || r.bytes < 0) {
+      throw new TypeError(`planMarkCheckBatch: not a { id, bytes } row: ${JSON.stringify(r)}`);
+    }
+  }
+  const ids = [];
+  let bytes = 0;
+  for (const r of rows) {
+    if (ids.length >= maxRows) break;
+    if (ids.length > 0 && bytes + r.bytes > maxBytes) break;
+    ids.push(r.id);
+    bytes += r.bytes;
+  }
+  return { ids, bytes, after: ids.length === 0 ? null : ids[ids.length - 1] };
+}
+
+const MARK_CHECK_STATE_RE = new RegExp(`^(${MARK_CHECK_WORDS.join('|')}) ([0-9]{1,16}) ([0-9]{1,16})$`);
+const markCheckCount = (n) => Number.isSafeInteger(n) && n >= 0;
+
+/** HEALTH_META.exportMarksCheck's text: `<word> <sinceMs> <cleared>`. Anything else is a caller's bug and throws. */
+export function formatMarkCheckState({ word, sinceMs, cleared }) {
+  if (!MARK_CHECK_WORDS.includes(word) || !markCheckCount(sinceMs) || !markCheckCount(cleared)) {
+    throw new TypeError(`formatMarkCheckState: not a check state: ${JSON.stringify({ word, sinceMs, cleared })}`);
+  }
+  return `${word} ${sinceMs} ${cleared}`;
+}
+
+/** HEALTH_META.exportMarksCheck read back: null when the key is absent (the check is not stopped short), else its word,
+ *  since and cleared. A value off the grammar THROWS: it is never folded into absent, so status names it unmeasured. */
+export function parseMarkCheckState(v) {
+  if (v === null) return null;
+  const m = typeof v === 'string' ? MARK_CHECK_STATE_RE.exec(v) : null;
+  if (m === null || !markCheckCount(Number(m[2])) || !markCheckCount(Number(m[3]))) {
+    throw new TypeError(`export_marks_check: not '<word> <sinceMs> <cleared>': ${JSON.stringify(v)}`);
+  }
+  return { word: m[1], sinceMs: Number(m[2]), cleared: Number(m[3]) };
+}
+
+/** The state a stop records, from what meta holds (`recorded`, the text as read, or null) and this step's stop: the new
+ *  word; since when the check has stopped on words of this word's class (MARK_CHECK_STALL_WORDS, or `budget` and `off`):
+ *  kept while the word stays within one class, `nowMs` for the first stop and for a stop whose word crosses between the
+ *  classes (R5 as amended: doctor ages the escalating class alone); and the marks cleared so far (`cleared` added to the
+ *  recorded count). A recorded text off the grammar is the writer's to cure: the check restarts its record from this
+ *  stop rather than keep a value status cannot read. */
+export function nextMarkCheckState({ recorded, word, nowMs, cleared }) {
+  if (!markCheckCount(nowMs) || !markCheckCount(cleared)) {
+    throw new TypeError(`nextMarkCheckState: not a clock and a count: ${JSON.stringify({ nowMs, cleared })}`);
+  }
+  let prev;
+  try { prev = parseMarkCheckState(recorded); } catch { prev = null; }
+  const sameClass = prev !== null && MARK_CHECK_STALL_WORDS.includes(prev.word) === MARK_CHECK_STALL_WORDS.includes(word);
+  return { word, sinceMs: sameClass ? prev.sinceMs : nowMs, cleared: (prev === null ? 0 : prev.cleared) + cleared };
+}
+
+// ── W5h-1 Task 2: doctor sees a check after a bind that cannot finish (D-5633 (history-export-bind-check-doctor)) ─
+// Task 1's check after a bind runs in bounded batches over as many ticks as it needs, and writes
+// HEALTH_META.exportMarksCheck ('<word> <sinceMs> <cleared>', parsed by parseMarkCheckState) each time it stops short;
+// its done stamp deletes the record. Until then a mark may still name a segment that is not on this box, so the gap
+// guard cannot see those rows. Two words (coordinator ruling R5 as amended, put to the operator at plan approval):
+//   export-marks-unchecked  WARN while the record stands;
+//   export-marks-stalled    FAIL in its place once the word is one no tick moves past by itself (Task 1's
+//                           MARK_CHECK_STALL_WORDS: wal-held, unlistable, failed) and the record's sinceMs is more than
+//                           EXPORT_MARKS_STALL_MS ago (a FAIL turns doctor red, and `ccrc update` exits 3 on it).
+// `budget` is progress: the check resumes as each tick's budget allows, and its starvation behind ingest is accepted
+// and made visible by the WARN (R4); it never escalates, since an ingest backlog that long already FAILs lag-high.
+// `off` never escalates either: the operator's switch holds back every other freshness FAIL (D-4314).
+// The age is the record's sinceMs, which Task 1 keeps while the word stays within one class and restarts when it
+// crosses between the escalating words and budget/off, so it is the escalating class's own. A sinceMs recorded in the
+// future (the clock stepped back) reads as 0 min, so it never reaches the FAIL.
+// These are function declarations and frozen consts read at call time: deriveHealth and remedyFor, above, call
+// them only after the module has loaded. MARK_CHECK_WORDS and MARK_CHECK_STALL_WORDS are Task 1's, declared once.
+
+/** The words of a stop word's class, for the detail: 'wal-held, unlistable or failed', or 'budget or off'. */
+function markCheckClassWords(word) {
+  const ws = MARK_CHECK_WORDS.filter((w) => MARK_CHECK_STALL_WORDS.includes(w) === MARK_CHECK_STALL_WORDS.includes(word));
+  return ws.length === 1 ? ws[0] : `${ws.slice(0, -1).join(', ')} or ${ws[ws.length - 1]}`;
+}
+
+/** What each stop word means, for the detail. */
+const MARK_CHECK_GLOSS = Object.freeze({
+  budget: 'the run budget was spent before its next batch, ingest first',
+  off: 'capture is off',
+  'wal-held': 'a reader held the store\'s WAL past its ceiling',
+  unlistable: 'the export directory could not be listed',
+  failed: 'an error the sweep logged',
+});
+
+/** Which of the two words the record raises, or null when no check stands unfinished. */
+function markCheckArm(h) {
+  const s = h.exportMarksCheck ?? null;
+  if (s === null) return null;
+  // Under history-off no tick can retry the check, so the switch holds the FAIL back as it holds every freshness FAIL (D-4314, D-5640).
+  if (!h.historyOff && MARK_CHECK_STALL_WORDS.includes(s.word) && h.nowMs - s.sinceMs > EXPORT_MARKS_STALL_MS) return 'stalled';
+  return 'unchecked';
+}
+
+/** The detail of either word. It says what is unfinished, never what was cleared: export-segment-missing says that. */
+function markCheckDetail(arm, h) {
+  const s = h.exportMarksCheck;
+  const age = Math.max(0, minutesOf(h.nowMs - s.sinceMs));
+  const why = `${s.word} (${MARK_CHECK_GLOSS[s.word] ?? 'a word this build does not know'})`;
+  const since = `has stopped on ${markCheckClassWords(s.word)} for ${age} min`;
+  const tail = `has cleared at least ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
+  if (arm === 'stalled') {
+    return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since} (over ${minutesOf(EXPORT_MARKS_STALL_MS)} min), words no tick moves past by itself, and ${tail}`;
+  }
+  return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since}, and ${tail}`;
+}
+
+/** Said after every word's own remedy: until the check finishes, a mark may name a segment that is not on this box whole,
+ *  and prune --apply is not gated on the marks, so a blob it tombstones then keeps its bytes in no segment here. */
+const MARK_CHECK_PRUNE_HOLD = 'until the check finishes, hold any ccrc history prune --apply: a blob it tombstones while its mark names a segment not on this box whole keeps its bytes in no segment here';
+
+/** The remedy of either word, by the word the check last stopped on, with the prune hold; the fallback text when there
+ *  is no record. */
+function markCheckRemedy(word, h) {
+  const own = markCheckOwnRemedy(word, h);
+  return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
+}
+
+/** The clause the stop remedies of `budget`, `off`, `wal-held` and `unlistable` share (review 644 F4; `budget` too since wave 5h-1 FR2):
+ *  the check runs from the tick's export step, and no scheduled tick runs while the history-off switch stands, so "the next tick" would be
+ *  false under it, and a switch set after a budget stop leaves the record on `budget`. */
+const MARK_CHECK_RESUMES = `the check resumes at the next tick that runs it, and none runs while ~/${SWITCHES.off} stands`;
+
+/** The remedy of the word the check last stopped on alone. */
+function markCheckOwnRemedy(word, h) {
+  const s = h.exportMarksCheck ?? null;
+  switch (s === null ? null : s.word) {
+    case 'budget':
+      return `none needed while ingest leaves the check room: ${MARK_CHECK_RESUMES}; if it stands for days, read the sweep: ${SWEEP_LOG}`;
+    case 'off':
+      return `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole: ${MARK_CHECK_RESUMES}`;
+    case 'wal-held':
+      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: ' + MARK_CHECK_RESUMES;
+    case 'unlistable':
+      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: ${MARK_CHECK_RESUMES}`;
+    case 'failed':
+      return `read the sweep: ${SWEEP_LOG}; the check's error is logged there each tick it fails`;
+    default:
+      return HEALTH_REMEDIES[word];
+  }
+}
+
+// ── D-5635 (history-export-adopt-carry-remedy): the hold a carry after an adopt needs ─────────────────────────────
+/** The first tick after a bind clears the export mark of every segment that is not on this box whole (§9.15
+ *  "After a bind"), so a carry still running at that tick costs a re-export of every row the missing segments held.
+ *  history-off holds that tick (sweep's scheduledPass ends before it opens the store) while the three binding verbs
+ *  still run under it (§8.4), so the operator holds the ticks until the copy is whole. One text, two readers: the
+ *  store-unbound remedy, read before the adopt (`'before the adopt'`), and the adopt's carry line, printed after its
+ *  bind (`'before you copy'`, which adds that the next tick comes within minutes, the bind having armed the check). SWITCHES.off is the switch's one spelling (O13). Declared below HEALTH_REMEDIES,
+ *  which calls it while the module loads: a function declaration is hoisted whole, and every const it reads
+ *  (SWITCHES, HISTORY_ROOT_REL, EXPORT_DIR) is initialised above HEALTH_REMEDIES. */
+export function carryHoldAdvice(when) {
+  // After the bind (`'before you copy'`) the check is already armed, and the timer's next tick, within minutes, clears the
+  // marks of every segment not here whole: the hold is needed NOW, so the line says so. Before the adopt nothing is armed yet.
+  const timing = when === 'before you copy' ? `${when} and before the next tick, which comes within minutes (the bind has armed the check)` : when;
+  return `touch ~/${SWITCHES.off} ${timing} and remove it only once both directories hold every source file at the same size: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
+}
+
+/** The store-unbound remedy's carry half (D-5635): the two directories a store's id keys (`<store_id>` when the id is
+ *  not known), copied here before the adopt, or held behind history-off from before it. */
+export function adoptCarryAdvice(storeId) {
+  const id = storeId ?? '<store_id>';
+  return `when ~/${HISTORY_ROOT_REL}/journal/${id}/ and ~/${HISTORY_ROOT_REL}/${EXPORT_DIR}/${id}/ are to come from the box the store left, copy them here before the adopt, or ${carryHoldAdvice('before the adopt')}`;
 }

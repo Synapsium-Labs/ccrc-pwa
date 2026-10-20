@@ -29,7 +29,7 @@ const DEC: LifecycleDec = {
 };
 const MEAS: LifecycleMeas = {
   project: 'ccrc-pwa', workspace: 'still-river', branch: 'ws/still-river',
-  uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-corp',
+  uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-acme',
   tip: 'a'.repeat(40), attic: 201, atticsrc: 'worktree', archivedAt: null,
   archivedReason: null, manifestBytes: null, held: null,
   workdir: '/home/you/worktrees/ccrc-pwa/still-river', base: 'main', old: null,

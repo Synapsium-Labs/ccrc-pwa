@@ -8,7 +8,7 @@
 
 **Tech Stack:** bash (`ccd/ccd`), vitest (`server/test`).
 
-**Programme:** `child-tmpdir-bsd`, a one-wave follow-up to `child-reclamation` (CCR-15), coordinated by `ccrc-pwa-calm-mesa`. Ledger: `docs/superpowers/programs/child-tmpdir-bsd.md` on the coordinator's branch `ws/ccr-15-reclamation-policy-fleet-cleanup`.
+**Programme:** `child-tmpdir-bsd`, a one-wave follow-up to `child-reclamation` (#166), coordinated by `ccrc-pwa-calm-mesa`. Ledger: `docs/superpowers/programs/child-tmpdir-bsd.md` on the coordinator's branch `ws/166-reclamation-policy-fleet-cleanup`.
 
 ---
 

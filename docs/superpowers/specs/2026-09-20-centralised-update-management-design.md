@@ -1240,6 +1240,94 @@ numeral) ships in the wave that changes the rule, line-neutral where `pools-pros
   download that a mirror can serve (`CCRC_RELEASE_BASE_URL`), and the catalogue has its own mirror knob.
 - **A `D-N` block** is minted per wave from the allocator; none is written here.
 
+### Known limitations, as shipped
+
+Each item below was re-read in the shipped code (`main` at `bece7728`) and accepted as it stands rather than fixed.
+Each says what can happen, when, and what bounds it or what the operator does about it.
+
+- **A node id that changes mid-update.** If a node's id changes while its update runs (a reinstall under a new id,
+  or a restored `~/.ccrc`), the console can lose that run's lease (when the old row is retired outright, or once the
+  operator acks a revived row that halted) and may then move another node while the run goes on, the box's own
+  lock still serialising updates on that box; a lease handed to a revived row also keeps that row's old report
+  fields, which in one rare sequence halts the fleet on a stale revert until acked, and clears that row's old request
+  when it settles.
+- **A rollback asks the release host before the lock.** A rollback to a version the box does not keep asks the
+  release host whether the tag exists before it reaches the update lock, so when the lock is held by a run that has
+  not yet written a live in-flight report (a detached child's first seconds, the watchdog's measuring hold, a killed
+  restore child) and that question fails, the console's move ends as a halting launcher failure rather than `busy`,
+  and the operator acks it.
+- **A hung updater.** A live updater that hangs answers `busy` to every console move: nothing halts and the request
+  stands, but a standing request for the fleet node holds the server node waiting for the fleet until the operator
+  acks the fleet row or mends the box, as the `busy` detail says.
+- **The probe-to-acquire window.** Between a `--detach` parent's lock probe and its child taking the lock, a
+  watchdog tick or another console move can leave a `queued` report that no run advances, or start a second
+  transient update unit that the lock then serialises, so two updates never run at once; the lease deadline and an
+  ack bound it.
+- **A reused pid.** A report's writer counts as alive while `kill(pid, 0)` finds its pid, so a leftover in-flight
+  `update.json` whose pid the kernel has reused answers `busy` to every move to that node until that pid is gone or
+  the report is rewritten on the box; an ack ends only the current request's wait.
+- **A kill between the supervisor sweep and `done`.** On a `server` or `both` box the watchdog then finds the box
+  converged and healthy and closes the report `failed` (abandoned, nothing reverted), and that row halts every move
+  until the operator acks it; a fleet-role box has no watchdog, so its `restarting` report stays, and a console
+  move's lease ends at its deadline as a halting failure, acked the same way.
+- **`ccrc backup` and the busy line.** While `ccrc backup` prunes it holds `~/.ccrc/update.lock`, so an update
+  started in that moment is refused `busy` with a line that names the last update's pid and target from
+  `update.json`, not `ccrc backup`; the window lasts as long as the prune, and a console move's request stands for
+  the next dispatch.
+- **Requests written during a halt.** An **Update all** that reaches the server while a halt stands (a tap sent
+  before the screen showed the halt) leaves its requests standing, and they move once the halt is acknowledged, by
+  design; the halt banner does not list them.
+- **Flip or download.** The rollback sheet says that a rollback flips to a kept copy or downloads the release, but
+  not which one each node will do, because the console does not inventory a node's kept versions; `ccrc versions`
+  on the box lists them.
+- **No commit sha in the catalogue.** Every release row's commit sha is empty, because a release is created from an
+  existing tag and GitHub then reports a branch name, not a commit, as its target; the tag names the commit.
+- **An orphaned report temp file.** A `ccrc update` killed (SIGKILL) while it writes a phase can leave a few hundred
+  bytes at `~/.ccrc/update.json.tmp.<pid>`; nothing reads or removes it, and it can be deleted by hand.
+- **A killed plain install, then a rollback.** If `ccrc install` is killed after it removed the box's stamp and
+  before it restarted the units, `~/ccrc` names the new version while the units run the old one, and a hand-typed
+  `ccrc rollback` there is not refused: to a kept version it flips, which is safe, but back to the version the
+  units run, when the box does not keep that one complete, it downloads the release and re-installs it in place
+  into that version's directory, under the running units (the write every update made before versioned installs).
+- **A launcher install over a written-through version.** `ccrc install` run from the installed launcher over a
+  version whose tree was written through since it was kept still records a complete install for the stamp the box
+  carries; the version itself still reads written-through, so no rollback or restore flips to it.
+- **A source with no stamp.** An install from a tree with neither a usable git checkout nor a `build.json` writes
+  no stamp, and unless it moved `~/ccrc` to a version the old stamp does not name, the box's existing stamp stays,
+  so `ccrc version` reports that stamp's build; the install's own line says the stamp stays.
+- **The killed-flip state without a kept target.** When an update was killed between its flip and its restart and
+  the version the units still run is not kept complete (or its own `ccrc` predates versioned installs),
+  `ccrc rollback` refuses and names no repair command, because no safe one-line repair is known for that state;
+  nothing on the box is changed, and the repair is by hand.
+- **Backups ordered by name.** Backup directories are ordered by their local-time names, so where the box's
+  writers do not share one time zone (or across a daylight-saving fall-back) a prune at a `CCRC_BACKUP_KEEP` of 0 or
+  1 can keep an older backup and remove a newer one; the run's own backup and the other protected ones are never
+  removed.
+- **A TERM to the sweep alone.** A TERM sent to the update's sweep process alone during one of its foreground
+  verifies (a re-check, an unrecorded unit's first verify, the fallback with no scratch directory) leaves that
+  read-only verify and its `sleep` to end by themselves within seconds, and a TERM to the whole process group can
+  rarely leak one verify job the same way; a unit stop signals the whole cgroup and leaves nothing.
+- **A caller that traps another signal.** If a future caller of the sweep traps a signal other than INT and returns
+  from its handler, that signal cuts the sweep's waits short: on Linux the batch is then verified one unit at a
+  time, about twice as long with the same verdict, and on macOS the stay-up window is shortened; no shipped caller
+  sets such a trap.
+- **doctor's reason for an undecided key.** On Linux, when doctor cannot decide a key in the box's env files
+  because of its shape (a space around `=`, an `export` prefix, a backslash, an unpaired quote), the key reads not
+  measured and the reason names the file and the key but not the line.
+- **doctor's fleet comparison.** doctor's `fleet` check asks the server at `CCRC_ADDR`, else at the `CCRC_HOST` and
+  `CCRC_PORT` in the box's own `ccrc.env`, so on a fleet box whose `ccrc.env` names the fleet box itself the check
+  never reaches the server box. `CCRC_ADDR` set for the run to an address where the server answers plain HTTP
+  reaches it, but on a server whose session gate is armed the check skips there too, because `/api/fleet/health`
+  is behind the gate; `ccrc version` on each box compares the builds by hand.
+- **`ccrc-api` request bodies.** `ccrc-api` passes a call's JSON body to `curl` on its command line, so a mail body
+  or an ask's answer can be read in the box's process listing while the call runs; the box token travels on stdin,
+  never on the command line.
+- **Dotted session ids.** A session id holding a `.` runs in a tmux session whose name has it written as `_`, and
+  the readers that turn a live tmux name back into an id (the session hook, the status line, self-swap, `ccd clip`
+  without an id, `ccrc-api`) get the sanitised id, which is no registry key, so `ccrc-api` refuses that session's
+  attributed calls (failing closed) and `ccd clip` files its image where no cleanup looks; two ids that differ only
+  by `.` against `_` share one tmux name, and `ws-add` refuses neither, so such ids are best avoided.
+
 ## 17. Out of scope
 
 Retiring `deploy.sh`; per-tenant anything and dispatch groups (§14, two seams); delta/differential updates (the

@@ -85,7 +85,7 @@ describe('PoolSheet options', () => {
   });
 
   it('offers each distinct roster pool once, plus no pool', () => {
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' }));
     renderPoolSheet({ fleet: store });
 
     expect(screen.getAllByRole('button', { name: /^pool / }).map((button) => button.textContent))
@@ -184,7 +184,7 @@ describe('PoolSheet writes', () => {
 
   it('toasts the unknown-pool warning from a successful write', async () => {
     const skew = rosterSkew(
-      pooled({ claude: 'pool-a', claude2: 'pool-b' }),
+      pooled({ claude: 'pool-a', claude9: 'pool-b' }),
       ['pool-a'],
     );
     vi.spyOn(api, 'setProjectPool').mockImplementation(async (_project, pool) => ({
@@ -398,7 +398,7 @@ describe('PoolSheet request relevance', () => {
     vi.spyOn(api, 'setProjectPool').mockImplementation((project) =>
       project === 'alpha' ? first.promise : second.promise,
     );
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     act(() => {
       store.setState({ pools: {
         listed: true,
@@ -440,7 +440,7 @@ describe('PoolSheet request relevance', () => {
     vi.spyOn(api, 'setProjectPool').mockImplementation((project) =>
       project === 'alpha' ? first.promise : second.promise,
     );
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     act(() => {
       store.setState({ pools: {
         listed: true,
@@ -493,7 +493,7 @@ describe('PoolSheet request relevance', () => {
     vi.spyOn(api, 'setProjectPool').mockImplementation((project) =>
       project === 'alpha' ? first.promise : second.promise,
     );
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     act(() => {
       store.setState({ pools: {
         listed: true,
@@ -543,7 +543,7 @@ describe('PoolSheet request relevance', () => {
     vi.spyOn(api, 'setProjectPool').mockImplementation((project) =>
       project === 'alpha' ? first.promise : second.promise,
     );
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     act(() => {
       store.setState({ pools: {
         listed: true,
@@ -585,7 +585,7 @@ describe('PoolSheet request relevance', () => {
     // A/B replacement above exercises the reachable newer-request ordering.
     const first = deferred<{ ok: true; pool: { state: 'tagged'; name: string } }>();
     const set = vi.spyOn(api, 'setProjectPool').mockReturnValue(first.promise);
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     renderPoolSheet({ fleet: store });
 
     fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));

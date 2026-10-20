@@ -52,7 +52,7 @@ mental model as the code.
   the one line at addr1, so a block sitting at LINE 1 had its own start marker re-emitted and
   the block appended after it — two start markers. That layout is not exotic: it is exactly
   what the append path produces for a home that had no `CLAUDE.md` at all, which on the
-  reference fleet is a real home (`.claude-dev0`). Found by instrumenting a test whose failure
+  reference fleet is a real home (`.claude-lab0`). Found by instrumenting a test whose failure
   disagreed with the artifact on disk.
 
   **(5) The three-piece splice checked only the LAST piece's status.** `{ a; b; c; } > tmp`

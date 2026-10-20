@@ -18,7 +18,7 @@ import { seedAccountsSh } from './ccdWsHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-reviewer-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/reviewer-skill');
-const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
 
 let home: string;
 const skill = (d: string, ...rest: string[]): string =>
@@ -89,7 +89,7 @@ describe('install-reviewer-skill', () => {
   it('reports a failed home in the exit status but still processes the others', () => {
     // Same rule as the coordinator installer: one bad home must not silently
     // strand the account a swap could move a reviewer onto.
-    const blocked = path.join(home, '.claude-corp', 'skills');
+    const blocked = path.join(home, '.claude-acme', 'skills');
     fs.mkdirSync(blocked, { recursive: true });
     fs.chmodSync(blocked, 0o500);
     let threw = false;
@@ -97,17 +97,17 @@ describe('install-reviewer-skill', () => {
     fs.chmodSync(blocked, 0o700);
     expect(threw).toBe(true);
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
-    expect(fs.existsSync(skill('.claude-personal', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(skill('.claude-home', 'SKILL.md'))).toBe(true);
     // Same per-home-isolation pin as install-coordinator-skill's suite
     // (mutation M1 there): `.claude-gpt` is the FOURTH home, processed AFTER
-    // `.claude-corp` fails — only the per-home `continue` reaches it, so a
+    // `.claude-acme` fails — only the per-home `continue` reaches it, so a
     // `rc=1; continue` mutated to `exit 1` shows up here.
     expect(fs.existsSync(skill('.claude-gpt', 'SKILL.md'))).toBe(true);
   });
 
   it('never writes outside the homes it was given', () => {
     run(path.join(home, '.claude'));
-    for (const d of ['.claude-personal', '.claude-corp', '.claude-gpt']) {
+    for (const d of ['.claude-home', '.claude-acme', '.claude-gpt']) {
       expect(fs.existsSync(path.join(home, d, 'skills'))).toBe(false);
     }
   });

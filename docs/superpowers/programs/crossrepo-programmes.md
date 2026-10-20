@@ -71,8 +71,8 @@ coordinator mints exactly that many, defines them in the same act, and mails the
 
 ## Dogfood exit criteria
 
-The dogfood programme runs as its **own** programme once wave 2 is live: home `custom-tools`, wave 1
-there, wave 2 in `data-internal` on real work the operator names, **opened without `sessionId`** — the
+The dogfood programme runs as its **own** programme once wave 2 is live: home `project-d`, wave 1
+there, wave 2 in `project-e` on real work the operator names, **opened without `sessionId`** — the
 path that spawns fresh in the target repo, which is the only path a crossing may take. Its exit
 criteria are the current build spec's §9 acceptance list with D-2684/D-2687 and D-2715/D-2716's
 provenance corrections, and this ledger is where they are measured:
@@ -114,8 +114,8 @@ beside it when the programme closes.
   route re-binds through `setSession` whenever the request names a `sessionId` and its hold succeeded, so the
   worker arm is reached by a live path and not only by the store test — the funnel exists so that the day a
   recovery re-binds a run, the promise holds.
-- **Dogfood pair (2026-09-08, operator):** custom-tools ↔ data-internal, the pair that was live traffic
-  in August; not intake ↔ data-internal, whose dependency is still future.
+- **Dogfood pair (2026-09-08, operator):** project-d ↔ project-e, the pair that was live traffic
+  in August; not project-n ↔ project-e, whose dependency is still future.
 - **Two corrections from the plan's pre-read, folded into the spec before the plans were written:**
   `NotifyEvent` and `feed_events` carry no `runId`, so the one migration also adds `feed_events.runId`;
   and `coordinator-skill.test.ts` requires every `RunRefuseCode` to be named in the skill corpus the
@@ -268,7 +268,7 @@ so **the gate is closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEP
   four `done` plus the one `abandoned`), with `account-pools` → `ccrc-pwa` joining as the sixth when its wave 6 closes**,
   because run 47 is its LAST run and the self-healing arm therefore never fires for it — will never open again and stay
   `NULL` forever: `build4` → `ccrc-pwa`, `program-leverage` → `ccrc-pwa`, `registry-durability` →
-  `ccrc-pwa`, `promise-backfill` → `expoAI-assistant`, `claude-tooling-consolidation` → `custom-tools`. Measured
+  `ccrc-pwa`, `prog-e` → `project-h`, `prog-f` → `project-d`. Measured
   2026-09-14: 10 programmes, 1 with a home, 9 `NULL`, and every one of the nine has run in exactly one project — zero
   ambiguous cases. Backfilling them needs a new write surface or a direct server-box write, a scope decision for a
   later wave. The per-run remedy was offered and declined on 2026-09-14: abandoning run 47 and re-opening it with a
@@ -288,7 +288,7 @@ so **the gate is closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEP
 ## Next-wave brief
 
 None — the programme's three waves are closed. What remains is a programme of its own, not a wave of
-this one: the **dogfood**, homed in `custom-tools` with its wave 2 in `data-internal`, measured against
+this one: the **dogfood**, homed in `project-d` with its wave 2 in `project-e`, measured against
 the dogfood exit-criteria section above. Whoever opens it opens a NEW programme with its own ledger, its
 own slug and its own coordinator; this ledger is closed and is read, not written.
 

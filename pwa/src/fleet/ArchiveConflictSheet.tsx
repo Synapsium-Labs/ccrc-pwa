@@ -197,18 +197,12 @@ export function ArchiveConflictSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title={CLAIMED_TITLE}>
-      <div className="archive-conflict-sheet">
-        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
-            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
-            branch has no argument with — the branch had only restyled the
-            literals it replaced. Main's text, the branch's utilities. */}
-        <p className={QC_CONSEQUENCE}>
-          {claimedSentence(named)}
-        </p>
-        <p className={QC_CONSEQUENCE}>
-          {CLAIMED_CONSEQUENCE}
-        </p>
+    <Sheet
+      open
+      onClose={onClose}
+      title={CLAIMED_TITLE}
+      // The answers are pinned in the Sheet's footer (D-5932).
+      footer={
         <div className={QC_ACTIONS}>
           <Button variant="danger" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
@@ -220,6 +214,19 @@ export function ArchiveConflictSheet({
             Cancel
           </Button>
         </div>
+      }
+    >
+      <div className="archive-conflict-sheet">
+        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
+            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
+            branch has no argument with — the branch had only restyled the
+            literals it replaced. Main's text, the branch's utilities. */}
+        <p className={QC_CONSEQUENCE}>
+          {claimedSentence(named)}
+        </p>
+        <p className={QC_CONSEQUENCE}>
+          {CLAIMED_CONSEQUENCE}
+        </p>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

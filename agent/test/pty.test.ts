@@ -99,10 +99,10 @@ describe('ccrc-agent ptyOpen/pty control frames', () => {
     const fake = makeFakeSpawn();
     await open(fake.spawn);
 
-    const res = await client!.req<Res>(1, { op: 'ptyOpen', sessionId: 'claude2-MekWarLive', cols: 120, rows: 40 });
+    const res = await client!.req<Res>(1, { op: 'ptyOpen', sessionId: 'claude9-project-f', cols: 120, rows: 40 });
     expect(res.ok).toBe(true);
     expect(typeof res.ptyId).toBe('number');
-    expect(fake.calls).toEqual([{ sessionId: 'claude2-MekWarLive', cols: 120, rows: 40 }]);
+    expect(fake.calls).toEqual([{ sessionId: 'claude9-project-f', cols: 120, rows: 40 }]);
   });
 
   it('rejects a sessionId with disallowed characters', async () => {

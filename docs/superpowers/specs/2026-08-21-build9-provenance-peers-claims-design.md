@@ -4,7 +4,7 @@ Three operator requirements arrived together and turned out to share one substra
 
 1. **Same-project sessions conflict and cannot coordinate.** A live session wrote: *"I can't reach it
    directly — the addressable peer list only shows sessions on other projects, so quiet-river (running
-   under claude2) isn't visible from here. Coordination goes through you."*
+   under claude9) isn't visible from here. Coordination goes through you."*
 2. **"Who spawned it — not recoverable from the registry.** We should be able to recover who has spawned
    and stopped what sessions and why."
 3. **"We also need record of destruction/cleanup."**
@@ -42,8 +42,8 @@ and `swap.log`. The consequences compound:
   survives across 24 rows** — and that one was written by `ws-archive` about itself.
 - `.archived`/`.archivedreason` are cleared only by `ws-restore` (`ccd:3082`) and `_reg_purge`
   (`ccd:555`), never by `start`/`ensure`. **Measured: 4 of 8 `.archived` rows are live and heartbeating
-  right now** while stamped `merged:#N` — `ccrc-pwa-calm-mesa`, `custom-tools-brisk-ridge`,
-  `data-internal-plain-harbor`, `data-internal-still-prairie`. The one field in the registry carrying a
+  right now** while stamped `merged:#N` — `ccrc-pwa-calm-mesa`, `project-d-brisk-ridge`,
+  `project-e-plain-harbor`, `project-e-still-prairie`. The one field in the registry carrying a
   *why* is false on half the rows that have it. **A field that is silently false reads as authoritative,
   which is worse than absence.**
 - `_reg_purge` (`ccd:458-556`) unlinks **every** `$REG/<id>.<field>` behind a deliberately future-proof

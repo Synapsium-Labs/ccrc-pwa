@@ -1135,8 +1135,10 @@ export async function dispatchRun(
       if (atAct === 'busy') return { ok: false, kind: 'refused', code: 'worker-busy' };
       if (atAct === 'unmeasured') return { ok: false, kind: 'refused', code: 'status-unmeasurable' };
     }
-    const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
-    // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
+    // D-5912: a human's draft in the worker's box is stashed around the `/clear` and restored after it (Claude Code
+    // restores a stash after a slash command too, measured in Task P1b's probe), never a reason to skip the clear.
+    const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear', { onDraft: 'stash' });
+    // A refused `/clear` (dialog open, a stash refused, an ignored Enter…) is
     // not fatal to dispatch itself — the run still lands in `dispatched`
     // below, with `clearedAt` left null as the honest record that the
     // second step has not run yet; a coordinator that notices retries it
@@ -1157,7 +1159,7 @@ export async function dispatchRun(
   // attributable (`markDispatched`'s own docstring). A `/clear` refusal is
   // RECORDED (deviation D-47, found in Task 9 review) — D-1's own amended
   // text promises "the refusal recorded" and nothing did: `run_events.detail`
-  // carries the typed `sendPrompt` error code (`dialog-open`/`draft-present`/
+  // carries the typed `sendPrompt` error code (`dialog-open`/`stash-failed`/
   // `verify-failed`/`enter-ignored`/…) an operator (or Task 11's own record)
   // can otherwise only guess at.
   // COMPUTED HERE, ABOVE THE COMMIT, and used twice: once as a column the commit
@@ -1232,7 +1234,7 @@ export async function dispatchRun(
   //
   // WHAT THAT COSTS CHANGED UNDER THIS BUILD, and the new cost is the worse
   // of the two (wave-check). It used to be a park: the delivery lane's next
-  // sweep hit `draft-present`, kept hitting it, and parked the brief
+  // sweep hit `draft-present` (a word that lane no longer meets, D-5912), kept hitting it, and parked the brief
   // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS` with nothing
   // surfacing why. Both halves of that are now false — Task 407 lets the
   // lane CLEAR exactly this box, on the record THIS CALL writes
