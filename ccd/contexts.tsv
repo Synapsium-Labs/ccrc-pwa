@@ -176,6 +176,7 @@ _ws_child_op	C4
 _ws_child_manifest	C4
 _ws_sensitive_inside	C4
 _ws_collect_ignored	C4
+_ws_collect_ignored_settled	C4
 _ws_merge_proof	C4
 _ws_fingerprint	C4
 _ws_reap_reset	C4
