@@ -2681,7 +2681,20 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
     expect(stubLog(home)).toBeNull();
     expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
-    if (flag === 'out') expect(existsSync(out)).toBe(false);
+    // D-5815: every required flag is checked before --out is made, so a missing one never leaves a fresh --out behind.
+    expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
+  }, 60_000);
+
+  // D-5815: the required-flag check precedes admission (it supersedes Task 8's order), so a missing --budget answers
+  // args-invalid even when the account would be refused, and nothing is made.
+  it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {
+    const home = t8Home('ccrc-w2-t8-required-first-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'cx-a', budget: null }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: budget-required\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
   }, 60_000);
 
   it('an empty HOME is refused args-invalid before --out is made, as the probe refuses it', () => {
@@ -3145,6 +3158,40 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
       expect(t9Fs.existsSync(t9Path.join(out, 'probe.json')), c.name).toBe(false);
       expect(t9Fs.existsSync(t9Path.join(out, 'probe')), `${c.name}: no stream file`).toBe(false);
     }
+  });
+});
+
+describe('W2-4 Task 9: the probe checks every required flag before --out is made (D-5815)', () => {
+  // The probe's own fixture box is built inline, as Task 9's t9Box does: up-a (a recording stub) and ext-n (external, refused).
+  function box(prefix: string): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = path.join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    const acct = (id: string, suffix: string, exec: Record<string, unknown>) =>
+      ({ id, label: id, configDirSuffix: suffix, exec, homeAble: true, hue: 'cyan', telemetry: 'anthropic' });
+    writeRoster(home, [acct('up-a', '.claude', { kind: 'upstream' }), acct('ext-n', '.ext-n', { kind: 'external' })]);
+    plantStub(home, 'up-a');
+    return { home, out: path.join(base, 'out') };
+  }
+  const argvOf = (out: string, account: string, drop: string | null): string[] => {
+    const base: Array<[string, string]> = [['out', out], ['account', account], ['budget', '1000000'], ['arm-model', 'fixture-model-arm']];
+    return ['probe', ...base.filter(([k]) => k !== drop).flatMap(([k, v]) => [`--${k}`, v])];
+  };
+  it.each(['out', 'account', 'budget', 'arm-model'])('a missing --%s alone is args-invalid, with no --out made and no spawn', (flag) => {
+    const { home, out } = box('ccrc-replay-t9-req-');
+    const r = runDriver(home, argvOf(out, 'up-a', flag));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
+    expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  });
+  it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {
+    const { home, out } = box('ccrc-replay-t9-reqfirst-');
+    const r = runDriver(home, argvOf(out, 'ext-n', 'budget'));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: budget-required\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
   });
 });
 

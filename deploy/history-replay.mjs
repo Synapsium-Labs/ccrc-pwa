@@ -1306,8 +1306,10 @@ export function refuseRecallOff(home, ids) {
 
 // ── W2-4 Task 8: step 0a, end to end (W2-D57, W2-D55, W2-D24, W2-D52, W2-D51) ──────────────────────────────────
 // `step0a` runs once per named node before pilot sourcing (W2 decisions §5, act 7). It spends, so it takes every
-// refusal before its first spawn: the pane and the arguments (main), --out (Task 2), the account (Task 3), then the
-// required --budget (W2-D55: no default before part 1), the three model ids, and the settings mode. It then
+// refusal before its first spawn: the pane and the arguments (main), HOME, every required flag (D-5815: --out,
+// --account, --budget, --writer-model, --judge-model and --arm-model, so a missing one never leaves a fresh --out
+// behind; W2-D55: no budget default before part 1), the unusable inputs (D-5813), --out (Task 2), the account
+// (Task 3), and the settings mode. It then
 // measures what it records but never compares: codeShas() over the tree it runs from and the installed release
 // stamp (W2-D24; part 1's validator compares them with gate_code). Neither has an "unmeasured" spelling in the
 // record, so an unmeasured one refuses here, with the preflight's own word (Task 7's rule): code-unmeasured
@@ -1337,16 +1339,14 @@ const STEP0A_RUNS = Object.freeze([
   Object.freeze({ key: 'box', mode: 'box', modelFlag: 'arm-model' }),
 ]);
 
-/** A flag's value, or args-invalid '<flag>-required'. */
-function requireFlag(flags, name) {
-  if (flags[name] === undefined) refuse('args-invalid', `${name}-required`);
-  return flags[name];
-}
+/** step 0a's required flags, in the order a missing one is reported (D-5815). Every one is checked before
+ *  refuseUnusableInputs and prepareOut, so a missing flag never leaves a fresh --out behind. */
+const STEP0A_REQUIRED = Object.freeze(['out', 'account', 'budget', 'writer-model', 'judge-model', 'arm-model']);
 
 /** D-5813: the operator inputs that would otherwise surface as a TypeError (exit 1) from spawnArgv or spawnEnv after
  *  --out is made, or after step 0a's writer run has spent. HOME and the resolved --out must not hold ':' (PATH's
  *  separator), and every model flag given must be a model id (MODEL_RE). A model flag that is absent is left to its
- *  own `<flag>-required` refusal, in its handler's order. The TypeErrors stay as defence.
+ *  own `<flag>-required` refusal (D-5815: both handlers have already checked their required flags). The TypeErrors stay as defence.
  *  @param {string} home  @param {string} outArg
  *  @param {ReadonlyArray<readonly [string, unknown]>} models flag name and value */
 function refuseUnusableInputs(home, outArg, models) {
@@ -1425,13 +1425,16 @@ function pinStep0aLaunch(dir, now) {
 export async function step0aCommand(flags, env) {
   if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
   const home = path.resolve(env.HOME);   // D-5813: one spelling of HOME for every path and every taught spelling below
-  const outArg = requireFlag(flags, 'out');
+  // D-5815: every required flag first, before --out is made and before admission (a missing --budget answers
+  // args-invalid even for an account admission would refuse).
+  for (const k of STEP0A_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
+  const outArg = flags.out;
   refuseUnusableInputs(home, outArg, STEP0A_RUNS.map((r) => [r.modelFlag, flags[r.modelFlag]]));
   const out = prepareOut(outArg);
   const { json, roster } = readRoster(home);
-  const launch = admitAccount(json, roster, requireFlag(flags, 'account'), home);
-  const budget = requireFlag(flags, 'budget');
-  const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, requireFlag(flags, r.modelFlag)]));
+  const launch = admitAccount(json, roster, flags.account, home);
+  const budget = flags.budget;
+  const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, flags[r.modelFlag]]));
   const settingsMode = flags['settings-mode'] ?? 'restricted';
   if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
   const shas = codeShas();
@@ -1490,7 +1493,7 @@ HANDLERS.set('step0a', step0aCommand);
 export const PROBE_KIND = 'ccrc-history-w2-probe';
 /** The flags the probe takes. parseArgs knows every driver flag; a flag the probe never reads is refused, not ignored. */
 const PROBE_FLAGS = Object.freeze(['out', 'account', 'budget', 'arm-model', 'settings-mode']);
-const PROBE_REQUIRED = Object.freeze(['out', 'account', 'arm-model']);
+const PROBE_REQUIRED = Object.freeze(['out', 'account', 'arm-model', 'budget']);   // D-5815: --budget is checked here, before --out is made
 /** The probe's runs and streams live under `<out>/probe/`. */
 const PROBE_RUN_DIR = 'probe';
 const PROBE_OUTPUT = 'probe.json';
@@ -1566,8 +1569,8 @@ function writeProbeJson(out, value) {
   return sha256Hex(readFileSync(final));
 }
 
-/** `probe`: pane and args (main), then --out, admission, the required --budget, and the gate before every spawn,
- *  so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
+/** `probe`: pane and args (main), then every required flag (--budget included, D-5815), HOME, --out, admission and the
+ *  gate before every spawn, so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
  *  `<out>/probe.json`, and `sha256 <hex>` on stdout. Exit 0 whatever the runs showed. */
 export async function probeCommand(flags, env) {
   for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
@@ -1580,7 +1583,6 @@ export async function probeCommand(flags, env) {
   const out = prepareOut(flags.out);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, flags.account, home);
-  if (flags.budget === undefined) refuse('args-invalid', 'budget-required');
   // D-5813: an absent or non-executable launcher is an account that cannot be launched, a driver refusal, not a raw spawn error.
   try {
     accessSync(launch.launcher, constants.X_OK);
