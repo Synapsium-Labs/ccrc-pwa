@@ -265,7 +265,7 @@ export function ProjectCard({
   // things such a link would need). The board groups by programme and the cell
   // names the programme, so the operator lands looking at the right group.
   const openRunFor = (session: FleetSession): (() => void) | null =>
-    runForSession(runs, session.id) === null ? null : () => navigate('/runs');
+    runForSession(runs, session) === null ? null : () => navigate('/runs');
 
   // The orphaned worker's marker and every ruling about when it stays silent:
   // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE

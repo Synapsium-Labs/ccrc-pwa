@@ -14,6 +14,11 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
+// implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
+// counts one as an act.
+import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
@@ -60,6 +65,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -95,7 +101,8 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
+  IDLE_RUN_STATES, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskMintReleaseReason, type AskReleaseReason, type AskState,
   // plan Task 16 (D-5298): the approvals row's vocabularies.
@@ -936,6 +943,17 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
+/** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
+export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+
+/** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
+const driftInt = (v: unknown, column: string): number => {
+  const n = typeof v === 'bigint' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) throw new Error(`${column} is not a non-negative safe integer`);
+  return n;
+};
+const driftIntOrNull = (v: unknown, column: string): number | null => (v === null ? null : driftInt(v, column));
+
 /** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
  *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
  *  instant this process cannot prove (`persistedInt`, D-2545's rule), is a failure, never a smaller set. */
@@ -1043,8 +1061,12 @@ interface MeasuredRunRow { row: RunRowDb; nums: RunNumbers }
  * queued. `outstandingMailFor` below is the store-side fix; this constant is
  * what lets every "is this delivery outstanding" query converge on one
  * fragment instead of independently agreeing four times.
+ *
+ * DERIVED, not typed (D-5997, #532): L0's `OUTSTANDING_DELIVERY_STATES` is the
+ * complement of `TERMINAL_DELIVERY_STATES`, so this fragment and
+ * `TERMINAL_DELIVERY_SQL` below cannot disagree about a state either names.
  */
-const OUTSTANDING_STATES_SQL = "('queued','delivered')";
+const OUTSTANDING_STATES_SQL = `('${OUTSTANDING_DELIVERY_STATES.join("','")}')`;
 
 /** The WRITE-side complement of `OUTSTANDING_STATES_SQL` above, built from L0's
  *  `TERMINAL_DELIVERY_STATES` by the same `.join` interpolation
@@ -1106,8 +1128,9 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
  *  not a fault of the node). `HALTED_UPDATE_SQL` above is the STATE list only and is wider: `settleNode` refuses
  *  every `failed` row whatever its detail, which is its own rule. The prefix is compared by `substr`, byte for byte
  *  like `startsWith` — `LIKE` folds ASCII case. A NULL detail makes the comparison NULL, so the whole halting test is
- *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. */
-const haltingRowSql = (t: string): string =>
+ *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. Exported only so
+ *  `halting-parity.test.ts` runs it beside `isHaltingUpdate` on the same rows (D-5890). */
+export const haltingRowSql = (t: string): string =>
   `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
 /** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
@@ -1157,6 +1180,28 @@ export type SetEnvelopeResult =
  *  Same remedy as `bumpReplayCount`'s union below and `SetWorkItemResult`
  *  above: the union is the fix; the guard alone is not
  *  (D-1410). */
+/** D-5997 (ARCH-15, #532): what the ONE delivery-row writer decided about one
+ *  row. `changed` is whether the guarded `UPDATE` wrote it; `state` is the row's
+ *  state AFTER the attempt, read back in the same synchronous call, so a refused
+ *  write names what refused it (`acked`, `rejected`, or `delivered` for a park
+ *  writer) and a row that is gone says `absent`. Every one-row writer of
+ *  `mail_deliveries` returns this, or a union built from it. */
+export interface DeliveryWrite { changed: boolean; state: MailDeliveryState | 'absent' }
+
+/** D-5998 (ARCH-15, #532): a SCOPED bulk write (a run's, a recipient's, a
+ *  reclaim's deliveries) answers how many rows it changed. It has no one row whose
+ *  state it could name, so it carries no `state`. */
+export interface DeliveryBulkWrite { changed: number }
+
+/** Which rows the one writer may touch: `'outstanding'` (the positive form,
+ *  `OUTSTANDING_STATES_SQL`), `'non-terminal'` (the negative form,
+ *  `TERMINAL_DELIVERY_SQL`), or `'ack'` — the negative form plus `markAcked`'s one
+ *  named exception, the replay-ceiling park (orchestrator ruling I2(b)). */
+type DeliveryGuard = 'outstanding' | 'non-terminal' | 'ack';
+
+/** A value the one delivery writer binds: every column it writes is one of these. */
+type SqlArg = string | number | null;
+
 export type MarkAckedResult =
   | { ok: true; state: 'acked' }
   | { ok: false; why: 'absent' }
@@ -1415,13 +1460,16 @@ const MAIL_ROW_COLUMNS =
   // one list, so the gate reaches every consumer through a single reader
   // (`hydrateMail`) rather than being added to each query in turn.
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
-  'd.gateSince AS gateSince, d.gateAt AS gateAt';
+  'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
+  // D-5838: when the park began, for the strip's `parked` line.
+  'd.parkedAt AS parkedAt';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
+  parkedAt: number | null;
 }
 
 /** A route argument can never ask either mail read to walk more history (or
@@ -2091,13 +2139,12 @@ export class CoordStore {
    * Narrowing statement first, so a widened one is caught by the suite instead of
    * by a program.
    */
-  private cancelKickoffsTo(displaced: readonly string[]): void {
-    this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      `lastError = '${MAIL_RECLAIM_CANCELLED_ERROR}' ` +
-      `WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId IN (${placeholders(displaced.length)}) ` +
+  private cancelKickoffsTo(displaced: readonly string[]): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries(
+      "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_RECLAIM_CANCELLED_ERROR], 'outstanding',
+      `toId IN (${placeholders(displaced.length)}) ` +
       'AND mailId IN (SELECT id FROM mail WHERE runId IS NULL AND fromId = ? AND subject = ?)',
-    ).run(...displaced, 'operator', PROGRAM_KICKOFF_SUBJECT);
+      [...displaced, 'operator', PROGRAM_KICKOFF_SUBJECT]) };
   }
 
   /**
@@ -2140,13 +2187,12 @@ export class CoordStore {
    * meant is the human reading it. Recorded here rather than opened; an operator
    * door that re-points one by id is a decision somebody makes on purpose.
    */
-  private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): void {
-    this.db.prepare(
-      `UPDATE mail_deliveries SET toId = ? WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
-      `AND toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
+  private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding',
+      `toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
       "WHERE m.toId = 'coordinator' AND r.program = ?)",
-    ).run(to, ...displaced, program);
+      [...displaced, program]) };
   }
 
   /**
@@ -2172,7 +2218,7 @@ export class CoordStore {
    * this is a second delivery, so it renders its own envelope, naming the heir
    * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
    * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
-   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * `rundefsTx.ts` already use, for the same reason (the delivery id does not
    * exist until the row does).
    *
    * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
@@ -2242,9 +2288,16 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — twelve holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — the holders below, in file order
+   * (the count is the scan's, not this list's):
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
+   *   `writeDeliveries` — the ONE delivery-row writer (D-5997, #532). The
+   *     writers below that take its `'outstanding'` guard (`cancelKickoffsTo`,
+   *     `repointCoordinatorMail`, `parkSupersededDeliveries`,
+   *     `cancelOutstandingDeliveries`, `cancelDeliveriesTo`) no longer spell the
+   *     fragment themselves, so the scan finds them here; each is still walked
+   *     below by name, because what each one does to a re-queued row is its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
    *     method inside the one `reclaimProgram` transaction, so neither can see a
    *     row it inserted; that ordering is argued above and at each of their own
@@ -2320,6 +2373,18 @@ export class CoordStore {
    *     waiting out a limit, which is the fact the stall lane's limit hold
    *     reads. A terminal row never counts, so an acked or parked refusal
    *     cannot keep a worker's limit hold alive.
+   *   `parkDelivery`, `holdParked`, `wakeParked`, `markParkEscalated`,
+   *     `baselineParkBox` and `parkedDeliveries` (D-5838, the PARKED state) — the mail sweep's
+   *     writers and read for a never-delivered row whose live recipient's box
+   *     will not take the nudge. A re-queued row reaches them only by failing to
+   *     land on its NEW recipient, and is parked there like any other row; the
+   *     park keeps it outstanding, so nothing this arm counts moves. `runHealth`
+   *     gains a second narrow-predicate count beside the one above,
+   *     `mailParkedLive`, which a re-queued row joins only while parked.
+   *   `absorbParkEscalation` (D-5841, the brief watch) — writes only
+   *     `parkEscalatedAt` on a wave brief's own delivery, which a re-queued row
+   *     never is (it belongs to a `POST /api/mail` mail, not a `coordinator`
+   *     brief); nothing this arm counts moves.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2437,13 +2502,11 @@ export class CoordStore {
    *  `mailIds` is always `rows.map(r => r.mailId)` from that call's own
    *  re-queue, so a row the `NOT EXISTS` dedupe declined to move is never
    *  reached by this statement either. */
-  private parkSupersededDeliveries(displaced: readonly string[], mailIds: readonly number[]): void {
-    this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      `lastError = '${MAIL_REBIND_SUPERSEDED_ERROR}' ` +
-      `WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId IN (${placeholders(displaced.length)}) ` +
-      `AND mailId IN (${placeholders(mailIds.length)})`,
-    ).run(...displaced, ...mailIds);
+  private parkSupersededDeliveries(displaced: readonly string[], mailIds: readonly number[]): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries(
+      "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_REBIND_SUPERSEDED_ERROR], 'outstanding',
+      `toId IN (${placeholders(displaced.length)}) AND mailId IN (${placeholders(mailIds.length)})`,
+      [...displaced, ...mailIds]) };
   }
 
   /**
@@ -2557,7 +2620,7 @@ export class CoordStore {
    * comment in the body), so a close that landed after the lane's candidate read
    * is never given a row or a mail.
    *
-   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefsTx.ts`) can hold this
    * row and its mail in ONE. `tx` is not re-entrant. A caller with no
    * transaction of its own uses `recordStallObservation` below, so the check and
    * the insert are never split by another writer.
@@ -2730,12 +2793,10 @@ export class CoordStore {
    *  unit-level coverage of this method does. An already-`acked` row is left
    *  alone — it is not outstanding, and this is not the ack-race guard
    *  `markDelivered`/`rejectDelivery` carry for THEIR own callers. */
-  cancelOutstandingDeliveries(runId: number): void {
-    this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      `lastError = '${MAIL_RUN_CLOSED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
-      'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
-    ).run(runId);
+  cancelOutstandingDeliveries(runId: number): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries(
+      "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_RUN_CLOSED_ERROR], 'outstanding',
+      'mailId IN (SELECT id FROM mail WHERE runId = ?)', [runId]) };
   }
 
   /** Child reclamation (spec 2026-09-22 §5.6): every outstanding delivery
@@ -2760,12 +2821,10 @@ export class CoordStore {
    *  park from a no-op. An already-`acked` or already-parked row is left
    *  alone: `OUTSTANDING_STATES_SQL` is the whole guard. Plain enough (no
    *  nested `tx()`) to call standalone, like its sibling. */
-  cancelDeliveriesTo(toId: string): number {
-    const res = this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      `lastError = '${MAIL_CHILD_RECLAIMED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId = ?`,
-    ).run(toId);
-    return Number(res.changes);
+  cancelDeliveriesTo(toId: string): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries(
+      "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_CHILD_RECLAIMED_ERROR], 'outstanding',
+      'toId = ?', [toId]) };
   }
 
   /**
@@ -4274,7 +4333,7 @@ export class CoordStore {
   runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
     const out = new Map<number, RunHealth>();
     for (const id of runIds) {
-      out.set(id, { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+      out.set(id, { mailOutstanding: 0, mailParked: 0, mailParkedLive: 0, mailReplayMax: 0, doneRejects: 0,
                     lastRejectCode: null, briefQueued: null, clearError: null,
                     coordKickoffPendingSince: null });
     }
@@ -4303,14 +4362,17 @@ export class CoordStore {
       "SUM(CASE WHEN d.state = 'rejected' AND " +
       `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
       'THEN 1 ELSE 0 END) AS parked, ' +
+      // D-5838: outstanding AND parked — alive, waiting on its recipient's box.
+      `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} AND d.parkedAt IS NOT NULL THEN 1 ELSE 0 END) AS parkedLive, ` +
       'MAX(d.replayCount) AS replayMax ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `WHERE m.runId IN (${ph}) GROUP BY m.runId`,
     ).all(...runIds) as unknown as
-      { runId: number; outstanding: number; parked: number; replayMax: number | null }[]) {
+      { runId: number; outstanding: number; parked: number; parkedLive: number; replayMax: number | null }[]) {
       const h = out.get(row.runId);
       if (h === undefined) continue;
       out.set(row.runId, { ...h, mailOutstanding: row.outstanding, mailParked: row.parked,
+                           mailParkedLive: row.parkedLive,
                            mailReplayMax: row.replayMax ?? 0 });
     }
 
@@ -4559,6 +4621,95 @@ export class CoordStore {
       }
       return { kind: 'written', before, after: this.stallSettings() };
     });
+  }
+
+  // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
+  // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
+  // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
+
+  /** Every non-terminal run, with the `at` of its newest ACT row: a `run_events` row that is neither a stall
+   *  observation (`parseStallDetail` reads it) nor caused by `'operator'` (the lanes write as the operator), or null
+   *  when there is none. */
+  driftOpenRuns(): DriftReadResult<DriftRunRow> {
+    try {
+      const runs = this.db.prepare(
+        `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+      ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
+      const events = this.db.prepare(
+        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+        'ORDER BY at DESC, id DESC',
+      );
+      const out: DriftRunRow[] = [];
+      for (const r of runs) {
+        let lastActAt: number | null = null;
+        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
+          if (parseStallDetail(e.detail) !== null) continue;
+          lastActAt = driftInt(e.at, 'run_events at');
+          break;
+        }
+        out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every QUEUED delivery with its gate columns and D1's park columns (#853): both mail kinds are about a row never
+   *  delivered (a parked row stays `queued`), so a `delivered` one is not read. The literal `'queued'`, not
+   *  `OUTSTANDING_STATES_SQL`: this read is not a holder of the outstanding predicate the re-queue's walk counts. */
+  driftOutstandingDeliveries(): DriftReadResult<DriftDeliveryRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT id, toId, state, lastGate, gateSince, parkedAt, parkEscalatedAt FROM mail_deliveries ' +
+        "WHERE state = 'queued' ORDER BY id",
+      ).all() as { id: unknown; toId: string; state: string; lastGate: string | null; gateSince: unknown;
+        parkedAt: unknown; parkEscalatedAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'mail_deliveries id'), toId: r.toId, state: r.state, lastGate: r.lastGate,
+        gateSince: driftIntOrNull(r.gateSince, 'mail_deliveries gateSince'),
+        parkedAt: driftIntOrNull(r.parkedAt, 'mail_deliveries parkedAt'),
+        parkEscalatedAt: driftIntOrNull(r.parkEscalatedAt, 'mail_deliveries parkEscalatedAt'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every run at `awaiting-review`: when it ENTERED that state (its newest transition row into it from another
+   *  state; null when no row says) and its claimant's newest mail naming the run (null: none). */
+  driftAwaitingReview(): DriftReadResult<DriftReviewRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT r.id AS id, r.program AS program, r.claimedBy AS claimedBy, ' +
+        "(SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.toState = 'awaiting-review' " +
+        "AND e.fromState <> 'awaiting-review') AS enteredAt, " +
+        '(SELECT MAX(m.at) FROM mail m WHERE m.runId = r.id AND m.fromId = r.claimedBy) AS lastClaimantMailAt ' +
+        "FROM runs r WHERE r.state = 'awaiting-review' ORDER BY r.id",
+      ).all() as { id: unknown; program: string; claimedBy: string | null; enteredAt: unknown; lastClaimantMailAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'runs id'), program: r.program, claimedBy: r.claimedBy,
+        enteredAt: driftIntOrNull(r.enteredAt, 'run_events at'),
+        lastClaimantMailAt: driftIntOrNull(r.lastClaimantMailAt, 'mail at'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every `held` or `answering` asks row. */
+  driftHeldQuestions(): DriftReadResult<DriftAskRow> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT id, at, childId, state FROM asks WHERE state IN ('held', 'answering') ORDER BY id",
+      ).all() as { id: unknown; at: unknown; childId: string; state: string }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'asks id'), at: driftInt(r.at, 'asks at'), childId: r.childId, state: r.state,
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
@@ -5038,6 +5189,9 @@ export class CoordStore {
       // thing absence means on the wire.
       lastGate: isMailGate(r.lastGate) ? r.lastGate : null,
       gateCount: r.gateCount, gateSince: r.gateSince, gateAt: r.gateAt,
+      // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
+      // keeps its park columns as history, and the wire must not call it parked.
+      parkedAt: r.state === 'queued' ? r.parkedAt : null,
     }));
   }
 
@@ -5158,10 +5312,42 @@ export class CoordStore {
   }
 
   /**
+   * D-5997 (ARCH-15, #532): THE ONE WRITER of `mail_deliveries`. Every method
+   * below that changes a delivery row delegates here; this is the file's single
+   * `UPDATE mail_deliveries` statement, and the only place the terminality guard
+   * is spelled. `guard` picks the rows it may touch — the positive form
+   * (`OUTSTANDING_STATES_SQL`), the negative form (`TERMINAL_DELIVERY_SQL`), or
+   * the negative form plus `markAcked`'s one named exception — and `where` only
+   * NARROWS that set: it is ANDed after the guard, never ORed into it, so no
+   * caller can widen what the guard admits. Both fragments are built from L0's
+   * `TERMINAL_DELIVERY_STATES` (one directly, one through its derived
+   * complement), so a terminal state added there moves every writer at once.
+   * Answers how many rows changed; `writeDelivery` below turns that into
+   * `{changed, state}` for a one-row write.
+   */
+  private writeDeliveries(set: string, setArgs: readonly SqlArg[], guard: DeliveryGuard, where: string, whereArgs: readonly SqlArg[]): number {
+    const guardSql = guard === 'outstanding' ? `state IN ${OUTSTANDING_STATES_SQL}`
+      : guard === 'non-terminal' ? `state NOT IN ${TERMINAL_DELIVERY_SQL}`
+      : `(state NOT IN ${TERMINAL_DELIVERY_SQL} OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))`;
+    const guardArgs = guard === 'ack' ? [MAIL_REPLAY_CEILING_ERROR] : [];
+    return Number(this.db.prepare(`UPDATE mail_deliveries SET ${set} WHERE ${guardSql} AND (${where})`)
+      .run(...setArgs, ...guardArgs, ...whereArgs).changes);
+  }
+
+  /** D-5997: one row by id through `writeDeliveries`, answered as `{changed,
+   *  state}` — the state read back after the write, `'absent'` for no row. */
+  private writeDelivery(id: number, set: string, setArgs: readonly SqlArg[], guard: DeliveryGuard, where = '1', whereArgs: readonly SqlArg[] = []): DeliveryWrite {
+    const changed = this.writeDeliveries(set, setArgs, guard, `id = ? AND ${where}`, [id, ...whereArgs]) > 0;
+    const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?').get(id) as { state: string } | undefined;
+    if (row === undefined) return { changed, state: 'absent' };
+    return { changed, state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
+  }
+
+  /**
    * Overwrites a delivery's stored `envelope`, once, immediately after
    * `queueDelivery`. THREE direct callers, each doing exactly that and none of
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
-   * in `rundefs.ts` (which has called it since Build 7 — this sentence said
+   * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
    * `requeueAbandonedMail` in this file, which renders the heir's own envelope
    * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
@@ -5183,7 +5369,7 @@ export class CoordStore {
    * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
-   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
@@ -5207,15 +5393,10 @@ export class CoordStore {
    * the first means the row this transaction just inserted is gone, the second
    * means someone else finished this delivery. */
   setDeliveryEnvelope(id: number, envelope: string): SetEnvelopeResult {
-    const res = this.db.prepare(
-      `UPDATE mail_deliveries SET envelope = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(envelope, id);
-    if (Number(res.changes) > 0) return { ok: true };
-    const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?')
-      .get(id) as { state: string } | undefined;
-    if (!row) return { ok: false, why: 'absent' };
-    return { ok: false, why: 'terminal',
-             state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
+    const w = this.writeDelivery(id, 'envelope = ?', [envelope], 'non-terminal');
+    if (w.changed) return { ok: true };
+    if (w.state === 'absent') return { ok: false, why: 'absent' };
+    return { ok: false, why: 'terminal', state: w.state };
   }
 
   /**
@@ -5263,7 +5444,8 @@ export class CoordStore {
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
                                 attempts: number; lastError: string | null; envelope: string;
                                 deliveredAt: number | null; ingestedAt: number | null;
-                                lastGate: string | null; gateSince: number | null }[] {
+                                lastGate: string | null; gateSince: number | null;
+                                parkedAt: number | null; parkReason: string | null; parkBox: string | null }[] {
     return this.db.prepare(
       // `lastError` (Task 409) is the row's INCOMING failure — what it already
       // carried before this sweep touched it — which is how `sweepMail` tells
@@ -5274,7 +5456,7 @@ export class CoordStore {
       // of gate, and reading the row again at write time would race the sweep
       // against itself on exactly the rows it is deciding about.
       'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt, ' +
-      'lastGate, gateSince FROM mail_deliveries ' +
+      'lastGate, gateSince, parkedAt, parkReason, parkBox FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
@@ -5282,7 +5464,8 @@ export class CoordStore {
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
                     lastError: string | null; envelope: string;
                     deliveredAt: number | null; ingestedAt: number | null;
-                    lastGate: string | null; gateSince: number | null }[];
+                    lastGate: string | null; gateSince: number | null;
+                    parkedAt: number | null; parkReason: string | null; parkBox: string | null }[];
   }
 
   /**
@@ -5329,15 +5512,19 @@ export class CoordStore {
    *  (`rejectDelivery` below) carries the identical `NOT IN` list for the
    *  same reason. `markAcked` itself refuses a terminal row in its own
    *  `WHERE` for the identical reason (see its own docstring). */
-  markDelivered(id: number, at: number): void {
-    this.db.prepare(
+  markDelivered(id: number, at: number): DeliveryWrite {
+    return this.writeDelivery(id,
       // The gate columns clear IN THE SAME STATEMENT as the move (D-792), so
       // the existing `state NOT IN (...)` guard covers them too and a row the
       // guard skips keeps its gate. A second UPDATE could clear a gate off a
       // row this one declined to touch.
-      "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, " +
-      `lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(at, id);
+      // The park columns (D-5838) clear in the same statement for the same
+      // reason: a delivered row is not parked, and the park's own probe and
+      // escalation read `parkedAt` alone.
+      "state = 'delivered', deliveredAt = ?, " +
+      'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL, ' +
+      'parkedAt = NULL, parkReason = NULL, parkBox = NULL, parkEscalatedAt = NULL',
+      [at], 'non-terminal');
   }
 
   /**
@@ -5372,10 +5559,7 @@ export class CoordStore {
    * no caller distinguishes.
    */
   bumpReplayCount(id: number): { state: 'counted'; replayCount: number } | { state: 'terminal' } {
-    const res = this.db.prepare(
-      `UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(id);
-    if (res.changes === 0) return { state: 'terminal' };
+    if (!this.writeDelivery(id, 'replayCount = replayCount + 1', [], 'non-terminal').changed) return { state: 'terminal' };
     return {
       state: 'counted',
       replayCount: (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
@@ -5393,10 +5577,8 @@ export class CoordStore {
    *  courtesy of one caller, a guard is a property of the row; the same
    *  ack-or-park-lands-mid-window race every sibling writer here already
    *  guards against. */
-  markIngested(id: number, at: number): void {
-    this.db.prepare(
-      `UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(at, id);
+  markIngested(id: number, at: number): DeliveryWrite {
+    return this.writeDelivery(id, 'ingestedAt = ?', [at], 'non-terminal');
   }
 
   /** Refuses — and NAMES the refusal — when already acked, absent, or PARKED
@@ -5452,13 +5634,10 @@ export class CoordStore {
   markAcked(id: number, at: number): MarkAckedResult {
     // UPDATE FIRST, then label. One statement decides; the read that follows is
     // only there to say WHICH refusal it was.
-    const res = this.db.prepare(
-      'UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
-      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL '
-      + `WHERE id = ? AND (state NOT IN ${TERMINAL_DELIVERY_SQL} `
-      + "OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))",
-    ).run('acked', at, id, MAIL_REPLAY_CEILING_ERROR);
-    if (Number(res.changes) > 0) return { ok: true, state: 'acked' };
+    const w = this.writeDelivery(id,
+      'state = ?, ackedAt = ?, lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL',
+      ['acked', at], 'ack');
+    if (w.changed) return { ok: true, state: 'acked' };
     const row = this.db.prepare('SELECT state, lastError FROM mail_deliveries WHERE id = ?')
       .get(id) as { state: string; lastError: string | null } | undefined;
     if (!row) return { ok: false, why: 'absent' };
@@ -5492,11 +5671,9 @@ export class CoordStore {
    *  the stall watch's `turn-running` hold reach it but refuse before any
    *  keystroke. `attempts` is SEND-FAILURE budget (`MAIL_MAX_ATTEMPTS`'s own
    *  docstring): none may march toward the park ceiling of a failed prompt. */
-  backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
-    this.db.prepare(
-      'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
-      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
+  backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): DeliveryWrite {
+    return this.writeDelivery(id, 'attempts = attempts + ?, lastError = ?, nextAttemptAt = ?',
+      [countsAsAttempt ? 1 : 0, lastError, nextAttemptAt], 'non-terminal');
   }
 
   /**
@@ -5542,12 +5719,10 @@ export class CoordStore {
    * long has THIS gate been holding it", not "how long has it been stuck at
    * anything".
    */
-  noteGate(id: number, gate: MailGate, now: number, same: boolean, sinceIfSame: number | null): void {
-    this.db.prepare(
-      'UPDATE mail_deliveries SET lastGate = ?, gateAt = ?, ' +
-      'gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ? ' +
-      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(gate, now, same ? 1 : 0, same ? (sinceIfSame ?? now) : now, id);
+  noteGate(id: number, gate: MailGate, now: number, same: boolean, sinceIfSame: number | null): DeliveryWrite {
+    return this.writeDelivery(id,
+      'lastGate = ?, gateAt = ?, gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ?',
+      [gate, now, same ? 1 : 0, same ? (sinceIfSame ?? now) : now], 'non-terminal');
   }
 
   /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — review finding 22, the
@@ -5563,12 +5738,109 @@ export class CoordStore {
    *  with a different, later reason. `state != 'acked'` alone let that
    *  second write through unconditionally; a park is terminal exactly the
    *  way `'acked'` is, so it needs the identical protection. */
-  rejectDelivery(id: number, code: MailRejectCode, lastError: string): void {
-    this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ?, " +
-      "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL " +
-      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
-    ).run(code, lastError, id);
+  rejectDelivery(id: number, code: MailRejectCode, lastError: string): DeliveryWrite {
+    return this.writeDelivery(id,
+      "state = 'rejected', rejectCode = ?, lastError = ?, lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL",
+      [code, lastError], 'non-terminal');
+  }
+
+  /**
+   * PARK a never-delivered row (D-5838, #754): the recipient is alive but
+   * its input box would not take the nudge. The row stays `queued` — so every
+   * outstanding-state reader still counts it, and an older build retries it as
+   * an ordinary row — and gains the park columns. `parkedAt` keeps the FIRST
+   * park's time across re-parks (`COALESCE`), which is what the escalation and
+   * the 24 h ceiling are measured from; `parkReason` and `parkBox` are always the
+   * latest. `attempts` advances like a `backOff` that counts. Guarded to an
+   * outstanding row never delivered: a delivered row never parks (its replay
+   * backs off unbounded, `MAIL_MAX_ATTEMPTS`'s own docstring). Answers whether
+   * the row was written.
+   */
+  parkDelivery(id: number, reason: string, box: string | null, now: number, nextAttemptAt: number): DeliveryWrite {
+    return this.writeDelivery(id,
+      'attempts = attempts + 1, lastError = ?, nextAttemptAt = ?, parkedAt = COALESCE(parkedAt, ?), parkReason = ?, parkBox = ?',
+      [reason, nextAttemptAt, now, reason, box], 'outstanding', 'deliveredAt IS NULL');
+  }
+
+  /** Hold a parked row to its timer WITHOUT an attempt (D-5838): an
+   *  `enter-ignored` park whose box still holds what it held when it parked is
+   *  re-examined by every gate on the timer, but nothing is pressed or typed. */
+  holdParked(id: number, nextAttemptAt: number): DeliveryWrite {
+    return this.writeDelivery(id, 'nextAttemptAt = ?', [nextAttemptAt], 'outstanding',
+      'parkedAt IS NOT NULL AND deliveredAt IS NULL');
+  }
+
+  /** Wake a parked row now (D-5838): the sweep's box probe saw the box change. */
+  wakeParked(id: number, now: number): DeliveryWrite {
+    return this.writeDelivery(id, 'nextAttemptAt = ?', [now], 'outstanding',
+      'parkedAt IS NOT NULL AND deliveredAt IS NULL AND nextAttemptAt > ?', [now]);
+  }
+
+  /** Record the park's ONE operator escalation (D-5838). Answers true only for
+   *  the call that wrote it, so a second sweep — or a restart — never pushes a
+   *  second time. */
+  markParkEscalated(id: number, at: number): DeliveryWrite {
+    return this.writeDelivery(id, 'parkEscalatedAt = ?', [at], 'outstanding',
+      'parkedAt IS NOT NULL AND deliveredAt IS NULL AND parkEscalatedAt IS NULL');
+  }
+
+  /** Absorb the park's operator escalation into a more specific notice
+   *  (D-5841, #755): the brief-not-taken notice has told the claimant and pushed
+   *  the operator about this delivery, so its park — now, or a later one —
+   *  escalates nothing more. Unlike `markParkEscalated` it needs no `parkedAt`:
+   *  a brief still on its failure ladder at 10 minutes parks after the notice.
+   *  Writes only an outstanding, never-delivered row not yet escalated, and a
+   *  delivery clears it with the other park columns. */
+  absorbParkEscalation(id: number, at: number): DeliveryWrite {
+    return this.writeDelivery(id, 'parkEscalatedAt = ?', [at], 'outstanding',
+      'deliveredAt IS NULL AND parkEscalatedAt IS NULL');
+  }
+
+  /** Set a parked row's box baseline when the park could not read it (D-5838,
+   *  verification round): `parkBox` NULL means UNKNOWN, and the first reading
+   *  after the park becomes what later readings are compared against. Writes
+   *  only while it is still NULL, so it never moves a known baseline. */
+  baselineParkBox(id: number, box: string): DeliveryWrite {
+    return this.writeDelivery(id, 'parkBox = ?', [box], 'outstanding',
+      'parkedAt IS NOT NULL AND deliveredAt IS NULL AND parkBox IS NULL');
+  }
+
+  /** Every outstanding PARKED row, due or not (D-5838): the sweep probes their
+   *  boxes, escalates and applies the ceiling on every pass, not only when a
+   *  row's own timer comes round. Never-delivered rows only, like every park
+   *  writer here: a delivered row that still carries park columns (written by
+   *  an older build after a rollback) is not parked. */
+  parkedDeliveries(): { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
+                        parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[] {
+    return this.db.prepare(
+      'SELECT id, mailId, toId, parkedAt, parkReason, parkBox, parkEscalatedAt, nextAttemptAt ' +
+      `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
+    ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
+                            parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
+  }
+
+  /** Every UNLANDED wave brief of an ACTIVE run (D-5841, #755), for the mail
+   *  sweep's brief pass: the brief's LATEST delivery has no `ingestedAt` and is
+   *  not `acked`, it was queued at or after `since`, and its run carries no
+   *  `brief-not-taken` row yet. `retried` is whether the run carries its
+   *  `brief-retry` row. A read only; the pass's writes are its own. */
+  unlandedBriefs(since: number): UnlandedBrief[] {
+    const rows = this.db.prepare(
+      'SELECT r.id AS runId, r.program AS program, r.wave AS wave, r.waveOf AS waveOf, ' +
+      'd.id AS deliveryId, m.id AS mailId, d.toId AS toId, m.at AS queuedAt, d.state AS state, ' +
+      'd.deliveredAt AS deliveredAt, d.parkedAt AS parkedAt, d.parkReason AS parkReason, ' +
+      'd.lastGate AS lastGate, d.lastError AS lastError, ' +
+      'EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) AS retried ' +
+      'FROM mail m JOIN runs r ON r.id = m.runId ' +
+      'JOIN mail_deliveries d ON d.id = (SELECT MAX(x.id) FROM mail_deliveries x WHERE x.mailId = m.id) ' +
+      "WHERE m.fromId = 'coordinator' AND m.subject = ? AND m.at >= ? " +
+      `AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      "AND d.ingestedAt IS NULL AND d.state != 'acked' " +
+      'AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) ' +
+      'ORDER BY r.id',
+    ).all(BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, since, BRIEF_NOTICE_DETAIL) as unknown as
+      (Omit<UnlandedBrief, 'retried'> & { retried: number })[];
+    return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
@@ -7437,6 +7709,35 @@ export class CoordStore {
       "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
+  }
+
+  /** D-5925 (held questions survive a restart): every ask row a hold still owns, `held` or `answering`, oldest
+   *  first. Read once, on the boot's unprimed tick (`watch.ts`'s `detectDialogs`), so the in-memory carrier
+   *  (`heldAsks`, D-2169) can be re-seeded from the rows that already hold its deadline (`askNotifyAt(at)`) and its
+   *  identity (`dialogId`, `askKey`). All-or-failure, like every other list read on this surface. */
+  heldQuestionRows(): AsksReadResult {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE state IN ('held','answering') ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateAsk']>[0][];
+    const asks: AskRow[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      if (!h.ok) return { ok: false, kind: 'ask-unreadable', detail: h.detail };
+      asks.push(h.ask);
+    }
+    return { ok: true, asks };
+  }
+
+  /** D-5925: the main thread's (`agentId` `''`, D-5491) approval rows still `held` for a claimant, oldest first,
+   *  grouped by child: the boot's snapshot `heldApprovals` is re-seeded from. `held` ONLY, never `released`:
+   *  `lapseApproval` records no time and no reason, so a row lapsed and pushed before the restart cannot be told
+   *  from one lapsed after it, and selecting it would push the operator twice. All-or-failure. */
+  heldApprovalRowsByChild(): { ok: true; rows: Map<string, ApprovalRow[]> } | { ok: false; detail: string } {
+    const read = this.approvalRows("WHERE state = 'held' AND agentId = '' AND releaseReason IS NULL ORDER BY id");
+    if (!read.ok) return read;
+    const out = new Map<string, ApprovalRow[]>();
+    for (const r of read.rows) out.set(r.childId, [...(out.get(r.childId) ?? []), r]);
+    return { ok: true, rows: out };
   }
 
   // ── approvals (coordinator-first routing plan Task 16, D-5298, D-5440, D-5441) ──────────────────────────────────

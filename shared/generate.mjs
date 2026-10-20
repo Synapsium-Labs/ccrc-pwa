@@ -167,12 +167,16 @@ function idArray(ids) {
  * for an account the roster says has no such telemetry (`gpt`) — the file
  * would be indistinguishable from a real measurement and would hand
  * `projectHome` the fake zero that `telemetry: 'none'` was added to prevent.
+ * An OpenRouter lane (`telemetry: 'openrouter'`) and a compatible lane (`'none'`)
+ * are outside it and outside `CCRC_ANTHROPIC_BACKEND` too (D-5521): neither
+ * reports Claude Code's rate limits, and neither is an Anthropic backend.
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
  * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
  * backend memberships, and they are deliberately not each other's complement:
- * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
+ * `telemetry` has four values, and a lane whose telemetry is `openrouter` or
+ * `none` is in neither (D-5521). ccd
  * reads the first for the four things that only work against Claude Code's own
  * protocol (`--remote-control`, spawn-effort injection, the cross-backend
  * sanitiser, the 429 exclusion writer) and the second for the one thing that

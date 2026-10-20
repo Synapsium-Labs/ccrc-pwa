@@ -9,13 +9,14 @@ import { AgentOpError, LinkNotSentError, type FleetClient } from '../remote/clie
 import type { FleetIO } from '../io.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from '../update/inventory.js';
 import { openPoolReadDeadline } from '../pools.js';
+// D-5896: `NODE_ID_RE` straight from its L0 home; through `coord/store.ts` it loaded the store and `node:sqlite`.
 import {
-  NODE_FILES, TOKEN_SYNC_OP, TOKEN_SYNC_OP_TIMEOUT_MS, isTokenSyncOpError, readTokenTransport,
+  NODE_FILES, NODE_ID_RE, TOKEN_SYNC_OP, TOKEN_SYNC_OP_TIMEOUT_MS, isTokenSyncOpError, readTokenTransport,
 } from '../../../shared/agent-protocol.js';
 import { GENERATION_ID_RE, readGenerationFile } from '../../../shared/box-token.js';
 import type { GateRowsSource, GenerationReader, TokenSyncLink } from './ports.js';
 import type { GateNode, SyncResult } from './policy.js';
-import { NODE_ID_RE, type NodeRow } from '../coord/store.js';
+import type { NodeRow } from '../coord/store.js';
 
 const LOST_WORDS = ['timeout', 'disconnected', 'aborted'] as const;
 

@@ -185,6 +185,13 @@ describe('step-up keeps the session (D-5512)', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(rowOf(w.home, a)!.assertedAt).toBeUndefined();
     expect(rowOf(w.home, b)!.assertedAt).toBeUndefined();
+    // A mismatch still SPENDS the challenge: A, its rightful owner, cannot finish it afterwards.
+    const spent = await app.inject({
+      method: 'POST', url: '/api/auth/step-up/finish', headers: { cookie: a }, payload: auth.assert(challenge, 1),
+    });
+    expect(spent.statusCode, spent.body).toBe(403);
+    expect(errorOf(spent)).toBe('step-up-required');
+    expect(rowOf(w.home, a)!.assertedAt).toBeUndefined();
     // …and B's own challenge, finished by B, is accepted: the refusal was the binding.
     const own = await stepUpStart(app, b);
     const ok = await app.inject({
@@ -261,6 +268,35 @@ describe('step-up keeps the session (D-5512)', () => {
     const other = await passphraseStepUp(app, b);
     expect(other.statusCode, other.body).toBe(200);
     expect(typeof rowOf(w.home, b)!.assertedAt).toBe('number');
+  });
+
+  it('failed passkey assertions at finish count toward the session budget and lock it (`step-up-locked`)', async () => {
+    const w = await openApp(); app = w.app;
+    const a = await login(app);
+    const auth = makeAuthenticator();
+    await enrol(app, auth, a);
+    for (let i = 0; i < STEP_UP_MAX_FAILURES; i++) {
+      const challenge = await stepUpStart(app, a);
+      const good = auth.assert(challenge, i + 1);
+      const sig = Buffer.from(good.signatureB64url, 'base64url');
+      sig[sig.length - 1] ^= 0xff;
+      const bad = await app.inject({
+        method: 'POST', url: '/api/auth/step-up/finish', headers: { cookie: a },
+        payload: { ...good, signatureB64url: b64(sig) },
+      });
+      expect(bad.statusCode, bad.body).toBe(403);
+      expect(errorOf(bad)).toBe('step-up-required');
+    }
+    // Locked: start is refused, and so is a finish carrying a valid assertion.
+    const lockedStart = await app.inject({ method: 'POST', url: '/api/auth/step-up/start', headers: { cookie: a } });
+    expect(lockedStart.statusCode, lockedStart.body).toBe(429);
+    expect(errorOf(lockedStart)).toBe('step-up-locked');
+    const lockedFinish = await app.inject({
+      method: 'POST', url: '/api/auth/step-up/finish', headers: { cookie: a }, payload: auth.assert('AAAA', 99),
+    });
+    expect(lockedFinish.statusCode, lockedFinish.body).toBe(429);
+    expect(errorOf(lockedFinish)).toBe('step-up-locked');
+    expect(rowOf(w.home, a)!.assertedAt).toBeUndefined();
   });
 
   it("failed step-ups leave `LoginRateLimiter`'s budget untouched", async () => {

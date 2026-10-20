@@ -335,6 +335,17 @@ describe('write routes', () => {
     await app.close();
   });
 
+  it("POST prompt maps `replaceDraft: true` to `onDraft: 'replace'`: it clears, and never stashes (D-5911)", async () => {
+    const { app, calls } = await makeApp(['❯ half-typed thought\n', '❯ \n', '❯ hi\n', '❯ \n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi', replaceDraft: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    const keys = sendKeysCalls(calls).map((c) => c.at(-1));
+    expect(keys[0]).toBe('C-u');
+    expect(keys).not.toContain('C-s');
+    await app.close();
+  });
+
   // C0.2, the user-visible fix: knownId used to answer via readRegistry,
   // which drops a session's ENTIRE row when any one of its three
   // completeness fields (wrapper/workdir/uuid) fails to read — so a single
@@ -1212,38 +1223,51 @@ describe('notify ingestion', () => {
 // this route at all — no test here even named `/stop` until now). Written
 // FIRST and confirmed red against the pre-gate code, which would have
 // answered 404 unknown-session (a LIE: the row is right there, just
-// unmeasured) rather than 503.
+// unmeasured) rather than 502.
 describe('POST /api/sessions/:id/stop', () => {
-  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
+  // A well-formed legacy row, shared by the three `/stop` cases below: `seedSession` writes `project: id`, which the
+  // stop pair clause refuses 502 on its own, so it would neither isolate the identity arm nor stop normally.
+  const seedWellFormed = (home: string, id: string) => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'demo-a', project: 'demo', workdir: '/w/demo', uuid: '1'.repeat(36), started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  };
+
+  it('refuses 502 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
-    const cfg = loadConfig({ CCRC_HOME: home });
-    const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
-      new Bus(),
-    );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
-    await app.close();
-  });
-
-  it('the archive door refuses 503 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
-    const home = mkTmp('ccrc-');
-    seedRoster(home);
-    seedSession(home, ID, 'claude-a');
+    seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
     const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue() },
       new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive` });
-    expect(res.statusCode).toBe(503);
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/stop' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'stop')).toEqual([]);
+    await app.close();
+  });
+
+  it('the archive door refuses 502 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedWellFormed(home, 'demo-a-demo');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/archive' });
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
     await app.close();
@@ -1272,14 +1296,14 @@ describe('POST /api/sessions/:id/stop', () => {
   });
 
   // Blocking review finding 3: the whole-fleet cousin of the field-degraded
-  // case above must get the SAME 503, never the 404 this route exists to
+  // case above must get the SAME 502, never the 404 this route exists to
   // avoid for exactly this reason — an unlistable registry proves nothing
   // about whether THIS id exists, the identical fact `readSessionRecord`'s
   // own `reason: 'unlistable'` already distinguishes from `reason: 'absent'`.
   // Written FIRST and confirmed red against the pre-fix code, which
   // collapsed both reasons into one bare `!read.found` check and answered
   // 404 unknown-session for a registry it could not even list.
-  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
+  it('refuses 502 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
      'cannot be listed at all', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -1292,7 +1316,7 @@ describe('POST /api/sessions/:id/stop', () => {
       new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     await app.close();
   });
@@ -1300,14 +1324,18 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const id = 'demo-a-demo';
+    seedWellFormed(home, id);
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${id}/stop` });
     expect(res.statusCode).toBe(200);
+    // No capability evidence, so the bare pair form: ccd recomputes `demo-a-demo`, the row that was tapped.
+    expect(calls).toEqual([['stop', 'demo-a', 'demo']]);
     await app.close();
   });
 });

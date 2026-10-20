@@ -99,13 +99,13 @@ const seedEmptyIdentity = (home: string, id: string): void => {
  *  assumed. The arm under test is only reached when BOTH of these hold, and each
  *  is one edit away from silently ceasing to: if `<id>.uuid` stopped being listed
  *  the case would fall into the proven-absence arm and pass for the wrong reason,
- *  and if the row started assembling the read would answer `found: true` and skip
+ *  and if the row started assembling the read would answer `kind: 'found'` and skip
  *  rung 1 entirely. An unreachable arm asserted green is the failure mode this
  *  file's whole per-rung fixture design exists to avoid. */
 const expectListedButUnassembled = async (home: string, id: string): Promise<void> => {
   expect(readdirSync(path.join(home, '.cc-sessions'))).toContain(`${id}.uuid`);
   expect(await readSessionRecord(localIO, testDeps(home).cfg, id))
-    .toEqual({ found: false, reason: 'absent' });
+    .toEqual({ kind: 'absent' });
 };
 
 describe('measureClaimant — three answers, and the inputs that collapse into each', () => {

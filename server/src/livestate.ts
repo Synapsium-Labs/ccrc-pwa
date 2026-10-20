@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { SessionStatus } from '../../shared/api.js';
+import { CLAUDE_MIN_BUILD, compareClaudeVersions, isClaudeVersion } from '../../shared/claudeVersion.js';
 
 export interface LiveState {
   pid: number; sessionId: string; cwd: string; name: string | null;
@@ -77,10 +78,13 @@ export function liveSessionStatus(status: string): SessionStatus {
  * Workflow row must not overrule it (fleet.ts).
  *
  * `false` — keep the pane row as the fallback — for no version, for a build
- * below 2.1.277 (unmeasured, none on the fleet), and for any string that does
- * not open with `X.Y.Z`. Parsed here rather than by `shared/semver.ts`'s
- * `compareReleaseTags`, which takes release TAGS (`vX.Y.Z`) and throws on
- * anything else: this string comes from Claude Code's file, not from us.
+ * below 2.1.277 (unmeasured, none on the fleet), and for any string that is
+ * not a Claude Code build. Judged by the lexicon (`shared/claudeVersion.ts`'s
+ * `isClaudeVersion`, `compareClaudeVersions` and `CLAUDE_MIN_BUILD`, D-5696),
+ * not by `shared/semver.ts`'s `compareReleaseTags`, which takes release TAGS
+ * (`vX.Y.Z`): this string comes from Claude Code's file, not from us. Since
+ * D-5696 a string must be exactly `X.Y.Z` (a suffix or a leading zero, which
+ * the old prefix parse let through, is `false`, toward the fallback).
  *
  * KNOWN LIMIT: the floor has no ceiling. Every build from 2.1.277 up is
  * trusted, the unmeasured ones above 2.1.283 (and 3.x) included, while the
@@ -93,10 +97,7 @@ export function liveSessionStatus(status: string): SessionStatus {
  * build, say).
  */
 export function liveStatusCoversDelegation(version: string | null): boolean {
-  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '');
-  if (!m) return false;
-  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 277)));
+  return isClaudeVersion(version) && compareClaudeVersions(version, CLAUDE_MIN_BUILD) >= 0;
 }
 
 /**

@@ -1388,7 +1388,7 @@ The LANE is the third suppressor (2026-09-07): a session spawns with
 (`CCRC_ANTHROPIC_BACKEND` in `accounts.sh`, read by ccd's `_is_anthropic_backend`).
 A lane on any other backend — a ChatGPT/Codex lane, which holds no claude.ai OAuth
 and runs Claude Code in token mode against a local proxy, or any lane declared
-`telemetry: "codex"` or `"none"` — spawns without it whatever the box flag and the
+`telemetry: "codex"`, `"openrouter"` or `"none"` — spawns without it whatever the box flag and the
 row say, because Remote Control needs a claude.ai token with the inference scope
 and that lane cannot present one. The backend decides, not placement: an Anthropic
 account held out of placement with `homeAble: false` keeps the flag, a home-able
@@ -1448,11 +1448,13 @@ scored better — for as long as it is installed and not kill-switched.
 `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
-`telemetry` is `'anthropic'`, `'codex'` or `'none'`: `'anthropic'` means the statusline publishes this
+`telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
 (`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
 eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
-publisher, never the statusline; `'none'` says the account will never report rate limits,
+publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
+`~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
+`'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
 declares the entry to be roster PLUMBING rather than one of your accounts — the
 `upstream` entry naming the binary every generated wrapper `exec`s — so no
@@ -1788,8 +1790,8 @@ may need the new id.
 `haiku`, `sonnet`, `opus`, `fable`. On a lane whose roster `telemetry` is `"anthropic"` those are Claude
 Code's own aliases and there is nothing to classify: `show` answers read-only and every change is refused.
 That includes every lane `ccrc account add` creates, whose key lanes route through their own `--models` map
-(`exec.models`) instead. A lane whose `telemetry` is `"codex"` or `"none"` — a Codex lane, or an OpenRouter or
-Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
+(`exec.models`) instead. A lane whose `telemetry` is `"codex"`, `"openrouter"` or `"none"` — a Codex lane, an OpenRouter
+lane, or an Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
@@ -1805,6 +1807,9 @@ ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
 ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
 ccrc models <id> clear-window <modelId>          # drop one
+ccrc models <id> hold <class>              # no automatic advance moves this class
+ccrc models <id> release <class>           # it may move again, canary first
+ccrc models <id> revert <class>            # back to its model before its last advance, and held there
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1851,6 +1856,23 @@ refresh materialises and writes the default. With a stale or absent catalogue a 
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
 puts the lane on the default rule.
+
+**Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
+registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
+the family the class follows (the last part of a `<vendor>-<version>-<family>` model id), an optional hold, the
+model the class had before its last automatic advance, and its last ten moves. `init codex` writes it, with a
+family for every class, an empty one included. `set-class` records the move and takes the family from the new pin,
+and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
+`hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
+model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
+on record it refuses `no-previous`. Holds arrive one build before the automatic advance itself, so a class that
+must stay where it is can be held first. Every write to a lane's model files — every per-lane verb but `show`, and
+the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
+finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
+before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
+the one lane model file written outside the lock: the probe replaces it whole, by a rename, so a writer under the
+lock always reads one complete catalogue. `rm` reaps the advance file with the lane's other model files, and never
+the lock.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3107,7 +3129,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3152,7 +3174,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s
@@ -5291,8 +5313,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8361-8363`), each with an operator sentence of its own at `:8413`,
-`:8421` and `:8434`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8438-8440`), each with an operator sentence of its own at `:8490`,
+`:8498` and `:8511`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

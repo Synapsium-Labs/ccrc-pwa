@@ -6,6 +6,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
   PRESENCE_REFRESH_MS,
+  SECRET_MASK,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -509,10 +510,32 @@ const PASTED_WRAPPER = /<\/?pasted_content id="[^"]*">/g;
  *  submits our own chip, and the transcript gives the text back wrapped, with
  *  blank lines around it. Every visible character must still match. */
 function sameSent(sent: string, echoed: string): boolean {
-  if (sent === echoed) return true;
+  if (sent === echoed || maskedEcho(sent, echoed)) return true;
   if (!echoed.includes('<pasted_content id="')) return false;
   const bare = (t: string): string => t.replace(PASTED_WRAPPER, '').replace(/\s+/g, '');
-  return bare(sent) === bare(echoed);
+  return bare(sent) === bare(echoed) || maskedEcho(bare(sent), echoed, bare);
+}
+
+/** Is `echoed` `sent` with credential shapes masked (D-5995)? The server masks every frame, so a prompt holding a
+ *  key echoes with `SECRET_MASK` in its place: the echo's literal parts must match the sent text in order, anchored
+ *  at both ends, and each mask must stand for one or more characters with no blank among them (a masked span is a
+ *  credential's run, never prose). `norm`: the paste-chip arm's normalization,
+ *  already applied to `sent`. */
+function maskedEcho(sent: string, echoed: string, norm: (t: string) => string = (t) => t): boolean {
+  if (!echoed.includes(SECRET_MASK)) return false;
+  const parts = echoed.split(SECRET_MASK).map(norm);   // the mask itself holds a space: split before normalizing
+  const head = parts[0]!;
+  const tail = parts[parts.length - 1]!;
+  if (!sent.startsWith(head) || !sent.endsWith(tail)) return false;
+  const end = sent.length - tail.length;
+  let at = head.length;
+  const masked = (a: number, b: number): boolean => b > a && !/\s/.test(sent.slice(a, b));
+  for (const part of parts.slice(1, -1)) {
+    const i = sent.indexOf(part, at + 1);   // the leftmost place, after a non-empty gap, leaves the most room
+    if (i < 0 || !masked(at, i)) return false;
+    at = i + part.length;
+  }
+  return masked(at, end);
 }
 
 function clearConfirmed(

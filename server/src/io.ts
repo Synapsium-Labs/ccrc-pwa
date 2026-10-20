@@ -36,7 +36,7 @@ import { isReadFromRange } from '../../shared/agent-protocol.js';
 export type { ReadFailure };
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
- *  both to `null`, unlike `readFile`/`readFileB64` below. See THE GOVERNING
+ *  both to `null`, unlike `readFile` below. See THE GOVERNING
  *  RULE in `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`
  *  (committed, not the session-scoped SDD scratch dir): the measured read is
  *  ADDITIONAL evidence, never a replacement for existing evidence — at every
@@ -123,6 +123,11 @@ export type MeasuredByteRangeRead =
  * import node:fs directly for fleet paths once threaded through this.
  */
 export interface FleetIO {
+  // D-5969 (ARCH-08b): every member states its failure contract on a `Failure contract:` line, where a caller reads it
+  // (`fleetio-contract.test.ts` requires one). A `*Measured` member never rejects and tells its failures apart; its
+  // collapsing sibling is a convenience whose `null` folds them, and a read whose failure decides anything uses the
+  // measured one.
+
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
    *  `timeoutMs` overrides the remote client's ordinary request timeout; it can
@@ -133,13 +138,21 @@ export interface FleetIO {
    *  `readFile` member has no cancellation parameter. Local `readdir` ignores
    *  both optional arguments because the Node API used by this adapter accepts
    *  neither; Node also cannot interrupt every local
-   *  filesystem syscall after dispatch. */
+   *  filesystem syscall after dispatch.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
   readFileMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredRead>;
-  readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
+  /** The collapsing convenience over `readFileMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `readFileMeasured` to tell them apart. */
+  readFile(path: string): Promise<string | null>;
   /** Distinguishes absence from unreadability for a range read; the EOF arm
-   *  is a positive answer. `readFileFrom` derives from this. */
+   *  is a positive answer. `readFileFrom` derives from this.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
   readFileFromMeasured(path: string, offset: number): Promise<MeasuredRangeRead>;
-  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;   // null on ANY failure; use readFileFromMeasured to tell absent from unreadable
+  /** The collapsing convenience over `readFileFromMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure; use `readFileFromMeasured` to tell absent from
+   *  unreadable. */
+  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
   /** The BYTE-exact sibling of `readFileFromMeasured`: at most `maxBytes` bytes
    *  from `offset`, as a `Uint8Array`, with the file's `size`. `maxBytes` is
    *  `1..READ_FROM_MAX_BYTES` and `offset` a non-negative safe integer; anything
@@ -150,7 +163,8 @@ export interface FleetIO {
    *  `unreadable`, because bytes are never rebuilt from text. `timeoutMs` and
    *  `signal` are forwarded by the remote adapter; `localIO` ignores both, as
    *  `readdir` does. `readFileFromMeasured` is unchanged and keeps its decoded
-   *  string. */
+   *  string.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
   readFileFromBytesMeasured(
     path: string,
     offset: number,
@@ -158,42 +172,65 @@ export interface FleetIO {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<MeasuredByteRangeRead>;
-  /** Distinguishes absence, unreadability and over-cap. `readFileB64` derives
-   *  from this. */
+  /** Distinguishes absence, unreadability and over-cap. Binary-safe; `localIO`
+   *  has no cap. Its collapsing sibling `readFileB64` had no callers and is gone
+   *  (D-5969): its `null` folded all three.
+   *  Failure contract: never rejects; `absent` only for a proven absence, `too-large` for a file the agent will not
+   *  send (agent/src/fileops.ts's MAX_READ_B64_BYTES), every other failure `unreadable`. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
-  readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
   /** Distinguishes an empty listing, a missing directory and an unlistable
    *  one — see `MeasuredDirectoryRead`. `readdir` derives from this. The
    *  optional arguments are forwarded by the remote adapter and ignored by
-   *  `localIO`, exactly as for `readdir`. */
+   *  `localIO`, exactly as for `readdir`.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT. An older agent's bare `names: null`, a
+   *  malformed answer, a refusal, a timeout and a disconnect are all `unreadable`, never `absent`. */
   readdirMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead>;
-  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;   // null on ANY failure — absent and unreadable both collapse here; use readdirMeasured to tell them apart
+  /** The collapsing convenience over `readdirMeasured`. Its call sites may only shrink (the ratchet in
+   *  `fleetio-contract.test.ts`, D-5969): a listing whose failure decides anything reads `readdirMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `readdirMeasured` to tell them apart. */
+  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
-   *  own absence marker could not be trusted before this existed. */
+   *  own absence marker could not be trusted before this existed.
+   *  Failure contract: never rejects; `absent` only for a proven absence, every other failure `unreadable`. */
   statMeasured(path: string): Promise<MeasuredStat>;
-  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;   // null on ANY failure — absent and unreadable both collapse here; use statMeasured to tell them apart
+  /** The collapsing convenience over `statMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `statMeasured` to tell them apart. */
+  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
   /** The path's own type, NOT its target's — the question every other read
    *  on this interface answers about the resolved file. Declared here because
    *  a CONSUMER needs it (`limits.ts`'s `authDead` gate, which must agree with
    *  two bash bodies that refuse a symlinked marker), and it has no
    *  collapsing convenience sibling on purpose: the whole value of this member
-   *  is the distinction a `| null` would destroy. */
+   *  is the distinction a `| null` would destroy.
+   *  Failure contract: never rejects; `absent` only for a proven absence; locally every other failure is
+   *  `unreadable`, and remotely an agent too old to answer, or any fault on the wire, is `unmeasured`. */
   lstatMeasured(path: string): Promise<MeasuredPathKind>;
   /** Physical path for `path`, or null when it cannot be resolved (missing
    *  path, permission, or an implementation with no resolver — the remote io
    *  answers null unconditionally, so callers degrade to the unresolved
    *  path). Exists for transcript resolution: Claude Code munges its PHYSICAL
    *  cwd, the registry keeps the path ccd wrote, and on a symlinked projects
-   *  root the two disagree. */
+   *  root the two disagree.
+   *  Failure contract: never rejects; `null` on ANY failure, and always `null` remotely — never evidence of absence. */
   realpath(path: string): Promise<string | null>;
-  writeFileB64(path: string, dataB64: string): Promise<void>;          // mkdir -p parent
+  /** Writes `dataB64`'s bytes to `path`, creating the parent (`mkdir -p`).
+   *  Failure contract: REJECTS on any failure (the local errno, or the agent's refusal or a dropped connection); it
+   *  resolves only once the write is done. */
+  writeFileB64(path: string, dataB64: string): Promise<void>;
+  /** Follows `path` from `offset`, calling `onData` with each new chunk and `onReset` when the file shrinks under it;
+   *  answers its idempotent `close()`.
+   *  Failure contract: a read fault after it opens is retried on the next watch or poll (remotely, on the next
+   *  connection), never surfaced through the callbacks; opening the subscription may reject, so a caller guards the
+   *  call. */
   tailFile(
     path: string,
     offset: number,
     onData: (chunk: Buffer) => void,
     onReset: (size: number) => void,
-  ): Promise<() => void>; // returns close()
+  ): Promise<() => void>;
 }
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
@@ -270,11 +307,6 @@ export const localIO: FleetIO = {
   async readFileB64Measured(p) {
     try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
     catch (err) { return { ok: false, reason: failureFor(err) }; }
-  },
-
-  async readFileB64(p) {
-    const r = await this.readFileB64Measured(p);
-    return r.ok ? r.dataB64 : null;
   },
 
   async readdirMeasured(p) {

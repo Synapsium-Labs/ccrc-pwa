@@ -28,6 +28,7 @@ import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER } from '../src/collectLane
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
+import type { PushPayload } from '../src/push.js';
 import { COLLECT_BOX_LABELS, type ChildReclaimAttention, type ChildReclaimCollectAttention } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -50,6 +51,9 @@ export interface CollectRigOpts {
   readonly mono?: number;
   /** The live marker already stands when the watcher is built. */
   readonly armed?: boolean;
+  /** A push sink, so a case can see the lane never pushes (D-5850's feed writers' pin). Omitted, the watcher has none,
+   *  as a box with no VAPID keys runs. */
+  readonly push?: { readonly notify: (p: PushPayload) => Promise<void> };
 }
 
 /** The rig's WALL-clock origin. Module-private: Task 6's fixture exports a monotonic `T0`, and one name must not mean
@@ -162,15 +166,21 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
       if (leaf === 'tmproots' && gate !== null) await gate;
       return base.io.lstatMeasured(p);
     },
-    async readdir(p, timeoutMs, signal) {
+    // The registry's listing is intercepted on the MEASURED reader, which the executor reads (D-5969); the plain
+    // `readdir` derives from it, as `localIO`'s does, so either reader sees the same fault.
+    async readdirMeasured(p, timeoutMs, signal) {
       if (p === reg) registryListings += 1;
       if (p === reg && listingHold !== null) {
         const h = listingHold;
         listingHold = null; park(h.id, 1);
         try { await h.promise; } finally { park(h.id, -1); }
       }
-      if (p === reg && unlistable) return null;
-      return base.io.readdir(p, timeoutMs, signal);
+      if (p === reg && unlistable) return { ok: false, reason: 'unreadable' };
+      return base.io.readdirMeasured(p, timeoutMs, signal);
+    },
+    async readdir(p, timeoutMs, signal) {
+      const r = await this.readdirMeasured(p, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
   };
   const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [...FULL_CAPS] };
@@ -183,6 +193,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   // watcher built with no fleet link reads `NO_FLEET_IDENTITY`, until a case measures a node or reconnects.
   const identity = new FleetIdentityCell();
   const deps = { ...base, fleetIdentity: identity, cfg, io, coord, notifyLog, fleetState,
+    ...(opts.push !== undefined ? { push: opts.push } : {}),
     presence: { isVisible: (id: string) => visible(id) },
     monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');

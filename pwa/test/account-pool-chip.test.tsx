@@ -22,6 +22,7 @@ import type { AccountPoolWire } from '../../shared/poolrule';
 import { accountPoolState } from '../src/lib/accounts';
 import { ACCOUNT_POOL_UNAVAILABLE_TEXT, AccountsScreen } from '../src/screens/AccountsScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -233,7 +234,7 @@ describe('FleetScreen — the epoch/observed lag indicator (staleness, not healt
 
   it('the fleet head shows epoch/observed ONLY when they differ', () => {
     const store = makeStore();
-    const { rerender } = render(<FleetScreen store={store} epoch={3} observedEpoch={3} />);
+    const { rerender } = renderFleet(<FleetScreen store={store} epoch={3} observedEpoch={3} />);
     expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
     rerender(<FleetScreen store={store} epoch={4} observedEpoch={3} />);
     expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 4 / observed 3');
@@ -241,13 +242,13 @@ describe('FleetScreen — the epoch/observed lag indicator (staleness, not healt
 
   it('says nothing at all when the agent cannot tell us (absent, not null)', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} epoch={4} observedEpoch={undefined} />);
+    renderFleet(<FleetScreen store={store} epoch={4} observedEpoch={undefined} />);
     expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
   });
 
   it('says nothing when there is no epoch to compare against either', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} observedEpoch={3} />);
+    renderFleet(<FleetScreen store={store} observedEpoch={3} />);
     expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
   });
 });

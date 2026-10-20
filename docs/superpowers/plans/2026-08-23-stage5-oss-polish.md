@@ -608,3 +608,11 @@ list. **No transfer, no flip, no tag happens from this session.**
   (the Mac-side clip env triple, and the fleet host's server-address env for swap
   notices, absent per the old D-73 measurement — a tree with no baked fallback sends
   nothing until that file exists).
+
+## Public-repo hygiene: private tracker ids (2026-10-19)
+
+This plan built `server/test/topology-clean.test.ts` (Task 1), so this addition to it is defined here. Issued 2026-10-19 to the private-tracker-id guard, a block of two. D-5878 is defined here, once.
+
+- **D-5878** — `private-tracker-id` (topology-clean's ninth forbidden class): CLAUDE.md's public-repo rule bans links to private trackers and their ticket ids, and refers to ccrc work by its GitHub `#n`. Nothing enforced it, and eight ids had landed in seven tracked files (three plans or specs, the binary-lifecycle programme ledger, one source comment and two test headers). Each became the GitHub issue the tracker syncs it to (the binary-lifecycle brief is #218, its earlier report #121, the open-run preconditions audit ticket #548, the stale-run card fix #746), in place within its line, so no line moved. The class matches a ticket id under a key in the suite's `PRIVATE_TRACKER_KEYS`, case-insensitively, since the tracker's suggested branch names spell it in lowercase, plus a link with a path into the tracker's workspace. It is a named key list, not the general `[A-Z]{2,10}-[0-9]+` shape: that shape matched 2822 tokens in 409 tracked files that are no tracker's (`UTF-8`, `SHA-256`, `ARCH-21`, `OA-2`), so it could only ship behind an allowlist, which the suite refuses. The class rides the suite's existing walks (tip, branch history, tracked paths), its `catches` are the planted controls, and its `passes` pin the bare key, D-numbers, ARCH ids and `#n`. Red first: before the scrub the class reported all eight ids as `file:line: token` rows; after it, green.
+
+Issued and unused: 5879.

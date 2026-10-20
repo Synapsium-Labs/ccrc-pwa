@@ -8,11 +8,13 @@
  * (`coord/archiveDoor.ts`, L1) holds the rule and its reasoning. The watcher's pane-scraped reads arrive as THUNKS,
  * read at call time, so a call never sees a snapshot captured when the deps object was built.
  */
-import { configDirFor, type CcrcConfig } from './config.js';
+// D-5896: the pure join from its own module; through `config.ts` this file loaded `coord/db.ts` and `node:sqlite`.
+import { configDirFor } from './configDir.js';
+import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet } from './fleet.js';
-import type { FleetWatcher } from './watch.js';
+import type { FleetWatcherView } from './coord/ports.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { readLiveStateMeasured } from './livestate.js';
@@ -28,14 +30,14 @@ export interface TurnReadDeps {
   /** The watcher's newest pane-scraped reads, read at call time (thunks, so a call never sees a stale snapshot
    *  captured when the deps object was built); `undefined` when no watcher runs, as today. */
   pendingDialogs: () => ReadonlySet<string> | undefined;
-  statuslines: () => ReturnType<FleetWatcher['currentStatuslines']> | undefined;
+  statuslines: () => ReturnType<FleetWatcherView['currentStatuslines']> | undefined;
 }
 
 /** `TurnReadDeps` over an optional watcher — the one spelling of the two thunks, for `server.ts` and
  *  `coord/routes.ts` alike. */
 export function turnReadDeps(
   base: { io: FleetIO; cfg: CcrcConfig; tmux: Tmux },
-  watcher: Pick<FleetWatcher, 'currentPending' | 'currentStatuslines'> | undefined,
+  watcher: FleetWatcherView | undefined,
 ): TurnReadDeps {
   return {
     io: base.io, cfg: base.cfg, tmux: base.tmux,

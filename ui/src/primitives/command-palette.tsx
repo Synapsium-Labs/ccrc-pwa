@@ -31,6 +31,7 @@
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Drawer } from 'vaul';
 import { cn } from '../lib/cn';
+import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { Icon } from './icon';
 import { KEYCAP } from './keycap';
 import { LIST_ROW } from './list-row';
@@ -104,13 +105,10 @@ export const PALETTE_ACTIVE =
   + ' forced-colors:outline-2 forced-colors:outline-[CanvasText] forced-colors:-outline-offset-2';
 
 /** The palette's entrance and exit, on vaul's keyframes (D-5457): the
- *  content's slide and the overlay's fade both run at the tokens' pace.
- *  `command-layer.test.tsx` reads it off the open palette. */
-export const PALETTE_MOTION =
-  'data-[state=open]:[animation-duration:var(--dur-base)]!'
-  + ' data-[state=open]:[animation-timing-function:var(--curve-swift)]!'
-  + ' data-[state=closed]:[animation-duration:var(--dur-fast)]!'
-  + ' data-[state=closed]:[animation-timing-function:var(--curve-swift)]!';
+ *  content's slide and the overlay's fade both run at the tokens' pace. The
+ *  retime is the one helper every vaul surface shares (D-5930), at the
+ *  palette's own pace. 'command-layer.test.tsx' reads it off the open palette. */
+export const PALETTE_MOTION = VAUL_MOTION + ' ' + PALETTE_MOTION_VARS;
 
 export function CommandPalette({
   open,

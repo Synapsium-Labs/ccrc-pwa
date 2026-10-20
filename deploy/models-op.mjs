@@ -35,18 +35,26 @@
 //     The two window ops (`set-window`, `clear-window`) obey all three against
 //     their own sibling file (`windowOp`), and re-materialise the same way.
 //
+// ── THE LOCK (auto-advance spec D21) ─────────────────────────────────────
+// Every op whose `OPS` row says `writes: true` runs under the caller's
+// per-lane lock: `ccd/ccrc` reaches each of them only through
+// `_models_answer_locked` or `_models_node_locked`. This file takes no lock of
+// its own (node has no flock(2)) and depends on that one caller for it; a
+// direct `node deploy/models-op.mjs <op>` is unserialised, as before.
+//
 // `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
 // registry it is about to delete would be pointless — worse, it would refuse to
 // reap a registry that no longer parses, which is exactly the file this verb
-// exists to clean up. It still obeys rule 1. It reaps the five MODEL files —
-// registry, catalogue, TSV, effort map, measured windows — and DELIBERATELY not
-// `lane.json`, though this file generates that too: the manifest carries the
-// roster's lane topology (auth dir, ports), which belongs to the ACCOUNT, not
-// the registry. Its owner is the codex arm of account removal (`_acct_remove`,
-// spec §9, Plan 2b-2) — and that owner must reap it, because an id removed and
-// later re-added would otherwise inherit the old lane's authDir and ports until
-// its next mutation: one lane spending another account's OAuth.
+// exists to clean up. It still obeys rule 1. It reaps the six MODEL files —
+// registry, catalogue, TSV, effort map, measured windows, advance state — and
+// DELIBERATELY not `lane.json`, though this file generates that too: the
+// manifest carries the roster's lane topology (auth dir, ports), which belongs
+// to the ACCOUNT, not the registry. Its owner is the codex arm of account
+// removal (`_acct_remove`, spec §9, Plan 2b-2) — and that owner must reap it,
+// because an id removed and later re-added would otherwise inherit the old
+// lane's authDir and ports until its next mutation: one lane spending another
+// account's OAuth.
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
@@ -67,17 +75,20 @@ import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
   modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
+import {
+  AdvanceInvalid, backfillAdvance, familyOf, parseAdvance, reconcilePending, recordMove, resolveEffort,
+} from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
 
 /** The account-id shape (C6), spelled once, here — the same shape as
  *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
- *  account id becomes a path segment below, in SIX places (`registryPath`,
+ *  account id becomes a path segment below, in SEVEN places (`registryPath`,
  *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`,
- *  `windowsPath`), so this file validates its own `--id` at op entry rather
- *  than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level gate one
- *  layer up, not this file's own — to have run first. */
+ *  `windowsPath`, `advancePath`), so this file validates its own `--id` at op
+ *  entry rather than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level
+ *  gate one layer up, not this file's own — to have run first. */
 export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** What `init` plants per probe kind.
@@ -111,6 +122,25 @@ const SEEDS = {
   },
 };
 
+/** The family each class follows when `init codex`, or the one-time backfill of a lane with no advance file,
+ *  seeds an EMPTY class (auto-advance spec §2.2 "Seeding"): written as DATA, because an empty class has no pin
+ *  to derive one from. The three classes `SEEDS.codex` pins take their pins' own families, DERIVED, so the two
+ *  tables cannot disagree; the fourth is the one literal word, the family the `SEEDS` docstring above names as
+ *  the next to classify. A pinned class's family always comes from its pin, never from here. */
+const SEED_FAMILIES = Object.freeze({
+  codex: Object.freeze({
+    haiku: familyOf(SEEDS.codex.classes.haiku),
+    sonnet: familyOf(SEEDS.codex.classes.sonnet),
+    opus: familyOf(SEEDS.codex.classes.opus),
+    fable: 'astra',
+  }),
+});
+
+/** The clock every advance-file time comes from, read ONCE, here: whole seconds with a `Z`, the form
+ *  `parseAdvance` accepts. `CCRC_MODELS_NOW` replaces it (tests only); a value not of that form is then refused by
+ *  `writeAdvance`'s read-back, never written. */
+const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
 const HOME = process.env['HOME'] ?? '';
 const modelsDir = () => path.join(HOME, '.ccrc', 'models');
 const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
@@ -123,6 +153,11 @@ const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
  *  the registry, never a key in it — `shared/models.mjs`'s `parseWindows` says
  *  why. `readWindowsFile` reads it, `writeWindows` writes it, `rm` reaps it. */
 const windowsPath = (id) => path.join(modelsDir(), `${id}.windows.json`);
+/** The lane's advance file (auto-advance spec §2.1, D13): per class the family it follows, its hold, the pin
+ *  before its last automatic advance and its last moves. A SIBLING of the registry, never a key in it, so an
+ *  older ccrc keeps reading the registry after a rollback. `readAdvance` reads it, `writeAdvance` is its one
+ *  writer, `rm` reaps it. */
+const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);
 /** Spec §4.3's "lane manifest" row, and §5.4's first line. */
 const laneJsonPath = (id) => path.join(HOME, '.ccrc', 'codex', id, 'lane.json');
 
@@ -206,7 +241,9 @@ function findAccount(json, id) {
 /** Deviation B-3: `origin/main`'s roster has no `exec.provider`, and
  *  `telemetry: 'anthropic'` is its own declaration that an account is an
  *  Anthropic subscription lane — the field `limits.ts` scores on. `gpt` carries
- *  `telemetry: 'none'`. This is the one place the boolean is computed here. */
+ *  `telemetry: 'none'`. This is the one place the boolean is computed here.
+ *  An OpenRouter lane (`telemetry: 'openrouter'`) and a compatible lane (`'none'`)
+ *  are registry lanes, never Anthropic ones (D-5521). */
 const isAnthropicLane = (account) => account.telemetry === 'anthropic';
 
 /** A lane a registry can sit on at all: not upstream (that entry names the
@@ -319,14 +356,64 @@ function windowsReport(reading) {
   return { state: 'ok', byModel };
 }
 
+/** The lane's advance file, as EXACTLY ONE of three answers — never an overloaded null:
+ *   - `{ advance: null }`: no file, the normal state of a lane not yet backfilled (§2.1);
+ *   - `{ advance }`: `parseAdvance`'s copy, unknown keys and all;
+ *   - `{ err: [word, detail] }`: a file that exists and cannot be read (`advance-file-unreadable`; a FIFO or a
+ *     directory included, type-tested first and never a block), or that is not an advance file this build reads
+ *     (`advance-file-invalid`, the detail opening with the field). Only that blocks a lane (§2.8), and every
+ *     writer refuses it rather than overwrite a file it cannot read. */
+function readAdvance(id) {
+  const p = advancePath(id);
+  let text;
+  try {
+    text = readRegular(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') return { advance: null };
+    return { err: ['advance-file-unreadable', `${p} could not be read: ${e.message}.`] };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    return { err: ['advance-file-invalid', `${p} is not valid JSON: ${e.message}.`] };
+  }
+  try {
+    return { advance: parseAdvance(json) };
+  } catch (e) {
+    if (e instanceof AdvanceInvalid) {
+      return { err: ['advance-file-invalid', `${e.message} (${p} is not an advance file this build reads)`] };
+    }
+    throw e;
+  }
+}
+
+/** The lane's advance file as `show` reports it (auto-advance spec §2.7, D14: the Models panel reads it through
+ *  `show`): `absent`; `ok` with each class's family, hold, previous and history; or `unreadable` / `invalid` with
+ *  the reason. Never folded into `absent`: "nothing recorded yet" and "a file nobody can read" have two remedies. */
+function advanceReport(id) {
+  const r = readAdvance(id);
+  if (r.err !== undefined) {
+    return { state: r.err[0] === 'advance-file-unreadable' ? 'unreadable' : 'invalid', detail: r.err[1] };
+  }
+  return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes };
+}
+
+/** The sentence every `writeJsonFile` refusal ends with, named because its callers reword it where it would be
+ *  false: a set-class whose hand intent is already on disk when its registry write fails (`handIntentLeft`), a
+ *  revert whose hold is already on disk when a later write fails, and an init whose registry is already created when
+ *  its advance-file write fails (both `sayWhatChanged`). */
+const NOTHING_CHANGED = 'Nothing was changed.';
+
 /** The ONE write of a hand-editable JSON file here — the class registry
- *  (`writeRegistry`) and the measured windows (`writeWindows`): tmp + rename,
- *  0600, this repo's rule for any file another process reads. 2-space indent
- *  and a trailing newline, the shape every hand-editable ccrc file has. Returns
- *  null, or `[error, detail]` with the caller's own error word; a failed write
- *  unlinks its tmp, so it leaves nothing behind. One writer for both files,
- *  rather than a second copy of `writeRegistry`'s shape for the windows, is
- *  a ruled departure from the Stage 0 plan's Task 4 (D-5783). */
+ *  (`writeRegistry`), the measured windows (`writeWindows`) and the advance
+ *  file (`writeAdvance`): tmp + rename, 0600, this repo's rule for any file
+ *  another process reads. 2-space indent and a trailing newline, the shape
+ *  every hand-editable ccrc file has. Returns null, or `[error, detail]` with
+ *  the caller's own error word; a failed write unlinks its tmp, so it leaves
+ *  nothing behind. One writer for every such file, rather than a second copy
+ *  of `writeRegistry`'s shape for the windows, is a ruled departure from the
+ *  Stage 0 plan's Task 4 (D-5783); the advance file joins it the same way. */
 function writeJsonFile(p, value, error) {
   const tmp = `${p}.${process.pid}.tmp`;
   try {
@@ -336,7 +423,7 @@ function writeJsonFile(p, value, error) {
     return null;
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* the tmp may never have been created */ }
-    return [error, `${p} could not be written: ${e.message}. Nothing was changed.`];
+    return [error, `${p} could not be written: ${e.message}. ${NOTHING_CHANGED}`];
   }
 }
 
@@ -351,6 +438,334 @@ function writeRegistry(id, registry) {
  *  does not know are written back as they were. */
 function writeWindows(id, raw) {
   return writeJsonFile(windowsPath(id), raw, 'windows-unwritable');
+}
+
+/** THE ONE WRITER of the lane's advance file (auto-advance spec D21). Rule 2 holds here too: the object goes
+ *  back through `parseAdvance` before it is written, so no caller can leave a file the next reader refuses. The
+ *  write itself is `writeJsonFile`'s — tmp + rename, 0600, 2-space JSON and a trailing newline, the bytes
+ *  `serializeAdvance` spells — never a copy of that shape of its own (D-5783). Every caller holds the
+ *  lane-files lock, taken by the bash that ran this op (`ccd/ccrc`'s `_models_lock`). */
+function writeAdvance(id, advance) {
+  let parsed;
+  try {
+    parsed = parseAdvance(advance);
+  } catch (e) {
+    if (e instanceof AdvanceInvalid) {
+      return ['advance-invalid', `the advance file for account "${id}" would not read back (${e.message}), so it `
+        + 'was not written. Nothing was changed.'];
+    }
+    throw e;
+  }
+  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');
+}
+
+/** The advance file as a writer loads it (auto-advance spec D21) — `set-class` (before and after its rename),
+ *  `hold`, `release`, `revert`, and W2's commit and backfill: read; when absent, backfilled IN MEMORY from
+ *  `registry`, the state BEFORE the caller's own change (§2.1: an absent file is normal, and a write creates it);
+ *  and any pending intent, of either shape, reconciled against `registry` (D-5188), so every
+ *  locked writer heals the crash gap. `{err}` when the file exists and cannot be read. `dirty` is true when what
+ *  comes back is not what is on disk (created here, or an intent settled), so the caller writes even when its own
+ *  change is a no-op. ANY lane: a hand act is recorded whatever the probe, and a probe with no `SEED_FAMILIES` row
+ *  seeds no family, so its empty classes stay unfilled; only the codex arm ever advances a class (`advance-backfill`
+ *  and `advance-plan` say why not for every other lane). */
+function advanceForWrite(id, registry) {
+  const cur = readAdvance(id);
+  if (cur.err !== undefined) return { err: cur.err };
+  const base = cur.advance ?? backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
+  const { advance, recovered } = reconcilePending(base, registry);
+  return { advance, recovered, dirty: cur.advance === null || base.pending !== null };
+}
+
+/** Create the lane's advance file from its registry when there is none, and NEVER rewrite one that exists,
+ *  readable or not: `{created: true}`, `{created: false, why}` (`present`, or the read's own word), or `{err}` when
+ *  the write failed. An empty class gets its probe's seed family (`SEED_FAMILIES`), as `init` would have given it. */
+function backfillOnce(id, registry) {
+  const cur = readAdvance(id);
+  if (cur.err !== undefined) return { created: false, why: cur.err[0] };
+  if (cur.advance !== null) return { created: false, why: 'present' };
+  const w = writeAdvance(id, backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null }));
+  return w === null ? { created: true } : { err: w };
+}
+
+/** `init`'s advance file, for every probe (auto-advance spec §2.2). With none, `backfillOnce` creates it when
+ *  `createIfAbsent` (the codex probe: a fresh `init` of any other probe writes no advance file, and such a lane is
+ *  left as it is). One already there was LEFT by an earlier registry, because init creates a registry only where
+ *  there is none: the `probe-declared` remedy (delete the registry by hand), a rollback to a build whose `rm` reaps
+ *  five files, or an `rm` cut short before its last reap (D-5966). Adopted whole, its families
+ *  would disagree with the new pins, so an advance could cross families, and its `pending` would be settled as a
+ *  move that never happened, on any lane, because a hand act records into the file whatever the probe. So it is
+ *  REUSED, for every probe: each class keeps its `hold` and its `history`, the operator's acts; `previous` is
+ *  cleared, because a revert to a pin of the registry that is gone would jump to an unrelated model; every family
+ *  is written exactly as a fresh init of this probe writes it (its `SEED_FAMILIES` row, or no seed where it has
+ *  none); `pending` is cleared; unknown keys are kept. `{created: true}`, `{reused: true}`, `{created: false}`
+ *  (absent and not created), `{created: false, why, unread}` for a file it cannot read (left as it is, as
+ *  `backfillOnce` leaves one; `unread` is the read's `[word, detail]`, which init's `advanceNote` names), or
+ *  `{err, reusing}` when the write failed. */
+function seedForInit(id, registry, createIfAbsent) {
+  const cur = readAdvance(id);
+  if (cur.err !== undefined) return { created: false, why: cur.err[0], unread: cur.err };
+  if (cur.advance === null) return createIfAbsent ? backfillOnce(id, registry) : { created: false };
+  const fresh = backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
+  const next = { ...cur.advance, classes: { ...cur.advance.classes }, pending: null };
+  for (const c of CLASSES) next.classes[c] = { ...next.classes[c], family: fresh.classes[c].family, previous: null };
+  const w = writeAdvance(id, next);
+  return w === null ? { reused: true } : { err: w, reusing: true };
+}
+
+/** A hand `set-class`'s INTENT (auto-advance spec D21; D-5188), written to the advance file
+ *  under the lane-files lock BEFORE the registry is renamed: `{how: 'hand', class, from, to, emptied, at}` — the
+ *  class the call named, its pin before and after (`null` for none), the classes one model, one class empties (each
+ *  pinned `to` before), and the act's time. The rename and this file's write cannot be one act, so a set-class killed
+ *  between them leaves the intent, and the lane's next locked writer records the move (`reconcilePending`'s hand
+ *  branch: one `how: hand` entry per moved pin, each family rewritten from its pin and CLEARED for none or an
+ *  off-grammar id, D-5195, `previous` untouched), or drops it when the rename never happened.
+ *  Loaded through `advanceForWrite(id, before)`: an intent an earlier crash left is settled first, and an absent file
+ *  is backfilled from the registry BEFORE this change. It never refuses, because set-class never has: `{note: null}`
+ *  when the intent is on disk, else `{note}` naming what failed, and the registry change goes ahead unrecorded. A
+ *  registry write that then fails leaves the intent behind; the next locked writer drops it, the pin still `from`,
+ *  except where `from` and `to` are one (`none` on a class already empty), whose only effect, the family cleared, is
+ *  what the call asked for. */
+function beginHandMove(id, before, after, cls) {
+  const loaded = advanceForWrite(id, before);
+  if (loaded.err !== undefined) {
+    return { note: `${loaded.err[0]}: ${loaded.err[1]} The class registry was written; the advance file was left as `
+      + 'it is, so this change has no history entry and no class family was rewritten. Fix or delete that file (the '
+      + 'next write re-creates it from the registry, with no holds and no history).' };
+  }
+  const intent = {
+    how: 'hand', class: cls, from: before.classes[cls], to: after.classes[cls],
+    emptied: CLASSES.filter((c) => c !== cls && before.classes[c] !== null && after.classes[c] === null),
+    at: now(),
+  };
+  const w = writeAdvance(id, { ...loaded.advance, pending: intent });
+  return { note: w === null ? null : `${w[0]}: ${w[1]} The class registry was written; the advance file is as it `
+    + 'was, so this change has no history entry and no class family was rewritten.' };
+}
+
+/** A set-class's registry-write refusal once its hand intent is on disk (`beginHandMove` answered no note):
+ *  `writeJsonFile`'s closing `Nothing was changed.` is no longer true, because the advance file now holds the
+ *  intent, so that sentence is replaced by what did and did not change. The registry pin is still `from`, so the
+ *  lane's next locked writer records no move from the intent (`reconcilePending`; D-5188). */
+function handIntentLeft(detail) {
+  if (!detail.endsWith(NOTHING_CHANGED)) return detail;
+  return `${detail.slice(0, -NOTHING_CHANGED.length)}The registry was not changed. The hand intent this set-class `
+    + "wrote to the lane's advance file stays there, and the lane's next locked writer, finding the pin unchanged, "
+    + 'records no move from it.';
+}
+
+/** A hand `set-class`'s record, once the registry and the lane's files are written: the intent `beginHandMove` left
+ *  is settled through `advanceForWrite(id, after)`, so set-class records its move through the very function that
+ *  recovers one a crash cut short, and the two can never disagree. It never refuses: the sentence it returns, when
+ *  the file could not be read back or written, becomes the answer's `advanceNote`, and the intent it could not
+ *  clear is recorded by the lane's next locked writer. Null when all went well. */
+function settleHandMove(id, after) {
+  const loaded = advanceForWrite(id, after);
+  if (loaded.err !== undefined) {
+    return `${loaded.err[0]}: ${loaded.err[1]} The class registry was written; this change is not recorded in the `
+      + 'advance file yet.';
+  }
+  const w = writeAdvance(id, loaded.advance);
+  return w === null ? null : `${w[0]}: ${w[1]} The class registry was written; the advance file still holds this `
+    + "change's intent, which the lane's next locked writer records.";
+}
+
+/** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
+ *  file when it has none (`backfillOnce`), and never rewrite one that exists. A lane with a class registry that is
+ *  not codex-kind, or whose registry probe is not `codex`, answers `created: false` with why (`lane-not-codex-kind`,
+ *  `probe-not-codex`), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic
+ *  lane and a lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
+ *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
+ *  materialise and LiteLLM render all succeeded. */
+function backfillOp(a, account, registry) {
+  let why = null;
+  if (!(isObj(account.exec) && account.exec.kind === 'codex')) why = 'lane-not-codex-kind';
+  else if (registry.probe !== 'codex') why = 'probe-not-codex';
+  const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
+  if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
+  out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }) });
+  return 0;
+}
+
+/** A writer's refusal of an advance file it cannot read: the verb rewrites that file and will not overwrite one it
+ *  cannot read. */
+const refuseAdvance = (err, opName, id) => refuse(1, err[0], `${err[1]} ${opName} rewrites account "${id}"'s `
+  + 'advance file and will not overwrite one it cannot read. Fix it by hand, or delete it (the next write re-creates '
+  + 'it from the registry, with no holds and no history), then re-run. Nothing was written.');
+
+/** `hold <class>` and `release <class>` (auto-advance spec §2.7, D3, D12): set or clear a class's hold, the one
+ *  brake the automatic advance honours. They touch only the lane's advance file — the registry, its pins and the
+ *  lane's settings stay as they are, so nothing re-materialises. A hold records WHEN (`now()`) and the ACT that set
+ *  it, `hand` here (D-5190). A second hold, or a release of a class not held, changes nothing and says so
+ *  (`changed: false`); a pending intent found on the way is still settled and written. */
+function holdOp(opName, a, account, registry, catalogue, win) {
+  const loaded = advanceForWrite(a.id, registry);
+  if (loaded.err !== undefined) return refuseAdvance(loaded.err, opName, a.id);
+  const c = loaded.advance.classes[a.class];
+  let changed = false;
+  if (opName === 'hold' && c.hold === null) {
+    c.hold = { at: now(), by: 'hand' };
+    changed = true;
+  }
+  if (opName === 'release' && c.hold !== null) {
+    c.hold = null;
+    changed = true;
+  }
+  if (changed || loaded.dirty) {
+    const w = writeAdvance(a.id, loaded.advance);
+    if (w !== null) return refuse(1, w[0], w[1]);
+  }
+  out({ ok: true, op: opName, class: a.class, changed, ...describe(account, registry, catalogue, win) });
+  return 0;
+}
+
+/** A refusal or note once something is already on disk — a revert's hold (D-5206), or init's new registry:
+ *  `writeJsonFile`'s closing `Nothing was changed.` is false by then, so it is replaced by `rest`, which says what did
+ *  and did not change. */
+function sayWhatChanged(detail, rest) {
+  return `${detail.endsWith(NOTHING_CHANGED) ? detail.slice(0, -NOTHING_CHANGED.length) : `${detail} `}${rest}`;
+}
+
+/**
+ * `revert <class>` (auto-advance spec §2.7): put back the model the class had before its last automatic advance
+ * (`previous`, with its effort level — D-5189 — through `resolveEffort` when that model no longer offers it), and
+ * hold the class there so the next hour cannot move it again. One act.
+ *  - THE EFFORT LEVEL (D-5991): a stored level the model no longer offers is ranked against a catalogue row that
+ *    still lists it, never only against the current model's row, which may not list it either.
+ *  - REFUSED, writing nothing: no advance on record (`no-previous`); a previous model the catalogue no longer lists
+ *    (`previous-not-in-catalogue`); one another class pins now (`previous-taken`: a revert never empties another
+ *    class); a registry the validator or the renderer refuses (`registry-invalid`, `unroutable-lane`).
+ *  - THE BRAKE FIRST (D-5206): the hold reaches the advance file before the registry moves, so a revert stopped
+ *    anywhere leaves the class held, never free to be advanced again. It is `{at: now(), by: 'revert'}` whatever
+ *    hold stood before, a hand one included: a hold records the act that set it last (D-5190), and the panel and
+ *    doctor name that act.
+ *  - COMMIT AFTER MATERIALISE, as an advance commits (D21): `previous` is cleared and the move recorded only once the
+ *    lane's files are rendered. A materialise that fails puts the old registry back and renders it again, and the
+ *    refusal says the class is held.
+ *  - THE FAMILY (D-5992): the commit writes the restored pin's family, so a pin moved back across families leaves no
+ *    stale family for a later reader. A revert to none keeps the stored family, the one an empty class is filled
+ *    from (spec §2.2 Seeding).
+ *  - A RE-RUN ON A REVERTED PIN (D-5991): a revert cut short after its registry write left the class on
+ *    `previous.model` with no history entry. Run again, it renders the lane, clears `previous` and keeps the hold,
+ *    and records no move: an entry from that model to itself, at the level it already has, would be a move that
+ *    never happened. A pin already on `previous.model` at ANOTHER level (a hand set-class back to it keeps the
+ *    class's level) has the level put back, and that change is recorded: a `revert` entry whose `from` and `to` are
+ *    that one model, with the `effort` pair. The final write's note says, for each shape, what is not recorded.
+ */
+function revertOp(a, account, registry, catalogue, win) {
+  const loaded = advanceForWrite(a.id, registry);
+  if (loaded.err !== undefined) return refuseAdvance(loaded.err, 'revert', a.id);
+  const adv = loaded.advance;
+  const c = adv.classes[a.class];
+  const from = registry.classes[a.class];
+  if (c.previous === null) {
+    return refuse(1, 'no-previous',
+      `account "${a.id}"'s ${a.class} class has no automatic advance on record, so there is nothing to revert to. `
+      + `'ccrc models ${a.id} set-class ${a.class} <modelId|none>' sets it by hand. Nothing was written.`);
+  }
+  const to = c.previous.model;
+  const rowOf = (id) => (id === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === id));
+  if (to !== null && catalogue !== null && rowOf(to) === undefined) {
+    return refuse(1, 'previous-not-in-catalogue',
+      `${a.class}'s previous model "${to}" is no longer in account "${a.id}"'s catalogue, so it cannot be put back. `
+      + `'ccrc models ${a.id} show' lists what the lane offers, and set-class picks one by hand. Nothing was written.`);
+  }
+  const taker = to === null ? undefined : CLASSES.find((o) => o !== a.class && registry.classes[o] === to);
+  if (taker !== undefined) {
+    return refuse(1, 'previous-taken',
+      `${a.class}'s previous model "${to}" is the ${taker} class's model now, and a revert never empties another `
+      + `class. Move ${taker} first, or set ${a.class} by hand. Nothing was written.`);
+  }
+  const next = JSON.parse(JSON.stringify(registry));
+  next.classes[a.class] = to;
+  const effortFrom = isObj(registry.effort) && typeof registry.effort[a.class] === 'string'
+    ? registry.effort[a.class] : null;
+  let effortTo = c.previous.effort;
+  const toRow = rowOf(to);
+  if (effortTo !== null && toRow !== undefined && toRow.efforts.length > 0 && !toRow.efforts.includes(effortTo)) {
+    // D-5991: ranked by a row that lists the stored level (the first), because the class's current model may have
+    // dropped it too; with no row listing it, `resolveEffort` falls back to the model's lowest.
+    const ranker = catalogue.models.find((m) => m.efforts.includes(effortTo));
+    effortTo = resolveEffort({ stored: effortTo, oldEfforts: ranker?.efforts ?? null, newEfforts: toRow.efforts })
+      ?? null;
+  }
+  if (effortTo === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[a.class];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [a.class]: effortTo };
+  }
+  // An explicit discovery list has to offer what a class routes to: set-class's own rule, and like it never on an
+  // openrouter lane, whose list grows only through `discovery add`'s whitelist check.
+  if (to !== null && registry.probe !== 'openrouter' && Array.isArray(next.discovery) && !next.discovery.includes(to)) {
+    next.discovery = [...next.discovery, to];
+  }
+  let validated;
+  try {
+    validated = parseRegistry(next, catalogue);
+  } catch (e) {
+    if (e instanceof RegistryInvalid) return refuseRegistry(e, a.id);
+    throw e;
+  }
+  // RULE 2's render check, inline rather than `renderRefusal` (D-5784's one helper): that helper answers null for a
+  // registry with nothing assigned, the legal unseeded state, and a revert that leaves a lane's every class empty
+  // must refuse `unroutable-lane` there, never write it, as the mutation tail's seeded-to-unseeded branch does.
+  try {
+    modelEnvBlock(validated, catalogue, windowsOf(win));
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', `${e.message} Nothing was written.`);
+    throw e;
+  }
+  // THE BRAKE FIRST (D-5206), over any hold already standing: the act that set it last.
+  c.hold = { at: now(), by: 'revert' };
+  const w0 = writeAdvance(a.id, adv);
+  if (w0 !== null) return refuse(1, w0[0], w0[1]);
+  const w1 = writeRegistry(a.id, validated);
+  if (w1 !== null) {
+    return refuse(1, w1[0], sayWhatChanged(w1[1], 'The registry was not changed. The hold this revert wrote to the '
+      + `lane's advance file stays, so ${a.class} is held now, on ${from ?? 'none'}, and its previous model is still `
+      + 'on record, so the revert can be run again.'));
+  }
+  const mat = materialise(account, validated, catalogue, windowsOf(win));
+  if (mat.err !== undefined) {
+    const back = writeRegistry(a.id, registry);
+    const again = back === null ? materialise(account, registry, catalogue, windowsOf(win)) : { err: back };
+    const how = back !== null ? 'could NOT be put back'
+      : again.err === undefined ? 'was put back, and the lane re-rendered on it'
+        : `was put back, and rendering it failed too (${again.err[1]})`;
+    return refuse(1, mat.err[0], `${mat.err[1]} The registry ${how}; ${a.class} is held, on ${from ?? 'none'}, and `
+      + 'its previous model is still on record, so the revert can be run again.');
+  }
+  c.previous = null;
+  // D-5992: the restored pin's family, so the file stays true for every reader. A revert to none keeps the stored
+  // family: an empty class is filled from it, and a held one is reported behind it.
+  if (to !== null) c.family = familyOf(to);
+  // D-5991: a re-run on a reverted pin records no move, its pin and its level both unchanged. A pin already on
+  // previous.model at another level (a hand set-class back to it) has its level put back, and that is recorded: one
+  // model as from and to, and the effort pair, which an entry's rules allow (nothing ties its from to its to).
+  const moved = from !== to || effortFrom !== effortTo;
+  const done = !moved ? adv : recordMove(adv, a.class, {
+    at: now(), how: 'revert', from, to, ok: true, canary: 'not-run',
+    ...(effortFrom !== effortTo ? { effort: { from: effortFrom, to: effortTo } } : {}),
+  });
+  const w2 = writeAdvance(a.id, done);
+  const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
+  if (w2 !== null) {
+    // What the file still says, true for each shape: previous is on record, the hold is on disk, and the history
+    // lacks the move or the level's change this run made, if it made one.
+    const rest = !moved
+      ? 'The class is on its previous model and held, but that previous model is still on record: run the revert '
+        + 'again to clear it; it records no move.'
+      : `${from !== to ? 'The class was reverted and is held, but this move'
+        : "The class's effort level was put back and the class is held, but this change"} is not in its history and `
+        + 'its previous model is still on record: a second revert finds the class already on that model at that '
+        + 'level, so it clears that record and records no move.';
+    answer.advanceNote = `${w2[0]}: ${sayWhatChanged(w2[1], rest)}`;
+    process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
+  }
+  out(answer);
+  return 0;
 }
 
 /** Spec §5.4's lane manifest — "id, config dir, ports, auth dir, unit names,
@@ -605,7 +1020,7 @@ function renderRefusal(registry, catalogue, windows) {
  *  when there is no registry file: an Anthropic lane, or one `init` never ran
  *  on. An unseeded registry (deviation B-1, every class null) still gets the
  *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
- *  `materialise` writes no env block for it. */
+ *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
@@ -622,6 +1037,7 @@ function describe(account, registry, catalogue, reading) {
     renderRefusal: renderRefusal(registry, catalogue, windows),
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
+    advance: advanceReport(account.id),
   };
 }
 
@@ -647,6 +1063,7 @@ function orphanDescribe(id, registry, catalogue, reading) {
     settingsDrift: [],
     windows: windowsReport(reading),
     contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
+    advance: advanceReport(id),
   };
 }
 
@@ -687,31 +1104,40 @@ function whitelistCheck(endpointsFile) {
   return { servedBy };
 }
 
-/** DATA: one row per op naming the keys it takes and which of them are
- *  required. */
+/** DATA: one row per op naming the keys it takes, which of them are required, and whether it WRITES a lane file
+ *  (auto-advance spec D21). A `writes: true` row runs only under the caller's lane-files lock, and `ccd/ccrc`'s
+ *  MODELS_WRITE_OPS is exactly those rows, which `single-definition.test.ts` checks in both directions.
+ *  `materialise --check true` writes nothing but shares its row. `litellm` writes the TIER's config, under the
+ *  tier lock (`_codex_lock`), not a lane file, so it is `false` here. */
 const OPS = {
-  lanes: { keys: ['file'], required: ['file'] },
-  show: { keys: ['file', 'id'], required: ['file', 'id'] },
-  init: { keys: ['file', 'id', 'probe', 'base-url'], required: ['file', 'id', 'probe'] },
-  'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'] },
-  'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
-  'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
+  lanes: { keys: ['file'], required: ['file'], writes: false },
+  show: { keys: ['file', 'id'], required: ['file', 'id'], writes: false },
+  init: { keys: ['file', 'id', 'probe', 'base-url'], required: ['file', 'id', 'probe'], writes: true },
+  'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'], writes: true },
+  'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'], writes: true },
   // Codex-bridge spec §2.7: a lane's measured context windows, in their own
   // sibling file (`windowOp`). `tokens` is checked against WINDOW_MIN and
   // WINDOW_MAX here, never in bash.
-  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'] },
-  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'] },
-  discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
+  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'], writes: true },
+  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'], writes: true },
+  discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'], writes: true },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
   // as every caller before it expects. Any other value is refused.
-  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'] },
-  rm: { keys: ['file', 'id'], required: ['file', 'id'] },
+  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'], writes: true },
+  rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
+  // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`); never rewrites one.
+  'advance-backfill': { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
+  // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
+  hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  revert: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
   // any value other than the literal string "true" renders and reports
   // `changed` without writing; `--commit true` performs the write. See the
   // `litellm` arm's own comment for why the write is a second, explicit call.
-  litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'] },
+  litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'], writes: false },
 };
 
 /** The files `materialise` renders WHOLE, as `[key, path, text]` in write
@@ -932,7 +1358,7 @@ function main(argv) {
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
 
-  // C6: at op entry, before any of the six per-account paths are built and
+  // C6: at op entry, before any of the seven per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
   // no-such-account gate (an orphan is the expected case there), which used
   // to mean it ran before ANY id validation. A `..`-bearing id built a path
@@ -988,14 +1414,14 @@ function main(argv) {
   const account = findAccount(json, a.id);
 
   if (opName === 'rm') {
-    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the five
+    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the six
     // model-registry files this design owns and clears exactly the eight settings
     // keys `modelEnvBlock` can write — nothing else in that file. NOT
     // `lane.json`, which `materialise` also writes: it is the account's, and the
     // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
     // registry or catalogue through their validators: `rm -f` semantics apply
-    // to each of the five files on its own, so a broken (unparseable)
+    // to each of the six files on its own, so a broken (unparseable)
     // registry or catalogue is still reaped rather than blocking the one verb
     // that exists to clean it up. `ccrc account remove` deliberately never
     // deletes under ~/.ccrc/models/ and names this verb as the remedy, so an
@@ -1004,7 +1430,7 @@ function main(argv) {
     // the settings step is skipped, and the answer says so.
     const removed = [];
     for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
-      windowsPath(a.id)]) {
+      windowsPath(a.id), advancePath(a.id)]) {
       try {
         unlinkSync(p);
         removed.push(p);
@@ -1221,7 +1647,31 @@ function main(argv) {
     if (w !== null) return refuse(1, w[0], w[1]);
     const mat = materialise(account, registry, catalogue, windowsOf(win));
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
+    // auto-advance spec §2.2: `init codex` seeds EVERY class's family as data, an empty class's included, so the
+    // automatic advance can later fill that class from its own family; other probes seed none and create none.
+    // An advance file already here was left by an earlier registry: `init` of every probe reuses it, its holds
+    // and history kept and the rest set as a fresh init of this probe sets it (`seedForInit`, D-5966).
+    const seeded = seedForInit(a.id, registry, a.probe === 'codex');
     const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue, win) };
+    let advanceNote = null;
+    if (seeded.err !== undefined) {
+      advanceNote = `${seeded.err[0]}: ${sayWhatChanged(seeded.err[1], `The class registry was created; ${seeded.reusing
+        ? 'the advance file an earlier registry left is as it was, its families not re-seeded. Delete that file, '
+          + 'and the next write re-creates it from the registry.'
+        : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`)}`;
+    } else if (seeded.unread !== undefined) {
+      advanceNote = `${seeded.unread[0]}: ${seeded.unread[1]} The class registry was created; the advance file an `
+        + 'earlier registry left could not be used, so it was left as it is: its families are not re-seeded. Fix it '
+        + 'by hand, or delete it (the next write re-creates it from the registry, with no holds and no history).';
+    } else if (seeded.reused === true) {
+      advanceNote = 'the lane already had an advance file, left by an earlier class registry, and it was reused '
+        + '(D-5966): each class keeps its hold and history, takes its family as a fresh init of '
+        + 'this probe gives it, and loses the old pending move and previous pin.';
+    }
+    if (advanceNote !== null) {
+      answer.advanceNote = advanceNote;
+      process.stderr.write(`${SELF}: ${advanceNote}\n`);
+    }
     if (CLASSES.every((c) => registry.classes[c] === null)) {
       answer.remedy = `probe "${a.probe}" ships no seed mapping — only you can say which of its `
         + `models belongs in which class. Build the lane with 'ccrc models ${a.id} discovery add `
@@ -1241,6 +1691,14 @@ function main(argv) {
   }
   if (opName === 'set-window' || opName === 'clear-window') {
     return windowOp(opName, a, account, registry, catalogue, win);
+  }
+  if (opName === 'advance-backfill') return backfillOp(a, account, registry);
+  if (opName === 'hold' || opName === 'release' || opName === 'revert') {
+    if (!CLASSES.includes(a.class)) {
+      return refuse(1, 'unknown-class', `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
+    }
+    return opName === 'revert' ? revertOp(a, account, registry, catalogue, win)
+      : holdOp(opName, a, account, registry, catalogue, win);
   }
   const next = JSON.parse(JSON.stringify(registry));
 
@@ -1447,11 +1905,21 @@ function main(argv) {
       'a lane needs at least one class among opus, sonnet and haiku: clearing this one would leave '
       + `account "${a.id}" with no model at all for an unqualified request.`);
   }
+  // auto-advance spec D21 (D-5188): a hand set-class writes its INTENT to the advance file
+  // BEFORE the registry is renamed, and records its move from that intent once the lane's files are written. One
+  // killed in between leaves the intent for the lane's next locked writer, and so does a materialise that fails
+  // below, the registry having moved. Neither half ever refuses for that file: a note becomes `advanceNote`.
+  const hand = opName === 'set-class' ? beginHandMove(a.id, registry, validated, a.class) : null;
   const w = writeRegistry(a.id, validated);
-  if (w !== null) return refuse(1, w[0], w[1]);
+  if (w !== null) return refuse(1, w[0], hand !== null && hand.note === null ? handIntentLeft(w[1]) : w[1]);
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
+  const advanceNote = hand === null ? null : (hand.note ?? settleHandMove(a.id, validated));
   const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win) };
+  if (advanceNote !== null) {
+    answer.advanceNote = advanceNote;
+    process.stderr.write(`${SELF}: ${advanceNote}\n`);
+  }
   // Keyed on the manifest having been WRITTEN — the same gate `laneManifest`
   // applies — so a lane with no lane.json, whose haiku nothing publishes from,
   // is never told its publication stopped.

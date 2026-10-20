@@ -29,7 +29,7 @@ import {
 import { accountLabel, accountPool } from '../lib/accounts';
 import { elapsedShort, elapsedWords, statusLabel } from '@ccrc/ui';
 import { restartWords, type RestartWords } from '../lib/restart';
-import { humanBytes } from '../screens/ArchiveScreen';
+import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
 import {

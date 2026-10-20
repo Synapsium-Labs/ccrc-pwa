@@ -107,12 +107,19 @@ const rig = async (o: RigOpts = {}) => {
   reconnect(cell, NODE_A);
   const state: FleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [...FULL_CAPS] };
   let onListing: Listing | null = null;
+  // The registry's listing is intercepted on the MEASURED reader, which the switches read (D-5969); the plain
+  // `readdir` derives from it, as `localIO`'s does, so either reader sees the same fault.
+  const readdirMeasured: FleetIO['readdirMeasured'] = async (p, timeoutMs, signal) => {
+    const fn = onListing;
+    if (p === reg && fn !== null && (await fn()) === 'null') return { ok: false, reason: 'unreadable' };
+    return base.io.readdirMeasured(p, timeoutMs, signal);
+  };
   const io: FleetIO = {
     ...base.io,
-    readdir: async (p: string, timeoutMs?: number, signal?: AbortSignal) => {
-      const fn = onListing;
-      if (p === reg && fn !== null && (await fn()) === 'null') return null;
-      return base.io.readdir(p, timeoutMs, signal);
+    readdirMeasured,
+    readdir: async (p, timeoutMs, signal) => {
+      const r = await readdirMeasured(p, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
   };
   const deps: Deps = {

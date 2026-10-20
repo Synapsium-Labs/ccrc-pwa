@@ -657,10 +657,12 @@ describe('Build 7 nouns', () => {
     expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
       .toContain('the same guard every other');
     expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
-    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
-    // seventh writer raises it rather than breaking it.
-    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
-      .toBeGreaterThanOrEqual(6);
+    // Six negative-form guards at 5e9f650d (2026-09-02), one per writer. Since
+    // D-5997 (#532) the guard is spelled in ONE place, `writeDeliveries`: the
+    // plain negative form and `markAcked`'s replay-ceiling exception. An EXACT
+    // count now, because a third spelling is a writer that bypassed the one
+    // writer — exactly what this pin exists to catch.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length).toBe(2);
   });
 
   // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
@@ -739,9 +741,10 @@ describe('Build 7 nouns', () => {
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
   // build (`dispatchRun`, `settleItems`, `closeRun`) lands as a `CoordStore`
   // method, and this is the scanner that says so.
-  describe('the coord ring — only store.ts, rundefs.ts and routes.ts hold the handle', () => {
+  describe('the coord ring — only store.ts, rundefsTx.ts and routes.ts hold the handle', () => {
     const coordDir = path.join(ccrcRoot, 'server/src/coord');
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefs.ts', 'routes.ts', 'db.ts', 'schema.ts']);
+    // D-5896: `rundefs.ts` left this set when its mail writes moved to `rundefsTx.ts`; `tx.ts` is `tx` itself.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
@@ -4813,6 +4816,26 @@ describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => 
   }
 });
 
+// D-5930: vaul's keyframes are retimed in one place, `ui/src/lib/motion.ts`. The Sheet once retimed them with
+// transition utilities a keyframe never reads, and the command palette carried a private recipe of its own; a
+// third surface spelling `animation-duration:` would be a third pace nothing keeps on the tokens. Every file type
+// under `ui/src`, comments included: a literal-absence pin, and CSS is where the next copy is likeliest.
+describe("vaul's motion is retimed once, in ui/src/lib/motion.ts (D-5930)", () => {
+  const UI_SRC = path.join(ccrcRoot, 'ui', 'src');
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    if (e.startsWith('__')) return [];
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css|mjs)$/.test(p) ? [p] : [];
+  });
+
+  it('no animation-duration: or animation-timing-function: literal exists in ui/src outside ui/src/lib/motion.ts', () => {
+    const files = walk(UI_SRC);
+    expect(files.map(rel), 'the scan reaches the primitives').toContain('ui/src/primitives/command-palette.tsx');
+    const holders = files.filter((f) => /animation-(?:duration|timing-function):/.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['ui/src/lib/motion.ts']);
+  });
+});
+
 // Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
 // are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
 // import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
@@ -5917,6 +5940,78 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
   });
 });
 
+// PATH IDENTITY W1a (spec 2026-10-12 §2.3): the registry id predicate and its cap are ONE L0 function and ONE L0
+// constant, and the collector's temp-root names derive from them, so the dash, dot and length clauses are written
+// once. APPENDED after the last describe, for the reason the blocks above state: `session-hook.test.ts`'s citation
+// audit cites this file by line. The wave 9 describe above still holds `isTmpRootId`'s one function definer and the
+// store's use of `TMPROOT_ID_MAX_CHARS`. Its three pattern helpers are block-local there, and hoisting them would move
+// this file's cited lines, so this block keeps its own copies under the same names.
+describe('path identity W1a: the registry id predicate is defined once, and isTmpRootId derives from it', () => {
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
+  const API = (): string => readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+  const TMP_DECL = 'export function isTmpRootId(id: unknown): id is string {';
+  /** `isTmpRootId`'s body: from the end of its declaration line to the first bare closing brace, or null. */
+  const tmpBody = (t: string): string | null => {
+    const at = t.indexOf(TMP_DECL);
+    if (at === -1) return null;
+    const end = t.indexOf('\n}', at);
+    return end === -1 ? null : t.slice(at + TMP_DECL.length, end);
+  };
+  /** The right-hand side of `TMPROOT_ID_MAX_CHARS`'s declaration, or null. */
+  const aliasRhs = (t: string): string | null => /^export const TMPROOT_ID_MAX_CHARS = (.*)$/m.exec(t)?.[1] ?? null;
+
+  it('CONTROL: the body slice sees a re-derived body and a derived one, and the alias reader sees a literal', () => {
+    const old = `${TMP_DECL}\n  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)\n`
+      + `    && !id.startsWith('.') && !id.startsWith('-');\n}\n`;
+    expect(tmpBody(old)).toMatch(/startsWith/);
+    expect(tmpBody(old)).not.toMatch(/\bisRegistryId\s*\(/);
+    const derived = `${TMP_DECL}\n  return isRegistryId(id);\n}\n`;
+    expect(tmpBody(derived)).toMatch(/\bisRegistryId\s*\(/);
+    expect(tmpBody(derived)).not.toMatch(/startsWith/);
+    expect(tmpBody('export const isTmpRootId = isRegistryId;\n')).toBeNull();
+    expect(aliasRhs('export const TMPROOT_ID_MAX_CHARS = 255;\n')).toBe('255;');
+    expect(DEF_VAL('REGISTRY_ID_MAX_CHARS').test('export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;')).toBe(false);
+  });
+
+  it('isRegistryId and REGISTRY_ID_MAX_CHARS are declared in shared/api.ts and nowhere else', () => {
+    expect(definers(DEF_FN('isRegistryId'))).toEqual(['shared/api.ts']);
+    expect(definers(DEF_VAL('isRegistryId'))).toEqual([]);
+    expect(definers(DEF_VAL('REGISTRY_ID_MAX_CHARS'))).toEqual(['shared/api.ts']);
+  });
+
+  it('isTmpRootId calls isRegistryId and tests no prefix itself', () => {
+    const body = tmpBody(API());
+    expect(body, 'isTmpRootId is not declared as a function in shared/api.ts').not.toBeNull();
+    expect(body).toMatch(/\bisRegistryId\s*\(/);
+    expect(body).not.toMatch(/startsWith/);
+    expect(body).not.toMatch(/\bisSessionIdShape\b/);
+  });
+
+  it('TMPROOT_ID_MAX_CHARS is the alias, never a second literal', () => {
+    expect(aliasRhs(API())).toBe('REGISTRY_ID_MAX_CHARS;');
+  });
+
+  // Wave 9's REDERIVED scan reads one code line at a time, so a copy of the old two-line body under a new name (the
+  // shape call on one line, the prefix tests on the next) passes it. This scan reads each file's whole code text, and
+  // `[^;{}]` keeps a match inside one statement, so a shape check and a prefix test in two statements are not a copy.
+  it('no file outside shared/api.ts re-derives it from the shape and a prefix test, even across lines', () => {
+    const REDERIVED_STMT = new RegExp(
+      String.raw`\bisSessionIdShape\s*\([^;{}]*?startsWith\(\s*['"][.-]['"]\s*\)`
+      + String.raw`|startsWith\(\s*['"][.-]['"]\s*\)[^;{}]*?\bisSessionIdShape\s*\(`);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => isSessionIdShape(id)\n  && !id.startsWith('-');\n"),
+      'CONTROL: a two-line copy').toBe(true);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => !id.startsWith('.')\n  && isSessionIdShape(id);\n"),
+      'CONTROL: a two-line copy, prefix first').toBe(true);
+    expect(REDERIVED_STMT.test("if (!isSessionIdShape(sid)) {\n  return null;\n}\nif (sid.startsWith('-')) {\n"),
+      'CONTROL: two statements are not a copy').toBe(false);
+    expect(REDERIVED_STMT.test(stallCodeText("  // isSessionIdShape(id) && !id.startsWith('-')\n")),
+      'CONTROL: a comment line is not code').toBe(false);
+    expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && REDERIVED_STMT.test(stallCode(f))).map(rel)).toEqual([]);
+  });
+});
+
 // CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.9: "Exactly one database writer and one journal append
 // adapter exist; only POST and automatic latch call the writer"). APPENDED, for the reason the blocks above state:
 // `session-hook.test.ts`'s citation audit cites this file by line. Settings now arms the temp-root collector beside the
@@ -6499,8 +6594,11 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    // Three since plan Task 16: the approval hold's snapshotted push (`tryHoldApproval`) is the third raise site.
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(3);
+    // Two since D-5925: the first raise, and `askHoldPayload`, the one builder of a held push. `hold()`, the approval
+    // hold (`tryHoldApproval`, plan Task 16) and the restart re-seed all build through it.
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(watch.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(watch.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
 
@@ -6654,12 +6752,14 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
     expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
   });
 
-  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+  // D-5925: the restart re-seed is the second reader, and it reads the deadline from the row's own mint time.
+  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', () => {
     expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
     expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
     expect(watch).toMatch(/return \{ until, askId,/);
+    expect(watch).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
   it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
@@ -6893,12 +6993,38 @@ describe('the children\'s deny list, its switch and the spawn record\'s readers 
     expect(decl('CHILD_DENY_RULES').test('expect(CHILD_DENY_RULES).toEqual(x);')).toBe(false);
   });
   it('each constant is declared once, in shared/api.ts', () => {
-    for (const c of ['CHILD_DENY_RULES', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
+    for (const c of ['CHILD_DENY_RULES', 'childDenyRules', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
       expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
     }
   });
   it('each reader is declared once, in server/src/registry.ts', () => {
     for (const c of ['denySettingsOf', 'childShellOf']) expect(holders(decl(c)), c).toEqual(['server/src/registry.ts']);
+  });
+});
+
+// D-5695 / D-5696 (plan docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w1-observe.md, CB1a's Frozen clause,
+// carried into CB1b). The Claude Code build grammar and the version-untrusted floor are defined once, in
+// `shared/claudeVersion.ts`. Comment lines are skipped (`stallCodeText`): a sentence ABOUT the floor is not a copy of
+// it. `liveStatusCoversDelegation` (`server/src/livestate.ts`) asks the lexicon rather than parsing and comparing on
+// its own.
+describe('the Claude Code version grammar and its floor are defined once, in shared/claudeVersion.ts (D-5695, D-5696)', () => {
+  const FLOOR = /(?<![\d.])2\.1\.277(?![\d.])/;
+  const BODY = String.raw`(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`;
+  it('CONTROL: the scan sees a code line and passes over a comment line', () => {
+    expect(FLOOR.test(stallCodeText("const F = '2.1.277';"))).toBe(true);
+    expect(FLOOR.test(stallCodeText(' * below 2.1.277 (unmeasured)'))).toBe(false);
+    expect(FLOOR.test('2.1.2770')).toBe(false);
+  });
+  it('the floor is defined once: one code line in the four roots spells 2.1.277', () => {
+    const holders = ALL.filter((f) => FLOOR.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+  });
+  it('the grammar\'s body is spelled once, and livestate parses no version of its own', () => {
+    const holders = ALL.filter((f) => stallCode(f).includes(BODY)).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+    const live = stallCode(path.join(ccrcRoot, 'server', 'src', 'livestate.ts'));
+    expect(live).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
+    expect(live).toMatch(/from '\.\.\/\.\.\/shared\/claudeVersion\.js'/);
   });
 });
 
@@ -7145,6 +7271,36 @@ describe("the account op's builder, wire vocabulary and spawn port each have one
   });
 });
 
+// D-5935 (plan docs/superpowers/plans/2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md, Task P3-6a).
+// Inserted here, above every open PR's hunk and below every line cited by number. Which workflow controls a Claude
+// Code version has is server-only knowledge: `WORKFLOW_CONTROLS`, its recipe and drive types and its slot list are
+// declared once, in server/src/workflows/controls.ts, so the table never reaches `shared/` (the PWA bundle) or the PWA
+// itself, where the PWA would start deciding what a version can do. The act names are the wire's, declared once in
+// shared/workflows.ts.
+describe('the workflow-control table is defined once, in server/src (D-5935)', () => {
+  const holders = (re: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), stallCode(f)] as const), ...planted].filter(([, t]) => re.test(t)).map(([p]) => p).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  const SERVER_ONLY = ['WORKFLOW_CONTROLS', 'WORKFLOW_CONTROL_SLOTS', 'WorkflowControlSlot', 'WorkflowControlDrive',
+    'WorkflowControlRecipe', 'WorkflowControlTable'] as const;
+  it('CONTROL: the pattern sees a declaration and passes over a use; a copy in shared/ is seen beside the original', () => {
+    expect(decl('WORKFLOW_CONTROLS').test('export const WORKFLOW_CONTROLS: WorkflowControlTable = {};')).toBe(true);
+    expect(decl('WorkflowControlDrive').test('export type WorkflowControlDrive =')).toBe(true);
+    expect(decl('WORKFLOW_CONTROLS').test('const recipe = WORKFLOW_CONTROLS[version];')).toBe(false);
+    expect(holders(decl('WORKFLOW_CONTROLS'), [['shared/workflows.ts', 'export const WORKFLOW_CONTROLS = {};']]))
+      .toEqual(['server/src/workflows/controls.ts', 'shared/workflows.ts']);
+  });
+  it('the table and its types are declared once, in server/src/workflows/controls.ts', () => {
+    for (const c of SERVER_ONLY) expect(holders(decl(c)), c).toEqual(['server/src/workflows/controls.ts']);
+  });
+  it('WorkflowControlAct is declared once, in shared/workflows.ts', () => {
+    expect(holders(decl('WorkflowControlAct'))).toEqual(['shared/workflows.ts']);
+  });
+  it('nothing under shared/ or pwa/ names the table', () => {
+    expect(holders(/\bWORKFLOW_CONTROLS\b/).filter((p) => !p.startsWith('server/src/'))).toEqual([]);
+  });
+});
+
 // Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
 // one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
 // is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after
@@ -7226,4 +7382,437 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
       expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
     });
   }
+});
+
+// ── auto-advance spec §2.1, D21: the advance file has one writer and one clock ─────────────────────────────────
+describe('the advance file and its clock, each spelled once (auto-advance spec §2.1, D21)', () => {
+  const walkSrc = (dir: string): string[] => {
+    const out: string[] = [];
+    if (!existsSync(dir)) return out;
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__') || e === 'node_modules' || e === 'dist') continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...walkSrc(p)); continue; }
+      if (/\.(tsx?|mjs|mts)$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  /** Every shipped source a second spelling could hide in: the four TypeScript roots, `deploy/` and `shared/`
+   *  (their `.mjs`), and every bash tool, comments stripped. */
+  const SHIPPED = [...new Set([
+    ...['shared', 'deploy', 'server/src', 'pwa/src', 'agent/src'].flatMap((d) => walkSrc(path.join(ccrcRoot, d))),
+    ...BASH,
+  ])];
+  const textOf = (f: string): string => (BASH.includes(f) ? codeLines(f).join('\n') : readFileSync(f, 'utf8'));
+  const OP = path.join(ccrcRoot, 'deploy', 'models-op.mjs');
+  /** `deploy/models-op.mjs` cut at each top-level `function` line: name → that function's text, to the next. */
+  const functionsOf = (src: string): Map<string, string> => {
+    const starts = [...src.matchAll(/^(?:export\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+      .map((m) => ({ name: m[1]!, at: m.index! }));
+    return new Map(starts.map((s, i) => [s.name, src.slice(s.at, i + 1 < starts.length ? starts[i + 1]!.at : src.length)]));
+  };
+
+  it('the corpus is real', () => {
+    const names = SHIPPED.map(rel);
+    for (const f of ['deploy/models-op.mjs', 'shared/model-advance.mjs', 'ccd/ccrc']) expect(names).toContain(f);
+  });
+
+  it('`.advance.json` is spelled by deploy/models-op.mjs alone, on advancePath\'s one line, and by no bash tool', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('.advance.json')).map(rel).sort()).toEqual(['deploy/models-op.mjs']);
+    expect(readFileSync(OP, 'utf8').split('\n').filter((l) => l.includes('.advance.json')))
+      .toEqual(['const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);']);
+  });
+
+  it('its bytes come from one place: writeAdvance writes through writeJsonFile (D-5783), and nothing else writes the file or spells its bytes', () => {
+    const src = readFileSync(OP, 'utf8');
+    const fns = functionsOf(src);
+    // The one writer: the only function that names both the path and the JSON write is writeAdvance, and it hands
+    // that write the path with its own error word.
+    const writesIt = (body: string): boolean => /\badvancePath\(/.test(body) && /\bwriteJsonFile\(/.test(body);
+    expect([...fns].filter(([, body]) => writesIt(body)).map(([n]) => n)).toEqual(['writeAdvance']);
+    expect(fns.get('writeAdvance')).toMatch(/\bwriteJsonFile\(advancePath\(id\), \w+, 'advance-unwritable'\)/);
+    // serializeAdvance spells writeJsonFile's bytes for readers and tests (model-advance-file.test.ts pins that the
+    // two agree), so a shipped call of it could only be a second writer's.
+    const CALL = /(?<!function )\bserializeAdvance\(/;
+    expect(SHIPPED.filter((f) => CALL.test(textOf(f))).map(rel)).toEqual([]);
+    expect(src.split('\n')
+      .filter((l) => /\badvancePath\(/.test(l) && /\b(?:writeFileSync|renameSync|appendFileSync)\(/.test(l))).toEqual([]);
+    // Every call of advancePath in the file, pinned whole, the `.advance.json` case's idiom: a writer that holds the
+    // path in a variable, or an arrow const after writeAdvance (which the function cut above folds into it), adds a
+    // line here. readAdvance's, writeAdvance's and rm's reap (Task 5).
+    expect(src.split('\n').filter((l) => /\badvancePath\(/.test(l)).map((l) => l.trim())).toEqual([
+      'const p = advancePath(id);',
+      "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+      'windowsPath(a.id), advancePath(a.id)]) {',
+    ]);
+  });
+
+  it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel)).toEqual(['deploy/models-op.mjs']);
+    const lines = readFileSync(OP, 'utf8').split('\n');
+    expect(lines.filter((l) => l.includes("process.env['CCRC_MODELS_NOW']"))).toHaveLength(1);
+    expect(lines.filter((l) => /\bnew Date\(|\bDate\.now\(/.test(l)).map((l) => l.trim())).toEqual([
+      "const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z');",
+      'raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };',
+    ]);
+  });
+
+  it("REASON_MAX is assigned once, in shared/model-advance.mjs: every other source that caps a reason imports it", () => {
+    // The advance reason's cappers live in deploy/, shared/, the models server code, the PWA and the bash tools.
+    // server/src/coord/briefwatch.ts holds its own, unrelated REASON_MAX (a wave brief's word cap), so the
+    // coordination code is outside this census rather than a second spelling of this one.
+    const ASSIGN = /\bREASON_MAX\s*=(?!=)/;
+    const inScope = (f: string): boolean => BASH.includes(f) || /^(?:deploy|shared|server\/src\/models|pwa\/src)\//.test(rel(f));
+    expect(SHIPPED.filter((f) => inScope(f) && ASSIGN.test(textOf(f))).map(rel)).toEqual(['shared/model-advance.mjs']);
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'model-advance.mjs'), 'utf8')).toContain('export const REASON_MAX = 200;');
+  });
+});
+
+// ── auto-advance spec D21: the lane-files lock, and the one list of ops that run under it ──────────────────────
+describe('the lane-files lock: one path outside ~/.ccrc/models, and one list of writing ops (auto-advance spec D21)', () => {
+  it('the lock path is spelled once, in ccd/ccrc, on _models_lock_path\'s one line, and by no node or TypeScript source', () => {
+    expect(holdersOf('.ccrc/locks')).toEqual(['ccd/ccrc']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccrc')).filter((l) => l.includes('.ccrc/locks')))
+      .toEqual(['_models_lock_path() { printf \'%s\' "$HOME/.ccrc/locks/models-$1.lock"; }']);
+    const mjs = (d: string): string[] => readdirSync(path.join(ccrcRoot, d)).filter((f) => f.endsWith('.mjs'))
+      .map((f) => path.join(ccrcRoot, d, f));
+    expect([...ALL, ...mjs('deploy'), ...mjs('shared')].filter((f) => readFileSync(f, 'utf8').includes('.ccrc/locks')).map(rel))
+      .toEqual([]);
+  });
+
+  it('MODELS_WRITE_OPS is exactly the OPS rows marked writes: true, in both directions, and every row says which', () => {
+    const bash = /^MODELS_WRITE_OPS="([^"]*)"$/m.exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(bash, 'ccd/ccrc has no file-scope MODELS_WRITE_OPS').toBeTruthy();
+    const op = readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8');
+    const start = op.indexOf('const OPS = {');
+    expect(start).toBeGreaterThan(0);
+    const block = op.slice(start, op.indexOf('\n};\n', start));
+    const rows = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{([^\n]*)\},$/gm)]
+      .map((m) => ({ op: m[1]!, writes: /\bwrites: (true|false)\b/.exec(m[2]!)?.[1] ?? null }));
+    expect(rows.length, 'the OPS scan found too few rows to be reading the table').toBeGreaterThanOrEqual(12);
+    // Every row is ONE line, so the scan above sees it: a row written over several lines would be invisible to it in
+    // both directions, and a new writing op left out of MODELS_WRITE_OPS would run unlocked with this case green.
+    const starts = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{/gm)].map((m) => m[1]!);
+    expect(starts, 'an OPS row written over several lines: write each row on one line').toEqual(rows.map((r) => r.op));
+    expect(rows.filter((r) => r.writes === null).map((r) => r.op), 'an OPS row with no writes flag').toEqual([]);
+    expect(bash![1]!.split(' ').filter(Boolean).sort())
+      .toEqual(rows.filter((r) => r.writes === 'true').map((r) => r.op).sort());
+  });
+});
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
+// the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
+// entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
+// handler or the PWA would be a second answer to "what kind of lane is this", free to disagree with the first.
+describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('rosterKindOf').test('export function rosterKindOf(entry: AccountDef)')).toBe(true);
+    expect(decl('rosterKindOf').test('...rosterKindOf(a),')).toBe(false);
+  });
+  it('rosterKindOf and its vocabulary are declared once, in shared/roster.ts', () => {
+    for (const c of ['rosterKindOf', 'RosterKind', 'RosterKindWire']) {
+      expect(holders(decl(c)), c).toEqual(['shared/roster.ts']);
+    }
+  });
+  it("it is called by the accounts handler alone, which is the RosterWire builder", () => {
+    expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
+  });
+});
+
+// D-5849 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0b; ARCH-40 (#775); spec 2026-10-19
+// §2.1 rule (f), §5.1 rule 3). APPENDED, because this file is cited by line. One writer per fact, for the two switches
+// whose writer set is ALREADY at its target, so each set may only shrink (a pin on a fact not yet at target would be a
+// freeze; those land with the series that reaches it, the feed archive's with C1e).
+//   - `reclaim-paused`: one writer, ccd's `reclaim-pause` verb (`cmd_reclaim_pause` in `ccd/ccd`), which the server
+//     reaches only through its CCD_ARGV row. No TS or .mjs file writes it.
+//   - `mail-disabled`: hand-only ("removable only by a human at a terminal", `ccd/ccrc`). Nothing in the tree writes it.
+// The O13 describe's `writes` is block-local to that describe, so this one defines its own classifiers, and they also
+// follow a shell variable that holds the path (`local marker="$REG/reclaim-paused"` … `touch -- "$marker"`), which is
+// how the one writer spells it. The corpus is bash (ccd/, deploy/, install.sh), TS under ROOTS, .mjs, and every tracked
+// .py; the tree's .mts files are all .d.mts declarations. TS/.mjs and Python follow a `const|let|var` (Python: a plain
+// assignment) whose initialiser builds the path, per FILE, and count a spawn/exec of a write verb naming it. A bash
+// writer is named `file:function` (`file:(top level)` outside a function); a TS or Python writer by its file. KNOWN
+// WIDTH: a name assembled from pieces, a bash variable assigned in one function and written in another, a path passed
+// through a parameter or object field, and an fs call split over lines are not seen.
+// The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
+import { markerDefinitions } from './consolidationCensus.js';
+describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
+  /** The functions of one bash text that write `name`'s path, directly or through a variable assigned from it. */
+  const bashWriters = (text: string, name: string): string[] => {
+    const out = new Set<string>();
+    let fn = '(top level)';
+    let vars: string[] = [];
+    for (const raw of text.split('\n')) {
+      const open = /^([A-Za-z_][\w-]*)\s*\(\)\s*\{/.exec(raw);
+      if (open) { fn = open[1]!; vars = []; }
+      if (isBashComment(raw)) continue;
+      const l = raw.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
+      for (const m of l.matchAll(new RegExp(`\\b([A-Za-z_]\\w*)=[^\\s;]*${esc(name)}\\b`, 'g'))) vars.push(m[1]!);
+      const target = [`[^\\s<>|;&]*${esc(name)}\\b`, ...vars.map((v) => `\\$\\{?${v}\\}?(?![\\w])`)].join('|');
+      if (new RegExp(`>{1,2}\\s*["']?(?:${target})`).test(l)
+        || new RegExp(`(?:^|[\\s;&|({])${WRITE_VERB}\\s[^;&|]*?["']?(?:${target})`).test(l)) out.add(fn);
+      if (/^}\s*$/.test(raw)) { fn = '(top level)'; vars = []; }
+    }
+    return [...out];
+  };
+  /** The alternation that names `name`'s path: the literal, or one of `ids` (constants and variables holding it). */
+  const naming = (name: string, ids: readonly string[]): string =>
+    [esc(name), ...ids.map((c) => `\\b${esc(c)}\\b`)].join('|');
+  /** A TS or .mjs code line that writes `name`'s path: a file-changing fs call, or a spawn/exec of a write verb, naming
+   *  the literal or one of `consts`. */
+  const tsWrites = (line: string, name: string, consts: readonly string[]): boolean =>
+    new RegExp(`\\b(?:writeFile|appendFile|createWriteStream|rename|copyFile|symlink|link|truncate|utimes|lutimes|open|mkdir|rm|unlink|cp)(?:Sync)?\\s*\\([^;]*(?:${
+      naming(name, consts)})`).test(line)
+    || new RegExp(`\\b(?:execFile|spawn|exec)(?:Sync)?\\s*\\(\\s*[\`'"]${WRITE_VERB}\\b[^;]*(?:${naming(name, consts)})`).test(line);
+  /** The ids a text binds to `name`'s PATH, followed to a fixed point (`const m = join(reg, X)`, then `const q = m`).
+   *  `decl` captures the id and the initialiser of one line; an initialiser binds only when it names the path AND builds
+   *  one (`pathy`: a join, a string or template, a concatenation) or is a bare alias, so `const r = f(names.includes(X))`
+   *  does not bind `r`. Per FILE: two functions' same-named locals merge. */
+  const boundIds = (lines: readonly string[], name: string, seed: readonly string[], decl: RegExp,
+    pathy: RegExp): string[] => {
+    const ids = [...seed];
+    for (let grew = true; grew;) {
+      grew = false;
+      const named = new RegExp(naming(name, ids));
+      const alias = new RegExp(`^\\s*(?:${[esc(name), ...ids.map(esc)].join('|')})\\s*;?\\s*$`);
+      for (const l of lines) {
+        const m = decl.exec(l);
+        if (m && !ids.includes(m[1]!) && named.test(m[2]!) && (pathy.test(m[2]!) || alias.test(m[2]!))) {
+          ids.push(m[1]!); grew = true;
+        }
+      }
+    }
+    return ids;
+  };
+  /** A TS or .mjs FILE's code writes `name`'s path, directly or through a `const|let|var` bound to it (D-5849). */
+  const tsFileWrites = (text: string, name: string, consts: readonly string[]): boolean => {
+    const lines = text.split('\n');
+    const ids = boundIds(lines, name, consts, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=(?![=>])(.*)/,
+      /^\s*(?:(?:await\s+)?(?:path\.)?(?:join|resolve)\s*\(|[`'"]|[\w$.]+\s*\+)/);
+    return lines.some((l) => tsWrites(l, name, ids));
+  };
+  /** A Python FILE's code writes `name`'s path (an `open` for writing, a pathlib/os/shutil change, a write verb in
+   *  argv), directly or through a name assigned from it (D-5849). */
+  const pyFileWrites = (text: string, name: string): boolean => {
+    const lines = text.split('\n').filter((l) => !l.trim().startsWith('#'));
+    const target = new RegExp(naming(name, boundIds(lines, name, [], /^\s*([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)(.*)/,
+      /^\s*(?:os\.path\.(?:join|abspath|realpath)\s*\(|(?:pathlib\.)?Path\s*\(|[rbf]?['"]|\(|[\w.]+\s*[/+])/)));
+    const write = new RegExp([
+      `\\bopen\\s*\\(.*,\\s*(?:mode\\s*=\\s*)?['"][a-z]*[wax+]`,
+      '\\.(?:touch|write_text|write_bytes|mkdir|unlink|rename|replace|symlink_to|hardlink_to|rmdir)\\s*\\(',
+      '\\bos\\.(?:replace|renames?|remove|unlink|mknod|symlink|link|mkdirs?|makedirs|rmdir|truncate)\\s*\\(',
+      '\\bshutil\\.(?:copy\\w*|move|rmtree)\\s*\\(',
+      `['"]${WRITE_VERB}['"]`,
+    ].join('|'));
+    return lines.some((l) => target.test(l) && write.test(l));
+  };
+  /** Every tracked Python file (none is a bash, TS or .mjs corpus member). A failed `git ls-files` (no checkout) throws
+   *  rather than scanning nothing, and the CONTROL row holds the corpus non-empty. */
+  const pyFiles = (): string[] => {
+    const r = spawnSync('git', ['ls-files', '-z', '*.py'], { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files *.py exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\0').filter(Boolean).map((f) => path.join(ccrcRoot, f));
+  };
+  /** The constants that hold `name` (`const X = 'name'`), from the census module's own query. */
+  const constsOf = (name: string): string[] =>
+    markerDefinitions(name).map((s) => /\bconst\s+([A-Za-z_$][\w$]*)/.exec(s.text)![1]!);
+  const writersOf = (name: string): string[] => {
+    const out: string[] = [];
+    for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${rel(f)}:${fn}`);
+    const consts = constsOf(name);
+    for (const f of [...ALL, ...ALL_MJS]) if (tsFileWrites(stallCode(f), name, consts)) out.push(rel(f));
+    for (const f of pyFiles()) if (pyFileWrites(readFileSync(f, 'utf8'), name)) out.push(rel(f));
+    return out.sort();
+  };
+
+  it('CONTROL (fixture): the classifiers see the verb, a second writer, a write through a variable, and pass over a read', () => {
+    const verb = [
+      'cmd_reclaim_pause() {',
+      '  local marker="$REG/reclaim-paused"',
+      '  touch -- "$marker" || die "could not raise it"',
+      '}',
+      'cmd_reap() {',
+      '  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \\',
+      '    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }',
+      '  # touch "$REG/reclaim-paused" is the operator\'s, not this function\'s',
+      '}',
+    ].join('\n');
+    expect(bashWriters(verb, 'reclaim-paused')).toEqual(['cmd_reclaim_pause']);
+    expect(bashWriters(`${verb}\ncmd_other() {\n  : > "$REG/reclaim-paused"\n}`, 'reclaim-paused'))
+      .toEqual(['cmd_reclaim_pause', 'cmd_other']);
+    expect(bashWriters('cmd_x() {\n  local m="$REG/reclaim-paused"\n  rm -f -- "$m"\n}', 'reclaim-paused')).toEqual(['cmd_x']);
+    expect(bashWriters('cmd_y() {\n  touch "$REG/mail-disabled"\n}', 'mail-disabled')).toEqual(['cmd_y']);
+    expect(bashWriters('cmd_z() {\n  [[ -e "$REG/mail-disabled" ]] && return 0\n}', 'mail-disabled')).toEqual([]);
+    expect(bashWriters('cmd_q() {\n  : > "$REG"/reclaim-paused\n}', 'reclaim-paused')).toEqual(['cmd_q']);
+    expect(bashWriters('cmd_r() {\n  : >> "${REG}"/mail-disabled\n}', 'mail-disabled')).toEqual(['cmd_r']);
+    expect(bashWriters('cmd_t() {\n  local m="$REG"/reclaim-paused\n  rm -f -- "$m"\n}', 'reclaim-paused')).toEqual(['cmd_t']);
+    expect(bashWriters('cmd_s() {\n  [[ -e "$REG"/mail-disabled ]] && return 0\n}', 'mail-disabled')).toEqual([]);
+    expect(tsWrites("writeFileSync(join(reg, 'reclaim-paused'), '');", 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
+    expect(tsWrites('await writeFile(path.join(reg, RECLAIM_PAUSE_MARKER), "");', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
+    expect(tsWrites('if (names.includes(RECLAIM_PAUSE_MARKER)) return;', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(false);
+    const C = ['RECLAIM_PAUSE_MARKER'];
+    expect(tsFileWrites("function raise(reg) {\n  const marker = join(reg, RECLAIM_PAUSE_MARKER);\n  writeFileSync(marker, '');\n}",
+      'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("let p: string = path.join(reg, 'reclaim-paused');\nconst q = p;\nawait rm(q, { force: true });",
+      'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("execFileSync('touch', [join(reg, RECLAIM_PAUSE_MARKER)]);", 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("spawnSync(`rm`, ['-f', m]);\nconst m = join(reg, RECLAIM_PAUSE_MARKER);", 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("const p = join(reg, RECLAIM_PAUSE_MARKER);\nif (existsSync(p)) return;\nwriteFileSync(other, '');",
+      'reclaim-paused', C)).toBe(false);
+    expect(tsFileWrites("execFileSync('ls', [join(reg, RECLAIM_PAUSE_MARKER)]);", 'reclaim-paused', C)).toBe(false);
+    expect(tsFileWrites('createWriteStream(join(reg, RECLAIM_PAUSE_MARKER)).end();', 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("const m = join(reg, RECLAIM_PAUSE_MARKER);\nawait utimes(m, now, now);", 'reclaim-paused', C)).toBe(true);
+    expect(pyFiles().length, 'the Python corpus is empty: git ls-files found no .py').toBeGreaterThan(0);
+    expect(pyFileWrites("with open(os.path.join(reg, 'mail-disabled'), 'w') as f:\n    pass", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("m = os.path.join(reg, 'mail-disabled')\nos.remove(m)", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("(Path(reg) / 'mail-disabled').touch()", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("subprocess.run(['touch', os.path.join(reg, 'mail-disabled')])", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("m = os.path.join(reg, 'mail-disabled')\nif os.path.exists(m):\n    open(m).read()", 'mail-disabled'))
+      .toBe(false);
+    expect(pyFileWrites("# open(os.path.join(reg, 'mail-disabled'), 'w') is the operator's", 'mail-disabled')).toBe(false);
+    expect(constsOf('reclaim-paused')).toEqual(['RECLAIM_PAUSE_MARKER']);
+    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER', 'MAIL_DISABLED_MARKER']);
+  });
+
+  it("reclaim-paused: one writer, ccd's reclaim-pause verb", () => {
+    expect(writersOf('reclaim-paused')).toEqual(['ccd/ccd:cmd_reclaim_pause']);
+  });
+
+  it('reclaim-paused: the server reaches the verb only through its CCD_ARGV row', () => {
+    const verb = /(['"])reclaim-pause\1/;
+    const holders = ALL.filter((f) => rel(f).startsWith('server/src/') && verb.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['server/src/ccdargv.ts']);
+    const lines = stallCode(path.join(ccrcRoot, 'server/src/ccdargv.ts')).split('\n');
+    const at = lines.findIndex((l) => /^export const CCD_ARGV\s*=\s*\{/.test(l));
+    const end = lines.findIndex((l, i) => i > at && /^\}/.test(l));
+    expect(at, 'ccdargv.ts declares no CCD_ARGV').toBeGreaterThan(-1);
+    const uses = lines.flatMap((l, i) => (verb.test(l) ? [i] : []));
+    expect(uses.length).toBe(1);
+    expect(uses[0]!, 'the reclaim-pause argv is spelled outside CCD_ARGV').toBeGreaterThan(at);
+    expect(uses[0]!).toBeLessThan(end);
+  });
+
+  it('mail-disabled: hand-only, no writer in the tree', () => {
+    expect(writersOf('mail-disabled')).toEqual([]);
+  });
+
+  // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
+  // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
+  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
+  // `server/` any TS parser package counts (the 7.x compiler's `typescript/unstable/*` among them); elsewhere only the
+  // alias does, because the PWA's tests use the PWA's own TypeScript 6. KNOWN WIDTH: a `createRequire` require and a
+  // specifier built at run time are not seen.
+  const SCAN_PARSER = 'typescript-api';
+  const TS_PARSERS = ['typescript', SCAN_PARSER, 'oxc-parser', '@typescript-eslint/parser',
+    '@typescript-eslint/typescript-estree', '@babel/parser', '@swc/core', 'acorn', 'esprima'];
+  const importsPkg = (code: string, pkgs: readonly string[]): boolean =>
+    new RegExp(`(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)['"\`](?:${pkgs.map(esc).join('|')
+    })(?:/[^'"\`]*)?['"\`]`).test(code);
+  const parserImporters = (): string[] => {
+    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+      '*.ts', '*.tsx', '*.mts', '*.cts', '*.js', '*.jsx', '*.mjs', '*.cjs'], { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return [...new Set(r.stdout.split('\0').filter((f) => f && !/\.d\.[mc]?ts$/.test(f)))]
+      .filter((f) => existsSync(path.join(ccrcRoot, f)))
+      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')),
+        f.startsWith('server/') ? TS_PARSERS : [SCAN_PARSER]))
+      .sort();
+  };
+
+  it('CONTROL: the parser-import pattern sees each import form and passes over a comment and a longer name', () => {
+    const sees = (code: string): boolean => importsPkg(stallCodeText(code), TS_PARSERS);
+    // Each specifier is quoted by `q`, so this file's own text names none and stays out of the importer list.
+    const q = (s: string, c = "'"): string => `${c}${s}${c}`;
+    expect(sees(`import ts from ${q('typescript-api')};`)).toBe(true);
+    expect(sees(`import {\n  createSourceFile,\n} from ${q('typescript', '"')};`)).toBe(true);
+    expect(sees(`const m = await import(${q('typescript/unstable/ast')});`)).toBe(true);
+    expect(sees(`const p = require(${q('oxc-parser')});`)).toBe(true);
+    expect(sees(`export { parse } from ${q('@babel/parser')};`)).toBe(true);
+    expect(sees(`// import ts from ${q('typescript-api')};\nconst x = 1;`)).toBe(false);
+    expect(sees(`import x from ${q('typescript-api-extra')};`)).toBe(false);
+  });
+
+  it('only scan/parse.ts imports a TS parser (D-5853)', () => {
+    expect(parserImporters()).toEqual(['server/test/scan/parse.ts']);
+  });
+
+  it('the parser is a dev-only dependency pinned exactly, and the lockfile resolves that version (D-5853)', () => {
+    const pkg = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const spec = pkg.devDependencies?.[SCAN_PARSER] ?? '';
+    expect(spec).toMatch(/^npm:typescript@6\.\d+\.\d+$/);
+    expect(pkg.dependencies?.[SCAN_PARSER]).toBeUndefined();
+    const lock = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; dev?: boolean; devDependencies?: Record<string, string> }> };
+    expect(lock.packages['']!.devDependencies?.[SCAN_PARSER]).toBe(spec);
+    expect(lock.packages[`node_modules/${SCAN_PARSER}`]).toMatchObject({ version: spec.split('@').pop(), dev: true });
+  });
+});
+
+// D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
+// brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
+// `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
+// brief and the pass that looks for it cannot drift apart. Code lines only (`stallCode`).
+describe('the brief watch is defined once (D-5841)', () => {
+  const holders = (re: RegExp): string[] =>
+    ALL.filter((f) => rel(f).startsWith('server/src/') && re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+  const HOME = 'server/src/coord/briefwatch.ts';
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(defines('briefStep').test('export function briefStep(b: B, now: number): BriefStep {')).toBe(true);
+    expect(stallCodeText("// the subject is 'wave-brief'\nconst x = 1;")).not.toMatch(/'wave-brief'/);
+  });
+
+  it('the two timers are 5 and 10 minutes, defined in briefwatch.ts alone', () => {
+    const src = stallCode(path.join(ccrcRoot, HOME));
+    expect(src).toMatch(/export const BRIEF_RETRY_MS = 5 \* 60_000;/);
+    expect(src).toMatch(/export const BRIEF_NOTICE_MS = 10 \* 60_000;/);
+    for (const name of ['BRIEF_RETRY_MS', 'BRIEF_NOTICE_MS', 'BRIEF_RETRY_DETAIL', 'BRIEF_NOTICE_DETAIL',
+      'WAVE_BRIEF_SUBJECT', 'briefStep', 'briefNotTakenSubject', 'briefNotTakenTag']) {
+      expect(holders(defines(name)), name).toEqual([HOME]);
+    }
+  });
+
+  it("the wave brief's subject is spelled on one source code line", () => {
+    expect(holders(/['"]wave-brief['"]/)).toEqual([HOME]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'))).toMatch(/subject: WAVE_BRIEF_SUBJECT\b/);
+  });
+});
+
+// D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A10). APPENDED. The credential shapes have
+// one home, `CREDENTIAL_MASKS` in `shared/api.ts`, beside the mask's two words; the egress mask has one home,
+// `server/src/accounts/mask.ts`; and `redact.ts`'s approval-row redactor reads its generic `sk-` and JWT shapes from
+// the registry rather than keeping a second copy that could drift from the egress mask's.
+describe('the credential shapes and the egress mask each have one home (D-5513)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CREDENTIAL_MASKS').test('export const CREDENTIAL_MASKS = [')).toBe(true);
+    expect(decl('CREDENTIAL_MASKS').test("import { CREDENTIAL_MASKS } from '../../../shared/api.js';")).toBe(false);
+  });
+  it('the shapes and the mask words are declared once, in shared/api.ts', () => {
+    for (const c of ['CREDENTIAL_MASKS', 'CredentialMask', 'CredentialMaskId', 'credentialMaskSource', 'SECRET_MASK',
+      'SECRET_MASK_TOO_LARGE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the mask lives in its one file', () => {
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+      'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
+    }
+  });
+  it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
+    expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
+    expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
 });

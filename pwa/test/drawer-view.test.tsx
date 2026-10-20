@@ -582,6 +582,31 @@ describe('the terminal takes the keyboard when its socket opens', () => {
       view.unmount();
     }
   });
+
+  // D-5931: the Sheet owns focus on open, and moves it on that open alone. Opening the drawer puts the focus on its
+  // panel; xterm's own `term.focus()` on the socket's open takes it from there, inside the trap, and the Sheet never
+  // takes it back on a later render.
+  it('opening the drawer: the panel has the focus, then xterm\'s textarea once the fake socket opens, and the Sheet never takes it back', async () => {
+    const t = fakeTerm();
+    const view = render(
+      <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => memStore()} />,
+    );
+    const panel = screen.getByRole('dialog');
+    expect(document.activeElement, 'the panel did not take the focus on open').toBe(panel);
+    const ws = FakeSocket.instances.at(-1)!;
+    act(() => ws.onopen?.());
+    expect(document.activeElement).toBe(t.textarea());
+    // Later renders while open: the socket's state, a chip flip, a resize.
+    fireEvent.click(viewChipEl());
+    resizeWindow();
+    await frame();
+    view.rerender(
+      <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => memStore()} />,
+    );
+    await frame();
+    expect(document.activeElement, 'the Sheet took the focus back from the terminal').toBe(t.textarea());
+    expect(panel.contains(document.activeElement)).toBe(true);
+  });
 });
 
 describe('the chip', () => {

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
+import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
@@ -37,7 +38,8 @@ import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type Sw
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { STALL_QUIET_MS } from './stall.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
@@ -62,7 +64,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -239,6 +241,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
     // distinction it received (`route: <why>[ <field>]` or `slug: <why>`,
     // present only for those refusals), so its PRESENCE rides the wire exactly as
@@ -316,6 +320,8 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: every close but the abandon refuses it, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
@@ -634,6 +640,7 @@ export function registerCoordRoutes(
       return { ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
@@ -844,6 +851,7 @@ export function registerCoordRoutes(
       return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
@@ -1074,6 +1082,7 @@ export function registerCoordRoutes(
       return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
@@ -1207,7 +1216,8 @@ export function registerCoordRoutes(
     const mail = program !== null
       ? coord.mailForProgram(program, { limit, all })
       : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
-    return reply.code(200).send({ ok: true, mail });
+    // Session-derived text, masked before it leaves (D-5513, accounts plan Task A10).
+    return reply.code(200).send({ ok: true, mail: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(mail) });
   });
 
   /**
@@ -1239,7 +1249,10 @@ export function registerCoordRoutes(
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
-    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
+    return reply.code(200).send({
+      ok: true, id: row.id, toId: row.toId, state: row.state,
+      envelope: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(row.envelope),   // masked before it leaves (D-5513)
+    });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -1276,11 +1289,14 @@ export function registerCoordRoutes(
    *  why `deferred` is left to rule 3's child gate, which re-reads. */
   const sessionMarkOf = async (sessionId: string): Promise<SessionMarkRead> => {
     const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-    if (read.found) {
+    if (read.kind === 'found') {
       const k = read.record.child.kind;
       return k === 'child' ? { kind: 'child' } : k === 'none' ? { kind: 'root' } : { kind: 'deferred' };
     }
-    if (read.reason === 'unlistable') return { kind: 'deferred' };
+    // `bad-id` (path identity, spec §2.3) is unmeasured, never absent, so it is
+    // left to rule 3's child gate like `unlistable`. The open gate's `sessionId`
+    // check already refuses such an id before this read.
+    if (read.kind === 'unlistable' || read.kind === 'bad-id') return { kind: 'deferred' };
     // `absent` is two populations (`readSessionRecord`'s docstring): no
     // `.uuid` listed, and a listed row that could not be built. Only the first
     // is row-less; a listed `.child` is the child gate's `spent-unmeasured`.
@@ -1389,13 +1405,15 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     // THE PRECONDITIONS ARE DECIDED IN L1 (D-5384, audit ticket ARCH-21):
-    // `coord/openRun.ts`'s `openRunPreconditions` runs the body shape, the
-    // review arm (D-2799), the slug and home shaping (D-2349), F1's
-    // `project-mismatch`, F2's home verdict and §12's `claimant-is-a-worker`,
-    // in that order, before any row exists — so a refusal leaves no `planned`
-    // orphan and places no hold. Every read it makes is a synchronous DB read
-    // handed in here, called only by the gate that needs it. This route answers
-    // its refusal and acts on its plan; it decides none of it.
+    // `coord/openRun.ts`'s `openRunPreconditions` runs every precondition —
+    // the body shape, path identity's three id checks (spec §2.3), the review
+    // arm (D-2799), the slug and home shaping (D-2349), D-5298's attribution
+    // and registry gates, F1's `project-mismatch`, F2's home verdict and §12's
+    // `claimant-is-a-worker` — in its gate table's order, before any row
+    // exists, so a refusal leaves no `planned` orphan and places no hold.
+    // Every read it makes is handed in here, called only by the gate that
+    // needs it. This route answers its refusal and acts on its plan; it
+    // decides none of it.
     const pre = await openRunPreconditions({
       body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
       reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
@@ -1696,9 +1714,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':
@@ -1711,6 +1728,15 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // spec §2.3: `which` names the side that is not a registry id. The HEIR is
+      // this request's own value, so `bad-session-id` (400), the status main's
+      // refusal table (`shared/refusal.ts`) gives that word, where `bad-session`
+      // is 409. The stored CLAIMANT is a row no retry heals, so `bad-session`
+      // (409), and its detail names the abandon door. Nothing was re-pointed.
+      case 'bad-session':
+        return r.which === 'claimant'
+          ? refuseRoute(reply, 'bad-session', { detail: r.detail })
+          : refuseRoute(reply, 'bad-session-id', { detail: r.detail });
       // D-5298: through `refuseRun` (D-5384's run-refusal helper), not inline.
       case 'project-mismatch':
         return refuseRun(reply, 'project-mismatch', {
@@ -1834,6 +1860,14 @@ export function registerCoordRoutes(
     // Forward motion toward a review claim re-measures; retreating to
     // `working` does not — see this route's own docstring.
     if (to === 'awaiting-review' || to === 'merging') {
+      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
+      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
+      // refusal from it records a rejection and queues mail to that id, so
+      // this check stands before it and outside it. A row written before
+      // POST /api/runs checked its ids can hold an id ccd would read as a
+      // flag. Retreating to `working` composes no argv, so such a row can
+      // still be sent back: the check guards this block alone.
+      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
       const verdict = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
         { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
@@ -1978,18 +2012,26 @@ export function registerCoordRoutes(
       if (sid === null || sid === '') {
         return reply.code(409).send({ ok: false, error: 'no-session' });
       }
-      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
-      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
-      // `sessionId` only for "non-empty string", no charset guard), but
-      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
-      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
-      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
-      // ever building an argv or writing an event this door's own reader
-      // would later refuse to parse back — `no-session` (nothing to route
-      // to) and `bad-session` (something to route to, but not a name this
-      // door can safely write) are two different conditions and must not
-      // collapse to one refusal.
-      if (!isSessionIdShape(sid)) {
+      // The stored id is re-checked HERE, before any field read, argv or
+      // event (spec §2.3). `sid` comes off `run.sessionId`/`run.claimedBy`,
+      // a STORED row: `POST /api/runs` now refuses a `claimedBy` or
+      // `sessionId` that is not a registry id, but a row written before that
+      // check can still hold one, so this door asks again rather than
+      // trusting the open. The rule is THE registry-id predicate,
+      // `isRegistryId` (`shared/api.ts`): the session-id shape, no leading
+      // `-` or `.`, and at most 255 characters. Fix round 1, finding #2
+      // checked the SHAPE alone, because `routeEventDetail` below embeds
+      // `sid` unescaped as the sixth segment of a `:`-delimited grammar whose
+      // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
+      // predicate keeps that guarantee and closes what the shape let through:
+      // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
+      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
+      // A manual-field write reads no registry field, so nothing but this
+      // check stands between a bad stored id and that argv. `no-session`
+      // (nothing to route to) and `bad-session` (something to route to, but
+      // not a name this door can safely write or compose) are two different
+      // conditions and must not collapse to one refusal.
+      if (!isRegistryId(sid)) {
         return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
@@ -3097,7 +3139,7 @@ export function registerCoordRoutes(
     if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
-    return { ok: true, items: deps.coord.workItems(id) };
+    return { ok: true, items: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.workItems(id)) };   // D-5513
   });
 
   /**
@@ -3146,9 +3188,10 @@ export function registerCoordRoutes(
     // predating that grammar legitimately contain dots.
     const program = typeof q.program === 'string' && q.program.trim() !== ''
       ? q.program.trim() : null;
-    return { events: program === null
+    // Every event's text came off a session: masked before it leaves (D-5513, accounts plan Task A10).
+    return { events: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(program === null
       ? deps.coord.feedEvents(limit)
-      : deps.coord.feedEventsForProgram(program, limit) };
+      : deps.coord.feedEventsForProgram(program, limit)) };
   });
 
   /**
@@ -3282,21 +3325,27 @@ export function registerCoordRoutes(
         detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
     }
 
-    // ONE listing, reused below for the presence ladder — the same
-    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // A `?of=` that is not a registry id is refused BEFORE any read (spec §2.3): it can never name a row this server
+    // reads, so the presence ladder below would answer 502 for it forever. Checked on the trimmed value `selfId`
+    // takes below.
+    if (hasOf && !isRegistryId((q.of as string).trim())) {
+      return refuseRoute(reply, 'bad-session-id');
+    }
+
+    // ONE read (spec §2.3). Its listing is the presence ladder's. Its rows are `assembleFleet`'s (its own `records`
+    // parameter's contract: every lane of one pass describes one observation) and this route's own for `uuid`,
+    // which `FleetSession` does not carry. Its refused count rides the 200 as `refusedRows`. Unlistable keeps the
+    // fail-shut 502 that the mail ingress uses for this directory.
+    // [registry-refused:reports]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
     }
-    // The records are read ONCE and handed to `assembleFleet` (its own
-    // `records` parameter's contract: every lane of one pass describes one
-    // observation) — this route needs them itself for `uuid`, which
-    // `FleetSession` does not carry.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const recById = new Map(recs.map((r) => [r.id, r]));
+    const names = reg.names;
+    const recById = new Map(reg.records.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
+      undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -3377,7 +3426,10 @@ export function registerCoordRoutes(
       });
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
-    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+    // `refusedRows` (spec §2.3): additive and absence-permitting, present only when a listed `.uuid` was refused, so a
+    // peer list that is silently short of a row says that it is. One writer of the field: this line.
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE,
+      ...(reg.refused.size > 0 ? { refusedRows: reg.refused.size } : {}) });
   });
 
   /**
@@ -3485,9 +3537,14 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        const names = await deps.io.readdir(deps.cfg.registryDir);
+        // ONE registry read (spec §2.3): its rows are `assembleFleet`'s and its listing is the presence ladder's, so
+        // the two describe one observation. Unlistable gives no rows and a `null` listing: every holder reads
+        // unmeasurable, never absent and never `yes` off a second read the ladder did not see.
+        // [registry-refused:reports]
+        const reg = await readRegistryMeasured(deps.io, deps.cfg);
+        const names = reg.listed ? reg.names : null;
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
+          undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
@@ -4343,6 +4400,7 @@ export function registerCoordRoutes(
     const signer = signerFor();
     if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
 
+    // [registry-refused:refuses] a refused row is in no `recs`: the request answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, which leaves the prompt the operator's.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === sessionId) ?? null;
     if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
@@ -4498,6 +4556,7 @@ export function registerCoordRoutes(
     if (now >= row.notifyAt) {
       return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
     }
+    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === row.childId) ?? null;
     if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');
