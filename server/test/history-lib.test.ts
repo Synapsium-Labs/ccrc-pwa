@@ -3963,6 +3963,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('the off remedy names the switch through SWITCHES, the one spelling (O13)', () => {
     const r = healthLib.deriveHealth(base({ historyOff: true }));
     expect(r.warn.find((i) => i.word === 'off')!.remedy).toContain(healthLib.SWITCHES.off);
+    expect(r.warn.find((i) => i.word === 'off')!.remedy, 'review 644 F4: a late carry is the reason to keep it').toContain('when capture should resume, once any carry is whole');
   });
 
   // ── the grace D-4168 ──
@@ -8024,7 +8025,7 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
       for (let j = 0; j < names.length; j += 1) expect(libSeg.segmentOrdersAfter(names[i]!, names[j]!), `${names[i]!} after ${names[j]!}: one order with orderSegmentNames`).toBe(i > j);
     }
   });
-  it('replayWriterLayout: each writer\'s lowest and highest listed seq; a directory holds a fork when some pair of writers is neither one\'s successor (equal and interleaved seqs included), and a rebind\'s writer, wholly above the earlier one, is a successor (D-5726 (history-export-replay-mark-one-writer))', () => {
+  it('replayWriterLayout: each writer\'s lowest and highest seq over the listed names and the marked names; a directory holds a fork when some pair of writers is neither one\'s successor (equal and interleaved seqs included), and a rebind\'s writer, wholly above the earlier one, is a successor (D-5726 (history-export-replay-mark-one-writer))', () => {
     const lay = (names: string[]): { ranges: Array<[string, number, number]>; forked: boolean } => {
       const l = libSeg.replayWriterLayout(names);
       return { ranges: [...l.ranges.entries()].map(([w, r]: [string, { lo: number; hi: number }]) => [w, r.lo, r.hi] as [string, number, number]).sort(), forked: l.forked };
@@ -8919,7 +8920,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(i?.remedy, 'prune --apply is not gated on the marks').toContain('; until the check finishes, hold any ccrc history prune --apply');
   });
 
-  it.each(['off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (F4)', (word) => {
+  it.each(['off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (review 644 F4)', (word) => {
     const own = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')!.remedy;
     expect(own).toContain(`the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands`);
     expect(own).not.toContain('resumes with the next tick');

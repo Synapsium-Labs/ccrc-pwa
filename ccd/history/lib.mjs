@@ -3320,7 +3320,7 @@ export const HEALTH_META = Object.freeze({
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
   // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): why the check after a bind stopped short, since when, and the
-  // marks it has cleared so far, at least ('<word> <sinceMs> <cleared>', lib formatMarkCheckState; display only, and a thrown failure records 0); deleted by its done stamp.
+  // marks it has cleared so far, at least ('<word> <sinceMs> <cleared>', lib formatMarkCheckState; display only, and a thrown failure adds 0 for its step, so the batches it committed before the throw go uncounted); deleted by its done stamp.
   exportMarksCheck: 'export_marks_check',
 });
 
@@ -9010,7 +9010,7 @@ function markCheckRemedy(word, h) {
   return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
 }
 
-/** The clause the stop remedies of `off`, `wal-held` and `unlistable` share (F4): the check runs from the tick's export
+/** The clause the stop remedies of `off`, `wal-held` and `unlistable` share (review 644 F4): the check runs from the tick's export
  *  step, and no scheduled tick runs while the history-off switch stands, so "the next tick" would be false under it. */
 const MARK_CHECK_RESUMES = `the check resumes at the next tick that runs it, and none runs while ~/${SWITCHES.off} stands`;
 

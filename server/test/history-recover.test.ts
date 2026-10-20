@@ -5004,8 +5004,8 @@ describe('D-5637: export replay marks an entry and a blob by the last segment th
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'CONTROL: both rows placed').toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
       // D-5726 (history-export-replay-mark-one-writer) re-expects E1: D-5637 moved its mark across writers to the later carrier
-      // (`1.ffffffff.db`); now a mark comes off across writers, so E1 is unmarked too and owed to the pass (E0 was unmarked either way).
-      expect(marksOf(db), 'E0 is unmarked: the later carrier holds its row without the stub, and the earlier mark goes with it; E1 is unmarked too since D-5726: the two writers\' marks come off')
+      // (`1.ffffffff.db`); now a mark comes off across a fork (two writers at an equal seq), so E1 is unmarked too and owed to the pass (E0 was unmarked either way).
+      expect(marksOf(db), 'E0 is unmarked: the later carrier holds its row without the stub, and the earlier mark goes with it; E1 is unmarked too since D-5726: across a fork the marks come off')
         .toEqual([null, null]);
       expect(strandedBlobsOn(db)).toEqual([]);
     } finally {
@@ -5015,15 +5015,17 @@ describe('D-5637: export replay marks an entry and a blob by the last segment th
 });
 
 // ── W1-B4 whole-branch review: replay resumes after a segment the operator moved aside (D-4765's way out) ───────────
-// ── wave 5h-1: a mark moves only within one writer (D-5726 (history-export-replay-mark-one-writer)) ──────────────────────────
-// D-5637 marked a row by its last carrier in (seq, writer) order, which holds only within one writer: every export of a writer
-// writes all the store held of a row, and nothing deletes those rows. Across writers (a directory carried in from another box,
-// or a split brain) the content order is unknown, so a mark moved to another writer's segment could name one that lacks a row
-// only the earlier carrier holds; with the earlier one lost the check cleared nothing and the row was never written again.
-// Replay now takes the mark OFF across writers (lib decideReplayMark), so the pass writes the row again. In-process on planted
-// segments, the pass and the check run in-process too, and the second rebuild is a fresh store of the same id replaying the
-// segments that are left. The first assertions on the rebuilt store are soft, so a red there still runs on to the loss it guards.
-describe('D-5726: replay moves an export mark only within one writer; across writers it comes off (wave 5h-1; whole-branch review)', () => {
+// ── wave 5h-1: a mark moves to a later carrier of the same writer or of a successor writer, and comes off across a fork (D-5726 (history-export-replay-mark-one-writer)) ──
+// D-5637 marked a row by its last carrier in (seq, writer) order, which holds within one writer, and to a successor writer (a rebind's
+// new token, all its seqs above the earlier writer's): every export of a writer writes all the store held of a row, and nothing deletes
+// those rows. Across a fork (two writers whose seqs interleave or touch: a directory carried in from another box, or a split brain)
+// the content order is unknown, so a mark moved to the other writer's segment could name one that lacks a row only the earlier carrier
+// holds; with the earlier one lost the check cleared nothing and the row was never written again. Replay now takes the mark OFF across
+// a fork (lib decideReplayMark), so the pass writes the row again. A held mark naming an unlisted segment of another writer stays for
+// the check, and comes off at once in a forked directory. In-process on planted segments, the pass and the check run in-process too,
+// and the second rebuild is a fresh store of the same id replaying the segments that are left. The first assertions on the rebuilt
+// store are soft, so a red there still runs on to the loss it guards.
+describe('D-5726: replay moves an export mark to a later carrier of the same writer or of a successor writer; across a fork it comes off, and a held mark naming an unlisted segment of another writer stays for the check (wave 5h-1; whole-branch review)', () => {
   const W1 = X10_WRITER;
   const W2 = 'ffffffff';
   const seg = (n: number, w: string = W1): string => `${n}.${w}.db`;
@@ -5282,8 +5284,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
   // store still holds the mark, and a replay that moved it onto another writer's segment would leave the check after a bind nothing
   // to clear: the rows only the missing segment carried would never be exported again. The three cases below pin the rule: a held
   // mark naming an unlisted segment of ANOTHER writer stays for the check ('keep'), or comes off at once in a forked directory.
-  // `variantsOf` counts entry_variants; E0 carries two of them in the segment that is moved aside or lost.
-  const variantsOf = (d: DatabaseSync): number => Number((d.prepare('SELECT count(*) AS n FROM entry_variants').get() as { n: number }).n);
+  // E0 carries two entry_variants in the segment that is moved aside or lost (counted with `x10Count(d, 'entry_variants')`).
   const variantRows = (fam: X10Family, texts: X10Text[], t0: number): PlantSegmentRow[] => [
     { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[0]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
     { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[1]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 6, cause: 'unknown' } },
@@ -5305,7 +5306,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), ...variantRows(fam, texts, t0)] });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1)]);
-      expect(variantsOf(db), 'the backup holds E0\'s two variants').toBe(2);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
       moveAside(box, seg(2));
       const side = 'zqd5726j a late sidecar writer 2 linked';
       plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [{ text: side }], rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), sidecarRow(fam, 'd5726j.txt', side, texts[0]!.uuid, t0)] });
@@ -5317,7 +5318,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       expect.soft(live, 'the pass wrote E0 into a segment of the current writer').toEqual([seg(1), seg(3, W2), `4.${ids.writer}.db`]);
       expect.soft(unmarkedOn(db), 'and nothing is left due').toEqual({ entries: 0, blobs: 0 });
       again = await rebuildAgain(box, ids);
-      expect(variantsOf(again.db), 'E0\'s variant rows survive in the export').toBe(2);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
     } finally {
       if (again !== null) closeWriter(again.db);
       closeWriter(db);
@@ -5336,7 +5337,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       plantSegment(box, ids.storeId, { seq: 4, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 4').toEqual([seg(4), seg(3)]);
-      expect(variantsOf(db), 'the backup holds E0\'s two variants').toBe(2);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
       moveAside(box, seg(4));
       plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs: [], rows: x10Rows(e0) });
@@ -5350,7 +5351,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       moveAside(box, seg(5, W2));
       checkAfterLoss(box, ids, db);
       again = await rebuildAgain(box, ids);
-      expect(variantsOf(again.db), 'E0\'s variant rows survive in the export').toBe(2);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
     } finally {
       if (again !== null) closeWriter(again.db);
       closeWriter(db);
@@ -5370,7 +5371,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
-      expect(variantsOf(db), 'the backup holds E0\'s two variants').toBe(2);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
       moveAside(box, seg(2));
       plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
@@ -5384,7 +5385,7 @@ describe('D-5726: replay moves an export mark only within one writer; across wri
       moveAside(box, seg(3, W2));
       checkAfterLoss(box, ids, db);
       again = await rebuildAgain(box, ids);
-      expect(variantsOf(again.db), 'E0\'s variant rows survive in the export').toBe(2);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
     } finally {
       if (again !== null) closeWriter(again.db);
       closeWriter(db);

@@ -2846,7 +2846,8 @@ function replayEntryRow(db, seg, r) {
   // order is unknown either way, so lib decideReplayMark answers instead: 'keep' returns (the same page again, a restore's backup mark
   // of a later segment or writer, or, in a directory that holds a fork, an entry this segment did not insert and that is unmarked:
   // the take-off is sticky), 'take-off' takes the mark off (counted EXPORT_MARK_TAKEN_OFF) so the next pass writes the entry
-  // again, and 'mark' is the path below.
+  // again, and 'mark' is the path below. A held mark naming a segment the listing does not hold, of another writer, is kept for
+  // the check (which clears it, the segment being missing), or taken off in a directory that holds a fork (lib decideReplayMark).
   const word = decideReplayMark({ seg: seg.name, held: e.exported_seg === null ? null : String(e.exported_seg), fresh, layout: seg.layout });
   if (word === 'keep') return;
   if (word === 'take-off') {
@@ -3064,7 +3065,8 @@ function noteSkippedSegment(db, name, verdict) {
  *  export-blobs' page (the blobs that carry bytes), true export-stubs' (D-5397 (history-export-replay-bytes-before-stubs)).
  *  insert-or-ignore by sha256 (§9.14) in both: a blob the store already holds, whole or pruned, keeps its row; one with
  *  bytes is marked with its last carrier (D-5637) within one writer or to a successor writer; across a fork the mark comes off
- *  instead (D-5726, lib decideReplayMark; export_mark_taken_off). A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
+ *  instead (D-5726, lib decideReplayMark; export_mark_taken_off); a held mark naming a segment the listing does not hold, of another
+ *  writer, is kept for the check, or taken off in a forked directory. A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
  *  probe runs only when the insert answered 0 changes, so a fresh blob costs no statement more, and no read's answer
  *  changes. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)), dated by the replay. An empty
  *  page ends the segment. */
@@ -3085,7 +3087,8 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
       // answers for a held blob: 'mark' moves it, 'keep' leaves it, and 'take-off' (a fork: the other writer's seqs interleave or touch
       // this one's) takes the blob's referrers' marks off FIRST and then the blob's own, in this transaction (D-5395, D-5396: an
       // entry holds its mark only while every blob it references is exported or pruned), so the pass writes the row again; each is
-      // counted EXPORT_MARK_TAKEN_OFF.
+      // counted EXPORT_MARK_TAKEN_OFF. A held mark naming a segment the listing does not hold, of another writer, is kept for the
+      // check (which clears it, the segment being missing), or taken off in a directory that holds a fork.
       // R-F5: a fresh insert goes through lib too (fresh: true answers 'mark'), so every mark decision is lib's.
       if (Number(ins.changes) === 1) {
         if (decideReplayMark({ seg: name, held: null, fresh: true, layout }) === 'mark') s.blobMark.run(markMs, name, b.sha256);
