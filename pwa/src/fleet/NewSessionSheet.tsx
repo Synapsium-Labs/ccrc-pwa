@@ -341,7 +341,7 @@ export function NewSessionSheet({
           setNotice({ step: refusal.kind === 'account-refused' ? 'account' : 'name', text });
           if (refusal.kind === 'account-refused') setWrapper(null);
         }
-      } else if (preview.kind !== 'named') {
+      } else {
         toast(failedTo('start', err), 'error');
       }
     } finally {

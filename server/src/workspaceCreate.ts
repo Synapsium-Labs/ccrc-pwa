@@ -13,7 +13,9 @@
 import { WS_TITLE_CAP, WS_WRAPPER_CAP } from './ccdargv.js';
 import { ACCOUNT_ID_RE } from '../../shared/roster.js';
 import type { WsCreateRefusal } from '../../shared/refusal.js';
-import { deriveWorkspaceSlug, isWsProject, NAME_REFUSAL_TEXT, type NameRefusal, type SlugAsk } from '../../shared/slug.js';
+import {
+  deriveWorkspaceSlug, isWsProject, NAME_REFUSAL_TEXT, WS_ID_MAX, workspaceId, type NameRefusal, type SlugAsk,
+} from '../../shared/slug.js';
 
 /**
  * The longest name the server will parse. A pasted issue URL is about a hundred characters and a copied branch name a
@@ -61,7 +63,7 @@ export const isWsWrapper = (s: string): boolean => ACCOUNT_ID_RE.test(s) && !s.s
  *   2. a blank (or whitespace-only) name is the plain create, and `wrapper` is ignored;
  *   3. a project that is not `isWsProject` is `400 bad-project`;
  *   4. a name past `LINEAR_REF_MAX_CHARS` is `400 name-too-long`, a refused name `400 bad-name` with its reason;
- *   5. a wrapper outside the grammar is `400 bad-wrapper`;
+ *   5. a project plus slug past ccd's id cap is `400 id-too-long`; a wrapper outside the grammar is `400 bad-wrapper`;
  *   6. a wrapper without `ws-wrapper-v1`, or a name without `ws-title-v1`, is `501 unsupported` naming the token.
  *      Never a silent drop: a dropped `--wrapper` would place the workspace on the least-loaded lane, not the chosen one.
  */
@@ -79,6 +81,9 @@ export function planCreate(project: string, body: { name?: unknown; wrapper?: un
     const reason: NameRefusal = ask.kind === 'refused' ? ask.reason : 'no-usable-characters';
     return refuse('bad-name', { reason, detail: NAME_REFUSAL_TEXT[reason] });
   }
+
+  // ccd's id cap, before any argv: `cmd_ws_add` refuses an id past it with nothing made, and that would arrive as a 502.
+  if (workspaceId(project, ask.slug).length > WS_ID_MAX) return refuse('id-too-long');
 
   if (wrapper !== undefined && !isWsWrapper(wrapper)) return refuse('bad-wrapper');
   if (wrapper !== undefined && !caps.wrapper) return refuse('unsupported', { needs: WS_WRAPPER_CAP });

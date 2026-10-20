@@ -313,6 +313,21 @@ export function sanitizeTitle(raw: string): string {
   return `${kept.trimEnd()}…`;
 }
 
+/**
+ * ccd's `_REG_ID_MAX`: the longest id a NEW workspace may have, in bytes. `cmd_ws_add` refuses past it with "nothing was
+ * created", after the slug is chosen, so without this a long project plus a long slug reaches the operator as a 502 that
+ * reads like a broken fleet. The ids are ASCII (`isWsProject`, the slug grammar), so characters are bytes.
+ * `slug.test.ts` reads ccd's number out of the shipped file and holds this equal to it.
+ */
+export const WS_ID_MAX = 128;
+
+/**
+ * A workspace's id: ccd's `cmd_ws_add` rule `local id="$project-$slug"`, spelled ONCE. The server's create answer, the
+ * sheet's preview line and its sentences, and the divergence census's worktree-to-id reading all call this, so the rule
+ * has one writer on this side as it has on the box.
+ */
+export const workspaceId = (project: string, slug: string): string => `${project}-${slug}`;
+
 /** `fix-the-login-flow` → `Fix the login flow`: Linear's own title slug, read back as words. */
 function sentenceFromSlug(slug: string): string {
   const words = slug.split(/[-_]+/).filter((w) => w !== '').join(' ');

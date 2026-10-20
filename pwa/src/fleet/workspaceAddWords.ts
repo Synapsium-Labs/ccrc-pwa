@@ -10,7 +10,7 @@
 import { ApiError } from '../lib/apiError';
 import { accountLabel } from '../lib/accounts';
 import type { RosterWire } from '../../../shared/api';
-import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../shared/slug';
+import { NAME_REFUSAL_TEXT, isNameRefusal, workspaceId, type NameRefusal } from '../../../shared/slug';
 
 /** The `ccd caps` tokens a 501 `unsupported` names in `needs`. */
 export type AddNeeds = 'ws-title-v1' | 'ws-wrapper-v1';
@@ -22,6 +22,8 @@ export type AddRefusal =
   | { kind: 'bad-request' }
   | { kind: 'bad-project' }
   | { kind: 'name-too-long' }
+  /** The project plus the name's slug would pass ccd's id cap, so nothing was created. */
+  | { kind: 'id-too-long' }
   /** `reason` is null for a word this build does not know: the sentence is then the generic one. */
   | { kind: 'bad-name'; reason: NameRefusal | null }
   | { kind: 'bad-wrapper' }
@@ -53,6 +55,7 @@ export function classifyAddError(err: unknown): AddRefusal {
       case 'bad-request': return { kind: 'bad-request' };
       case 'bad-project': return { kind: 'bad-project' };
       case 'name-too-long': return { kind: 'name-too-long' };
+      case 'id-too-long': return { kind: 'id-too-long' };
       case 'bad-name': return { kind: 'bad-name', reason: isNameRefusal(body.reason) ? body.reason : null };
       case 'bad-wrapper': return { kind: 'bad-wrapper' };
       case 'bad-slug': return { kind: 'bad-slug' };
@@ -120,16 +123,17 @@ export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
     case 'bad-request': return BAD_REQUEST_TEXT;
     case 'bad-project': return `"${ctx.project}" isn't a project a workspace can be added to.`;
     case 'name-too-long': return 'That name is too long. Shorten it, or paste just the ticket id.';
+    case 'id-too-long': return `${ctx.project} plus that name makes an id too long for the fleet box. Shorten the name.`;
     case 'bad-name': return r.reason === null ? "That name can't be used. Change it and try again." : NAME_REFUSAL_TEXT[r.reason];
     case 'bad-wrapper': return "That account name isn't valid. Pick the account again.";
     case 'bad-slug': return "The fleet box refused that name's short form. Try a different name.";
     case 'slug-taken': return ctx.slug === null
       ? 'A workspace with that name already exists. Open it from the board, or change the name. Your text is kept.'
-      : `${ctx.project}-${ctx.slug} already exists. Open it from the board, or change the name. Your text is kept.`;
+      : `${workspaceId(ctx.project, ctx.slug)} already exists. Open it from the board, or change the name. Your text is kept.`;
     case 'account-refused': return r.leftBehind
       // ccd's own remedy for what it left (`cmd_ws_add`): adopt the worktree and branch onto a working account. A retry
       // of the same name reads `slug-taken`, because the slug is on disk though no row names it, so that is said too.
-      ? `${accountRefusedText(r.reason, ctx.roster)} The worktree and branch for ${ctx.slug === null ? 'this workspace' : `${ctx.project}-${ctx.slug}`} were already made and are still on the fleet box with no session. Fix the account or pick another, then adopt them there with: ccd start <account> ${ctx.project} <worktree>. Adding the same name again will say it already exists.`
+      ? `${accountRefusedText(r.reason, ctx.roster)} The worktree and branch for ${ctx.slug === null ? 'this workspace' : workspaceId(ctx.project, ctx.slug)} were already made and are still on the fleet box with no session. Fix the account or pick another, then adopt them there with: ccd start <account> ${ctx.project} <worktree>. Adding the same name again will say it already exists.`
       : `${accountRefusedText(r.reason, ctx.roster)} Pick another account. Nothing was created.`;
     case 'unsupported': return r.needs === null
       ? "The fleet box's ccd doesn't support that yet. Update the fleet box, or change the options."

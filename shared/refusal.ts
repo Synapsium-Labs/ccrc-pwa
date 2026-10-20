@@ -50,7 +50,7 @@ import { SWAP_REFUSALS } from './api.js';
  * L1) before any argv exists and sent by the route through `refuseRoute` with a computed word, so they are a typed
  * vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal words at a send.
  */
-export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', 'bad-wrapper'] as const;
+export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', 'bad-wrapper', 'id-too-long'] as const;
 export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
 
 /**
@@ -170,6 +170,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // retype, 409 for a slug already in use and an account ccd will not place this workspace on (the request was
   // well-formed; the box's state refused it). A missing ccd cap answers the existing `unsupported` (501).
   'bad-project': 400, 'name-too-long': 400, 'bad-name': 400, 'bad-wrapper': 400, 'bad-slug': 400,
+  // `id-too-long`: the project plus the slug would pass ccd's id cap (`WS_ID_MAX`), which ccd refuses with nothing made.
+  'id-too-long': 400,
   'slug-taken': 409, 'account-refused': 409,
   // The workspace rename (named workspaces S9): CHOSEN — `not-a-workspace` is 409, the request was well-formed and the
   // row's own state (a main checkout) refuses it; `bad-title` is 400, the one thing the operator can retype, though only

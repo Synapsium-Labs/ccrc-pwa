@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { SLUG_MAX, deriveBranch } from '../src/naming.js';
 import {
   WS_SLUG_MAX, WS_SLUG_MIN, WS_TITLE_MAX_BYTES, NAME_REFUSALS, NAME_REFUSAL_TEXT, isNameRefusal,
-  parseLinearRef, deriveWorkspaceSlug, offlineTitle, isWsProject, sanitizeTitle,
+  parseLinearRef, deriveWorkspaceSlug, offlineTitle, isWsProject, sanitizeTitle, workspaceId, WS_ID_MAX,
   slugifyWords, fitSlug,
 } from '../../shared/slug.js';
 import { LC_REASON_MAX_BYTES } from '../../shared/api.js';
@@ -302,6 +302,23 @@ describe('offlineTitle — the title when Linear gave nothing', () => {
 
   it('a plain name is its own title', () => {
     expect(offlineTitle('Login cleanup')).toBe('Login cleanup');
+  });
+});
+
+describe('workspaceId, the one spelling of ccd\'s `$project-$slug`', () => {
+  it('is the project, a dash and the slug', () => {
+    expect(workspaceId('project-a', 'eng-1234')).toBe('project-a-eng-1234');
+  });
+
+  it('WS_ID_MAX is ccd\'s _REG_ID_MAX, read out of the shipped file, not a second spelling', () => {
+    const defs = [...ccdSource.matchAll(/^_REG_ID_MAX=(\d+)$/gm)].map((m) => Number(m[1]));
+    expect(defs, 'ccd/ccd defines _REG_ID_MAX=<n> exactly once').toHaveLength(1);
+    expect(WS_ID_MAX).toBe(defs[0]);
+  });
+
+  it('ccd builds the id of a new workspace the same way, and caps it before anything is made', () => {
+    expect(ccdSource).toMatch(/local id="\$project-\$slug"/);
+    expect(ccdSource).toMatch(/_reg_id_cap "\$project-\$slug" \|\| die/);
   });
 });
 

@@ -15,6 +15,7 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { Button, Chip, QC_ACTIONS, TextInput } from '@ccrc/ui';
 import { LOOKUP_NOTE, type Lookup, type NamePreview } from './workspaceNameWords';
 import { slugStays } from './workspaceRenameWords';
+import { workspaceId } from '../../../shared/slug';
 import './fleet.css';
 
 /** The words of the field itself. Each door's own sentences (its empty hint, its disabled reasons) are passed in. */
@@ -110,7 +111,7 @@ export function WorkspaceNameField({
               )}
             </p>
             <p className="m-0 font-mono text-meta text-ink-secondary [overflow-wrap:anywhere]">
-              {keepSlug === undefined ? `new workspace ${project}-${preview.slug} · branch ws/${preview.slug}` : slugStays(keepSlug)}
+              {keepSlug === undefined ? `new workspace ${workspaceId(project, preview.slug)} · branch ws/${preview.slug}` : slugStays(keepSlug)}
             </p>
             {keepSlug === undefined && preview.shortened && <p className={NAME_FIELD_CLASS.hint}>{NAME_FIELD_TEXT.shortened}</p>}
             {preview.note !== null && (

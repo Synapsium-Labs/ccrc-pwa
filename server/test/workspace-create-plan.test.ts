@@ -2,6 +2,7 @@
 // through a whole server. Pure functions, no fixtures.
 import { describe, it, expect } from 'vitest';
 import { classifyAddFailure, isWsWrapper, planCreate } from '../src/workspaceCreate.js';
+import { WS_ID_MAX, WS_SLUG_MAX, workspaceId } from '../../shared/slug.js';
 
 describe('classifyAddFailure', () => {
   it("reads the lane's reason out of the sentence, up to ccd's tail", () => {
@@ -60,6 +61,23 @@ describe('planCreate', () => {
   it('absent wrapper stays null, a present one is carried', () => {
     const plan = planCreate('project-a', { name: 'x y', wrapper: 'lane-a' }, caps);
     expect(plan.kind === 'named' && plan.wrapper).toBe('lane-a');
+  });
+
+  // ccd refuses a new id past `_REG_ID_MAX` (128) BYTES in `cmd_ws_add`, after the slug is chosen and before anything is
+  // made. That is a thing the operator can fix (a shorter name), so it is a word here and never a 502 from ccd's stderr.
+  it('an id past ccd\'s cap is id-too-long, decided before any argv; one exactly at the cap goes through', () => {
+    const slug = 'eng-1234';
+    const atCap = 'p'.repeat(WS_ID_MAX - slug.length - 1);
+    expect(workspaceId(atCap, slug)).toHaveLength(WS_ID_MAX);
+    expect(planCreate(atCap, { name: 'ENG-1234' }, caps).kind).toBe('named');
+    expect(planCreate(`${atCap}p`, { name: 'ENG-1234' }, caps)).toEqual({ kind: 'refuse', refusal: { error: 'id-too-long', extra: {} } });
+    // A long project and a 31-character slug: the case a name cannot shorten its way out of unless the NAME is shorter.
+    const long = 'p'.repeat(WS_ID_MAX - WS_SLUG_MAX);
+    expect(planCreate(long, { name: 'a'.repeat(40) }, caps)).toEqual({ kind: 'refuse', refusal: { error: 'id-too-long', extra: {} } });
+  });
+
+  it('a blank name is the plain create whatever the project length: ccd draws the slug, so nothing is decided here', () => {
+    expect(planCreate('p'.repeat(WS_ID_MAX), { name: '  ' }, caps)).toEqual({ kind: 'plain' });
   });
 
   it('checks the project before the name: a refused name on a bad project is bad-project', () => {

@@ -8090,4 +8090,11 @@ describe('the named-workspace vocabularies have one home each', () => {
     for (const c of ['BAD_TITLE_REASONS', 'BadTitleReason']) expect(holders(decl(c)), c).toEqual(['shared/refusal.ts']);
     expect(holders(/'blank'\s*,\s*'control-characters'\s*,\s*'too-long'/)).toEqual(['shared/refusal.ts']);
   });
+  it('the workspace id `${project}-${slug}` is spelled once, by workspaceId in shared/slug.ts', () => {
+    const spelled = /`[^`]*\$\{\s*(?:ctx\.)?project\s*\}-\$\{\s*(?:ctx\.|preview\.|plan\.ask\.)?slug\s*\}/;
+    expect(spelled.test('`${project}-${slug}`'), 'CONTROL: the pattern sees the spelling').toBe(true);
+    expect(spelled.test('`new workspace ${project}-${preview.slug} · branch`'), 'CONTROL: and the preview line').toBe(true);
+    expect(holders(spelled).filter((f) => f !== 'shared/slug.ts')).toEqual([]);
+    expect(holders(/\bexport const workspaceId\b/)).toEqual(['shared/slug.ts']);
+  });
 });

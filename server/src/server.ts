@@ -21,6 +21,7 @@ import {
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
+import { workspaceId } from '../../shared/slug.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -2924,7 +2925,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     const slug = plan.ask.slug;
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
-    if (res.ok) return { ok: true, id: `${project}-${slug}`, slug, title };
+    if (res.ok) return { ok: true, id: workspaceId(project, slug), slug, title };
     const failure = classifyAddFailure(res);
     switch (failure.kind) {
       case 'slug-taken': return refuseRoute(reply, 'slug-taken');

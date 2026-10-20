@@ -11,7 +11,7 @@ import { buildServer } from '../src/server.js';
 import { ACTOR_FLAGS_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 import { LINEAR_KEY_FILE } from '../src/linear/connection.js';
 import type { FetchLike } from '../src/linear/client.js';
-import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
+import { WS_ID_MAX, WS_SLUG_MAX, WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { testDeps } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -104,6 +104,15 @@ describe('refusals send no argv', () => {
       expect(res.json()).toEqual({ ok: false, error: 'bad-wrapper' });
       expect(calls).toEqual([]);
     });
+
+  it('a long project and a 31-character slug pass ccd\'s id cap: 400 id-too-long and nothing is sent, never a 502', async () => {
+    const { app, calls } = await boot();
+    // 97 + 1 + 31 = 129: one past the cap, and under Fastify's 100-character route-parameter bound.
+    const res = await post(app, { name: 'a'.repeat(40) }, 'p'.repeat(WS_ID_MAX - WS_SLUG_MAX));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'id-too-long' });
+    expect(calls).toEqual([]);
+  });
 
   it('a name without ws-title-v1 is 501 naming the token, never a silent unnamed create', async () => {
     const { app, calls } = await boot({ verbs: ['ws-add', WS_WRAPPER_CAP] });
