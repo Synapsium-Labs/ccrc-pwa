@@ -389,3 +389,42 @@ describe('localIO.tailFile', () => {
     expect(chunks).toEqual([]);
   });
 });
+
+// D-6058 (1), accounts plan Task A12: the local arm reads as the agent's `read` op does. A FIFO is `unreadable` at once
+// and its bytes stay for whoever holds it; a name directly in `~/.cc-sessions/.accounts` is opened with `O_NOFOLLOW`, so
+// a symlink planted there is `unreadable`, while the same link anywhere else is still followed.
+describe('localIO.readFileMeasured reads regular files only (D-6058)', () => {
+  it('a FIFO a writer holds is unreadable at once, and its bytes stay in it', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { closeSync, constants, openSync, readSync, writeSync } = await import('node:fs');
+    const fifo = path.join(mktempDir(), 'in');
+    execFileSync('mkfifo', [fifo]);
+    const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    const writer = openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+    try {
+      writeSync(writer, 'the-relayed-code');
+      const t0 = Date.now();
+      expect(await localIO.readFileMeasured(fifo)).toEqual({ ok: false, reason: 'unreadable' });
+      expect(Date.now() - t0).toBeLessThan(1_000);
+      const buf = Buffer.alloc(64);
+      expect(buf.subarray(0, readSync(reader, buf, 0, 64, null)).toString('utf8')).toBe('the-relayed-code');
+    } finally {
+      closeSync(writer);
+      closeSync(reader);
+    }
+  }, 4_000);
+
+  it('a symlink at a lane-state name is unreadable; the same link elsewhere is followed', async () => {
+    const home = mktempDir();
+    const dir = path.join(home, '.cc-sessions', '.accounts');
+    mkdirSync(dir, { recursive: true });
+    const target = path.join(home, 'target.json');
+    writeFileSync(target, '{"identity":"the-target"}');
+    symlinkSync(target, path.join(dir, 'lane-a.json'));
+    symlinkSync(target, path.join(home, '.cc-sessions', 'elsewhere.json'));
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-a.json'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await localIO.readFileMeasured(path.join(home, '.cc-sessions', 'elsewhere.json')))
+      .toEqual({ ok: true, content: '{"identity":"the-target"}' });
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-b.json'))).toEqual({ ok: false, reason: 'absent' });
+  });
+});

@@ -74,6 +74,29 @@ describe('the agent reads regular files only (A12)', () => {
     4_000,
   );
 
+  it.each(['read', 'readFrom', 'readB64'] as const)(
+    'a `%s` of a FIFO no process holds open is refused at once: the open never waits for a writer',
+    async (op) => {
+      const f = await open();
+      const run = path.join(f.home, '.cc-sessions', '.auth', 'lane-b.run');
+      mkdirSync(run, { recursive: true });
+      const fifo = path.join(run, 'in');
+      execFileSync('mkfifo', [fifo]);
+      const req = op === 'readFrom' ? { op, path: fifo, offset: 0 } : { op, path: fifo };
+      try {
+        const t0 = Date.now();
+        const res = await client!.req<Res>(++id, req);
+        expect(Date.now() - t0).toBeLessThan(1_000);
+        expect(res.ok).toBe(true);
+        expect(res).not.toHaveProperty('absent');
+      } finally {
+        // A blocking open (the mutant) waits for a writer: give it one, so a red run frees its thread.
+        try { fds.push(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK)); } catch { /* nothing waits */ }
+      }
+    },
+    4_000,
+  );
+
   it('a regular lane-state file still reads', async () => {
     const f = await open();
     const dir = path.join(f.home, '.cc-sessions', '.accounts');
