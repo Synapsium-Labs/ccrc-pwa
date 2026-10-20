@@ -97,15 +97,25 @@ refuses to type over it. It backs off and retries; it does **not** give up
 immediately. You will see `attempts` climb on every tick.
 
 The budget is **6 attempts**, and it applies only to a delivery that has never
-been delivered at all. At the sixth the lane parks it `state: "rejected"` and
-stops. That is deliberate — a message that can never land should not retry for
-the life of the box — but a park means your brief was never read.
+been delivered at all. At the sixth the lane **parks** it — and a park is not a
+give-up while the recipient session is alive: the delivery stays outstanding
+(`state: "queued"`, with a `parkedAt` time on `GET /api/mail`), and the lane
+delivers it the moment the worker's input box changes (the draft sent or
+cleared), or on its own retry every 10 minutes. It is rejected
+(`state: "rejected"`) only when the recipient is gone for good, its run closes,
+or it has sat parked for 24 hours.
 
 **One failure parks on the FIRST attempt, not the sixth:** `enter-ignored`,
-where the lane typed your message into a never-delivered row's box and the
-session swallowed both Enters. The text is sitting there whole, so re-injecting
-would type the entire envelope a second time underneath the first. Do not wait
-for a count to climb on that one.
+where the lane typed the nudge into a never-delivered row's box and the session
+swallowed both Enters. The nudge is sitting there whole, so the lane never
+types it again. Every 10 minutes it presses Enter on that nudge once more, only
+after checking that the box still holds exactly its own text, and it delivers
+at once if the box is submitted or cleared in between.
+
+**You are told.** When a message YOU sent parks, you get a system mail from
+`operator` with the subject `mail parked: <your subject>`, saying why and what
+will land it — and `mail rejected: <your subject>` if it ever hits the 24-hour
+ceiling. The operator is told once too, about 15 minutes in.
 
 What to do, in order:
 
@@ -127,10 +137,12 @@ What to do, in order:
    because they are four an operator plausibly types and leaves sitting, so a
    `/clear` with no such record behind it is treated as the operator's and
    refused. Assume nothing will be cleared for you; check the screen.
-4. **If the delivery has already parked**, send the message again with
-   `POST /api/mail` once the box is clear. The park is terminal for that
-   delivery, not for the conversation: the mail row is untouched and nothing you
-   said is lost.
+4. **If the delivery has parked**, do not send it again: clearing the box is
+   enough, and the lane delivers it on its own. Only a delivery that was
+   REJECTED (`state: "rejected"` — its recipient gone, its run closed, or 24 h
+   parked) needs a fresh `POST /api/mail`. Even then the rejection is terminal
+   for that delivery, not for the conversation: the mail row is untouched and
+   nothing you said is lost.
 
    You do not have to do that for a report addressed to the CHAIR after the
    operator hands the program to a new coordinator. That handover queues the new
