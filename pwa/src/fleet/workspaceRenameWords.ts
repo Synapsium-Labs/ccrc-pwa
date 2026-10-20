@@ -93,8 +93,25 @@ const BAD_TITLE_TEXT: Record<BadTitleReason, string> = {
   'too-long': "The fleet box's ccd says that title is too long. Shorten it, or paste just the ticket id.",
 };
 
-/** One sentence per refusal, none a prefix of another (`workspace-rename-words.test.ts` holds the set apart). */
-export function renameRefusalText(r: RenameRefusal): string {
+/** What a rename's refusal says once its sheet is gone: the title was not changed, and never an instruction for a field
+ *  nobody can type in. An arm with nothing to say about a sheet is `null`, and falls through to `renameRefusalText`'s own. */
+function dismissedRenameText(r: RenameRefusal): string | null {
+  switch (r.kind) {
+    case 'name-too-long': return "That title was too long, so it wasn't changed.";
+    case 'bad-name': return "That title couldn't be used, so it wasn't changed.";
+    case 'bad-title': return "The fleet box's ccd refused that title, so it wasn't changed.";
+    case 'not-saved': return "The fleet box couldn't finish writing the title, so it may be half changed. Check the board.";
+    default: return null;
+  }
+}
+
+/** One sentence per refusal, none a prefix of another (`workspace-rename-words.test.ts` holds the set apart).
+ *  `dismissed`: the sheet was closed while the request was in flight, so the sentence is a toast (`dismissedRenameText`). */
+export function renameRefusalText(r: RenameRefusal, opts: { dismissed?: boolean } = {}): string {
+  if (opts.dismissed === true) {
+    const said = dismissedRenameText(r);
+    if (said !== null) return said;
+  }
   switch (r.kind) {
     case 'bad-request': return BAD_REQUEST_TEXT;
     case 'bad-session-id': return "This session's id isn't valid, so it can't be renamed. Reload the page.";

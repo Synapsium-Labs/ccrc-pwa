@@ -89,6 +89,10 @@ export interface AddContext {
   project: string;
   slug: string | null;
   roster: readonly RosterWire[];
+  /** The refusal arrived after its sheet was dismissed, so it is said once as a toast with no sheet behind it: a
+   *  sentence that promises the open sheet's text, account step or field ("Your text is kept", "Pick another
+   *  account", "change the name") is then false, and each such arm says what is true without one. Absent: the open sheet's. */
+  dismissed?: boolean;
 }
 
 /**
@@ -123,8 +127,34 @@ const NEEDS_TEXT: Record<AddNeeds, string> = {
 /** The new-session door's own `ws-title-v1` sentence: clearing the name there starts on the main checkout, not an automatic workspace. */
 const NEW_SESSION_TITLE_NEEDS_TEXT = "The fleet box's ccd is too old to name a workspace. Update the fleet box, or clear the name to start on the main checkout.";
 
+/** The sentence for a refusal whose sheet was dismissed: what happened to the workspace and what is on the board, and
+ *  never an instruction for a field that is gone. An arm with nothing to say about a sheet is `null`, and falls through
+ *  to `addRefusalText`'s own. */
+function dismissedRefusalText(r: AddRefusal, ctx: AddContext): string | null {
+  switch (r.kind) {
+    case 'name-too-long': return "That name was too long, so the workspace wasn't created.";
+    case 'id-too-long': return `${ctx.project} plus that name makes an id too long for the fleet box, so the workspace wasn't created.`;
+    case 'bad-name': return "That name couldn't be used, so the workspace wasn't created.";
+    case 'bad-wrapper': return "That account name wasn't valid, so the workspace wasn't created.";
+    case 'bad-slug': return "The fleet box refused that name's short form, so the workspace wasn't created.";
+    case 'slug-taken': return ctx.slug === null
+      ? 'A workspace with that name already exists. Open it from the board.'
+      : `${workspaceId(ctx.project, ctx.slug)} already exists. Open it from the board.`;
+    case 'account-refused': return r.leftBehind ? null : `${accountRefusedText(r.reason, ctx.roster)} Nothing was created.`;
+    case 'unsupported': return r.needs === null
+      ? "The fleet box's ccd doesn't support that yet. Update the fleet box."
+      : r.needs === 'ws-title-v1' ? "The fleet box's ccd is too old to name a workspace. Update the fleet box."
+        : "The fleet box's ccd is too old to start a named workspace on the account you picked. Update the fleet box.";
+    default: return null;
+  }
+}
+
 /** One sentence per refusal, none a prefix of another (`workspace-add-words.test.ts` holds the set apart). */
 export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
+  if (ctx.dismissed === true) {
+    const said = dismissedRefusalText(r, ctx);
+    if (said !== null) return said;
+  }
   switch (r.kind) {
     case 'bad-request': return BAD_REQUEST_TEXT;
     case 'bad-project': return `"${ctx.project}" isn't a project a workspace can be added to.`;

@@ -141,3 +141,53 @@ describe('accountRefusedText reads ccd\'s <lane>:<why>', () => {
     expect(accountRefusedText('refused', TEST_ROSTER)).toBe("That account can't take a new workspace (refused).");
   });
 });
+
+// A REFUSAL THAT ARRIVES AFTER ITS SHEET WAS DISMISSED is said once, as a toast, with no sheet behind it (second blind
+// review, S3-2). Every sentence that promises something about the open sheet, "Your text is kept", "Pick another
+// account", "change the name", an instruction to shorten, clear or retype, is then false or has nothing to act on.
+describe('addRefusalText for a sheet that is gone', () => {
+  const gone = { ...ctx, dismissed: true };
+  const every: AddRefusal[] = [
+    { kind: 'bad-request' }, { kind: 'bad-project' }, { kind: 'name-too-long' }, { kind: 'id-too-long' },
+    ...NAME_REFUSALS.map((reason): AddRefusal => ({ kind: 'bad-name', reason })),
+    { kind: 'bad-name', reason: null }, { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' },
+    { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false },
+    { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true },
+    { kind: 'unsupported', needs: 'ws-title-v1' }, { kind: 'unsupported', needs: 'ws-wrapper-v1' }, { kind: 'unsupported', needs: null },
+    { kind: 'ccd-failed', stderr: 'no origin/HEAD' }, { kind: 'ccd-failed', stderr: null },
+    { kind: 'unreached' }, { kind: 'other', status: 418 },
+  ];
+  /** What only an open sheet can honour: its kept text, its account step, its field. */
+  const SHEET_PROMISES = [
+    /text is kept/i, /pick another account/i, /pick the account/i, /change the name/i, /change it/i, /shorten/i,
+    /clear the name/i, /try a different/i, /change the options/i, /type one/i, /retype/i,
+  ];
+
+  it('promises nothing about a sheet, for any refusal, at either door', () => {
+    for (const door of ['plus', 'new-session'] as const) {
+      for (const r of every) {
+        const text = addRefusalText(r, { ...gone, door });
+        for (const promise of SHEET_PROMISES) expect(text, `${door} ${JSON.stringify(r)}`).not.toMatch(promise);
+      }
+    }
+  });
+
+  it('still gives every refusal kind its own sentence, and says the id that is taken', () => {
+    // The grammar's name refusals read as one sentence for a gone sheet, so uniqueness is over the kinds.
+    const firstOfKind = every.filter((r, i) => every.findIndex((x) => x.kind === r.kind) === i);
+    const distinct = firstOfKind.map((r) => addRefusalText(r, gone));
+    expect(new Set(distinct).size).toBe(distinct.length);
+    expect(addRefusalText({ kind: 'slug-taken' }, gone)).toContain('project-a-eng-1234 already exists. Open it from the board.');
+    expect(addRefusalText({ kind: 'slug-taken' }, { ...gone, slug: null })).toBe('A workspace with that name already exists. Open it from the board.');
+  });
+
+  it('an account refusal that created nothing says so and no more; one that left a worktree keeps ccd\'s remedy', () => {
+    expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false }, gone)).toMatch(/can't sign in right now\. Nothing was created\.$/);
+    expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true }, gone)).toContain('ccd start <account> project-a <worktree>');
+  });
+
+  it('is the open sheet\'s sentence when the sheet is not gone', () => {
+    expect(addRefusalText({ kind: 'slug-taken' }, { ...ctx, dismissed: false })).toBe(addRefusalText({ kind: 'slug-taken' }, ctx));
+    expect(addRefusalText({ kind: 'slug-taken' }, ctx)).toMatch(/Your text is kept\.$/);
+  });
+});

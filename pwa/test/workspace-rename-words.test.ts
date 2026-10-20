@@ -56,7 +56,7 @@ describe('renameRefusalText', () => {
   ];
 
   it('gives every refusal a sentence of its own, and no sentence is the start of another', () => {
-    const texts = every.map(renameRefusalText);
+    const texts = every.map((r) => renameRefusalText(r));
     expect(new Set(texts).size).toBe(texts.length);
     for (const a of texts) for (const b of texts) if (a !== b) expect(b.startsWith(a), `${a} starts ${b}`).toBe(false);
   });
@@ -84,6 +84,39 @@ describe('renameRefusalText', () => {
 
   it('a half-made write says it may be half changed and that trying again is the way out', () => {
     expect(renameRefusalText({ kind: 'not-saved' })).toMatch(/half changed.*Try again/);
+  });
+});
+
+// The same rule as the create's (second blind review, S3-2): a refusal that lands after the sheet was dismissed is
+// said as a toast, so it may not tell the operator to retype, shorten or change a field that is no longer there.
+describe('renameRefusalText for a sheet that is gone', () => {
+  const every: RenameRefusal[] = [
+    { kind: 'bad-request' }, { kind: 'bad-session-id' }, { kind: 'name-too-long' }, { kind: 'bad-name', reason: null },
+    { kind: 'bad-name', reason: 'no-usable-characters' }, { kind: 'bad-name', reason: 'too-short' },
+    { kind: 'bad-title', reason: null }, { kind: 'bad-title', reason: 'blank' }, { kind: 'bad-title', reason: 'control-characters' },
+    { kind: 'bad-title', reason: 'too-long' }, { kind: 'not-a-workspace' }, { kind: 'unknown-session' }, { kind: 'unsupported' },
+    { kind: 'not-saved' }, { kind: 'ccd-failed', stderr: 'x' }, { kind: 'ccd-failed', stderr: null },
+    { kind: 'unreached' }, { kind: 'other', status: 418 },
+  ];
+  const SHEET_PROMISES = [/type one/i, /retype/i, /shorten/i, /change it/i, /clear the title/i, /text is kept/i];
+
+  it('promises nothing about a field that is no longer there', () => {
+    for (const r of every) {
+      const text = renameRefusalText(r, { dismissed: true });
+      for (const promise of SHEET_PROMISES) expect(text, JSON.stringify(r)).not.toMatch(promise);
+      expect(text.trim()).not.toBe('');
+    }
+  });
+
+  it('says that the title was not changed, where the open sheet says what to type', () => {
+    expect(renameRefusalText({ kind: 'name-too-long' }, { dismissed: true })).toBe("That title was too long, so it wasn't changed.");
+    expect(renameRefusalText({ kind: 'bad-name', reason: null }, { dismissed: true })).toBe("That title couldn't be used, so it wasn't changed.");
+    // A half-made write has no field to retry from: it points at the board, where the truth is.
+    expect(renameRefusalText({ kind: 'not-saved' }, { dismissed: true })).toMatch(/half changed\. Check the board\.$/);
+  });
+
+  it('is the open sheet\'s sentence otherwise', () => {
+    for (const r of every) expect(renameRefusalText(r, { dismissed: false })).toBe(renameRefusalText(r));
   });
 });
 
