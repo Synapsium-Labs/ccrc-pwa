@@ -53,7 +53,9 @@ async function boot(page: Page, view: AppView): Promise<void> {
     const root = document.documentElement;
     return root.getAttribute('data-skin') === skin && (root.getAttribute('data-theme') ?? 'phosphor') === theme;
   }, [view.skin, view.theme] as const, { timeout: 20_000 });
-  await page.locator('main, [data-page-scaffold]').first().waitFor({ timeout: 20_000 });
+  // The first VISIBLE landmark: on a phone the frame's `main#content` is hidden on the fleet route (the swap) and the
+  // fleet column, a `section.fleet`, is what shows (W2 S2b; D-5466).
+  await page.locator('main:visible, section.fleet:visible, [data-page-scaffold]:visible').first().waitFor({ timeout: 20_000 });
 }
 
 /** The root's resolved value of a token, as the page sees it under the current media. */

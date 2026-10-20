@@ -198,7 +198,7 @@ export function AppearanceSection(): ReactNode {
     <section className="settings-section" aria-labelledby={titleId}>
       <h2 id={titleId} className="settings-section-title">Appearance</h2>
       <SkinFieldset />
-      <AppearanceFieldset legend="Theme">
+      <AppearanceFieldset legend="Theme" command="switch-theme">
         <AppearanceRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} group="settings-theme" swatch={false} />
         {/* Grouped by how the palette reads, because that is the first thing
             anyone is choosing between — and the ask was light AND dark, not a

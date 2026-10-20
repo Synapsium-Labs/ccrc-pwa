@@ -1,27 +1,27 @@
 // The base commands (D-5103): the screens, the sessions, the layout and the
-// theme, and the shortcut sheet. "New session" and the per-session actions
-// are W2's: they need the fleet screen's own state, and that screen is held
-// by an in-flight change until it lands.
+// theme, and the shortcut sheet. W2 Task S2b adds "New session" (the fleet
+// flows' own door, D-5468), "Go to Docs" (from the route table) and "Open the
+// command palette" (D-5469: a door runs a command, so the search door needs
+// one); the per-session actions join in S2d.
 import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
 import { groupFleet } from '../fleet/groupFleet';
 import { nestFleet } from '../fleet/nestFleet';
 import { isRunClosed, runCard } from '../fleet/runWords';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { matchRoute, ROUTES } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 
-/** The screens a "Go to" command opens, each with its `g` chord's second key.
- *  `command-registry.test.ts` holds every path to a route `app.tsx` routes.
- *  Archive has no chord: `a` is Accounts, and the archive is a door off the
- *  fleet rather than a place visited every day. */
-export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = [
-  { id: 'go-fleet', title: 'Go to Fleet', path: '/', chord: 'f' },
-  { id: 'go-inbox', title: 'Go to Inbox', path: '/mail', chord: 'i' },
-  { id: 'go-runs', title: 'Go to Runs', path: '/runs', chord: 'r' },
-  { id: 'go-accounts', title: 'Go to Accounts', path: '/accounts', chord: 'a' },
-  { id: 'go-archive', title: 'Go to Archive', path: '/archive' },
-  { id: 'go-settings', title: 'Go to Settings', path: '/settings', chord: 's' },
-];
+/** The `g` chord's second key per route. Archive and Docs have none: `a` is
+ *  Accounts and `d` is unclaimed, and both are doors off the fleet rather
+ *  than places visited every day. */
+const CHORDS: Readonly<Record<string, string>> = { fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
+
+/** The screens a "Go to" command opens: the route table's top rows (D-5466),
+ *  each with its `g` chord's second key. `command-registry.test.ts` holds
+ *  every path to a route `app.tsx` routes. */
+export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = ROUTES.flatMap((r) =>
+  r.top && r.path !== null ? [{ id: `go-${r.id}`, title: `Go to ${r.title}`, path: r.path, chord: CHORDS[r.id] }] : []);
 
 /** The fleet in the order the fleet screen draws it: its cards in
  *  `groupFleet`'s order (which sorts with `sortFleet`), and each card's rows
@@ -41,8 +41,8 @@ export function fleetOrder(
 
 /** The session the path names, or null off a session screen. */
 function currentId(path: string): string | null {
-  const m = /^\/s\/([^/]+)\/?$/.exec(path);
-  return m ? decodeURIComponent(m[1]!) : null;
+  const at = matchRoute(path);
+  return at?.route.id === 'session' ? at.param : null;
 }
 
 /** Step through the fleet from the session in force, wrapping at either end.
@@ -67,6 +67,12 @@ export function baseCommands(): Command[] {
       keys: g.chord === undefined ? undefined : ['g', g.chord],
       run: (ctx) => ctx.navigate(g.path),
     })),
+    {
+      id: 'new-session',
+      title: 'New session',
+      group: 'Sessions',
+      run: (ctx) => ctx.openNewSession(),
+    },
     {
       id: 'open-session',
       title: 'Open session…',
@@ -130,6 +136,15 @@ export function baseCommands(): Command[] {
           })),
         ],
       }),
+    },
+    {
+      // Offered by a door (the search door, the command field), never inside
+      // the palette it would open: the palette is already open there.
+      id: 'open-palette',
+      title: 'Open the command palette',
+      group: 'Help',
+      when: (ctx) => !ctx.paletteOpen,
+      run: (ctx) => ctx.openPalette(),
     },
     {
       id: 'show-shortcuts',
