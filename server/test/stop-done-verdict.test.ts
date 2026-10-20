@@ -26,10 +26,11 @@ const readLive = (o: Record<string, unknown>): StopDoneInput['live'] =>
   ({ kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE, ...o }) as StopDoneInput['live'];
 
 const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
-  row: row(),
+  row: row(), heldKind: 'none', holdOkVerb: true,
   store: {
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
     openWorker: false, openClaimant: false, claim: false, mail: false, reviewing: false,
+    placed: { last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }, openWorker: false },
   },
   viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
   afterMs: HIBERNATE_AFTER_MS_DEFAULT,

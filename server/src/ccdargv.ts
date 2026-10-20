@@ -353,7 +353,8 @@ export const CCD_ARGV = {
    *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
    *  `hibernate-verb-dec-and-idempotence` (D-5424)).
    *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
-  hibernate: (id: string, dec: ActorFlags | null) => argv(['hibernate', id, ...decFlags(dec)]),
+  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null) =>
+    argv(['hibernate', ...(holdOk === null ? [] : ['--hold-ok', holdOk]), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -979,6 +980,13 @@ export const COLLECT_CAP = 'collect-v1';
  *  the server's own read is then the only guard, as it was before. ccd's `echo swap-busy-v1` and
  *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
 export const SWAP_BUSY_CAP = 'swap-busy-v1';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--hold-ok <text>` (D-6091, fleet capacity W1-1):
+ *  ccd passes a `.hold` that re-reads byte-identical to `<text>` and is a programme hold. It gates ONE decision, the
+ *  run-done policy's: whether a finished child held only by its programme's hold may be put to sleep. Read through
+ *  `capSupported` (false on no evidence), so a box without it keeps today's `held`. ccd's `echo hibernate-hold-ok` and
+ *  `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

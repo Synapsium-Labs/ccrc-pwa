@@ -549,7 +549,11 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
         lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
           last: asked.map((sessionId) => ({ sessionId, runId: 10, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'acct-a-project-a' })),
-          openWorkers: [], openClaimants: ['acct-a-project-a'] }),
+          openWorkers: [], openClaimants: ['acct-a-project-a'],
+          // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
+          lastPlaced: asked.map((sessionId) => ({ sessionId, runId: 10, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
+            program: 'p', programTitle: null, claimedBy: 'acct-a-project-a' })),
+          openPlacedWorkers: [] }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: () => undefined,

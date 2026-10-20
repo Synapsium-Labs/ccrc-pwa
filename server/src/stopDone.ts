@@ -106,6 +106,12 @@ export type StopDoneStoreRead =
     /** The session's NEWEST run as worker (`lastRunBySession`), or null when no run names it. */
     readonly last: { readonly runId: number; readonly state: string; readonly closedAt: number | null } | null;
     readonly openWorker: boolean;
+    /** D-6091: the same two facts with `planned` runs left out (`lastRunBySession`'s `lastPlaced` and
+     *  `openPlacedWorkers`): a wave not yet dispatched uses nothing. */
+    readonly placed: {
+      readonly last: { readonly runId: number; readonly state: string; readonly closedAt: number | null } | null;
+      readonly openWorker: boolean;
+    };
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
@@ -136,8 +142,18 @@ export type StopDoneLive =
     readonly mark: StopDoneMark;
   };
 
+/** What the row's `.hold` is, classified by the sweep (L4) so this file still imports L0 alone (D-6091). `none`: no
+ *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
+ *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-open`: one naming a run
+ *  the store reads in / outside `TERMINAL_RUN_STATES`. `unreadable`: one naming a run the store could not read. */
+export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-open' | 'unreadable';
+
 export interface StopDoneInput {
   readonly row: StopDoneRow;
+  /** The row's `.hold`, classified (D-6091). */
+  readonly heldKind: StopDoneHeldKind;
+  /** `capSupported` for `hibernate-hold-ok`: this box's ccd takes `ccd hibernate --hold-ok <text>` (D-6091). */
+  readonly holdOkVerb: boolean;
   readonly store: StopDoneStoreRead;
   /** `Presence.isOpen` for this id (D-5242's presence contract): an open screen, visible or hidden. */
   readonly viewer: boolean;
@@ -157,7 +173,11 @@ export interface StopDoneInput {
 }
 
 export type StopDoneVerdict =
-  | { readonly act: 'hibernate'; readonly runId: number; readonly idleMs: number }
+  | {
+    readonly act: 'hibernate'; readonly runId: number; readonly idleMs: number;
+    /** D-6091: the exact `.hold` text a programme hold passed with; the act hands it to `ccd hibernate --hold-ok`. */
+    readonly holdOk?: string;
+  }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
 

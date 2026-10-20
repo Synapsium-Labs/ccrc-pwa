@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
 import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -419,6 +419,40 @@ describe('stopDonePass: run-close timing, before and after (D-6091)', () => {
     const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
     expect(f.argv).toEqual([]);
+  });
+});
+
+// D-6091: the sweep classifies the row's `.hold` for the verdict. Every read it cannot make holds.
+describe('heldKindOf: the row\'s hold, classified (D-6091)', () => {
+  const coord = (states: Record<number, string | 'unreadable' | 'absent' | 'throws'>) => ({
+    run: (id: number) => {
+      const st = states[id];
+      if (st === 'throws') throw new Error('locked');
+      if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'x' };
+      if (st === undefined || st === 'absent') return { ok: true as const, run: null };
+      return { ok: true as const, run: { state: st } };
+    },
+  }) as unknown as Pick<StopDoneSweepDeps['coord'], 'run'>;
+
+  it('no hold, an operator text, the unreadable and empty placeholders, a programme hold', () => {
+    const c = coord({});
+    expect(heldKindOf(null, c)).toBe('none');
+    expect(heldKindOf('keep: debugging', c)).toBe('operator');
+    expect(heldKindOf('<hold file unreadable — treated as held>', c)).toBe('operator');
+    expect(heldKindOf('', c)).toBe('operator');
+    expect(heldKindOf('program:programme-a wave:3', c)).toBe('programme');
+  });
+
+  it('a run: suffix reads the run: done and failed are terminal, every other state open', () => {
+    const c = coord({ 7: 'done', 8: 'failed', 9: 'working', 10: 'planned', 11: 'awaiting-review' });
+    expect(heldKindOf('program:programme-a wave:2 run:7', c)).toBe('run-terminal');
+    expect(heldKindOf('program:programme-a wave:2 run:8', c)).toBe('run-terminal');
+    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('run-open');
+  });
+
+  it('a run: suffix whose run cannot be read — refused, absent or throwing — is unreadable', () => {
+    const c = coord({ 7: 'unreadable', 8: 'absent', 9: 'throws' });
+    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('unreadable');
   });
 });
 

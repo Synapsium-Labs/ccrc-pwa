@@ -5,17 +5,18 @@ import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
-import { CCD_ARGV, sweepDec, verbSupported } from './ccdargv.js';
+import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, capSupported, sweepDec, verbSupported } from './ccdargv.js';
 import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX, hibernateAfterMs,
 } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
+import { programmeHoldOf } from './coord/rundefs.js';
 import { expiryReviewing } from './coord/expireArchived.js';
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 import {
   STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
-  stopDoneVerdict, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow, type StopDoneStoreRead,
-  type StopDoneVerdict,
+  stopDoneVerdict, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
+  type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
 
 /**
@@ -109,10 +110,15 @@ function storeReadFor(
   if (!last.ok) return { ok: false, detail: last.detail };
   try {
     const run = last.last.find((l) => l.sessionId === id) ?? null;
+    const placed = last.lastPlaced.find((l) => l.sessionId === id) ?? null;
     return {
       ok: true,
       last: run === null ? null : { runId: run.runId, state: run.state, closedAt: run.closedAt },
       openWorker: last.openWorkers.includes(id),
+      placed: {
+        last: placed === null ? null : { runId: placed.runId, state: placed.state, closedAt: placed.closedAt },
+        openWorker: last.openPlacedWorkers.includes(id),
+      },
       openClaimant: last.openClaimants.includes(id),
       claim: claimants.has(id),
       // D-5838: a PARKED row does not veto (it waits on its box, up to 24 h, and
@@ -143,6 +149,23 @@ function storeReads(coord: StopDoneSweepDeps['coord'], ids: readonly string[]): 
     for (const id of ids) out.set(id, { ok: false, detail });
   }
   return out;
+}
+
+/** The row's `.hold`, classified (D-6091): the grammar through `programmeHoldOf`, the one reader of
+ *  `HOLD_REASON_PATTERN`, and a `run:` suffix's state through the store's `run` read. Any read that cannot be made, or
+ *  a run the store does not have, answers `unreadable`, which holds. */
+export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>): StopDoneHeldKind {
+  if (held === null) return 'none';
+  const hold = programmeHoldOf(held);
+  if (hold === null) return 'operator';
+  if (hold.runId === null) return 'programme';
+  try {
+    const r = coord.run(hold.runId);
+    if (!r.ok || r.run === null) return 'unreadable';
+    return (TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state) ? 'run-terminal' : 'run-open';
+  } catch {
+    return 'unreadable';
+  }
 }
 
 async function readLive(deps: StopDoneSweepDeps, rec: SessionRecord): Promise<StopDoneLive> {
@@ -187,9 +210,11 @@ export async function stopDonePass(
   if (pop.length === 0) return [];
   const reads = storeReads(deps.coord, pop.map((s) => s.id));
   const verb = verbSupported(deps.fleetState, CCD_ARGV.hibernate(pop[0]!.id, null));
+  const holdOkVerb = capSupported(deps.fleetState, HIBERNATE_HOLD_OK_CAP);
   const afterMs = hibernateAfterMs(names.includes(HIBERNATE_AFTER_HOURS_FILE) ? await deps.readAfterHours() : null);
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
-    row, store, viewer: deps.presence?.isOpen(row.id) ?? true, sinceStartMs: at - deps.startedAt,
+    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb, store, viewer: deps.presence?.isOpen(row.id) ?? true,
+    sinceStartMs: at - deps.startedAt,
     presenceTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), afterMs,
     live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
@@ -219,7 +244,7 @@ export async function stopDonePass(
         const store = storeReads(deps.coord, [row.id]).get(row.id)!;
         const v = stopDoneVerdict(inputFor(again, store, await readLive(deps, rec), at));
         if (v.act !== 'hibernate') return { id: row.id, kind: 'held-at-act', verdict: v };
-        const res = await deps.runCcd(CCD_ARGV.hibernate(row.id, sweepDec(deps.fleetState, STOP_DONE_ACTOR)));
+        const res = await deps.runCcd(CCD_ARGV.hibernate(row.id, sweepDec(deps.fleetState, STOP_DONE_ACTOR), v.holdOk ?? null));
         if (!res.ok) {
           mem.retryAt.set(row.id, deps.now() + STOP_DONE_RETRY_MS);
           const busy = /ccd: session-busy: ?(\S*)/.exec(res.stderr);
