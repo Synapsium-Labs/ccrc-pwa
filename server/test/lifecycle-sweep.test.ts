@@ -12,6 +12,7 @@ import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 import {
   LC_ACT_UNKNOWN, LC_DIR_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX, LIFECYCLE_ACTS,
 } from '../../shared/api.js';
@@ -105,7 +106,7 @@ describe('the tick itself', () => {
     // but both should get to report rather than the first hiding the second).
     // D-5832: the one other interval is the delegation lane's stall sampler, a measurement clock (not a sweep) that the lane's close() clears.
     expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(2);
-    expect.soft(src.match(/LANE_TIMERS\.setInterval\(/g) ?? [], 'the second is the lane sampler, by name').toHaveLength(1);
+    expect.soft(callsIn(symbolOf('server/src/watch.ts', 'createDelegationStallSampler')).filter((c) => c.callee === 'LANE_TIMERS.setInterval'), 'the second is the lane sampler, by name').toHaveLength(1);
     expect.soft(src).not.toContain('lifecycleTimer');
   });
 
