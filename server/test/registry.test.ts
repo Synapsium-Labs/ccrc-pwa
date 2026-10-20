@@ -549,6 +549,62 @@ describe('workspace on the wire', () => {
   });
 });
 
+describe('title and named (named-workspaces S2)', () => {
+  let home: string;
+  let reg: string;
+  const ID = 'demo-quiet-mesa';
+  const row = {
+    wrapper: 'claude-a', project: 'demo', workdir: '/w/demo/quiet-mesa', uuid: 'a'.repeat(36),
+    workspace: 'quiet-mesa',
+  };
+  const read = async (io: FleetIO = localIO) =>
+    (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+  });
+
+  it('a row with neither file reads title null and namedByOperator false, and spends no read on them', async () => {
+    seed(reg, ID, row);
+    const paths: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => { paths.push(p); return localIO.readFileMeasured(p); },
+    };
+    const r = await read(io);
+    expect([r.title, r.namedByOperator]).toEqual([null, false]);
+    expect(paths.filter((p) => /\.(?:title|named)$/.test(p)), 'unlisted fields are not read').toEqual([]);
+  });
+
+  it('reads the title (trimmed) and a present `named` as true', async () => {
+    seed(reg, ID, { ...row, title: 'ENG-1234 - Fix the login flow\n', named: '1' });
+    const r = await read();
+    expect([r.title, r.namedByOperator]).toEqual(['ENG-1234 - Fix the login flow', true]);
+  });
+
+  it('an EMPTY `named` file reads as named — presence is the signal (the `.hold` ruling)', async () => {
+    seed(reg, ID, { ...row, named: '' });
+    expect((await read()).namedByOperator).toBe(true);
+  });
+
+  it('a LISTED but unreadable `named` reads as named — doubt reads as named', async () => {
+    seed(reg, ID, { ...row, named: '1' });
+    expect((await read(unreadableField(ID, 'named'))).namedByOperator).toBe(true);
+  });
+
+  it('a `named` listed but proven gone by its own read is not named', async () => {
+    seed(reg, ID, { ...row, named: '1' });
+    expect((await read(absentField(ID, 'named'))).namedByOperator).toBe(false);
+  });
+
+  it('a blank title reads null, never an empty label', async () => {
+    seed(reg, ID, { ...row, title: '  \n' });
+    expect((await read()).title).toBeNull();
+  });
+});
+
 describe('PR and archive fields', () => {
   it('reads base, prphase, prnumber, prcheckedat and archived off disk', async () => {
     const home = mkTmp('ccrc-');

@@ -3742,6 +3742,20 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // A HUMAN'S NAME IS FINAL (named workspaces S2, D-6112). A workspace a human
+      // named — `ccd ws-add --title`, `ccd ws-title` — keeps its name. Its
+      // branch is still the birth branch `ws/<slug>`, so nothing above tells it
+      // from an auto-named one, and `sessionLabel` reads `branch` before
+      // `workspace`: without this clause the operator's `eng-1234` is rewritten
+      // to the model's title within one sweep of the first ai-title, with no
+      // verb able to put it back. Doubt reads as NAMED (`namedByOperator`'s
+      // ladder: a listed-but-unreadable or empty marker is true) — the same
+      // ruling as `held` below, for the same asymmetry: renaming over a human's
+      // choice is unrecoverable, skipping an auto row leaves it where it was.
+      // A field on the row this loop already read, so it sits before the
+      // `openRunsForSession` query and costs nothing; `--clear` removes the file
+      // and returns the row to the sweep.
+      if (r.namedByOperator) continue;
       // TWELFTH CONDITION (Wave 3 §3.1). A claimed workspace is not renamed —
       // `sessionLabel` reads `branch` before `workspace`, so a rename mid-wave
       // changes what every surface calls a worker the coordinator's ledger

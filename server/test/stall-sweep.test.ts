@@ -130,6 +130,7 @@ const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join
 /** A complete registry row (`hold-gate.test.ts`'s literal), measured unless `over` says otherwise. */
 const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
   hibernatedAt: null,
+  namedByOperator: false, title: null,
   id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,

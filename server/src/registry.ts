@@ -147,6 +147,31 @@ export interface SessionRecord {
    *  file, a power loss with no fsync. A torn write is no longer among them:
    *  `_reg_set` renames rather than truncates. */
   held: string | null;
+  /**
+   * `$REG/<id>.named` — a human chose this workspace's name (`ccd ws-add --title`, `ccd ws-title`), so the name is a
+   * CHOICE and not a placeholder (D-6112). Written ONLY with a title: coordinator dispatch passes a slug too, and
+   * keying on the slug would exempt every dispatched worker from the sweep for life. An auto-named workspace has no
+   * file at all.
+   *
+   * The one consumer is `sweepNames`, which must not rename over it, and that is why the ladder leans this way:
+   * DOUBT READS AS NAMED, the `held` ruling above, and the two mistakes are genuinely asymmetric. Reading a named
+   * workspace as unnamed lets the ai-title sweep rewrite its branch, `sessionLabel` reads `branch` before
+   * `workspace`, and the operator's name disappears from every surface with nothing to put it back. Reading an
+   * unnamed one as named leaves it on `ws/<slug>`, where it already was — the sweep is a courtesy.
+   *
+   * PRESENCE IS THE SIGNAL, as `.hold`'s is: a readable file reads `true` whatever it holds, the EMPTY file included
+   * (`--clear` REMOVES the file, so an empty one is not a clear). A LISTED-but-unreadable file reads `true`. Only two
+   * things read `false`: the file is not in the listing (the field is not even read, D-5347), or a MEASURED `absent`
+   * on a listed one — a proven ENOENT, the marker cleared between the listing and its own read.
+   */
+  namedByOperator: boolean;
+  /**
+   * `$REG/<id>.title` — the sentence the operator gave (`ws-add --title`, `ws-title`), null when absent, unreadable or
+   * blank. Collapsing those is deliberate and costs only a plainer label: unlike `named` this field has no
+   * fail-shut direction to argue about, so it is a plain `field()` read and not a measured one. S6 carries it to the
+   * wire; until then it has no consumer.
+   */
+  title: string | null;
   /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
    *  record (D-310 (was D-B8-14), spec §2): `<epoch-seconds> <verbatim reason>`, written
    *  by `_substrate_mark` on every unknown probe tick, removed by
@@ -776,7 +801,8 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw,
+    namedRead, titleRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -815,6 +841,11 @@ async function buildRecord(
     names.includes(`${id}.childshell`) ? fieldMeasured(io, cfg.registryDir, id, 'childshell') : Promise.resolve(null),
     // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
     names.includes(`${id}.hibernated`) ? field(io, cfg.registryDir, id, 'hibernated') : Promise.resolve(null),
+    // Named workspaces S2 (D-6112): the operator's name marker and title, each read only when listed, the D-5347 shape
+    // `deny-settings` and `childshell` use — a row ccd never named costs no read, so the census does not move. `named`
+    // is MEASURED: a listed marker that will not read is told from one that is gone (see `namedByOperator`).
+    names.includes(`${id}.named`) ? fieldMeasured(io, cfg.registryDir, id, 'named') : Promise.resolve(null),
+    names.includes(`${id}.title`) ? field(io, cfg.registryDir, id, 'title') : Promise.resolve(null),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -1058,6 +1089,11 @@ async function buildRecord(
     held: holdRead.ok
       ? (holdRead.content === '' ? HOLD_NO_REASON : holdRead.content)
       : (holdRead.reason === 'absent' ? null : (holdListed ? HOLD_UNREADABLE : null)),
+    // `namedByOperator`'s ladder. `namedRead` is null exactly when the listing does not name the file, and the file
+    // is read ONLY when it does — so a non-null failed read is a LISTED one: `unreadable` is named (doubt), a measured
+    // `absent` is a proven ENOENT. An empty file is named: presence is the signal, `.hold`'s ruling.
+    namedByOperator: namedRead === null ? false : (namedRead.ok || namedRead.reason === 'unreadable'),
+    title: titleRaw === null || titleRaw === '' ? null : titleRaw,
     // The `.hold` ladder, applied to the supervisor's fault record (D-310,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so
