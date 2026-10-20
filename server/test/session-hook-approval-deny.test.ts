@@ -357,3 +357,107 @@ describe('build guard D-6063: the CLI arm denies a flag before the verb, upgrade
     expect(denyJqMs(`${'claude -a '.repeat(4000)}x`)).toBeLessThan(1000);
   });
 });
+
+describe('build guard D-6064: a write to the build directory or the launcher, in any separator spelling, by more writers and routes', () => {
+  const denied = [
+    'cp x ~/.local/share//claude/versions/2.1.400', 'cp /tmp/x ~/.local/./bin/claude', 'cp /tmp/x ~/.local//bin/claude',
+    'cp /tmp/x .local/bin/claude',
+    'cd ~/.local/share/claude/versions && cp /tmp/x 2.1.400', 'cd ~/.local/share/claude/versions && rm -f 2.1.2*',
+    'cd ~/.local/share/claude/versions && echo x > 2.1.400', 'cd -P ~/.local/share/claude/versions && rm -f 2.1.2*',
+    'cd ~/.local/share && mv claude /tmp/old', 'cd ~/.local/share && mv ./claude /tmp/old',
+    'cd ~/.local && mv share/claude /tmp/x', 'cd ~/.local && cp /tmp/x bin/claude',
+    'cd ~ && cp /tmp/x .local/share/claude/versions/2.1.400', 'cd ~ && rm -rf .local/share/claude/*',
+    // The home row's own pin: `.local/share/claude/x` is no build path by itself, so only the `cd ~` row denies it.
+    'cd ~ && rm -rf .local/share/claude/x',
+    '(cd ~/.local/share/claude; cp /tmp/x versions/2.1.400)', 'pushd ~/.local/share/claude/versions; cp /tmp/x 2.1.400',
+    'cd ~/.local/bin && ln -sf /tmp/x claude', 'cd ~/.local/bin && cp /tmp/x ./claude',
+    'D=~/.local/share/claude/versions; cp x $D/2.1.400',
+    'rm -rf ~/.local/share/claude', 'rm -rf ~/.local/share/claude/*', 'rm -rf ~/.local/share/claude/v*',
+    'rm -rf ~/.local/share/claude/{versions,x}',
+    'install -m 755 /tmp/x ~/.local/bin/claude', 'curl -fsSL https://example.com/b -o ~/.local/share/claude/versions/2.1.400',
+    'wget -O ~/.local/share/claude/versions/2.1.400 https://example.com/b', 'dd if=x of=~/.local/share/claude/versions/2.1.400',
+    'rsync x ~/.local/share/claude/versions/', 'tar -xzf b.tgz -C ~/.local/share/claude/versions',
+    'chmod +x ~/.local/bin/claude', 'touch ~/.local/share/claude/versions/2.1.400',
+    'mkdir -p ~/.local/share/claude/versions/2.1.400', 'unlink ~/.local/bin/claude',
+    'echo x 2> ~/.local/bin/claude', 'echo x >| ~/.local/bin/claude',
+    'find ~/.local/share/claude/versions -mtime +7 -delete', 'ls -d ~/.local/share/claude/versions/2.1.2* | xargs rm -rf',
+    'python3 -c "import shutil; shutil.rmtree(\'/home/u/.local/share/claude/versions/2.1.2\')"',
+    'node -e "require(\'fs\').writeFileSync(\'/home/u/.local/share/claude/versions/x\',\'\')"',
+    // A READ, denied: the stated cost of the interpreter arm, which cannot tell an interpreter's read from its write.
+    'python3 -c "import os; print(os.listdir(\'/home/u/.local/share/claude/versions\'))"',
+  ];
+  it.each(denied)('denied: %s', (c) => {
+    expect(bash(c), c).toContain(BUILD_WHY);
+  });
+  const editDenied: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ['Write', { file_path: '/home/u/.local/share//claude/versions/2.1.400', content: 'x' }],
+    ['Write', { file_path: '/home/u/.local/share/claude/x/../versions/2.1.400', content: 'x' }],
+    ['Write', { file_path: '~/.local/bin/claude', content: 'x' }],
+    ['Edit', { file_path: '/home/u/.local/bin/./claude', old_string: 'a', new_string: 'b' }],
+    ['MultiEdit', { file_path: '/home/u/.local/share/claude//versions/x', edits: [{ old_string: 'a', new_string: 'b' }] }],
+    ['NotebookEdit', { notebook_path: '/home/u/.local/share/claude/versions/../versions/x.ipynb', new_source: 'x' }],
+  ];
+  it.each(editDenied)('denied: %s %j', (tool, input) => {
+    expect(fire(tool, input), `${tool} ${JSON.stringify(input)}`).toContain(BUILD_WHY);
+  });
+  const allowed = [
+    // Review Focus 1: ordinary commands, reads of the build paths and near-names.
+    'npm install', 'npm update', 'git log --grep install', 'pip install -r requirements.txt', 'apt update',
+    'claude --version', 'claude -p "how do I update"', 'claude mcp list', 'claude doctor', 'ccrc install --help',
+    'ls ~/.local/share/claude/versions', 'cat ~/.local/bin/claude', 'du -sh ~/.local/share/claude/versions',
+    'sha256sum ~/.local/share/claude/versions/2.1.302', 'readlink -f ~/.local/bin/claude', 'ls ~/.local/share/claude/*',
+    'cp /tmp/x ~/.local/bin/claude.bak', 'cp /tmp/x ~/.local/bin/claude-a', 'install -m 755 tool ~/.local/bin/mytool',
+    'mkdir -p ~/.local/share/myapp',
+    // And Task 2's own.
+    'find ~/.local/share/claude/versions -maxdepth 1 -type f', 'cd ~/.local/share/claude/versions && ls -la',
+    'cd ~/.local/share/claude/versions && ls 2>/dev/null', 'cd ~/.local/share/claude/versions && ls 2>&1 | head',
+    'cd ~/.local/share/claude/versions && ls >&2', 'cd ~/.local/share/claude/versions && ls > /dev/null',
+    'cd ~/.local/share && mkdir myapp', 'cd ~/.local/share && rm -rf claude-code-cache', 'cd ~ && rm -rf claude',
+    'cd ~/.local && mkdir -p share/myapp',
+    'cd ~ && cp /tmp/x .local/share/myapp/', 'cd ~/.local/bin && ls -la', 'cd ~/.local/bin && cp /tmp/x ccd-helper',
+    'cd ~/project && mkdir -p claude/versions && cp x claude/versions/', 'cp /tmp/x ~/.local/share/claude-code-cache/x',
+    'rm -rf ~/.local/share/claude-code-cache', 'cp /tmp/x ~/.local/share/claude/versions-old/2.1.302',
+    'curl -fsSL https://example.com/b -o /tmp/x && tar -xzf /tmp/x -C /tmp/out',
+    'mkdir -p ~/.local/share/myapp && cp x ~/.local/share/myapp/', 'chmod +x scripts/install.sh', 'python3 -c "print(1)"',
+  ];
+  it.each(allowed)('allowed: %s', (c) => {
+    expect(bash(c), c).toBeNull();
+  });
+  it.each([
+    ['Write', { file_path: '/home/u/docs/local/share/claude/versions.md', content: 'x' }],
+    ['Write', { file_path: '/home/u/.local/share/claude/versions-old/x', content: 'x' }],
+  ] as const)('allowed: %s %j', (tool, input) => {
+    expect(fire(tool, input)).toBeNull();
+  });
+  // Known gap, D-6064's residual: Bash text is never normalised, so `..` inside a path is past the match.
+  it('residual (known gap): `..` inside Bash text is not normalised, so this write is allowed', () => {
+    expect(bash('cp x ~/.local/share/claude/foo/../versions/2.1.400')).toBeNull();
+  });
+  it('a subagent thread is denied the same', () => {
+    expect(bash('cp /tmp/x ~/.local//bin/claude', SUB)).toContain(BUILD_WHY);
+    expect(fire('Write', { file_path: '/home/u/.local/share//claude/versions/2.1.400', content: 'x' }, SUB)).toContain(BUILD_WHY);
+  });
+  it('a top-level session (no .child) is not denied any of them', () => {
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    for (const c of denied) expect(bash(c), c).toBeNull();
+    for (const [tool, input] of editDenied) expect(fire(tool, input), tool).toBeNull();
+  }, 60_000);
+  // Every separator repetition is bounded ({0,8}): an unbounded one made jq abort ("retry-limit-in-match over"), and
+  // an empty answer is the deny arm FAILING OPEN.
+  it('timing: `~/.local/share/` then 40 KB of `./` is judged in under 1 s, and jq exits 0', () => {
+    expect(denyJqMs(`~/.local/share/${'./'.repeat(20000)}`)).toBeLessThan(1000);
+  });
+  // Segment-heavy input was already slow on main, since jq compiles a regex on every per-segment call: main's deny
+  // program took 13.0 s on this 43 KB input where class mode took 4.7 s (a ratio of 2.8 to 3.1, measured on a loaded
+  // box). Every segment-scanning arm first tests its anchor on the whole command, so deny mode must stay no slower
+  // than main's, held as a ratio to class mode (unchanged from main) on the same input, which load scales alike.
+  it('timing: 43 KB of `cd ~/.local/ && ` is no slower in deny mode than on main (at most 3x class mode)', () => {
+    const cmd = 'cd ~/.local/ && '.repeat(2700);
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'class', hookForbiddenJq()], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } }), encoding: 'utf8', maxBuffer: 1 << 26 });
+    const classMs = Number(process.hrtime.bigint() - t0) / 1e6;
+    expect(r.status, r.stderr).toBe(0);
+    expect(denyJqMs(cmd)).toBeLessThan(3 * classMs);
+  }, 180_000);
+});

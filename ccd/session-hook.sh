@@ -4399,7 +4399,17 @@ fi
 # flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
 # are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
 # head only, where Claude Code runs it. The official installer's URLs and a global npm, pnpm, yarn or bun install of
-# `@anthropic-ai/claude-code` count too. A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
+# `@anthropic-ai/claude-code` count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
+# any separator spelling (`SEPP`: `/`, `//`, `/./`, at most eight), absolute, home-anchored or relative at the start of
+# a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
+# a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
+# through `find` with an action, `| xargs`, an interpreter naming the path, a `cd` row (into the build directory,
+# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule) and a variable holding the path. An
+# edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
+# `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every
+# repetition is bounded, since an unbounded one made jq abort, which here is FAIL-OPEN, and every segment-scanning arm
+# first tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
 # head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
@@ -4410,7 +4420,7 @@ fi
 # top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
-# `downloads.claude.ai`; and `claude` or `/.local/bin/` together with `/.local/` (a write). Every pattern needs one
+# `downloads.claude.ai`; and `.local` (a write, in any spelling, after a `cd` too). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
@@ -4463,23 +4473,61 @@ def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
 def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
 def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
 def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + NW + ")";
+def META: ";&|()<>`" + $q + "\"";
+def BT: "(?![A-Za-z0-9_.-])";
+def LOC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))\\.local" + SEPP;
+def GLOBW: "[^" + WS + "/" + META + "]{0,64}";
+def BUILDX: "(?:" + LOC + "share" + SEPP + "claude" + SEPP + "versions" + BT
+  + "|" + LOC + "share" + SEPP + "claude(?:" + SEPP + GLOBW + "[*?\\[{]" + GLOBW + ")?/{0,8}(?=$|[" + WS + META + "])"
+  + "|" + LOC + "bin" + SEPP + "claude" + BT + ")";
+def SEG: "\n|;|(?<!>)&(?!>)|(?<!>)\\|";
+def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}(?:$|/dev/null" + NW + "))";
+def BWR: "(?:" + RDR + "|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB
+  + "(?:mv|cp|ln|truncate|rm|install|dd|rsync|tar|unzip|chmod|chown|touch|mkdir|curl|wget|unlink|shred|patch)" + NA + ")";
+def hb1($head; $tail): ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
+  | $last >= 0 and (.[0:$last] | test($head));
 def END: "(?=$|[" + WS + ";&|)])";
 def ANC: "(?:(?:~|\\$\\{?HOME\\}?|/[^" + WS + ";&|()<>]{0,256}?)?" + SEPP + "|\\./)?";
 def CDH: "(?:^|[" + WS + "(])(?:cd|pushd)" + SP + "+(?:-[PLe]{1,3}" + SP + "+){0,2}";
-def VERSD: CDH + ANC + "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions/{0,8}" + END;
-def cdthen($cd; $then): test($cd) and (split("[\n;&|]"; null) as $s
-  | first(range(0; $s | length) | select($s[.] | test($cd))) as $k
-  | any($s[$k + 1:][]; test($then)));
+def CDT($dir): CDH + ANC + $dir + "/{0,8}" + END;
+def OPW: "(?<![^" + WS + "=])(?:\\./{1,8})?";
+def VERSD: CDT("\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions");
+def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
+  | ([range(0; $s | length) | select($s[.] | test($cd))] | .[0]) as $k
+  | $k != null and any($s[$k + 1:][]; f));
 def BI: "build\tinstalling or updating a Claude Code build";
+def BW: "build\ta write to a Claude Code build or its launcher";
+def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN;
+def CLOP: "claude(?=$|[" + WS + "/;&|)])";
+def LBOP: "bin" + SEPP + "claude(?=$|[" + WS + ";&|)])";
 def bmatch:
-  (select(hbt("[\n;&|]"; WR; BUILD)) | "build\ta write to a Claude Code build or its launcher"),
+  (select(test(BUILDX) and hbt(SEG; BWR; BUILDX)) | BW),
+  (select(test(NB + "find" + NA) and test(BUILDX) and any(split(SEG; null)[]; test(NB + "find" + NA) and test(BUILDX)
+     and test(SP + "-(?:delete|exec|execdir|ok|okdir)" + NW))) | BW),
+  (select(test(NB + "xargs" + NA) and test(BUILDX) and any(split("[\n;&]"; null)[]; split("|") as $p
+     | ([range(0; $p | length) | select($p[.] | test(BUILDX))] | .[0]) as $k
+     | $k != null and any($p[$k + 1:][]; test("^" + SP + "*xargs" + NA) and test(BWR)))) | BW),
+  (select(test(NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA) and test(BUILDX)) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share" + SEPP + "claude(?:" + SEPP + "versions)?"); BWR; test(BWR))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share"); OPW + CLOP; hb1(BWR; OPW + CLOP))) | BW),
+  (select(cdthen(CDT("\\.local"); "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen("(?:" + CDH + "(?:~|\\$\\{?HOME\\}?)/{0,8}" + END + "|(?:^|[" + WS + "(])cd" + SP + "*$)"; "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "claude" + END; hb1(BWR; OPW + "claude" + END))) | BW),
+  (select(test(BUILDX) and test("=") and (. as $c | [match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
+     | select(.captures[1].string | test(BUILDX)) | .captures[0].string] | unique
+     | any(.[]; . as $n | $c | hbt(SEG; BWR; "\\$\\{?" + $n + NA)))) | BW),
   (select(test(CLI + CRUN)) | BI),
   (select(test(WB + "claude" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
-  (select(cdthen(VERSD; "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN)) | BI),
+  (select(cdthen(VERSD; VERW; test(VERW))) | BI),
   (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai")) | BI),
   (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
      and test(SP + "(?:install|i|add|update|up|upgrade)" + NW) and test("@anthropic-ai/claude-code")
      and test("(?:^|" + SP + ")(?:-g|--global|--location=global|global)" + NW))) | BI);
+def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
+  | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
+      elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
@@ -4492,7 +4540,7 @@ def pathwhy($t):
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
     (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string" and test(BUILD)) | "build\ta write to a Claude Code build or its launcher") // "")
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
@@ -4508,8 +4556,7 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
      || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
-     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* \
-     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) && "$apf" == */.local/* ) ]] || apf=""
+     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* || "$apf" == *.local* ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
