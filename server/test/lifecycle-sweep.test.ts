@@ -97,7 +97,7 @@ describe('FleetWatcher.sweepLifecycle', () => {
 describe('the tick itself', () => {
   const src = fs.readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
 
-  it('adds NO new timer — the sweep rides the tick that already exists', () => {
+  it('adds NO sweep timer of its own — the sweep rides the tick that already exists (the lane\'s stall sampler is the one other interval)', () => {
     // `start()` is the one place a timer is created in this class (`:484`). A
     // second setInterval/setTimeout would be a second clock nothing stops on
     // close. FIX ROUND 1, F8: two independent claims, softened (lower stakes

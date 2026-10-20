@@ -3889,7 +3889,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     const failed = await pass(l);
     expect(failed.report, 'the failed repair returns null').toBeNull();
     expect(l.dur.state().checkpoint.revision, 'the revision did not move').toBe(revision);
-    // the counts agree again, the revision is the projected one, nothing drifted and no clock is due: only the stale mark is left
+    // the counts agree again, nothing drifted and no clock is due: what is left is the failed repair's own invalidation, the stale mark AND
+    // the projected revision its catch cleared beside it (D-5836's M14: either alone refuses the short path, so this row reds M10, not one term)
     l.h.store.db.prepare("DELETE FROM delegation_events WHERE eventId = 'stray'").run();
     await expectFull(l, 'the next per-pass repair, port healthy');
     await expectShort(l, 'after the full repair');
@@ -3974,8 +3975,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectShort(l, 'just inside the interval of the earlier full repair');
     const recovered = await l.dur.recover();
     expect(recovered.failure).toBeNull();
-    // Not due measured from the recover (FULL_MS-1000 on), but long past due measured from the earlier full repair. The first per-pass
-    // repair is full by the first-after-recover rule alone, and the second, at that point, is short.
+    // Not due measured from the recover (FULL_MS-1000 on). The clock restarts at the recover by three equivalent lines (its start, its own
+    // full repair, and the first per-pass repair after it, full by the first-after-recover rule), so no row reds one alone (MrecClock survives).
     l.vclock.ms += FULL_MS - 1000;
     await expectFull(l, 'the first per-pass repair after the recover, FULL_MS-1000 on');
     await expectShort(l, 'the second per-pass repair at that point');
@@ -3991,7 +3992,7 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectFull(l, 'the first per-pass repair right after the recover');
     await expectShort(l, 'the second, right after the recover');
     l.vclock.ms += FULL_MS - 1000;
-    await expectShort(l, 'just inside the interval counted from the recover (a clock still counting from the earlier full repair would force a full here)');
+    await expectShort(l, 'just inside the interval counted from the recover and its full repairs (recover()\'s own restart is one of three equivalent lines)');
     l.vclock.ms += 2000;
     await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
   });
