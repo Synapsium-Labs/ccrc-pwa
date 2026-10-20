@@ -127,7 +127,7 @@ describe('sendPrompt submits a paste chip it can prove is its own (D-5087)', () 
     const human = EMPTY.replace('❯\xa0\x1b[2mTry "how do I log an error?"\x1b[0m', '❯\xa0a half-typed human line');
     expect(draftOf(human)).toBe('a half-typed human line');
     const { tmux, calls } = phaseTmux({ start: human, typed: CHIP });
-    const res = await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'c1000'), { replaceDraft: true });
+    const res = await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'c1000'), { onDraft: 'replace' });
     expect(res).toEqual({ ok: true });
     expect(keysOf(calls)).toEqual(['C-u', 'lit(1000)', 'Enter']);
   });

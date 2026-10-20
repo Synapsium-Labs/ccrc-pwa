@@ -1,4 +1,4 @@
-import type { Deps } from './server.js';
+import type { Deps } from './deps.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
 import { resolveTranscript } from './transcript/resolve.js';
