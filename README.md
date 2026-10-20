@@ -5513,10 +5513,11 @@ partial reads and absent input are reported, never claimed as a clean zero. Noti
 observations at delivery, not exact kill instants.
 
 The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
-`--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days
-(`--since`/`--until` are read in the local zone, so a week across a DST change is refused; the documented
-invocation sets `TZ=UTC`): observed reap-class OOMs ABOVE B + 2 means withdraw the spawn assignment through
-a follow-up release. At B + 2 it is `not-triggered`, not a health verdict; raw pane stops, unmapped and
+`--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days,
+7 × 86400 s (`--since`/`--until` are read in the local zone, so a local calendar week across a DST change is
+refused; Task 5 of `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`
+runs it with `TZ=UTC`): observed reap-class OOMs ABOVE B + 2 means withdraw the spawn assignment through a
+follow-up release. At B + 2 it is `not-triggered`, not a health verdict; raw pane stops, unmapped and
 unmeasured classifications remain beside it. Direct pressure kills do not feed that comparison. The variable
 is `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environment, primary AND
 resume-retry, including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit
