@@ -1029,6 +1029,20 @@ function q18ShareAt(nf, p, o) {
 }
 
 /**
+ * The number of grid steps from x to 1 for a step that divides 1 - x, or null for a step that does not (zero, negative,
+ * not a number, larger than 1 - x, or off by more than 1e-9). q18Power refuses a null with its RangeError and
+ * validateOpenRecord refuses the same value before it is signed: one rule, so the two cannot disagree.
+ * @param {number} gridStep
+ * @param {Frac} x
+ * @returns {number|null}
+ */
+function q18GridSteps(gridStep, x) {
+  const span = (x.den - x.num) / x.den;
+  const N = Math.round(span / gridStep);
+  return gridStep > 0 && N >= 1 && Math.abs(N * gridStep - span) <= 1e-9 ? N : null;
+}
+
+/**
  * Q18, the smallest passing point uptake (W2-D21), procedure 'bisection-on-grid-crn': the grid runs from x to 1
  * in steps of gridStep (which must divide 1 - x). The answer is the bisection's boundary: a grid point whose pass share
  * and whose upper neighbour's both reach `power` while the point below's does not (the top point needs only its own, and
@@ -1046,9 +1060,8 @@ export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gri
   if (!Number.isSafeInteger(sims) || sims < 1) throw new RangeError(`q18Power: sims=${sims} is not a positive integer`);
   nearestRankBounds(B);
   if (cmpFrac(x, frac(0, 1)) <= 0 || cmpFrac(x, frac(1, 1)) >= 0) throw new RangeError('q18Power: x lies outside (0, 1)');
-  const span = (x.den - x.num) / x.den;
-  const N = Math.round(span / gridStep);
-  if (!(gridStep > 0) || N < 1 || Math.abs(N * gridStep - span) > 1e-9) throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+  const N = q18GridSteps(gridStep, x);
+  if (N === null) throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
   const procedure = Q18_DEFAULTS.procedure;
   const keys = new Set();
   for (const f of families) {
@@ -2380,6 +2393,12 @@ function recValidate(record, ctx, checkLink) {
     if (!nodeStores.has(s.store_id) || boundStores.has(s.store_id)) { refuse(`step0a[${i}].store_id`, 'value-outside-set'); entryRefused = true; }
     boundStores.add(s.store_id);
     if (s.settings_mode !== r.settings_mode) refuse(`step0a[${i}].settings_mode`, 'value-outside-set');
+    // Measured under part 1's account: step 0a is carried unchanged into part 2, so this binds both parts (D-5791: the
+    // account, the empty flags map, part 2's census and assignment bindings and the Q18 values below).
+    if (s.account !== r.account) refuse(`step0a[${i}].account`, 'value-outside-set');
+    // An empty map claims no flag measured, which loses the one thing step 0a is for. That it names every flag the
+    // contract uses is W2-5a's parity pin, the first PR that loads both modules.
+    if (Object.keys(s.flags_accepted).length === 0) refuse(`step0a[${i}].flags_accepted`, 'value-outside-set');
     for (const [flag, accepted] of Object.entries(s.flags_accepted)) {
       if (accepted === false) refuse(`step0a[${i}].flags_accepted.${flag}`, 'flag-rejected');
     }
@@ -2393,6 +2412,12 @@ function recValidate(record, ctx, checkLink) {
   if (!decimalFrac(r.halts.handcheck_agreement_min, false).ok) refuse('halts.handcheck_agreement_min', 'value-outside-set');
   // activeFamilies throws on a negative look-back (the integer type is already checked).
   if (r.active_rule.lookback_ms < 0) refuse('active_rule.lookback_ms', 'value-outside-set');
+  // Every signed Q18 value q18Power would throw on. The grid-step test is q18Power's own, shared. An empty
+  // power list and lookback_days are not refused here: q18Power throws on neither.
+  if (!(r.q18_settings.rho_headline >= 0 && r.q18_settings.rho_headline < 1)) refuse('q18_settings.rho_headline', 'value-outside-set');
+  r.q18_settings.power.forEach((p, i) => { if (!(p > 0 && p <= 1)) refuse(`q18_settings.power[${i}]`, 'value-outside-set'); });
+  if (r.q18_settings.sims < 1) refuse('q18_settings.sims', 'value-outside-set');
+  if (q18GridSteps(r.q18_settings.grid_step, X) === null) refuse('q18_settings.grid_step', 'value-outside-set');
 
   // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
   const used = r.pilot.used;
@@ -2461,6 +2486,16 @@ function recValidate(record, ctx, checkLink) {
   const assignedTwice = new Set(assignedKeys).size !== assignedKeys.length;
   if (assignedTwice || !recSame(r.assignment, assignArms(seed, r.assignment.map(recRefOf)))) refuse('assignment', 'assignment-mismatch');
   if (r.assignment_sha256 !== assignmentSha256(r.assignment)) refuse('assignment_sha256', 'assignment-mismatch');
+  // Part 2's census binds to part 1's nodes as step 0a does: a census entry names a node's store and each
+  // store once, every node has its entry (a store holding no families still does: there is no empty form), and no
+  // assigned family sits on a store that no node names.
+  const censusStores = new Set();
+  r.census.forEach((c, i) => {
+    if (!nodeStores.has(c.store_id) || censusStores.has(c.store_id)) refuse(`census[${i}].store_id`, 'value-outside-set');
+    censusStores.add(c.store_id);
+  });
+  r.nodes.forEach((n, i) => { if (!censusStores.has(n.store_id)) refuse(`nodes[${i}]`, 'value-outside-set'); });
+  r.assignment.forEach((a, i) => { if (!nodeStores.has(a.store_id)) refuse(`assignment[${i}].store_id`, 'value-outside-set'); });
 
   // The quiz families: consistent with their counts and the frozen file; no control-held id; no pilot family
   // (W2-D25, W2-D77, W2-D76).

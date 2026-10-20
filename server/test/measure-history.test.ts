@@ -5441,4 +5441,160 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       }
     });
   });
+  describe('review fix round 1: validator bindings (D-5791)', () => {
+    const STORE_C = '00000000-0000-4000-8000-0000000000c3';
+    const VOS = 'value-outside-set';
+    /** q18Power called with the smallest valid parameters, `over` replacing some: families [] returns once they are valid. */
+    const q18With = (over: Record<string, unknown>): unknown =>
+      (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
+        { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...over });
+    const q18 = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
+
+    it('CONTROL: the valid draft and the valid final validate', () => {
+      expect(verdict(draft())).toEqual([]);
+      expect(verdict(final(), chainOf(draft()))).toEqual([]);
+    });
+
+    describe('F8: an empty flags_accepted', () => {
+      it('{} on one entry is value-outside-set at that entry, in a draft', () => {
+        expect(verdict(set(draft(), 'step0a[0].flags_accepted', {}))).toEqual([{ path: 'step0a[0].flags_accepted', word: VOS }]);
+        expect(verdict(set(draft(), 'step0a[1].flags_accepted', {})), 'by its own index').toEqual([{ path: 'step0a[1].flags_accepted', word: VOS }]);
+      });
+      it('CONTROL: one true flag validates', () => {
+        expect(verdict(set(draft(), 'step0a[0].flags_accepted', { '--only-flag': true }))).toEqual([]);
+      });
+      it('in a final it is the same refusal beside the draft-mismatch it necessarily brings', () => {
+        const f = set(final(), 'step0a[0].flags_accepted', {});
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'step0a[0].flags_accepted', word: VOS }, { path: 'step0a', word: 'draft-mismatch' }]);
+      });
+    });
+
+    describe('F9: a step 0a entry measured under another account', () => {
+      it('is value-outside-set at step0a[i].account, in a draft', () => {
+        expect(verdict(set(draft(), 'step0a[0].account', 'account-z'))).toEqual([{ path: 'step0a[0].account', word: VOS }]);
+        expect(verdict(set(draft(), 'step0a[1].account', 'account-z')), 'by its own index').toEqual([{ path: 'step0a[1].account', word: VOS }]);
+      });
+      it('and in a final, which carries step 0a unchanged (beside the draft-mismatch the change brings)', () => {
+        const f = set(final(), 'step0a[1].account', 'account-z');
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'step0a[1].account', word: VOS }, { path: 'step0a', word: 'draft-mismatch' }]);
+      });
+      it('CONTROL: the entry under part 1\'s account validates, and so does a draft whose account and entries all move together', () => {
+        const d = draft();
+        d.account = 'account-y';
+        for (const s of d.step0a) s.account = 'account-y';
+        expect(verdict(d)).toEqual([]);
+        const onlyTop = draft();
+        onlyTop.account = 'account-y';
+        expect(verdict(onlyTop), 'the top-level account moved alone: both entries now differ').toEqual(
+          [{ path: 'step0a[0].account', word: VOS }, { path: 'step0a[1].account', word: VOS }]);
+      });
+    });
+
+    describe('F10: part 2\'s census and assignment bind to part 1\'s nodes', () => {
+      const censusEntry = (s: string): Rec => ({ store_id: s, census_ms: T0 - 3 * DAY, census_sha256: hex(`census ${s}`) });
+      const finalWith = (patch: (f: Rec) => void): Rec => { const f = final(); patch(f); return f; };
+      it('a census entry that names no node is value-outside-set at census[i].store_id', () => {
+        const f = finalWith((x) => x.census.push(censusEntry(STORE_C)));
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'census[2].store_id', word: VOS }]);
+      });
+      it('a second census entry for a bound store is value-outside-set at its own index', () => {
+        const f = finalWith((x) => x.census.push(censusEntry(STORE_A)));
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'census[2].store_id', word: VOS }]);
+        const g = finalWith((x) => x.census.splice(1, 0, censusEntry(STORE_A)));
+        expect(verdict(g, chainOf(draft())), 'the later of the two is refused, the first binds').toEqual([{ path: 'census[1].store_id', word: VOS }]);
+      });
+      it('a node with no census entry is value-outside-set at nodes[i]; an empty census refuses every node', () => {
+        const f = finalWith((x) => x.census = x.census.filter((c: Rec) => c.store_id === STORE_A));
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'nodes[1]', word: VOS }]);
+        const g = finalWith((x) => x.census = []);
+        expect(verdict(g, chainOf(draft()))).toEqual([{ path: 'nodes[0]', word: VOS }, { path: 'nodes[1]', word: VOS }]);
+      });
+      it('a node whose store holds no assigned family still needs its entry: there is no empty form', () => {
+        const onlyA = ASSIGNMENT.filter((a) => a.store_id === STORE_A);
+        expect(onlyA.length).toBeGreaterThan(0);
+        expect(onlyA.length).toBeLessThan(ASSIGNMENT.length);
+        const quizOnA = QUIZ.filter((q) => q.store_id === STORE_A);
+        const reshape = (x: Rec): void => {
+          x.assignment = onlyA.map((a) => ({ ...a }));
+          x.assignment_sha256 = gate9.assignmentSha256(onlyA);
+        };
+        // STORE_B holds no assigned family here; the quiz is re-cut to STORE_A's so that only the census is in question.
+        const d = draft();
+        const withEntry = final(d);
+        reshape(withEntry);
+        const { r: f, ctx } = withQuiz(withEntry, quizOnA);
+        expect(verdict(f, { ...ctx, draft: d }), 'CONTROL: STORE_B has its entry and no family, and validates').toEqual([]);
+        const noEntry = final(d);
+        reshape(noEntry);
+        noEntry.census = noEntry.census.filter((c: Rec) => c.store_id === STORE_A);
+        const { r: g } = withQuiz(noEntry, quizOnA);
+        expect(verdict(g, { ...ctx, draft: d })).toEqual([{ path: 'nodes[1]', word: VOS }]);
+      });
+      it('an assignment family on a store no node names is value-outside-set at assignment[i].store_id', () => {
+        const extra: Ref = { store_id: STORE_C, ccrc_id: 'sess-orphan', generation: gen(300) };
+        const assigned = gate9.assignArms(SEED, [...FAMILIES, extra]) as Array<Ref & { arm: string }>;
+        const at = assigned.findIndex((a) => a.store_id === STORE_C);
+        const f = finalWith((x) => { x.assignment = assigned; x.assignment_sha256 = gate9.assignmentSha256(assigned); });
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: `assignment[${at}].store_id`, word: VOS }]);
+      });
+      it('CONTROL: the valid final, with an assignment on both nodes\' stores, validates', () => {
+        expect(new Set(ASSIGNMENT.map((a) => a.store_id))).toEqual(new Set([STORE_A, STORE_B]));
+        expect(verdict(final(), chainOf(draft()))).toEqual([]);
+      });
+      it('a draft has no census to bind, so the same records give no census word', () => {
+        expect(verdict(draft()).filter((e) => e.path.startsWith('census'))).toEqual([]);
+      });
+    });
+
+    describe('F3: the signed Q18 values q18Power would throw on', () => {
+      it('rho_headline outside [0, 1) is refused, and 0 and 0.999 validate', () => {
+        for (const bad of [1, -0.1, 1.5]) expect(q18('rho_headline', bad), String(bad)).toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
+        for (const ok of [0, 0.999]) expect(q18('rho_headline', ok), `CONTROL ${ok}`).toEqual([]);
+      });
+      it('a power level outside (0, 1] is refused at its own index, and 1 validates', () => {
+        expect(q18('power', [0.5, 0])).toEqual([{ path: 'q18_settings.power[1]', word: VOS }]);
+        expect(q18('power', [1.5])).toEqual([{ path: 'q18_settings.power[0]', word: VOS }]);
+        expect(q18('power', [-0.2, 0.5, 2])).toEqual([{ path: 'q18_settings.power[0]', word: VOS }, { path: 'q18_settings.power[2]', word: VOS }]);
+        expect(q18('power', [1]), 'CONTROL').toEqual([]);
+        expect(q18('power', [0.000001]), 'CONTROL: just above 0').toEqual([]);
+      });
+      it('sims below 1 is refused; 1 validates; a fraction stays field-malformed', () => {
+        for (const bad of [0, -3]) expect(q18('sims', bad), String(bad)).toEqual([{ path: 'q18_settings.sims', word: VOS }]);
+        expect(q18('sims', 1), 'CONTROL').toEqual([]);
+        expect(q18('sims', 1.5)).toEqual([{ path: 'q18_settings.sims', word: 'field-malformed' }]);
+      });
+      it('a grid_step that does not divide 1 - x is refused; 0.005 and 0.1 validate', () => {
+        for (const bad of [0.007, 0, -0.1, 1, 0.45 + 0.0001]) {
+          expect(q18('grid_step', bad), String(bad)).toEqual([{ path: 'q18_settings.grid_step', word: VOS }]);
+        }
+        for (const ok of [0.005, 0.1, 0.9, 0.3, 0.05]) expect(q18('grid_step', ok), `CONTROL ${ok}`).toEqual([]);
+      });
+      it('the validator and q18Power agree at each edge: what one accepts the other runs, what one refuses the other throws on', () => {
+        const rows: Array<[string, string, unknown, boolean]> = [
+          ['rho_headline', 'rho', 0, true], ['rho_headline', 'rho', 0.999, true], ['rho_headline', 'rho', 1, false], ['rho_headline', 'rho', -0.1, false],
+          ['power', 'power', 1, true], ['power', 'power', 0.5, true], ['power', 'power', 0, false], ['power', 'power', 1.5, false],
+          ['sims', 'sims', 1, true], ['sims', 'sims', 0, false],
+          ['grid_step', 'gridStep', 0.005, true], ['grid_step', 'gridStep', 0.1, true], ['grid_step', 'gridStep', 0.007, false], ['grid_step', 'gridStep', 0, false],
+        ];
+        for (const [field, param, v, valid] of rows) {
+          const asSigned = field === 'power' ? [v] : v;
+          expect(q18(field, asSigned).length === 0, `validator: ${field} = ${String(v)}`).toBe(valid);
+          if (valid) expect(() => q18With({ [param]: v }), `q18Power: ${param} = ${String(v)}`).not.toThrow();
+          else expect(() => q18With({ [param]: v }), `q18Power: ${param} = ${String(v)}`).toThrow(RangeError);
+        }
+      });
+      it('q18Power keeps its exact grid-step message', () => {
+        expect(() => q18With({ gridStep: 0.007 })).toThrow('q18Power: grid step 0.007 does not divide 1 - x');
+      });
+      it('an empty power list and any lookback_days are not refused: q18Power throws on neither', () => {
+        expect(q18('power', [])).toEqual([]);
+        expect(q18('lookback_days', 0)).toEqual([]);
+      });
+      it('the shipped defaults pass every one of these', () => {
+        const d = gate9.Q18_DEFAULTS;
+        expect(() => q18With({ rho: d.rho_headline, power: d.power[0], sims: d.sims, gridStep: d.grid_step })).not.toThrow();
+        expect(verdict(draft())).toEqual([]);
+      });
+    });
+  });
 });
