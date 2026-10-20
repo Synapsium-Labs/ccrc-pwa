@@ -89,8 +89,8 @@ export interface StopDoneSweepDeps {
 export interface StopDoneMemory {
   /** After a refused stop: not asked again before this instant. */
   readonly retryAt: Map<string, number>;
-  /** D-6091: the mail-only count the lane's last excluded row carried; absent reads as 0, so a restart writes one row
-   *  when the count is not zero, and a quiet fleet writes none. */
+  /** D-6091: the mail-only count the lane's last excluded row carried; absent until this process's first pass writes
+   *  one, so a restart writes one row, zero included, and a zero reads apart from a lane that never ran. */
   mailOnly?: number;
 }
 
@@ -188,7 +188,7 @@ function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
       }
       : {
         kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
-        body: `${row.count} finished worker(s) would be put to sleep but for unread mail to them; they stay awake until it is read.`,
+        body: `${row.count} finished worker(s) stay awake for unread mail to them, with nothing in the coordination store or their workspace holding them besides; their panes are measured once it is read.`,
       });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
@@ -199,9 +199,9 @@ function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
   }
 }
 
-/** The excluded row, written only when the count differs from the last one this process wrote. */
+/** The excluded row, written on this process's first pass and then only when the count differs from the last one. */
 function recordMailOnly(deps: StopDoneSweepDeps, mem: StopDoneMemory, count: number): void {
-  if (count === (mem.mailOnly ?? 0)) return;
+  if (count === mem.mailOnly) return;
   mem.mailOnly = count;
   recordFeed(deps, { kind: 'mail-only', count });
 }

@@ -281,7 +281,8 @@ describe('ccd hibernate --hold-ok (D-6091)', () => {
     refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));
   });
 
-  it('an unreadable .hold refuses held with --hold-ok', () => {
+  // Root reads a mode-000 file, so the case means nothing there (the directory row below stays root-safe).
+  it.skipIf(process.getuid?.() === 0)('an unreadable .hold refuses held with --hold-ok', () => {
     idle(); fs.writeFileSync(regPath('hold'), PROG); fs.chmodSync(regPath('hold'), 0o000);
     try {
       refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));

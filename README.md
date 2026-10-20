@@ -4595,7 +4595,8 @@ naming an open or unreadable run, and a box without the token keep the worker aw
 the coordination serialiser, the registry record and its row, the store, presence and the live state are read again,
 and `ccd` re-measures the box-local half (a terminal attached included). At most three acts a pass; a refused one is not
 asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act, and one `Workers kept awake by
-unread mail: <n>` row whenever the count of finished workers nothing but unread mail holds changes. Since Task 17b it is hibernation
+unread mail: <n>` row on the lane's first pass after a start, zero included, and whenever the count changes: finished
+workers unread mail holds with no other store or workspace hold (their panes are measured once it is read). Since Task 17b it is hibernation
 for this population, not a separate stop (D-5427): it keeps every use hold hibernation holds, and a worker it puts down
 wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, a Restart. It stays live under its own
 switches while hibernation's own sweep waits for the operator to arm it: `$REG/stop-done-disabled` (this lane only; no

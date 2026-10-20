@@ -124,6 +124,8 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
 }
 
 const mem = (): StopDoneMemory => ({ retryAt: new Map() });
+/** The `Worker asleep` rows alone: a process's first pass also writes its mail-only count, zero included (D-6091). */
+const sleepRows = (f: Fake) => f.feed.filter((e) => !('kind' in e));
 /** The argv the lane composes since Task 17b (stop-done-composes-hibernate (D-5427)): `ccd hibernate`, declared. */
 const HIB = (id: string): string[] => ['hibernate', id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
 const ID = 'project-a-quiet-basin';
@@ -166,7 +168,7 @@ describe('stopDonePass (D-5370)', () => {
     const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => { f.argv.push([...a]); return { ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane', killed: false, signal: null }; };
     const out = await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(out).toEqual([{ id: ID, kind: 'skipped', detail: 'attached' }]);
-    expect(f.feed).toEqual([]);
+    expect(sleepRows(f)).toEqual([]);
     await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
   });
@@ -177,7 +179,7 @@ describe('stopDonePass (D-5370)', () => {
     expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
     expect(f.argv).toEqual([HIB(ID)]);
     expect(f.serialCalls).toBe(1);
-    expect(f.feed).toEqual([{ sessionId: ID, runId: 10 }]);
+    expect(sleepRows(f)).toEqual([{ sessionId: ID, runId: 10 }]);
   });
 
   it('the kill switch: with stop-done-disabled listed, nothing is read and nothing is stopped', async () => {
@@ -348,7 +350,7 @@ describe('stopDonePass (D-5370)', () => {
     f.ccdOk = false;
     const m = mem();
     expect((await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []))[0]?.kind).toBe('failed');
-    expect(f.feed).toEqual([]);
+    expect(sleepRows(f)).toEqual([]);
     await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
     expect(f.argv.length).toBe(1);
     f.ccdOk = true;
@@ -512,11 +514,18 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
     expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 2', 'Workers kept awake by unread mail: 1']);
   });
 
-  it('a pass whose count is zero from the start writes no row; a fall to zero writes one', async () => {
+  it('the first pass of a process writes its count, zero included; then only a change writes one', async () => {
     const f = fake([ID]);
     const m = mem();
     await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
-    expect(coordRows(f)).toEqual([]);
+    expect(coordRows(f).map((e) => e.title), 'a restart writes one row, so zero reads apart from never-ran')
+      .toEqual(['Workers kept awake by unread mail: 0']);
+    await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(f), 'still zero: no second row').toHaveLength(1);
+    const e = fake([]);
+    await stopDonePass(e.deps, mem(), [], [], []);
+    expect(coordRows(e).map((r) => r.title), 'an empty population writes its zero too')
+      .toEqual(['Workers kept awake by unread mail: 0']);
     const g = fake([ID]);
     g.mailTo.add(ID);
     await stopDonePass(g.deps, m, [row(ID)], [rec(ID)], []);
@@ -530,13 +539,16 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
     f.mailTo.add(ID);
     f.openWorkers.add(ID);
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
-    expect(coordRows(f)).toEqual([]);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 0']);
   });
 
   it('the sleep row names the run\'s state', async () => {
     const f = fake([ID]);
     const bodies: string[] = [];
-    const log = { ...f.deps.notifyLog!, record: (e: { body: string }) => { bodies.push(e.body); return { ...e, seq: 1, at: NOW }; } };
+    const log = { ...f.deps.notifyLog!, record: (e: { kind: string; body: string }) => {
+      if (e.kind === 'run') bodies.push(e.body);
+      return { ...e, seq: 1, at: NOW };
+    } };
     await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
     expect(bodies).toEqual([`${ID} was put to sleep: its run 10 is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
   });

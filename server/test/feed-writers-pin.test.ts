@@ -1100,7 +1100,8 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
-    const out = await stopDonePass(deps, { retryAt: new Map() }, [row], [record], []);
+    // D-6091: a lane that already wrote its mail-only zero, so the one row here is the sleep's.
+    const out = await stopDonePass(deps, { retryAt: new Map(), mailOnly: 0 }, [row], [record], []);
     return { rec, out, argv };
   };
 
