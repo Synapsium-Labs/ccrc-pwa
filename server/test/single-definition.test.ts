@@ -6727,12 +6727,14 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
     expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
   });
 
-  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+  // D-5925: the restart re-seed is the second reader, and it reads the deadline from the row's own mint time.
+  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', () => {
     expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
     expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
     expect(watch).toMatch(/return \{ until, askId,/);
+    expect(watch).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
   it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
