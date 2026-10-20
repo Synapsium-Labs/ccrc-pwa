@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e93660f8573d7d962e50913a1912ca322e9fbb15b9c6503ce83ec35f30b0a5ea
+# ccrc:generated 1 sha256=0f9a22e52e5aa4528405efe5ec1cf8b0cdd8238371bd4542bd21e2bcd43d0153
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7939,10 +7939,17 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
            die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
   fi
 
+  # D-5880 (#138): `branch -d` guards unmerged work, not a shared NAME — never take main, master, develop
+  # or origin/HEAD's target. D-5881: no `ws/` shape test (ws-rename gives an own branch any free name).
+  local ownbr=1 dfltbr; dfltbr=$(git -C "$main" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  case "$branch" in main|master|develop|"${dfltbr#origin/}") ownbr=0 ;; esac   # an unset target matches only ""
   # DECLARED IN THE R4-1 BLOCK ABOVE NOW, not here: the attic pin needs it to
   # resolve a tip from the registry when the worktree is gone, and a SECOND
   # `local` in the same function re-declares and blanks it. One reader, one place.
-  if [[ -n "$branch" ]]; then
+  if [[ -n "$branch" ]] && (( ownbr == 0 )); then
+    # Loud, never silent: the operator learns the name ws-rm refused to touch.
+    echo "kept branch $branch (shared, not this workspace's own) — ws-rm never deletes main, master, develop or origin/HEAD's target" >&2
+  elif [[ -n "$branch" ]]; then
     # git had a record, so the registry is a witness, never the decider: a
     # divergence means the branch was renamed outside ccd, and the name to
     # delete is the one git actually had checked out there.
