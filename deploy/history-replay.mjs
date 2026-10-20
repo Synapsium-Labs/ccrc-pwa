@@ -227,28 +227,34 @@ function refuseIfStopping() {
  *  leader's 'exit' fires, a STOP_GRACE_MS timer starts and 'close' clears it. If it fires it SIGKILLs the leader's group
  *  (only processes still in the run's group: a live member keeps the group allocated) and destroys the child's stdin,
  *  stdout and stderr streams that exist (runChild's stdout is the `.part`'s descriptor, so `child.stdout` is null there).
- *  Node then emits 'close' with the exit's code and signal and the run finishes as on close. Only stderr written after
- *  the leader's exit is cut: its stdout is the `.part`'s descriptor, and its stderr is in the pipe at its exit and read
- *  well before the timer fires. The timer is NOT unref'd: when a grandchild holds a pipe the pipe's handle keeps the loop
- *  alive anyway, and a ref'd timer is what guarantees it fires; it is cleared at 'close', so it never holds a finished run. */
+ *  Node then emits 'close' with the exit's code and signal and the run finishes as on close. What is cut is whatever a
+ *  process writes to a pipe after the leader's exit. For runChild that is stderr only: its stdout is the `.part`'s
+ *  descriptor, and the leader's own stderr is in the pipe at its exit and read well before the timer fires. For
+ *  measureClaudeVersion, whose stdout is a pipe too, stdout written after the leader's exit (by a grandchild) is cut as
+ *  well; the version line the leader wrote before its exit is read. The SIGKILL is skipped when the registry no longer
+ *  holds this child (a reaped child's pid may have been reused by a sibling group leader within the grace). The timer
+ *  is NOT unref'd: when a grandchild holds a pipe the pipe's handle keeps the loop alive anyway, and a ref'd timer is
+ *  what guarantees it fires; it is cleared at 'close', so it never holds a finished run. */
 function spawnGroup(launcher, argv, options) {
   const child = spawn(launcher, argv, { ...options, detached: true });
   const pid = child.pid;
   if (typeof pid === 'number') {
     liveChildren.set(pid, child);
-    let closed = false;
     let bound = null;
+    // Node emits 'exit' before 'close' for a child with a pid ('close' waits for the exit and for every readable stdio
+    // pipe), so the timer is always started before 'close' clears it.
     child.once('exit', () => {
-      if (closed) return;   // 'close' came first: nothing is left to bound
       bound = setTimeout(() => {
-        signalGroup(pid, 'SIGKILL');
+        // The group is killed only while the registry still holds THIS child: a reaped child's pid may be reused by a
+        // sibling group leader within the grace, and that sibling's group is not this run's to kill. The streams are
+        // destroyed either way.
+        if (liveChildren.get(pid) === child) signalGroup(pid, 'SIGKILL');
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr?.destroy();
       }, STOP_GRACE_MS);
     });
     child.once('close', () => {
-      closed = true;
       if (bound !== null) clearTimeout(bound);
       if (liveChildren.get(pid) === child) liveChildren.delete(pid);
     });
@@ -967,8 +973,9 @@ export function spentSoFar(out) {
 // windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
 // says, even if the child lives on), and a grandchild that calls setsid (it escapes every group kill and keeps running, and
 // the bounded wait after the leader's exit, spawnGroup, no longer lets it hold the driver; if it inherited the run's stdout
-// it can still write into the stream after the charge, and a resume then refuses the changed stream). The over-count windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s
-// removal (the `.pid` goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
+// it can still write into the stream after the charge, and a resume then refuses the changed stream). The over-count
+// windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s removal (the `.pid`
+// goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
 
 /** The four ways a run is spawned: an arm run (with the CCRC_RECALL_* values), the question writer, the judge,
@@ -1261,7 +1268,12 @@ function settleLeftover(out, name, live) {
   if (rec !== null) {
     const state = live(rec.pid, rec.start);
     if (state !== 'dead') {
-      refuse('run-live', `pid ${rec.pid} (process group ${rec.pid}) is ${state}; ${name}.jsonl.part and ${name}.pid are its`);
+      // D-5984: the remedy keeps the charge. Removing the `.pid` ALONE sends the next driver down the no-record rule, which
+      // charges the `.part` and removes it; removing both files would lose that run's tokens for good.
+      refuse('run-live', `pid ${rec.pid} (process group ${rec.pid}) is ${state}; ${name}.jsonl.part and ${name}.pid are its. `
+        + 'If the pid is confirmed not to be a live Claude Code from this --out (a reused pid, or a box with no /proc), '
+        + `remove only the \`${name}.pid\`: the next driver then charges the \`${name}.jsonl.part\` and removes it. `
+        + `Never remove the \`${name}.jsonl.part\`.`);
     }
   }
   const partRead = readPlain(partPath, OUT_STREAM_CAP);
@@ -1460,8 +1472,9 @@ function finishedOutcome(job) {
  *  `<name>.pid` record is written right after spawn() when it has a pid. It is killed, group and all, when it outlives
  *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). The wait after its leader exits is bounded by spawnGroup (a
  *  STOP_GRACE_MS timer that SIGKILLs the group and destroys the stderr pipe; `child.stdout` is null here, the `.part`
- *  being the leader's stdout), so a same-group process that ignores SIGTERM and holds stderr is dead when this returns. A spawn that fails removes the `.part` and the `.pid`. It checks
- *  nothing about a stop itself: launchRun's check runs in the same synchronous stretch, before this is called (D-5984). */
+ *  being the leader's stdout), so a same-group process that ignores SIGTERM and holds stderr is dead when this returns.
+ *  A spawn that fails removes the `.part` and the `.pid`. It checks nothing about a stop itself: launchRun's check runs
+ *  in the same synchronous stretch, before this is called (D-5984). */
 function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
     // D-5986: created exclusively and without following a link. claimOut and launchRun have settled every leftover, so a

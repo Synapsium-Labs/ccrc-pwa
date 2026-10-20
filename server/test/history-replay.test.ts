@@ -1659,6 +1659,29 @@ describe('fix round 1 (D-5984): liveness answers alive, dead or unmeasured', () 
     writeFileSync(path.join(proc, 'self', 'stat'), stat('1'));
     expect(replay.liveness(778, '12345', proc), 'a /proc that answers for itself: the pid is gone').toBe('dead');
   });
+
+  // D-5984: the two other unmeasured arms. Each fixture row also holds <procDir>/self/stat, so that a /proc which answers
+  // for itself is not what makes the answer: deleting either arm falls through to 'dead', not to the missing-/proc arm.
+  it('a stat that cannot be read for any reason but ENOENT (a directory there: EISDIR) reads unmeasured, never dead', () => {
+    const proc = mkTmp('ccrc-replay-proc-unreadable-');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), `1 (a) S ${'0 '.repeat(18)}1 0\n`);
+    mkdirSync(path.join(proc, '779', 'stat'), { recursive: true });
+    expect(replay.liveness(780, '12345', proc), 'CONTROL: the fixture /proc answers for itself, so a missing pid file is dead').toBe('dead');
+    expect(replay.liveness(779, '12345', proc), 'a stat that fails to read with EISDIR is not a dead process').toBe('unmeasured');
+  });
+
+  it('a stat line with no closing parenthesis (unparsable) reads unmeasured, never dead', () => {
+    const proc = mkTmp('ccrc-replay-proc-unparsable-');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), `1 (a) S ${'0 '.repeat(18)}1 0\n`);
+    mkdirSync(path.join(proc, '781'), { recursive: true });
+    writeFileSync(path.join(proc, '781', 'stat'), `781 (a b S ${'0 '.repeat(18)}12345 0\n`);
+    mkdirSync(path.join(proc, '782'), { recursive: true });
+    writeFileSync(path.join(proc, '782', 'stat'), `782 (a b) S ${'0 '.repeat(18)}12345 0\n`);
+    expect(replay.liveness(782, '12345', proc), 'CONTROL: the same line with its parenthesis closed reads alive').toBe('alive');
+    expect(replay.liveness(781, '12345', proc), 'an unparsable stat line is not a dead process').toBe('unmeasured');
+  });
 });
 
 describe('fix round 1 (D-5984): a leftover whose writer is alive is never charged, removed or spawned again; a dead one is charged once', () => {
@@ -1702,6 +1725,26 @@ describe('fix round 1 (D-5984): a leftover whose writer is alive is never charge
     expect(ledgerOf(b.out), 'nothing charged').toEqual([]);
     expect(stubLog(b.home), 'nothing spawned').toBeNull();
   }, 60_000);
+
+  // D-5984: the remedy the detail gives is the one that keeps the charge. With the `.pid` removed ALONE, the next claim
+  // charges the `.part` once and removes it; removing both files would lose that run's tokens for good.
+  it.each(['alive', 'unmeasured'] as const)('a run-live detail (%s writer) says to remove only the .pid; doing so, the next claim charges the .part once and removes it', (state) => {
+    const out = replay.prepareOut(path.join(mkTmp('ccrc-replay-d5984-remedy-'), 'out'));
+    plant(out, 'sub/rem-0', { pid: recText(424290, '31') });
+    let detail = '';
+    try { replay.claimOut(out, { liveness: stubLive(state) }); } catch (e) { detail = (e as replay.DriverRefusal).detail; expect((e as replay.DriverRefusal).word).toBe('run-live'); }
+    expect(detail, 'the detail says to remove only the .pid and never the .part').toContain(
+      'If the pid is confirmed not to be a live Claude Code from this --out (a reused pid, or a box with no /proc), remove only the `sub/rem-0.pid`: '
+      + 'the next driver then charges the `sub/rem-0.jsonl.part` and removes it. Never remove the `sub/rem-0.jsonl.part`.');
+    expect(detail, 'one line').not.toContain('\n');
+    expect(ledgerOf(out), 'the refused claim charged nothing').toEqual([]);
+    rmSync(path.join(out, 'sub', 'rem-0.pid'));
+    const c = replay.claimOut(out, { liveness: notAsked });
+    try {
+      expect(ledgerOf(out), 'the .part\'s tokens are charged exactly once').toEqual([{ name: 'sub/rem-0', tokens: L_TOKENS }]);
+      expect(existsSync(path.join(out, 'sub', 'rem-0.jsonl.part')), 'and the .part is removed').toBe(false);
+    } finally { c.release(); }
+  });
 
   it('a regular .pid that is not exactly {pid, start} refuses run-live naming the file: nothing is charged, removed or spawned', async () => {
     const malformed: Array<[string, string]> = [['not json', 'not json\n'], ['empty', ''], ['pid zero', recText(0, null)], ['pid missing', '{"start":null}\n'],
@@ -4910,6 +4953,7 @@ const path = require('node:path');
 const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
 const args = process.argv.slice(2);
 const stream = () => fs.readFileSync(path.join(home, ${JSON.stringify(STUB_STREAM)}), 'utf8');
+fs.appendFileSync(path.join(home, 'leaders.pids'), process.pid + '\\n');
 ${body}
 `;
   /** setsid as the stub starts it: not detached, so setsid is no group leader and execs sleep in its own pid, which is
@@ -4918,6 +4962,8 @@ ${body}
 fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
 g.unref();`;
   const pidsOf = (b: { home: string }): string => path.join(b.home, 'grandchildren.pids');
+  /** Every pid a case's stubs recorded, leaders and grandchildren: what its finally kills. */
+  const allOf = (home: string): number[] => [...recorded(join(home, 'leaders.pids')), ...recorded(join(home, 'grandchildren.pids'))];
 
   it('SIGTERM while a setsid grandchild holds the run\'s stderr: exit 2 interrupted well before the grandchild ends, which keeps running (the named residual)', async () => {
     const base = mkTmp('ccrc-replay-fr2-setsid-stop-');
@@ -4951,7 +4997,7 @@ process.stdout.write(stream());`), { mode: 0o700 });
       expect(answered, `answered at ${answered} ms, not when the ${SLEEP_S} s grandchild ended`).toBeLessThan(9_000);
       expect(recorded(gcFile).some(alive), 'the setsid grandchild escaped the group kill and is still running: the residual, no longer holding the driver').toBe(true);
     } finally {
-      killAll(recorded(gcFile));
+      killAll(allOf(home));
       driver.kill('SIGKILL');
     }
   }, 120_000);
@@ -4967,12 +5013,12 @@ process.stdout.write(stream());`), { mode: 0o700 });
       const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'bw-0')), 60_000, 'the run returning');
       const took = Date.now() - started;
       expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
-      expect(took, 'the bound waits out the grace; a bound that cuts at the exit would lose stderr still in the pipe').toBeGreaterThanOrEqual(STOP_GRACE_MS - 1_000);
+      expect(took, 'the bound waits out the grace (a timer that fires at the exit returns early and reds this by time)').toBeGreaterThanOrEqual(STOP_GRACE_MS - 1_000);
       expect([o.skipped, o.code, o.unknownOptions]).toEqual([false, 0, ['--fixture-flag']]);
       const run = JSON.parse(readFileSync(join(b.out, 'bw-0.run.json'), 'utf8'));
       expect(run.unknown_options, 'the leader\'s stderr line is recorded').toEqual(['--fixture-flag']);
       expect(recorded(pidsOf(b)).some(alive), 'the setsid grandchild is still running').toBe(true);
-    } finally { killAll(recorded(pidsOf(b))); }
+    } finally { killAll(allOf(b.home)); }
   }, 120_000);
 
   it('the bound reaches --version too: a setsid grandchild holding its stdout does not hold measureClaudeVersion', async () => {
@@ -4987,22 +5033,27 @@ g.unref();`), { mode: 0o700 });
       const took = Date.now() - started;
       expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
       expect(v).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
-    } finally { killAll(recorded(pidsOf(b))); }
+    } finally { killAll(allOf(b.home)); }
   }, 120_000);
 
-  it('the timeout path: a process in the run\'s group that ignores SIGTERM and holds stderr is dead when the run returns', async () => {
+  it('the timeout path: a process in the run\'s group that ignores SIGTERM and holds stderr survives the timeout\'s SIGTERM, and is dead when the run returns', async () => {
     const b = t5Box('ccrc-replay-fr2-timeout-group-');
+    // The grandchild records its own pid only AFTER it has installed its ignoring handler, so a recorded pid is one the
+    // timeout's SIGTERM cannot kill. Same group (no setsid, no detached), stderr inherited from the run's pipe.
     writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
-// Same group (no setsid, no detached), stderr inherited from the run's pipe, SIGTERM ignored.
-const g = cp.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 25000)"], { stdio: ['ignore', 'ignore', 'inherit'] });
-fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+const g = cp.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); require('node:fs').appendFileSync(process.argv[1], process.pid + '\\\\n'); setTimeout(() => {}, 25000)", path.join(home, 'grandchildren.pids')], { stdio: ['ignore', 'ignore', 'inherit'] });
 setTimeout(() => {}, 25000);`), { mode: 0o700 });
     try {
-      const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'tg-0', { timeoutMs: 3_000 })), 60_000, 'the timed-out run returning');
-      expect([o.skipped, o.signal]).toEqual([false, 'SIGTERM']);
+      const run = bounded(claimedRun(t5job(b, b.up, 'box', 'tg-0', { timeoutMs: 8_000 })), 60_000, 'the timed-out run returning');
+      run.catch(() => {});
+      expect(await until(() => recorded(pidsOf(b)).length >= 1 && recorded(join(b.home, 'leaders.pids')).length >= 1, 60_000), 'the stub and its grandchild recorded their pids').toBe(true);
       const [gc] = recorded(pidsOf(b));
-      expect(gc, 'the stub recorded its grandchild').toBeGreaterThan(0);
+      const [leader] = recorded(join(b.home, 'leaders.pids'));
+      expect(await until(() => !alive(leader!), 30_000), 'the timeout\'s SIGTERM ended the leader').toBe(true);
+      expect(alive(gc!), 'CONTROL: the grandchild survived the timeout\'s SIGTERM (it ignores it), so only the bound can end it').toBe(true);
+      const o = await run;
+      expect([o.skipped, o.signal]).toEqual([false, 'SIGTERM']);
       expect(await until(() => !alive(gc!), 3_000), 'the group member that ignored SIGTERM is dead when the run returns').toBe(true);
-    } finally { killAll(recorded(pidsOf(b))); }
+    } finally { killAll(allOf(b.home)); }
   }, 120_000);
 });
