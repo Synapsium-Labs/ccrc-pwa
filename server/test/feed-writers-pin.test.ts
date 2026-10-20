@@ -1165,7 +1165,9 @@ describe('the executors\' writers, handed a push sink: recorded whatever the pre
     const { home, rec } = await sinks(visible);
     const { deps, out } = await expiryOutcome(home, rec);
     const at = rec.mark();
-    recordExpireFeed({ ...deps, push: rec.push }, out);
+    // Handed a push sink: bound first, so the writer's narrower deps type admits the extra member.
+    const handed = { ...deps, push: rec.push };
+    recordExpireFeed(handed, out);
     expect(withoutFlush(rec.since(at))).toEqual(['record', 'archive']);
     expect(rec.archived.map((e) => [e.sessionId, e.title])).toEqual([[EXPIRE_ID, 'archived workspace cleanup deferred']]);
     expect(rec.pushes).toEqual([]);
