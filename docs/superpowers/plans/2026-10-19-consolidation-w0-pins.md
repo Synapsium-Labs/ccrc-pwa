@@ -149,7 +149,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   | a `writeFileSync(join(reg, 'reclaim-paused'), '')` added to `server/src/watch.ts` | single-definition | "reclaim-paused: one writer" |
   | a `touch "$REG/mail-disabled"` added to `ccd/ccd` | single-definition | "mail-disabled: hand-only" |
   | `feedRecordCallSites` counts comment lines | consolidation-census | "a docstring mention is not a call site" |
-  | `reclaimPauseParseSites` matches the bare word | consolidation-census | "12 files name it; 10 expressions parse it" |
+  | `reclaimPauseParseSites` matches the bare word | consolidation-census | "FIXTURE: an import, a comment, a template or a bare literal names the marker but is not a parse" |
 
 - [ ] **Step 4: Verify.**
 
@@ -370,6 +370,11 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
   - **As planned:** the spec's rev 1 put ARCH-00 in a later slice; rev 2 moves it into W0 now because ARCH-06 depends on it.
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
   - **Departs from ARCH-06:** the ticket's exemplar suites (the stall-sweep tick order, the coord-store UPDATE census) are not W1a's and move in a later slice; this slice moves the suites W1a needs.
+
+### A departure entered by the coordinator
+
+- **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
+  - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
 
 ### Issued for Task C0h and defined here
 
