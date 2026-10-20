@@ -3002,6 +3002,10 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     renderFleet(<FleetScreen store={makeStore()} />);
     const ackButton = await screen.findByRole('button', { name: 'Ack fleet' });
     expect(document.querySelector('.halt-banner-node-text')?.textContent).toBe('fleet: failed (last tried v0.0.84) — gate: unit not up');
+    // Three banners apply (the skew, the halt and the release line), so the stack (W2 Task S2c) shows the first two
+    // in rank order and folds the release line behind "+1 more"; open it to reach Update all.
+    expect(screen.queryByRole('button', { name: 'Update all' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '+1 more' }));
     expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
     await waitFor(() => expect(screen.getByText(/run different builds/i)).toHaveTextContent('Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.'));
     expect(document.body.textContent).not.toContain('ccrc rollout');

@@ -116,6 +116,12 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
   );
 }
 
+/** Does the halt banner show? A view has landed and at least one node is halting. The banner stack asks it (W2
+ *  Task S2c, BannerStack.tsx). */
+export function haltBannerShows(view: UpdatesView | null): boolean {
+  return view !== null && haltingNodes(view.nodes).length > 0;
+}
+
 export function HaltBanner({ updates: view, seq, onAcked, stale = false }: {
   updates: UpdatesView | null; seq: number; onAcked: () => number; stale?: boolean;
 }): ReactNode {
