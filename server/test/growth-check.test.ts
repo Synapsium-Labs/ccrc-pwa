@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import {
   stripTs, measureBash, codeLines, netGrowth, growthOver, addedFiles,
   GROWTH_LIMIT, L1_L2_NEW_FILE_DIRS,
-  classMethodCount, growthSummary, appendJobSummary, fileAt, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
+  classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
 } from './growthCheck.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -166,11 +166,14 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
     const rows = [
       { file: 'server/src/watch.ts', base: 900, head: 950, delta: 50, atBoth: true },
       { file: 'ccd/ccd', base: 300, head: 290, delta: -10, atBoth: true },
+      { file: 'server/src/index.ts', base: 10, head: 10, delta: 0, atBoth: true },
     ];
     const md = growthSummary({ base: 'abcdef1234567', rows, over: ['server/src/watch.ts'],
       methods: { base: 12, head: 14 }, armed: false });
     expect(md).toContain('| `server/src/watch.ts` | 900 | 950 | +50 |');
     expect(md).toContain('| `ccd/ccd` | 300 | 290 | -10 |');
+    // An unchanged file still gets its row: the summary lists every watched file.
+    expect(md).toContain('| `server/src/index.ts` | 10 | 10 | +0 |');
     expect(md).toContain(`${METHOD_COUNT_CLASS} methods`);
     expect(md).toMatch(/base 12, head 14, delta \+2/);
     expect(md).toContain('GROWTH_OVER: `server/src/watch.ts`');
@@ -179,6 +182,29 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
     const none = growthSummary({ base: 'abcdef1234567', rows, over: [], methods: { base: 12, head: 12 }, armed: true });
     expect(none).toContain('GROWTH_OVER: (none)');
     expect(none).not.toMatch(/reporting only/);
+  });
+
+  it('method counts are read at the base sha and at the head sha, and a file missing at a sha counts 0', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-methods-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('commit', '-q', '--allow-empty', '-m', 'empty');
+      const empty = git('rev-parse', 'HEAD');
+      writeFileSync(path.join(dir, 'w.ts'), 'class W { a() {} }\n');
+      git('add', 'w.ts');
+      git('commit', '-q', '-m', 'one');
+      const one = git('rev-parse', 'HEAD');
+      writeFileSync(path.join(dir, 'w.ts'), 'class W { a() {} b() {} c() {} }\n');
+      git('commit', '-q', '-am', 'three');
+      const three = git('rev-parse', 'HEAD');
+      expect(methodCounts('w.ts', 'W', one, three, dir)).toEqual({ base: 1, head: 3 });
+      expect(methodCounts('w.ts', 'W', empty, one, dir)).toEqual({ base: 0, head: 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('the summary is appended to $GITHUB_STEP_SUMMARY when set, and nothing is written when it is not', () => {
@@ -221,13 +247,10 @@ const measured = 'base' in resolved
       const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
       const rows = GROWTH_FILES.map((f) => netGrowth(f, resolved.base, head, ROOT));
       const over = growthOver(rows, addedFiles(resolved.base, head, ROOT));
-      const methodsAt = (sha: string): number => {
-        const src = fileAt(METHOD_COUNT_FILE, sha, ROOT);
-        return src === null ? 0 : classMethodCount(src, METHOD_COUNT_CLASS);
-      };
       // D-6119: absolute numbers go to the job summary only, never an assertion.
+      const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows, over,
-        methods: { base: methodsAt(resolved.base), head: methodsAt(head) }, armed: GROWTH_ARMED }));
+        methods, armed: GROWTH_ARMED }));
       return { rows, over, summaryWritten };
     })()
   : null;

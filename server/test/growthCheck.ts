@@ -213,6 +213,16 @@ export function classMethodCount(src: string, cls: string): number {
     .length;
 }
 
+/** `cls`'s method count in `file` at the merge-base and at HEAD; a file
+ *  missing at a sha counts 0 (D-6119). */
+export function methodCounts(file: string, cls: string, base: string, head: string, cwd: string): { base: number; head: number } {
+  const at = (sha: string): number => {
+    const src = fileAt(file, sha, cwd);
+    return src === null ? 0 : classMethodCount(src, cls);
+  };
+  return { base: at(base), head: at(head) };
+}
+
 export interface GrowthSummaryInput {
   base: string;
   rows: readonly GrowthRow[];
