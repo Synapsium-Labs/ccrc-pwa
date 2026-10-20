@@ -108,6 +108,7 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
       // One literal word per arm (`refusal-status.test.ts` reads each from its call), never Linear's text.
       switch (v.reason) {
         case 'unauthorised': return refuseRoute(reply, 'key-rejected');
+        case 'forbidden': return refuseRoute(reply, 'key-forbidden');
         case 'timeout': return refuseRoute(reply, 'timeout');
         case 'malformed': return refuseRoute(reply, 'malformed');
         case 'unreachable': return refuseRoute(reply, 'unreachable');

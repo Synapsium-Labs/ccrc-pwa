@@ -27,6 +27,9 @@ type ClientNote = 'unrecognised' | 'call-failed';
 export const LOOKUP_NOTE = {
   'not-configured': { hint: "Linear isn't connected, so the title is what you entered.", pointer: 'Connect Linear in Settings' },
   'unauthorised': { hint: 'Linear rejected the saved key, so the title is what you entered.', pointer: 'Replace the key in Settings' },
+  // A 403 is Linear refusing THIS request (a scope, or a team the key cannot see), not a verdict on the key, so the
+  // note is quiet: no pointer to replace a key nobody called bad.
+  'forbidden': { hint: "Linear wouldn't let this key read that issue, so the title is what you entered.", pointer: null },
   'not-found': { hint: 'Linear has no issue with that id, so the title is what you entered.', pointer: null },
   'timeout': { hint: 'Linear took too long to answer, so the title is what you entered.', pointer: null },
   'unreachable': { hint: "Couldn't reach Linear, so the title is what you entered.", pointer: null },

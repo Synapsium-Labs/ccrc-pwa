@@ -21,6 +21,7 @@ const ok = (connection: LinearConnectionView): Response => reply(200, { ok: true
 const CONNECTED: LinearConnectionView = { state: 'connected', outcome: 'ok', org: 'team-a', user: 'user-a', keyTail: '4f2c', checkedAt: NOW - 3 * 60_000 };
 const NOT_CONNECTED: LinearConnectionView = { state: 'not-connected' };
 const REJECTED: LinearConnectionView = { state: 'key-rejected', outcome: 'rejected', org: 'team-a', user: 'user-a', keyTail: '4f2c', checkedAt: NOW - 60_000 };
+const FORBIDDEN: LinearConnectionView = { state: 'key-forbidden', outcome: 'forbidden', org: 'team-a', user: 'user-a', keyTail: '4f2c', checkedAt: NOW - 60_000 };
 const UNREACHABLE: LinearConnectionView = { state: 'unreachable', outcome: 'unreachable', org: 'team-a', user: 'user-a', keyTail: '4f2c', checkedAt: NOW - 60_000 };
 
 interface Sent { method: string; path: string; body: unknown }
@@ -115,6 +116,18 @@ describe('the section, state by state (§5.1)', () => {
     expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
   });
 
+  it('key forbidden: its own sentence (the key is not called bad), a Replace key field, Check again and Disconnect', async () => {
+    install({ get: () => ok(FORBIDDEN) });
+    await mount();
+    expect(stateText()).toBe(LINEAR_TEXT.forbidden);
+    expect(LINEAR_TEXT.forbidden).not.toBe(LINEAR_TEXT.rejected);
+    expect(LINEAR_TEXT.forbidden).not.toMatch(/revoked|expired/);
+    expect(field()).toBeTruthy();
+    expect(button('Replace key')).toBeTruthy();
+    expect(button('Check again')).toBeTruthy();
+    expect(button('Disconnect')).toBeTruthy();
+  });
+
   it('unreachable: its sentence, Check again and Disconnect, no field', async () => {
     install({ get: () => ok(UNREACHABLE) });
     await mount();
@@ -131,7 +144,7 @@ describe('the section, state by state (§5.1)', () => {
       [{ state: 'unusable' }, LINEAR_TEXT.unusableKey],
       [{ state: 'placeholder' }, LINEAR_TEXT.placeholderKey],
     ];
-    const seen = new Set<string>([LINEAR_TEXT.notConnected, LINEAR_TEXT.rejected, LINEAR_TEXT.unreachable]);
+    const seen = new Set<string>([LINEAR_TEXT.notConnected, LINEAR_TEXT.rejected, LINEAR_TEXT.forbidden, LINEAR_TEXT.unreachable]);
     for (const [view, sentence] of cases) {
       install({ get: () => ok(view) });
       await mount();
@@ -228,6 +241,7 @@ describe('Connect', () => {
   it('each refusal is a fixed sentence chosen by its word, and the box\'s own text never reaches the screen', async () => {
     const cases: [number, string, string][] = [
       [400, 'key-rejected', 'Linear rejected that key'],
+      [400, 'key-forbidden', 'Linear refused that key access'],
       [400, 'bad-key', "doesn't look like a Linear API key"],
       [503, 'unreachable', "Couldn't reach Linear"],
       [503, 'timeout', 'took too long'],
@@ -402,7 +416,7 @@ describe('the step-up (D-5512)', () => {
 
 describe('readLinearConnection', () => {
   it('reads every state the server sends', () => {
-    for (const v of [NOT_CONNECTED, CONNECTED, REJECTED, UNREACHABLE, { state: 'unreadable' }, { state: 'unusable' }, { state: 'placeholder' },
+    for (const v of [NOT_CONNECTED, CONNECTED, REJECTED, FORBIDDEN, UNREACHABLE, { state: 'unreadable' }, { state: 'unusable' }, { state: 'placeholder' },
       { state: 'details-unknown', why: 'stale' }] as LinearConnectionView[]) {
       expect(readLinearConnection(v), v.state).toEqual(v);
     }
@@ -411,7 +425,7 @@ describe('readLinearConnection', () => {
   it('refuses what it cannot vouch for, and keeps nothing it was not asked to', () => {
     for (const bad of [null, 'x', [], {}, { state: 'nope' }, { state: 'details-unknown', why: 'because' },
       { ...CONNECTED, outcome: 'rejected' }, { ...CONNECTED, keyTail: 4 }, { ...CONNECTED, checkedAt: 'now' }, { ...CONNECTED, org: 5 },
-      { ...REJECTED, outcome: 'ok' }]) {
+      { ...REJECTED, outcome: 'ok' }, { ...FORBIDDEN, outcome: 'rejected' }]) {
       expect(readLinearConnection(bad), JSON.stringify(bad)).toBeNull();
     }
     expect(readLinearConnection({ ...CONNECTED, key: KEY, extra: 1 })).toEqual(CONNECTED);

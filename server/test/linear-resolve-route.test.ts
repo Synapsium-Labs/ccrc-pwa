@@ -153,6 +153,7 @@ describe('GET /api/linear/resolve', () => {
   it('degrades every other failure arm to the offline title with its own word', async () => {
     const cases: [Awaited<ReturnType<FetchLike>>, string][] = [
       [{ ok: false, status: 401, json: async () => ({}) }, 'unauthorised'],
+      [{ ok: false, status: 403, json: async () => ({}) }, 'forbidden'],
       [{ ok: true, status: 200, json: async () => ({ data: { issue: null } }) }, 'not-found'],
       [{ ok: true, status: 200, json: async () => ({ nope: 1 }) }, 'malformed'],
       [{ ok: false, status: 502, json: async () => ({}) }, 'unreachable'],

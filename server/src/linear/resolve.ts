@@ -49,7 +49,8 @@ export async function resolveTitle(ref: string, ask: NamedAsk, deps: ResolveDeps
     return { title: sanitizeTitle(ticketTitle(look.identifier, look.title)), source: 'linear' };
   }
   if (look.reason === 'unauthorised') {
-    // The 401 marker (design §5.1): Settings tells the truth next time it is opened. `markLinearRejected` compares
+    // The 401 marker (design §5.1), and ONLY a 401's: a 403 (`forbidden`) is Linear refusing this request, not a verdict
+    // on the key, and falls through to the offline title unmarked. Settings tells the truth next time it is opened. `markLinearRejected` compares
     // digests, so a key replaced meanwhile is never condemned, and its failing never changes the answer.
     await markLinearRejected(deps.ccrcDir, look.keyDigest, (deps.now ?? Date.now)()).catch(() => {
       // Fixed words only: the error can carry a path, and the digest and key stay out of the line.

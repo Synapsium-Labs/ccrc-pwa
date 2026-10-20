@@ -30,6 +30,7 @@ describe('linearConnectionView', () => {
     expect(linearConnectionView(key, present())).toEqual({ state: 'connected', outcome: 'ok', ...shown });
     expect(linearConnectionView(key, present({ outcome: 'rejected' }))).toEqual({ state: 'key-rejected', outcome: 'rejected', ...shown });
     expect(linearConnectionView(key, present({ outcome: 'unreachable' }))).toEqual({ state: 'unreachable', outcome: 'unreachable', ...shown });
+    expect(linearConnectionView(key, present({ outcome: 'forbidden' }))).toEqual({ state: 'key-forbidden', outcome: 'forbidden', ...shown });
     expect(JSON.stringify(linearConnectionView(key, present()))).not.toContain(DIGEST);
   });
 
@@ -49,6 +50,7 @@ describe('linearConnectionView', () => {
       linearConnectionView(key, present()).state,
       linearConnectionView(key, present({ outcome: 'rejected' })).state,
       linearConnectionView(key, present({ outcome: 'unreachable' })).state,
+      linearConnectionView(key, present({ outcome: 'forbidden' })).state,
       linearConnectionView(key, { kind: 'absent' }).state,
     ]);
     expect([...seen].sort()).toEqual([...LINEAR_VIEW_STATES].sort());
@@ -56,8 +58,9 @@ describe('linearConnectionView', () => {
 });
 
 describe('checkOutcomeOf', () => {
-  it('only a 401/403 condemns a key; every other arm decided nothing about it', () => {
+  it('only a 401 condemns a key, a 403 is its own outcome, and every other arm decided nothing about it', () => {
     expect(checkOutcomeOf('unauthorised')).toBe('rejected');
+    expect(checkOutcomeOf('forbidden')).toBe('forbidden');
     for (const r of ['timeout', 'malformed', 'unreachable'] as const) expect(checkOutcomeOf(r)).toBe('unreachable');
   });
 });

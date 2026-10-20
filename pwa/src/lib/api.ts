@@ -642,15 +642,17 @@ export function readLinearConnection(raw: unknown): LinearConnectionView | null 
       return { state: raw.state };
     case 'details-unknown':
       return isWord(LINEAR_DETAILS_PROBLEMS, raw.why) ? { state: 'details-unknown', why: raw.why } : null;
-    case 'connected': case 'key-rejected': case 'unreachable': {
+    case 'connected': case 'key-rejected': case 'key-forbidden': case 'unreachable': {
       const state = raw.state;
-      const outcome: LinearCheckOutcome = state === 'connected' ? 'ok' : state === 'key-rejected' ? 'rejected' : 'unreachable';
+      const outcome: LinearCheckOutcome = state === 'connected' ? 'ok'
+        : state === 'key-rejected' ? 'rejected' : state === 'key-forbidden' ? 'forbidden' : 'unreachable';
       if (!isWord(LINEAR_CHECK_OUTCOMES, raw.outcome) || raw.outcome !== outcome) return null;
       const s = shown(outcome);
       if (s === null) return null;
       return state === 'connected' ? { state, ...s, outcome: 'ok' }
         : state === 'key-rejected' ? { state, ...s, outcome: 'rejected' }
-          : { state, ...s, outcome: 'unreachable' };
+          : state === 'key-forbidden' ? { state, ...s, outcome: 'forbidden' }
+            : { state, ...s, outcome: 'unreachable' };
     }
     default:
       return null;

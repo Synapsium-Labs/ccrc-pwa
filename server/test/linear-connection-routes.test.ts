@@ -142,6 +142,8 @@ describe('GET /api/linear/connection', () => {
     r.answer(status(401));
     r.clock.now = NOW + 1;
     expect(view(await check(r))).toMatchObject({ state: 'key-rejected', outcome: 'rejected', org: 'team-a', keyTail: '0001', checkedAt: NOW + 1 });
+    r.answer(status(403));
+    expect(view(await check(r))).toMatchObject({ state: 'key-forbidden', outcome: 'forbidden', org: 'team-a', keyTail: '0001' });
     r.answer(status(502));
     expect(view(await check(r))).toMatchObject({ state: 'unreachable', outcome: 'unreachable', org: 'team-a' });
     r.answer(viewerOk());
@@ -362,8 +364,16 @@ describe('PUT /api/linear/connection', () => {
     expect(json(res)).toEqual({ ok: false, error: 'key-rejected' });
     expect(res.body).not.toContain(LEAK);
     expect(files(r)).toEqual([]);
+  });
+
+  it('a key Linear forbids is 400 key-forbidden, its own word and not key-rejected, and NOTHING is written', async () => {
+    const r = await rig();
+    await r.stamp();
     r.answer(status(403));
-    expect(json(await put(r, KEY))['error']).toBe('key-rejected');
+    const res = await put(r, KEY);
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toEqual({ ok: false, error: 'key-forbidden' });
+    expect(res.body).not.toContain(LEAK);
     expect(files(r)).toEqual([]);
   });
 
@@ -651,10 +661,10 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
     expect(view(await get(r))).toMatchObject({ state: 'connected', org: 'team-b', keyTail: '0002' });
   });
 
-  it('does not mark on a failure that is not a 401', async () => {
+  it('does not mark on a failure that is not a 401, a 403 included (spec 5.1: only a 401 condemns the key)', async () => {
     const r = await rig();
     await connect(r);
-    for (const ans of [status(502), status(429), { ok: true, status: 200, json: async () => ({ data: { issue: null } }) }]) {
+    for (const ans of [status(403), status(502), status(429), { ok: true, status: 200, json: async () => ({ data: { issue: null } }) }]) {
       r.answer(ans);
       await resolve(r);
       expect(view(await get(r)).state).toBe('connected');

@@ -98,11 +98,13 @@ describe('lookupLinearIssue', () => {
     }
   });
 
-  it('answers unauthorised for 401 and 403, and hands back the digest of the key it used (never the key)', async () => {
-    for (const status of [401, 403]) {
+  it('answers unauthorised for a 401 and forbidden for a 403, each with the digest of the key it used (never the key)', async () => {
+    // Spec 5.1: only a 401 says the key is bad. A 403 is Linear refusing THIS request (a scope, a team the key cannot
+    // see), so it is its own word and the one place a caller decides what to condemn reads the two apart.
+    for (const [status, reason] of [[401, 'unauthorised'], [403, 'forbidden']] as const) {
       const { f } = spyFetch(bodyOf({}, status));
       const r = await lookupLinearIssue(REF, HAVE_KEY, { fetch: f });
-      expect(r).toEqual({ ok: false, reason: 'unauthorised', keyDigest: valueDigestHex(KEY) });
+      expect(r).toEqual({ ok: false, reason, keyDigest: valueDigestHex(KEY) });
       expect(JSON.stringify(r)).not.toContain(KEY);
     }
   });
@@ -229,10 +231,10 @@ describe('lookupLinearIssue', () => {
     }
   });
 
-  it('the failure list is the type, not a second copy, and names the five arms plus the unreachable one', () => {
+  it('the failure list is the type, not a second copy, and names every arm', () => {
     expect(new Set(LINEAR_FAILURES).size).toBe(LINEAR_FAILURES.length);
     expect([...LINEAR_FAILURES].sort())
-      .toEqual(['malformed', 'not-configured', 'not-found', 'timeout', 'unauthorised', 'unreachable']);
+      .toEqual(['forbidden', 'malformed', 'not-configured', 'not-found', 'timeout', 'unauthorised', 'unreachable']);
   });
 });
 
@@ -353,7 +355,7 @@ describe('verifyLinearKey', () => {
   it('each failure is its own word, and every one carries the digest', async () => {
     const cases: [Answer | (() => Promise<Answer>), string][] = [
       [bodyOf({}, 401), 'unauthorised'],
-      [bodyOf({}, 403), 'unauthorised'],
+      [bodyOf({}, 403), 'forbidden'],
       [bodyOf({}, 500), 'unreachable'],
       [bodyOf({}, 429), 'unreachable'],
       [async () => { throw new Error('ECONNREFUSED'); }, 'unreachable'],

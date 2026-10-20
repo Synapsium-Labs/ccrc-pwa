@@ -11,7 +11,8 @@
  * three (plus "describes another key") fold into one `details-unknown` that still says which, because the
  * remedy is the same (press Check again) and the reason is worth a line in the section.
  */
-import type { LinearConnectionView, LinearDetailsRead } from '../../../shared/linear.js';
+import type { LinearCheckOutcome, LinearConnectionView, LinearDetailsRead } from '../../../shared/linear.js';
+import type { LinearVerifyFailure } from './client.js';
 
 /** `readLinearKey`'s answer with the key replaced by its digest. */
 export type KeyMeasure =
@@ -22,13 +23,18 @@ export type KeyMeasure =
   | { kind: 'unreadable' };
 
 /**
- * What a failed key check means for the STORED outcome: Linear's 401/403 says the key is bad (`rejected`);
- * every other arm (a timeout, a 5xx, a refused connection, an answer of the wrong shape) decided nothing about
- * the key, so it is `unreachable`. The wire to the caller keeps the arm word (`timeout`, `malformed`); only the
- * stored outcome folds, because the section's table has one state for "could not check".
+ * What a failed key check means for the STORED outcome: Linear's 401 says the key is bad (`rejected`) and its 403 is
+ * its own outcome (`forbidden`: refused, which is not a verdict on the key); every other arm (a timeout, a 5xx, a
+ * refused connection, an answer of the wrong shape) decided nothing about the key, so it is `unreachable`. The wire
+ * to the caller keeps the arm word (`timeout`, `malformed`); only the stored outcome folds, because the section's
+ * table has one state for "could not check".
  */
-export function checkOutcomeOf(reason: 'unauthorised' | 'timeout' | 'malformed' | 'unreachable'): 'rejected' | 'unreachable' {
-  return reason === 'unauthorised' ? 'rejected' : 'unreachable';
+export function checkOutcomeOf(reason: LinearVerifyFailure): LinearCheckOutcome {
+  switch (reason) {
+    case 'unauthorised': return 'rejected';
+    case 'forbidden': return 'forbidden';
+    case 'timeout': case 'malformed': case 'unreachable': return 'unreachable';
+  }
 }
 
 export function linearConnectionView(key: KeyMeasure, details: LinearDetailsRead): LinearConnectionView {
@@ -47,6 +53,7 @@ export function linearConnectionView(key: KeyMeasure, details: LinearDetailsRead
   switch (d.outcome) {
     case 'ok': return { state: 'connected', outcome: 'ok', ...shown };
     case 'rejected': return { state: 'key-rejected', outcome: 'rejected', ...shown };
+    case 'forbidden': return { state: 'key-forbidden', outcome: 'forbidden', ...shown };
     case 'unreachable': return { state: 'unreachable', outcome: 'unreachable', ...shown };
   }
 }

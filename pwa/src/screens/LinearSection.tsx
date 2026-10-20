@@ -40,6 +40,7 @@ export const LINEAR_TEXT = {
   unread: "Couldn't read the Linear connection. Reload to try again.",
   notConnected: "Not connected. Paste a personal API key from Linear's settings (read access is enough).",
   rejected: 'Linear rejected this key (it was revoked or expired). Ticket titles fall back to what you paste.',
+  forbidden: 'Linear refused this key access at the last check (it may be missing a permission). The key was not called bad. Ticket titles fall back to what you paste.',
   unreachable: "Couldn't reach Linear at the last check. Ticket titles fall back to what you paste.",
   detailsUnknown: "A key is stored, but the box has no record of what it last found out about it. Check again to confirm it still works.",
   unreadableKey: "Can't read the stored key. Fix the file's permissions on the box, or replace the key here.",
@@ -60,6 +61,7 @@ export const LINEAR_TEXT = {
 const REFUSAL_TEXT: Readonly<Record<string, string>> = {
   'bad-key': "That doesn't look like a Linear API key. Paste it again, with nothing before or after it.",
   'key-rejected': 'Linear rejected that key, so nothing was saved. Check it and try again.',
+  'key-forbidden': 'Linear refused that key access, so nothing was saved. Check its permissions, or try another key.',
   'unreachable': "Couldn't reach Linear, so nothing was saved. Try again.",
   'timeout': 'Linear took too long to answer, so nothing was saved. Try again.',
   'malformed': "Linear's answer was not what was expected, so nothing was saved. Try again.",
@@ -85,6 +87,7 @@ export function linearStateText(v: LinearConnectionView, now: number): ReactNode
   switch (v.state) {
     case 'not-connected': return LINEAR_TEXT.notConnected;
     case 'key-rejected': return LINEAR_TEXT.rejected;
+    case 'key-forbidden': return LINEAR_TEXT.forbidden;
     case 'unreachable': return LINEAR_TEXT.unreachable;
     case 'details-unknown': return LINEAR_TEXT.detailsUnknown;
     case 'unreadable': return LINEAR_TEXT.unreadableKey;
@@ -107,6 +110,8 @@ export function linearControls(v: LinearConnectionView): { field: 'connect' | 'r
     case 'not-connected': return { field: 'connect', check: false, disconnect: false };
     case 'connected': return { field: null, check: true, disconnect: true };
     case 'key-rejected': return { field: 'replace', check: false, disconnect: true };
+    // A 403 is not a verdict on the key: it may be the scope that changed, so a second look is worth offering too.
+    case 'key-forbidden': return { field: 'replace', check: true, disconnect: true };
     case 'unreachable': return { field: null, check: true, disconnect: true };
     case 'details-unknown': return { field: null, check: true, disconnect: true };
     case 'unreadable': case 'unusable': case 'placeholder': return { field: 'replace', check: false, disconnect: true };

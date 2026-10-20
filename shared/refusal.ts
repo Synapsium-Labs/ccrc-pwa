@@ -92,7 +92,7 @@ export const GENERIC_REFUSALS = [
   'run-unreadable', 'runs-unreadable', 'sweep-stopped', 'too-large', 'unknown-ask', 'unknown-claim',
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
   // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
-  'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'not-connected', 'unreachable', 'timeout', 'malformed',
+  'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'key-forbidden', 'not-connected', 'unreachable', 'timeout', 'malformed',
   // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
   'slug-taken', 'bad-slug', 'account-refused',
 ] as const;
@@ -159,11 +159,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // the PWA's login screen, which no passphrase could clear. Its other four words are defined above.
   'insecure-origin': 403,
   // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
-  // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected: all things the
+  // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected or forbade: all things the
   // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear
   // not answering, one word per arm (`timeout` and `malformed` are not folded into `unreachable`: a retry helps
   // the first and not the second).
-  'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400,
+  'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400, 'key-forbidden': 400,
   'not-connected': 409,
   'unreachable': 503, 'timeout': 503, 'malformed': 503,
   // The named workspace create (named workspaces S5): CHOSEN — 400 for a name, project or wrapper the operator can

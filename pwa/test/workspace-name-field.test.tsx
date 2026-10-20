@@ -177,6 +177,16 @@ describe('the lookup', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
+  it('a Linear that forbade the lookup says so quietly, and does not send the operator to replace a key it did not call bad', async () => {
+    vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'ENG-9999', source: 'offline', note: 'forbidden' });
+    render(<Harness onOpenSettings={vi.fn()} />);
+    type('ENG-9999');
+    await settle(NAME_LOOKUP_DEBOUNCE_MS);
+    expect(screen.getByText(LOOKUP_NOTE.forbidden.hint)).toBeInTheDocument();
+    expect(LOOKUP_NOTE.forbidden.hint).not.toBe(LOOKUP_NOTE.unauthorised.hint);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['a rejected request', () => Promise.reject(new ApiError(502, { ok: false }))],
     ['a network failure', () => Promise.reject(new TypeError('Failed to fetch'))],

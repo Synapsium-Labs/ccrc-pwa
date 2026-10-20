@@ -145,11 +145,12 @@ async function callLinear(
     });
 
     if (!res.ok) {
-      // 401/403 is a key problem the operator can fix; everything else is the
-      // service. 429 lands in `unreachable` deliberately: it is not a
-      // credential fault and the caller's answer (use the offline title) is
-      // the same as for a 500.
-      return { ok: false, reason: res.status === 401 || res.status === 403 ? 'unauthorised' : 'unreachable' };
+      // ONLY a 401 says the key is bad (spec 5.1). A 403 is Linear refusing this
+      // request (a scope, a team the key cannot see): its own arm, which no caller
+      // may treat as a verdict on the key. Everything else is the service. 429
+      // lands in `unreachable` deliberately: it is not a credential fault and the
+      // caller's answer (use the offline title) is the same as for a 500.
+      return { ok: false, reason: res.status === 401 ? 'unauthorised' : res.status === 403 ? 'forbidden' : 'unreachable' };
     }
 
     try {

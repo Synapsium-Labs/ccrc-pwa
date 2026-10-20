@@ -88,7 +88,7 @@ describe('LOOKUP_NOTE', () => {
     const hints = Object.values(LOOKUP_NOTE).map((n) => n.hint);
     expect(new Set(hints).size).toBe(hints.length);
     const pointers = Object.entries(LOOKUP_NOTE).filter(([, n]) => n.pointer !== null).map(([k]) => k);
-    expect(pointers.sort()).toEqual(['not-configured', 'unauthorised']);
+    expect(pointers.sort()).toEqual(['not-configured', 'unauthorised']);   // a 403 is not the key's fault: no pointer
   });
 
   it('reads the server\'s words and none of the client\'s own as a server reason', () => {

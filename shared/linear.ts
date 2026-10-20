@@ -29,10 +29,10 @@ export function isLinearKeyShape(key: unknown): key is string {
     && LINEAR_KEY_SHAPE.test(key);
 }
 
-/** What the last check of the stored key found. `ok`, `rejected` (Linear answered 401/403) or `unreachable`
- *  (a timeout, a 5xx, a refused connection, an answer that was not the shape asked for: nothing was decided
- *  about the key). */
-export const LINEAR_CHECK_OUTCOMES = ['ok', 'rejected', 'unreachable'] as const;
+/** What the last check of the stored key found. `ok`, `rejected` (Linear answered 401: the key is bad), `forbidden`
+ *  (Linear answered 403: it refused this request, which is not a verdict on the key) or `unreachable` (a timeout, a
+ *  5xx, a refused connection, an answer that was not the shape asked for: nothing was decided about the key). */
+export const LINEAR_CHECK_OUTCOMES = ['ok', 'rejected', 'forbidden', 'unreachable'] as const;
 export type LinearCheckOutcome = (typeof LINEAR_CHECK_OUTCOMES)[number];
 
 /** Why a stored key has no usable details beside it: the file is `absent` (a crash between the two writes, or an
@@ -55,6 +55,8 @@ export type LinearConnectionView =
   | { state: 'not-connected' }
   | ({ state: 'connected' } & LinearShown & { outcome: 'ok' })
   | ({ state: 'key-rejected' } & LinearShown & { outcome: 'rejected' })
+  /** Linear answered 403 at the last check. The key is not called bad: it may lack a scope, or a team. */
+  | ({ state: 'key-forbidden' } & LinearShown & { outcome: 'forbidden' })
   | ({ state: 'unreachable' } & LinearShown & { outcome: 'unreachable' })
   /** A key is stored and no details describe it. The key may be fine: Check again says. */
   | { state: 'details-unknown'; why: LinearDetailsProblem }
@@ -66,7 +68,7 @@ export type LinearConnectionView =
   | { state: 'placeholder' };
 
 export const LINEAR_VIEW_STATES = [
-  'not-connected', 'connected', 'key-rejected', 'unreachable', 'details-unknown', 'unreadable', 'unusable', 'placeholder',
+  'not-connected', 'connected', 'key-rejected', 'key-forbidden', 'unreachable', 'details-unknown', 'unreadable', 'unusable', 'placeholder',
 ] as const satisfies readonly LinearConnectionView['state'][];
 
 /** What `~/.ccrc/linear.json` holds: the DISPLAY record of the stored key (never a credential). `org`/`user` are
@@ -97,12 +99,14 @@ export interface LinearConnectionAnswer { ok: true; connection: LinearConnection
  * (`server/src/linear/client.ts` makes them) and by the PWA (`LOOKUP_NOTE` says each in a sentence, a `satisfies
  * Record` over this type, so a new arm is a compile error until it has its words). EACH ITS OWN, because the operator
  * and the caller do different things about each: `not-configured` is a setup step, `unauthorised` a bad or expired
- * key, `not-found` a ticket that does not exist (or that the key cannot see), `timeout` is worth retrying,
+ * key (a 401, the ONLY answer that marks the stored key rejected), `forbidden` Linear refusing this request (a 403: a
+ * scope or a team the key lacks, which says nothing against the key and never marks it), `not-found` a ticket that
+ * does not exist, `timeout` is worth retrying,
  * `malformed` is an answer that was not the shape asked for, and `unreachable` is everything else the service or the
  * network did (a 5xx, a 429, a refused connection, a GraphQL errors array).
  */
 export const LINEAR_FAILURES = [
-  'not-configured', 'unauthorised', 'not-found', 'timeout', 'malformed', 'unreachable',
+  'not-configured', 'unauthorised', 'forbidden', 'not-found', 'timeout', 'malformed', 'unreachable',
 ] as const;
 export type LinearFailure = (typeof LINEAR_FAILURES)[number];
 

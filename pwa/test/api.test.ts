@@ -1141,6 +1141,7 @@ describe('account pools', () => {
   it.each([
     ['a known word', 'not-configured', 'not-configured'],
     ['another known word', 'unreachable', 'unreachable'],
+    ['the 403 word', 'forbidden', 'forbidden'],
     ['a word this build lacks', 'from-the-future', 'unrecognised'],
     ['a client-side note smuggled in as a word', 'call-failed', 'unrecognised'],
     ['a reason that is not a string', 7, 'unrecognised'],
