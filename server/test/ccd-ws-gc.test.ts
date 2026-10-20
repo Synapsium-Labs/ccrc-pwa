@@ -420,6 +420,19 @@ describe('ws-gc --fast', () => {
     });
   }
 
+  it('reads an archived row whose manifest is a symlink as unmeasured, the registry\'s no-symlink rule', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    const elsewhere = path.join(h.home, 'planted.json');
+    fs.writeFileSync(elsewhere, '{"id":"demo-quiet-mesa","worktreeBytes":3145728}\n');
+    fs.symlinkSync(elsewhere, path.join(reg, 'demo-quiet-mesa.archivemanifest'));
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(members(fast)[0]).toMatch(/^archived demo quiet-mesa /);
+    expect(sizeOf(fast, 'quiet-mesa'), fast).toBe('-');
+  });
+
   it('claims no total: the footer says sizing was skipped', () => {
     h.makeRepo('demo');
     addWs('demo', 'quiet-mesa');
