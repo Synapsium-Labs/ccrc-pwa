@@ -1562,10 +1562,10 @@ export function questionOutcome(attempts) {
 
 /**
  * W2-D81: the hand-check sample. Per arm, in ASSIGNMENT_ARMS order, ceil(share * n) of that arm's judged items (the
- * signed share, read as an exact decimal and computed in integers, never in floats: D-5788), drawn
- * without replacement from the seed's 'handcheck' substream over the items sorted by id (so input order never moves
- * it); then every judge-failed item, outside the share. `judged` (the judge returned a label) and `judgeFailed` (it
- * was malformed twice) are exclusive. Answers the sampled ids, sorted.
+ * signed share, read as an exact decimal and computed in integers, never in floats: D-5788), drawn without replacement
+ * from the seed's 'handcheck' substream over the items sorted by id (so input order never moves it); then every
+ * judge-failed item, outside the share. `judged` (the judge returned a label) and `judgeFailed` (it was malformed
+ * twice) are exclusive. Answers the sampled ids, sorted.
  * @param {string} seedHex the open record's bootstrap seed, 64 lowercase hex characters
  * @param {ReadonlyArray<{id: string, arm: 'treatment'|'control', judged: boolean, judgeFailed: boolean}>} items
  * @param {number} share the open record's handcheck.share: a decimal in (0, 1] of at most six places

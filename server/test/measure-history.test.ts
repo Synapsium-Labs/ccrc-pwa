@@ -788,7 +788,8 @@ describe('W2-3 Task 1: raw window rows', () => {
   describe('review fix round 1: families mode reads one snapshot (D-5790)', () => {
     /** families_report over the real read-only connection, wrapped so that a second connection runs `writeSql` and
      *  commits right after the first SELECT whose text holds `needle` (the empty needle: the report's FIRST SELECT).
-     *  Prints [[boundary_uuid, [file_id, …]], …] for demo-a. Census mode's racing wrapper, for families mode. */
+     *  Prints one [[boundary_uuid, [file_id, …]], …] list per listed family (demo-a alone by default): `seen` is the
+     *  first family's list, `byFamily` each family's boundary uuids. Census mode's racing wrapper, for families mode. */
     const race = (f: Planted, needle: string, writeSql: string[], fams: Array<[string, string]> = [['demo-a', G1]]):
       { status: number | null; stderr: string; seen: Array<[string, number[]]>; byFamily: Record<string, string[]> } => {
       const RACE = [
