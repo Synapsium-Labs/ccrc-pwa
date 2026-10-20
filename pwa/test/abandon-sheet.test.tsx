@@ -638,3 +638,25 @@ it('a run with neither workspace nor branch is named by its id', () => {
                        onClose={() => {}} abandonRun={vi.fn()} />);
   expect(screen.getByText(/^Abandon run 3 — 3\?/)).toBeInTheDocument();
 });
+
+// D-5971 (#549, ARCH-11b): a defensive arm. The abandon route's close outcome does not send `registry-unmeasurable`
+// today; if it ever does (with or without stderr), the sheet reads the WORD at any status: "the release failed" is a different fact.
+describe('an abandon refused registry-unmeasurable (D-5971)', () => {
+  const refusedWith = (err: unknown): void => {
+    render(<AbandonSheet run={run()} onClose={() => {}}
+                         abandonRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+  };
+
+  it.each([502, 503])('at %i says the registry could not be read, never that the release failed', async (status) => {
+    refusedWith(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText('the release failed')).toBeNull();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
+  });
+
+  it('keeps the stderr ccd sent with it, the more specific fact', async () => {
+    refusedWith(new ApiError(502, { ok: false, error: 'registry-unmeasurable', stderr: 'ccd: no wrapper has capacity' }));
+    expect(await screen.findByText('ccd: no wrapper has capacity')).toBeInTheDocument();
+  });
+});

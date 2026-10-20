@@ -33,7 +33,7 @@ import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Skeleton, us
 import { api, apiErrorText } from '../lib/api';
 import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT, optionNote, useResultLine,
-} from '../screens/settingsText';
+} from './settingsText';
 import { useFleetStore } from '../stores/fleet';
 import { childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';

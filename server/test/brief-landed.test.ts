@@ -16,7 +16,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
-import { queueSystemMail } from '../src/coord/rundefs.js';
+import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { briefNotTakenSubject } from '../src/coord/briefwatch.js';

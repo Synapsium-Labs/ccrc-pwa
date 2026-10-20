@@ -85,7 +85,7 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
 });
 
 describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions under server/src (D-5849)', () => {
-  it('FIXTURE: 12 files name it; 10 expressions parse it: an import, a comment, a template or a bare literal is not a parse', () => {
+  it('FIXTURE: an import, a comment, a template or a bare literal names the marker but is not a parse', () => {
     const sites = reclaimPauseParseSites(root);
     // Two expressions on one line are two sites; the commented-out read is none.
     expect(sites.map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/lane.ts:9', 'server/src/lane.ts:9']);
@@ -93,7 +93,7 @@ describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions und
       ['server/src/coord/rundefs.ts', 'server/src/lane.ts', 'server/src/watch.ts']);
   });
 
-  it("REAL: 12 files name it; 10 expressions parse it: it finds childReclaim's read, and names outnumber parses", () => {
+  it("REAL: it finds childReclaim's read, and fewer files parse the marker than name it", () => {
     const sites = reclaimPauseParseSites();
     show('reclaimPauseParseSites', sites);
     expect(sites.some((s) => s.file === 'server/src/coord/childReclaim.ts'), "childReclaim's read is not found").toBe(true);

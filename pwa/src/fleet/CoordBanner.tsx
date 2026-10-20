@@ -20,7 +20,7 @@
 import type { ReactNode } from 'react';
 import { MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
 import { useMarkerToggle } from './useMarkerToggle';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText, isRegistryUnmeasurable } from '../lib/api';
 import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -39,6 +39,8 @@ import './fleet.css';
  *  in this app already uses. */
 export function inlinePauseError(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
+  // D-5971: `registry-unmeasurable` renders inline by its WORD, whatever status carries it.
+  if (isRegistryUnmeasurable(err)) return apiErrorText(err);
   if (err.status === 501) return COORD_UNSUPPORTED_TEXT;
   // Review, M1: this arm used to read `body.stderr` itself and fall back to
   // `apiErrorText(err)` — but `apiErrorText` is ALREADY stderr-first
