@@ -307,6 +307,44 @@ describe('the BSD-order shim is the chmod ccd resolves, and it refuses a trailin
   });
 });
 
+/** ITEM 35 (path-identity spec §3.9): the collector's quarantine maker, `_ws_collect_qdir`, clears the setgid bit a
+ *  setgid `~/.cc-tmp` hands the directory it makes, with `chmod -- g-s "$q"`. No case ran that line under BSD argument
+ *  order: `ccd-collect-quarantine.test.ts` logs it through a shell function that calls the HOST chmod, which on Linux
+ *  is GNU and permutes, so a `--` after the mode would pass there. The literal census below reads one line at a time,
+ *  so a `chmod g-s \` broken before its `--` passes it too; these cases do not. Both orders, one body. */
+const LINUX = process.platform === 'linux';
+/** `_ws_collect_qdir`'s answer: its rc and its two globals, read in the shell that called it. */
+const qdir = (env: NodeJS.ProcessEnv): { status: number; rc: string; q: string; why: string; out: string } => {
+  const r = shStatus('_ws_collect_qdir; printf "%s\\x1f%s\\x1f%s" "$?" "$_WS_Q" "$_WS_Q_WHY"', env);
+  const [rc = '', q = '', why = ''] = r.out.split('\x1f');
+  return { status: r.status, rc, q, why, out: r.out };
+};
+const quarantine = (): string => path.join(fs.realpathSync(tmpRoot()), '.ccd-quarantine');
+
+describe('the collector’s quarantine maker runs under both argument orders (item 35)', () => {
+  it.each(CHMODS)('%s: the collector’s quarantine maker makes .ccd-quarantine 0700 and answers 0', (_order, chmodEnv) => {
+    fs.mkdirSync(tmpRoot(), { mode: 0o755 });
+    const m = qdir(chmodEnv());
+    expect(m.status, m.out).toBe(0);
+    expect(m.rc, m.why).toBe('0');
+    expect(m.q).toBe(quarantine());
+    expect(m.why).toBe('');
+    expect(fs.statSync(quarantine()).mode & 0o7777).toBe(0o700);
+  });
+});
+
+describe.skipIf(!LINUX)('the collector’s quarantine maker under a setgid ~/.cc-tmp, where Linux hands the new directory the bit (item 35)', () => {
+  it.each(CHMODS)('%s: the quarantine it makes is 0700, never 2700', (_order, chmodEnv) => {
+    fs.mkdirSync(tmpRoot(), { mode: 0o755 });
+    fs.chmodSync(tmpRoot(), 0o2755);
+    expect(fs.statSync(tmpRoot()).mode & 0o7777, 'the CONTROL: ~/.cc-tmp is setgid').toBe(0o2755);
+    const m = qdir(chmodEnv());
+    expect(m.rc, m.why).toBe('0');
+    expect(m.q).toBe(quarantine());
+    expect(fs.statSync(quarantine()).mode & 0o7777, 'the setgid bit was cleared').toBe(0o700);
+  });
+});
+
 /** Every shell script shipped under `ccd/` and `deploy/`, found by SHEBANG
  *  (`sh` or `bash`), never by a hand-kept list. */
 const REPO = path.resolve(path.dirname(CCD), '..');

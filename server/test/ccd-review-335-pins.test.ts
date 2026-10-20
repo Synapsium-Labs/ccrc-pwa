@@ -133,6 +133,15 @@ const cleanReason = (done: Record<string, unknown>, head: string): string => {
   return why;
 };
 const doneOf = (): Record<string, unknown> => eventsOf(h.home, 'reclaim').find((e) => e['outcome'] === 'done')!;
+/** ITEM 36 (path-identity spec §3.9): `why` is ccd's reason cut at 300 bytes (`cleanReason` checked the cut and that it
+ *  is printable ASCII), and the reason OPENS with `want`, which spells the leaf's path twice, so on a long TMPDIR
+ *  `want` runs past the cut. Asserted is `want` as far as the cut lets it reach: all of it when it fits, its first
+ *  300 bytes when it does not. */
+const opensWithUpToTheCut = (why: string, want: string): void => {
+  const cut = why.slice(0, -1);
+  const n = Math.min(want.length, Buffer.byteLength(cut, 'utf8'));
+  expect(cut.slice(0, n), 'the reason opens with the needle, as far as the cut lets it reach').toBe(want.slice(0, n));
+};
 
 // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
 describe.skipIf(process.platform === 'darwin')('F9: an rm that fails on a long, non-ASCII name reaches the row as ONE short clean line (spec §5.6)', () => {
@@ -147,7 +156,7 @@ describe.skipIf(process.platform === 'darwin')('F9: an rm that fails on a long, 
     const done = doneOf();
     expect(measOf(done)['clipsKept']).toBe('unmeasured');
     const why = cleanReason(done, `clips ${clips} kept (unmeasured): `);
-    expect(why).toContain(`removing ${fs.realpathSync(clips)} failed (rm exit 1): rm: cannot remove '${fs.realpathSync(clips)}/evil????`);
+    opensWithUpToTheCut(why, `removing ${fs.realpathSync(clips)} failed (rm exit 1): rm: cannot remove '${fs.realpathSync(clips)}/evil????`);
   }, 90_000);
 
   it('the temp root’s unmeasured arm after the removal helper ran (`tmpwhy`)', () => {
@@ -161,7 +170,7 @@ describe.skipIf(process.platform === 'darwin')('F9: an rm that fails on a long, 
     const done = doneOf();
     expect(measOf(done)['tmpRootKept']).toBe('unmeasured');
     const why = cleanReason(done, `temp root ${tmp} kept (unmeasured): `);
-    expect(why).toContain(`removing ${fs.realpathSync(tmp)} failed (rm exit 1): rm: cannot remove '${fs.realpathSync(tmp)}/evil????`);
+    opensWithUpToTheCut(why, `removing ${fs.realpathSync(tmp)} failed (rm exit 1): rm: cannot remove '${fs.realpathSync(tmp)}/evil????`);
   }, 90_000);
 });
 
