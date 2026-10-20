@@ -15,6 +15,7 @@ import {
   EXPIRE_PERSISTENT_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
+  rankArchivedHeld,
   EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput, type ExpiryReport,
 } from '../src/archivedExpiry.js';
@@ -1041,6 +1042,66 @@ describe('the attention list, and the words that never tell an operator to end a
       ['c', archivedExpiryEntry(3)],
     ]);
     expect(expiryAttention(m).map((a) => [a.sessionId, a.kind])).toEqual([['b', 'held'], ['a', 'would-expire']]);
+  });
+});
+
+// D-5943 (spec §2.7, #120 folded into #318): the ranked total of bytes archived workspaces hold, each with the lane's
+// latest verdict for it. A pure read of the registry rows and the lane's memory; it decides nothing.
+describe('the ranked held bytes (D-5943)', () => {
+  const row = (id: string, bytes: number | null, archivedAt = 100) => ({ id, workspace: id, archivedAt, archivedBytes: bytes });
+  const none = new Map<string, ArchivedExpiryEntry>();
+
+  it('ranked by bytes, descending — ties broken by id', () => {
+    const r = rankArchivedHeld([row('b', 10), row('a', 300), row('d', 10), row('c', 50)], none);
+    expect(r.rows.map((x) => [x.sessionId, x.bytes])).toEqual([['a', 300], ['c', 50], ['b', 10], ['d', 10]]);
+  });
+
+  it('null bytes are unmeasured, never 0, and last', () => {
+    const r = rankArchivedHeld([row('z', null), row('a', null), row('m', 0), row('k', 7)], none);
+    expect(r.rows.map((x) => [x.sessionId, x.bytes])).toEqual([['k', 7], ['m', 0], ['a', null], ['z', null]]);
+    expect(r.unmeasured).toBe(2);
+    expect(r.rows.find((x) => x.sessionId === 'a')!.bytes).toBeNull();
+  });
+
+  it('the total sums measured rows only', () => {
+    const r = rankArchivedHeld([row('a', 1_000), row('b', null), row('c', 24)], none);
+    expect(r.totalBytes).toBe(1_024);
+    expect(rankArchivedHeld([row('a', null)], none)).toEqual({ totalBytes: 0, unmeasured: 1,
+      rows: [{ sessionId: 'a', bytes: null, verdict: 'not-yet-audited', kind: 'not-yet-audited' }] });
+  });
+
+  it('a never-audited row reads `not-yet-audited` — no entry, a fresh entry, or an entry for another archive', () => {
+    const fresh = new Map([['b', archivedExpiryEntry(100)],
+      ['c', { ...archivedExpiryEntry(99), expiresAt: 700, report: { kind: 'would-expire', at: 1, sensitive: 0 } } as ArchivedExpiryEntry]]);
+    const r = rankArchivedHeld([row('a', 3), row('b', 2), row('c', 1)], fresh);
+    expect(r.rows.map((x) => [x.sessionId, x.verdict, x.kind])).toEqual([
+      ['a', 'not-yet-audited', 'not-yet-audited'], ['b', 'not-yet-audited', 'not-yet-audited'], ['c', 'not-yet-audited', 'not-yet-audited']]);
+  });
+
+  it('an audited row carries its word and kind: the standing report, else the last answer, else what the audit taught', () => {
+    const m = new Map<string, ArchivedExpiryEntry>([
+      ['w', { ...archivedExpiryEntry(100), expiresAt: 700, lastOutcome: 'would-expire', report: { kind: 'would-expire', at: 1, sensitive: 0 } }],
+      ['r', { ...archivedExpiryEntry(100), expiresAt: 700, lastOutcome: 'refused:branch-elsewhere',
+        report: { kind: 'refused', at: 1, token: 'branch-elsewhere', detail: '' } }],
+      ['s', { ...archivedExpiryEntry(100), expiresAt: 700, report: { kind: 'stuck', at: 1, detail: 'd', attempts: 2 } }],
+      ['d', { ...archivedExpiryEntry(100), expiresAt: 700, lastOutcome: 'deferred:presence' }],
+      // A hold met after a deferral: the standing report speaks, not the older answer.
+      ['h', { ...archivedExpiryEntry(100), expiresAt: 700, lastOutcome: 'deferred:presence', report: { kind: 'held', at: 1, reason: 'r' } }],
+      ['l', { ...archivedExpiryEntry(100), expiresAt: 700 }],
+      ['n', { ...archivedExpiryEntry(100), report: { kind: 'no-evidence', at: 1 } }],
+    ]);
+    const r = rankArchivedHeld(['w', 'r', 's', 'd', 'h', 'l', 'n'].map((id) => row(id, 1)), m);
+    expect(Object.fromEntries(r.rows.map((x) => [x.sessionId, [x.verdict, x.kind]]))).toEqual({
+      w: ['would-expire', 'would-expire'], r: ['branch-elsewhere', 'refused'], s: ['failing', 'failing'],
+      d: ['presence', 'deferred'], h: ['held', 'held'], l: ['expiry-known', 'learned'], n: ['no-evidence', 'no-evidence'],
+    });
+  });
+
+  it('only archived workspaces are counted — a main checkout and a live workspace are not', () => {
+    const r = rankArchivedHeld([{ id: 'main', workspace: null, archivedAt: 100, archivedBytes: 9 },
+      { id: 'live', workspace: 'live', archivedAt: null, archivedBytes: 9 }, row('a', 1)], none);
+    expect(r.rows.map((x) => x.sessionId)).toEqual(['a']);
+    expect(r.totalBytes).toBe(1);
   });
 });
 

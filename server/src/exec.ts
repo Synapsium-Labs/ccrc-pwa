@@ -4,7 +4,8 @@ import { tmuxTarget } from '../../shared/tmux-target.js';
 
 /** The unmeasured vocabulary lives in `./unmeasured.js` (D-5896): it is a word, not an exec, and `lifecycle.ts`
  *  reached `node:child_process` only to read it. Re-exported so every other import keeps working. */
-export { UNMEASURED, type Unmeasured } from './unmeasured.js';
+export { UNMEASURED, type Unmeasured, type NotRan, type NotRanReason } from './unmeasured.js';
+import type { NotRan } from './unmeasured.js';
 
 /** `killed` is OPTIONAL and that is not a style choice: 249 bare
  *  `{code, stdout, stderr}` literals across 32 test files make a required field
@@ -18,11 +19,20 @@ export { UNMEASURED, type Unmeasured } from './unmeasured.js';
  *  `signal` that is the only evidence it was cut short at all. Same optional
  *  discipline: absent = the peer did not tell us; `null` = it did, and there was
  *  no signal. */
-export interface ExecResult {
+interface ExecAnswer {
   code: number; stdout: string; stderr: string;
   killed?: boolean;
   signal?: string | null;
 }
+
+/** D-6034: the `ran` discriminant, ADDITIVE for now. `ran: false` is a runner's own answer that the command never
+ *  ran (or may not have); `code: 1` and `stderr` stay forged on that arm exactly as before, so every reader that
+ *  reads only `code` is unchanged. `ran` absent is today's every other answer; step 2 makes it required. A reader
+ *  that classifies a refusal must narrow on `ran === false` FIRST: no refusal, die or composition error is ever
+ *  read off a forged code. */
+export type ExecResult =
+  | (ExecAnswer & { ran?: true })
+  | (ExecAnswer & NotRan);
 export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
 
 /** §1.7: `local` mode is a PRODUCER of the cut-short measurement too, and it used
@@ -44,12 +54,17 @@ export const realRunner: Runner = (cmd, args) =>
     execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
       const code = err ? (e?.code as number | undefined ?? 1) : 0;
-      resolve({
+      const measured = {
         code: typeof code === 'number' ? code : 1,
         stdout: String(stdout), stderr: String(stderr),
         killed: e?.killed === true,
         signal: e?.signal ?? null,
-      });
+      };
+      // D-6034: a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means no child ever existed, so
+      // the forged 1 is said to be one. Any other string code (a maxBuffer overflow) had a child, and stays as it was.
+      const spawnFailed = e !== null && typeof e.code === 'string' && typeof e.syscall === 'string'
+        && e.syscall.startsWith('spawn');
+      resolve(spawnFailed ? { ...measured, ran: false, reason: 'spawn', detail: e.message } : measured);
     });
   });
 
