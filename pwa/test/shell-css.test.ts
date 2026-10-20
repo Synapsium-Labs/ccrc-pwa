@@ -243,3 +243,9 @@ describe('docs/docs.css sets no overflow on .shell-detail (spec 4.14)', () => {
     expect(paneOverflow(`${docsCss}\n${planted}\n`)).not.toEqual([]);
   });
 });
+
+describe('the main landmark draws no focus ring (D-5679)', () => {
+  it('.shell-detail:focus-visible sets outline none; Chrome holds the cascade (browser/content-focus-ring)', () => {
+    expect(declaredValues(shellCss, '.shell-detail:focus-visible', 'outline')).toEqual(['none']);
+  });
+});

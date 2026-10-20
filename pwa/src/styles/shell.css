@@ -53,6 +53,15 @@
   font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
 }
 
+/* The main landmark takes focus only from script: the skip link, a palette
+ * that hands focus back after a route change, a switch that replaced the
+ * focused part (`tabIndex=-1`, D-5679). It is not a control, so base.css's
+ * page-wide ring stays off it; measured in Chromium, a keyboard palette run
+ * drew that ring along the whole pane (`browser/content-focus-ring`). */
+.shell-detail:focus-visible {
+  outline: none;
+}
+
 /* ---- Mobile: full-screen swap (unchanged) ---------------------------- */
 @media (max-width: 899.98px) {
   .app-shell[data-view='fleet'] .shell-detail {
