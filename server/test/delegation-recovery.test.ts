@@ -2774,7 +2774,8 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     const held = new Set(have);
     const calls = { project: 0, inserts: [] as number[] };
     const port: DelegationProjectionPort = {
-      project: () => { calls.project++; },
+      // a checkpoint that holds no session is the wipe (the projection deletes the events of a LEAVING session): it clears what is held
+      project: (cp) => { calls.project++; if (cp.sessions.length === 0) held.clear(); },
       insertEvents: (rows) => {
         calls.inserts.push(rows.length);
         let inserted = 0;
@@ -2821,6 +2822,31 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
     expect(j.seen.passes).toBe(2);
     expect(report).toMatchObject({ journalPasses: 2, fullReplay: true });
+  });
+
+  it('review 705 F1: an equal count whose max is a sequence the journal holds no evidence at reads the journal in full, with recovery\'s counts', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);                // count 6 as the journal's, max 99: the journal has no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 99 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 705 F1: the same disagreement without recovery\'s counts — the counting pass sees no evidence at the max, so the full pass runs', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal }), 'the control, SQLite in sync, only counts').toMatchObject({ journalPasses: 1, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
+    expect(j.seen.passes).toBe(3);                                       // the counting pass, the full pass, the wipe's replay
+    expect(report).toMatchObject({ journalPasses: 3, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
   });
 
   it('heals every drifted session in ONE journal pass, deleting them one session at a time with the loop yielded between', async () => {
@@ -3931,12 +3957,18 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     await expectShort(l, 'after the full repair');
   });
 
-  it('D-5836 R2: eventStats max disagreeing with an equal count — the full path', async () => {
+  it('D-5836 R2: eventStats max disagreeing with an equal count — the full path, which heals it (review 705 F1)', async () => {
     const l = await lane();
     await settle(l);
+    const movedId = l.h.store.db.prepare('SELECT eventId FROM delegation_events WHERE journalSequence = 2').get()?.['eventId'];
     l.h.store.db.prepare('UPDATE delegation_events SET journalSequence = 102 WHERE journalSequence = 2').run();       // count 2 as before, max 102
     expect(l.h.store.delegationEventStats()).toEqual({ count: 2, maxSequence: 102 });
-    await expectFull(l, 'max disagreeing with an equal count');
+    const report = await expectFull(l, 'max disagreeing with an equal count');
+    // the journal holds no evidence at 102: the full replay meets the moved row's eventId on another sequence, a conflict, and heals its session
+    expect(report, 'the repair read the journal in full and healed the one session').toMatchObject({ fullReplay: true, healedSessions: 1, wipedAll: false });
+    expect(l.h.store.delegationEventStats(), 'the heal leaves the journal\'s sequences').toEqual({ count: 2, maxSequence: 2 });
+    expect(l.h.store.db.prepare('SELECT journalSequence FROM delegation_events WHERE eventId = ?').get(String(movedId))?.['journalSequence'], 'the moved row is back on its sequence').toBe(2);
+    await expectShort(l, 'after the full repair');
   });
 
   it('D-5836 R2: the lane\'s first per-pass repair after a recover() is full (recovery\'s own repair does not count), and the next takes the short path', async () => {
