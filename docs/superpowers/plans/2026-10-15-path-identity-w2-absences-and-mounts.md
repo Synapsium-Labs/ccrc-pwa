@@ -15606,15 +15606,16 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
   - The whole-branch review's fix wave widened the shadow pin (case 16). It now seeds `_WS_CAD_WHY` and `_WS_QSLOTS` too
     and expects `after sentinel sentinel sentinel sentinel 1:sentinel`. Deleting `local -a _WS_QSLOTS=()` reds it
     (`… 0:`), and so does dropping `_WS_CAD_WHY=''` from the local line.
-  - Fix round 1 pinned three arms of the drop that no row turned on its own (the review's F1 and F4). T6.9 deletes the
-    re-proof's three lines together, so the re-proof's unmeasured arm was never mutated alone. Each row below was
-    applied to `ccd/ccd` in the worktree, restored by `cp`, and checked by `cmp` and `mark.mjs --check`; no shipped code
-    changed.
-  - T6.17 turns only the re-proof's unmeasured arm, `(( rc == 0 )) || {`, into `: || {`. It reds the helper case
-    `~/.cc-tmp that cannot be SEARCHED only when the drop proves the leaf's absence again: …`
-    (`expected '[rc=0] dropped|' to match …the absence of the leaf could not be proven again`) and, in
-    `ccd-tmproot-drop-propagation.test.ts`, the real verb's `D2 real, ~/.cc-tmp unsearchable only at the drop's re-proof:
-    …` (`the witness stands: never dropped over an absence that was not proven`). Both cases skip as root.
+  - The fix round after the wave's review pinned three arms of the drop that no row turned on its own (the review's F1
+    and F4). T6.9 deletes the re-proof's three lines together, so the re-proof's unmeasured arm was never mutated alone.
+    Each row below was applied to `ccd/ccd` in the worktree, restored by `cp`, and checked by `cmp` and `mark.mjs
+    --check`; no shipped code changed.
+  - T6.17 turns only the re-proof's unmeasured arm into `: || {`: the third `(( rc == 0 )) || {` in the function, the
+    one whose reason says the absence of the leaf could not be proven again. It reds the helper case `~/.cc-tmp that
+    cannot be SEARCHED only when the drop proves the leaf's absence again: …` (`expected '[rc=0] dropped|' to match …the
+    absence of the leaf could not be proven again`) and, in `ccd-tmproot-drop-propagation.test.ts`, the real verb's `D2
+    real, ~/.cc-tmp unsearchable only at the drop's re-proof: …` (`the witness stands: never dropped over an absence
+    that was not proven`). Both cases skip as root.
   - T6.18 turns the fallback's unlink proof, `_ws_reclaim_absent "$w" || {`, into `: || {`. It reds
     `simulated Darwin, the unlink fails (tmproots/ cannot be written): …`
     (`expected '[rc=0] dropped|' to be '[rc=2] |its witness was kept: its unlink could not be proven (…)'`): a failed
@@ -15750,11 +15751,11 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     (`expected undefined to be 'state-changed'`: the verb collected on the clobbered witness), not at the bytes line.
     T11.10's case 16b reds at its link line. T11.16's red text is the lister's own id refusal, because the settle's id
     guard is shadowed by `_ws_collect_asides_of`'s own refusal.
-  - Fix round 1 pinned the settle's parse guard on a sole aside with no witness (the review's F2). No case read it by
-    behaviour, and deleting the call reddened `#4b` only because its writer seam runs inside that call. `#18k` (the
-    settle alone: a sole aside whose body is `x`, no witness, the leaf standing) asserts rc 2, the why naming the
-    aside's path, the aside byte-identical and nothing at the witness's name. `#15b` (through the real reclaim tail)
-    asserts the reclaim completes, the aside stands, and the tail's warning names it.
+  - The fix round after the wave's review pinned the settle's parse guard on a sole aside with no witness (the review's
+    F2). No case read it by behaviour, and deleting the call reddened `#4b` only because its writer seam runs inside
+    that call. `#18k` (the settle alone: a sole aside whose body is `x`, no witness, the leaf standing) asserts rc 2,
+    the why naming the aside's path, the aside byte-identical and nothing at the witness's name. `#15b` (through the
+    real reclaim tail) asserts the reclaim completes, the aside stands, and the tail's warning names it.
   - T11.26 keeps the call but accepts any regular file:
     `{ _ws_tmproot_witness_parse "$a" "$id" || [[ -f "$a" ]]; } \`. It reds `#18k`
     (`expected '[rc=0] restored|' to be '[rc=2] |the one compare-and-drop aside of …'`) and `#15b`
@@ -15833,11 +15834,12 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     correction, not a departure. Step 3 also names the wrong describe: the file's last `});` closes the describe about
     the lane's kind being derived in `shared/roster.ts`, not the `tmux unreachable` one, and the append is unaffected.
     The `store.ts` line hints drifted by 55 lines.
-  - Fix round 1 pinned the `!collected &&` term of `foundNothing` (the review's F3). Cases 9a to 9e use a temp-root-only
-    item, which the list drops once its half ends, before the mark is read. Cases 9f, 9g and 9h carry an item whose
-    clips half stands, with collect reads [absent, removed], [removed, absent] and [keyless, absent]. Each asserts no
-    found-nothing clause (the `meas` shape reads as the clips half alone, and the cut shape says its temp root has since
-    been collected), and that the item, carrying no mark, counts toward the `kept-many` collapse.
+  - The fix round after the wave's review pinned the `!collected &&` term of `foundNothing` (the review's F3). Cases 9a
+    to 9e use a temp-root-only item, which the list drops once its half ends, before the mark is read. Cases 9f, 9g and
+    9h carry an item whose clips half stands, with collect reads [absent, removed], [removed, absent] and [keyless,
+    absent]. Each asserts no found-nothing clause (the `meas` shape reads as the clips half alone, and the cut shape
+    says its temp root has since been collected), and that the item, carrying no mark, counts toward the `kept-many`
+    collapse.
   - T13.15 deletes `!collected && `. It reds the three rows and nothing else (3 of 41): each item gains the
     found-nothing clause and is set apart from the collapse.
 - **D-5183** (Task 14) `w2-task-14-plan-text`: item 36's measured set and count; case 3's measured verdict; any `w2-detail-past-the-cut-*`.
@@ -15908,8 +15910,8 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     rewritten: its two cases are the F9 cases, not "collect-why cases". §3.10 says that child-reclamation wave 10 built
     items 38 and 40.
   - The contract note's corrections. The R93 bullet first dropped "and W1b's run closed", as unverifiable from the tree,
-    and a run label the record did not support. The wave's review found the first true by the programme record, and fix
-    round 1 restored it. The note's census and line-count claims were verified from `git diff` against the base:
+    and a run label the record did not support. Task 16's own review found the first true by the programme record, and
+    its fix round restored it. The note's census and line-count claims were verified from `git diff` against the base:
     `ccd/ccd` hunks only at the stamp, at `_lc_json` (line-neutral) and after line 19162; `shared/api.ts` keeps every
     line above its foot; `journalparse.ts` is line-neutral plus a foot function; there is no `die` and no new command.
   - The "no merge" sentence. The drafted "`main` did not move between the wave's branch point and this note" was false,
@@ -15931,9 +15933,10 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     and the `device` detail "still say" the witness of the id, and the wave's fix made that false. The bullet is
     reworded in place (3 lines for 3): Task 10 named the aside only in the `witness-mismatch` details, and the final fix
     closed the rest. The slug `aside-detail-texts-beyond-p11` stays named there and in `FOUND_WHILE_BUILDING`.
-  - Fix round 1 added two qualifiers to §3.10, in place. `audit-normalise-has-no-mount-ask` gains "including same-device
-    source chmod", and `human-gated-removals-ask-no-mounts` gains "including ignored-file and ignored-directory
-    crossing". The workspace-lifecycle consent names both, and the drafted wording had dropped them.
+  - The fix round after the wave's review added two qualifiers to §3.10, in place. `audit-normalise-has-no-mount-ask`
+    gains "including same-device source chmod", and `human-gated-removals-ask-no-mounts` gains "including ignored-file
+    and ignored-directory crossing". The workspace-lifecycle consent names both, and the drafted wording had dropped
+    them.
 - **D-5186** (Task 17) `w2-task-17-plan-text`: the base's absorptions; the full run's id; any literal the plan stated that was measured otherwise.
   - The first absorption, at Task 17's start. `origin/main` was 36d0a92c1, 61 commits past the base 643c76cd4, and
     `git merge-tree` read rc 1. One `git merge origin/main` made de253a3f6. Three conflicts, each resolved as follows.
@@ -15941,7 +15944,7 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     `ccrc-unmodified`). The foot appends of `shared/api.ts` and `single-definition.test.ts` kept both sides, main's
     block first and W2's (the `CollectLeafEndWord` block and the `path identity W2` describe) after it, each intact.
     Package files had changed on main, so `npm ci` was re-run in `server`, `ui`, `agent` and `pwa`.
-  - The second absorption, after #722 merged. `origin/main` was a2ea1e3bd (b2c17f859 is #722, then #959, #961 and #947),
+  - The second absorption, after #722 merged. `origin/main` was a2ea1e3bd (b2c17f859 is #722, then #961, #959 and #947),
     and `merge-tree` of 47b0991b5 read rc 1. One merge made 1e21d4155 (parents 47b0991b5 and a2ea1e3bd). The only
     conflict was `ccd/ccd` line 2, three markers: main's line was taken and restamped. W2's `ccd/ccd` change set against
     main stayed byte-identical to before (788 changed lines in 81 hunks). `feed-writers-pin`, `lifecycle-wire`,
