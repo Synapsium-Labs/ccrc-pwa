@@ -24,7 +24,7 @@ import { landsOnLine, type ProjectPlacementRead } from './placementWords';
 import { useProjectedHome } from './useProjectedHome';
 import type { AddOutcome } from './useProjectRows';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
-import { LINEAR_SETTINGS_PATH, confirmLabel } from './workspaceNameWords';
+import { LINEAR_SETTINGS_PATH } from './workspaceNameWords';
 import './fleet.css';
 
 export const ADD_WORKSPACE_TEXT = {
@@ -79,6 +79,9 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
     setRefusal(null);
   };
 
+  /** The confirm's own gate, and Enter's: a refused name sends nothing, and a create in flight is not asked twice. */
+  const canSubmit = preview.kind !== 'refused' && !adding;
+
   const submit = async (): Promise<void> => {
     // No guard for `adding` or a refused name here: the confirm is DISABLED for both (the only way to submit), and a
     // second request for a project in flight is `addWorkspace`'s own `busy`.
@@ -88,7 +91,7 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
     const outcome = await add(project, preview.kind === 'named' ? { name: value } : {});
     if (outcome.kind === 'busy') return;
     const failure = outcome.kind === 'refused'
-      ? addRefusalText(classifyAddError(outcome.error), { project, slug: preview.kind === 'named' ? preview.slug : null, roster })
+      ? addRefusalText(classifyAddError(outcome.error), { door: 'plus', project, slug: preview.kind === 'named' ? preview.slug : null, roster })
       : null;
     if (mine !== generation.current) {
       // The sheet was dismissed while the request was in flight: its words have no sheet to sit in, and the next opening
@@ -117,13 +120,11 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
         // `NAME_FIELD_CLASS.confirmRow` is `QC_ACTIONS` with a `minmax(0, 1fr)` column, so a long name's confirm cannot push
         // past the panel (its own comment has the measurement).
         <div className={NAME_FIELD_CLASS.confirmRow}>
-          <Button variant="primary" disabled={preview.kind === 'refused' || adding} onClick={() => void submit()}>
+          <Button variant="primary" disabled={!canSubmit} onClick={() => void submit()}>
             {/* A long name is cut with an ellipsis, never wrapped: the confirm stays one line and whole. */}
-            <span className={NAME_FIELD_CLASS.confirmLabel}>
-              {adding
-                ? ADD_WORKSPACE_TEXT.adding
-                : confirmLabel(preview, { empty: ADD_WORKSPACE_TEXT.empty, named: (short) => `Add ${short}` })}
-            </span>
+            {/* ONE LABEL WHATEVER IS TYPED (design §2.2: "Add workspace"): the title the operator typed is the preview's
+                line above, and a refused name is told in the sentence under the field, not on a dimmed button. */}
+            <span className={NAME_FIELD_CLASS.confirmLabel}>{adding ? ADD_WORKSPACE_TEXT.adding : ADD_WORKSPACE_TEXT.empty}</span>
           </Button>
           <Button variant="ghost" onClick={onClose}>{ADD_WORKSPACE_TEXT.cancel}</Button>
         </div>
@@ -137,6 +138,8 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
           preview={preview}
           project={name}
           emptyHint={ADD_WORKSPACE_TEXT.emptyHint}
+          locked={adding}
+          onSubmit={() => { if (canSubmit) void submit(); }}
           onOpenSettings={goSettings}
         />
         {refusal !== null && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{refusal}</p>}

@@ -89,7 +89,7 @@ describe('tapping + on a project card', () => {
     open();
     tapPlus();
     fireEvent.change(await field(), { target: { value: 'ENG-1234' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add ENG-1234' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(creates).toHaveLength(1));
     expect(JSON.parse(creates[0]?.init.body as string)).toEqual({ name: 'ENG-1234' });
     await waitFor(() => expect(screen.queryByText('Add a workspace to alpha')).not.toBeInTheDocument());
@@ -100,7 +100,7 @@ describe('tapping + on a project card', () => {
     open();
     tapPlus();
     fireEvent.change(await field(), { target: { value: 'ENG-1234' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add ENG-1234' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add workspace' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('alpha-eng-1234 already exists');
     expect((await field()).value).toBe('ENG-1234');
     expect(screen.getByText('Add a workspace to alpha')).toBeInTheDocument();

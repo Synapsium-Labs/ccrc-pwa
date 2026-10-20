@@ -11,7 +11,7 @@
 // A DISABLED FIELD SAYS WHY. A door that cannot take a name (a crossing project, an overflow account) disables the
 // field and says it in one line, instead of leaving an input that silently ignores what is typed into it.
 import { useId } from 'react';
-import type { ChangeEvent, ReactNode } from 'react';
+import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
 import { Button, Chip, QC_ACTIONS, TextInput } from '@ccrc/ui';
 import { LOOKUP_NOTE, type Lookup, type NamePreview } from './workspaceNameWords';
 import { slugStays } from './workspaceRenameWords';
@@ -68,18 +68,25 @@ export interface WorkspaceNameFieldProps {
   keepSlug?: string;
   /** The input's placeholder; the rename door says "title" where the create says "name". */
   placeholder?: string;
+  /** A request is in flight: the field keeps what it holds and takes no edit (read-only, not disabled, so it keeps the
+   *  focus and a phone's keyboard stays where it was). The preview must not move under a request already sent. */
+  locked?: boolean;
+  /** Enter in the field: the host's own submit, which the host gates exactly as its confirm button is gated. Absent, Enter does nothing. */
+  onSubmit?: () => void;
+  /** One more line for a named preview, drawn inside the preview's reserved height so it cannot move the sheet. */
+  namedNote?: string;
 }
 
 export function WorkspaceNameField({
   value, onChange, preview, project, emptyHint, disabledReason = null, onOpenSettings, keepSlug,
-  placeholder = NAME_FIELD_TEXT.placeholder,
+  placeholder = NAME_FIELD_TEXT.placeholder, locked = false, onSubmit, namedNote,
 }: WorkspaceNameFieldProps): ReactNode {
   const id = useId();
   const describedBy = `${id}-preview`;
   const disabled = disabledReason !== null;
   return (
     <div className={NAME_FIELD_CLASS.stack}>
-      <label htmlFor={id} className="grid gap-1">
+      <label htmlFor={id} className={NAME_FIELD_CLASS.stack}>
         <span className="route-field-label">{NAME_FIELD_TEXT.label}</span>
         <TextInput
           id={id}
@@ -92,10 +99,19 @@ export function WorkspaceNameField({
           spellCheck={false}
           aria-describedby={describedBy}
           aria-invalid={!disabled && preview.kind === 'refused' ? true : undefined}
+          readOnly={locked}
           onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+            // Not while an IME is composing: its Enter commits the candidate, and a submit then would send half a word.
+            if (e.key !== 'Enter' || e.nativeEvent.isComposing || onSubmit === undefined) return;
+            e.preventDefault();
+            onSubmit();
+          }}
         />
       </label>
-      <div id={describedBy} aria-live="polite" className="grid min-h-11 content-start gap-1">
+      {/* THE PREVIEW'S HEIGHT IS RESERVED (`min-h-28`): a title, the id line and one note fit, so the sheet does not jump
+          when the first answer arrives or a lookup resolves. A sheet is anchored at its foot, so growth moves its top. */}
+      <div id={describedBy} aria-live="polite" className="grid min-h-28 content-start gap-1">
         {disabled ? (
           <p className={NAME_FIELD_CLASS.hint}>{disabledReason}</p>
         ) : preview.kind === 'empty' ? (
@@ -114,11 +130,16 @@ export function WorkspaceNameField({
               {keepSlug === undefined ? `new workspace ${workspaceId(project, preview.slug)} · branch ws/${preview.slug}` : slugStays(keepSlug)}
             </p>
             {keepSlug === undefined && preview.shortened && <p className={NAME_FIELD_CLASS.hint}>{NAME_FIELD_TEXT.shortened}</p>}
+            {namedNote !== undefined && <p className={NAME_FIELD_CLASS.hint}>{namedNote}</p>}
             {preview.note !== null && (
               <p className={NAME_FIELD_CLASS.hint}>{LOOKUP_NOTE[preview.note].hint}</p>
             )}
             {preview.note !== null && LOOKUP_NOTE[preview.note].pointer !== null && onOpenSettings !== undefined && (
-              <Button variant="ghost" size="fit" className="justify-self-start" onClick={onOpenSettings}>
+              // A ONE-LINE LINK, not a bordered button (design §5): the ghost variant's hairline, hover ground and
+              // padding are taken off, and the 44px hit area is kept.
+              <Button variant="ghost" size="fit"
+                      className="justify-self-start border-0 px-0 text-meta leading-none underline underline-offset-2 enabled:hover:bg-transparent enabled:active:bg-transparent"
+                      onClick={onOpenSettings}>
                 {LOOKUP_NOTE[preview.note].pointer}
               </Button>
             )}

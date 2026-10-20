@@ -303,6 +303,9 @@ export function NewSessionSheet({
   if (routeWorkflow !== '') route.workflow = routeWorkflow;
   const hasRoute = Object.keys(route).length > 0;
 
+  /** The confirm's own gate, which Enter in the name field follows exactly. */
+  const canStart = wrapper !== null && project !== null && !starting && preview.kind !== 'refused';
+
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
     const mine = generation.current;
@@ -330,7 +333,7 @@ export function NewSessionSheet({
     } catch (err) {
       if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
-        const text = addRefusalText(refusal, { project: project.name, slug: preview.slug, roster });
+        const text = addRefusalText(refusal, { door: 'new-session', project: project.name, slug: preview.slug, roster });
         if (mine !== generation.current) {
           // The sheet was dismissed while the request was in flight: there is no sheet to hold the sentence, and the next
           // opening must not inherit it, so it is said once, as an error toast.
@@ -350,7 +353,30 @@ export function NewSessionSheet({
   };
 
   return (
-    <Sheet open={open} onClose={onClose} eyebrow="new session" title="Start a session">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      eyebrow="new session"
+      title="Start a session"
+      // THE CONFIRM IS PINNED (the sheets' own footer, D-5932), not the last thing in a scrolling body: with the name
+      // field, its preview and the routing row it fell below the fold at 360 and 390 wide. Step 1 has no confirm.
+      footer={wrapper === null ? undefined : (
+        <div className={NAME_FIELD_CLASS.confirmRow}>
+          <Button variant="primary" disabled={!canStart || project === null} onClick={() => void start()}>
+            <span className={NAME_FIELD_CLASS.confirmLabel}>
+              {starting
+                ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
+                : project === null
+                  ? 'Choose a project'
+                  : confirmLabel(preview, {
+                    empty: `Start ${project.name} on ${accountLabel(roster, wrapper)}`,
+                    named: (short) => `Start ${short} on ${accountLabel(roster, wrapper)}`,
+                  })}
+            </span>
+          </Button>
+        </div>
+      )}
+    >
       {wrapper === null ? (
         <>
           <p className="sheet-copy">Pick the account it runs on — you can move it later.</p>
@@ -378,7 +404,10 @@ export function NewSessionSheet({
           </div>
         </>
       ) : (
-        <>
+        // LOCKED WHILE THE REQUEST IS IN FLIGHT: a disabled fieldset disables every control inside it (the change link, the
+        // search, the project rows, the three selects), so nothing the request was built from can change under it.
+        // `contents` keeps it out of the layout. The confirm is the footer's, outside it.
+        <fieldset disabled={starting} className="contents">
           <button
             type="button"
             className="acct-change"
@@ -446,9 +475,11 @@ export function NewSessionSheet({
                 project={project.name}
                 emptyHint={NEW_SESSION_NAME_TEXT.emptyHint}
                 disabledReason={nameReason}
+                namedNote={NEW_SESSION_NAME_TEXT.named}
+                locked={starting}
+                onSubmit={() => { if (canStart) void start(); }}
                 onOpenSettings={() => { onClose(); navigate(LINEAR_SETTINGS_PATH); }}
               />
-              {preview.kind === 'named' && <p className={NAME_FIELD_CLASS.hint}>{NEW_SESSION_NAME_TEXT.named}</p>}
               {notice?.step === 'name' && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{notice.text}</p>}
             </div>
           )}
@@ -482,23 +513,7 @@ export function NewSessionSheet({
             Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
-          <Button
-            variant="primary" className="sheet-confirm"
-            disabled={project === null || starting || preview.kind === 'refused'}
-            onClick={() => void start()}
-          >
-            <span className={NAME_FIELD_CLASS.confirmLabel}>
-              {starting
-                ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
-                : project === null
-                  ? 'Choose a project'
-                  : confirmLabel(preview, {
-                    empty: `Start ${project.name} on ${accountLabel(roster, wrapper)}`,
-                    named: (short) => `Start ${short} on ${accountLabel(roster, wrapper)}`,
-                  })}
-            </span>
-          </Button>
-        </>
+        </fieldset>
       )}
     </Sheet>
   );

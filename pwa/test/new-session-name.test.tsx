@@ -166,7 +166,8 @@ describe('a name starts a workspace on the account that was picked', () => {
     await pickDemo();
     type('!!');
     expect(screen.getByText('That has no letters or numbers in it.')).toBeInTheDocument();
-    const c = start('Fix the name to continue');
+    // The label stays the door's plain one (a disabled button is dimmed below readable contrast): the sentence above says what to fix.
+    const c = start('Start demo on team·max');
     expect(c).toBeDisabled();
     fireEvent.click(c);
     expect(add).not.toHaveBeenCalled();
@@ -175,7 +176,99 @@ describe('a name starts a workspace on the account that was picked', () => {
   });
 });
 
+describe('Enter in the field', () => {
+  it('starts exactly as the confirm does: a name is a workspace create', async () => {
+    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
+    await openAt();
+    await pickDemo();
+    type('Login cleanup');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(add).toHaveBeenCalledWith('demo', { name: 'Login cleanup', wrapper: 'claude' }));
+  });
+
+  it('an empty field starts on the main checkout, as the confirm does', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAt();
+    await pickDemo();
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(create).toHaveBeenCalledWith({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' }));
+  });
+
+  it('sends nothing for a refused name', async () => {
+    const add = vi.spyOn(api, 'workspaceAdd');
+    const create = vi.spyOn(api, 'createSession');
+    await openAt();
+    await pickDemo();
+    type('!!');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(add).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not double-start while a request is in flight', async () => {
+    const add = vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise(() => {}));
+    await openAt();
+    await pickDemo();
+    type('Login cleanup');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('while a request is in flight everything it was built from is locked', () => {
+  it('the field is read-only and the project list, the account change and the three selects are disabled', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise(() => {}));
+    await openAt();
+    await pickDemo();
+    type('Login cleanup');
+    fireEvent.click(start('Start Login cleanup on team·max'));
+    await screen.findByRole('button', { name: 'Starting…' });
+    expect(field()).toHaveAttribute('readonly');
+    expect(field()).toBeDisabled();
+    expect(screen.getByRole('button', { name: /change/ })).toBeDisabled();
+    expect(screen.getByPlaceholderText('Search projects')).toBeDisabled();
+    for (const l of ['Class', 'Effort', 'Workflows']) expect(screen.getByLabelText(l)).toBeDisabled();
+    // The project rows are inside the same disabled fieldset: tapping another changes nothing.
+    expect(screen.getByText('demo').closest('fieldset')).toBeDisabled();
+  });
+
+  it('they unlock when the request fails, with the operator\'s text intact', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(409, { ok: false, error: 'slug-taken' }));
+    await openAt();
+    await pickDemo();
+    type('ENG-1234');
+    fireEvent.click(start('Start ENG-1234 on team·max'));
+    await screen.findByRole('alert');
+    expect(field()).toBeEnabled();
+    expect(field().value).toBe('ENG-1234');
+    expect(screen.getByLabelText('Class')).toBeEnabled();
+  });
+});
+
+describe('the confirm is pinned, not the last thing in a scrolling body', () => {
+  it('lives in the sheet footer, so it stays in reach however tall the preview grows', async () => {
+    await openAt();
+    await pickDemo();
+    type('ENG-1234');
+    const confirm = start('Start ENG-1234 on team·max');
+    expect(confirm.closest('.sheet-footer')).not.toBeNull();
+  });
+});
+
 describe('every refusal keeps the sheet open and the text in the field', () => {
+  it('an old ccd that cannot title says what clearing the name does AT THIS DOOR: the main checkout, not an automatic workspace', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported', needs: 'ws-title-v1' }));
+    await openAt();
+    await pickDemo();
+    type('ENG-501');
+    fireEvent.click(start('Start ENG-501 on team·max'));
+    const text = (await screen.findByRole('alert')).textContent ?? '';
+    expect(text).toContain('clear the name to start on the main checkout');
+    expect(text).not.toContain('automatic name');
+  });
+
   it('a taken slug stays at the project step with the field intact', async () => {
     vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(409, { ok: false, error: 'slug-taken' }));
     const { onClose } = await openAt();

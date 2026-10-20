@@ -187,6 +187,16 @@ describe('the lookup', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
+  it('the pointer is a one-line link (no hairline, underlined) and the preview keeps its height so the sheet does not jump', async () => {
+    vi.spyOn(api, 'linearResolve').mockResolvedValue({ title: 'ENG-9999', source: 'offline', note: 'not-configured' });
+    render(<Harness onOpenSettings={vi.fn()} />);
+    type('ENG-9999');
+    await settle(NAME_LOOKUP_DEBOUNCE_MS);
+    const link = screen.getByRole('button', { name: LOOKUP_NOTE['not-configured'].pointer });
+    expect(link).toHaveClass('border-0', 'underline');
+    expect(link.closest('[aria-live="polite"]')).toHaveClass('min-h-28');
+  });
+
   it.each([
     ['a rejected request', () => Promise.reject(new ApiError(502, { ok: false }))],
     ['a network failure', () => Promise.reject(new TypeError('Failed to fetch'))],

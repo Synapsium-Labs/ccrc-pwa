@@ -130,8 +130,9 @@ describe('saving a title', () => {
     mount(props());
     type('\u0001\u0002');
     expect(screen.getByText(BLANK_TITLE_TEXT)).toBeInTheDocument();
-    expect(button(RENAME_TEXT.fixName)).toBeDisabled();
-    fireEvent.click(button(RENAME_TEXT.fixName));
+    // The label stays "Save title": a disabled button is dimmed below readable contrast, so the instruction is the sentence above.
+    expect(button(RENAME_TEXT.save)).toBeDisabled();
+    fireEvent.click(button(RENAME_TEXT.save));
     expect(rename).not.toHaveBeenCalled();
   });
 
@@ -302,6 +303,39 @@ describe('a refusal that arrives after the sheet was dismissed', () => {
     expect(await screen.findByText(renameRefusalText({ kind: 'unknown-session' }))).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(p.onRenamed).not.toHaveBeenCalled();
+  });
+});
+
+describe('Enter in the field', () => {
+  it('saves exactly as the confirm does, and clears when the field is emptied', async () => {
+    mount(props());
+    type('Upload retry spike');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('project-a-quiet-harbor', { title: 'Upload retry spike' }));
+    cleanup();
+    rename.mockClear();
+    mount(props());
+    type('');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('project-a-quiet-harbor', { clear: true }));
+  });
+
+  it('sends nothing for the title as it stands or a title with nothing in it', () => {
+    mount(props());
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    type('\u0001');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(rename).not.toHaveBeenCalled();
+  });
+
+  it('the field is locked while the request is in flight, and Enter does not send a second', async () => {
+    rename.mockReturnValue(new Promise(() => {}));
+    mount(props());
+    type('Upload retry spike');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(field()).toHaveAttribute('readonly'));
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(rename).toHaveBeenCalledTimes(1);
   });
 });
 

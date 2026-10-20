@@ -26,7 +26,6 @@ export const RENAME_TEXT = {
   clear: 'Clear title',
   clearBusy: 'Clearing…',
   cancel: 'Cancel',
-  fixName: 'Fix the name to continue',
   /** The field is as the workspace has it: nothing to save. */
   unchanged: 'This is the current title. Change it to save a new one.',
   /** Emptied: the confirm is now "Clear title". */

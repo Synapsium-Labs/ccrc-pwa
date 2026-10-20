@@ -136,10 +136,14 @@ export function withLookup(p: NamePreview, answer: ResolveRead | 'call-failed'):
   };
 }
 
-/** The confirm's label for a door: "Add workspace" / "Start project-a on lane-a" with nothing typed, the name in it once something is. */
+/**
+ * The confirm's label for a door: "Add workspace" / "Start project-a on lane-a" with nothing typed, the name in it once
+ * something is. A REFUSED name keeps the door's plain label: the confirm is disabled, and a disabled control is dimmed
+ * below readable contrast, so the instruction ("fix the name") is not carried there. It is the refusal sentence under
+ * the field, in normal contrast, which says what is wrong.
+ */
 export function confirmLabel(p: NamePreview, door: { empty: string; named: (short: string) => string }): string {
-  if (p.kind === 'empty') return door.empty;
-  if (p.kind === 'refused') return 'Fix the name to continue';
+  if (p.kind === 'empty' || p.kind === 'refused') return door.empty;
   return door.named(p.short);
 }
 

@@ -93,7 +93,7 @@ describe('the words around the field', () => {
   });
 
   it('the confirm has a word for each of its states', () => {
-    expect([RENAME_TEXT.save, RENAME_TEXT.clear, RENAME_TEXT.saveBusy, RENAME_TEXT.clearBusy, RENAME_TEXT.fixName])
-      .toEqual(['Save title', 'Clear title', 'Saving…', 'Clearing…', 'Fix the name to continue']);
+    expect([RENAME_TEXT.save, RENAME_TEXT.clear, RENAME_TEXT.saveBusy, RENAME_TEXT.clearBusy])
+      .toEqual(['Save title', 'Clear title', 'Saving…', 'Clearing…']);
   });
 });

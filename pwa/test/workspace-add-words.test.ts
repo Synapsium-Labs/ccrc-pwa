@@ -6,7 +6,7 @@ import { accountRefusedText, addRefusalText, classifyAddError, type AddRefusal }
 import { NAME_REFUSALS, NAME_REFUSAL_TEXT } from '../../shared/slug';
 import { TEST_ROSTER } from './rosterFixture';
 
-const ctx = { project: 'project-a', slug: 'eng-1234', roster: TEST_ROSTER };
+const ctx = { door: 'plus' as const, project: 'project-a', slug: 'eng-1234', roster: TEST_ROSTER };
 const err = (status: number, body: unknown): ApiError => new ApiError(status, body);
 
 describe('classifyAddError reads status and word', () => {
@@ -88,6 +88,15 @@ describe('addRefusalText', () => {
     expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true }, { ...ctx, slug: null })).toContain('for this workspace');
     // The pre-flight refusal keeps its own words.
     expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false }, ctx)).toMatch(/Pick another account\. Nothing was created\.$/);
+  });
+
+  it('says what clearing the name does at EACH door: the + adds an automatic workspace, the new-session sheet starts on the main checkout', () => {
+    const plus = addRefusalText({ kind: 'unsupported', needs: 'ws-title-v1' }, ctx);
+    const session = addRefusalText({ kind: 'unsupported', needs: 'ws-title-v1' }, { ...ctx, door: 'new-session' });
+    expect(plus).toContain('clear the name to add one with an automatic name');
+    expect(session).toContain('clear the name to start on the main checkout');
+    expect(session).not.toContain('automatic');
+    expect(session).not.toBe(plus);
   });
 
   it('says plainly that the box\'s ccd is too old, and for which feature', () => {

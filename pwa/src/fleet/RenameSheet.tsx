@@ -95,8 +95,13 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
   const canSend = clearing ? hasTitle : edited && !refused;
   const confirmLabel = clearing
     ? (busy === 'clear' ? RENAME_TEXT.clearBusy : RENAME_TEXT.clear)
-    : refused ? RENAME_TEXT.fixName : busy === 'save' ? RENAME_TEXT.saveBusy : RENAME_TEXT.save;
+    : busy === 'save' ? RENAME_TEXT.saveBusy : RENAME_TEXT.save;
   const goSettings = (): void => { onClose(); navigate(LINEAR_SETTINGS_PATH); };
+  /** The confirm's own gate, which Enter in the field follows exactly. */
+  const confirm = (): void => {
+    if (!canSend || busy !== null) return;
+    void send(clearing ? { clear: true } : { title: value });
+  };
 
   return (
     <Sheet
@@ -106,8 +111,7 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
       title={RENAME_TEXT.title}
       footer={
         <div className={NAME_FIELD_CLASS.confirmRow}>
-          <Button variant="primary" disabled={!canSend || busy !== null}
-                  onClick={() => void send(clearing ? { clear: true } : { title: value })}>
+          <Button variant="primary" disabled={!canSend || busy !== null} onClick={confirm}>
             <span className={NAME_FIELD_CLASS.confirmLabel}>{confirmLabel}</span>
           </Button>
           {!clearing && hasTitle && (
@@ -128,6 +132,8 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
           emptyHint={emptyHint}
           keepSlug={slug}
           placeholder={RENAME_TEXT.placeholder}
+          locked={busy !== null}
+          onSubmit={confirm}
           onOpenSettings={goSettings}
         />
         {refusal !== null && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{refusal}</p>}

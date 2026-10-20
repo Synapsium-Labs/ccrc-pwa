@@ -83,6 +83,9 @@ export function classifyAddError(err: unknown): AddRefusal {
 
 /** What a sentence may name: the project, the slug the operator asked for (null when they asked for none), the roster for labels. */
 export interface AddContext {
+  /** Which door asked: what "clear the name" does differs (the `+` adds an automatically named workspace, the
+   *  new-session sheet starts on the main checkout), and the sentence that offers it must say the true one. */
+  door: 'plus' | 'new-session';
   project: string;
   slug: string | null;
   roster: readonly RosterWire[];
@@ -117,6 +120,9 @@ const NEEDS_TEXT: Record<AddNeeds, string> = {
   'ws-wrapper-v1': "The fleet box's ccd is too old to start a named workspace on the account you picked. Update the fleet box, or clear the name to start on the main checkout.",
 };
 
+/** The new-session door's own `ws-title-v1` sentence: clearing the name there starts on the main checkout, not an automatic workspace. */
+const NEW_SESSION_TITLE_NEEDS_TEXT = "The fleet box's ccd is too old to name a workspace. Update the fleet box, or clear the name to start on the main checkout.";
+
 /** One sentence per refusal, none a prefix of another (`workspace-add-words.test.ts` holds the set apart). */
 export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
   switch (r.kind) {
@@ -137,7 +143,7 @@ export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
       : `${accountRefusedText(r.reason, ctx.roster)} Pick another account. Nothing was created.`;
     case 'unsupported': return r.needs === null
       ? "The fleet box's ccd doesn't support that yet. Update the fleet box, or change the options."
-      : NEEDS_TEXT[r.needs];
+      : r.needs === 'ws-title-v1' && ctx.door === 'new-session' ? NEW_SESSION_TITLE_NEEDS_TEXT : NEEDS_TEXT[r.needs];
     case 'ccd-failed': return r.stderr === null
       ? "The fleet box couldn't create the workspace, and gave no reason."
       : `The fleet box couldn't create the workspace: ${r.stderr}`;

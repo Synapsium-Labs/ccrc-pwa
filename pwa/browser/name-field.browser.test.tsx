@@ -130,22 +130,22 @@ describe('the + sheet', () => {
         // A ticket: pending, then Linear's title, with the id and branch it will get.
         await page.getByLabel('Name or Linear ticket').fill('ENG-1234');
         await page.getByText('from Linear').waitFor({ timeout: 5_000 });
-        whole(await measure(page, /^Add ENG-1234$/), `${where}, ticket`);
+        whole(await measure(page, /^Add workspace$/), `${where}, ticket`);
         await shot(page, 'plus-ticket', view);
 
         // A name long enough to need cutting: the confirm still fits and the slug says it was shortened.
         await page.getByLabel('Name or Linear ticket').fill('Investigate the flaky upload test on the staging runner after the retry change');
         await page.getByText(/Shortened to fit/).waitFor({ timeout: 5_000 });
-        const long = await measure(page, /^Add Investigate/);
+        // The + door's confirm is one label whatever is typed ("Add workspace"), so a long name cannot reach it.
+        const long = await measure(page, /^Add workspace$/);
         whole(long, `${where}, long name`);
-        // On a phone the name outruns the confirm and is cut; a desktop sheet is wide enough to show it whole.
-        if (view.width < 900) expect(long.confirmLabelClipped, `${where}: a long name should be cut with an ellipsis, not wrap or overflow`).toBe(true);
+        expect(long.confirmLabelClipped, `${where}: the confirm's label is cut`).toBe(false);
         await shot(page, 'plus-long', view);
 
         // A refused name: the sentence, a disabled confirm.
         await page.getByLabel('Name or Linear ticket').fill('!!');
         await page.getByText('That has no letters or numbers in it.').waitFor();
-        expect(await page.getByRole('button', { name: 'Fix the name to continue' }).isDisabled(), `${where}: a refused name leaves the confirm enabled`).toBe(true);
+        expect(await page.getByRole('button', { name: 'Add workspace' }).isDisabled(), `${where}: a refused name leaves the confirm enabled`).toBe(true);
         await shot(page, 'plus-refused', view);
       } finally {
         await ctx.close();
@@ -163,11 +163,11 @@ describe('the + sheet', () => {
       await page.getByRole('button', { name: /New workspace on project-a/ }).click();
       await settle(page);
       await page.getByLabel('Name or Linear ticket').fill('ENG-1234');
-      await page.getByRole('button', { name: 'Add ENG-1234' }).click();
+      await page.getByRole('button', { name: 'Add workspace' }).click();
       await page.getByRole('alert').waitFor({ timeout: 5_000 });
       expect(await page.getByRole('alert').textContent()).toContain('project-a-eng-1234 already exists');
       expect(await page.getByLabel('Name or Linear ticket').inputValue()).toBe('ENG-1234');
-      whole(await measure(page, /^Add ENG-1234$/), `${named(view)}, 409`);
+      whole(await measure(page, /^Add workspace$/), `${named(view)}, 409`);
       await shot(page, 'plus-taken', view);
     } finally {
       await ctx.close();
@@ -187,12 +187,20 @@ describe('the new-session sheet', () => {
         await page.getByRole('button', { name: /team·alt/ }).click();
         await page.getByRole('button', { name: /^project-b/ }).click();
         const where = named(view);
-        whole(await measure(page, /^Start project-b on team·alt$/), `${where}, empty`, true);
+        const empty = await measure(page, /^Start project-b on team·alt$/);
+        whole(empty, `${where}, empty`, true);
         await shot(page, 'session-empty', view);
 
+        // THE PREVIEW'S HEIGHT IS RESERVED: typing a name, and Linear's answer replacing the offline title, must not move
+        // the sheet. The panel's top is the measure: it is anchored at its foot, so any growth shows there.
+        await page.getByLabel('Name or Linear ticket').fill('ENG-1');
+        const pending = await measure(page, /^Start ENG-1 on team·alt$/);
+        expect(Math.abs(pending.panel!.top - empty.panel!.top), `${where}: the sheet jumped when a name was typed`).toBeLessThanOrEqual(1);
         await page.getByLabel('Name or Linear ticket').fill('ENG-1234');
         await page.getByText('from Linear').waitFor({ timeout: 5_000 });
-        whole(await measure(page, /^Start ENG-1234 on team·alt$/), `${where}, ticket`);
+        const ticket = await measure(page, /^Start ENG-1234 on team·alt$/);
+        whole(ticket, `${where}, ticket`);
+        expect(Math.abs(ticket.panel!.top - empty.panel!.top), `${where}: the sheet jumped when Linear answered`).toBeLessThanOrEqual(1);
         await shot(page, 'session-ticket', view);
 
         await page.getByLabel('Name or Linear ticket').fill('Investigate the flaky upload test on the staging runner after the retry change');

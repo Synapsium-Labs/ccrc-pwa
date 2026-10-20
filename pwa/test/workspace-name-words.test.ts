@@ -193,7 +193,8 @@ describe('shortTitle and confirmLabel', () => {
   const label = (p: NamePreview): string => confirmLabel(p, door);
   it('narrates each state', () => {
     expect(label(localPreview(''))).toBe('Add workspace');
-    expect(label(localPreview('!!'))).toBe('Fix the name to continue');
+    // A refused name keeps the plain label: the button is disabled (dimmed), and the instruction is the sentence under the field.
+    expect(label(localPreview('!!'))).toBe('Add workspace');
     expect(label(localPreview('ENG-1234'))).toBe('Add ENG-1234');
     expect(label(localPreview('Login cleanup'))).toBe('Add Login cleanup');
   });

@@ -101,11 +101,11 @@ describe('an empty field is today\'s create', () => {
 });
 
 describe('a name', () => {
-  it('narrates the confirm with the ticket id and sends the name as typed', async () => {
+  it('keeps ONE confirm label whatever is typed, and sends the name as typed', async () => {
     const p = props();
     mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     await waitFor(() => expect(p.add).toHaveBeenCalledWith('project-a', { name: 'ENG-1234' }));
   });
 
@@ -113,7 +113,7 @@ describe('a name', () => {
     const p = props();
     mount(p);
     type('Login cleanup');
-    fireEvent.click(confirm('Add Login cleanup'));
+    fireEvent.click(confirm());
     await waitFor(() => expect(p.add).toHaveBeenCalledWith('project-a', { name: 'Login cleanup' }));
   });
 
@@ -121,7 +121,7 @@ describe('a name', () => {
     const p = props({ add: vi.fn().mockResolvedValue({ kind: 'added', answer: { named: true, id: 'project-a-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' } }) });
     mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     expect(await screen.findByText('Added ENG-1234 - Fix the login flow')).toBeInTheDocument();
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });
@@ -130,14 +130,14 @@ describe('a name', () => {
     const p = props();
     mount(p);
     type('!!');
-    const c = confirm('Fix the name to continue');
+    const c = confirm();
     expect(c).toBeDisabled();
     expect(screen.getByText('That has no letters or numbers in it.')).toBeInTheDocument();
     fireEvent.click(c);
     expect(p.add).not.toHaveBeenCalled();
     expect(api.linearResolve).not.toHaveBeenCalled();
     type('a');
-    expect(confirm('Fix the name to continue')).toBeDisabled();
+    expect(confirm()).toBeDisabled();
     expect(p.add).not.toHaveBeenCalled();
   });
 
@@ -145,7 +145,7 @@ describe('a name', () => {
     mount(props());
     type('!!');
     type('Login cleanup');
-    expect(confirm('Add Login cleanup')).toBeEnabled();
+    expect(confirm()).toBeEnabled();
   });
 });
 
@@ -161,12 +161,12 @@ describe('every refusal keeps the sheet open and the text in the field', () => {
     const p = props({ add: vi.fn().mockResolvedValue(outcome) });
     mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     expect(await screen.findByRole('alert')).toHaveTextContent(words);
     expect(field().value).toBe('ENG-1234');
     expect(p.onClose).not.toHaveBeenCalled();
     expect(screen.getByText('Add a workspace to project-a')).toBeInTheDocument();
-    expect(confirm('Add ENG-1234')).toBeEnabled();
+    expect(confirm()).toBeEnabled();
   });
 
   it('the refusal goes away when the operator edits, and a retry sends again', async () => {
@@ -174,11 +174,11 @@ describe('every refusal keeps the sheet open and the text in the field', () => {
     const p = props({ add });
     mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     await screen.findByRole('alert');
     type('ENG-1234-b');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
     expect(add).toHaveBeenLastCalledWith('project-a', { name: 'ENG-1234-b' });
     await waitFor(() => expect(p.onClose).toHaveBeenCalled());
@@ -202,6 +202,38 @@ describe('every refusal keeps the sheet open and the text in the field', () => {
   });
 });
 
+describe('Enter in the field', () => {
+  it('submits exactly when the confirm would, and sends the name as typed', async () => {
+    const p = props();
+    mount(p);
+    type('Login cleanup');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(p.add).toHaveBeenCalledWith('project-a', { name: 'Login cleanup' }));
+    expect(p.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('an empty field is the plain create, as the confirm is', async () => {
+    const p = props();
+    mount(p);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(p.add).toHaveBeenCalledWith('project-a', {}));
+  });
+
+  it('sends nothing for a refused name, or while a create is in flight, or while an IME is composing', () => {
+    const p = props();
+    const r = mount(p);
+    type('!!');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    type('Login cleanup');
+    fireEvent.keyDown(field(), { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(field(), { key: 'a' });
+    expect(p.add).not.toHaveBeenCalled();
+    rerenderWith(r, { ...p, adding: true });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(p.add).not.toHaveBeenCalled();
+  });
+});
+
 describe('a long name cannot widen the confirm', () => {
   // jsdom lays nothing out; `browser/name-field.browser.test.tsx` measures the rects in Chrome (the confirm ran to 632px
   // at a 390px phone before this). These two hold the mechanism: a column that never sizes past the panel, and a label
@@ -214,13 +246,18 @@ describe('a long name cannot widen the confirm', () => {
   it('cuts the confirm\'s label instead of wrapping it', () => {
     mount(props());
     type('Investigate the flaky upload test on the staging runner');
-    const label = confirm(/^Add Investigate/).querySelector('span');
+    const label = confirm().querySelector('span');
     expect(label).toHaveClass('truncate');
     expect(label).toHaveClass('min-w-0');
   });
 });
 
 describe('in flight', () => {
+  it('locks the field: what is typed cannot change under a request already sent', () => {
+    mount(props({ adding: true }));
+    expect(field()).toHaveAttribute('readonly');
+  });
+
   it('stands the confirm down and says what it is doing', () => {
     mount(props({ adding: true }));
     expect(confirm('Adding…')).toBeDisabled();
@@ -232,7 +269,7 @@ describe('closing', () => {
     const p = props({ add: vi.fn().mockResolvedValue(refuse(409, { ok: false, error: 'slug-taken' })) });
     const r = mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     await screen.findByRole('alert');
 
     rerenderWith(r, { ...p, project: null });
@@ -249,7 +286,7 @@ describe('closing', () => {
     const p = props({ add: vi.fn().mockImplementation(() => new Promise<AddOutcome>((resolve) => { answer = resolve; })) });
     const r = mount(p);
     type('ENG-1234');
-    fireEvent.click(confirm('Add ENG-1234'));
+    fireEvent.click(confirm());
     rerenderWith(r, { ...p, project: null });
     rerenderWith(r, { ...p, project: 'project-a' });
     await act(async () => { answer(refuse(409, { ok: false, error: 'slug-taken' })); });
