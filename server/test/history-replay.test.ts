@@ -2606,6 +2606,14 @@ describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D
     expect(stopOf(b, { maxAge: 30_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
   });
 
+  it('seven ALONE inferred by age stops as stale: five is a resetAt fact, seven is older than its own 7d window, max_age_ms is past seven days (D-5814)', () => {
+    const b = t6Box('ccrc-replay-t6-seven-inferred-');
+    // five rolled over by a resetAt FACT (not inferred); seven has no resetAt and its sample is 700000 s old (past 604800 s).
+    // max_age_ms is raised past that age, so neither the age check nor the threshold stops it: only the sevenInferred half does.
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 20, ts: NOW_S - 700_000, fiveResetAt: NOW_S - 60 }));
+    expect(stopOf(b, { maxAge: 800_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
+  });
+
   it('a resetAt-fact 0 beside a fresh seven is a measured reset: admitted', () => {
     const b = t6Box('ccrc-replay-t6-fact-');
     t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 40, ts: NOW_S - 600, fiveResetAt: NOW_S - 60, sevenResetAt: NOW_S + 200_000 }));

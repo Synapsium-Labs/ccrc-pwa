@@ -242,7 +242,9 @@ export async function main(argv, env) {
 //   - Never a recursive create: the parent is the operator's to make, so a typo cannot grow a tree.
 export const OUT_MARKER = '.ccrc-history-replay';
 export const OUT_KIND = 'ccrc-history-replay-out';
-/** A marker longer than this is not one the driver wrote: the bound on the one read of it. */
+/** A marker longer than this is not one the driver wrote: the bound on the one read of it. The bound has no observable
+ *  outcome of its own (an oversized marker refuses `marker-mismatch` whether or not the read is bounded), so no mutant of
+ *  it can red a test (D-5814). */
 const OUT_MARKER_MAX_BYTES = 64;
 
 const errCode = (e) => String(e?.code ?? 'unknown');
@@ -1431,9 +1433,10 @@ export async function launchRun(job, opts = {}) {
 /** Run up to BATCH_MAX jobs, at most `concurrency` (<= CONCURRENCY_MAX) at once, calling `gate` before each spawn
  *  (Task 6's limits and budget stop). The gate is required: a missing one is a TypeError before any spawn, so the
  *  stop is never opt-in. A finished job is skipped without the gate. A gate reads the ledger BEFORE its own spawn and
- *  cannot see the runs in flight, so at concurrency c the ledger can pass the budget by up to c-1 runs' spend (the
- *  first gate of each lane runs before any of them has recorded); step 0a runs at concurrency 1 for this reason, and a
- *  caller that cannot tolerate that overshoot passes concurrency 1. `opts.claim` is claimOut's live claim over every
+ *  cannot see the runs in flight, and a run's spend lands only when it closes: the budget is a SOFT stop. The gate admits
+ *  a spawn while spent < budget, so the ledger can end up to c WHOLE runs past `--budget`, where c is the batch's
+ *  concurrency (step 0a 1, the probe 2). Operator line: set `--budget` at least c runs' spend below any total you must
+ *  not cross; the limits threshold stop is separate (D-5814). `opts.claim` is claimOut's live claim over every
  *  job's --out, required as the gate is (D-5985; the gate is checked first); `opts.liveness` defaults to the claim's.
  *  Before any lane starts, every job that has no run.json has its leftovers settled (settleLeftover, D-5984), so the
  *  first gate reads a dead writer's charge; a live writer refuses `run-live` and a `.part` that is not a regular
@@ -1606,9 +1609,10 @@ export function decideBudget(spent, budget) {
 }
 
 /** The gate called before each batch and before each spawn: the budget first, then the limits row. Throws DriverRefusal.
- *  It reads the ledger before its own spawn and cannot see a run in flight: with `concurrency` lanes at once, the ledger
- *  can pass the budget by up to concurrency-1 runs' spend before the next gate refuses. Step 0a runs at concurrency 1
- *  so that its gate sees each finished run's spend before the next starts. */
+ *  It reads the ledger before its own spawn and cannot see a run in flight, and a run's spend lands when it closes: the
+ *  gate admits a spawn while spent < budget, so the ledger can end up to c WHOLE runs past `--budget`, where c is the
+ *  batch's concurrency (step 0a 1, the probe 2). The budget is a soft stop. Operator line: set `--budget` at least c
+ *  runs' spend below any total you must not cross; the limits threshold stop is separate (D-5814). */
 export function batchGate({ out, home, accountId, budget, limits, now = Date.now }) {
   if (!Number.isSafeInteger(budget) || budget <= 0) throw new TypeError(`a budget is a positive integer: ${String(budget)}`);
   const thresholdPct = limits?.threshold_pct;
@@ -1780,7 +1784,9 @@ function step0aShapeError(o) {
 }
 
 /** Step 0a's output as a later subcommand's input (W2-D56): outside any git tree, its bytes' sha256 checked BEFORE
- *  they are parsed (input-sha-mismatch, W2-D59), then its shape (input-invalid). */
+ *  they are parsed (input-sha-mismatch, W2-D59), then its shape (input-invalid). Shape-only (D-5812): pilot-source may
+ *  run against a step 0a output that part 1 later refuses, because part 1 refuses a null in any of the three `*_init`
+ *  fields (`box_init` included, the box run alone carrying `--allowedTools`) or a false flag. */
 export function loadStep0a(p, sha256) {
   if (typeof sha256 !== 'string' || !SHA256_RE.test(sha256)) refuse('args-invalid', '--step0a-sha256 is not 64 lowercase hex');
   if (typeof p !== 'string' || p === '') refuse('args-invalid', '--step0a names no path');
@@ -1904,7 +1910,8 @@ function refuseUnusableInputs(home, outArg, models) {
 /** Every flag the runs' argvs carry (a token that starts with '-'; no contract value does). A flag is true only when
  *  no run reported it as an unknown option AND at least one run whose argv carries it emitted an init event
  *  (`facts.init !== null`): a flag whose every run died before Claude Code reached its init was not measured, and
- *  records false, never true (D-5812). The record's own `*_init` nulls tell "rejected" from "not reached". The
+ *  records false, never true (D-5812). The `*_init` nulls cannot tell "rejected" from "not reached" (a flag rejected as
+ *  unknown also exits before init); each `<name>.run.json` holds the run's unknown-option names. The
  *  argvs and outcomes are parallel. Pure.
  *  @param {ReadonlyArray<readonly string[]>} argvs
  *  @param {ReadonlyArray<{ unknownOptions: readonly string[], facts: { init: object | null } }>} outcomes
