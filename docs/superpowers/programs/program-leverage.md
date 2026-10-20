@@ -29,7 +29,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   credential; unmeasurable refuses, never proceeds. Recorded in spec §7/§11.
 - **Operator ruling (2026-08-28): wave-1 dispatch HOLDS for operator review of the spec.** The
   run is opened and the block allocated; dispatch fires on the operator's go.
-- **Two programs are active concurrently** (`battlescape-operational`, MekWarLive, wave 2/6 at
+- **Two programs are active concurrently** (`prog-c`, project-f, wave 2/6 at
   open time): every `toId:'coordinator'` mail in this program MUST carry `runId` — the
   runId-less form resolves only when exactly one program is active. Briefs restate this.
 - **Build 9 remnants are a NON-GOAL**: peers/claims/allocator/lifecycle shipped in build 9/9b
@@ -41,7 +41,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   server access writes `D-TBD-<slug>` and it is reconciled at wave review.
 
 - **Adjacent lane (operator flag, 2026-08-28): `ws/ccrc-with-graphify-integration`**
-  (`ccrc-pwa-amber-cove`, wrapper claude2) — graphify fleet integration, spec rev 3
+  (`ccrc-pwa-amber-cove`, wrapper claude9) — graphify fleet integration, spec rev 3
   approved, 13-task plan, block D-995..D-998, mid-implementation. Its TRUE delta vs
   origin/main is `ccd/ccrc` + its docs + install/update/single-definition tests — ZERO path
   overlap with wave 1 (an apparent overlap was this coordinator's stale local `main` ref;
@@ -867,7 +867,7 @@ moment you need the number, never from a document's floor).
 **The idle.** The worker stopped at 2026-09-03 22:28 UTC having closed item 3, and sat at an empty
 prompt for 10.5 hours. `hookstate` read `state:done event:Stop ask:null` the whole time — a clean
 turn end with no pending ask, i.e. not blocked, not limit-locked, just unprompted. Its 5h window was
-at 2% and three migration targets sat idle (`claude-corp` 0/0, `claude2` and `claude-dev0` both 7d
+at 2% and three migration targets sat idle (`claude-acme` 0/0, `claude9` and `claude-lab0` both 7d
 53%) against its own wrapper's 7d 83%. **The loop has no self-resume:** a worker that finishes a turn
 mid-wave waits for a nudge that only arrives if a human or the coordinator is watching. Wave 7 hid
 this because every turn ended on a report; wave 8's five-item shape ends three turns short of one.

@@ -2235,7 +2235,7 @@ button.proj-card-pool::before {
 
 /* — Your sign-in, which is NOT one of your accounts (D-161) —
    The passkey block and the session block used to be `.accounts-row` with an
-   `.account-gauge-label` — the two classes a claude2/gpt row wears — so
+   `.account-gauge-label` — the two classes a claude9/gpt row wears — so
    "Passkeys" read as a fifth fleet account in the same list. They keep the card
    treatment and take their own identity from a real heading instead of an
    account label.
@@ -2881,21 +2881,10 @@ button.proj-card-pool::before {
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 
 /* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
-   The AccountsScreen skeleton, class for class. `.settings-screen` paints NO
-   background of its own, and neither does `.shell-detail`, so every rule
-   here that sets a colour sits on body's --bg-page and is registered on that
-   ground in design/audit.mjs's INHERITED_GROUNDS (the `.mail-chip` /
-   `.pool-epoch-lag` reasoning) — the uncovered census is frozen (D-2689).
-   Tasks 7-10 append the screen's sections after this block. */
-.settings-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
-.settings-head { display: flex; align-items: center; gap: var(--sp-2); }
-/* Same visual contract as `.accounts-back` (and chat.css's `.chat-back`) — a
-   rule of its own rather than a shared class, for the reason `.accounts-back`
-   gives: two screens with one shape are not one thing. */
-.settings-title {
-  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
-  color: var(--ink-primary);
-}
+   Its head and column are `PageScaffold`'s since settings Task R2b1 (D-5504):
+   `.settings-screen`, `.settings-head` and `.settings-title` retired with the
+   one long page, and the frame's own layout is screens/settings/settings.css.
+   The cards below are today's, moved unchanged onto the section pages. */
 /* The doors to /accounts and /settings are @ccrc/ui's `Door` — no rules here.
    Their ground was always two (the page on a phone, `.shell-nav`'s
    --bg-surface in the desktop sidebar), which is why one was REGISTERED on one

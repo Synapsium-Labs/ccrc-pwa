@@ -44,9 +44,12 @@ describe('the base commands', () => {
     // `app.tsx`'s ladder matches against ROUTES and nothing else (D-5466;
     // `app.test.tsx` holds the two to each other both ways), so a Go to whose
     // path no row matches would open the placeholder.
-    expect(GO_TO.length, 'one Go to per top route').toBe(ROUTES.filter((r) => r.top).length);
+    // One Go to per top route, and one per page under a top route with a path of its own (Settings' five
+    // sections, D-5504); each targets the row it is named for. A row with no path (`settings-section`) has none.
+    const offered = ROUTES.filter((r) => r.path !== null && (r.top || r.id.startsWith('settings-')));
+    expect(GO_TO.map((g) => g.id), 'one Go to per offered route').toEqual(offered.map((r) => `go-${r.id}`));
     for (const go of GO_TO) {
-      expect(matchRoute(go.path)?.route.top, `${go.title} → ${go.path}`).toBe(true);
+      expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
     }
     expect(GO_TO.map((g) => g.path)).toContain('/');
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
@@ -70,6 +73,9 @@ describe("the ids are W2's door table's", () => {
       'switch-layout', 'switch-theme', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
       'go-docs', 'new-session', 'open-palette',
+      // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
+      'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
+      'go-settings-security',
     ].sort());
   });
 });

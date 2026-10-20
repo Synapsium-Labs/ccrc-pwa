@@ -485,7 +485,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     (its coordinator clause 3, for one). Wave 7 dispatches only once claim 956 is released or the two coordinators
     agree a split like R23. Either way, the second PR to land merges `main` and keeps both sides.
   - **"Clear stuck bash approvals, if they are still there."** Measured read-only at 17:01: neither is still there.
-    `MekWarLive-swift-harbor` restarted at 17:01 after a rate limit and reads `done`. `ccrc-pwa-swift-hollow` reads
+    `project-f-swift-harbor` restarted at 17:01 after a rate limit and reads `done`. `ccrc-pwa-swift-hollow` reads
     `working`, with a prompt submitted at 16:58. Neither hookstate carries an `ask`. Nothing was typed into any pane.
   - **"Yes to stall watch section", with the question "should we be able to configure any parameters?"** That is a
     design question with its own spec. It is brainstormed with the operator before any plan, starting from a

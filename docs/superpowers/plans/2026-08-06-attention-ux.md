@@ -965,7 +965,7 @@ it('omits the project from the title when only one project is active', async () 
 });
 
 it('names the project when more than one is active', async () => {
-  const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+  const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
   await w.tick();
   markIdle('cc-a');
   await w.tick();

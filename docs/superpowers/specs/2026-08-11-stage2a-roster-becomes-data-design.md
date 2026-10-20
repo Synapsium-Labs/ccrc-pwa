@@ -29,10 +29,10 @@ under **Carried into 2a** below.
 
 | Question | Decision | Why |
 |---|---|---|
-| Account identity | **Free-form ids** — a user names accounts whatever fits (`work`, `personal`, `oss`) | The OSS goal is the best solo-dev experience; nobody should inherit one operator's `claude2`/`claude-corp` naming. The closed `Wrapper` union buys one compile-time check that stops meaning anything once there is no hand-typed union to add to |
+| Account identity | **Free-form ids** — a user names accounts whatever fits (`work`, `personal`, `oss`) | The OSS goal is the best solo-dev experience; nobody should inherit one operator's `claude9`/`claude-acme` naming. The closed `Wrapper` union buys one compile-time check that stops meaning anything once there is no hand-typed union to add to |
 | Existing hand-built boxes | **`ccrc adopt` is read-only in 2a** — it writes `accounts.json` and nothing else | Adoption is the schema's best test; in-place convergence of a live production fleet waits for stage 4, where update and rollback exist |
 | CLI surface | `install`, `adopt`, `doctor`, `status` — of which **only `adopt` lands in 2a**; the other three are 2b | Adding an account is `edit accounts.json` + re-run `install`, reusing idempotent convergence rather than building a second path that must stay in sync |
-| Roster failure posture | **Refuse to boot**, with a named remedy, in both the server and ccd | Follows stage 1's `assertProjectsRootIsSafe` precedent. A silently-empty roster is exactly the failure that killed chat for six `claude-dev0` sessions |
+| Roster failure posture | **Refuse to boot**, with a named remedy, in both the server and ccd | Follows stage 1's `assertProjectsRootIsSafe` precedent. A silently-empty roster is exactly the failure that killed chat for six `claude-lab0` sessions |
 
 ## What the disk actually contains
 
@@ -42,8 +42,8 @@ by preference:
 - **`~/.local/bin/claude` is not a wrapper.** It is the Claude Code binary
   itself — 304,282,632 bytes of ELF. ccrc must never generate, overwrite or
   back it up.
-- **Three accounts are trivially generatable.** `claude2` (336 bytes),
-  `claude-corp` (102 bytes) and `claude-dev0` (340 bytes) are the same four-line
+- **Three accounts are trivially generatable.** `claude9` (336 bytes),
+  `claude-acme` (102 bytes) and `claude-lab0` (340 bytes) are the same four-line
   shape: set `CLAUDE_CONFIG_DIR`, optionally source
   `~/.cc-secrets/<id>-oauth.env`, `exec` the binary.
 - **One account is bespoke and must be left alone.** `gpt` (7,800 bytes) is a
@@ -62,8 +62,8 @@ by preference:
       "exec": { "kind": "upstream" },
       "homeAble": true,  "hue": "cyan",    "telemetry": "anthropic" },
 
-    { "id": "claude2", "label": "team·alt", "configDirSuffix": ".claude-personal",
-      "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude2-oauth.env" },
+    { "id": "claude9", "label": "team·alt", "configDirSuffix": ".claude-home",
+      "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude9-oauth.env" },
       "homeAble": true,  "hue": "violet",  "telemetry": "anthropic" },
 
     { "id": "gpt",     "label": "gpt",      "configDirSuffix": ".claude-gpt",
@@ -92,11 +92,11 @@ computable, and computing them removes a class of hazard:
 
 - **`idPrefix`** is always `<id>-`. Deriving it makes the arm-order hazard
   structural: the generator emits case arms sorted by **descending id length**,
-  so `claude-dev0-*` cannot land after `claude-*`. Today that ordering is
+  so `claude-lab0-*` cannot land after `claude-*`. Today that ordering is
   protected by a comment asking maintainers not to reorder.
 - **The disable file** is `~/.cc-sessions/<id>-disabled`. Today's
   `GPT_DISABLE_FILE` already matches that pattern exactly.
-- **`ccdValid`** is true for all five accounts since `claude-dev0`'s
+- **`ccdValid`** is true for all five accounts since `claude-lab0`'s
   promotion, and collapses to "every account in the roster".
 - **`hooksAble`** is true for all five, and both install scripts already skip
   a home whose directory is absent, so the flag buys nothing.
@@ -130,14 +130,14 @@ against) and `--pr-merged`, which deliberately aliases the violet hue.
 **`telemetry`** (`anthropic` | `none`) exists because `limits.ts` conflates
 *unmeasured* with *zero used*, and an account scored 0 wins every placement.
 Both halves are mechanically confirmed against the current tree:
-`projectHome({claude:5, claude2:6, 'claude-corp':7})` returns
-`{wrapper:'claude-dev0', score:0}` — an account with no telemetry row at all —
+`projectHome({claude:5, claude9:6, 'claude-acme':7})` returns
+`{wrapper:'claude-lab0', score:0}` — an account with no telemetry row at all —
 and an account shaped like `{five: null, seven: 0}` behaves identically.
 
 Two corrections to the earlier framing of this bug. `gpt` **does** write
 `~/.cc-limits/gpt.json`; its content is `{"five": null, "seven": 0, …}`, so the
 distinguishing fact is a permanently null `five`, not an absent file. And
-nothing is misplaced in production today: `claude-dev0` reports real telemetry
+nothing is misplaced in production today: `claude-lab0` reports real telemetry
 (12/4 at the time of writing), so it is scored honestly, and the only
 structurally-unmeasurable account, `gpt`, is kept out of scoring by
 `homeAble: false` rather than by anything to do with telemetry.
@@ -243,10 +243,10 @@ migration in 2a, by `ccrc install` from 2b onward:
 ```bash
 #!/usr/bin/env bash
 # ccrc:generated 1 sha256=…
-CCRC_ACCOUNTS=(claude claude2 claude-corp claude-dev0 gpt)
-CCRC_HOME_ABLE=(claude claude2 claude-corp claude-dev0)
-_ccrc_cfg_dir()    { case "$1" in claude-dev0) echo "$HOME/.claude-dev0";; … esac; }
-_ccrc_id_wrapper() { case "$1" in claude-dev0-*) echo claude-dev0;; claude-corp-*) …;; claude-*) …;; esac; }
+CCRC_ACCOUNTS=(claude claude9 claude-acme claude-lab0 gpt)
+CCRC_HOME_ABLE=(claude claude9 claude-acme claude-lab0)
+_ccrc_cfg_dir()    { case "$1" in claude-lab0) echo "$HOME/.claude-lab0";; … esac; }
+_ccrc_id_wrapper() { case "$1" in claude-lab0-*) echo claude-lab0;; claude-acme-*) …;; claude-*) …;; esac; }
 ```
 
 Case arms are emitted in **descending id length**, making the ordering
@@ -267,7 +267,7 @@ are safe there only because the id charset excludes whitespace; that is now a
 load-bearing reason for the charset rule in §4, not merely a tidiness one.
 
 Today's `_id_wrapper` arms are **not** strictly length-descending —
-`claude-corp-` and `claude-dev0-` are both 12 characters, and `claude2-` (8)
+`claude-acme-` and `claude-lab0-` are both 12 characters, and `claude9-` (8)
 precedes `claude-` (7) by hand-authoring luck. The order is correct but by a
 weaker accident than "sorted". A golden-file comparison against today's text
 would therefore fail against a correctly-sorted generator: the test must assert
@@ -281,7 +281,7 @@ roster for free.
 
 **A missing `accounts.sh` makes ccd die** with a named remedy, rather than
 falling back to a built-in default. A fallback would mean a box quietly running
-a roster that does not match its accounts — the `claude-dev0` failure exactly.
+a roster that does not match its accounts — the `claude-lab0` failure exactly.
 ccd already dies this way for a missing python3.
 
 The cost is an ordering constraint with teeth: `accounts.sh` must land
@@ -335,7 +335,7 @@ values.
 ### 10. The roster in two-box (remote) mode
 
 In `fleetMode: 'remote'` the server runs on one box and the accounts live on
-another — <server-host> has no Claude accounts at all, while openclaw has five. But
+another — <server-host> has no Claude accounts at all, while the fleet box has five. But
 `GET /api/accounts` serves labels, hues and ordering, which are facts about the
 *fleet host*.
 
@@ -378,7 +378,7 @@ box.
 ### Carried into 2a
 
 `shared/api.ts`'s roster docstrings now contradict the roster: after the
-`claude-dev0` promotion they still state the account "is not ccd-valid", that
+`claude-lab0` promotion they still state the account "is not ccd-valid", that
 `ccdValid` "is false", and that `HOME_ABLE_WRAPPERS` is "the three accounts",
 while the data says ccd-valid, home-able, and four. These comments are
 load-bearing — they are what a maintainer reads before touching arm order — so
@@ -411,10 +411,10 @@ In order:
    each with a named remedy.
 3. The migration file reproduces today's five accounts verbatim; the full
    suite passes unchanged.
-4. `ccrc adopt` on openclaw independently rediscovers those same five from
+4. `ccrc adopt` on the fleet box independently rediscovers those same five from
    disk alone — `claude` upstream, `gpt` external, three generated, with
-   `claude2` and `claude-dev0`'s secrets files correctly attributed.
-5. Both boxes deploy; `/health` reports the shipped sha; `claude-dev0` still
+   `claude9` and `claude-lab0`'s secrets files correctly attributed.
+5. Both boxes deploy; `/health` reports the shipped sha; `claude-lab0` still
    resolves; no live session loses its account.
 
 ## Risks and mitigations
@@ -445,5 +445,5 @@ releases and update (4), OSS polish (5) are unchanged by this spec.
 - Parent spec: `docs/superpowers/specs/2026-08-11-ccrc-oss-single-dev-infra-design.md`
 - Stage 1 (shipped): PRs #33/#34 — build identity, EnvironmentFile cutover,
   repatriated fleet-host artifacts, `resolveProjectsRoot`
-- The roster's own history: `shared/api.ts:1199-1356`, and the `claude-dev0`
+- The roster's own history: `shared/api.ts:1199-1356`, and the `claude-lab0`
   incident it documents

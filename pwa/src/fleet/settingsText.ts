@@ -17,10 +17,26 @@
 import { createElement, Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FocusEvent, ReactNode } from 'react';
 import type { StallLevel } from '../../../shared/api';
+import type { SettingsSectionId } from '../lib/routes';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
 export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read; the screen will re-check.";
+
+/** Settings' index (settings spec §3.1, D-5503): each section's purpose line, under its name on the narrow index and
+ *  in a nav row's `title`; and the one line an unknown section id says, above the index (§4.1, D-5504). */
+export const SETTINGS_INDEX_TEXT = {
+  purpose: {
+    updates: 'Which ccrc release the fleet runs, and how new releases reach it.',
+    appearance: 'How ccrc looks on this device. Other devices keep their own choice.',
+    notifications: 'What this browser is told, and which releases the server announces to everyone.',
+    automation: 'What the server does to the fleet by itself: checking on quiet workers, and clearing what dead sessions '
+      + 'leave behind.',
+    security: 'Who can open this console, and the key the fleet box uses to call this server.',
+  } satisfies Record<SettingsSectionId, string>,
+  notFound: 'That section does not exist.',
+  navLabel: 'Settings sections',
+} as const;
 
 /** The classes a section's "now" lines wear, by tone: one map, so the Stall watch and Temp root collector sections
  *  cannot drift apart. */

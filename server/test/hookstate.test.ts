@@ -7,7 +7,7 @@ import { readHookState, readHookStateMeasured, readHookStateRawMeasured, HOOKSTA
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude9-project-f';
 const UUID = '1'.repeat(36);
 const NOW = 1_800_000_000_000; // arbitrary fixed epoch ms, no relation to real time
 

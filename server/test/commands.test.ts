@@ -31,10 +31,10 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude-a-rp-llm';
-    const workdir = '/data/projects/rp-llm';
+    const id = 'claude-a-project-j';
+    const workdir = '/data/projects/project-j';
     const uuid = '9'.repeat(36);
-    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'rp-llm', workdir, uuid, started: '1' })) {
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'project-j', workdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
     const munged = workdir.replace(/[/._]/g, '-');
@@ -69,10 +69,10 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude-a-rp-llm';
-    const workdir = '/data/projects/rp-llm';
+    const id = 'claude-a-project-j';
+    const workdir = '/data/projects/project-j';
     const uuid = '8'.repeat(36);
-    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'rp-llm', workdir, uuid, started: '1' })) {
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'project-j', workdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
     // Own account (claude-a): the projects root exists but holds nothing for
@@ -116,19 +116,19 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude-a-rp-llm-pin';
-    const registryWorkdir = '/data/projects/rp-llm';
-    const liveCwd = '/data/projects/rp-llm-worktree'; // moved — e.g. into a worktree
+    const id = 'claude-a-project-j-pin';
+    const registryWorkdir = '/data/projects/project-j';
+    const liveCwd = '/data/projects/project-j-worktree'; // moved — e.g. into a worktree
     const uuid = '7'.repeat(36);
     const pid = 5551;
     for (const [k, v] of Object.entries(
-      { wrapper: 'claude-a', project: 'rp-llm', workdir: registryWorkdir, uuid, started: '1' })) {
+      { wrapper: 'claude-a', project: 'project-j', workdir: registryWorkdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
     const cfgDir = path.join(home, '.claude-a');
     mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
     writeFileSync(path.join(cfgDir, 'sessions', `${pid}.json`), JSON.stringify({
-      pid, sessionId: uuid, cwd: liveCwd, name: 'rp-llm', status: 'idle', statusUpdatedAt: 1, version: '2.1.210',
+      pid, sessionId: uuid, cwd: liveCwd, name: 'project-j', status: 'idle', statusUpdatedAt: 1, version: '2.1.210',
     }));
     // The CORRECT copy, at the REGISTRY workdir's exact munge — planted FIRST
     // (older mtime), so only an exact-rung hit (not `pickNewest`) can prefer it.

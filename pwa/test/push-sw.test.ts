@@ -266,7 +266,7 @@ describe('push-sw: the plain tap is unchanged', () => {
 });
 
 // Design 2026-09-20 §13: a release push carries no session, so its tap has
-// nowhere to deep-link; the payload's `url` ('/settings') is the target instead.
+// nowhere to deep-link; the payload's `url` ('/settings/updates') is the target instead.
 // The url is a SAME-USER-WRITABLE string once it is in a payload, and a tap
 // that navigated wherever it pointed would make every push an open redirect —
 // so only a path this origin serves is honoured, decided by the URL parser
@@ -305,8 +305,8 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
 
   it('stashes the url into the notification data, beside the session', async () => {
     const self = load();
-    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings' });
-    expect(shown[0]!.opts.data).toEqual({ sessionId: null, url: '/settings', actions: [] });
+    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings/updates' });
+    expect(shown[0]!.opts.data).toEqual({ sessionId: null, url: '/settings/updates', actions: [] });
   });
 
   it('stashes null when the payload carries no url — an older server, a session push', async () => {
@@ -326,25 +326,25 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
 
   it('a plain tap opens the url and posts nothing', async () => {
     const self = load();
-    await click(self, '', { sessionId: null, url: '/settings', actions: [] });
-    expect(opened).toEqual(['/settings']);
+    await click(self, '', { sessionId: null, url: '/settings/updates', actions: [] });
+    expect(opened).toEqual(['/settings/updates']);
     expect(posted).toEqual([]);
   });
 
-  it('the push it showed is the tap that lands on /settings — the round trip', async () => {
+  it('the push it showed is the tap that lands on /settings/updates — the round trip', async () => {
     const self = load();
-    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings' });
+    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings/updates' });
     await click(self, '', shown[0]!.opts.data);
-    expect(opened).toEqual(['/settings']);
+    expect(opened).toEqual(['/settings/updates']);
   });
 
   it('a url wins over the session deep-link when no answer was tapped', async () => {
     const self = load();
-    await click(self, '', { sessionId: 'cc-a', url: '/settings' });
-    expect(opened).toEqual(['/settings']);
+    await click(self, '', { sessionId: 'cc-a', url: '/settings/updates' });
+    expect(opened).toEqual(['/settings/updates']);
     opened = [];
-    await click(self, 'something-else', { sessionId: 'cc-a', url: '/settings' });
-    expect(opened).toEqual(['/settings']);
+    await click(self, 'something-else', { sessionId: 'cc-a', url: '/settings/updates' });
+    expect(opened).toEqual(['/settings/updates']);
     expect(posted).toEqual([]);
   });
 
@@ -380,7 +380,7 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
 
   it('never diverts an answer: an ask action with a session still POSTs it', async () => {
     const self = load();
-    await click(self, 'ask:k:0', { sessionId: 'cc-a', url: '/settings' },
+    await click(self, 'ask:k:0', { sessionId: 'cc-a', url: '/settings/updates' },
       { actions: [{ action: 'ask:k:0', title: 'Red' }] });
     expect(posted).toEqual([{ url: '/api/sessions/cc-a/ask', body: { askKey: 'k', optionIndexes: [0] } }]);
     expect(opened).toEqual([]);

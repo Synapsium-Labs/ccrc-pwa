@@ -78,7 +78,7 @@ future exception must be argued into this file").
 | # | Decision | Default (the operator may overrule at review) |
 |---|---|---|
 | 1 | Scope | The tree at the branch point, every tracked file, frozen docs included. Not history, release assets, the fork or old PR revisions |
-| 2 | Regrowth guard | Class 9 in `topology-clean.test.ts`, hashed entries for names already public in history; the local list holds every name and feeds the local scan and the pre-push hook |
+| 2 | Regrowth guard | Class 9 in `topology-clean.test.ts`, hashed entries for names already public in history; the local list holds every name and feeds the local scan, and the pre-push hook's next version after this PR merges |
 | 3 | The base64 literal lists in `topology-clean.test.ts` and `license.test.ts` | Every decoded literal is a list entry (already appended locally). The two classes made only of literals ("fleet account label", "operator residue") are removed; "tailnet name" keeps its `.ts.net` shape and synthetic catches; the registration pin becomes 7 (8 - 2 + 1). `license.test.ts`'s old-org check becomes a class 9 lookup that prints `#h8` |
 | 4 | Issue-tracker ticket ids | Each becomes the GitHub `#n` it is mirrored as (the list gives every mapping) |
 | 5 | Real person names | Roles: "the operator", "a colleague" |
@@ -207,7 +207,7 @@ it('never returns text', () => {
   `git -c color.ui=never diff --no-ext-diff --no-textconv <merge-base>...HEAD` (the `+` lines, keyed on each
   `+++ b/<path>` header, skipping `SELF` and binary paths), with the same git-config isolation the existing range
   row uses. An open branch is then charged only for what its tip adds, and clears by editing its tip. Commit
-  messages and branch names are not class 9 corpora; the pre-push hook and the push check above cover them. Add a
+  messages and branch names are not class 9 corpora; the push check above covers them, and the pre-push hook's next version will after this PR merges ("Not in this plan"). Add a
   fixture-repo row: a throwaway repo whose middle commit adds `CANARY` to a file and whose last commit removes it
   reads clean; one whose tip still adds it reads exactly one `#<canary h8>`; a `SELF` path addition reads none.
 
@@ -322,4 +322,103 @@ ledger, the 2026-09-08 spec and the wave-3 docs-flip plan), `server/test/coordin
 
 ## Deviations found
 
-(None yet. Numbers are issued to the run at dispatch.)
+Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here when it is taken.
+
+- **D-5277** — `visibility-measured-by-token` (Task 1 Step 6): a row's visibility was measured with the class's own
+  tokenizer, as a whole token joined any way (every form a row commits, matched as `part`), over the messages and
+  patches reachable from `origin`'s branches and the tags that exist on `origin`, not with `git log --all -i -G`.
+  `--all` reaches refs that were never published (local-only tags, the stash), and a fixed-string `-G` counts a token
+  inside an unrelated longer word, which would commit a hash for a name whose private sense was never public. A row
+  whose base64 copy is in that history counts as present: the two base64-literal classes this plan removes published
+  those names in decodable form, so hashing them reveals nothing new. Result: 80 rows `pub`, 17 `local`: 9 measured absent, and 8 the list already marked `local`, which stay
+  local by Step 6's rule whatever history holds (one of them is in a commit trailer); no `local` row has a hit in the
+  tree. A first pass that matched each row in its own mode
+  marked one row `local` that the tree speaks joined another way; the Task 1 review found it.
+- **D-5278** — `no-product-passes` (Task 1 Step 7): class 9's `passes` carry no product run. The tree speaks product
+  vocabulary containing a `run` entry's tokens for one row only, and committing that vocabulary beside the class,
+  with or without a comment, tells a reader which tokens that entry is made of. The `run`/`part` distinction is
+  pinned by synthetic unit pins in `private-names.test.ts` instead, and the Task 7 mutant that widens a `run` entry to
+  `part` shows red on the tree row. The passes are ccrc's own vocabulary, the house stand-ins, and the replacement
+  vocabulary the two removed classes pinned.
+- **D-5279** — `entries-live-in-the-matcher` (Task 1 Steps 7-8): `PRIVATE_NAMES`, `CANARY` and `EXEMPTIONS` are exported
+  by `private-names.mjs`, not defined in `topology-clean.test.ts`: `license.test.ts` reads the old-org entries from
+  them (Decision 3) and the local scan applies the same exemptions as the class, so both need one copy. `CANARY` is
+  built by `join`, so no line of the tree spells it as one run, and the planned line-digest exemption for its
+  defining line is not needed. A `match` class takes `(line, file)`. Both exemptions apply to one entry only, in
+  documents under `docs/` whose path names the history programme.
+- **D-5280** — `every-form-of-a-name` (Task 1 Step 10, Review Focus 4): the tokenizer and the entries cover the forms the
+  tree writes a name in, found by the independent `grep -F` cross-check and by the Task 1 review. A list row commits
+  up to three entries (`entriesOf`): its tokens split at camelCase boundaries, its camelCase pieces merged, and all
+  its tokens run together. A line is read split; then, where it has a camelCase boundary, every run of two to four
+  consecutive camelCase pieces, at most 40 characters, is read as one token against the one-token `part` entries
+  (a name inside `useXxx` or `XxxClient`), and its pieces merged. An upper-case run splits before its last capital when a lower-case letter
+  follows. A line is folded one code point at a time: NFKC, Unicode hyphens to `-`, soft hyphens and zero-width
+  characters dropped. The old classes matched substrings, so a name with a letter or digit appended still scored;
+  class 9 matches whole tokens, and such a form is caught only where it is another listed row.
+- **D-5281** — `modes-keep-their-joiners` (Task 1 Step 10): `run` matches the joiners its name is listed with
+  (case-blind), not any run joiner, and a fourth mode, `exact`, matches anywhere in a run with the listed joiners.
+  Measured at the branch point: some rows' tokens also occur in product vocabulary or in fixture file names, joined
+  by a different character, and every such hit was a false positive. The local list's modes changed for nine rows:
+  one to `exact`, eight from `run` to `part`, where `part` loses nothing and also catches a name inside a branch or
+  workspace slug.
+- **D-5282** — `the-class-reads-like-the-scan` (Task 1, Review Focus 3 and 4): class 9 prints a path with each hit
+  replaced by its `#h8` (overlapping hits masked as one span), since a file named after an entry would otherwise put
+  the name into a public CI log, and it reads a `words` phrase broken across two lines (through a repeated comment or
+  quote marker), which the plan left to the local scan. The branch corpus reads a
+  path git decorates in a diff header (a trailing TAB after a space, C-quoting with octal escapes).
+- **D-5283** — `commercial-work-list` (Task 2 Step 3): `info/ccrc-scrub/crit-text.txt` is the inventory critic's list of
+  text paths, not the commercial and legal work list. The work list was the critic's commercial entry, re-measured at
+  the branch point with a search for commercial and legal phrases. Neighbouring sentences carried the same matter, so
+  more lines were reworded than the entry named; each reworded `path:line` is in the local `info/ccrc-scrub/operator-read.txt`, for the operator to read.
+- **D-5284** — `byte-pin-is-a-blob-id` (Task 3 Step 2): the 2026-08-11 crossrepo specification's byte-identity pin now
+  compares the file's git blob id (`git hash-object --no-filters`) with the id of the swept bytes, beside its four
+  content literals, instead of comparing it with `origin/main`. The sweep had to edit the file, and after this lands
+  an `origin/main` comparison would compare the file with itself. The blob id needs no new import, so the edit to the
+  swept test stays line-neutral. Measured: a one-byte edit to the specification reds the pin.
+- **D-5285** — `hand-swept-forms` (Tasks 2-6, Review Focus 4): forms of a private name that no list entry can carry
+  without reading neutral vocabulary as private were swept by hand, each recorded in the local `variants.tsv`: a lane's
+  bare suffix standing for the lane (the same word is part of the neutral fixture vocabulary), a lane-family suffix or
+  a suffix fragment beside a lane stand-in, a name written with a space, URL-encoded or split by a control-byte escape
+  (a comment's example then still renders as its stand-in), a name built from string parts, and a `run` name inside a
+  hyphen run. Decision 10's `/home/<x>` became `/home/u` in files with no list hit too, the producer and the expectation
+  together. The 29-character id (Task 6 Step 2) is `project-h-id-pad-keen-prairie` on all four lines that state the
+  length. Review 662 found two more: a person's first name alone, swept to a role and now also a local-only `part`
+  row, and the public org's stem with a possessive naming the private project it measured. These hand-swept forms have
+  no committed regrowth guard: only the local scan and the `grep -F` cross-check see them.
+- **D-5286** — `a-ledger-sweeps-itself` (Task 2, Task 7 Step 1): `docs/superpowers/programs/path-identity.md` was not
+  swept here. By ruling, its programme swept it on its own ledger PR (#436), which carried other edits not yet
+  published. Until #436 merged, this PR carried the file's 12 hits and class 9's tree row was red on that file alone.
+  #436 has merged and this branch has merged `main` since, so nothing is carried. `ccd/ccd` was swept here with that
+  programme's consent: comment lines only, then re-stamped.
+- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6, review 673 F2 and F3, review
+  684 F1 and F2): the
+  tokenizer drops every code point Unicode marks `Default_Ignorable_Code_Point`, not only the six it first listed, and
+  nothing else. A name split by a bidi mark or isolate, a combining grapheme joiner or a Mongolian vowel separator read
+  as two tokens, so class 9 and the scan both missed it. One unit pin per character class (LRM, RLM, LRI, CGJ, MVS,
+  ZWSP, SHY, WJ) reds when the fold is narrowed back (measured). The set is defined once, and every fold is built from
+  it: the in-line fold, the trailing blanks a phrase broken across a line break ends on, and both sides of the marker
+  a wrapped comment repeats on the next line. One pair pin for each of those three reds when it is narrowed back
+  (measured). Format characters (`Cf`) outside the set are not added: those 32 points are mostly visible, and dropping
+  a visible mark joins the tokens either side of it and loses a hit. A pin on U+0600 reds when `Cf` is restored to
+  `INVISIBLE` alone, through a second line the fold's slow path reads, and when it is restored to both regexes
+  (measured). Measured on Node v24.14.1 (Unicode 17.0, ICU 78.2) and on the floor, Node v22.16.0 (Unicode 16.0, ICU
+  77.1), the latter in a throwaway `node:22.16.0` container with no network: every pinned point is default-ignorable
+  in both, U+0600 is not, and the pins hold in both. The pair check's letter-or-digit gate reads the facing ends
+  folded, as `hitsIn` reads them, so a character NFKC folds to a letter counts on either side of a line break, with or
+  without a default-ignorable letter beside it. Seven positive pins red when the gate reads the raw ends (measured).
+  Known limits, older than this PR and not fixed here: the pair check misses a phrase broken across two lines when its
+  part on the previous line holds a camelCase break in any of its words (a capital inside a word, or a character that
+  folds to one), because its early exit reads only the split token stream; and when the phrase's part on either line
+  lies more than 80 units from the line break, because the facing ends are cut at 80 units before matching.
+- **D-5288** — `the-guard-pins-itself` (Task 1 Steps 7-8, Review Focus 3 and 4; review 662 F7 and F8): the shape
+  checks passed with an entry deleted. `PRIVATE_NAMES` is now pinned by `PRIVATE_NAMES_DIGEST`, a digest of every
+  entry's four fields that `hash --list` prints beside the literal it regenerates, so a deleted, reordered or weakened
+  entry reds a unit pin (measured: one entry deleted). Each exemption's conjunct, and the revision regex's `^` anchor,
+  has a red-on-removal pin of its own: the plugin phrase is exempt only in a history-programme document (a path
+  holding `ccrc-history`, not only `history`), only after its prefix and only before its suffix; a revision citation
+  needs seven or more hex digits after an `@` that directly follows the name (each measured; review 673 F7). The
+  digest pin's failure message names `hash --list` and says to paste the literal and its digest line together, and a
+  CLI pin runs `hash --list` over a fixture list of synthetic tokens: the canary prints first, no `local` row's entry
+  prints, and the printed digest is the digest of exactly the printed entries (measured: a digest of
+  `entries.slice(1)` reds; review 673 F8). A pin's fixture splits its `x.ts:1` literal as `citations.test.ts` spells its
+  own, so `main`'s D-5893 ratchet does not count a synthetic string as a line citation.

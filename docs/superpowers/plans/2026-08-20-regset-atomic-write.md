@@ -269,8 +269,8 @@ describe('_reg_set writes atomically', () => {
     // (`_reg_get`, `field()` in registry.ts) is written against a file whose
     // bytes are exactly the value. An implementation that gained a newline
     // would break `.uuid` matching and every `-eq`/`=~` guard downstream.
-    h.sh(`_reg_set demo-quiet-basin wrapper claude2`);
-    expect(readFileSync(path.join(REG(h), 'demo-quiet-basin.wrapper'), 'utf8')).toBe('claude2');
+    h.sh(`_reg_set demo-quiet-basin wrapper claude9`);
+    expect(readFileSync(path.join(REG(h), 'demo-quiet-basin.wrapper'), 'utf8')).toBe('claude9');
   });
 
   it('REPLACES the inode rather than truncating it — a reader that already opened the file still sees whole, OLD bytes', () => {
