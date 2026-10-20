@@ -7550,6 +7550,7 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
 import { markerDefinitions } from './consolidationCensus.js';
 import { parseSource } from './scan/parse.js';
+import { SWITCHES } from '../../shared/switches.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
@@ -7687,7 +7688,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       .toBe(false);
     expect(pyFileWrites("# open(os.path.join(reg, 'mail-disabled'), 'w') is the operator's", 'mail-disabled')).toBe(false);
     expect(constsOf('reclaim-paused')).toEqual(['RECLAIM_PAUSE_MARKER']);
-    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER', 'MAIL_DISABLED_MARKER']);
+    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER']); // one definition since D-5855
   });
 
   it("reclaim-paused: one writer, ccd's reclaim-pause verb", () => {
@@ -7710,6 +7711,33 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
+  });
+
+  // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
+  // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
+  // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
+  // a `SWITCHES` row. KNOWN WIDTH: the stall watch's map keys (`coord/stall.ts`) are not `*_MARKER` constants and are
+  // not rows yet; a name assembled from pieces is not seen.
+  it('mail-disabled is defined once, in its switchboard row (may only shrink)', () => {
+    const sites = markerDefinitions('mail-disabled');
+    expect(sites.length, 'a second definition of mail-disabled').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(['shared/switches.ts']);
+  });
+
+  it('every marker row is defined once, in shared/switches.ts', () => {
+    const markers = Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : []));
+    expect(markers.length, 'CONTROL: the switchboard has marker rows').toBeGreaterThan(10);
+    for (const m of markers) expect(markerDefinitions(m).map((x) => x.file), m).toEqual(['shared/switches.ts']);
+  });
+
+  it('every marker literal is a SWITCHES row: no const *_MARKER under server/src or shared/ names a marker without one', () => {
+    const DEF = /\bconst\s+([A-Z0-9_]*_MARKER)\s*(?::[^=]+)?=\s*(['"])([a-z][a-z0-9-]*)\2/g;
+    const rows = new Set(Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : [])));
+    expect([...'const X_MARKER = \'x-y\';'.matchAll(DEF)].map((m) => m[3]), 'CONTROL: the pattern sees a definition')
+      .toEqual(['x-y']);
+    const rowless = ALL.filter((f) => /^(?:server\/src|shared)\//.test(rel(f)))
+      .flatMap((f) => [...stallCode(f).matchAll(DEF)].filter((m) => !rows.has(m[3]!)).map((m) => `${rel(f)}: ${m[1]} = ${m[3]}`));
+    expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
   });
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
