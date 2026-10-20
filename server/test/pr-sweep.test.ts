@@ -568,6 +568,7 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const failing = { value: true };
+    const killed = { value: true };
     let prStateCalls = 0;
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -575,7 +576,8 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
       if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
         prStateCalls += 1;
-        if (failing.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        if (failing.value && killed.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        if (failing.value) return { code: 1, stdout: '', stderr: '' };
         return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
       }
       return { code: 0, stdout: '', stderr: '' };
@@ -611,6 +613,12 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
       await pass();
       expect(sweeps()).toHaveLength(3);
       expect(sweeps()[2]).toMatch(/failed \(cut-short/);
+
+      // A new reason speaks with no success between: cut-short, then a plain exit, which stays agent-down.
+      killed.value = false;
+      await pass();
+      expect(sweeps()).toHaveLength(4);
+      expect(sweeps()[3]).toMatch(/failed \(agent-down/);
     } finally {
       warn.mockRestore();
       w.stop();

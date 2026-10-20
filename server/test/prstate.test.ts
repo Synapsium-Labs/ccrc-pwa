@@ -471,6 +471,7 @@ describe('sweepFailureReason (landing-order wave 3c)', () => {
     ['the link dropped', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'transport', detail: 'disconnected' }, 'agent-down'],
     ['the agent declined it', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'spawn', detail: 'x' }, 'agent-down'],
     ['ccd exited non-zero by itself', { ...base, killed: false, signal: null }, 'agent-down'],
+    ['a signal the agent did not send', { ...base, killed: false, signal: 'SIGKILL' }, 'agent-down'],
     ['an older agent measured nothing', { ...base, killed: UNMEASURED, signal: UNMEASURED }, 'agent-down'],
   ];
   it.each(rows)('%s', (_what, res, want) => {
