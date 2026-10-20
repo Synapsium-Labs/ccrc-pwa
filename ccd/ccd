@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1ca8d105281265353ed558ba6a3073b2e10aa13b65278cf5e1f8eb906266fa6e
+# ccrc:generated 1 sha256=f390a469d352f8497e1b644c48921240891c10db6601935bf27191c9c9e2a8ae
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5700,13 +5700,13 @@ def git(main, *args):
     return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
 
 def ours_of(main, tip, oids):
-    """Proof 0 for every row at once: the PR's head commit exists locally AND, with a tip to reach from, is reachable from it. The
-    SAME answers as `one_ours` from ONE `cat-file --batch-check` and at most ONE `rev-list`, not ~200 spawns a workspace. Oids go
-    on STDIN, never an argv (spec §7), only after `fullmatch`: `OID.match` lets a trailing newline through and shifts every later
-    answer. Each is asked peeled (`X^{commit}`) and bare (as merge-base resolves it), so a name ambiguous bare answers False. `tip
-    is None` (a hand rename or delete, which deviation 7 measured and calls ORDINARY) SKIPS reachability: False would demote a
-    bound MERGED row and clear its persisted number, a LOCAL fact erasing GitHub's answer; a recycled slug always resolves, so
-    gets the full proof. A tip rev-list cannot read answers False; an unclean batch falls back to `one_ours`."""
+    """Proof 0 for every row at once: the PR's head commit exists locally AND, given a tip, is reachable from it, which a recycled
+    slug and a stranger's fork both fail. `one_ours`'s SAME answers from ONE `cat-file --batch-check` and at most ONE `rev-list`.
+    Oids go on STDIN (spec §7) after `fullmatch`: `OID.match` passes a trailing newline, shifting later answers. Each is asked
+    peeled (`X^{commit}`) and bare, as merge-base does; ambiguous bare fails the reachability conjunct only, so with no tip one
+    peeling to a commit answers True, like `one_ours`. `tip is None` (hand rename or delete: ORDINARY, deviation 7) SKIPS
+    reachability: False would let a LOCAL fact demote a bound MERGED row, erasing GitHub's answer; a recycled slug always resolves.
+    An unreadable tip answers False; an unclean batch falls back. The wire says which rung answered: `tip` is null beside `ours`."""
     cands = sorted({o for o in oids if isinstance(o, str) and OID.fullmatch(o)})
     full, amb = {}, set()
     if cands:
