@@ -551,6 +551,10 @@ Two further P3-2 changes extend D-5931 itself and take no number of their own. T
 
 Issued and unused (Task P3-2): none; both spares are defined above.
 
+Two P3-3 changes extend D-5932 itself and take no number of their own. The browser leg the task's Step 1 names is `pwa/browser/sheet-footer.browser.test.tsx`: What's new with eight releases, opened from the update banner, at 360/390/1280/1920 in both skins and both palettes; the body overflows and scrolls, the footer is inside the panel and below the body, and Update all and Close are whole inside the viewport. `ArchiveSheet` wraps its body in `.archive-conflict-sheet`, the class `ArchiveConflictSheet` uses, so the tests that reached its danger button through that wrapper (`header`, `lifecycle-ui`, `session-actions-sheet`) and the Abandon click in `browser/refusal-copy.browser.test.ts` now reach the button through `.sheet-footer`; each error line stays in the body, and its locators are unchanged. `QC_CONSEQUENCE` gains `last:mb-0`: in `AbandonSheet`, `ArchiveConflictSheet`, `ArchiveSheet`, `UpdateMoveSheet` and `ResumeSheet` the consequence used to be followed by the answers inside a padded card, and with them gone its `mb-5` padded only the card's foot (measured at 390 and 1920, both skins).
+
+Issued and unused (Task P3-3): 6030, 6031, written without the prefix so they seed no floor.
+
 
 ## Review log
 
