@@ -41,13 +41,15 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  `wrapper-moved` stays for a measured mismatch). The last three are fix round 1's (D-5984, D-5985): `run-live` (a
  *  leftover `.part` whose writer is alive or unmeasured, or a regular `.pid` whose content is not a record), `out-in-use` (another
  *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
- *  the driver: a signal that has arrived by a yield is handled there, and the stop check after it refuses, so no spawn
- *  starts after the handler has run; after the handler has run, no run.json, step0a.json or probe.json is written, but a
- *  run whose post-close stretch is under way when a signal arrives is recorded, and the subcommand then refuses; a run
- *  stopped in flight is charged once, by its spend line; a signal that arrives in the synchronous stretch between a yield
- *  and a spawn is handled at the next turn, and that child is stopped and charged; a signal that arrives after the batch's
- *  last check, when every child has closed, is not handled: the result is written, and the driver exits 0, or ends by
- *  that signal if it comes after main has removed its listeners: D-5984). */
+ *  the driver: a signal that arrives before the poll phase inside a yield is handled there, and every stop check after it
+ *  refuses, so no spawn starts after the handler has run; after the handler has run, no run.json, step0a.json or probe.json
+ *  is written, but a run whose post-close stretch is under way when a signal arrives is recorded, and the subcommand then
+ *  refuses; a run stopped in flight is charged once, by its spend line; a signal that arrives in one lane's synchronous
+ *  stretch from its yield to its spawn is handled only at the next poll phase, so a sibling lane whose yield returns in the
+ *  same check phase passes its stop check and spawns: lanes that start together end their yields in one check phase, so up
+ *  to c children (the batch's concurrency) can start in it, and each is stopped and charged; a signal that arrives after
+ *  the batch's last check, when every child has closed, is not handled: the result is written, and the driver exits 0, or
+ *  ends by that signal if it comes after main has removed its listeners: D-5984). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -159,15 +161,20 @@ export function paneRefusal(env) {
 // registry holds and, after STOP_GRACE_MS, SIGKILL to whatever it STILL holds. The handler never exits the driver: the
 // interrupt surfaces as the `interrupted` refusal, through main's one stderr line and EXIT.REFUSED. A driver killed alone
 // (SIGKILL, the OOM killer) cannot run any of this; the `.pid` record each run leaves is what the next driver reads
-// (settleLeftover). What a stop guarantees: a signal that has arrived by a yield (yieldToSignals) is handled there, and the
-// stop check after it refuses `interrupted`, so no spawn starts after the handler has run. A signal that arrives in the
-// synchronous stretch between a yield and a spawn is handled at the next turn, and that child is stopped and charged.
+// (settleLeftover). What a stop guarantees: a signal that arrives before the poll phase inside a yield (yieldToSignals) is
+// handled there, and every stop check after it refuses `interrupted`, so no spawn starts after the handler has run. A signal
+// that arrives in one lane's synchronous stretch from its yield to its spawn is handled only at the next poll phase, so a
+// sibling lane whose yield returns in the same check phase does not see it: it passes its stop check, calls its gate and
+// spawns. Lanes that start together (every batch's start, through Promise.all) end their yields in one check phase, so that
+// window is up to c children, the batch's concurrency, not one; every child spawned in it is stopped (the handler SIGTERMs
+// every live group) and charged, so no spend goes unseen.
 // The wait after a leader's exit is bounded (spawnGroup): a STOP_GRACE_MS timer from the leader's 'exit', cleared at
 // 'close', SIGKILLs the leader's group and destroys the streams, so a process that outlives the leader and holds a pipe
 // cannot hold the driver, its lock or a signal's answer.
-// Residuals, named: that yield-to-spawn window; the post-last-check window (a signal that arrives after runBatch's last
-// check, when every child has closed, is not handled: main removes its listeners before the loop polls, the result is
-// written, and the driver exits 0, or, when the signal comes after that removal, ends by the signal's default action); a
+// Residuals, named: that yield-to-spawn window (up to c children); the post-last-check window (a signal that arrives
+// after runBatch's last check, when every child has closed, is not handled: main removes its listeners before the loop
+// polls, the result is written, and the driver exits 0, or, when the signal comes after that removal, ends by the
+// signal's default action); a
 // driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
 // charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds
 // the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a resume then
@@ -207,7 +214,9 @@ function onStopSignal(sig) {
   setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
 }
 
-/** Two turns of the event loop, in sequence: the point at which a signal that has already arrived is handled. A Node signal
+/** Two turns of the event loop, in sequence: the point at which a signal that arrived before the poll phase between them
+ *  is handled (one that arrives later, in a lane's stretch from this yield to its spawn, is handled at the next poll phase,
+ *  and a sibling lane whose yield returns in the same check phase does not see it: D-5984). A Node signal
  *  handler runs only when the loop reaches its poll phase, and a lane resumes in a poll-phase callback (a child's 'exit' or
  *  'close'). From there one setImmediate runs in the same iteration's check phase, before the next poll, so a single turn
  *  can resume the lane ahead of a pending signal's handler. Two turns always have a poll phase between them. setTimeout 0
@@ -1675,9 +1684,12 @@ export async function launchRun(job, opts = {}) {
  *  first gate reads a dead writer's charge; a live writer refuses `run-live` and a `.part` that is not a regular
  *  file refuses out-refused, before any spawn. Each lane iteration yields to signals first (yieldToSignals), re-reads
  *  whether it may take a job, and then refuses `interrupted` if a stop is set, before finishedOutcome and the gate: a
- *  signal that has arrived by a yield is handled there and the stop check after it refuses, so no spawn starts after the
- *  handler has run. A signal that arrives in the synchronous stretch between a yield and a spawn is handled at the next
- *  turn, and that child is stopped and charged. The batch's last check, after its lanes, refuses `interrupted` too: a
+ *  signal that arrives before the poll phase inside a yield is handled there and every stop check after it refuses, so no
+ *  spawn starts after the handler has run. A signal that arrives in one lane's synchronous stretch from its yield to its
+ *  spawn is handled only at the next poll phase, so a sibling lane whose yield returns in the same check phase does not see
+ *  it: it passes its stop check, calls its gate and spawns. Lanes that start together (every batch's start, through
+ *  Promise.all) end their yields in one check phase, so that window is up to c children, the batch's concurrency; every
+ *  child spawned in it is stopped and charged. The batch's last check, after its lanes, refuses `interrupted` too: a
  *  lane whose final iteration found no job to take has made no stop check of its own. A signal that arrives after that
  *  check, when every child has closed, is not handled. The first throw, the gate's included, stops the batch: no further
  *  spawn starts, a run already started finishes and is recorded (a stopped one is not), and the throw is rethrown, so a
@@ -1702,7 +1714,9 @@ export async function runBatch(jobs, opts = {}) {
   let stop = null;
   const lane = async () => {
     for (;;) {
-      await yieldToSignals();   // D-5984: a signal that has arrived is handled here, so the checks below see it
+      // D-5984: a signal that arrived before this yield's poll phase is handled here; one in a sibling's yield-to-spawn
+      // stretch is not (up to c children)
+      await yieldToSignals();
       if (stop !== null || next >= jobs.length) return;   // re-read after the yield: a sibling may have failed meanwhile
       const i = next++;
       try {
@@ -1936,7 +1950,7 @@ export function wrapperSha(launch) {
  *  @param {object} launch  @param {string} out  @param {string | undefined} lang */
 export async function measureClaudeVersion(launch, out, lang) {
   const home = runHomeOf(launch);
-  await yieldToSignals();   // D-5984: a signal that has arrived is handled here, so the check below sees it
+  await yieldToSignals();   // D-5984: a signal that arrived before this yield's poll phase is handled here
   refuseIfStopping();   // D-5984: no spawn starts after the handler has run
   const childEnv = spawnEnv({ mode: 'writer', home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang });
   const cwd = makeRunCwd();
