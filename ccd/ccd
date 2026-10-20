@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=581bebfaa8b7e99dfa154cae916b9c5c729997291bbe09af2e5be837b94f83b4
+# ccrc:generated 1 sha256=5fd97868487a87952f3baf6ae758d4905e58d973d685f308762c879e0f28d3c3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28281,8 +28281,8 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
   # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
   # `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)). NO VALUE AND NO POSITIONAL MAY BEGIN WITH `-`
-  # (path-identity spec §2.4): the server composes the id FIRST, so an id of `--actor` would take `--surface` as its value
-  # and leave the surface word as the id. A dash-leading value is refused with the usage line; the id passes `_reg_id_ok`.
+  # (`hibernate-refuses-a-dash-leading-id`): the server composes the id FIRST, so an id `--actor` would take `--surface`
+  # as its value, leaving the surface word as the id. A dash-led value gets the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   while (( $# )); do
