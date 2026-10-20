@@ -59,6 +59,7 @@ import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
+import { registerLinearRoutes } from './linear/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1728,6 +1729,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
+  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
