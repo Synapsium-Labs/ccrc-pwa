@@ -2260,6 +2260,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         passes. v0.0.379 (#818) to v0.0.383 (#830) followed, unapplied. STATUS: fleet and server v0.0.368, newest
         v0.0.383, stable v0.0.328, intent dev/auto=off, backups fleet 196M/server 3203M, disk free fleet 207G/work
         volume 104G/server 29G, no anomalies.
+      - 2026-10-20 00:55: v0.0.384 (#834) to v0.0.386 (#857) followed, unapplied. STATUS: fleet and server
+        v0.0.368, newest v0.0.386, stable v0.0.328, intent dev/auto=off, backups fleet 196M/server 3203M, disk free
+        fleet 207G/work volume 99G/server 29G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
