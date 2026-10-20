@@ -24,6 +24,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { appFor, recorder, seedRow, ID_GATE_TOKEN } from './idGateFixture.js';
 import { absentField, unreadableField } from './ioDoubles.js';
 import * as registry from '../src/registry.js';
+import { parsedFile, symbolOf } from './scan/symbols.js';
+import { parseSource } from './scan/parse.js';
 
 vi.mock('../src/registry.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/registry.js')>();
@@ -157,5 +159,57 @@ describe('one read: on a listable registry each ladder calls readRegistryMeasure
         expect(readMeasuredSpy, 'one measured read').toHaveBeenCalledTimes(1);
       });
     }
+  }
+});
+
+// The spy rows above cannot see a raw `io.readdir` put back beside the measured
+// read: that listing never goes through the registry module. So each ladder's
+// calls are pinned too, keyed on the parser (D-6114's scan/symbols.ts), never on
+// source text: one `readRegistryMeasured(`, no `readdir(`, no `readRegistry(`.
+const ROUTES = 'server/src/coord/routes.ts';
+type Span = { start: number; end: number };
+/** The callee names called inside each ladder: `attributionVerdict` by its
+ *  symbol, each route by its own `app.post(<path>, …)` call. */
+const ladderCalls = (file: { calls: { callee: string; name: string | null; args: { kind: string; text: string }[];
+  start: number; end: number }[] }, attribution: Span | null): Record<string, string[]> => {
+  const route = (p: string): Span => {
+    const hits = file.calls.filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === p);
+    if (hits.length !== 1) throw new Error(`app.post('${p}') is registered ${hits.length} times`);
+    return hits[0]!;
+  };
+  const inside = (sp: Span): string[] =>
+    file.calls.filter((c) => c.start > sp.start && c.end <= sp.end && c.name !== null).map((c) => c.name!);
+  return {
+    mail: inside(route('/api/mail')),
+    ack: inside(route('/api/mail/:id/ack')),
+    ...(attribution ? { attribution: inside(attribution) } : {}),
+  };
+};
+const holdsOneRead = (names: string[]): void => {
+  expect(names.filter((n) => n === 'readRegistryMeasured'), 'one measured read').toHaveLength(1);
+  expect(names, 'a raw listing of the registry is back in this ladder').not.toContain('readdir');
+  expect(names, 'the wrapper is back in this ladder').not.toContain('readRegistry');
+};
+
+describe('one read, pinned on the parse: no ladder lists the registry beside its measured read (D-5863)', () => {
+  it('CONTROL (fixture): a raw readdir beside the measured read is caught', () => {
+    const src = [
+      "app.post('/api/mail', async () => {",
+      '  const reg = await readRegistryMeasured(io, cfg);',
+      '  const names = await deps.io.readdir(deps.cfg.registryDir);',
+      '});',
+      "app.post('/api/mail/:id/ack', async () => { await readRegistryMeasured(io, cfg); });",
+    ].join('\n');
+    const calls = ladderCalls(parseSource(src, 'fixture.ts'), null);
+    expect(() => holdsOneRead(calls.mail!)).toThrow(/raw listing/);
+    holdsOneRead(calls.ack!);
+  });
+
+  const calls = (): Record<string, string[]> =>
+    ladderCalls(parsedFile(ROUTES), symbolOf(ROUTES, 'registerCoordRoutes.attributionVerdict'));
+  for (const route of ['attribution', 'mail', 'ack'] as const) {
+    it(`${route}: one readRegistryMeasured(, no readdir( and no readRegistry(`, () => {
+      holdsOneRead(calls()[route]!);
+    });
   }
 });
