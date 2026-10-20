@@ -18320,3 +18320,17 @@ W2's `advance-plan` and `advance-commit` would then canary and re-pin that class
 The fix: for a pinned class, `chooseCandidate` takes the pin's family, and the stored family decides only for an empty class, which is what it exists for (spec §2.2 Seeding). `revertOp` also writes the restored pin's family, so the file stays true for every reader. W4 Task 18's family readback reads the pin's family the same way.
 
 Cost if wrong: an operator who meant a pinned class to follow another family must re-pin it there by hand.
+
+### D-6067 — every hand writer reports a recovered automatic move, and the hand verb sends its push
+
+Where: Task 9 (`advanceForWrite`, `recoveredField`, `beginHandMove`, `holdOp`, `revertOp`, set-class in `main`) and Task 11 (the hand-verb arms in `ccd/ccrc`). The coordinator issued it on 2026-10-20, while executing W2.
+
+**The gap it closes.** D-5216 has `advance-backfill`'s and `advance-commit`'s answers carry `recoveredMove`, reported by the refresh step. W1's hand writers (hand `set-class`, `hold`, `release`, `revert`) call the same loader and settle a crashed automatic intent in their own write, but they discarded the settled move. So when a hand verb ran first after a crash, it recorded the advance and no push ever went out.
+
+**What changes.**
+- `advanceForWrite`, the one loader every writer uses, builds the settled-move report itself. Its `recovered` now means a landed automatic advance only; W1 read it as either intent shape.
+- Every hand writer's answer carries `recoveredMove` when it recorded one, including a refusal after its first write: that writer did record the move.
+- `ccd/ccrc`'s hand-verb arms send the same push line the refresh step sends for a recovered move.
+- The plan text's `settleForWrite` is this loader; no separate function exists.
+
+**Cost if wrong.** A push from a hand verb in the rare case it runs first after a crashed advance. A move whose final history write fails can still be reported twice, which D-5216 accepts ("never zero pushes" over "never two").
