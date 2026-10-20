@@ -6415,10 +6415,15 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # exactly as the other three slugs do, no more contrived. Unlinking a lock file while
 # another process holds it is exactly how two processes come to hold "the
 # lock" on two different inodes — reopening the double compare-and-set this
-# branch's lock migration closed.
+# branch's lock migration closed. A sixth, D-5884 (#128): project `.ignored`
+# + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
+# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
+# its one retry. Unlinking that one costs nothing a lock protects: it only
+# lowers contention and is never a gate, so two retries holding two inodes is
+# two retries running at once, each with every refusal intact.
 #
-# NOT reachable this way, and this set IS the boundary — TWELVE dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these seven are
+# NOT reachable this way, and this set IS the boundary — THIRTEEN dot-prefixed
+# artifacts live under `$REG`; the six above are reachable, these seven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
