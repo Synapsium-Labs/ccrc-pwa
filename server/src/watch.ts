@@ -2312,7 +2312,6 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
-        readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         startedAt: this.stopDoneStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {

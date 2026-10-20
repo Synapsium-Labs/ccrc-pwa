@@ -5,6 +5,7 @@ import { REFINED } from '@ccrc/ui';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { FleetColumn } from '../../screens/FleetColumn';
 import type { SkinSet } from '../types';
+import { SessionChrome } from './SessionChrome';
 import './refined.css';
 
 export const REFINED_SET: SkinSet = {
@@ -14,7 +15,8 @@ export const REFINED_SET: SkinSet = {
   Rail: null,
   Nav: FleetColumn,
   FleetList: null,
-  SessionChrome: null,
+  // W2 Task S7c (D-5471): the short header and its one chip rail.
+  SessionChrome,
   TranscriptRow: null,
   Inspector: null,
   StatusBar: null,

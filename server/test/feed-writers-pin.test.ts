@@ -1075,11 +1075,14 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
         lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
           last: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
-          openWorkers: [], openClaimants: ['project-a-coordinator'] }),
+          openWorkers: [], openClaimants: ['project-a-coordinator'],
+          // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
+          lastPlaced: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
+            program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
+          openPlacedWorkers: [] }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
-        runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
       },
       runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
@@ -1090,14 +1093,14 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       turnVerdict: async () => 'idle',
       mark: async () => ({ ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR,
         restartAt: null }),
-      readAfterHours: async () => null,
       rowAtAct: async () => ({ ok: true, row: row as never }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
-    const out = await stopDonePass(deps, { retryAt: new Map() }, [row], [record], []);
+    // D-6091: a lane that already wrote its mail-only zero, so the one row here is the sleep's.
+    const out = await stopDonePass(deps, { retryAt: new Map(), mailOnly: 0 }, [row], [record], []);
     return { rec, out, argv };
   };
 

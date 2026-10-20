@@ -456,6 +456,8 @@ cmd_enable	C1
 cmd_stop	C4
 _hib_refuse	C4
 _hib_wake_clear	C4
+_hold_is_programme	C4
+_hib_hold_ok	C4
 cmd_hibernate	C4
 cmd_forget	C4
 cmd_ls	C1

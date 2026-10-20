@@ -28,6 +28,10 @@ function isPage(r: void | CommandPage): r is CommandPage {
   return typeof r === 'object' && r !== null;
 }
 
+/** The palette's chord, which the layer owns (`useShortcuts` binds it). The shortcut sheet lists it, and the composer's key
+ *  hints show it (W2 Task S7c). */
+export const PALETTE_KEYS: readonly string[] = [COMMAND_KEY, 'K'];
+
 /** What the layer needs from the shell: the fleet flows' New session door
  *  (`useFleetFlows().openNewSession`), handed down by `app.tsx`. */
 export interface CommandLayerProps {
@@ -179,7 +183,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // The sheet lists what `useShortcuts` binds: the registry's own keys, plus
   // the one chord the layer itself owns.
   const rows: { id: string; title: string; keys: readonly string[] }[] = [
-    { id: 'palette', title: 'Open the command palette', keys: [COMMAND_KEY, 'K'] },
+    { id: 'palette', title: 'Open the command palette', keys: PALETTE_KEYS },
     ...commands.flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
   ];
 

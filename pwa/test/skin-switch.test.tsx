@@ -444,3 +444,20 @@ describe('SWITCH_CLOSES is exact', () => {
     expect(Object.keys(SWITCH_CLOSES).filter((k) => !closed.includes(k)), 'registered, yet survived').toEqual([]);
   });
 });
+
+// W2 Task S7c (D-5471): SessionScreen mounts the skin's own chrome. Refined's is the short header (one chip rail, no
+// esc cap on a coarse pointer); Instrument's set places none, so the shared header comes back. Red when SessionScreen
+// ignores the set's `SessionChrome` and always draws the shared header.
+describe("the session screen mounts the skin's chrome", () => {
+  it("Refined's short header, then the shared one after a switch, with the same composer", () => {
+    stubPointer(false);
+    openSession(S, 'busy');
+    expect(document.querySelectorAll('.ref-chip-rail')).toHaveLength(1);
+    expect(document.querySelector('.keycap--esc')).toBeNull();
+    const box = screen.getByRole('textbox', { name: 'Message' });
+    toInstrument();
+    expect(document.querySelectorAll('.ref-chip-rail')).toHaveLength(0);
+    expect(document.querySelector('.chat-title-wrap')).not.toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(box);
+  });
+});

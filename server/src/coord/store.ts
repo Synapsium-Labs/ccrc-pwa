@@ -833,7 +833,13 @@ export type CoordPlacementStampsResult =
 /** `lastRunBySession`'s answer (workspace lifecycle spec §5.1): each asked session's newest run as `sessionId`,
  *  the asked sessions a non-terminal run names as `sessionId`, and every `claimedBy` of a non-terminal run. */
 export type LastRunsResult =
-  | { ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[] }
+  | {
+    ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[];
+    /** D-6091 (fleet capacity W1-1), additive: each asked session's newest run whose state is not `planned` (a wave
+     *  not yet dispatched uses nothing), and the asked sessions a run outside the terminal set AND outside `planned`
+     *  names. The run-done policy's reads; `last` and `openWorkers` keep their meaning for `fleet.ts` and `watch.ts`. */
+    lastPlaced: LastRun[]; openPlacedWorkers: string[];
+  }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -3802,8 +3808,8 @@ export class CoordStore {
    * That read cannot answer this: it filters to `coordProject IS NOT NULL` and carries no state.
    * `openRunsForSession` is per-session and reserved for destructive decision points.
    *
-   * Three statements, one synchronous call: nothing else writes `coord.db` between them. The claimant set is
-   * `openCoordinatorIds`' own read, reused rather than respelled.
+   * Five statements (the two placed reads are D-6091's), one synchronous call: nothing else writes `coord.db` between
+   * them. The claimant set is `openCoordinatorIds`' own read, reused rather than respelled.
    *
    * `id` rides CAST to TEXT and proven, ALL-OR-FAILURE (D-2545's rule, `openRunsForSession`'s): a partial list
    * is how a session's newest run could silently read as an older, terminal one. `closedAt` is proven PER ROW
@@ -3811,31 +3817,47 @@ export class CoordStore {
    * reads as doubt, and costs no other row its answer.
    */
   lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
-    if (sessionIds.length === 0) return { ok: true, last: [], openWorkers: [], openClaimants: [] };
-    const ph = placeholders(sessionIds.length);
-    const rows = this.db.prepare(
-      'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
-      'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
-      'LEFT JOIN programs p ON p.slug = r.program ' +
-      `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) GROUP BY sessionId) ORDER BY r.id`,
-    ).all(...sessionIds) as unknown as {
-      idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
-      claimedBy: string | null; closedAtText: string | null;
-    }[];
-    const last: LastRun[] = [];
-    for (const r of rows) {
-      const id = persistedInt(r.idText, 'run id');
-      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
-      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
-      last.push({
-        sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
-        programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
-      });
+    if (sessionIds.length === 0) {
+      return { ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [] };
     }
-    const openWorkers = (this.db.prepare(
-      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
-    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
-    return { ok: true, last, openWorkers, openClaimants: this.openCoordinatorIds() };
+    const ph = placeholders(sessionIds.length);
+    const planned: RunState = 'planned';
+    // `placedOnly` adds ONE clause to the newest-run subquery; the statement is otherwise the one `last` has always read.
+    const newest = (placedOnly: boolean): LastRun[] | { detail: string } => {
+      const rows = this.db.prepare(
+        'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
+        'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
+        'LEFT JOIN programs p ON p.slug = r.program ' +
+        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph})${placedOnly ? ' AND state <> ?' : ''} ` +
+        'GROUP BY sessionId) ORDER BY r.id',
+      ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as unknown as {
+        idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
+        claimedBy: string | null; closedAtText: string | null;
+      }[];
+      const out: LastRun[] = [];
+      for (const r of rows) {
+        const id = persistedInt(r.idText, 'run id');
+        if (!id.ok) return { detail: id.detail };
+        const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+        out.push({
+          sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
+          programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
+        });
+      }
+      return out;
+    };
+    const last = newest(false);
+    if (!Array.isArray(last)) return { ok: false, kind: 'run-unreadable', detail: last.detail };
+    const lastPlaced = newest(true);
+    if (!Array.isArray(lastPlaced)) return { ok: false, kind: 'run-unreadable', detail: lastPlaced.detail };
+    const open = (placedOnly: boolean): string[] => (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}` +
+      (placedOnly ? ' AND state <> ?' : ''),
+    ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as { sessionId: string }[]).map((r) => r.sessionId);
+    return {
+      ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
+      lastPlaced, openPlacedWorkers: open(true),
+    };
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
