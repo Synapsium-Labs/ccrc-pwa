@@ -27,6 +27,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -219,6 +220,9 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
 // the other `tests-only` lane, is pinned the same way.
 const TICK_WATCH_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/watch.ts');
 const TICK_HEAD = 'async tick(): Promise<void> {';
+/** `FleetWatcher.tick`'s source, keyed on its symbol (D-6114, scan/symbols.ts): it follows the method wherever it
+ *  moves, and a renamed or missing method throws by name. */
+const tickSource = (): string => sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.tick');
 const TICK_STRINGS = /'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g;
 /** Code only, every string's contents blanked: a brace inside a comment or a string cannot end a body. */
 const tickCode = (src: string): string => codeOnly(src).replace(TICK_STRINGS, (m) => `${m[0]}${m[0]}`);
@@ -247,13 +251,13 @@ describe('tick hands its records to the lanes that would otherwise read the regi
   });
 
   it('tick() passes its records to sweepHookStates(', () => {
-    const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+    const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
       .toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
   });
 
   it('tick() passes its records to detectDialogs(', () => {
-    const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+    const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
       .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
   });
@@ -264,7 +268,7 @@ describe('tick hands its records to the lanes that would otherwise read the regi
 // lane cases (`tick-refused-lanes.test.ts`) hand a lane the set directly, so a tick that stopped handing it, or handed
 // an empty set, would leave every one of them green. These pins see the hand-off itself.
 describe('tick hands this tick\'s refused set to the lanes that hold a refused id (tick-lanes-hold-a-refused-id)', () => {
-  const tickBody = (): string => tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+  const tickBody = (): string => tickBodyOf(tickCode(tickSource()), TICK_HEAD);
 
   it('tick() hands registryRead.refused to sweepStalls( on its StallTick', () => {
     expect(tickBody(), 'tick no longer hands the stall lane its refused set: a refused worker or claimant would read as absent')
