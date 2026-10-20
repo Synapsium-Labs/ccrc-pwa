@@ -8,9 +8,9 @@
 
 **Issues:** #752 (epic), #760 (D7), #761 (D8). **Ledger:** `docs/superpowers/programs/coordinator-durability.md`.
 
-**Inputs.** The consolidation spec (`2026-10-19-ccrc-consolidation-wave-design.md`, rev 2.1, on `main` since #819; rev 2 approved by the operator 2026-10-19) and its W1a plan (`2026-10-19-consolidation-w1a-switches-notify.md`, on `main`, Tasks C1c and C1f); `CLAUDE.md`'s architecture direction (#818: one owner per job): C5, C6; K5, K6, K10, K11, K12; waves W1a (§5.3), W1b (§5.4), W3 (§5.6), W6 (§5.9) and its rules (§5.1). Coordinator-first routing (D-5300's digest; `coord/heldFor.ts`). The stall watch (`coord/stall.ts`). The skins W3 screens plan's Tasks P4a (`inboxTarget.ts`, a record's target; merged as #701) and P7 (not merged) (`DigestScreen.tsx` on the scaffold). D1's open PR #821 (#754): the park columns on `mail_deliveries`, the `'parked'` gate and its once-per-park push.
+**Inputs.** The consolidation spec (`2026-10-19-ccrc-consolidation-wave-design.md`, rev 2.1, on `main` since #819; rev 2 approved by the operator 2026-10-19) and its W1a plan (`2026-10-19-consolidation-w1a-switches-notify.md`, on `main`, Tasks C1c and C1f); `CLAUDE.md`'s architecture direction (#818: one owner per job): C5, C6; K5, K6, K10, K11, K12; waves W1a (§5.3), W1b (§5.4), W3 (§5.6), W6 (§5.9) and its rules (§5.1). Coordinator-first routing (D-5300's digest; `coord/heldFor.ts`). The stall watch (`coord/stall.ts`). The skins W3 screens plan's Tasks P4a (`inboxTarget.ts`, a record's target; merged as #701) and P7 (not merged) (`DigestScreen.tsx` on the scaffold). D1's open PR #853 (#754): the park columns on `mail_deliveries`, the `'parked'` gate and its once-per-park push.
 
-**Base:** `origin/main` `643c76cd4` (rev 1 used `0843cbc9a`; the code between them changes only the PWA settings screen, so every anchor holds). Anchors: `sweepDigest` `server/src/watch.ts` ≈:8891; `sweepAsks` ≈:8649; `heldAsks` ≈:796; `primed` ≈:1327; `hold()` ≈:9093; `LEDGER_RECONCILE_SWEEP_MS` ≈:414; `buildDigest` `server/src/coord/digest.ts` ≈:106; `parentOfSession` `server/src/coord/store.ts` ≈:6940; `reclaimProgram` ≈:1975; `openRun`'s `attribution` rung `server/src/coord/openRun.ts` ≈:300; `askNotifyAt` `server/src/askwindow.ts` ≈:54; `DigestAnswer` `shared/api.ts` ≈:11578; the `asks` table `server/src/coord/schema.ts` ≈:814; `COORD_SCHEMA_VERSION` ≈:1722 (26 migrations on the base; #821 takes 27; re-measure the slot).
+**Base:** `origin/main` `643c76cd4` (rev 1 used `0843cbc9a`; the code between them changes only the PWA settings screen, so every anchor holds). Anchors: `sweepDigest` `server/src/watch.ts` ≈:8891; `sweepAsks` ≈:8649; `heldAsks` ≈:796; `primed` ≈:1327; `hold()` ≈:9093; `LEDGER_RECONCILE_SWEEP_MS` ≈:414; `buildDigest` `server/src/coord/digest.ts` ≈:106; `parentOfSession` `server/src/coord/store.ts` ≈:6940; `reclaimProgram` ≈:1975; `openRun`'s `attribution` rung `server/src/coord/openRun.ts` ≈:300; `askNotifyAt` `server/src/askwindow.ts` ≈:54; `DigestAnswer` `shared/api.ts` ≈:11578; the `asks` table `server/src/coord/schema.ts` ≈:814; `COORD_SCHEMA_VERSION` ≈:1722 (26 migrations on the base; #853 takes 27; re-measure the slot).
 
 **Deploy class.** DT1 to DT3, DT5 to DT7: server lane. DT4: PWA (served by the server). No fleet-box change, no `ccd` change, no restart of any session.
 
@@ -20,16 +20,16 @@
 
 ## Gates
 
-Measured on 2026-10-20 with `gh pr list -R Synapsium-Labs/ccrc-pwa --state open --json number,title,files` against `643c76cd4`. Open PRs touching this plan's files: **#821** (D1, #754: `server/src/watch.ts`, `server/src/coord/store.ts`, `server/src/coord/schema.ts` with migration 27, `shared/api.ts`), **#833** (`server/src/coord/store.ts`, the halting predicate's parity: line-disjoint from DT1's, DT2's and DT5's new read methods; re-check at Step 0) and **#737** (`server/test/single-definition.test.ts`). #813 (`openRun.ts`) merged as `ee6154dc7`. Neither W1a's C1c nor W1b is on `main` yet. No open PR touches `server/src/coord/digest.ts`, `server/src/coord/reclaim.ts`, `server/src/coord/routes.ts`, `server/src/coord/openRun.ts` or `pwa/src/screens/DigestScreen.tsx`. Re-measure at each task's Step 0.
+Measured on 2026-10-20 with `gh pr list -R Synapsium-Labs/ccrc-pwa --state open --json number,title,files` against `4c3f5ac95`. Open PRs touching this plan's files: **#853** (D1, #754, the single-commit recut of the closed #821 with identical content: `server/src/watch.ts`, `server/src/coord/store.ts`, `server/src/coord/schema.ts` with migration 27, `shared/api.ts`); **#846** (the outward-edge import drain: `server/src/coord/digest.ts`, `server/src/coord/routes.ts`, `server/src/coord/store.ts`, `server/src/watch.ts`, `server/test/single-definition.test.ts`; import lines and comments only, so DT1 to DT5 rebase onto it, rule 6); **#850** (`server/src/coord/schema.ts` with its own migration, `server/src/coord/routes.ts`, `shared/api.ts`, `server/test/single-definition.test.ts`: DT2's and DT6's migration slot is re-measured after it); **#848** (`server/src/coord/routes.ts`, refusal codes: line-disjoint from DT7's `openRun` refusal; re-check); **#832** (`server/src/watch.ts`, the delegation flush: line-disjoint from DT2's lane and DT5's `detectDialogs`; re-check); and **#737** (`server/test/single-definition.test.ts`). #833 (`store.ts`) merged as `4c3f5ac95`; #813 (`openRun.ts`) merged as `ee6154dc7`. Neither W1a's C1c nor W1b is on `main` yet. No open PR touches `server/src/coord/reclaim.ts`, `server/src/coord/openRun.ts` or `pwa/src/screens/DigestScreen.tsx`. Re-measure at each task's Step 0.
 
 | Task | Open PRs | Consolidation wave | Other |
 |---|---|---|---|
 | DT0 docs (this plan, the spec, the ledger) | — | — | — |
-| DT1 drift decider | **#821 merged** (its park columns are DT1's input); #737 only if DT1 edits `single-definition.test.ts` (it should not) | — | — |
-| DT2 reconciler lane, table, pushes | #821 merged (migration slot after 27) | **W1a's C1c merged** (the `notify` funnel; not C1f, not OA-C3); **W1b merged** (`LANE_SCHEDULE`) | DT1 |
+| DT1 drift decider | **#853 merged** (its park columns are DT1's input); #737 only if DT1 edits `single-definition.test.ts` (it should not) | — | — |
+| DT2 reconciler lane, table, pushes | #853 merged (migration slot after 27, and after #850's if it lands first) | **W1a's C1c merged** (the `notify` funnel; not C1f, not OA-C3); **W1b merged** (`LANE_SCHEDULE`) | DT1 |
 | DT3 digest, server | — | — | DT2 |
 | DT4 digest, PWA | — | — | DT3; skins W3 **P7** merged (P4a merged as #701) |
-| DT5 held questions across a restart | rule 6 against #821 on `watch.ts` (line-disjoint: #821 edits the mail lane, DT5 `detectDialogs` and `sweepApprovals`; re-check at Step 0); #833 line-disjoint on `store.ts` | none; a W3 series open on `watch.ts` rebases onto DT5 (rule 6) | — |
+| DT5 held questions across a restart | rule 6 against #853 on `watch.ts` (line-disjoint: #853 edits the mail lane, DT5 `detectDialogs` and `sweepApprovals`; re-check at Step 0); #832 line-disjoint on `watch.ts`; #846 imports and comments only (rule 6) | none; a W3 series open on `watch.ts` rebases onto DT5 (rule 6) | — |
 | DT6 claimant uuid column | — (#813 merged) | **W6 merged** | DT2 (for the `claimant-revived` kind) |
 | DT7 `claimant-revived` refinement, `openRun` only | — | W6 | DT6; **the 30-day rule** with its floor (§DT7) |
 
@@ -37,7 +37,7 @@ Measured on 2026-10-20 with `gh pr list -R Synapsium-Labs/ccrc-pwa --state open 
 
 ```
 DT0 (docs)
-[#821] ── DT1 (decider) ──[W1a C1c, W1b]── DT2 (lane, table, pushes) ── DT3 (digest server) ──[skins P7]── DT4 (digest PWA)
+[#853] ── DT1 (decider) ──[W1a C1c, W1b]── DT2 (lane, table, pushes) ── DT3 (digest server) ──[skins P7]── DT4 (digest PWA)
 DT5 (held questions across a restart)                      (independent)
 [W6] ── DT6 (claimant uuid; the revived count) ──[floor of 5, then 30 days, ≥ 1 finding]── DT7 (openRun refinement)   or close #761's remainder
 ```
@@ -76,9 +76,9 @@ DT5 (held questions across a restart)                      (independent)
 
 - [ ] **Step 1: Verify.** From `server/`: `git fetch -q origin main`, then `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`, each alone.
 
-### Task DT1: the drift decider (D-5921; spec §4.1, §4.2) — GATED: after #821
+### Task DT1: the drift decider (D-5921; spec §4.1, §4.2) — GATED: after #853
 
-**Routing:** band 2 (a pure decider over fixtures, fully specified). **Lane:** server. **Needs:** #821 (D1) merged: `mail-parked` and `mail-held` read its park columns.
+**Routing:** band 2 (a pure decider over fixtures, fully specified). **Lane:** server. **Needs:** #853 (D1) merged: `mail-parked` and `mail-held` read its park columns.
 
 **Files:**
 - Modify `shared/api.ts`: `DRIFT_KIND_MAP` (`run-quiet`, `claimant-gone`, `mail-parked`, `mail-held`, `parent-mismatch`, `review-waiting`, `question-orphaned`), `DriftKind`, `DRIFT_KINDS = Object.keys(DRIFT_KIND_MAP)`, `isDriftKind`, and `DriftFinding { key, kind, subject, detail, factAt, runId, sessionId }`.
@@ -86,7 +86,7 @@ DT5 (held questions across a restart)                      (independent)
 - Modify `server/src/coord/store.ts`: the read methods the watcher needs, each a `{ ok: true, rows } | { ok: false, detail }` union (no overloaded null): `driftOpenRuns()`, `driftOutstandingDeliveries()`, `driftAwaitingReview()`, `driftHeldQuestions()`.
 - Create `server/test/drift-findings.test.ts`.
 
-- [ ] **Step 0: Re-ground** #821's merged column names and its `'parked'` gate word; the `ClaimantVerdict` shape; the `run_events` writers' `causedBy` values (`git grep -n "recordRunEvent(" server/src`).
+- [ ] **Step 0: Re-ground** #853's merged column names and its `'parked'` gate word; the `ClaimantVerdict` shape; the `run_events` writers' `causedBy` values (`git grep -n "recordRunEvent(" server/src`).
 - [ ] **Step 1: Red.** Per kind, "fires one past its threshold" and "does not fire one under it"; "an `unmeasurable` verdict is no `claimant-gone`"; "each dead `cause` (absent, stopped, orphan, never-started) fires and names itself"; "a swapped session (same id, same uuid, alive) is no finding of any kind"; "stall observation rows and operator rows do not reset `run-quiet`"; "`review-waiting` measures from the transition, and a claimant mail naming the run after it clears it"; "a parked delivery is `mail-parked` and never also `mail-held`"; "a terminal `rejected` delivery is no finding"; "`parent-mismatch` names the worker, not the run"; "a `planned` run is no finding"; "an `awaiting-review` run is `review-waiting` only"; "a run-kind finding carries its `runId`, and `claimant-gone` the programme's newest open run"; "`drift.ts` imports no IO module" (an import scan, as the ring suites do); "a `held` ask fires past `askNotifyAt(at) + DRIFT_ASK_MARGIN_MS` and not before"; "an `answering` ask inside `ASK_ANSWERING_MAX_MS` past its margin is no finding"; "keys are stable across two calls on the same input"; "`factAt` is the fact's own time where it has one"; and the investigation's cases as fixtures: "a weeks-old open run", "an archived claimant" (whatever `measureClaimant` answers for it), "an absent claimant", "a 27 h held delivery", "a parked delivery to a live worker", "the reused-name parent mismatch (#746)", "an 18-day awaiting-review run", "a held ask after a restart".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
@@ -111,7 +111,7 @@ DT5 (held questions across a restart)                      (independent)
 **Routing:** band 3, native (a new lane on the watcher; push volume to the operator). **Lane:** server. **Needs:** DT1; the consolidation's W1a Task C1c merged (the `notify(event, mode)` funnel; C1f and OA-C3 are **not** needed); W1b merged (`LANE_SCHEDULE`, `runLane`).
 
 **Files:**
-- Modify `server/src/coord/schema.ts`: one additive migration (the slot after #821's 27, re-measured), `drift_findings` with `pushedAt` and `pushedVia` (spec §4.3), `drift_findings_open` and `drift_findings_pushed`.
+- Modify `server/src/coord/schema.ts`: one additive migration (the slot after #853's 27, re-measured), `drift_findings` with `pushedAt` and `pushedVia` (spec §4.3), `drift_findings_open` and `drift_findings_pushed`.
 - Modify `server/src/coord/store.ts`: `recordDriftPass(findings, now)` (one transaction: upsert keeping `firstSeenAt` and `pushedAt`, re-open a returning key, clear the rest, prune cleared rows older than 30 days); `markDriftPushed(keys, now, via: 'item' | 'summary')` (compare-and-set on `pushedAt IS NULL`, writes `pushedVia`, returns the keys it changed); `openDriftFindings()`; `driftFindingsOpenAt(ms)`; `driftPushesOnDay(dayStartMs)` (the daily cap's count: `pushedVia = 'item'` only).
 - Modify `server/src/watch.ts`: `sweepDrift(records, names)`, one `LANE_SCHEDULE` row at `DRIFT_SWEEP_MS = 900_000`: gather `DriftInput`, call `driftFindings`, `recordDriftPass`; then choose the pushes: findings with `pushedAt` NULL whose age passes `DRIFT_PUSH_AGE_MS`, excluding `question-orphaned`, a subject with a stall operator-rung observation whose `parseStallDetail` mode is `'live'` (a `'shadow'` one never suppresses), a `mail-parked` delivery with `parkEscalatedAt` set, and `claimant-gone` while `deadCoordinatorLaneArmed(names)` reads true (spec §4.4); on a pass that found the table empty, one summary push (`url` the day's digest path) and every such finding marked with `via 'summary'`; otherwise at most 3 this pass and `12 - driftPushesOnDay(today)` today. For each chosen key: `markDriftPushed([key], now, 'item')`, and only when it returns the key, `notify({ kind: 'coord', sessionId: <the session kind's id, else ''>, runId: <the run kind's id, else null>, … }, 'push', { url })`, `url` `/runs` for a run kind and `/s/<id>` for a session kind. Never throws: one bad read warns once and the next pass retries.
 - Create `server/test/drift-lane.test.ts`.
@@ -187,7 +187,7 @@ DT5 (held questions across a restart)                      (independent)
 
 ### Task DT5: held questions and approvals survive a restart (D-5925; spec §5)
 
-**Routing:** band 3, native (the ask lane's deferred push; coordinator-first). **Lane:** server. **Needs:** nothing; rule 6 against #821 on `watch.ts` (re-check line ranges at Step 0).
+**Routing:** band 3, native (the ask lane's deferred push; coordinator-first). **Lane:** server. **Needs:** nothing; rule 6 against #853 on `watch.ts` (re-check line ranges at Step 0).
 
 **Files:**
 - Modify `server/src/coord/store.ts`: `heldQuestionRows()` over `asks` in `held` or `answering`, and `heldApprovalRowsByChild()` over main-thread `approvals` rows in state `held` **only** (never `released`: `lapseApproval` records no time or reason, so a pre-restart lapse cannot be told apart), each a result union.
@@ -280,7 +280,7 @@ Each task is a plain revert. DT2's and DT6's migrations are additive: a revert l
 This programme's block is D-5920 to 5929. This plan defines D-5920 to D-5927, one per task. 5928 and 5929 are issued and unused, written without the prefix so they seed no floor.
 
 - **D-5920** — `durability-ledger-order` (Task DT0; spec §3): the epic's build order is D1 → D3 → D2 → D4 → D5, then D7; D6 and D8 are recorded as inputs to the consolidation's W6 `RunBinding`, not built beside it; arming the `busy` gate (D2) and the dead-coordinator lane (D6) are the operator's acts after their shadow reviews.
-- **D-5921** — `drift-decider-pure` (Task DT1; spec §4.1, §4.2): drift is decided by one pure L1 function over plain rows with seven kinds in one L0 map; liveness is the reclaim ladder's verdict, typed through `deadCoordinator.ts`'s L1 `ClaimantReading` so the decider imports no IO, and `unmeasurable` is never a `claimant-gone`; `run-quiet` covers active runs only; the mail kinds read D1's park columns (#821).
+- **D-5921** — `drift-decider-pure` (Task DT1; spec §4.1, §4.2): drift is decided by one pure L1 function over plain rows with seven kinds in one L0 map; liveness is the reclaim ladder's verdict, typed through `deadCoordinator.ts`'s L1 `ClaimantReading` so the decider imports no IO, and `unmeasurable` is never a `claimant-gone`; `run-quiet` covers active runs only; the mail kinds read D1's park columns (#853).
 - **D-5922** — `drift-lane-records-and-pushes-once` (Task DT2; spec §4.1, §4.3 to §4.5): a separate 15-minute lane, not a stall arm, records findings in `drift_findings` (cleared only by re-measurement), and pushes once per finding past 24 h, once-only held by its own `pushedAt` column and the push sent through W1a's `notify` funnel (C1c), bounded by a first-pass summary, 3 per pass and 12 per UTC day counted from the table, the daily count over per-item pushes only (`pushedVia`), with live-stall-overlap, armed-dead-coordinator and D1-escalation suppression, and a `url` (and a run kind's `runId`) on every push; it runs as one W1b `LANE_SCHEDULE` row and acts through no door.
 - **D-5923** — `digest-drift-additive` (Task DT3; spec §4.6): the digest carries the findings open at its window's end as an additive `drift` field; the day's claim and `count` are unchanged.
 - **D-5924** — `digest-out-of-step-section` (Task DT4; spec §4.6): the digest screen's "Out of step" rows are glances that open their target through the skins plan's P4a model (`/runs` or `/s/<id>`), never a sheet directly and never a new route.
@@ -334,3 +334,7 @@ A second review of rev 1 (`1e9199eb9`, PR #827), applied in rev 2. Each finding 
 | 10 | low | Stale citations: base, the consolidation spec and W1a plan now on `main`, #833 missing, PR already open | `git log origin/main`; `gh pr view 833`: `server/src/coord/store.ts` | Applied: rebased on `643c76cd4`; consolidation spec and W1a plan cited on `main` (#819); `CLAUDE.md` #818 cited; #833 in the gates (line-disjoint); "not pushed" no longer claimed |
 | 11 | low | One dead claimant gave two operator notices (the dead-coordinator lane and `claimant-gone`) | `deadCoordinator.ts` ≈:18-23: in shadow the lane writes a feed row and an attention entry, no push; `deadCoordinatorLaneArmed` ≈:136 | Applied, a rule chosen: while the lane is shadow both are kept (its record is OA-D6's evidence, the drift push is the only ping); once armed, `claimant-gone` is listed, not pushed; tested both ways (spec §4.4; DT2) |
 | 12 | low | The 30-day rule could close #761 on a measurement blind to pre-DT6 rows | rows before DT6 read `claimedByUuid` NULL | Applied: the 30 days start once 5 open programmes carry a stored uuid; the denominator is recorded beside the count; floor never reached keeps the remainder open (spec §6.5; DT6, DT7) |
+
+### Rev 2.1
+
+A third pass over rev 2 found every finding of the second review already applied (each row above re-checked in the text). Only the gates moved: `main` advanced to `4c3f5ac95` (merged in, no conflict, no `D-5920` to `D-5929` collision); #821 closed and was recut unchanged as #853, so every live reference names #853; #833 merged; #846 (imports and comments only), #850 (a migration of its own), #848 and #832 are added to the gates table, each re-measured at its task's Step 0.
