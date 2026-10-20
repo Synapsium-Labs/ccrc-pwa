@@ -171,7 +171,7 @@ leaves a human-named workspace open to the sweep.
 
 Both flags are advertised in `ccd caps` (`ws-title-v1`, `ws-wrapper-v1`). **The server sends neither to a box that
 does not advertise them**, and `wsAddNamed` places both flags **before** the project, as `--no-rc` and `--route`
-already lead. An older ccd's strip loop binds an unknown token as a positional (D-6113): leading, `--title` lands
+already lead. An older ccd's strip loop binds an unknown token as a positional (D-6164): leading, `--title` lands
 in the project or slug slot and is refused by `_ws_project_valid` or `_ws_slug_valid`; trailing, after
 `project slug`, it would be dropped unread and the workspace created on the least-loaded lane with exit 0. So the
 caps gate is the control, and the leading position is the defence behind it.

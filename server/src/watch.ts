@@ -3741,7 +3741,7 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
-      // A HUMAN'S NAME IS FINAL (named workspaces S2, D-6112). A workspace a human
+      // A HUMAN'S NAME IS FINAL (named workspaces S2, D-6163). A workspace a human
       // named — `ccd ws-add --title`, `ccd ws-title` — keeps its name. Its
       // branch is still the birth branch `ws/<slug>`, so nothing above tells it
       // from an auto-named one, and `sessionLabel` reads `branch` before

@@ -177,7 +177,7 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(SWAP_BUSY_CAP);
     // Named workspaces (S1): the two `ws-add` flags. The server gates `--title` and `--wrapper` on these and sends
-    // neither to a box that does not list them (an older ccd binds an unknown token as a positional, D-6113); this
+    // neither to a box that does not list them (an older ccd binds an unknown token as a positional, D-6164); this
     // holds the string here equal to both the constant the route will read and ccd's own `echo`.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_TITLE_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_WRAPPER_CAP);

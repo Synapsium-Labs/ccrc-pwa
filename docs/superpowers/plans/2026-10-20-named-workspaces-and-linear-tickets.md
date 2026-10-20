@@ -5,7 +5,7 @@
 
 **Base:** `origin/main` `63fc3152` (#940). **Branch:** `feat/named-workspaces`.
 
-**Deviation series:** D-6112..D-6113, minted by `POST /api/ledger/deviations` on 2026-10-20 (floor 6112 → 6114)
+**Deviation series:** D-6163..D-6164, minted by `POST /api/ledger/deviations` on 2026-10-21 (floor 6163 → 6165). They replace the pair first issued to this plan on 2026-10-20, which #1014 and #1019 defined on `main` before it landed; the branch renumbered rather than contest a merged tree.
 and defined below in the same act. A deviation found during execution is allocated the same way, never looked up.
 
 **Port source:** `feat/ticket-named-workspaces` (never merged). Read a file from it with
@@ -15,7 +15,7 @@ and defined below in the same act. A deviation found during execution is allocat
 the task it touches: B1 the public-tree scanner (constraint 5), B2 the post-worktree re-pick (S1), M1 the
 censuses (S1, S4b, S5, S9), M2 the registry census (S2), M3 `--wrapper`'s five gaps (S1, S8), M4 the key's
 posture and storage (S4b), M5 the lookup at create (S5), M6 title sanitising (S4/S5), M7 Rename's gate (S9),
-M8 D-6113's corrected claim, M9 `named` on dispatched workers (S1).
+M8 D-6164's corrected claim, M9 `named` on dispatched workers (S1).
 
 ## Global constraints (every task inherits these)
 
@@ -80,7 +80,7 @@ Files: `ccd/ccd` (`cmd_ws_add` ≈:6966, the no-placement refusal builder ≈:71
 Files: `server/src/registry.ts`, `server/src/watch.ts` (`sweepNames` ≈:3718), `server/test/name-sweep.test.ts`,
 `server/test/registry.test.ts`.
 
-1. **Red:** two rows in one sweep, one `named` → exactly one `ws-rename`, naming the auto row (D-6112). The doubt
+1. **Red:** two rows in one sweep, one `named` → exactly one `ws-rename`, naming the auto row (D-6163). The doubt
    arm: `named` listed but unreadable → named. An **empty** `named` file → named (presence is the signal, as
    `.hold`'s ruling at registry.ts ≈:139; `--clear` removes the file).
 2. Read `title` and `named` behind `names.includes(...) ? fieldMeasured(...) : Promise.resolve(null)` — the D-5347
@@ -206,12 +206,12 @@ Files: `ccd/ccd` (`cmd_ws_title`, `cmd_caps` verb list), `agent/src/whitelist.ts
 
 ## Deviations found
 
-- **D-6112** — `sweepNames` renames a workspace whose slug the operator chose. Its skip set
+- **D-6163** — `sweepNames` renames a workspace whose slug the operator chose. Its skip set
   (`server/src/watch.ts` ≈:3737–3827) excludes a row only for degraded identity, a main checkout, archival, an
   already-renamed branch, a hold or an open run; a slug passed to `ccd ws-add <project> <slug>` by hand still reads
   as the birth branch `ws/<slug>`, so the sweep overwrites it within one tick of its first ai-title. No registry
   field records that a human chose the name.
-- **D-6113** — `cmd_ws_add`'s strip loop binds any token it does not recognise as a positional (`ccd/ccd` ≈:7026),
+- **D-6164** — `cmd_ws_add`'s strip loop binds any token it does not recognise as a positional (`ccd/ccd` ≈:7026),
   and nothing reads a positional past the second. A leading unknown flag lands in the project or slug slot and is
   refused there; a **trailing** one, after `project slug`, is dropped unread and the workspace is created with
   exit 0 — on the least-loaded lane, if the dropped flag was the one choosing it. Callers therefore gate every new

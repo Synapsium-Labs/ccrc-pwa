@@ -149,7 +149,7 @@ export interface SessionRecord {
   held: string | null;
   /**
    * `$REG/<id>.named` — a human chose this workspace's name (`ccd ws-add --title`, `ccd ws-title`), so the name is a
-   * CHOICE and not a placeholder (D-6112). Written ONLY with a title: coordinator dispatch passes a slug too, and
+   * CHOICE and not a placeholder (D-6163). Written ONLY with a title: coordinator dispatch passes a slug too, and
    * keying on the slug would exempt every dispatched worker from the sweep for life. An auto-named workspace has no
    * file at all.
    *
@@ -841,7 +841,7 @@ async function buildRecord(
     names.includes(`${id}.childshell`) ? fieldMeasured(io, cfg.registryDir, id, 'childshell') : Promise.resolve(null),
     // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
     names.includes(`${id}.hibernated`) ? field(io, cfg.registryDir, id, 'hibernated') : Promise.resolve(null),
-    // Named workspaces S2 (D-6112): the operator's name marker and title, each read only when listed, the D-5347 shape
+    // Named workspaces S2 (D-6163): the operator's name marker and title, each read only when listed, the D-5347 shape
     // `deny-settings` and `childshell` use — a row ccd never named costs no read, so the census does not move. `named`
     // is MEASURED: a listed marker that will not read is told from one that is gone (see `namedByOperator`).
     names.includes(`${id}.named`) ? fieldMeasured(io, cfg.registryDir, id, 'named') : Promise.resolve(null),

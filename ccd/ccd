@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=31a929c65c4192157bff45d04f11dba1050218dab19bb0bb2c780995d3ea5a23
+# ccrc:generated 1 sha256=5cbbcb0ded5a90a8490cac0e99e588a47843a818bc389c5ed25d4c7f7546572e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7129,7 +7129,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # `--title` is the display title an operator gave the workspace; `--wrapper` is the account they chose for it.
-      # BOTH BEFORE THE PROJECT, AT THE CALLER: an older ccd binds an unknown `--` token as a POSITIONAL (D-6113), so
+      # BOTH BEFORE THE PROJECT, AT THE CALLER: an older ccd binds an unknown `--` token as a POSITIONAL (D-6164), so
       # a flag it does not know leads into the project or slug slot and is refused there — and one placed AFTER
       # `project slug` would be dropped unread and the workspace created on the least-loaded lane with exit 0. The
       # caller gates each on `ccd caps` (`ws-title-v1`, `ws-wrapper-v1`); this loop parses either position.
@@ -8821,7 +8821,7 @@ EOF
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
-  # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6113): leading,
+  # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above

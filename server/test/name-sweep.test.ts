@@ -830,14 +830,14 @@ describe('the naming lane', () => {
   });
 });
 
-// ── A HUMAN'S NAME IS FINAL (named-workspaces S2, D-6112) ───────────────────
+// ── A HUMAN'S NAME IS FINAL (named-workspaces S2, D-6163) ───────────────────
 // `$REG/<id>.named` is written by `ccd ws-add --title` (and `ws-title`), so it
-// marks the workspaces a HUMAN named. D-6112: before this clause the sweep had
+// marks the workspaces a HUMAN named. D-6163: before this clause the sweep had
 // no way to tell, and renamed `ws/eng-1234` to the model's title within one
 // tick of the first ai-title. `sessionLabel` reads `branch` before
 // `workspace`, so the operator's name then vanished from every surface, and no
 // verb renames a slug back.
-describe('the naming sweep leaves a human-named workspace alone (D-6112)', () => {
+describe('the naming sweep leaves a human-named workspace alone (D-6163)', () => {
   const ID2 = 'demo-still-water';
   const UUID2 = 'b'.repeat(36);
   const MUNGED2 = '-w-demo-still-water';

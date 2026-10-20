@@ -408,7 +408,7 @@ export const CCD_ARGV = {
    *  the grant's reach stays a decision somebody made.
    *
    *  `--title` AND `--wrapper` LEAD, before the project — `--no-rc` and `--route`'s own position — and the slug sits
-   *  right behind the project. An older ccd binds an unknown `--` token as a POSITIONAL (D-6113): leading, `--title`
+   *  right behind the project. An older ccd binds an unknown `--` token as a POSITIONAL (D-6164): leading, `--title`
    *  lands in the project slot and is refused by `_ws_project_valid`; trailing, after `project slug`, it would be
    *  dropped unread and the workspace created unnamed — and on the least-loaded lane when the dropped flag was
    *  `--wrapper` — with exit 0. The caller ALSO gates each on its `ccd caps` token (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`),
@@ -1028,7 +1028,7 @@ export const SWAP_BUSY_CAP = 'swap-busy-v1';
 
 /** The `ccd caps` token that says this box's `ws-add` takes `--title <text>` (named workspaces, design 2026-10-20 §4.1). It
  *  gates the route that names a workspace: no token, no `--title`. The server must not send it to a box that does not
- *  list it — an older ccd binds an unknown `--` token as a positional (D-6113), so a trailing `--title` is dropped unread
+ *  list it — an older ccd binds an unknown `--` token as a positional (D-6164), so a trailing `--title` is dropped unread
  *  and the workspace is created with exit 0, unnamed. Read it with `capSupported`, never `verbSupported` (a null list is
  *  REFUSE here). ccd's `echo ws-title-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
 export const WS_TITLE_CAP = 'ws-title-v1';

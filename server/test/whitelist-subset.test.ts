@@ -464,7 +464,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
     wsAdd: ['ws-add', 'demo'],
     // THE NAMED CREATE (named workspaces S5, design 2026-10-20 §4.1-4.2): `--title` and `--wrapper` LEAD, before the
-    // project, because an older ccd binds an unknown `--` token as a POSITIONAL (D-6113) — leading, it lands in the
+    // project, because an older ccd binds an unknown `--` token as a POSITIONAL (D-6164) — leading, it lands in the
     // project slot and is refused there; trailing, it would be dropped unread and the workspace created unnamed on the
     // least-loaded lane with exit 0. The slug follows the project and the dec trails it, as `wsAddWorker` does.
     wsAddNamed: ['ws-add', '--title', 'ENG-1234', '--wrapper', 'lane-a', 'demo', 'eng-1234', '--surface', 'pwa', '--actor', 'unmeasured'],
