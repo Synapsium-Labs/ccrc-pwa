@@ -93,7 +93,7 @@ const reaches = (repo: string, sha: string, ref: string): boolean => {
 
 /** A child whose branch is PROVEN gone, its worktree standing: HEAD detached first
  *  (`git branch -D` refuses a checked-out branch), then the branch deleted — the live
- *  `expoAI-assistant-calm-mesa` shape (shape A). */
+ *  `project-h-calm-mesa` shape (shape A). */
 function goneBranch(c: Child): void {
   h.git(c.wt, 'checkout', '-q', '--detach');
   h.git(c.main, 'branch', '-q', '-D', CHILD_BRANCH);
@@ -340,7 +340,7 @@ describe.skipIf(!MODERN_GIT)('the ladder, vanished arm (spec §5.5)', () => {
 });
 
 describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
-  it('the live expoAI-assistant-calm-mesa shape reclaims, HEAD and every reflog commit kept', () => {
+  it('the live project-h-calm-mesa shape reclaims, HEAD and every reflog commit kept', () => {
     const c = makeChild(h);
     // The work landed on main: the live HEAD and every reflog commit are on origin/main.
     h.git(c.main, 'merge', '-q', '--ff-only', CHILD_BRANCH);

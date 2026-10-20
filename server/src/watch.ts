@@ -127,6 +127,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
+import { notify } from './notice.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -813,6 +814,11 @@ function mergeBreakerMembers(
   }
   return [...out.values()];
 }
+
+/** `pushOne`'s two flags narrowed to the three combinations a lane can reach, each one `NoticeMode` (D-5857): neither
+ *  (`'push'`), `recordAlways` (`'record-always'`), or `recordAlways` with `recordOnly` (`'record-only'`). `recordOnly`
+ *  without `recordAlways` had no caller and is not a type. */
+type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
@@ -3426,49 +3432,23 @@ export class FleetWatcher {
     /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
      *  push's deep link to its day's screen (D-5300). */
     url?: string;
-  }, projects: Set<string>): void {
-    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
-    if (visible && !e.recordAlways) return;
+  } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
     // (run-less mail whose recipient session could not be resolved either,
     // `pushNewMail`'s own fallback chain) must degrade to no decoration at
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
-    const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
-      runId: e.runId ?? null });
-    void log?.flush();
-    // The durable feed archive — same record, same point, ALL kinds (Task
-    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
-    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
-    // pair exists to mirror, and a feed row that mirrors nothing is not an
-    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
-    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
-    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
-    // timeout) and this call sits directly on the poll, reached from every
-    // kind this method ever raises (the `done` push above, the ask push in
-    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
-    // that one bad lane must not kill the others — every neighbouring lane
-    // already earns that non-throwing property one way or another (see
-    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
-    // was the one exception reachable from every push, not just two lanes.
-    // The ring record and the push below are UNAFFECTED by a failure here —
-    // only the archive row is lost.
-    if (log && recorded) {
-      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
-      catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
-      }
-    }
-    if (visible) return;                       // recorded, not pushed
-    if (e.recordOnly) return;                   // recorded, deliberately never pushed
-    void this.deps.push?.notify({
-      title, body: e.body, sessionId: e.sessionId,
-      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
-      ...(e.actions ? { actions: e.actions } : {}),
-      ...(e.url !== undefined ? { url: e.url } : {}),
-    });
+    // D-5857: the presence gate, the ring record, its flush, the GUARDED durable archive (review finding 1: one bad
+    // lane must not kill the others, and `node:sqlite` throws synchronously from every kind this method raises) and
+    // the push are `notify`'s (`notice.ts`), in the mode the two flags name. The ring record and the push are
+    // UNAFFECTED by an archive failure; only the archive row is lost.
+    notify(this.deps, { kind: e.kind, sessionId: e.sessionId, title, body: e.body, runId: e.runId ?? null },
+      e.recordOnly ? 'record-only' : e.recordAlways ? 'record-always' : 'push', {
+        ...(e.tag !== undefined ? { tag: e.tag } : {}),
+        ...(e.actions ? { actions: e.actions } : {}),
+        ...(e.url !== undefined ? { url: e.url } : {}),
+      });
   }
 
   /**
@@ -5267,41 +5247,23 @@ export class FleetWatcher {
   }
 
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
-   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
-   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+   *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
+   *  a failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordFeed(coord: CoordStore, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord },
+      { kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body },
+      'record-only', { degraded: `temp-root collector ${row.title}, feed archive degraded` });
   }
 
   /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
    *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
-   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed. A failed
-   *  archive write is said and never stops the lane, and the log is flushed whatever happened (`collectRecordFeed`'s
-   *  idiom). */
+   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed (`notify`'s
+   *  `'record-only'`, D-5857). A failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'coord', sessionId: '', runId: null, title, body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord }, { kind: 'coord', sessionId: '', runId: null, title, body },
+      'record-only', { degraded: `temp-root collector ${title}, feed archive degraded` });
   }
 
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
@@ -5651,7 +5613,7 @@ export class FleetWatcher {
 
   /**
    * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
-   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and #166 then reclaims its marked
    * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
    * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
    * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list
@@ -6977,8 +6939,9 @@ export class FleetWatcher {
       console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
       return;
     }
+    // D-5912: a human's draft is stashed around the nudge and restored, never a reason to skip it.
     const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
-      { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
+      { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
     console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
     // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
     // nudge that typed nothing.
@@ -7261,22 +7224,27 @@ export class FleetWatcher {
    *      and this lane is now the only place the rule still has work to do.
    *
    * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
-   * `draft-present` refused, `dialog-open` refused — inside the session's own
+   * a draft stashed and restored, `dialog-open` refused — inside the session's own
    * `KeyedQueue` slot, injecting `renderMailNudge(d.toId)` — a tiny, single-
    * line, ID-AGNOSTIC reference (robust-mail-delivery spec §1), NEVER
    * `d.envelope` — with `resumeIfOwn: true` (F3 / bug #21, fix-round): a box
    * already holding this session's own un-submitted nudge (a prior sweep's
    * lost Enter) is recognized and its Enter finished, rather than misread as
-   * `draft-present` and backed off forever — the exact self-block the build4
+   * a human's draft — the exact self-block the build4
    * dogfood measured live (`docs/superpowers/programs/build4.md`). See
    * `sendPrompt`'s own docstring for the discrimination. NOTHING HERE TEACHES
    * IT TO RETYPE OR PRESS BLINDLY: the two-Enter budget and `submitEnter`'s
    * one-Enter doctrine (`inject/send.ts:456-460`) are load-bearing, and the
    * escalation for a stuck box is the human.
    *
-   * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
-   * agent-to-agent finding in this system; `draft-present` is a back-off, and
-   * the mail is still there in two minutes. `clearMailResidue` IS passed, but
+   * `onDraft: 'stash'` (D-5912), NEVER `replace`. A half-typed human message
+   * outranks every agent-to-agent finding in this system, so it is never typed
+   * over and never cleared: Claude Code's own stash (`C-s`) holds it around the
+   * nudge and gives it back, verified (D-5911), and a send that fails after the
+   * stash gives it back too (D-6010). A draft is therefore no reason to wait:
+   * there is no `draft-present` back-off and no "unsent text" sender notice on
+   * this lane. The two stash refusals (`stash-failed`, `stash-occupied`) are
+   * gates that back off and park like `dialog-open`. `clearMailResidue` IS passed, but
    * only once this delivery has provably been attempted before (spec §2.2) —
    * see the send site's own comment — and it can never clear a human draft
    * either (`isMailResidue`'s own docstring, `inject/send.ts`).
@@ -7920,8 +7888,8 @@ export class FleetWatcher {
         // `resumeIfOwn: true` (F3 / bug #21): if a PRIOR sweep's Enter for
         // this session's nudge was lost, the box now holds our own
         // un-submitted text — `sendPrompt` recognizes it (see its own
-        // docstring) and presses Enter rather than reading it as
-        // `draft-present` and backing off forever. Because the nudge carries
+        // docstring) and presses Enter rather than reading it as a human's
+        // draft and stashing it. Because the nudge carries
         // no per-delivery identity, resuming it is always correct regardless
         // of which due row this sweep is actually attempting.
         //
@@ -7951,7 +7919,7 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // refuses `draft-present` exactly as it does today.
+        // stashes the `/clear` as a draft and restores it (D-5912).
         const ownStrandedClear = store.strandedClear(d.toId);
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
         // different from what it held at the park (`parkBoxSeen`) — or, on this
@@ -7982,7 +7950,7 @@ export class FleetWatcher {
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+          { onDraft: 'stash', resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
@@ -8041,7 +8009,7 @@ export class FleetWatcher {
 
         if (res.error === 'auto-continue-armed') {
           // D-2369. Before the attempts ceiling on purpose: a held delivery is
-          // not a failed one. Told once per hold, like draft-present.
+          // not a failed one. Told once per hold.
           if (d.lastError !== 'auto-continue-armed') {
             tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
               `mail-blocked-${d.id}`);
@@ -8060,6 +8028,16 @@ export class FleetWatcher {
           this.landed(store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
+
+        // D-5912: the two stash refusals are the delivery's GATE as well as its
+        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port
+        // carries no `lastError`, D-792). They then take the path `dialog-open`
+        // and `box-unreadable` take: the back-off, the park at the attempts
+        // ceiling, the operator's one `mail-parked` push, and the 24 h ceiling.
+        // No hold arm exempts them: with the stash armed a draft is no reason to
+        // wait, so either word means something abnormal the operator should hear.
+        if (res.error === 'stash-failed') gated(d, 'stash-failed');
+        if (res.error === 'stash-occupied') gated(d, 'stash-occupied');
 
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
@@ -8086,12 +8064,10 @@ export class FleetWatcher {
             this.tellParkedSender(store, d.mailId, d.toId, 'rejected', res.error);
             continue;
           }
-          // What the box holds NOW, for the probe to compare against. A
-          // `draft-present` refusal already carries it (`boxText`, the probe's
-          // own reading); every other refusal is read once more.
-          const box = res.error === 'draft-present' && typeof res.draft === 'string'
-            ? res.draft
-            : await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+          // What the box holds NOW, for the probe to compare against, read once
+          // more. (D-5912: no refusal on this lane carries the box any more; the
+          // lane's sends stash a draft, so `draft-present` cannot reach here.)
+          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
           if (!this.landed(store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS), 'parkDelivery', d.id)) continue;
           this.parkProbeAt.set(d.id, now);
           if (d.parkedAt === null) {
@@ -8112,11 +8088,11 @@ export class FleetWatcher {
         // via `attempts` on the wire (Task 408).
         // D-5997: told only once the back-off LANDED — an ack that beat it means
         // the mail arrived, and its sender hears nothing about a blocked box.
+        // D-5912: no sender notice here any more. The one this lane had was for
+        // `draft-present`, which its sends can no longer produce (they stash the
+        // draft); a long wait is the park's `mail-parked` push (spec §2.4).
         const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
         if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
-        if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
-          tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
-        }
       } finally {
         this.mailInFlight.delete(d.toId);
       }

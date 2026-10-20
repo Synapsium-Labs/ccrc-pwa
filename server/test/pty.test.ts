@@ -68,13 +68,13 @@ describe('pty drawer bridge', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-MekWarLive?cols=120&rows=40`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=120&rows=40`);
     const frames: string[] = [];
     ws.on('message', (d) => frames.push(String(d)));   // attach before open: no frame may slip past
     await opened(ws);
 
     // spawned with the id and the client's dimensions
-    await vi.waitFor(() => expect(spawned).toEqual({ id: 'claude2-MekWarLive', cols: 120, rows: 40 }), wait);
+    await vi.waitFor(() => expect(spawned).toEqual({ id: 'claude9-project-f', cols: 120, rows: 40 }), wait);
 
     // server -> client: raw utf8 text frames of terminal output
     await vi.waitFor(() => expect(frames).toContain('WELCOME-FROM-TMUX'), wait);
@@ -89,7 +89,7 @@ describe('pty drawer bridge', () => {
     ws.close();
     await vi.waitFor(() => expect(stub.killed).toBe(true), wait);
     await vi.waitFor(() =>
-      expect(calls).toContainEqual(['tmux', 'resize-window', '-t', '=cc-claude2-MekWarLive:', '-x', '220', '-y', '50']),
+      expect(calls).toContainEqual(['tmux', 'resize-window', '-t', '=cc-claude9-project-f:', '-x', '220', '-y', '50']),
       wait);
   });
 
@@ -125,12 +125,12 @@ describe('pty drawer bridge', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-MekWarLive?cols=43&rows=40`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=43&rows=40`);
     await opened(ws);
-    await vi.waitFor(() => expect(log).toContain('spawnPty claude2-MekWarLive 43x40'), wait);
+    await vi.waitFor(() => expect(log).toContain('spawnPty claude9-project-f 43x40'), wait);
 
-    const pin = 'tmux resize-window -t =cc-claude2-MekWarLive: -x 220 -y 50';
-    const spawn = 'spawnPty claude2-MekWarLive 43x40';
+    const pin = 'tmux resize-window -t =cc-claude9-project-f: -x 220 -y 50';
+    const spawn = 'spawnPty claude9-project-f 43x40';
     expect(log.indexOf(pin), 'the canonical pin never ran — the client reflows the history')
       .toBeGreaterThanOrEqual(0);
     expect(log.indexOf(pin), 'the pin ran AFTER the attach: by then tmux has already reflowed')

@@ -49,18 +49,18 @@ moved substantially in a single day.
 
 | | value |
 |---|---|
-| agent homes (`~/.claude*` with a `projects/` dir, excluding `.claude-docserver`) | **8** |
+| agent homes (`~/.claude*` with a `projects/` dir, excluding `.docs-preview`) | **8** |
 | real memory directories (excluding `-tmp` slugs) | **40** |
-| directories already symlinked | **8** (`.claude-corp` ×2, `.claude-personal` ×6) |
+| directories already symlinked | **8** (`.claude-acme` ×2, `.claude-home` ×6) |
 | distinct projects with memory | **13** |
-| homes whose `settings.json` does NOT reference the session hook | **2** (`.claude-glm`, `.claude-kimi`) |
+| homes whose `settings.json` does NOT reference the session hook | **2** (`.claude-alt1`, `.claude-alt2`) |
 | `ccrc-pwa` union across its 5 homes | 66 instances, **57 distinct**, 52 unique, 5 colliding, **3 differing** |
 
 Re-take command (read-only):
 
 ```bash
 for h in ~/.claude*/; do
-  b=$(basename "$h"); case "$b" in .claude-docserver) continue;; esac
+  b=$(basename "$h"); case "$b" in .docs-preview) continue;; esac
   [ -d "$h/projects" ] || continue
   n=$(find "$h/projects" -maxdepth 2 -name memory -type d 2>/dev/null | grep -v '/-tmp' | wc -l)
   l=$(find "$h/projects" -maxdepth 2 -name memory -type l 2>/dev/null | wc -l)
@@ -373,9 +373,9 @@ describe('ccrc memory — the census', () => {
   });
 
   it('enumerates homes from the FILESYSTEM, not the roster', () => {
-    // `.claude-glm` is in no roster entry; it must still be reported.
-    seed('.claude-glm', '-p-demo', { 'a.md': 'x' });
-    expect(run(['memory']).out).toContain('.claude-glm');
+    // `.claude-alt1` is in no roster entry; it must still be reported.
+    seed('.claude-alt1', '-p-demo', { 'a.md': 'x' });
+    expect(run(['memory']).out).toContain('.claude-alt1');
   });
 
   it('reports a converged pair as converged, not as work to do', () => {
@@ -424,14 +424,14 @@ function's closing brace.
 # operator sees exactly what would happen before it happens.
 #
 # HOMES ARE ENUMERATED FROM THE FILESYSTEM, NOT FROM THE ROSTER. Measured
-# 2026-09-09: `.claude-glm` and `.claude-kimi` are on disk, hold memory, and
+# 2026-09-09: `.claude-alt1` and `.claude-alt2` are on disk, hold memory, and
 # are in no roster entry. The roster describes accounts ccrc PLACES WORK ON;
 # it was never a census of homes, and using it as one is how the design's own
 # first draft came to list five homes when there were eight.
 _mem_homes() {   # -> one agent-home path per line
   local d
   for d in "$HOME"/.claude*/; do
-    case "$(basename -- "${d%/}")" in .claude-docserver) continue ;; esac
+    case "$(basename -- "${d%/}")" in .docs-preview) continue ;; esac
     [ -d "${d}projects" ] || continue
     printf '%s\n' "${d%/}"
   done
@@ -554,7 +554,7 @@ describe('ccrc memory --apply — the union', () => {
 
   it('unions two homes that hold different files', () => {
     seed('.claude', '-p-demo', { 'a.md': 'A' });
-    seed('.claude-corp', '-p-demo', { 'b.md': 'B' });
+    seed('.claude-acme', '-p-demo', { 'b.md': 'B' });
     run(['memory', '--apply']);
     expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
     expect(fs.readFileSync(path.join(storeDir(), 'b.md'), 'utf8')).toBe('B');
@@ -562,11 +562,11 @@ describe('ccrc memory --apply — the union', () => {
 
   it('KEEPS BOTH when the same filename differs — never picks a winner', () => {
     seed('.claude', '-p-demo', { 'same.md': 'first' });
-    seed('.claude-corp', '-p-demo', { 'same.md': 'second' });
+    seed('.claude-acme', '-p-demo', { 'same.md': 'second' });
     run(['memory', '--apply']);
     const names = fs.readdirSync(storeDir()).sort();
     expect(names).toContain('same.md');
-    expect(names.some((n) => n.startsWith('same.') && n.includes('claude-corp'))).toBe(true);
+    expect(names.some((n) => n.startsWith('same.') && n.includes('claude-acme'))).toBe(true);
     const bodies = names.filter((n) => n.startsWith('same.'))
       .map((n) => fs.readFileSync(path.join(storeDir(), n), 'utf8')).sort();
     expect(bodies).toEqual(['first', 'second']);
@@ -574,7 +574,7 @@ describe('ccrc memory --apply — the union', () => {
 
   it('deduplicates a byte-identical collision into ONE file', () => {
     seed('.claude', '-p-demo', { 'same.md': 'identical' });
-    seed('.claude-corp', '-p-demo', { 'same.md': 'identical' });
+    seed('.claude-acme', '-p-demo', { 'same.md': 'identical' });
     run(['memory', '--apply']);
     expect(fs.readdirSync(storeDir()).filter((n) => n.startsWith('same.')))
       .toEqual(['same.md']);
@@ -585,7 +585,7 @@ describe('ccrc memory --apply — the union', () => {
       'one.md': '---\nname: one\ndescription: the first\n---\nbody\n',
       'MEMORY.md': '- stale line that mentions nothing real\n',
     });
-    seed('.claude-corp', '-p-demo', {
+    seed('.claude-acme', '-p-demo', {
       'two.md': '---\nname: two\ndescription: the second\n---\nbody\n',
       'MEMORY.md': '- a different stale line\n',
     });
@@ -611,7 +611,7 @@ describe('ccrc memory --apply — the union', () => {
     const other = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, 'a.md'), 'A');
-    const d = path.join(home, '.claude-corp', 'projects', '-p-demo');
+    const d = path.join(home, '.claude-acme', 'projects', '-p-demo');
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(other, path.join(d, 'memory'));
     run(['memory', '--apply']);
@@ -775,7 +775,7 @@ git commit -m "feat(ccrc): union the memory stores, keeping both sides of a conf
 - Produces: `_check_memory` — the standard doctor contract: `_dr_pass` / `_dr_fail` with a remedy.
 
 **Why three conditions and not two.** A home can be perfectly converged today and still be unable to
-*stay* converged: `.claude-glm` and `.claude-kimi` carry a `settings.json` that does not reference
+*stay* converged: `.claude-alt1` and `.claude-alt2` carry a `settings.json` that does not reference
 `~/.cc-sessions/session-hook.sh`, and `ccd/install-session-hooks.sh`'s DEFAULT (no-argv) home list is
 built from `CCRC_ACCOUNTS` — the roster — so a home in no roster entry is never wired *by that default
 run* (the installer also takes `--homes <dir>…`, unused by any `ccrc` verb — see D-2179's correction).
@@ -809,12 +809,12 @@ describe('_check_memory (spec 2026-09-08 §4)', () => {
 
   it('FAILs differently for a home the session hook can never reach', () => {
     const home = healthy('ccrc-doctor-mem-unreach-');
-    const h = path.join(home, '.claude-glm');
+    const h = path.join(home, '.claude-alt1');
     fs.mkdirSync(path.join(h, 'projects'), { recursive: true });
     fs.writeFileSync(path.join(h, 'settings.json'), '{}');
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/FAIL memory/);
-    expect(r.stdout).toContain('.claude-glm');
+    expect(r.stdout).toContain('.claude-alt1');
     expect(r.stdout).toMatch(/hook/i);
   });
 });
@@ -843,10 +843,10 @@ In `ccd/ccrc-doctor-checks`, beside the other `_check_*` functions:
 # reported that two homes disagreed about a project's memory, so a session read
 # its own superseded record after an account swap and acted on it. A
 # convergence mechanism without a detector only moves the silence one layer
-# down: the next unconverged home forks exactly as `.claude-dev0` did.
+# down: the next unconverged home forks exactly as `.claude-lab0` did.
 #
-# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
-# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-alt1` and
+# `.claude-alt2` are on disk, hold memory, and are in no roster entry — a
 # roster-driven check would report PASS while the homes most likely to fork
 # went unexamined.
 #
@@ -859,7 +859,7 @@ _check_memory() {
   local h b d slug link store forked="" unreachable=""
   for h in "$HOME"/.claude*/; do
     b=$(basename -- "${h%/}")
-    case "$b" in .claude-docserver) continue ;; esac
+    case "$b" in .docs-preview) continue ;; esac
     [ -d "${h}projects" ] || continue
     if [ -f "${h}settings.json" ] \
        && ! grep -q 'session-hook.sh' "${h}settings.json" 2>/dev/null; then
@@ -1088,7 +1088,7 @@ number up; do not invent one.
   the cause. Measured: `ccd/install-session-hooks.sh`'s DEFAULT home list (no argv) builds from
   `CCRC_ACCOUNTS` (`for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")"); done`), so a
   home in no roster entry is never wired **by that default run**. This plan does **not** auto-add
-  `.claude-glm`/`.claude-kimi` to the roster: rostering an account changes where ccrc PLACES WORK, which
+  `.claude-alt1`/`.claude-alt2` to the roster: rostering an account changes where ccrc PLACES WORK, which
   is an operator decision with consequences well beyond memory. Doctor reports it and names both
   remedies. Task 4.
   **Corrected 2026-09-09 (whole-branch review, Minor):** "a home in no roster entry can never be
@@ -1152,16 +1152,16 @@ blocks say.
   inheriting it. `-ef` is necessary and `-d` is necessary: deleting either is an independently
   measurable defect. **What it costs, corrected:** the first ruling accepted that `--apply` would leave
   a relative-but-correct link as written, since it skips whatever `_mem_state` calls converged. That was
-  wrong, and the same rule strands a worse shape — a link CHAIN (`.claude-corp` -> `.claude`'s link ->
+  wrong, and the same rule strands a worse shape — a link CHAIN (`.claude-acme` -> `.claude`'s link ->
   store) also resolves, so `--apply` skipped it permanently and doctor printed PASS, leaving one
   account's HOME load-bearing for every other. That is the second defect of the existing prior art this
   design exists to remove, and under this box's actual `en_US.UTF-8` locale `.claude` sorts before
-  `.claude-corp`, so it is an ordering a real box plausibly produces, not a contrived one.
+  `.claude-acme`, so it is an ordering a real box plausibly produces, not a contrived one.
   **Corrected 2026-09-09 (whole-branch review, critic item D):** "`.claude` sorts first" is not a
   general rule, and an earlier version of this entry stated it as one. Bash sorts the expanded glob
   strings INCLUDING the trailing `/`, so under `LC_ALL=C` — what a stripped systemd environment
   typically sets, and what this suite's own `doctorEnv` sets for `ccrc-doctor.test.ts` — `-` (0x2D)
-  beats `/` (0x2F) and `.claude-corp/` sorts BEFORE `.claude/`, the opposite order, which would
+  beats `/` (0x2F) and `.claude-acme/` sorts BEFORE `.claude/`, the opposite order, which would
   mis-attribute a conflict copy to the wrong home rather than manufacture the chain this arm repairs.
   The chain shape itself is real prior art on this box regardless of which order manufactures it
   mid-run; only the false universal ordering claim is retracted here.
@@ -1195,7 +1195,7 @@ blocks say.
   to become canonical on the re-run. Task 3.
 
 - **D-2242** — the conflict-suffix copy in this plan writes unconditionally, so a home already holding
-  `same.claude-corp.md` loses it when another home's differing `same.md` arrives — the silent winner
+  `same.claude-acme.md` loses it when another home's differing `same.md` arrives — the silent winner
   the whole rule forbids, one filename away, and measured. The suffixed destination now takes the same
   three-way test as the primary: identical is skipped, differing walks to the next free numbered slot,
   and nothing is ever copied onto an existing path. Task 3.
@@ -1263,8 +1263,8 @@ blocks say.
   Task 4.
 
 - **D-2252** — `_mem_absorb`'s conflict tag is a home basename, which begins with a dot, so this plan's
-  `${base%.md}.$tag.md` produces `same..claude-corp.md`. The leading dot is stripped:
-  `same.claude-corp.md`. Cosmetic, and it lands in a file an operator has to read and judge. Task 3.
+  `${base%.md}.$tag.md` produces `same..claude-acme.md`. The leading dot is stripped:
+  `same.claude-acme.md`. Cosmetic, and it lands in a file an operator has to read and judge. Task 3.
 
 - **D-2375** — **THE SCRATCH GUARD WAS THE LINUX SPELLING OF ONE RULE, AND WAS DEAD CODE ON DARWIN.**
   D-2181's `-tmp*` names the OS scratch root on Linux and nothing at all on macOS: `/tmp` there is a

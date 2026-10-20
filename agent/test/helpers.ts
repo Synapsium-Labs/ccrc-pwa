@@ -21,7 +21,7 @@ const tmp = mkTmp;
 
 export function makeFixture(): Fixture {
   const home = tmp('ccrc-agent-home-');
-  for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-personal']) {
+  for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-home']) {
     mkdirSync(path.join(home, dir), { recursive: true });
   }
   const projectsRoot = tmp('ccrc-agent-projects-');

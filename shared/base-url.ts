@@ -42,8 +42,8 @@
  *  `http://LOCALHOST:8642` with `localhost`), and a range test in L0 means
  *  hand-parsing dotted quads for a set of three.
  *
- *  The exception is not a courtesy: `~/.local/bin/cck3` and
- *  `~/.local/bin/claude-glm` on the fleet box already point
+ *  The exception is not a courtesy: `~/.local/bin/ccx3` and
+ *  `~/.local/bin/claude-alt1` on the fleet box already point
  *  `ANTHROPIC_BASE_URL` at `http://127.0.0.1:8642` (spec §4.3, measured
  *  2026-09-07), and the whole argument for a general `baseUrl` is that the
  *  ownership-whitelist proxy IS an Anthropic-compatible endpoint. Refusing

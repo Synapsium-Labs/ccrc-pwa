@@ -216,7 +216,7 @@ describe('the receipt, and the attachments a user message carries', () => {
     render(
       <MessageBubble id="demo-quiet-mesa" event={{
         kind: 'user', uuid: 'u2', ts: '2026-07-21T20:00:00Z',
-        text: '/home/rc/.cc-clips/demo-quiet-mesa/clip-1-a1b2.png look at this',
+        text: '/home/u/.cc-clips/demo-quiet-mesa/clip-1-a1b2.png look at this',
       }} />,
     );
     const img = screen.getByRole('img', { name: 'clip-1-a1b2.png' });
@@ -231,7 +231,7 @@ describe('the receipt, and the attachments a user message carries', () => {
     render(
       <MessageBubble id="demo-quiet-mesa" event={{
         kind: 'user', uuid: 'u3', ts: '2026-07-21T20:00:00Z',
-        text: '/home/rc/.cc-clips/demo-quiet-mesa/clip-9-zzzz.png',
+        text: '/home/u/.cc-clips/demo-quiet-mesa/clip-9-zzzz.png',
       }} />,
     );
     fireEvent.error(screen.getByRole('img', { name: 'clip-9-zzzz.png' }));

@@ -212,7 +212,7 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('names the project when more than one is active', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -1021,7 +1021,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('falls back to the RECIPIENT session\'s own project for run-less mail in a multi-project fleet', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();                  // priming
 
       const mail = w.coord!.insertMail({
@@ -1041,7 +1041,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('suppresses the decoration entirely — never a dangling separator — when even the recipient\'s project is unknown', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();
 
       // `toId` names no live session (e.g. reaped between send and

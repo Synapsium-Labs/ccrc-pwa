@@ -29,6 +29,9 @@ export interface ImportEdge {
   typeOnly: boolean;
   /** The bound names: `default` as its local name, a namespace as `* as x`, named ones by their imported name. */
   names: string[];
+  /** The named ones bound with a per-name `type` (`import { type A, b }` → `['A']`), for an `import` or an
+   *  `export … from`; absent on the other kinds. An edge whose every name is here binds no value (D-6045, stage 2). */
+  typeNames?: string[];
   /** 1-based. */
   line: number;
 }
@@ -189,15 +192,23 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
       if (c?.name) names.push(c.name.text);
       const nb = c?.namedBindings;
       if (nb && ts.isNamespaceImport(nb)) names.push(`* as ${nb.name.text}`);
-      if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) names.push((e.propertyName ?? e.name).text);
+      const typeNames: string[] = [];
+      if (nb && ts.isNamedImports(nb)) {
+        for (const e of nb.elements) {
+          names.push((e.propertyName ?? e.name).text);
+          if (e.isTypeOnly) typeNames.push((e.propertyName ?? e.name).text);
+        }
+      }
       imports.push({ specifier: st.moduleSpecifier.text, kind: 'import',
-        typeOnly: c?.phaseModifier === ts.SyntaxKind.TypeKeyword, names, line: lineOf(st.getStart(sf)) });
+        typeOnly: c?.phaseModifier === ts.SyntaxKind.TypeKeyword, names, typeNames, line: lineOf(st.getStart(sf)) });
     } else if (ts.isExportDeclaration(st) && st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)) {
       const ec = st.exportClause;
       const names = !ec ? ['*']
         : ts.isNamespaceExport(ec) ? [`* as ${nameText(ec.name) ?? ''}`]
           : ec.elements.map((e) => nameText(e.propertyName ?? e.name) ?? '');
-      imports.push({ specifier: st.moduleSpecifier.text, kind: 'export-from', typeOnly: st.isTypeOnly, names,
+      const typeNames = ec && ts.isNamedExports(ec)
+        ? ec.elements.filter((e) => e.isTypeOnly).map((e) => nameText(e.propertyName ?? e.name) ?? '') : [];
+      imports.push({ specifier: st.moduleSpecifier.text, kind: 'export-from', typeOnly: st.isTypeOnly, names, typeNames,
         line: lineOf(st.getStart(sf)) });
     } else if (ts.isImportEqualsDeclaration(st) && ts.isExternalModuleReference(st.moduleReference)
       && ts.isStringLiteral(st.moduleReference.expression)) {

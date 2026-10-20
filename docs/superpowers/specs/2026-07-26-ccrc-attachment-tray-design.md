@@ -45,7 +45,7 @@ user-visible:
    turns and by `CompactionCard` (`:252`), and the image branch there is gated on
    `isImageUrl` (`:30`, extension-based) inside the `a` renderer (`:162`). So the
    transcript reads
-   `…is Poor /home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150340.png`.
+   `…is Poor /home/you/.cc-clips/claude9-project-c/clip-20260726-150340.png`.
 7. **Two latent bugs in `ccd clip`.** Every destination is named `.png` regardless
    of the real type (`ccd:598`), so a downscaled JPEG lies about its format; and
    `clip-$(date +%Y%m%d-%H%M%S)` at one-second resolution `mv -f`s over a clip

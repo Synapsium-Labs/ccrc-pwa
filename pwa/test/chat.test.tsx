@@ -127,7 +127,7 @@ const MESH_RESULT =
   + ' You can now continue with these answers in mind.';
 
 /** Store whose socket is inert and whose api never reaches the network. */
-const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
+const makeStore = (id = 'claude:ProjectC'): SessionStore =>
   createSessionStore(id, {
     makeSocket: () =>
       ({
@@ -225,20 +225,20 @@ describe('ChatListInner', () => {
   });
 
   it('renders a sent clip path as the image, not the path', () => {
-    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+    const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude9-Proj" pending={[]} events={[
       { kind: 'user', uuid: 'u1', ts: NOW, text: `${P}\nwhat is this` },
     ]} />);
 
     const img = screen.getByRole('img', { name: 'clip-20260726-150340-a1b2.png' });
-    expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude2-Proj/clip/clip-20260726-150340-a1b2.png`);
+    expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude9-Proj/clip/clip-20260726-150340-a1b2.png`);
     expect(screen.getByText('what is this')).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(P))).not.toBeInTheDocument();
   });
 
   it('falls back to the filename when the clip is gone from disk', () => {
-    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+    const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude9-Proj" pending={[]} events={[
       { kind: 'user', uuid: 'u1', ts: NOW, text: P },
     ]} />);
     fireEvent.error(screen.getByRole('img'));
@@ -255,9 +255,9 @@ describe('ChatListInner', () => {
   it('shows the same thumbnails on the optimistic bubble, from the object URL', () => {
     // chip -> pending -> confirmed must never flicker empty, so the pending bubble
     // renders the blob it inherited rather than waiting on a server round trip.
-    render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+    render(<ChatListInner id="claude9-Proj" events={[]} pending={[{
       key: 'p1', text: 'what is this', state: 'sending',
-      attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
+      attachments: [{ path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
     }]} />);
     expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:mock/1');
     expect(screen.getByText('what is this')).toBeInTheDocument();
@@ -267,9 +267,9 @@ describe('ChatListInner', () => {
   // changes shape the moment it lands. A document has no object URL by
   // construction (the tray mints none), so both draw its name.
   it('shows a pending document as the same name chip the confirmed bubble gives it', () => {
-    render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+    render(<ChatListInner id="claude9-Proj" events={[]} pending={[{
       key: 'p2', text: 'read this', state: 'sending',
-      attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2-notes.md' }],
+      attachments: [{ path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2-notes.md' }],
     }]} />);
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByText('clip-1-a1b2-notes.md')).toHaveClass('msg-attach-doc');
@@ -586,20 +586,20 @@ describe('SessionScreen', () => {
   it('acks the session on mount, written through to localStorage', () => {
     window.localStorage.clear();
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
-    expect(loadAcks()).toHaveProperty('claude:OpenClawHetzner');
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
+    expect(loadAcks()).toHaveProperty('claude:ProjectC');
   });
 
   it('renders skeleton bubbles until the backlog arrives', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     // untouched store: uuid null — no backlog yet
     expect(screen.getAllByRole('status', { name: 'Loading' }).length).toBeGreaterThan(0);
   });
 
   it('dead session disables the composer and offers restart', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     seed(store, { uuid: 'u1', status: 'dead', events: [user('u1', 'last words')] });
 
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
@@ -609,25 +609,25 @@ describe('SessionScreen', () => {
 
   it('shows the transcript diagnostic banner with the attempted path', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
-    seed(store, { uuid: 'u1', missingFile: '/home/rc/.claude/projects/x/u1.jsonl' });
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
+    seed(store, { uuid: 'u1', missingFile: '/home/u/.claude/projects/x/u1.jsonl' });
 
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
-    expect(screen.getByText('/home/rc/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
+    expect(screen.getByText('/home/u/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open terminal' })).toBeInTheDocument();
   });
 
   it('focuses the composer on open with a fine pointer — no second click needed', async () => {
     stubPointer(true);
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
   });
 
   it('leaves focus alone on a coarse pointer', async () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
   });
@@ -648,7 +648,7 @@ describe('SessionScreen', () => {
         raw: '❯ 1. Expand–contract',
       },
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // Radix marks the rest of the page aria-hidden while the dialog is open
