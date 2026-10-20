@@ -8695,6 +8695,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // coincidence on the shifted line: a coincidental pass gained, not a
       // repair, and Task 11 still owns that anchor. No rule changed, so no
       // D-number.
+      // RE-MEASURED on the archived-held block (D-5943; base = origin/main,
+      // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
+      // else moved. This branch adds 51 lines to the cited file (the
+      // `FleetHealth.archivedHeld` field and the block's types and reader,
+      // above README's anchors), and every anchor below them shifts by exactly
+      // 51. README's four were re-pointed to the tip's lines (`:8478-8480`,
+      // `:8530`, `:8538`, `:8551`). The one site that ENTERED is the same
+      // frozen-plan site named above (its `:5644`), whose coincidental pass is
+      // lost again: not a new debt, and Task 11 still owns it. No rule
+      // changed, so no D-number.
+      'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8849,7 +8860,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // neither frozen corpus document changed. S6-R11, no new D-number.
     // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
     // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
+    // 201 -> 202 at the archived-held block (D-5943): `shared/api.ts` 0 -> 1, the +51 shift argued beside the map; no
+    // other key moves and neither frozen corpus document changed. S6-R11, no new D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
