@@ -3340,7 +3340,10 @@ describe('C1 reads only a tracking ref the remote still backs (D-5882)', () => {
     fs.writeFileSync(path.join(wt, 'z.txt'), 'never merged\n');
     h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'never merged');
     const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
-    expect(a.verdict, 'skipping C1 must never make unmerged work reapable').not.toBe('reapable');
+    // D-5883: name the refusal — the merge prover, not an unrelated rung, must be what stops it.
+    expect(a.verdict, 'skipping C1 must never make unmerged work reapable').toBe('tree-differs');
+    expect(a.detail).toContain('never merged');
+    expect(a.detail).not.toContain('not on the remote');
     expect(fs.existsSync(wt)).toBe(true);
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
   }, 30000);
