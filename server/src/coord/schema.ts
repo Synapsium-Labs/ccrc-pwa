@@ -1738,7 +1738,8 @@ export const MIGRATIONS: readonly string[] = [
   // ── 28: user_version 27 -> 28 ─────────────────────────────────────────────
   // D-5513 (accounts-connect spec 2026-10-18 §3.3, plan Task A10): `secret_fingerprints`, the exact-bytes half of the
   // egress mask. One row per lane secret: `fp` is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)` in
-  // lowercase hex, computed ON THE BOX by the account verbs (which hold both), and `gen` names the box-token
+  // lowercase hex over the secret with its trailing `=` stripped, and `len` that stripped secret's byte length (D-5996:
+  // only a run of a held length is hashed), computed ON THE BOX by the account verbs (which hold both); `gen` names the box-token
   // generation it was keyed with (D-5975), so a rotation can keep matching the previous generation's rows until the
   // re-keyed ones land. `at` is epoch ms. The server never holds a lane secret, and this table is never served: its
   // ONE reader and writer is `SecretMasker` (`server/src/accounts/mask.ts`); A12's `reloadRoster` fills it through it.
@@ -1753,6 +1754,7 @@ export const MIGRATIONS: readonly string[] = [
     laneId TEXT    NOT NULL,
     fp     TEXT    NOT NULL CHECK (length(fp) = 64),
     gen    TEXT    NOT NULL,
+    len    INTEGER NOT NULL CHECK (len BETWEEN 20 AND 8192),
     at     INTEGER NOT NULL,
     PRIMARY KEY (laneId, gen, fp)
   );

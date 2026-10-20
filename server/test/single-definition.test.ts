@@ -7508,7 +7508,8 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     }
   });
   it('the mask lives in its one file', () => {
-    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers']) {
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+      'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
       expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
     }
   });

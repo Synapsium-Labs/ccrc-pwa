@@ -544,6 +544,9 @@ export function registerCoordRoutes(
    */
   watcher?: FleetWatcher,
 ): CoordRoutesHandle {
+  /** D-5995: an answer carrying session-derived text is masked as one frame before it is serialized. */
+  const maskAnswer = async (_req: FastifyRequest, _reply: FastifyReply, payload: unknown): Promise<unknown> =>
+    (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload);
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
@@ -3845,7 +3848,7 @@ export function registerCoordRoutes(
    * stored, `DEVIATION_ALLOC_STATES`'s own D4 argument — so a phone can see
    * it without owning a clock policy.
    */
-  app.get('/api/ledger', async (req, reply) => {
+  app.get('/api/ledger', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/ledger')) return;
     const q = req.query as { project?: unknown };
@@ -4239,7 +4242,7 @@ export function registerCoordRoutes(
    * box" left to scope (CLAUDE.md: "Identity on the fleet is attribution,
    * not authentication: single UNIX user, ccd has no caller auth").
    */
-  app.get('/api/asks', async (req, reply) => {
+  app.get('/api/asks', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995
     let viaBoxToken = false;
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);

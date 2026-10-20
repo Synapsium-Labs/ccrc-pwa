@@ -2,6 +2,7 @@ import {
   envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
+import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
 
 const TOOL_RESULT_MAX = 20_000;
 const TOOL_INPUT_MAX = 4_000;
@@ -327,7 +328,9 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
       } else if (block?.type === 'tool_use') {
         let input = '';
         try {
-          input = JSON.stringify(block.input ?? null) ?? '';
+          // D-5995: the DECODED input is masked before it is serialized and cut, so a shape a JSON escape or the cut
+          // would hide is still seen; `SessionStream.send` masks the frame again with the fingerprints.
+          input = JSON.stringify(SHAPE_ONLY_MASKER.maskDeep(block.input ?? null)) ?? '';
         } catch {
           input = '';
         }

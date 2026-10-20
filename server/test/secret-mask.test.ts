@@ -39,8 +39,11 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, DrawerMask, fingerprintOf, fingerprintGeneration, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
+import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
+import { saveSnapshot } from '../src/fleetstate.js';
+import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -77,7 +80,7 @@ const maskerWith = (opts: { token?: () => string | null; requestRekey?: () => vo
   const db = openCoordDb(path.join(mkTmp('ccrc-mask-'), 'coord.db'));
   const token = opts.token ?? (() => TOKEN_1);
   const m = new SecretMasker({ db, token, requestRekey: opts.requestRekey });
-  m.ingest((opts.secrets ?? [CMP]).map((s, i) => ({ laneId: `lane${i}`, fp: fingerprintOf(token()!, s) })));
+  m.ingest({ gen: fingerprintGeneration(token()!), rows: (opts.secrets ?? [CMP]).map((s, i) => fingerprintRow(token()!, `lane${i}`, s)) });
   return { m, db };
 };
 
@@ -215,7 +218,8 @@ describe('a compatible key is masked by its exact bytes (D-5513)', () => {
 
   it('a compatible-key fingerprint planted at run 300 of one frame is masked', () => {
     const { m } = maskerWith();
-    const runs = Array.from({ length: 299 }, (_, i) => `filler${String(i).padStart(20, '0')}`);
+    // D-5995: only a run of a held length is a candidate, so the fillers have CMP's length
+    const runs = Array.from({ length: 299 }, (_, i) => `filler${String(i).padStart(CMP.length - 6, '0')}`);
     const out = m.maskText(`${runs.join(' ')} ${CMP} tail`);
     expect(RUNS_PER_CHUNK).toBe(256);
     expect(out.endsWith(`${SECRET_MASK} tail`)).toBe(true);
@@ -225,7 +229,7 @@ describe('a compatible key is masked by its exact bytes (D-5513)', () => {
   it('a frame past the hard ceiling ends in the too-large notice, and no byte after the ceiling reaches the socket', () => {
     const { m } = maskerWith();
     const ceiling = RUNS_PER_CHUNK * MAX_CHUNKS;
-    const runs = Array.from({ length: ceiling + 10 }, (_, i) => `filler${String(i).padStart(20, '0')}`);
+    const runs = Array.from({ length: ceiling + 10 }, (_, i) => `filler${String(i).padStart(CMP.length - 6, '0')}`);   // D-5995
     const out = m.maskText(`${runs.join(' ')} ${CMP} after`);
     expect(out.endsWith(SECRET_MASK_TOO_LARGE)).toBe(true);
     expect(out).toContain(runs[ceiling - 1]);
@@ -237,8 +241,8 @@ describe('a compatible key is masked by its exact bytes (D-5513)', () => {
   it('a row is matched only under the token of its own generation', () => {
     const { db } = maskerWith();   // CMP under TOKEN_1's generation
     // A stray row filed under TOKEN_2's generation but keyed with TOKEN_1: no generation's own fingerprint.
-    db.prepare('INSERT INTO secret_fingerprints (laneId, fp, gen, at) VALUES (?, ?, ?, ?)')
-      .run('stray', fingerprintOf(TOKEN_1, CMP_OTHER), fingerprintGeneration(TOKEN_2), 1);
+    db.prepare('INSERT INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)')
+      .run('stray', fingerprintOf(TOKEN_1, CMP_OTHER), fingerprintGeneration(TOKEN_2), CMP_OTHER.length, 1);
     let tok = TOKEN_1;
     const m = new SecretMasker({ db, token: () => tok });
     tok = TOKEN_2;   // a rotation: TOKEN_2 is current, TOKEN_1 is held as the previous generation
@@ -254,14 +258,14 @@ describe('a compatible key is masked by its exact bytes (D-5513)', () => {
     tok = TOKEN_2;   // the box token rotates
     expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);   // before the re-key: the previous generation still matches
     expect(rekeys).toHaveLength(1);
-    m.ingest([{ laneId: 'lane0', fp: fingerprintOf(TOKEN_2, CMP) }]);   // the re-keyed rows land
+    m.ingest({ gen: fingerprintGeneration(TOKEN_2), rows: [fingerprintRow(TOKEN_2, 'lane0', CMP)] });   // the re-keyed rows land
     expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
     const gens = (db.prepare('SELECT DISTINCT gen FROM secret_fingerprints').all() as { gen: string }[]).map((r) => r.gen);
     expect(gens).toEqual([fingerprintGeneration(TOKEN_2)]);
     // and a process booting over rows of a generation it holds no token for asks for the re-key at once
-    db.prepare('INSERT INTO secret_fingerprints (laneId, fp, gen, at) VALUES (?, ?, ?, ?)').run('old', 'f'.repeat(64), 'oldgen', 1);
+    db.prepare('INSERT INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)').run('old', 'f'.repeat(64), 'oldgen', 45, 1);
     const booted: number[] = [];
-    new SecretMasker({ db, token: () => TOKEN_2, requestRekey: () => booted.push(1) });
+    new SecretMasker({ db, token: () => TOKEN_2, requestRekey: () => { booted.push(1); } });
     expect(booted).toHaveLength(1);
   });
 });
@@ -317,10 +321,10 @@ describe('the drawer stream (D-5513)', () => {
     out.length = 0;
     d.push('prompt> ');
     expect(out).toEqual(['prompt> ']);
-    d.push('partial');                           // an open run is held, at most 50 ms
+    d.push('sk-pa');                             // an open run that could start a shape is held, at most 50 ms (D-5995)
     expect(out).toEqual(['prompt> ']);
     vi.advanceTimersByTime(50);
-    expect(out).toEqual(['prompt> ', 'partial']);
+    expect(out).toEqual(['prompt> ', 'sk-pa']);
     d.dispose();
   });
 
@@ -460,7 +464,305 @@ describe('secret_fingerprints never leaves the server (D-5513)', () => {
     const db = new DatabaseSync(':memory:');
     const dbm = openCoordDb(path.join(mkTmp('ccrc-mask-cols-'), 'coord.db'));
     const cols = (dbm.prepare("SELECT name FROM pragma_table_info('secret_fingerprints')").all() as { name: string }[]).map((c) => c.name);
-    expect(cols.sort()).toEqual(['at', 'fp', 'gen', 'laneId']);
+    expect(cols.sort()).toEqual(['at', 'fp', 'gen', 'laneId', 'len']);   // len: the unpadded secret's byte length (D-5996)
     db.close();
+  });
+});
+
+// ── the review's findings (D-5995, D-5996) ─────────────────────────────────
+// APPENDED. Each case is a probe a reviewer ran against the first build: a credential that still reached a client,
+// or a mask that stalled or delayed the stream.
+/** A fingerprint row as the box answers it (D-5996): the secret's trailing `=` stripped, its byte length beside it. */
+const rowOf = (token: string, laneId: string, secret: string): { laneId: string; fp: string; len: number } => {
+  const bare = secret.replace(/=+$/, '');
+  return { laneId, fp: fingerprintOf(token, bare), len: Buffer.byteLength(bare, 'utf8') };
+};
+const ingestAs = (m: SecretMasker, token: string, secrets: string[]): unknown =>
+  (m.ingest as unknown as (a: unknown) => unknown)({
+    gen: fingerprintGeneration(token), rows: secrets.map((x, i) => rowOf(token, `lane${i}`, x)),
+  });
+const maskerOver = (token: () => string, secrets: string[], requestRekey?: () => unknown) => {
+  const db = openCoordDb(path.join(mkTmp('ccrc-mask-r-'), 'coord.db'));
+  const m = new SecretMasker({ db, token, requestRekey: requestRekey as (() => void) | undefined });
+  ingestAs(m, token(), secrets);
+  return { m, db };
+};
+
+describe('the review findings: shapes reach every client masked (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a Codex auth.json split at every offset of its field context and opaque refresh_token value leaves no byte of the value in the drawer', () => {
+    const line = `{"refresh_token": "${OPAQUE_REFRESH}"}\r\n`;
+    for (let k = 1; k < line.length - 2; k++) {
+      const out: string[] = [];
+      const d = new DrawerMask(new SecretMasker(), (t) => out.push(t), 50);
+      d.push(line.slice(0, k));
+      d.push(line.slice(k));
+      d.flush();
+      expect(leaksNone(out.join(''), OPAQUE_REFRESH), `split at ${k}: ${out.join('|')}`).toBe(true);
+      d.dispose();
+    }
+  });
+
+  it('a key after a literal \\n or \\t in a JSON-serialized tool input, or after a percent-escape, is masked', () => {
+    const m = new SecretMasker();
+    const input = JSON.stringify({ file_path: '/w/demo/.env', content: `A=1\n${API}\n\t${OAT}\n` });
+    const out = m.maskText(`{"kind":"tool_use","input":${JSON.stringify(input)}}`);
+    expect(leaksNone(out, API) && leaksNone(out, OAT), out).toBe(true);
+    for (const t of [`Bearer%20${OAT}`, `%22${ORKEY}%22`, `key%3D${API}`, `x\\r${OAT}`]) {
+      expect(leaksNone(m.maskText(t), t.includes(ORKEY) ? ORKEY : t.includes(API) ? API : OAT), t).toBe(true);
+    }
+  });
+
+  it('a transcript tool_use input holding a Codex auth.json reaches the session socket with its value masked', async () => {
+    const tool = JSON.stringify({ type: 'assistant', uuid: 'u-tool', timestamp: '2026-10-18T10:00:00.000Z', message: {
+      role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't1', name: 'Write',
+        input: { file_path: '/w/demo/auth.json', content: JSON.stringify({ tokens: { refresh_token: OPAQUE_REFRESH } }) } }],
+    } });
+    const frame = await backlogFrame(`${tool}\n`);
+    expect(leaksNone(frame, OPAQUE_REFRESH), frame.slice(0, 400)).toBe(true);
+  });
+
+  it('a tmux redraw positions a wrapped key with cursor moves, or puts ESC(B ESC[m or an OSC 8 link in it, and no byte of it leaks', () => {
+    const m = new SecretMasker();
+    const cases = [
+      `\x1b[5;1H⎿  ${OAT.slice(0, 40)}\x1b[6;1H     ${OAT.slice(40)}\x1b[7;1H`,
+      `\x1b[5;1H  ${OAT.slice(0, 40)}\x1b[6;6H${OAT.slice(40)}`,
+      `KEY=${API.slice(0, 60)}\x1b(B\x1b[m\r\n     ${API.slice(60)}\r\n`,
+      ...[5, 20, 60].map((k) => `x ${OAT.slice(0, k)}\x1b(B\x1b[m${OAT.slice(k)} y`),
+      `x ${OAT.slice(0, 30)}\x1b]8;;https://example.invalid/\x1b\\${OAT.slice(30)}\x1b]8;;\x1b\\ y`,
+      `x ${OAT.slice(0, 30)}\x1b]8;;https://example.invalid/\x07${OAT.slice(30)} y`,
+    ];
+    for (const c of cases) {
+      const secret = c.includes(API.slice(0, 20)) ? API : OAT;
+      const out = m.maskText(c, { rows: true });
+      expect(leaksNone(out.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])/g, ''), secret),
+        JSON.stringify(out)).toBe(true);
+    }
+  });
+
+  it('the drawer holds a split key past a gap longer than the hold and still leaks no byte of it', () => {
+    vi.useFakeTimers();
+    for (const k of [3, 6, 13, 22, 40]) {
+      const out: string[] = [];
+      const d = new SecretMasker().drawer((t) => out.push(t));
+      d.push(`key: ${OAT.slice(0, k)}`);
+      vi.advanceTimersByTime(80);
+      d.push(`${OAT.slice(k)}\r\n`);
+      expect(leaksNone(out.join(''), OAT), `gap after ${k}: ${out.join('|')}`).toBe(true);
+      d.dispose();
+    }
+  });
+
+  it('a maskDeep over a class instance masks its string fields', () => {
+    class Holder { constructor(readonly note: string) {} }
+    const out = JSON.stringify(new SecretMasker().maskDeep({ h: new Holder(`use ${OAT}`) }));
+    expect(leaksNone(out, OAT), out).toBe(true);
+  });
+});
+
+describe('the review findings: a compatible key is matched where it actually appears (D-5995, D-5996)', () => {
+  it('a compatible key ending a sentence, in brackets, in a URL path or query, after a literal \\r, or with an SGR inside is masked, and the same contexts around another key are not', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const ctx = (k: string): string[] => [`${k}.`, `(${k})`, `<${k}>`, `{${k}}`, `[${k}]`, `|${k}|`, `**${k}**`,
+      `/v1/${k}/x`, `?${k}`, `\\r${k}`];
+    for (const c of ctx(CMP)) expect(leaksNone(m.maskText(c), CMP), c).toBe(true);
+    for (const c of ctx(CMP_OTHER)) expect(m.maskText(c), c).toBe(c);
+    expect(leaksNone(m.maskText(`${CMP.slice(0, 10)}\x1b[31m${CMP.slice(10)}`).replace(/\x1b\[[0-9;]*m/g, ''), CMP)).toBe(true);
+  });
+
+  it('a compatible key wrapped onto an indented next row, or split by a cursor move, is masked in rows mode', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const c of [`  ⎿  x ${CMP.slice(0, 30)}\r\n     ${CMP.slice(30)}\r\n`, `k ${CMP.slice(0, 30)}\x1b[6;6H${CMP.slice(30)}`]) {
+      const out = m.maskText(c, { rows: true });
+      expect(leaksNone(out, CMP), JSON.stringify(out)).toBe(true);
+    }
+  });
+
+  it('a padded secret is fingerprinted without its padding and matched bare or padded (D-5996)', () => {
+    const padded = `${fill(30, 'pad')}==`;
+    const { m } = maskerOver(() => TOKEN_1, [padded]);
+    expect(m.maskText(`K=${padded}`)).toBe(`K=${SECRET_MASK}==`);
+    expect(m.maskText(`K ${padded.slice(0, -2)} x`)).toBe(`K ${SECRET_MASK} x`);
+  });
+
+  it('ordinary run-dense text of no fingerprinted length is never cut, and the ceiling is shared by a whole frame', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const plain = Array.from({ length: 40_000 }, (_, i) => `run${String(i).padStart(22, '0')}`).join(' ');
+    expect(m.maskText(plain).endsWith(SECRET_MASK_TOO_LARGE)).toBe(false);
+    // runs of CMP's own length are candidates: two strings of 9,000 each pass the 16,384-candidate frame ceiling
+    const same = (salt: string): string => Array.from({ length: 9_000 },
+      (_, i) => `${salt}${String(i).padStart(CMP.length - salt.length, '0')}`).join(' ');
+    const frame = m.maskDeep({ a: same('p'), b: `${same('q')} ${CMP}` });
+    expect(frame.a.endsWith(SECRET_MASK_TOO_LARGE)).toBe(false);
+    expect(frame.b.endsWith(SECRET_MASK_TOO_LARGE)).toBe(true);
+    expect(leaksNone(frame.b, CMP)).toBe(true);
+  });
+});
+
+describe('the review findings: rotation and re-key (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('two rotations before the re-key lands keep the oldest generation matched', () => {
+    let tok = TOKEN_1;
+    const { m } = maskerOver(() => tok, [CMP]);
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+    tok = TOKEN_2;
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+    tok = 'c3'.repeat(32);
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+  });
+
+  it('an answer keyed with another generation is refused and deletes nothing', () => {
+    let tok = TOKEN_1;
+    const { m, db } = maskerOver(() => tok, [CMP]);
+    tok = TOKEN_2;
+    m.maskText('x');
+    expect(ingestAs(m, TOKEN_1, [CMP_OTHER])).toBe(false);   // keyed with the previous token: not the current generation
+    const gens = (db.prepare('SELECT DISTINCT gen FROM secret_fingerprints').all() as { gen: string }[]).map((r) => r.gen);
+    expect(gens).toEqual([fingerprintGeneration(TOKEN_1)]);
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+  });
+
+  it('the re-key request\'s answer is ingested, and a failed request is retried with backoff', async () => {
+    vi.useFakeTimers();
+    let tok = TOKEN_1;
+    const calls: number[] = [];
+    let fail = true;
+    const { m, db } = maskerOver(() => tok, [CMP], () => {
+      calls.push(1);
+      if (fail) return Promise.reject(new Error('link down'));
+      return Promise.resolve({ gen: fingerprintGeneration(tok), rows: [rowOf(tok, 'lane0', CMP)] });
+    });
+    tok = TOKEN_2;
+    m.maskText('x');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const gens = (db.prepare('SELECT DISTINCT gen FROM secret_fingerprints').all() as { gen: string }[]).map((r) => r.gen);
+    expect(gens).toEqual([fingerprintGeneration(TOKEN_2)]);
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+    const settled = calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(calls).toHaveLength(settled);   // nothing stale left: no further request
+    (m as unknown as { close?: () => void }).close?.();
+  });
+});
+
+describe('the review findings: the mask stays cheap and the drawer stays live (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('20,000 shape matches mask in well under a second, flat and in rows mode', () => {
+    const m = new SecretMasker();
+    const text = Array.from({ length: 20_000 }, (_, i) => `sk-${String(i).padStart(12, '0')}`).join(' ');
+    for (const rows of [false, true]) {
+      const t0 = performance.now();
+      const out = m.maskText(text, { rows });
+      expect(out.startsWith(SECRET_MASK)).toBe(true);
+      expect(performance.now() - t0, `rows=${rows}`).toBeLessThan(600);
+    }
+  });
+
+  it('2 MB of undelimited drawer output in 4 KB chunks stays bounded in time and in what it holds', () => {
+    const out: string[] = [];
+    const d = new DrawerMask(new SecretMasker(), (t) => out.push(t), 50);
+    const chunk = 'A'.repeat(4096);
+    const t0 = performance.now();
+    let maxHeld = 0;
+    for (let i = 0; i < 512; i++) {
+      d.push(chunk);
+      maxHeld = Math.max(maxHeld, (d as unknown as { held: string }).held.length);
+    }
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(maxHeld).toBeLessThanOrEqual(8192 + 1024 + 4096);
+    d.dispose();
+  });
+
+  it('a keystroke echo that cannot start a shape goes at once, and a held one goes within 8 ms of its first hold', () => {
+    vi.useFakeTimers();
+    const out: string[] = [];
+    const d = new SecretMasker().drawer((t) => out.push(t));
+    d.push('x');
+    expect(out).toEqual(['x']);
+    d.push(' e');
+    vi.advanceTimersByTime(5);
+    d.push('y');                       // still a shape's possible start: held, the deadline does not restart
+    vi.advanceTimersByTime(3);
+    expect(out.join('')).toBe('x ey');
+    d.dispose();
+  });
+});
+
+describe('the review findings: every egress of session text is masked (D-5995)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const session = (id: string): FleetSession => ({
+    id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+    workspace: null, name: `n ${OAT}`, status: 'idle', statusUpdatedAt: null, limits: null,
+    dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+    branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+    hookState: null, askSummary: `paste ${ORKEY}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+    started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+  });
+  const clean = (body: string): void => {
+    expect(body).toContain(SECRET_MASK);
+    expect(leaksNone(body, OAT) && leaksNone(body, ORKEY), body.slice(0, 300)).toBe(true);
+  };
+
+  it('the /ws/fleet fleet frame and the disconnected GET /api/fleet snapshot carry only the mask', async () => {
+    const home = mkTmp('ccrc-mask-fleet-');
+    seedRoster(home);
+    const cachePath = path.join(home, 'state-cache.json');
+    await saveSnapshot([session(ID)], cachePath);
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const bus = new Bus();
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
+    clean((await app.inject({ method: 'GET', url: '/api/fleet' })).body);
+    const port = await listen(app);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const frame = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no fleet frame')), 5000);
+      ws.on('message', (d) => {
+        const s = String(d);
+        if (s.includes('"hello"')) bus.emit('fleet', [session(ID)]);
+        if (s.includes('"type":"fleet"')) { clearTimeout(t); resolve(s); }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    clean(frame);
+  });
+
+  it('GET /api/asks carries only the mask, and GET /api/digest leaks nothing', async () => {
+    const f = await approvalsFixture();
+    try {
+      const t = Date.now() - 3 * 86_400_000;
+      const id = f.coord.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k-mask', askAt: t, dialogId: 'd-mask',
+        question: `use ${OAT}?`, options: [ORKEY, 'no'], now: t });
+      const r = f.coord.askById(id);
+      if (!r.ok || r.ask === null) throw new Error('fixture');
+      clean((await f.app.inject({ method: 'GET', url: `/api/asks?parent=${PARENT}` })).body);
+      f.coord.takeAskForAnswer(id, r.ask.askAt);
+      f.coord.settleAsk(id, PARENT, ORKEY, t + 1);
+      const day = new Date(t + 86_400_000).toISOString().slice(0, 10);
+      const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${day}` })).body;
+      const prev = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${new Date(t).toISOString().slice(0, 10)}` })).body;
+      // The digest's lines already pass `redactCommand` (shapes only); the mask adds the exact-bytes half.
+      const body = d.includes('"lines":[]') ? prev : d;
+      expect(body).toContain('"rowKind":"ask"');
+      expect(leaksNone(body, OAT) && leaksNone(body, ORKEY), body.slice(0, 300)).toBe(true);
+    } finally { await f.close(); }
+  });
+
+  it('GET /api/digest and GET /api/ledger are masked like their siblings, as one frame each', () => {
+    const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
+    expect(src('coord', 'routes.ts')).toMatch(/app\.get\('\/api\/ledger', \{ preSerialization: maskAnswer \}/);
+    expect(src('server.ts')).toMatch(/app\.get\('\/api\/digest', \{ preSerialization: maskAnswer \}/);
   });
 });

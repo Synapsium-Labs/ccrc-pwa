@@ -1232,12 +1232,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
+  /** D-5995: a route answer carrying session-derived text is masked as one frame before it is serialized. */
+  const maskAnswer = async (_req: FastifyRequest, _reply: FastifyReply, payload: unknown): Promise<unknown> =>
+    (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload);
 
   // Degraded mode: while the remote fleet host is unreachable, serve the
   // last-known-good snapshot (fleetstate.ts, written by FleetWatcher on every
   // successful poll) instead of a live assemble that would otherwise read as
   // an empty fleet. `stale`/`downSince` let the PWA bannner explain why.
-  app.get('/api/fleet', async () => {
+  // D-5995: session text in a fleet answer (a name, an ask summary, a task's active form) is masked before it is
+  // serialized, on every arm of the route.
+  app.get('/api/fleet', { preSerialization: maskAnswer }, async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
       // NO `pools` KEY on this arm, deliberately: nothing about pools is
@@ -1537,8 +1542,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
+    // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized.
+    const mk = deps.masker ?? SHAPE_ONLY_MASKER;
     const sendFleet = (sessions: FleetSession[]) =>
-      socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'fleet', sessions } satisfies FleetMsg)));
     // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
     // (`currentFleet`), and a snapshot is assembled only before it. The watcher
     // re-emits only on change (`lastJson`), so a cold frame that differs from
@@ -1554,11 +1561,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       broadcastSeen = true;
       sendFleet(sessions);
     };
-    const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
+    const onNotice = (n: Notice) => socket.send(JSON.stringify(mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
     const onRuns = (runs: RunSummary[]) =>
-      socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
     const onCoord = (coord: CoordStatus) =>
-      socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+      socket.send(JSON.stringify(mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
       socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
@@ -2164,7 +2171,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * the newest day whose window has closed. Session-gated when armed (not EXEMPT); no box token. A read: it changes
    * nothing, and it never sends the push (the beat in `watch.ts` does).
    */
-  app.get('/api/digest', async (req, reply) => {
+  app.get('/api/digest', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: question and reason text
     if (!deps.coord) return refuseRoute(reply, 'not-configured');
     const q = (req.query ?? {}) as { day?: unknown };
     const hourUtc = readDigestHour(deps.cfg.ccrcDir);
