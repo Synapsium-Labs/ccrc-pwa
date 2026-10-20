@@ -12,7 +12,7 @@ import { programmeHoldOf } from './coord/rundefs.js';
 import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 import {
   STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
-  stopDoneVerdict, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
+  mailOnly, stopDoneVerdict, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
 
@@ -89,7 +89,14 @@ export interface StopDoneSweepDeps {
 export interface StopDoneMemory {
   /** After a refused stop: not asked again before this instant. */
   readonly retryAt: Map<string, number>;
+  /** D-6091: the mail-only count the lane's last excluded row carried; absent reads as 0, so a restart writes one row
+   *  when the count is not zero, and a quiet fleet writes none. */
+  mailOnly?: number;
 }
+
+/** The excluded row's title (D-6091): a finished worker that nothing but unread mail keeps awake is counted, never put
+ *  to sleep. */
+export const STOP_DONE_MAIL_ONLY_TITLE = 'Workers kept awake by unread mail';
 
 export type StopDoneOutcome =
   | { readonly id: string; readonly kind: 'hibernated'; readonly runId: number }
@@ -163,20 +170,40 @@ async function readLive(deps: StopDoneSweepDeps, rec: SessionRecord): Promise<St
   return { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, turn, mark };
 }
 
-function recordFeed(deps: StopDoneSweepDeps, id: string, runId: number): void {
+/** The lane's two feed rows (D-6091), through ONE writer site (consolidation W1a C1e's ratchet counts sites): a
+ *  worker put to sleep, naming its run's state, and the excluded row, the count of workers nothing but unread mail
+ *  keeps awake. Recorded and archived, never pushed. */
+type StopDoneFeedRow =
+  | { readonly kind: 'asleep'; readonly id: string; readonly runId: number; readonly state: string }
+  | { readonly kind: 'mail-only'; readonly count: number };
+
+function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
   const log = deps.notifyLog;
   if (!log) return;
   try {
-    const ev = log.record({
-      kind: 'run', sessionId: id, runId, title: 'Worker asleep',
-      body: `${id} was put to sleep: its run ${runId} is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
-    });
+    const ev = log.record(row.kind === 'asleep'
+      ? {
+        kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
+        body: `${row.id} was put to sleep: its run ${row.runId} is ${row.state} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
+      }
+      : {
+        kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
+        body: `${row.count} finished worker(s) would be put to sleep but for unread mail to them; they stay awake until it is read.`,
+      });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
-    console.warn(`ccrc-server: stop-done: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ${id}'s sleep has no feed row`);
+    const what = row.kind === 'asleep' ? `${row.id}'s sleep has no feed row` : 'the mail-only count has no feed row';
+    console.warn(`ccrc-server: stop-done: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ${what}`);
   } finally {
     void log.flush();
   }
+}
+
+/** The excluded row, written only when the count differs from the last one this process wrote. */
+function recordMailOnly(deps: StopDoneSweepDeps, mem: StopDoneMemory, count: number): void {
+  if (count === (mem.mailOnly ?? 0)) return;
+  mem.mailOnly = count;
+  recordFeed(deps, { kind: 'mail-only', count });
 }
 
 /** One pass of the lane. Returns what it did, for the caller's log and the tests. */
@@ -195,7 +222,7 @@ export async function stopDonePass(
     .filter((s) => s.child.kind === 'child' && s.stoppedBy === null && s.archivedAt === null && byId.has(s.id)
       && !mem.retryAt.has(s.id))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (pop.length === 0) return [];
+  if (pop.length === 0) { recordMailOnly(deps, mem, 0); return []; }
   const reads = storeReads(deps.coord, pop.map((s) => s.id));
   const verb = verbSupported(deps.fleetState, CCD_ARGV.hibernate(pop[0]!.id, null));
   const holdOkVerb = capSupported(deps.fleetState, HIBERNATE_HOLD_OK_CAP);
@@ -205,6 +232,8 @@ export async function stopDonePass(
     presenceTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
+  // The excluded row's count, over the whole population (pure: the verdict asked twice, no live read).
+  recordMailOnly(deps, mem, pop.filter((row) => mailOnly(inputFor(row, reads.get(row.id)!, { kind: 'unread' }, now))).length);
   const due: FleetSession[] = [];
   let measured = 0;
   for (const row of pop) {
@@ -218,6 +247,7 @@ export async function stopDonePass(
     if (v.act === 'hibernate') due.push(row);
   }
   const out: StopDoneOutcome[] = [];
+  const states = new Map<string, string>();
   for (const row of due) {
     const rec = byId.get(row.id)!;
     try {
@@ -239,7 +269,9 @@ export async function stopDonePass(
             ? { id: row.id, kind: 'skipped', detail: busy[1] || 'busy' }
             : { id: row.id, kind: 'failed', detail: res.stderr };
         }
-        recordFeed(deps, row.id, v.runId);
+        const state = store.ok && store.last !== null ? store.last.state : 'unknown';
+        states.set(row.id, state);
+        recordFeed(deps, { kind: 'asleep', id: row.id, runId: v.runId, state });
         return { id: row.id, kind: 'hibernated', runId: v.runId };
       })));
     } catch (err) {
@@ -248,7 +280,7 @@ export async function stopDonePass(
     }
   }
   for (const o of out) {
-    if (o.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${o.id} to sleep (run ${o.runId} done, idle; D-5370, D-5427)`);
+    if (o.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${o.id} to sleep (run ${o.runId} ${states.get(o.id) ?? 'unknown'}, idle; D-5370, D-5427, D-6091)`);
     else if (o.kind === 'skipped') console.warn(`ccrc-server: stop-done: ccd re-measured ${o.id} as ${o.detail} — not asked again for an hour`);
     else if (o.kind === 'failed') console.warn(`ccrc-server: stop-done: the hibernate of ${o.id} failed (${o.detail}) — not asked again for an hour`);
   }

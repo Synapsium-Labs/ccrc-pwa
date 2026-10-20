@@ -5,7 +5,7 @@ import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -43,7 +43,7 @@ const rec = (id: string): SessionRecord => ({ id, uuid: `uuid-${id}` }) as unkno
 interface Fake {
   deps: StopDoneSweepDeps;
   argv: string[][];
-  feed: { sessionId: string; runId: number | null }[];
+  feed: { kind?: string; sessionId: string; runId: number | null; title?: string; body?: string }[];
   serialCalls: number;
   /** Per session: the newest run's state and close time, and whether another open run names it. */
   runs: Map<string, { runId: number; state: string; closedAt: number | null }>;
@@ -100,7 +100,12 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     } as unknown as FleetState,
     presence: { isOpen: () => false },
     notifyLog: {
-      epoch: 'e', record: (e: { sessionId: string; runId: number | null }) => { f.feed.push({ sessionId: e.sessionId, runId: e.runId }); return { ...e, seq: ++seq, at: NOW }; },
+      epoch: 'e',
+      record: (e: { kind: string; sessionId: string; runId: number | null; title: string; body: string }) => {
+        f.feed.push(e.kind === 'coord' ? { kind: e.kind, sessionId: e.sessionId, runId: e.runId, title: e.title, body: e.body }
+          : { sessionId: e.sessionId, runId: e.runId });
+        return { ...e, seq: ++seq, at: NOW };
+      },
       flush: async () => undefined,
     } as unknown as StopDoneSweepDeps['notifyLog'],
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
@@ -483,6 +488,63 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
 
   it('HIBERNATE_HOLD_OK_CAP is a token ccd advertises (ccdCapTokens.ts)', () => {
     expect(CCD_CAPABILITY_TOKENS).toContain(HIBERNATE_HOLD_OK_CAP);
+  });
+});
+
+// D-6091: the excluded row — the finished workers nothing but unread mail keeps awake, counted on the lane's feed.
+describe('stopDonePass: the mail-only feed row (D-6091)', () => {
+  const coordRows = (f: Fake) => f.feed.filter((e) => e.kind === 'coord');
+
+  it('the excluded row carries the mail-only count, once per change', async () => {
+    const f = fake([ID, 'project-a-other-basin']);
+    f.mailTo.add(ID);
+    f.mailTo.add('project-a-other-basin');
+    const m = mem();
+    const rows = [row(ID), row('project-a-other-basin')];
+    const recs = [rec(ID), rec('project-a-other-basin')];
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 2']);
+    expect(coordRows(f)[0]).toMatchObject({ sessionId: '', runId: null });
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f), 'unchanged: no second row').toHaveLength(1);
+    f.mailTo.delete(ID);
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 2', 'Workers kept awake by unread mail: 1']);
+  });
+
+  it('a pass whose count is zero from the start writes no row; a fall to zero writes one', async () => {
+    const f = fake([ID]);
+    const m = mem();
+    await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(f)).toEqual([]);
+    const g = fake([ID]);
+    g.mailTo.add(ID);
+    await stopDonePass(g.deps, m, [row(ID)], [rec(ID)], []);
+    g.mailTo.delete(ID);
+    await stopDonePass(g.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(g).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 1', 'Workers kept awake by unread mail: 0']);
+  });
+
+  it('mail beside another hold is not counted', async () => {
+    const f = fake([ID]);
+    f.mailTo.add(ID);
+    f.openWorkers.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(coordRows(f)).toEqual([]);
+  });
+
+  it('the sleep row names the run\'s state', async () => {
+    const f = fake([ID]);
+    const bodies: string[] = [];
+    const log = { ...f.deps.notifyLog!, record: (e: { body: string }) => { bodies.push(e.body); return { ...e, seq: 1, at: NOW }; } };
+    await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
+    expect(bodies).toEqual([`${ID} was put to sleep: its run 10 is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+  });
+
+  it('the feed archive keeps one writer site', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'stopDoneSweep.ts'), 'utf8');
+    expect(src.match(/\.recordFeedEvent\(/g) ?? []).toHaveLength(1);
+    expect(src.match(/\.record\(/g) ?? []).toHaveLength(1);
   });
 });
 

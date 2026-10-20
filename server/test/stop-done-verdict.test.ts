@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  STOP_DONE_GRACE_MS, STOP_DONE_HOLDS, stopDoneVerdict, type StopDoneHold, type StopDoneInput, type StopDoneRow,
+  STOP_DONE_GRACE_MS, STOP_DONE_HOLDS, mailOnly, stopDoneVerdict, type StopDoneHold, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { PRESENCE_TTL_MS } from '../../shared/api.js';
 import { HIBERNATE_HOLDS } from '../src/coord/hibernate.js';
@@ -295,6 +295,25 @@ describe('stopDoneVerdict: finished workers sleep at run close (D-6091)', () => 
 
   it('the run-done policy reads no N: its input carries none', () => {
     expect(Object.keys(base())).not.toContain('afterMs');
+  });
+});
+
+// D-6091, the excluded row's count: a finished worker that NOTHING but unread mail keeps awake. One definition, the
+// verdict asked twice (with and without the mail), so no second hold order exists.
+describe('mailOnly (D-6091)', () => {
+  const withMail = (o: Partial<StopDoneInput> = {}) => base({ store: okStore({ mail: true }), ...o });
+
+  it('mailOnly is true only when mail is the sole hold', () => {
+    expect(mailOnly(withMail()), 'mail alone').toBe(true);
+    expect(mailOnly(base()), 'no mail').toBe(false);
+    expect(mailOnly(withMail({ viewer: true })), 'mail and a viewer').toBe(false);
+    expect(mailOnly(withMail({ row: row({ held: 'keep: debugging' }) })), 'mail and an operator hold (earlier)').toBe(false);
+    expect(mailOnly(withMail({ live: readLive({ mark: markAt({ crons: 1 }) }) })), 'mail and a cron').toBe(false);
+    expect(mailOnly(withMail({ store: okStore({ mail: true, claim: true }) })), 'mail and a claim').toBe(false);
+  });
+
+  it('with the live state unread, mail beside nothing else read so far counts (the live reads are not made for it)', () => {
+    expect(mailOnly(withMail({ live: { kind: 'unread' } }))).toBe(true);
   });
 });
 

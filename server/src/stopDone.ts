@@ -236,3 +236,18 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
     ? { act: 'hibernate', runId: s.last.runId, idleMs }
     : { act: 'hibernate', runId: s.last.runId, idleMs, holdOk: r.held };
 }
+
+/** Is unread mail the ONE thing keeping this finished worker awake (D-6091)? The verdict asked twice — as measured,
+ *  and with no outstanding mail — so there is one hold order, the verdict's. The lane counts these on its feed (the
+ *  excluded row): a worker the run-done policy would put to sleep but for mail nobody has read.
+ *
+ *  The live reads cost tmux and file reads, and the lane makes them only for a row nothing else holds, so a mail-held
+ *  row is asked with its live state unread: `measure` without the mail counts as "would sleep" here. */
+export function mailOnly(i: StopDoneInput): boolean {
+  if (!i.store.ok || !i.store.mail) return false;
+  const v = stopDoneVerdict(i);
+  if (v.act !== 'hold' || v.reason !== 'mail') return false;
+  const without = stopDoneVerdict({ ...i, store: { ...i.store, mail: false } });
+  return without.act === 'hibernate' || without.act === 'measure';
+}
+
