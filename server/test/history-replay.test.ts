@@ -1815,19 +1815,32 @@ describe('fix round 1 (D-5984): each child leads its own process group, with a p
     mkdirSync(t5path.join(b.out, `pf-0.pid.tmp-${process.pid}`));
     const files = ['stub.pid', 'grandchild.pid'].map((f) => t5path.join(b.home, f));
     const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    let killedPid: number | null = null;
     try {
       const failure = await bounded(claimedRun(t5job(b, b.up, 'box', 'pf-0')).then(() => null, (e: unknown) => e), 30_000, 'the run rejecting');
       expect(failure, 'the run rejects').toBeInstanceOf(DriverRefusal);
       expect((failure as DriverRefusal).word).toBe('out-refused');
-      expect((failure as DriverRefusal).detail).toMatch(/^pf-0\.pid\.tmp-\d+ already exists/);
-      await pause(2000);   // a child left running would have written its pid files by now
-      const stubPid = existsSync(files[0]!) ? Number(readFileSync(files[0]!, 'utf8')) : null;
-      if (stubPid !== null) expect(await until(() => groupGone(stubPid), 10_000), 'no process is left in the stub\'s group').toBe(true);
+      // The refusal names the child it killed, so the check below does not depend on the stub having started.
+      const detail = (failure as DriverRefusal).detail;
+      const named = /^pf-0\.pid\.tmp-\d+ already exists and is not a regular file; its child \(pid (\d+)\) was killed with its group$/.exec(detail);
+      expect(named, detail).not.toBeNull();
+      killedPid = Number(named![1]);
+      expect(await until(() => groupGone(killedPid!), 10_000), 'no process is left in the killed child\'s group').toBe(true);
+      // A stub that did start has its pid file read after the group is gone, so its grandchild is checked too.
       const grandchild = existsSync(files[1]!) ? Number(readFileSync(files[1]!, 'utf8')) : null;
       if (grandchild !== null) expect(await until(() => !alive(grandchild), 10_000), 'the grandchild died with the group').toBe(true);
       expect(existsSync(t5path.join(b.out, 'pf-0.run.json')), 'no run.json').toBe(false);
       expect(existsSync(t5path.join(b.out, 'pf-0.pid')), 'no record').toBe(false);
+      expect(existsSync(t5path.join(b.out, 'pf-0.jsonl.part')), 'the .part is left for the next claim').toBe(true);
+      // The next driver on this --out charges that .part once (one ledger line) and removes it (D-5811).
+      claimsByOut.get(b.out)!.release();
+      claimsByOut.delete(b.out);
+      claimFor(b.out);
+      const ledger = readFileSync(t5path.join(b.out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '');
+      expect(ledger, 'charged once').toHaveLength(1);
+      expect(existsSync(t5path.join(b.out, 'pf-0.jsonl.part')), 'the .part is removed after the charge').toBe(false);
     } finally {
+      if (killedPid !== null && !groupGone(killedPid)) { try { process.kill(-killedPid, 'SIGKILL'); } catch { /* gone */ } }
       for (const f of files) { try { process.kill(Number(readFileSync(f, 'utf8')), 'SIGKILL'); } catch { /* gone, or never written */ } }
     }
   }, 60_000);
@@ -2342,6 +2355,50 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
       expect(thrown(() => replay.claimOut(c))).toMatchObject({ word: 'out-refused', detail: `${tmpName} unwritable EACCES` });
     } finally {
       chmodSync(c, 0o700);
+    }
+  });
+
+  it('a dead record\'s .pid, removed after its .part is charged, in a run subdirectory nobody may write into (mode 0500): claimOut refuses out-refused <rel> unwritable EACCES, charged once, both files left', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const a = freshOut();
+    const sub = path.join(a, 'sub');
+    mkdirSync(sub);
+    writeFileSync(path.join(sub, 'dd-0.jsonl.part'), D6_STREAM);
+    writeFileSync(path.join(sub, 'dd-0.pid'), recText(424243, null));
+    chmodSync(sub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(a, { liveness: () => 'dead' }))).toMatchObject({ word: 'out-refused', detail: 'sub/dd-0.pid unwritable EACCES' });
+      const ledger = readFileSync(path.join(a, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '');
+      expect(ledger, 'the charge happened, once').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'dd-0.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(sub, 'dd-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+  });
+
+  it('a removal that cannot mask a refusal is quiet: release in a --out nobody may write into does not throw, and a takeover that fails refuses out-refused, not the raw errno of its tmp cleanup', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    // (1) the claim's release: the lock cannot be removed, and the release still returns
+    const a = freshOut();
+    const claim = replay.claimOut(a);
+    chmodSync(a, 0o500);
+    try {
+      expect(() => claim.release()).not.toThrow();
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock stays (it names this driver, dead by the next start)').toBe(true);
+    } finally {
+      chmodSync(a, 0o700);
+    }
+    // (2) a dead holder's lock in a --out that turns unwritable while the driver starts: the rename refuses, and the
+    // tmp file's cleanup in the finally, which fails too, must not replace that refusal
+    const b = freshOut();
+    writeFileSync(path.join(b, '.driver.lock'), recText(424244, null));
+    try {
+      expect(thrown(() => replay.claimOut(b, { liveness: () => 'dead', afterHeld: () => chmodSync(b, 0o500) })))
+        .toMatchObject({ word: 'out-refused', detail: '.driver.lock unwritable EACCES' });
+    } finally {
+      chmodSync(b, 0o700);
     }
   });
 

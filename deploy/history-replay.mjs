@@ -607,20 +607,23 @@ export function spendTokens(facts) {
 }
 
 // ── D-5986: no-follow, type-checked I/O under --out ────────────────────────────────────────────────────────
-// Every path the driver reads or writes under a (reused) --out goes through these, so a symlink, a FIFO or a
-// directory planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link
-// or blocks. Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
+// The paths the driver reads or writes under a (reused) --out go through these, so a symlink, a FIFO or a directory
+// planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link or blocks.
+// Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
 // O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is a tmp file created exclusively (O_EXCL|O_NOFOLLOW) and a
-// rename. Every failure to read, list, create or write a path under --out refuses `out-refused` with the path relative
-// to --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can
-// make each happen, and a raw errno is not a W2 stop word. That covers the removals and renames of the run's own
-// bookkeeping too (removePlain; the lock's link, rename and put-back; launchRun's `.pid` and `.part` removal and its
-// rename). A removal that fails AFTER the spend line leaves the `.part`, which the next driver charges again (an
-// over-count). Not covered, because only a signal or a race reaches them: the child's own error handler and the stop
-// path's `.part` removal in runChild, and the best-effort cleanup of a tmp file on a path that is already refusing
-// (dropQuietly). Kept as they are: prepareOut's marker WRITE (into the
-// directory it just made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the
-// wrapper). The marker's read, and HOME's limits row, go through readPlain.
+// rename. A failure to read, list, create or write at the sites below refuses `out-refused` with the path relative to
+// --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can make
+// each happen, and a raw errno is not a W2 stop word. Covered: the reads and the claim walk (readPlain, lstatOrNull,
+// refuseLinkedDirs, leftoverNames); the appends (appendPlain); the creates and writes (createPlain, writePlain,
+// ensurePlainDir); the removals and renames of the run's own bookkeeping (removePlain in settleLeftover, createPlain and
+// launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename). A removal that fails AFTER the
+// spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
+// reason: runChild's stop-path `.part` removal and its child-error removals (only a signal or a spawn failure reaches
+// them, and a refusal there would hide the error that got it there); the cleanups that run while a refusal is already in
+// flight, which use `dropQuietly` so a failed cleanup cannot replace that refusal (writePlain's tmp cleanups; takeLock's
+// stale and tmp removals; the claim's release). Kept as they are: prepareOut's marker WRITE (into the directory it just
+// made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the wrapper). The marker's
+// read, and HOME's limits row, go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
@@ -731,8 +734,9 @@ function appendPlain(out, rel, text) {
 /** Create `<out>/<rel>` exclusively (O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, mode set exactly by fchmod on the descriptor) and
  *  answer the open descriptor. An existing entry refuses `out-refused` `<rel> already exists`, with one exception when
  *  `replaceStale` is set: a REGULAR file there (a temp file an earlier driver of this pid left) is removed once and the
- *  create retried; on that first attempt an entry that is not a regular file says `<rel> already exists and is not a
- *  regular file`, and a regular file met AGAIN on the retry says only `<rel> already exists`. Any other failure to create
+ *  create retried. The refusal text says what the lstat found: an entry that is not a regular file says `<rel> already
+ *  exists and is not a regular file`; a regular file (met again on the retry, or without `replaceStale`) says `<rel>
+ *  already exists`; nothing (it vanished: a race) says `<rel> changed while it was being created`. Any other failure to create
  *  (a directory nobody may write into: EACCES) refuses `out-refused` `<rel> unwritable <code>`, never a raw errno.
  *  @returns {number} */
 function createPlain(out, rel, mode, replaceStale) {
@@ -745,7 +749,9 @@ function createPlain(out, rel, mode, replaceStale) {
       if (e?.code !== 'EEXIST' && e?.code !== 'ELOOP') refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
       const st = lstatOrNull(out, rel);
       if (replaceStale && attempt === 0 && st !== null && st.isFile()) { removePlain(out, rel); continue; }   // D-5986: a stale tmp nobody may remove refuses
-      refuse('out-refused', `${rel} already exists${replaceStale && attempt === 0 ? ' and is not a regular file' : ''}`);
+      // D-5986: the text says what the lstat found. Only a race reaches the first two (nothing there, or a regular file met again).
+      refuse('out-refused', st === null ? `${rel} changed while it was being created`
+        : st.isFile() ? `${rel} already exists` : `${rel} already exists and is not a regular file`);
     }
     fchmodSync(fd, mode);
     return fd;
@@ -797,7 +803,7 @@ function ensurePlainDir(out, rel) {
       } catch (e) {
         if (e?.code !== 'EEXIST') refuse('out-refused', `${sofar} unwritable ${errCode(e)}`);
         st = lstatOrNull(out, sofar);   // made by someone else between the lstat and the mkdir: judge what is there
-        if (st === null) refuse('out-refused', `${sofar} unwritable EEXIST`);
+        if (st === null) refuse('out-refused', `${sofar} changed while it was being created`);   // only a race reaches this
       }
     }
     if (!st.isDirectory()) refuse('out-refused', `${sofar} is not a directory`);
@@ -1184,7 +1190,9 @@ const liveClaims = new WeakSet();
  *  is no record refuse `out-in-use`. If the holder releases the lock between the failed link and the read (the read finds
  *  nothing), the link is tried ONCE more before the driver refuses. A dead holder's lock is
  *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
- *  anyone else it is put back and the driver refuses. */
+ *  anyone else it is put back and the driver refuses. Every removal here (the stale file, the tmp file in the `finally`) is
+ *  `dropQuietly` (D-5986): a raw error there would replace the refusal being raised, and a stale or tmp file left behind
+ *  is harmless, because the claim walk reads only `.jsonl.part` and `.pid` names. */
 function takeLock(out, live, afterHeld) {
   const lock = path.join(out, LOCK_NAME);
   const tmpRel = `${LOCK_NAME}.tmp-${process.pid}`;
@@ -1232,16 +1240,16 @@ function takeLock(out, live, afterHeld) {
       } catch (e) {
         if (e?.code !== 'EEXIST' && !(again.state === 'absent' && e?.code === 'ENOENT')) refuse('out-refused', `${LOCK_NAME} unwritable ${errCode(e)}`);   // D-5986
       }
-      rmSync(stale, { force: true });
+      dropQuietly(stale);
       refuse('out-in-use', `${LOCK_NAME} changed hands while this driver started`);
     }
     if (!link()) {
-      rmSync(stale, { force: true });
+      dropQuietly(stale);
       refuse('out-in-use', `${LOCK_NAME} was taken over by another driver`);
     }
-    rmSync(stale, { force: true });
+    dropQuietly(stale);
   } finally {
-    rmSync(tmp, { force: true });
+    dropQuietly(tmp);
   }
 }
 
@@ -1295,7 +1303,9 @@ export function claimOut(out, opts = {}) {
       liveClaims.delete(claim);
       const lock = path.join(out, LOCK_NAME);
       const mine = readPidRecord(lock);
-      if (mine.state === 'record' && mine.pid === process.pid && mine.start === procStart(process.pid)) rmSync(lock, { force: true });
+      // D-5986: quietly. A failed removal must not replace the refusal claimOut's catch is raising, or fail a release after
+      // the work is done; a lock left behind names this driver, which is dead by the next start and is taken over.
+      if (mine.state === 'record' && mine.pid === process.pid && mine.start === procStart(process.pid)) dropQuietly(lock);
     },
   });
   liveClaims.add(claim);
@@ -1400,7 +1410,8 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, p
       } catch (e) {
         signalGroup(pid, 'SIGKILL');   // a child no record names must not run on
         clearTimeout(timer);
-        reject(e);
+        // D-5984: the operator learns which child was killed (a refusal keeps its word and detail, a raw error stays as it is).
+        reject(e instanceof DriverRefusal ? new DriverRefusal(e.word, `${e.detail}; its child (pid ${pid}) was killed with its group`) : e);
         return;
       }
     }
