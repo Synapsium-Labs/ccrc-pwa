@@ -1629,10 +1629,13 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
       { mode: 0o755 });
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
-    const r = spawnSync('bash', ['-c', `. "$1"; CCD_OS=${os}; `
+    // A constant script: the source and the platform arrive in the environment, never in the command or its argv.
+    env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+    env['A11_OS'] = os;
+    const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; '
       + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN; '
-      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN',
-    '_', path.join(ccdRoot, 'ccrc')], { env, encoding: 'utf8' });
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN'],
+    { env, encoding: 'utf8' });
     const log = path.join(home, 'tmutil-calls');
     return { home, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [], status: r.status, stderr: r.stderr };
   }
@@ -1667,7 +1670,9 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
         { mode: 0o755 });
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
       for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
-      const r = spawnSync('bash', ['-c', `. "$1"; CCD_OS=${os}; _inst_lane_state`, '_', path.join(ccdRoot, 'ccrc')],
+      env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+      env['A11_OS'] = os;
+      const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; _inst_lane_state'],
         { env, encoding: 'utf8', timeout: 60_000 });
       expect(r.status, r.stderr).toBe(0);
       const log = path.join(home, 'tmutil-calls');
