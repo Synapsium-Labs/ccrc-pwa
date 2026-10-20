@@ -2284,6 +2284,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         in review. The raw lines are kept outside the source tree, as asked. v0.0.399 (#864) to v0.0.409 (#871)
         followed, unapplied. STATUS: fleet and server v0.0.395, newest v0.0.409, stable v0.0.328, intent
         dev/auto=off, backups fleet 181M/server 3847M, disk free fleet 208G/work volume 88G/server 29G, no anomalies.
+      - 05:55: v0.0.410 (#878) to v0.0.414 (#877) followed, unapplied. STATUS: fleet and server v0.0.395, newest
+        v0.0.414, stable v0.0.328, intent dev/auto=off, backups fleet 181M/server 3847M, disk free fleet 208G/work
+        volume 88G/server 29G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
