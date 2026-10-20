@@ -60,9 +60,9 @@ function allHeaderValues(gets: ReturnType<typeof laneProxyGets>): string[] {
 
 function expectCleanProbe(gets: ReturnType<typeof laneProxyGets>): void {
   expect(gets).toHaveLength(1);
+  expect(allHeaderValues(gets).every((value) => !value.includes(key) && !value.includes(key.slice(3)))).toBe(true);
   const accept = gets[0]!.headers['accept'] ?? [];
   expect(accept.length === 1 && accept[0] === 'application/json').toBe(true);
-  expect(allHeaderValues(gets).every((value) => !value.includes(key) && !value.includes(key.slice(3)))).toBe(true);
 }
 
 type ReadStage = 'ok' | 'open' | 'fstat' | 'read' | 'type' | 'initial-size' | 'growth';
