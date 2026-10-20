@@ -7,6 +7,9 @@
 // The scan is syntax only, through `../scan/parse.js` (ARCH-00's one parser wrapper; never a parser imported here).
 // A union counts when it is a top-level `export type X = 'a' | 'b' | …` of two or more literals. The map or guard
 // must be in the SAME file (that is what "sibling" means), and the map must type a variable or a `satisfies`.
+// Stated limits: the map alone satisfies the rule (a list derived from it is the convention, not checked); a union
+// with a `null` member is not scanned; a type-only guard signature, an `asserts v is X` predicate or a `declare const`
+// map would count although none gives a runtime list.
 //
 // EXEMPT is the merge-day debt. It started at the merge-day count (31) minus this PR's three lists, it may only
 // shrink, and every entry carries its reason. Adding a list to an exempt union makes the stale-entry row red until its
