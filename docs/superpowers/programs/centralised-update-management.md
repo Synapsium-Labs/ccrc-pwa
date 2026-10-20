@@ -2397,6 +2397,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - Dispatched: full run 39471710692 (`gh workflow run ci.yml --ref main -f mode=full`). On a green
           `full-suite` I fast-forward `stable` to `e99d6ec72`. A red that is a recorded or timing flake gets one job
           re-run. Any other red is reported first.
+      - **19:00 UTC: full run 39471710692 red on one macOS file of another programme's; the promotion waits on its fix.**
+        - Every Linux leg and three of four macOS shards are green. test-macos 4/4 (job 118797921581) is red on
+          `server/test/history-replay.test.ts` alone, 8 cases, and `full-suite` (job 118818921554) is red with it.
+        - Cause: the test stub's recorded env keys carry `__CF_USER_TEXT_ENCODING` on macOS (expected 7 keys, got 8),
+          so the exact-key assertions cannot pass on Darwin. Not a flake: all eight fail alike, and it is the file's
+          first macOS run (#826's PR leg was skipped by selection; it merged at 13:28 as `780c8126c`). The tree's
+          precedent is `ccd-child-reclaim-entry.test.ts`'s `DARWIN_ADDED`, which allows that key on Darwin only.
+        - Owner: the ccrc history programme (W2-4, #826). Mail 7340 to its coordinator asks for the fix and a mail
+          when it merges. Its send timed out during a server stall, and it landed. I do not touch the file. On the
+          merge, a new full run, then the fast-forward on its green `full-suite`.
+        - The probe's NOTE at 18:58: `/health` was silent for 5 s and answered v0.0.472 on the retry. The broker's
+          slow-pass lines at 18:57:11 and 18:58:15 read block 14.3 s and 16.9 s, flush 10.1 s and 12.9 s, rewrite
+          6.6 s and 6.8 s, against block 12.9 s at 14:58. A stall again, not an update fault. For tomorrow's soak.
+        - STATUS: fleet and server v0.0.472, newest v0.0.486, stable v0.0.328, intent dev/auto=off, backups fleet
+          222M/server 7978M, disk free fleet 198G/work volume 59G/server 24G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
