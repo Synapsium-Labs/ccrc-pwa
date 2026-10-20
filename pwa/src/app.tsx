@@ -58,7 +58,7 @@ export function App(): ReactNode {
   }, []);
   const sessions = useFleetStore((s) => s.sessions);
   // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
-  // with the fleet column into `fleet/FleetColumn.tsx`.
+  // with the fleet column into `screens/FleetColumn.tsx`.
   // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
   // store on an incompatible `hello`, cleared by a later compatible one.
   // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a

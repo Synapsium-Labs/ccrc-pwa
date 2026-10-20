@@ -4,7 +4,7 @@
 // shared modules only; never from Refined's directory (`skin-boundary.test.ts`, from S4a).
 import { INSTRUMENT } from '@ccrc/ui';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
-import { FleetColumn } from '../../fleet/FleetColumn';
+import { FleetColumn } from '../../screens/FleetColumn';
 import type { SkinSet } from '../types';
 import './instrument.css';
 

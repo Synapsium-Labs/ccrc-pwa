@@ -1,4 +1,5 @@
-// The fleet column as the shell places it (W2 Task S2b, D-5678): `FleetScreen` with the props `app.tsx` used to hand
+// The fleet column as the shell places it (W2 Task S2b, D-5678), beside the screen it composes (a feature directory
+// never imports a screen, D-5897): `FleetScreen` with the props `app.tsx` used to hand
 // it, read here instead, so a skin's `Nav` part is this component and takes no props (`skins/types.ts`).
 //
 // ONE COMPONENT FOR BOTH SKINS' PARTS, not one per skin: the two sets place the same column in this task, and a
@@ -7,12 +8,9 @@
 import type { ReactNode } from 'react';
 import { matchRoute } from '../lib/routes';
 import { useLocation } from '../lib/router';
-import { useMediaQuery } from '../lib/useMediaQuery';
-import { FleetScreen } from '../screens/FleetScreen';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
+import { FleetScreen } from './FleetScreen';
 import { useFleetStore } from '../stores/fleet';
-
-/** The desk width class: the master–detail split and the desk accounts bar. */
-export const DESK_QUERY = '(min-width: 900px)';
 
 export function FleetColumn(): ReactNode {
   const { path } = useLocation();

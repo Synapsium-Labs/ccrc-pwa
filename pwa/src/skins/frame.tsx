@@ -17,8 +17,7 @@
 // skin's parts without branching on the skin (D-5469).
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, ReactNode, Ref } from 'react';
-import { useMediaQuery } from '../lib/useMediaQuery';
-import { DESK_QUERY } from '../fleet/FleetColumn';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SkinSet } from './types';
 
 const SkinSetContext = createContext<SkinSet | null>(null);
