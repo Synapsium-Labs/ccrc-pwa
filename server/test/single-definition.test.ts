@@ -19,7 +19,6 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { componentFamily } from './sourceScan.js';
-import { sourceOfSymbol } from './scan/symbols.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
@@ -6029,6 +6028,9 @@ describe('path identity W1a: the registry id predicate is defined once, and isTm
 // store's writer, and the PWA cannot import server/src. Code lines only (`stallCode`): a sentence about a call is never a
 // call. KNOWN WIDTH: a call spelled inside a string on a code line counts, which errs toward red. A call through an
 // alias (`const w = store.setCollectLane; w(…)`) is not seen; the bar is the ordinary call.
+// D-6114: the pass's call count below reads `FleetWatcher.collectPass` by symbol. Imported here, beside its one
+// reader, so no line above moves (line citations into this file stay anchored).
+import { sourceOfSymbol } from './scan/symbols.js';
 describe('child reclamation wave 10: the collector switch has one writer, one journal and one resolver', () => {
   const STORE = 'server/src/coord/store.ts';
   const ROUTES = 'server/src/coord/routes.ts';
