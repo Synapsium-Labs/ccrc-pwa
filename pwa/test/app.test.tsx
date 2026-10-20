@@ -11,7 +11,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { App } from '../src/app';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { navigate } from '../src/lib/router';
+import { setSkin } from '../src/lib/skin';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { useFleetStore } from '../src/stores/fleet';
 
@@ -375,6 +377,39 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
     expect(document.activeElement).toBe(document.getElementById('content'));
     vi.unstubAllGlobals();
   });
+
+  // ONE ACCOUNTS STRIP PER WIDTH (W2 Global constraints, D-5678): the gate is split between `ShellFrame`'s
+  // `desk &&` and `FleetColumn`'s `showAccounts={!desktop}`, so it is counted through App, in both skins.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    for (const desk of [true, false]) {
+      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the bar' : 'the fleet column'}`, () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+        vi.stubGlobal('matchMedia', (q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }));
+        try {
+          setSkin(skin);
+          navigate('/');
+          render(<App />);
+          const strips = document.querySelectorAll('.accounts-strip');
+          expect(strips).toHaveLength(1);
+          const bar = document.querySelector('header.shell-accounts');
+          const fleet = screen.getByRole('region', { name: 'Fleet' });
+          if (desk) {
+            expect(bar?.contains(strips[0]!)).toBe(true);
+            expect(fleet.contains(strips[0]!)).toBe(false);
+          } else {
+            expect(bar).toBeNull();
+            expect(fleet.contains(strips[0]!)).toBe(true);
+          }
+        } finally {
+          setSkin(REFINED);
+          vi.unstubAllGlobals();
+        }
+      });
+    }
+  }
 
   it("Settings' Theme and Layout fieldsets are the doors of Switch theme and Switch layout (doorMark)", () => {
     navigate('/settings');
