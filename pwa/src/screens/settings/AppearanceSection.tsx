@@ -1,10 +1,11 @@
-// Settings › Appearance (settings spec §3.1; D-5503): Layout's `SkinFieldset` above Theme's rows and the fonts line.
-// This device's choices, so it reads nothing from the frame's view. Settings Task R2b1 moved it here from
-// `SettingsScreen.tsx` unchanged; the page's `<h2>` is the frame's.
+// Settings › Appearance (settings spec §3.3, §5.2; D-5503): one card (scope "This device") holding Layout's
+// `SkinFieldset` and its fonts line, then Theme's rows. This device's choices, so it reads nothing from the frame's
+// view. The page's `<h2>` is the frame's; the card's title is an `<h3>`.
 import type { ReactNode } from 'react';
-import { SYSTEM, THEMES } from '@ccrc/ui';
+import { SYSTEM, Section, THEMES } from '@ccrc/ui';
 import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from '../AppearanceRow';
 import { SkinFieldset } from '../SkinFieldset';
+import { SETTINGS_CARDS } from '../../fleet/settingsText';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
 // box-token card landed on main while that move was happening on this branch,
@@ -41,8 +42,9 @@ export function AppearanceSection(): ReactNode {
   const dark = THEMES.filter((t) => t.mode === 'dark');
   const light = THEMES.filter((t) => t.mode === 'light');
 
+  const card = SETTINGS_CARDS.appearance.look;
   return (
-    <>
+    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       <SkinFieldset />
       <AppearanceFieldset legend="Theme" command="switch-theme">
         <AppearanceRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} group="settings-theme" swatch={false} />
@@ -54,6 +56,6 @@ export function AppearanceSection(): ReactNode {
         <AppearanceGroup>Light</AppearanceGroup>
         {light.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
       </AppearanceFieldset>
-    </>
+    </Section>
   );
 }

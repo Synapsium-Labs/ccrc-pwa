@@ -15,6 +15,7 @@ import {
   type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorSeedCause, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
+import { notifyEach } from '../notice.js';
 
 /**
  * THE DEAD-COORDINATOR LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.4, "No successor" and "The act").
@@ -275,24 +276,14 @@ export class DeadCoordinatorActThrew extends Error {
 }
 
 /** Feed rows, recorded and never pushed: `kind: 'run'` with no run and a claimant as the session. A missing log
- *  degrades the record and never the act. */
+ *  degrades the record and never the act. Through the funnel's batch (`notice.ts` `notifyEach`, D-5859),
+ *  `'record-only'`: one try over the rows, so a failed archive drops the rows after it and is said once. */
 function recordRows(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, sessionId: string,
   rows: readonly { readonly title: string; readonly body: string }[], what: string,
 ): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    for (const row of rows) {
-      const ev = log.record({ kind: 'run', sessionId, runId: null, title: row.title, body: row.body });
-      deps.coord.recordFeedEvent(log.epoch, ev);
-    }
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — dead coordinator ${what}, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  notifyEach(deps, rows.map((row) => ({ kind: 'run', sessionId, runId: null, title: row.title, body: row.body })),
+    'record-only', { degraded: `dead coordinator ${what}, feed archive degraded` });
 }
 
 /** The feed rows for an act or its shadow — ONE per programme, in the spec's words, with the instant the hour counted

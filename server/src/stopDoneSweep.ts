@@ -11,7 +11,8 @@ import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
 import { programmeHoldOf } from './coord/rundefs.js';
 import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 import {
-  STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
+  STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PARKED_STATES,
+  STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
   mailOnly, stopDoneVerdict, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
@@ -28,6 +29,8 @@ import {
  * `attached` at the act. Since D-6091 its clock is the run's close: `recent` is the grace of marker quiet, never N, and
  * a programme hold or a hold naming a terminal run passes through `ccd hibernate --hold-ok <the exact text>` on a box
  * that advertises `hibernate-hold-ok`. It stays live under its own switches; hibernation's sweep acts only once armed.
+ * Since D-6092 (W1-1b, F5 (b)) "finished" is the verdict's: a `failed` run's worker sleeps as a `done` one does, and
+ * a producer parked at review, merge or close sleeps after `STOP_DONE_PARKED_IDLE_MS` of marker quiet.
  *
  * ONE PASS:
  *  1. the switches, read from the tick's registry listing: `$REG/stop-done-disabled` (this lane's kill switch),
@@ -119,6 +122,7 @@ function storeReadFor(
       ok: true,
       last: run === null ? null : { runId: run.runId, state: run.state, closedAt: run.closedAt },
       openWorker: last.openPlacedWorkers.includes(id),
+      parkedWorker: last.parkedPlacedWorkers.includes(id),
       openClaimant: last.openClaimants.includes(id),
       claim: claimants.has(id),
       // D-5838: a PARKED row does not veto (it waits on its box, up to 24 h, and
@@ -177,6 +181,12 @@ type StopDoneFeedRow =
   | { readonly kind: 'asleep'; readonly id: string; readonly runId: number; readonly state: string }
   | { readonly kind: 'mail-only'; readonly count: number };
 
+/** The run's state in the asleep row and the journal line (D-6092): `done` or `failed` as it reads, a parked run as
+ *  "parked at <state>". */
+function runStateWords(state: string): string {
+  return STOP_DONE_PARKED_STATES.includes(state) ? `parked at ${state}` : state;
+}
+
 function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
   const log = deps.notifyLog;
   if (!log) return;
@@ -184,7 +194,7 @@ function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
     const ev = log.record(row.kind === 'asleep'
       ? {
         kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
-        body: `${row.id} was put to sleep: its run ${row.runId} is ${row.state} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
+        body: `${row.id} was put to sleep: its run ${row.runId} is ${runStateWords(row.state)} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
       }
       : {
         kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
@@ -280,7 +290,7 @@ export async function stopDonePass(
     }
   }
   for (const o of out) {
-    if (o.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${o.id} to sleep (run ${o.runId} ${states.get(o.id) ?? 'unknown'}, idle; D-5370, D-5427, D-6091)`);
+    if (o.kind === 'hibernated') console.warn(`ccrc-server: stop-done: put ${o.id} to sleep (run ${o.runId} ${runStateWords(states.get(o.id) ?? 'unknown')}, idle; D-5370, D-5427, D-6091, D-6092)`);
     else if (o.kind === 'skipped') console.warn(`ccrc-server: stop-done: ccd re-measured ${o.id} as ${o.detail} — not asked again for an hour`);
     else if (o.kind === 'failed') console.warn(`ccrc-server: stop-done: the hibernate of ${o.id} failed (${o.detail}) — not asked again for an hour`);
   }

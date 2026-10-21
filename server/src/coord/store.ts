@@ -27,8 +27,8 @@ import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from 
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
 import {
-  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
-  type ChildReclaimLeafSourceRow,
+  CHILD_RECLAIM_LEAF_END_ACTS, CHILD_RECLAIM_LEAF_FAILED_TOKENS, childReclaimLeafEndRead,
+  type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow, type ChildReclaimLeafSourceRow,
 } from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
@@ -836,9 +836,13 @@ export type LastRunsResult =
   | {
     ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[];
     /** D-6091 (fleet capacity W1-1), additive: each asked session's newest run whose state is not `planned` (a wave
-     *  not yet dispatched uses nothing), and the asked sessions a run outside the terminal set AND outside `planned`
-     *  names. The run-done policy's reads; `last` and `openWorkers` keep their meaning for `fleet.ts` and `watch.ts`. */
-    lastPlaced: LastRun[]; openPlacedWorkers: string[];
+     *  not yet dispatched uses nothing), and the asked sessions an ACTIVE run names (D-6092, W1-1b, F5 (b): outside
+     *  the idle and terminal sets, the caps' predicate, so a state this build cannot name counts, and a producer's run
+     *  parked at review, merge or close does not). The run-done policy's reads; `last` and `openWorkers` keep their
+     *  meaning for `fleet.ts` and `watch.ts`. `parkedPlacedWorkers` (sibling-parked-run-takes-parked-clock): the asked
+     *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
+     *  policy's parked clock is not cut short by a newer done run beside it. */
+    lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -1111,6 +1115,9 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** The idle list, joined the same way (sibling-parked-run-takes-parked-clock): `lastRunBySession`'s parked read takes
+ *  it without `planned`, as `STOP_DONE_PARKED_STATES` does. */
+const IDLE_RUN_STATES_SQL = `('${IDLE_RUN_STATES.join("','")}')`;
 
 /** Design 2026-09-20 §6/§10 (W2): the node lease's predicates, built from L0's
  *  `SETTLED_UPDATE_STATES` by the `.join` `TERMINAL_DELIVERY_SQL` uses — never
@@ -1578,10 +1585,10 @@ class IntentJournalFault extends Error {
  *  reclamation for good: this must accept EVERY string the writer can emit.
  *
  *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
- *  as sqlite reads it back; `POST /api/runs` checks it only with
- *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
- *  `isSessionIdShape` exists precisely because the route does not enforce
- *  one), so `from` may hold whitespace, a line terminator beside other
+ *  as sqlite reads it back. Before path-identity W1a, `POST /api/runs`
+ *  checked a claimant only with `claimedBy.trim() === ''`; it now refuses
+ *  one `isRegistryId` (`shared/api.ts`) refuses, but a `from` stored before
+ *  the gate may still hold whitespace, a line terminator beside other
  *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
  *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
  *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
@@ -3818,7 +3825,9 @@ export class CoordStore {
    */
   lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
     if (sessionIds.length === 0) {
-      return { ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [] };
+      return {
+        ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+      };
     }
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
@@ -3850,13 +3859,19 @@ export class CoordStore {
     if (!Array.isArray(last)) return { ok: false, kind: 'run-unreadable', detail: last.detail };
     const lastPlaced = newest(true);
     if (!Array.isArray(lastPlaced)) return { ok: false, kind: 'run-unreadable', detail: lastPlaced.detail };
-    const open = (placedOnly: boolean): string[] => (this.db.prepare(
-      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}` +
-      (placedOnly ? ' AND state <> ?' : ''),
-    ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-6092: the run-done policy's "another run still uses it" is the ACTIVE set, read by the caps' own negative
+    // predicate (`INACTIVE_RUN_STATES_SQL`, which leaves `planned` out too); `openWorkers` keeps the non-terminal one.
+    const open = (activeOnly: boolean): string[] => (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ` +
+      (activeOnly ? INACTIVE_RUN_STATES_SQL : TERMINAL_RUN_STATES_SQL),
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    // sibling-parked-run-takes-parked-clock: the idle set without `planned` — the parked states.
+    const parked = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true),
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
     };
   }
 
@@ -6600,26 +6615,33 @@ export class CoordStore {
   /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
    *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
   static lifecycleLeafEndsSql(sessions: number): string {
-    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    return 'SELECT id, sessionId, act, at, truncated, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
       `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
   }
 
   /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
    *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
    *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
-   *  and whether a create is placed, are L1's. */
+   *  and whether a create is placed, are L1's.
+   *
+   *  A `collect` row's line goes to L1 RAW (path-identity spec §3.4): the stored `measJson` and the cut flag are
+   *  handed to `childReclaimLeafEndRead`, never a value revived from them, because the reader needs the cut flag
+   *  beside the text. The store decides nothing: what the line says of the leaf, and whether that ends the item,
+   *  are L1's. The two acts are L1's one spelling, `CHILD_RECLAIM_LEAF_END_ACTS`. */
   lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
     const ids = [...new Set(sessionIds)];
     const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
     if (ids.length === 0) return out;
-    const create: ChildReclaimLeafEndRow['act'] = 'create';
-    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const { create, collect } = CHILD_RECLAIM_LEAF_END_ACTS;
     const done: LifecycleOutcome = 'done';
     const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
-      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+      .all(...ids, create, collect, done) as
+        { id: number; sessionId: string; act: string; at: number | null; truncated: number; measJson: string | null }[];
     for (const r of rows) {
-      const act = r.act === create ? create : r.act === collect ? collect : null;
-      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
+      if (r.act === create) out.get(r.sessionId)?.push({ id: r.id, act: create, at: r.at });
+      else if (r.act === collect) {
+        out.get(r.sessionId)?.push({ id: r.id, act: collect, at: r.at, leaf: childReclaimLeafEndRead(r.measJson, r.truncated !== 0) });
+      }
     }
     return out;
   }

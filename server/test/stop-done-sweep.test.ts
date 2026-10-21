@@ -56,6 +56,8 @@ interface Fake {
   reviewsOpen: Set<string>;
   /** D-6091: sessions a newer `planned` run names (run 50): today it is their newest run and an open one. */
   planned: Set<string>;
+  /** sibling-parked-run-takes-parked-clock: sessions an (older) run parked at review, merge or close names. */
+  parked: Set<string>;
   /** D-6091: run states `run(id)` answers (a hold's `run:` suffix); absent → `working`. 'unreadable' → `ok: false`. */
   runStates: Map<number, string>;
 }
@@ -63,7 +65,7 @@ interface Fake {
 function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; holdOk?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
-    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), runStates: new Map(),
+    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), parked: new Set(), runStates: new Map(),
     deps: undefined as unknown as StopDoneSweepDeps,
   };
   ids.forEach((id, i) => f.runs.set(id, { runId: 10 + i, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }));
@@ -82,6 +84,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         }),
         openWorkers: asked.filter((id) => f.openWorkers.has(id) || f.planned.has(id)),
         openPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
+        parkedPlacedWorkers: asked.filter((id) => f.parked.has(id)),
         openClaimants: ['lane-a-project-a'],
       }),
       activeClaims: () => [],
@@ -487,6 +490,17 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
     expect(after).not.toHaveBeenCalled();
   });
 
+  it('a worker 11 minutes quiet after a done run, an older run of its parked at review, waits the parked 30 minutes', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 11 * 60_000 });
+    f.parked.add(ID);
+    const quiet = (ms: number): StopDoneSweepDeps['mark'] => async () => ({ ...MARK_IDLE, turnAt: NOW - ms, stopAt: NOW - ms });
+    await stopDonePass({ ...f.deps, mark: quiet(11 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, mark: quiet(30 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
   it('HIBERNATE_HOLD_OK_CAP is a token ccd advertises (ccdCapTokens.ts)', () => {
     expect(CCD_CAPABILITY_TOKENS).toContain(HIBERNATE_HOLD_OK_CAP);
   });
@@ -550,6 +564,31 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
     } };
     await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
     expect(bodies).toEqual([`${ID} was put to sleep: its run 10 is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+  });
+
+  it('the asleep row and journal line name a failed run as failed and a parked run by its state (D-6092)', async () => {
+    for (const [state, closedAt, words] of [
+      ['failed', NOW - STOP_DONE_GRACE_MS - 1, 'is failed'],
+      ['merging', null, 'is parked at merging'],
+      ['awaiting-review', null, 'is parked at awaiting-review'],
+    ] as const) {
+      const f = fake([ID]);
+      f.runs.set(ID, { runId: 10, state, closedAt });
+      const bodies: string[] = [];
+      const log = { ...f.deps.notifyLog!, record: (e: { kind: string; body: string }) => {
+        if (e.kind === 'run') bodies.push(e.body);
+        return { ...e, seq: 1, at: NOW };
+      } };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
+        expect(bodies, state).toEqual([`${ID} was put to sleep: its run 10 ${words} and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+        const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('put ' + ID + ' to sleep'));
+        expect(lines, state).toEqual([`ccrc-server: stop-done: put ${ID} to sleep (run 10 ${words.replace(/^is /, '')}, idle; D-5370, D-5427, D-6091, D-6092)`]);
+      } finally {
+        warn.mockRestore();
+      }
+    }
   });
 
   it('the feed archive keeps one writer site', () => {
@@ -749,6 +788,45 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       writeFileSync(path.join(h.reg, `${WID}.turn.json`), `${JSON.stringify({
         v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
         bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  // D-6092 (fleet capacity W1-1b), the characterization over the real store: a `failed` run's worker, and a producer
+  // parked at `awaiting-review` (its marker quiet 7 hours), are held today: the first `not-done`, the second by its own
+  // parked run (`run-worker` before `not-done` is even asked).
+  it('now: a failed run\'s worker, closed past the grace and quiet, is put to sleep (was: held)', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('now: a producer parked at awaiting-review, quiet 7 hours, is put to sleep — its own parked run does not hold it (was: held)', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('kept: a working run\'s worker, quiet 7 hours, is held', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();
       const t = await h.tick();
       await h.w.sweepStopDone(t.rows, t.records, []);
       expect(h.stops()).toEqual([]);

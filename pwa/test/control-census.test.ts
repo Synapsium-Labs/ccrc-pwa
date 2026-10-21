@@ -227,6 +227,10 @@ const CONTROLS: Record<string, string> = {
     + 'the two sheets that drew it were drawing the same button down to the '
     + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
     + 'unchanged; what is gone is the second copy of the markup.',
+  'fleet/CollectLaneSection.tsx <a> (computed)':
+    'VARIANT buttonVariants. The paused Cleanup pause card\'s one resume door, '
+    + 'a link to Runs that stands alone in the card foot, so it wears the ghost '
+    + 'button (`min-h-tap` in its base) rather than TextLink\'s inline shape.',
   'fleet/PasskeyNotice.tsx <button> passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
   'fleet/PoolList.tsx <button> pool-row': 'TOKEN. Both rows of the pool picker.',
   'fleet/ProjectCardHead.tsx <button> proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
@@ -245,6 +249,8 @@ const CONTROLS: Record<string, string> = {
   'skins/frame.tsx <a> skip-link':
     'TOKEN. The frame\'s "Skip to content" link (W2 Task S2b): visually hidden until focused, '
     + 'then `.skip-link:focus` declares the floor. Its first focusable element, so a keyboard reaches it first.',
+  'skins/refined/TranscriptRow.tsx <button> ref-tool-group-row':
+    "TOKEN. Refined's grouped tool row (W2 Task S13b, D-5475): the whole line is the disclosure that opens the run.",
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',

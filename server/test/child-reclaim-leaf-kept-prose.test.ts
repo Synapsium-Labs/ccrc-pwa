@@ -32,13 +32,13 @@ const row = (sessionId: string, meas: Record<string, unknown> | null, truncated 
 
 describe('the kept-leaf sentences (spec §5.9, §5.10)', () => {
   it('each half is written only when that half was kept', () => {
-    expect(childReclaimLeafKeptSentence('demo-g', { kind: 'kept', word: 'refused' }, NONE, null)).toBe(
+    expect(childReclaimLeafKeptSentence('demo-g', { kind: 'kept', word: 'refused' }, NONE, null, false)).toBe(
       'The reclaim of this child completed, but ccd kept its clips directory ~/.cc-clips/demo-g (refused: its removal '
       + `helper refused it). What was kept stays on disk. ${CLIPS_HALF} ${HORIZON}`);
-    expect(childReclaimLeafKeptSentence('demo-g', NONE, { kind: 'kept', word: 'in-use' }, null)).toBe(
+    expect(childReclaimLeafKeptSentence('demo-g', NONE, { kind: 'kept', word: 'in-use' }, null, false)).toBe(
       'The reclaim of this child completed, but ccd kept its temp root ~/.cc-tmp/demo-g (in-use: a process still used '
       + `it after the bounded wait). What was kept stays on disk. ${TMP_HALF} ${HORIZON}`);
-    expect(childReclaimLeafKeptSentence('demo-g', { kind: 'kept', word: 'unmeasured' }, { kind: 'kept', word: 'refused' }, null)).toBe(
+    expect(childReclaimLeafKeptSentence('demo-g', { kind: 'kept', word: 'unmeasured' }, { kind: 'kept', word: 'refused' }, null, false)).toBe(
       'The reclaim of this child completed, but ccd kept its clips directory ~/.cc-clips/demo-g (unmeasured: whether it '
       + 'could be removed could not be measured) and its temp root ~/.cc-tmp/demo-g (refused: its removal helper '
       + `refused it). What was kept stays on disk. ${CLIPS_HALF} ${TMP_HALF} ${HORIZON}`);

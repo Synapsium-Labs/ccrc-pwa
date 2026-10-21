@@ -1123,3 +1123,19 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     });
   });
 });
+
+describe('TextLink stays inside a line of text — a link alone is a control', () => {
+  // TextLink has no tap floor by contract (ui/src/primitives/text-link.tsx: WCAG 2.5.8's in-a-sentence exemption).
+  // The census grants that exemption to every TextLink, so a TextLink that is the ONLY thing in its element — the
+  // paused Cleanup pause card's resume door was one, 14–16px tall on a phone — would pass every row above. A link
+  // that stands alone is `buttonVariants` on an anchor (PrSheet's "Open on GitHub").
+  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx$/.test(e.name) ? [path.join(dir, e.name)] : []);
+
+  it('no element in the app holds a TextLink and nothing else', () => {
+    const alone = /<[a-zA-Z][^<>]*>\s*<TextLink\b[^]*?<\/TextLink>\s*<\//g;
+    const hits = files(path.join(import.meta.dirname, '..', 'src')).flatMap((f) =>
+      [...readFileSync(f, 'utf8').matchAll(alone)].map(() => path.relative(path.join(import.meta.dirname, '..'), f)));
+    expect(hits).toEqual([]);
+  });
+});

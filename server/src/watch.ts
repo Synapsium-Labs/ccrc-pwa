@@ -1,4 +1,4 @@
-import { performance } from 'node:perf_hooks';
+import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
@@ -8,13 +8,14 @@ import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
 } from './pools.js';
+import type { CcdResult } from './coord/ports.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import {
-  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
+  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
@@ -819,6 +820,12 @@ function mergeBreakerMembers(
  *  without `recordAlways` had no caller and is not a type. */
 type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
+/** What a failed `pr-state` call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail, else
+ *  the first line of ccd's stderr, cut to 160 characters. */
+function failureDetail(res: CcdResult): string {
+  return (res.ran === false ? res.detail : res.stderr.split('\n')[0] ?? '').slice(0, 160);
+}
+
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
@@ -999,6 +1006,9 @@ export class FleetWatcher {
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
+  /** The reason a project's last failed sweep was logged with, until a sweep succeeds: the latch behind `backoffPr`'s
+   *  one line per change and the success arm's `recovered`. */
+  private readonly prSweepFailure = new Map<string, PrState['reason']>();
   private lastPrSweep = 0;
   /** The fourth lane's clock. Starts at 0 so the first tick after start
    *  always refreshes — which is what recovers a server that connected to an
@@ -1710,6 +1720,19 @@ export class FleetWatcher {
     if (this.serverCapsRun !== null) await this.serverCapsRun;
   }
 
+  /** Resolves once none of the writers `tick()` fires without awaiting is in flight: the server-caps beat, the
+   *  inventory run and the dispatch run it ends in (D-6179). Each writes under `<ccrcDir>`, so a caller that removes
+   *  that directory (a test's teardown) awaits this after `stop()`. It loops because a run that settles can start the
+   *  next (the dispatch run's follow-up). It does not cover an inventory rerun queued by `triggerInventory()`, which
+   *  starts a few microtasks after `inventoryRun` clears. Never rejects: each lane warns on its own. */
+  async settled(): Promise<void> {
+    for (;;) {
+      const inFlight = [this.serverCapsRun, this.inventoryRun, this.dispatchRun].filter((p) => p !== null);
+      if (inFlight.length === 0) return;
+      await Promise.allSettled(inFlight);
+    }
+  }
+
   /**
    * The inventory lane's ONE run (design 2026-09-20 §8). The minute gate in
    * `tick()`, the `ready` trigger in `index.ts` and `GET /api/updates`
@@ -2152,7 +2175,7 @@ export class FleetWatcher {
     this.delegationLane().setSeams(seams);
   }
 
-  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests only: no production code calls it, so in production the lane's unref'd sampler interval lives for the process). */
   closeDelegation(): Promise<void> {
     return this.delegationLaneMemo === null ? Promise.resolve() : this.delegationLaneMemo.close();
   }
@@ -5054,6 +5077,7 @@ export class FleetWatcher {
       runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState, lane: this.collectPortFor(coord, id),
     }, id))
       .then((answer) => {
+        if (answer.kind === 'id-refused') return;
         if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }
         this.collectFoldAudit(coord, id, pass, answer.audit.value, answer.audit.arrived, answer.audit.composed);
       }, (err: unknown) => {
@@ -8150,7 +8174,7 @@ export class FleetWatcher {
           continue;
         }
         const res = await this.deps.runCcd(argv);
-        if (!res.ok) { this.backoffPr(project, now, 'agent-down', records); continue; }
+        if (!res.ok) { this.backoffPr(project, now, sweepFailureReason(res), records, failureDetail(res)); continue; }
         const lines = parsePrLines(res.stdout);
         // A WHOLE-REPO failure — the id-less shape, emitted by `_gh_repo_slug`,
         // `_gh_pr_list`, and `_pr_py` for an unparseable rc-0 body — really
@@ -8186,6 +8210,7 @@ export class FleetWatcher {
           continue;
         }
         this.prBackoff.delete(project);
+        if (this.prSweepFailure.delete(project)) console.warn(`ccrc-server: PR sweep of ${project} recovered`);
         for (const line of lines) {
           if (!isFullLine(line)) {
             // Greyed alone, and NEVER passed to phaseFor: it has no `rows`, so
@@ -8252,7 +8277,7 @@ export class FleetWatcher {
   /** A failed read never overwrites a good phase — only greys it — and an
    *  unauthenticated lane jumps straight to the ceiling, because retrying a
    *  revoked token every two minutes buys nothing. */
-  private backoffPr(project: string, now: number, reason: PrState['reason'], records: SessionRecord[]): void {
+  private backoffPr(project: string, now: number, reason: PrState['reason'], records: SessionRecord[], detail = ''): void {
     const prev = this.prBackoff.get(project);
     const step = reason === 'unauthenticated' || reason === 'rate-limit'
       ? PR_BACKOFF_MAX_MS
@@ -8264,6 +8289,12 @@ export class FleetWatcher {
       // retry time, and a 15-minute flat backoff with neither is indistinguishable
       // from a cap that has simply stopped working.
       this.prStates.set(r.id, { ...keep, phase: 'unknown', reason, retryAt: now + step });
+    }
+    // Said once per change (landing-order wave 3c): a blind lane used to be invisible, every pass backing off as
+    // `agent-down` with nothing in the journal. The latch is the reason, so a new reason speaks and a repeat does not.
+    if (this.prSweepFailure.get(project) !== reason) {
+      console.warn(`ccrc-server: PR sweep of ${project} failed (${reason}${detail ? `: ${detail}` : ''}); retrying in ${Math.round(step / 1000)}s`);
+      this.prSweepFailure.set(project, reason);
     }
   }
 
@@ -9831,12 +9862,59 @@ export const DELEGATION_PASS_BUDGET_MS = 45_000;
 export const DELEGATION_PASS_SLOW_MS = 1000;
 /** D-5692: the most bytes the whole timing line may take, prefix included. */
 export const DELEGATION_PASS_SLOW_LINE_BYTES = 2048;
+/** D-5832: the stall sampler's resolution (ms): its interval, and the least a stall it reads is long. Every stall value includes up to this much. */
+export const DELEGATION_STALL_RESOLUTION_MS = 20;
+/** D-5835: how long one loop turn waits (ms): a timer of at least the sampler's resolution, so the sampler's own overdue fire runs in the timers phase
+ *  the turn passes, before the turn does, and a read taken after the turn holds the stretch just ended. Derived, not respelled. */
+export const DELEGATION_LOOP_TURN_MS = DELEGATION_STALL_RESOLUTION_MS;
+/** D-5832, D-5835: the lane's timers, CAPTURED AT MODULE LOAD, so a test that fakes `setTimeout`, `setInterval` or `performance.now` (vitest's
+ *  fakes replace the globals, and its patch of `node:timers/promises` too) does not stop the lane's turns, its line's wait or its sampler. */
+const LANE_TIMERS = { setTimeout, setInterval, clearInterval, now: performance.now.bind(performance) } as const;
+/** D-5835: one production loop turn. */
+const laneProductionTurn = (): Promise<void> => new Promise<void>((resolve) => { LANE_TIMERS.setTimeout(resolve, DELEGATION_LOOP_TURN_MS); });
+/** D-5832: the production CPU clock: this thread's CPU where the runtime has it (`process.threadCpuUsage`, Node 23.9 on), else the process's. */
+function laneProductionCpu(): { micros: number; thread: boolean } {
+  const p = process as unknown as { threadCpuUsage?: () => { user: number; system: number } };
+  if (typeof p.threadCpuUsage === 'function') { const u = p.threadCpuUsage(); return { micros: u.user + u.system, thread: true }; }
+  const u = process.cpuUsage();
+  return { micros: u.user + u.system, thread: false };
+}
+/** D-5832: the production stall sampler: ONE unref'd interval at the resolution. At each fire it records the time since its previous fire
+ *  (ms; microseconds in the histogram, as integers of at least 1) into the pass-wide histogram and into the running maximum of the stretch
+ *  open at that fire. A read closes the stretch and opens the next without touching the previous-fire time; a histogram is never reset (a
+ *  reset would lose the interval that spans the first stall after it): `startPass` makes a new one. */
+function createDelegationStallSampler(): DelegationLaneStall {
+  let timer: ReturnType<typeof LANE_TIMERS.setInterval> | null = null;
+  let histogram = createHistogram();
+  let previous = LANE_TIMERS.now();
+  let stretchMax = 0;
+  const fire = (): void => {
+    const at = LANE_TIMERS.now();
+    const gap = at - previous;
+    previous = at;
+    histogram.record(Math.max(1, Math.round(gap * 1000)));
+    if (gap > stretchMax) stretchMax = gap;
+  };
+  return {
+    startPass: () => {
+      histogram = createHistogram();
+      if (timer === null) { previous = LANE_TIMERS.now(); timer = LANE_TIMERS.setInterval(fire, DELEGATION_STALL_RESOLUTION_MS); timer.unref(); }
+    },
+    stretch: () => { const v = stretchMax; stretchMax = 0; return v; },
+    pass: () => histogram.count === 0 ? { max: 0, p99: 0 } : { max: histogram.max / 1000, p99: histogram.percentile(99) / 1000 },
+    stop: () => { if (timer !== null) { LANE_TIMERS.clearInterval(timer); timer = null; } },
+  };
+}
 export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
-/** D-5692: every key the line may carry, in the one order it is written. Phases and parts are elapsed ms (an awaited one holds its waits,
- *  it is never CPU time); everything after the times is a size or a count, measured where the pass held it. `ownerCount` is D-5693: the
- *  size of the owner list, `owners` being the phase that reads them. `dropped` is the formatter's own and is never an input. */
+/** D-5692: every key the line may carry, in the one order it is written. Phases, parts, `rewrite`, `repairRewrite` and `yields` are elapsed ms (an awaited
+ *  one holds its waits, it is never CPU time); `blockCpu` and the `*Cpu` keys are CPU ms (main-thread
+ *  CPU when `cpuThread=1`, else process CPU); `stallMax`, `stallP99` and the `stall*` stretches are stall ms; the rest are sizes and counts,
+ *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. The
+ *  formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
+  'blockCpu', 'stallMax', 'stallP99', 'cpuThread',
   'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
@@ -9851,6 +9929,8 @@ export const DELEGATION_PASS_SLOW_KEYS = [
   'eLease', 'eRunChild', 'eUnowned', 'eAbsence', 'eRepair', 'eInterval',
   'repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed',
   'censusAge',
+  'flushCpu', 'upkeepCpu', 'effectsCpu', 'repairCpu', 'reconcileCpu', 'ownersCpu',
+  'stallFlush', 'stallMid', 'stallRepair', 'repairRewrite', 'yields', 'cpActivities', 'cpMapping', 'repairSkipped', 'attemptsSkipped',
   'dropped',
 ] as const;
 export type DelegationPassSlowKey = (typeof DELEGATION_PASS_SLOW_KEYS)[number];
@@ -9882,9 +9962,25 @@ const LANE_EFFECT_SIZES = [
   ['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'],
   ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval'],
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationReportEffect['kind']])[];
+/** D-5832: the phases whose CPU the line carries, by the key that carries it: the CPU while the phase is open, so other work at its awaits and yields counts, and turn 3's CPU stays in effects and reconcile. */
+const LANE_CPU_KEYS = [
+  ['flush', 'flushCpu'], ['upkeep', 'upkeepCpu'], ['effects', 'effectsCpu'], ['repair', 'repairCpu'], ['reconcile', 'reconcileCpu'], ['owners', 'ownersCpu'],
+] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationPassSlowKey])[];
+/** D-5692, D-5832: the phases `block` sums (the lane's own work and writes). */
+const LANE_BLOCK_KEYS = [
+  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+] as const satisfies readonly DelegationPassSlowKey[];
+/** D-5832: the three stretches of the pass the stall is read in, in order. */
+type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
 interface LanePassTiming {
   ms: Map<DelegationPassSlowKey, number>; sizes: Map<DelegationPassSlowKey, number>; startedAt: number; durable: DelegationDurability | null;
   rewrites: number; rewriteEvents: number; step: (() => void) | null;
+  /** D-5832: CPU microseconds per phase or part (summed), and whether the last CPU read was a thread's (null: none yet). */
+  cpu: Map<DelegationPassSlowKey, number>; cpuThread: boolean | null;
+  /** D-5832: the stretch open now (null: none has opened), and whether the `repair` part is open (`repairRewrite` charges only then). */
+  stretch: LaneStretch | null; repairOpen: boolean;
+  /** D-5835: the ms of the turn before the repair, which `effects` and `reconcile` enclose and the line takes out of them. */
+  yieldRepair: number;
 }
 /** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
 const DELEGATION_READ_TIMEOUT_MS = 10_000;
@@ -9976,6 +10072,27 @@ export interface DelegationLaneSeams {
   /** D-5692: called synchronously right after the lane reads its clock at the START of each timed phase and part (and of each rewrite
    *  the coordination store's port makes), with that phase's key: a row advances a virtual `monotonicMs` from here. */
   onPassPhase?: (phase: string) => void;
+  /** D-5832: the CPU clock `phase()` reads at each phase's start and end. Production: `process.threadCpuUsage` when present, else
+   *  `process.cpuUsage`; `micros` is user plus system (cumulative), and `thread` is true only for `threadCpuUsage`. */
+  cpuMicros?: () => { micros: number; thread: boolean };
+  /** D-5832: the stall sampler. Production: ONE sampler owned by the lane (a row passes the key as `undefined` to select it). */
+  loopDelay?: DelegationLaneStall;
+  /** D-5835: one loop turn (the three between phases, and the wait before the line is read). Production: a `setTimeout` of
+   *  `DELEGATION_LOOP_TURN_MS`, through a reference captured at module load. A rejecting turn (only a test seam can reject) ends the pass
+   *  like any throw out of `run`; only the line's wait is guarded. */
+  loopTurn?: () => Promise<void>;
+}
+/** D-5832: what the lane reads of the event loop's stall. One sampler for the lane, never one per pass, so under overlap a cut pass's late reads see the newer pass's histogram and zero its open stretch (review 716 G4). */
+export interface DelegationLaneStall {
+  /** At the start of a pass: opens a new pass-wide histogram (and starts the sampler if it is not running). */
+  startPass(): void;
+  /** Closes the open stretch and opens the next WITHOUT touching the sampler's previous-fire time; answers the longest interval (ms)
+   *  recorded in the stretch just closed, 0 when none was recorded. */
+  stretch(): number;
+  /** The pass-wide histogram since the last `startPass`: its maximum and its 99th percentile (ms), 0 and 0 when empty. */
+  pass(): { max: number; p99: number };
+  /** Clears the sampler's interval (the lane's `close()`). */
+  stop(): void;
 }
 
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
@@ -10364,6 +10481,8 @@ class DelegationLane {
    *  port's rewrite then lands in the later one's record; with none set it is dropped). Diagnostics only: nothing here is ever read to decide. */
   private readonly timings = new WeakMap<LanePass, LanePassTiming>();
   private passTiming: LanePassTiming | null = null;
+  /** D-5832: the lane's own stall sampler, made at the first pass that needs it (none when a row seams `loopDelay`); `close()` stops it. */
+  private sampler: DelegationLaneStall | null = null;
 
   /** D-5692: the ONE clock read for timing: the watcher's own monotonic clock (`Deps.monotonicMs`), else `performance.now()`. */
   private mono(): number { return this.deps.monotonicMs?.() ?? performance.now(); }
@@ -10371,8 +10490,46 @@ class DelegationLane {
    *  awaited phase holds its waits; a phase that ran is on the line even at 0, and one that did not run is absent. Summed over repeats. */
   private phase(pass: LanePass, key: DelegationPassSlowKey): () => void {
     const at = this.mono();
+    const cpu0 = this.cpuNow();                                          // D-5832: before the announcement, so a row's CPU lands inside the phase
     this.seams.onPassPhase?.(key);
-    return () => { const ms = this.timings.get(pass)?.ms; if (ms !== undefined) ms.set(key, (ms.get(key) ?? 0) + (this.mono() - at)); };
+    return () => {
+      const t = this.timings.get(pass);
+      if (t === undefined) return;
+      t.ms.set(key, (t.ms.get(key) ?? 0) + (this.mono() - at));
+      const cpu1 = this.cpuNow();
+      t.cpu.set(key, (t.cpu.get(key) ?? 0) + (cpu1.micros - cpu0.micros));
+      t.cpuThread = cpu1.thread;
+    };
+  }
+  /** D-5832: the CPU clock, from the seam or the runtime's own. */
+  private cpuNow(): { micros: number; thread: boolean } { return this.seams.cpuMicros?.() ?? laneProductionCpu(); }
+  /** D-5832: the stall sampler, from the seam or the lane's own (made on first use). */
+  private stall(): DelegationLaneStall { return this.seams.loopDelay ?? (this.sampler ??= createDelegationStallSampler()); }
+  /** D-5832: reads the stall of the open stretch (charging it to that stretch's key) and opens `next`. The first read of a pass finds none
+   *  open: its value is the time before the flush and is discarded, but no turn precedes it, so a stall from the phase before the flush can still be charged to `stallFlush` (review 705 F2). A pass with no record reads nothing. */
+  private readStretch(pass: LanePass, next: LaneStretch): void {
+    const t = this.timings.get(pass);
+    if (t === undefined) return;
+    const v = this.stall().stretch();
+    if (t.stretch !== null) t.sizes.set(t.stretch, v);
+    t.stretch = next;
+  }
+  /** D-5835: one loop turn between two phases, outside every applier call: reads the clock, tells `onPassPhase('yields')`, waits one turn
+   *  and adds the elapsed ms to `yields` (and, for the turn before the repair, to `yieldRepair`, which `effects` and `reconcile` enclose).
+   *  `next` closes the stretch open since the last read and opens that one (the turn after the flush and the one before the repair); the
+   *  turn before the reconcile reads none. The caller checks the abort signal at once after it. */
+  private async turn(pass: LanePass, next: LaneStretch | null): Promise<void> {
+    const t = this.timings.get(pass);
+    const at = this.mono();
+    this.seams.onPassPhase?.('yields');
+    try { await (this.seams.loopTurn ?? laneProductionTurn)(); } finally {
+      if (t !== undefined) {
+        const ms = this.mono() - at;
+        t.ms.set('yields', (t.ms.get('yields') ?? 0) + ms);
+        if (next === 'stallRepair') t.yieldRepair += ms;
+      }
+    }
+    if (next !== null) this.readStretch(pass, next);
   }
   /** (A step or a size of a pass that has no record, as when a row calls `applyEffects` or `reconcile` alone, is dropped.) */
   private size(pass: LanePass, key: DelegationPassSlowKey, n: number): void { this.timings.get(pass)?.sizes.set(key, n); }
@@ -10381,9 +10538,13 @@ class DelegationLane {
   private stepEnd(pass: LanePass): void { const t = this.timings.get(pass); if (t === undefined) return; const end = t.step; t.step = null; end?.(); }
   /** D-5692: opens a pass's record at `run`'s entry; it is also where the port's rewrites land until a later pass starts. */
   private startTiming(pass: LanePass): LanePassTiming {
-    const t: LanePassTiming = { ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null };
+    const t: LanePassTiming = {
+      ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null,
+      cpu: new Map(), cpuThread: null, stretch: null, repairOpen: false, yieldRepair: 0,
+    };
     this.timings.set(pass, t);
     this.passTiming = t;
+    this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
   /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
@@ -10405,7 +10566,11 @@ class DelegationLane {
     this.seams.onPassPhase?.('rewrite');
     try { return fn(); } finally {
       const t = this.passTiming;
-      if (t !== null) { t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + (this.mono() - at)); t.rewrites += projects; t.rewriteEvents += events; }
+      if (t !== null) {
+        const ms = this.mono() - at;
+        t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + ms); t.rewrites += projects; t.rewriteEvents += events;
+        if (t.repairOpen) t.ms.set('repairRewrite', (t.ms.get('repairRewrite') ?? 0) + ms);   // D-5832: `rewrite` less this is every other caller's time, flush's included (review 705 F3)
+      }
     }
   }
   /** D-5692: the pass's ONE timing line, decided here, in `run`'s finally, on every path (normal end, an early return, a throw, a cut pass's
@@ -10414,23 +10579,40 @@ class DelegationLane {
    *  effect parts (inside `effects`). `pre` and the stretch from `prep` to `policy` hold no await, so their elapsed time is the lane's
    *  own and a slow read is never taken for a block. The awaited blocking phases (`expire`, `flush`, `upkeep`, `prune`, `effects`) are
    *  elapsed too, so their writes' waits (a journal fsync, the repair's yields between chunks) count in `block`: a reader sets them against
-   *  the await-free stretches before calling the time CPU. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS`; never throws out of `run`. */
-  private passLine(pass: LanePass, t: LanePassTiming): void {
+   *  the await-free stretches before calling the time CPU. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS` (D-5832 keeps that
+   *  trigger: a stall alone writes nothing); never throws out of `run`. It carries CPU per phase and the stall per stretch (D-5832). */
+  private async passLine(pass: LanePass, t: LanePassTiming): Promise<void> {
     try {
-      const sum = (keys: readonly DelegationPassSlowKey[]): number => keys.reduce((n, k) => n + (t.ms.get(k) ?? 0), 0);
-      const block = sum(['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects']);
+      // D-5835: the turn before the repair is inside `effects` and `reconcile`, which enclose it: the line takes it out of both, so `block`
+      // (which sums `effects`) excludes it. The turns are summed in `yields`, and `total` keeps them.
+      const ms = new Map(t.ms);
+      for (const k of ['effects', 'reconcile'] as const) { const v = ms.get(k); if (v !== undefined) ms.set(k, Math.max(0, v - t.yieldRepair)); }
+      const sum = (keys: readonly DelegationPassSlowKey[]): number => keys.reduce((n, k) => n + (ms.get(k) ?? 0), 0);
+      const block = sum(LANE_BLOCK_KEYS);
       if (!(block > DELEGATION_PASS_SLOW_MS)) return;
       const total = this.mono() - t.startedAt;
+      // D-5832: one loop turn before the stall is read, only for a line that will be written (a fast pass pays none): a read taken in the
+      // check phase (a `setImmediate`) would run before the next timers phase and miss the stretch just ended. `total` was read before it,
+      // so the wait is in no time key. A turn that fails is not a reason for the line to be lost.
+      try { await (this.seams.loopTurn ?? laneProductionTurn)(); } catch { /* the read below is then as early as it would have been */ }
       const f: Partial<Record<DelegationPassSlowKey, number>> = {};
-      for (const [k, v] of t.ms) f[k] = v;
+      for (const [k, v] of ms) f[k] = v;
       for (const [k, v] of t.sizes) f[k] = v;
+      const stall = this.stall();
+      if (t.stretch !== null) f[t.stretch] = stall.stretch();
+      const whole = stall.pass();
+      f.stallMax = whole.max; f.stallP99 = whole.p99;
       f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
-      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']));
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']) - (ms.get('yields') ?? 0));
+      f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
+      if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
+      for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }
       if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
       if (t.durable !== null) {
         const cp = t.durable.state().checkpoint;
         f.cpSessions = cp.sessions.length; f.cpAttempts = cp.attempts.length; f.cpLeases = cp.leases.length; f.openLeases = cp.leases.filter((l) => l.releasedAt === null).length;
         f.cpLineage = cp.lineage.length; f.cpIntervals = cp.observationIntervals.length; f.cpCursors = cp.bucketCursors.length;
+        f.cpActivities = cp.activities.length; f.cpMapping = Object.keys(cp.activityIdsByNaturalKey).length;
       }
       f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;
       f.lostPrefixes = this.lostPrefixes().size; f.lossy = this.lossy ? 1 : 0; f.droppedMeasured = this.evidenceLoaded ? 1 : 0;
@@ -10450,8 +10632,10 @@ class DelegationLane {
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
 
-  /** Closes the applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  /** Closes the applier's journal descriptor, if it was ever opened (tests only: nothing in production calls closeDelegation). */
   async close(): Promise<void> {
+    this.sampler?.stop();                                                // D-5832: the lane's own stall sampler (its interval is unref'd, but a closed lane has none)
+    this.seams.loopDelay?.stop();   // a seam-supplied sampler is stopped too, deliberately: a test's sampler is stopped like the lane's own
     await this.opening?.catch(() => undefined);
     await this.durable?.close();
   }
@@ -10668,7 +10852,7 @@ class DelegationLane {
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
             },
-            now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
+            now: () => Date.now(), monotonicMs: () => this.mono(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
           }));
           this.durable = d;
           this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
@@ -10858,8 +11042,12 @@ class DelegationLane {
       // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
       // the next pass.
       // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
+      this.readStretch(pass, 'stallFlush');                             // D-5832: the stretch opens here; no turn precedes this read, so stallFlush may hold a stall from the phase before flush (review 705 F2)
       const endFlush = this.phase(pass, 'flush');
       try { this.forgetRead(pass, await this.flushPass(pass, durable)); } finally { endFlush(); }
+      if (pass.signal.aborted) return;
+      // D-5835: turn 1, the loop's turn after the flush (outside every applier call), and its abort check at once: a cut that lands in it ends the pass.
+      await this.turn(pass, 'stallMid');
       if (pass.signal.aborted) return;
 
       // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
@@ -10875,6 +11063,7 @@ class DelegationLane {
       if (pass.signal.aborted) return;
       const endPrune = this.phase(pass, 'prune');
       try { await this.pruneCursors(pass, durable); } finally { endPrune(); }
+      await this.turn(pass, null);                                      // D-5835: turn 2, before the reconcile (which writes `reconciledAt` before its first check)
       if (pass.signal.aborted) return;
 
       // A census this lane has not reconciled yet; an older or equal one is left alone.
@@ -10884,7 +11073,7 @@ class DelegationLane {
       }
     } finally {
       if (this.passTiming === t) this.passTiming = null;
-      this.passLine(pass, t);
+      await this.passLine(pass, t);
     }
   }
 
@@ -11752,7 +11941,7 @@ class DelegationLane {
     let filed = new Set<string>();
     if (attempts.length > 0) {                                           // D-5692: the part is timed only when it runs
       const endAttempts = this.phase(pass, 'attempts');
-      try { filed = await this.fileAttempts(durable, attempts); } finally { endAttempts(); }
+      try { filed = await this.fileAttempts(pass, durable, attempts); } finally { endAttempts(); }
     }
     let repair = false;
     for (const e of effects) {
@@ -11793,34 +11982,45 @@ class DelegationLane {
           e satisfies never;
       }
     }
+    if (repair) await this.turn(pass, 'stallRepair');                   // D-5835: turn 3, outside the `repair` part; the guard below is the check that follows it at once
     if (repair && !pass.signal.aborted) {
+      const timing = this.timings.get(pass);
       const endRepair = this.phase(pass, 'repair');
+      if (timing !== undefined) timing.repairOpen = true;                // D-5832: from here a port call is also `repairRewrite`
       let report: Awaited<ReturnType<DelegationDurability['repairProjection']>> = null;
-      try { report = await durable.repairProjection(); }
+      try { report = await durable.repairProjection({ perPass: true }); }
       catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
-      finally { endRepair(); }
+      finally { if (timing !== undefined) timing.repairOpen = false; endRepair(); }
       if (report !== null) {                                             // D-5692: read only; a throw or no report leaves these off the line
         this.size(pass, 'repairPasses', report.journalPasses); this.size(pass, 'repairInserted', report.inserted); this.size(pass, 'repairFull', report.fullReplay ? 1 : 0);
-        this.size(pass, 'repairWiped', report.wipedAll ? 1 : 0); this.size(pass, 'repairHealed', report.healedSessions);
+        this.size(pass, 'repairWiped', report.wipedAll ? 1 : 0); this.size(pass, 'repairHealed', report.healedSessions); this.size(pass, 'repairSkipped', report.skipped ? 1 : 0);
       }
     }
   }
 
   /** Makes the pass's attempts durable through a checkpoint-only change (an attempt already on file is skipped, so an upsert is a no-op),
-   *  one change for the lot and, if the lot is refused, each alone. Answers the IDs now on file. */
-  private async fileAttempts(durable: DelegationDurability, attempts: readonly DelegationAttemptRow[]): Promise<Set<string>> {
+   *  one change for the lot and, if the lot is refused, each alone. Answers the IDs now on file. D-5834: the attempts already on file, and the
+   *  repeats within the list (the first kept), are dropped BEFORE the change, and when nothing is left no change is made at all (it would build
+   *  twice, clone once and encode twice to write nothing); the line's `attemptsSkipped` says which happened. */
+  private async fileAttempts(pass: LanePass, durable: DelegationDurability, attempts: readonly DelegationAttemptRow[]): Promise<Set<string>> {
     const add = (list: readonly DelegationAttemptRow[]) => (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
       const have = new Set(cp.attempts.map((a) => a.attemptId));
       const fresh = list.filter((a, i) => !have.has(a.attemptId) && list.findIndex((b) => b.attemptId === a.attemptId) === i);
       return fresh.length === 0 ? cp : { ...cp, attempts: [...cp.attempts, ...fresh] };
     };
-    try {
-      await durable.applyCheckpointChange(add(attempts));
-    } catch (err) {
-      console.warn(`ccrc-server: the delegation attempts could not be filed together (${err instanceof Error ? err.message : String(err)}); filing each alone`);
-      for (const a of attempts) {
-        try { await durable.applyCheckpointChange(add([a])); }
-        catch (e2) { console.warn(`ccrc-server: a delegation attempt could not be filed: ${e2 instanceof Error ? e2.message : String(e2)}`); }
+    const onFile = new Set(durable.state().checkpoint.attempts.map((a) => a.attemptId));
+    const taken = new Set<string>();
+    const fresh = attempts.filter((a) => !onFile.has(a.attemptId) && !taken.has(a.attemptId) && (taken.add(a.attemptId), true));
+    this.size(pass, 'attemptsSkipped', fresh.length === 0 ? 1 : 0);
+    if (fresh.length > 0) {
+      try {
+        await durable.applyCheckpointChange(add(fresh));
+      } catch (err) {
+        console.warn(`ccrc-server: the delegation attempts could not be filed together (${err instanceof Error ? err.message : String(err)}); filing each alone`);
+        for (const a of fresh) {
+          try { await durable.applyCheckpointChange(add([a])); }
+          catch (e2) { console.warn(`ccrc-server: a delegation attempt could not be filed: ${e2 instanceof Error ? e2.message : String(e2)}`); }
+        }
       }
     }
     return new Set(durable.state().checkpoint.attempts.map((a) => a.attemptId));

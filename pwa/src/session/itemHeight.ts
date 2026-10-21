@@ -218,17 +218,24 @@ export function wellLines(text: string): number {
  * added to the bubble's estimate, so a screenshot neither looks like a line of
  * text nor teaches the user bucket that three lines cost 300px.
  *
+ * `group` is Refined's grouped tool row (D-5475, W2 Task S13b): a run of tool
+ * calls folded into ONE collapsed line, `.ref-tool-group`, however many calls
+ * it holds — a fixed-height population like a collapsed tool card, learned by
+ * its level. It is a bucket of its own, not `tool`, because the two rows are
+ * drawn differently (a sentence and a count, against a card's name and input).
+ * Expanded, it is not in its opening form and is never sampled.
+ *
  * THE RECORD IS THE VOCABULARY. `HEIGHT_BUCKETS` derives from it rather than
  * restating it, so a new bucket is a compile error here, not an unsized row.
  */
 export type RowKind =
   | 'user' | 'assistant' | 'system' | 'folded'
-  | 'divider' | 'tool' | 'mail' | 'task' | 'pending' | 'working';
+  | 'divider' | 'tool' | 'group' | 'mail' | 'task' | 'pending' | 'working';
 export type HeightBucket = RowKind | 'attach';
 
 const BUCKET_MAP: Record<HeightBucket, true> = {
   user: true, assistant: true, system: true, folded: true,
-  divider: true, tool: true, mail: true, task: true, pending: true, working: true,
+  divider: true, tool: true, group: true, mail: true, task: true, pending: true, working: true,
   attach: true,
 };
 

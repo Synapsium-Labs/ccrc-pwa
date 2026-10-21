@@ -150,20 +150,20 @@ describe('integration finding 7 — one reason vocabulary', () => {
   // compiler is not watching.
 
   it('derives the runtime list from the union rather than restating it', () => {
-    // Twelve. The tenth was `branch-drift`, added when the PR poller stopped
+    // Thirteen. The tenth was `branch-drift`, added when the PR poller stopped
     // asserting a phase for a workspace whose registry and worktree record name
     // different branches (D-178); the eleventh and twelfth are `unavailable`
     // and `truncated`, split off `error` on 2026-08-26 once a 5xx from
     // api.github.com and a body that stopped mid-stream were measured as two
     // distinct, repeatable faults that `error` was describing with one sentence
-    // about a third thing. Every one of them is recognised by the predicate
-    // that both validators now use. If `PR_REASONS` were ever hand-written back
-    // into an array this still passes — which is why the source scan below
-    // exists — but a DERIVED list that has gone out of step with the union is
-    // impossible to construct, and that is the point being recorded. The
-    // literal count is the ONE thing here that a new member touches,
+    // about a third thing; the thirteenth is `cut-short`, split off
+    // `agent-down` in landing-order wave 3c once a read ended by a deadline was
+    // measured as a slow lane, not a dead one. Each is recognised by the
+    // predicate both validators use. A hand-written list would still pass (the
+    // source scan below exists for that); a DERIVED list out of step with the
+    // union cannot be built. The count is the ONE thing a new member touches,
     // deliberately: it is what makes adding one a decision.
-    expect(PR_REASONS).toHaveLength(12);
+    expect(PR_REASONS).toHaveLength(13);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);
@@ -4095,6 +4095,27 @@ describe('the auto-install gate word is declared once, in L0 (programme wave 3)'
 
   it('the word is quoted in shared/api.ts and nowhere else across the four roots', () => {
     expect(ALL.filter((f) => LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+describe('the feed archive\'s writer set (D-5859; ARCH-54 #789)', () => {
+  // D-5859 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e; ARCH-54 (#789);
+  // spec §2.1 rule (f)). The feed archive's writer set reaches its W1a target: the funnel (`notice.ts`, `notify` and its
+  // batch `notifyEach`, one archive call between them) and stop-done's own pair (`stopDoneSweep.ts`, which W4 moves).
+  // May only shrink: a new hand-written `recordFeedEvent(` anywhere under server/src is red; raise a notice through
+  // the funnel instead. Its own describe block, away from the
+  // ARCH-40 tail and the file's end where other open slices append, and the census is loaded here, not at an import
+  // line, so no other block's line moves.
+  it('the feed archive has two writers, the funnel and stop-done\'s, and its call sites may only shrink (D-5859)', async () => {
+    const { feedRecordCallSites } = await import('./consolidationCensus.js');
+    const sites = feedRecordCallSites();
+    const where = sites.map((x) => `${x.file}:${x.line}`).join(', ');
+    expect(sites.length, `the feed archive has two writers at most; found ${where}`).toBeLessThanOrEqual(2);
+    expect(sites.filter((x) => x.file === 'server/src/notice.ts'), 'the funnel archives at exactly one site').toHaveLength(1);
+    for (const x of sites) {
+      expect(['server/src/notice.ts', 'server/src/stopDoneSweep.ts'], `${x.file}:${x.line}: a hand-written feed archive write — `
+        + "raise it through notice.ts's notify").toContain(x.file);
+    }
   });
 });
 
@@ -8155,5 +8176,32 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+});
+
+// PATH IDENTITY W2 (spec 2026-10-12 §3.4). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
+// citation audit cites this file by line. A `collect` `done`'s leaf words (`meas.leaf`) are ONE L0 table's keys in
+// `shared/api.ts`, and the runtime list derives from it. A second hand copy (a reader in `childReclaimSweep.ts` that
+// lists the two words itself, say) would drift from ccd's emit census, which reads the L0 list. KNOWN WIDTH: the two
+// words as a pair (a table, a union or an array) are seen; either word alone is ordinary copy and is not scanned.
+describe('path identity W2: the collect leaf words are spelled once, in shared/api.ts', () => {
+  const PAIR = /\bremoved:\s*true\b[^}]*\babsent:\s*true\b|\babsent:\s*true\b[^}]*\bremoved:\s*true\b|['"]removed['"]\s*[,|]\s*['"]absent['"]|['"]absent['"]\s*[,|]\s*['"]removed['"]/;
+  const api = (): string => readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+
+  it('CONTROL: the pair pattern sees a table, a union and an array, either way round, and passes over two comparisons', () => {
+    expect(PAIR.test('const T = { removed: true, absent: true };')).toBe(true);
+    expect(PAIR.test("type W = 'absent' | 'removed';")).toBe(true);
+    expect(PAIR.test("const W = ['removed', 'absent'];")).toBe(true);
+    expect(PAIR.test("x.word === 'removed' || x.word === 'absent'")).toBe(false);
+  });
+
+  it('COLLECT_LEAF_END_WORDS derives from its table', () => {
+    expect(api()).toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\n?\s*Object\.keys\(COLLECT_LEAF_END_TABLE\)/);
+    expect(api(), 'a hand-written array').not.toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\[/);
+  });
+
+  it('the two words are spelled as a vocabulary in shared/api.ts alone', () => {
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['shared/api.ts']);
   });
 });

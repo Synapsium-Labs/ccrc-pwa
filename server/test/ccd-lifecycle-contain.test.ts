@@ -185,7 +185,7 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 34', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 35', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
@@ -205,7 +205,8 @@ describe('the meas key vocabulary is ONE list', () => {
     // `meas.clipsKept`, carried by the reclaim/expire tail's done row (and its
     // purge failures) when it KEEPS a leaf the removal helper did not remove.
     // Declared in the SAME commit that first emits them, as wave 3's were.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 34').toBe(34);
+    // 34 -> 35 (path-identity W2): `meas.leaf`, the collector's `done` lines; declared in the SAME commit that first emits it.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 35').toBe(35);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);

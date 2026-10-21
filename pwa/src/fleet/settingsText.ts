@@ -15,9 +15,11 @@
 // (`CollectLaneSection.tsx`, `HaltBanner.tsx`), and a feature module that imports a screen is a back-edge.
 // `screens-back-edges.test.ts` pins the count at zero.
 import { createElement, Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
-import type { FocusEvent, ReactNode } from 'react';
-import type { StallLevel } from '../../../shared/api';
+import type { FocusEvent, MouseEvent, ReactNode } from 'react';
+import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
+import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
+import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
@@ -251,4 +253,97 @@ export function ResultLine({ line, className }: { line: ResultLineValue | null; 
     role: 'status',
     'aria-live': 'polite',
   }, line.text);
+}
+
+// ── The cards (settings Task R2b2; spec §3.3, §5.4, §5.5; D-5503) ─────────────────────────────────────────────────
+// Every card on a section page is a `Section` with a scope, a title and a purpose line, all from here, so the scope
+// census (settings-frame.test.tsx) reads one table and no page spells its own.
+
+/** Whose a card's setting is (spec §3.3): Refined draws it as the eyebrow, Instrument as the head's tag. */
+export const SETTINGS_SCOPE = {
+  fleet: 'Whole fleet',
+  device: 'This device',
+  browser: 'This browser',
+  box: 'This box',
+  you: 'You',
+} as const;
+export type SettingsScope = (typeof SETTINGS_SCOPE)[keyof typeof SETTINGS_SCOPE];
+
+/** One card's head: whose it is, its name, and what it is for. */
+export interface SettingsCardText { scope: SettingsScope; title: string; purpose: string }
+
+/** Each card's head, by section, in §3.3's order. A section page renders its cards from its own list here, so the
+ *  order is written once (Updates' list is C5's one-line insert point for the Claude Code card). */
+export const SETTINGS_CARDS = {
+  updates: {
+    fleetVersion: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Fleet version',
+      purpose: 'Which release the fleet runs, the releases it can move to, and when the server last looked for new ones.',
+    },
+    nodes: { scope: SETTINGS_SCOPE.fleet, title: 'Nodes', purpose: UPDATES_TEXT.nodesLead },
+    policy: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Update policy',
+      purpose: 'Which releases count as newest, and whether the server installs them by itself.',
+    },
+  },
+  appearance: {
+    look: {
+      scope: SETTINGS_SCOPE.device, title: 'Layout and theme',
+      purpose: 'How ccrc looks on this device. Other devices keep their own choice.',
+    },
+  },
+  notifications: {
+    browser: { scope: SETTINGS_SCOPE.browser, title: 'Push notifications', purpose: NOTIFICATIONS_TEXT.browserPurpose },
+    fleet: { scope: SETTINGS_SCOPE.fleet, title: 'Release announcements', purpose: NOTIFICATIONS_TEXT.announcePurpose },
+  },
+  automation: {
+    stall: {
+      scope: SETTINGS_SCOPE.fleet, title: STALL_SECTION_TEXT.title, purpose: STALL_WORDS.purpose,
+    },
+    collector: {
+      scope: SETTINGS_SCOPE.fleet, title: COLLECT_SECTION_TEXT.title, purpose: COLLECT_SECTION_TEXT.purpose,
+    },
+    pause: {
+      scope: SETTINGS_SCOPE.fleet, title: COLLECT_PAUSE_TEXT.title, purpose: COLLECT_PAUSE_TEXT.stops,
+    },
+  },
+  security: {
+    gate: {
+      scope: SETTINGS_SCOPE.box, title: 'Sign-in gate',
+      purpose: 'Whether this console asks who you are before it opens. The gate is set on the server, not here.',
+    },
+    // Box token's purpose line names the rotation interval, so it is built beside the card from the interval
+    // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here.
+  },
+} as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
+
+/** Box token's head without its purpose line (above). */
+export const BOX_TOKEN_CARD = { scope: SETTINGS_SCOPE.box, title: 'Box token' } as const;
+
+/** The sign-in gate card's words per state, and the banner every Settings page shows while the gate is off and the
+ *  page was reached from another machine (spec §5.5). The gate has no control here: it is set on the server (§1.4). */
+export const SIGN_IN_GATE_TEXT = {
+  on: 'Sign-in is on. Only someone with your passphrase or a passkey can open this console.',
+  lockedOut: 'Sign-in is locked: too many failed attempts. It reopens by itself shortly.',
+  exposedLead: 'Sign-in is off. Anyone who can reach this page can control your fleet.',
+  remedy: "Set CCRC_AUTH=on, CCRC_RP_ID and CCRC_ORIGIN together in the server's ccrc.env, then restart it "
+    + '(ccrc expose writes all three).',
+  laterCards: 'Passkeys and sign-out appear here once sign-in is on.',
+  loopback: 'Sign-in is off. This console is reachable from this machine only.',
+  unread: 'Sign-in state could not be read.',
+  /** The banner's link, after `exposedLead`; it opens Settings › Security. */
+  bannerLink: 'Fix it in Security',
+} as const;
+
+/** The when-line's class (spec §5: "when you would change it"), the tertiary step under a control's notes. Its rule
+ *  is `settings.css`'s, grounded on the card it sits in (design/audit.mjs). */
+export const SETTINGS_WHEN = 'settings-when';
+
+/** An in-app link's click: a plain click moves within the app; a modified one keeps the browser's own new tab. */
+export function inAppClick(path: string): (e: MouseEvent<HTMLAnchorElement>) => void {
+  return (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    navigate(path);
+  };
 }
