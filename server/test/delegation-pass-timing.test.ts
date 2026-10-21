@@ -242,12 +242,24 @@ function rig(w: World, seams: Record<string, unknown> = {}): Rig {
       for (const fn of st.left.get(k)?.shift() ?? []) fn();
     },
   } as never);
-  const project = w.coord.projectDelegationCheckpoint.bind(w.coord);
-  w.coord.projectDelegationCheckpoint = ((cp: Parameters<CoordStore['projectDelegationCheckpoint']>[0]) => {
+  // The hook fires on the FIRST store projection call of either kind a port call makes: the delta method falls back to the full method from
+  // inside itself, and that nested call is the same port call, so it must not fire the hook a second time (`inDelta`).
+  const fireProject = (): void => {
     const fn = st.last === null ? undefined : st.projects.get(st.last);
     if (fn !== undefined) { st.projects.delete(st.last!); fn(); }
+  };
+  const inDelta = { n: 0 };
+  const project = w.coord.projectDelegationCheckpoint.bind(w.coord);
+  w.coord.projectDelegationCheckpoint = ((cp: Parameters<CoordStore['projectDelegationCheckpoint']>[0]) => {
+    if (inDelta.n === 0) fireProject();
     return project(cp);
   }) as CoordStore['projectDelegationCheckpoint'];
+  const projectChanges = w.coord.projectDelegationCheckpointChanges.bind(w.coord);
+  w.coord.projectDelegationCheckpointChanges = ((prior: Parameters<CoordStore['projectDelegationCheckpointChanges']>[0], next: Parameters<CoordStore['projectDelegationCheckpointChanges']>[1]) => {
+    fireProject();
+    inDelta.n++;
+    try { return projectChanges(prior, next); } finally { inDelta.n--; }
+  }) as CoordStore['projectDelegationCheckpointChanges'];
   const also = (key: string, ...fns: Array<() => void>): void => {
     const firings = st.left.get(key) ?? [];
     fns.forEach((fn, i) => { (firings[i] ??= []).push(fn); });
@@ -447,7 +459,19 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const batch = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch');
     const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
     const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
-    const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
+    // The store's two projection methods, counted independently of the lane: a full call made from INSIDE the delta method (its fallback) is
+    // the same port call as the delta's own, so it is counted as nested and left out of `rewrites`.
+    const nesting = { depth: 0, nestedFull: 0 };
+    const deltaThrough = w.coord.projectDelegationCheckpointChanges.bind(w.coord);
+    const deltaCalls = vi.spyOn(w.coord, 'projectDelegationCheckpointChanges').mockImplementation((prior, next) => {
+      nesting.depth++;
+      try { return deltaThrough(prior, next); } finally { nesting.depth--; }
+    });
+    const fullThrough = w.coord.projectDelegationCheckpoint.bind(w.coord);
+    const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint').mockImplementation((cp) => {
+      if (nesting.depth > 0) nesting.nestedFull++;
+      return fullThrough(cp);
+    });
     const inserted = vi.spyOn(w.coord, 'insertDelegationEvents');
 
     const demo = [OLD, RAW, ...SCRATCHES, ...[...WITH_META, ...NO_META].map(treeOfAgent)];
@@ -477,6 +501,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       plan: plan.mock.calls.length, corr: corr.mock.calls.length, mark: markForced.mock.calls.length, win: windowForced.mock.calls.length,
       lost: lostForced.mock.calls.length, upkeep: upkeep.mock.results.length, batch: batch.mock.calls.length, repair: repair.mock.calls.length,
       projected: projected.mock.calls.length, inserted: inserted.mock.calls.length, change: change.mock.calls.length,
+      deltaCalls: deltaCalls.mock.calls.length, nestedFull: nesting.nestedFull,
     };
     r.arm({ pairs: 1500 });
     // the armed pass lists `other` as unlistable (its view is null) and five late trees; its census was measured 7 s before it
@@ -537,7 +562,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       eLease: effectsOf('request-linked-lease-identity'), eRunChild: effectsOf('record-run-child-owned'), eUnowned: effectsOf('record-unowned-worktree'),
       eAbsence: effectsOf('record-measured-absence'), eRepair: effectsOf('repair-report-projection'), eInterval: effectsOf('record-observation-interval'),
       // the coordination store's own calls
-      rewrites: projected.mock.calls.length - base.projected,
+      rewrites: (deltaCalls.mock.calls.length - base.deltaCalls) + (projected.mock.calls.length - base.projected) - (nesting.nestedFull - base.nestedFull),
       rewriteEvents: inserted.mock.calls.slice(base.inserted).reduce((s, [rows]) => s + rows.length, 0),
       // the checkpoint on disk after the pass
       cpSessions: cp.sessions.length, cpAttempts: cp.attempts.length, cpLeases: cp.leases.length, openLeases: cp.leases.filter((l) => l.releasedAt === null).length,
@@ -1533,11 +1558,17 @@ describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real
     let queued = false;
     let ran = false;
     let ranByUpkeep: boolean | null = null;
-    const project = w.coord.projectDelegationCheckpoint;               // the rig's wrapper
+    const queueFromFlush = (): void => { if (!queued && r.last() === 'flush') { queued = true; setImmediate(() => { ran = true; }); } };
+    const project = w.coord.projectDelegationCheckpoint;               // the rig's wrappers: both store projection methods, the flush calls one of them
     w.coord.projectDelegationCheckpoint = ((cp: Parameters<CoordStore['projectDelegationCheckpoint']>[0]) => {
-      if (!queued && r.last() === 'flush') { queued = true; setImmediate(() => { ran = true; }); }
+      queueFromFlush();
       return project(cp);
     }) as CoordStore['projectDelegationCheckpoint'];
+    const projectChanges = w.coord.projectDelegationCheckpointChanges;
+    w.coord.projectDelegationCheckpointChanges = ((prior: Parameters<CoordStore['projectDelegationCheckpointChanges']>[0], next: Parameters<CoordStore['projectDelegationCheckpointChanges']>[1]) => {
+      queueFromFlush();
+      return projectChanges(prior, next);
+    }) as CoordStore['projectDelegationCheckpointChanges'];
     r.also('upkeep', () => { ranByUpkeep = ran; });
     await censusPass(w, at(0), { demo: [] });
     expect(queued, 'the flush projected').toBe(true);

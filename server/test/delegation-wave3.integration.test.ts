@@ -1539,12 +1539,13 @@ describe('8. the closed scope census', () => {
     const lane = code(watch.slice(watch.indexOf('class DelegationLane {')));
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
-    // the lane's whole contact with the coordination store: three calls, all through the applier's projection port (and the store's
+    // the lane's whole contact with the coordination store: four calls, all through the applier's projection port (and the store's
     // presence, tested once); a fourth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
     expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
       'const coord = this.deps.coord;',
       'projection: coord === undefined ? null : {',
       'project: (cp) => coord.projectDelegationCheckpoint(cp),',
+      'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
       'if (this.deps.coord === undefined) return;',
