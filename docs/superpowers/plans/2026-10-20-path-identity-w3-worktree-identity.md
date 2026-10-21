@@ -6,14 +6,14 @@
 - **Run: not opened yet.** The coordinator opens and dispatches it only after all of these hold:
   - W2 (#1008) has merged and W2's run has closed;
   - PG2 A's consent is in the brief, and so is R7's (in R47's words) or the record that it is still awaited, in which case Task 5 waits (§Execution order);
-  - the coordinator's addendum (R44 to R59) confirms P1 to P23 (P14 as R55 amends it) and rules the conflicts C1 to C7 (R45 to R51), its round-2 rulings (R60 to R64) settle the seams the parallel round-1 fixes left, its integration rulings (R65 to R70) settle the six items the plan's integration left open, R71 confirms three of them as built and numbers REC-2's departure, and the final verification's rulings (R72, R73) settle a relative `.workdir` and the deviation numbers. This plan carries those rulings (R44 to R73).
+  - the coordinator's addendum (R44 to R59) confirms P1 to P23 (P14 as R55 amends it) and rules the conflicts C1 to C7 (R45 to R51), its round-2 rulings (R60 to R64) settle the seams the parallel round-1 fixes left, its integration rulings (R65 to R70) settle the six items the plan's integration left open, R71 confirms three of them as built and numbers REC-2's departure, and the final verification's rulings (R72, R73) settle a relative `.workdir` and the deviation numbers. R74 confirms Task 0's STOP on a relative `.workdir` and when the wave resumes, and R75 applies workspace-lifecycle's consent 7443: REC-1's shape numbered as a departure, R45 consented by content, the audit keys' definitions, and the completed function list. This plan carries those rulings (R44 to R75).
 
-  The only gates left wait on an outside consent: R7's, in R47's words, for `_spawn_start` (Task 5; §Execution order); workspace-lifecycle's answer to R45's request, which carries R53's expire key pin too (Task 6's expire half only); and PG2 A. Its deviation numbers are issued before the plan is committed (R40, as R48 and R73 amend it) and are defined singly in §Deviations found, in W2's form.
+  The only gate left waits on an outside consent: R7's, in R47's words, for `_spawn_start` (Task 5; §Execution order). Workspace-lifecycle's consent 7443 answers PG2 A and R45's request, with R53's expire key pin, and the brief carries it (R75; Task 0 Step 8). Its deviation numbers are issued before the plan is committed (R40, as R48, R73 and R75 amend it) and are defined singly in §Deviations found, in W2's form.
 - **Safety subject (spec §6):** which tree `git worktree remove` may delete. It is one PR from a fresh child.
 - **Deploy class (R42): `ccd/ccd` plus one server string. The fleet box moves first**, which is `ccrc rollout`'s default order, without `--server-first`.
   - `ccd/ccrc` changes only by one byte-identical line in its platform block (R4), which ccrc's own code never calls.
   - `server/src/wsaudit.ts` changes one sentence (R24).
-  - No frame field and no field the server reads changes. Ids come from `*.uuid` names only (`server/src/registry.ts`, the `listedIds` filter). The reclaim audit document (and the expire one, under workspace-lifecycle's consent to R45's request) gains two additive keys, `legacyRows` and `pendingRows`, and no server reader is added. There is no `FLEET_PROTO` bump and no coord.db migration. `pwa/**` and `agent/**` are untouched.
+  - No frame field and no field the server reads changes. Ids come from `*.uuid` names only (`server/src/registry.ts`, the `listedIds` filter). The reclaim audit document (and the expire one, under workspace-lifecycle's consent to R45's request) gains two additive keys, `legacyRows` and `pendingRows`, and no server reader is added. `legacyRows` counts the other rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`; an unmeasured field is in neither, and it holds the child (R75). There is no `FLEET_PROTO` bump and no coord.db migration. `pwa/**` and `agent/**` are untouched.
   - **Rollback:** an older ccd ignores `$REG/<id>.workdirid`, and its `_reg_purge` loop still unlinks it (every dot-free suffix).
   - **Re-upgrade:** a field written before the rollback either matches its logical spelling or reads stale or legacy. A valid field that went stale under the older ccd (the session respawned with no pane write) can only add a placement or a hold. It never releases a row (R12).
   - **The one-sentence server change:** in the window between the two boxes, the old server shows the old sentence for `worktree-remove-failed`. It is true of every failure the old ccd emits, and slightly incomplete for a new ccd's cwd refusals. Nothing is decided on it.
@@ -96,7 +96,7 @@
   - the composer on the blank line after `_plat_epoch_ms` (P1; `:390`);
   - ws-add's `.workdir` line (`:7417`, P4);
   - `cmd_ws_audit`'s reclaim document printf and its argument line (`:13318-13319`, R9).
-- `ccd/ccd`'s `_ws_expire_audit_contained`, under workspace-lifecycle's consent to R45's request only: its document printf's format line and its last argument line (`:34842` and `:34844`; the statement spans `:34842-34844`, and its middle argument line `:34843` is unchanged), edited in place. R45 amends R41's fence by exactly this edit, which lies above no corpus anchor. If the consent is refused, the function is not edited (`legacy-count-expire-half-fenced`).
+- `ccd/ccd`'s `_ws_expire_audit_contained`, under workspace-lifecycle's consent to R45's request only: the printf whose format holds `"mode":"expire","archivedAt"` (R45, consented by content in consent 7443: R75), its format line and its last argument line edited in place, its middle argument line byte-identical. Its line numbers are hints that Task 0 Step 2's (b22b) re-measures: `:34842-34844` at the export, lines 21 to 23 of the function on the `main` the consent read. R45 amends R41's fence by exactly this edit, which lies above no corpus anchor. If the consent is refused, the function is not edited (`legacy-count-expire-half-fenced`).
 - `ccd/ccrc`: the mirrored platform-block line only (R4; `:419`), line-neutral. The corpus cites `ccd/ccrc` too (`'ccd/ccrc': 5`), every cite below the block.
 - `ccd/contexts.tsv`: one row per new function, in definition order.
 - `server/src/wsaudit.ts`: the one `worktree-remove-failed` sentence (R24).
@@ -162,7 +162,7 @@ Each line binds every task.
   - The cwd probe uses ws-expire's lsof arm, compared against the tree's physical spelling.
   - Every ccd-side stat goes through `_plat_devino` or `_plat_btime`. The pane writer's per-OS stat lives in the platform block.
   - A forced-Darwin case on a Linux host adds host-conditional shims (`process.platform === 'darwin' ? '' : SHIMS`). GNU `stat -f '%d:%i' DIR` treats the format as a file name and exits 1 (measured), so from Task 8 on every forced-Darwin full tail needs `DARWIN_IDENT_SHIMS` (both functions), and from Task 10 on `DARWIN_LSOF_STUB` (P13, R50).
-- **Add-only (the wave's invariant).** No identity input may release a row, or turn a refusal into a pass, or turn a stronger refusal word into a weaker one (R71 excepts one shape by name, the numbered departure `record-by-another-spelling-reads-unmeasured`: a refusal either way, and nothing is removed). Each one may only add a placement (SHARED, NESTED or THROUGH) or a hold (unmeasured). The fence (Task 1) is re-run after every task that edits `ccd/ccd`.
+- **Add-only (the wave's invariant).** No identity input may release a row, or turn a refusal into a pass, or turn a stronger refusal word into a weaker one (R71 and R75 except two shapes by name, the numbered departures `record-by-another-spelling-reads-unmeasured` and `record-two-spellings-reads-unmeasured`: each is a refusal either way, an added hold, and nothing is removed). Each one may only add a placement (SHARED, NESTED or THROUGH) or a hold (unmeasured). The fence (Task 1) is re-run after every task that edits `ccd/ccd`.
 - **No overloaded null.** Each of these sets of answers stays distinct:
   - the field: `valid`, `pending`, `legacy-absent`, `legacy-stale`, `legacy-unparseable`, `legacy-link`, `unmeasured`;
   - the walk: complete, unmeasured (timeout, a failure, a short reply, a reply to a request list it was not given whole: R64, or a last request record with no NUL after it: R68);
@@ -243,6 +243,7 @@ The operator's working rulings from the W0 merge stand: PI1 B, PI2 L1, PI3 B, PI
   - The worker never edits `_spawn_start` without that consent in its brief.
 - **R8. The four spawn-pin suites** (`ccd-spawn-split`, `ccd-route-spawn`, `ccd-spawn-child-settings`, `ccd-route-degrade`) read the fragment from ccd rather than hard-coding it. Task 0 measures whether #435 edits any of them, and the consent ask covers those hunks.
 - **R9. The legacy count.** An additive pair, `legacyRows` and `pendingRows`.
+  - `legacyRows` counts rows in a `legacy-*` state, and `pendingRows` counts rows whose field reads `pending`. An unmeasured field is in neither, and it holds the child (R75 (d)).
   - It goes on the reclaim audit document, and on the expire audit document only under workspace-lifecycle's consent to R45's request. If that consent is refused, the expire half is dropped (`legacy-count-expire-half-fenced`), and the reclaim half stands alone.
   - The reclaim printf in `cmd_ws_audit` is edited in place and line-neutrally.
   - No server reader is added. The wave-done and the as-built note report the live counts.
@@ -478,6 +479,13 @@ The operator's working rulings from the W0 merge stand: PI1 B, PI2 L1, PI3 B, PI
   - Each issued number is written `D-<n>` followed by its slug in backticks, in W2's form (``- **D-<n>** (Tasks …; R…) `slug`: …``). §Deviations found's preamble spells the replacement.
   - The six wave-time numbers are six single entries.
   - C4's meta-form is respelled so that `dtbd.test.ts` cannot match it.
+- **R74 (integration 3). Confirmed:** on a non-zero `spell-not-absolute` count, Task 0 STOPs, and the wave resumes once a re-run of Step 6 prints no such line, after the operator has restarted or purged those rows (R72's "before the wave goes on").
+- **R75 (workspace-lifecycle's consent 7443, applied to the plan).** Consent 7443 is given, scoped to W3: PG2 A by function, and R45's request by content. It proves nothing W3 still owes (the fixture cases, the mutations, R39's full gate and the review run's acceptance), and any further name or body change that ws-expire reaches goes back to workspace-lifecycle's coordinator.
+  - (a) REC-1's shape, `record-two-spellings-reads-unmeasured`, is a numbered substantive departure, issued `D-6161` (Task 8's slot; §Deviations found). When two records name one tree, the record reader answers rc 2. That comes before the ladder's terminal words (`branch-elsewhere`, `containment-unproven`, `tree-unreadable`), so a terminal answer becomes the retryable `unmeasured`. It is an added hold, not a release. The add-only Global Constraint names it beside `record-by-another-spelling-reads-unmeasured`. Task 8's EXP-1 pins that in REC-1's shape ws-expire answers unmeasured, removes nothing and mints no token, and A1 is its mutation row. So the substantive departures number seventeen, and the issued numbers thirty-eight.
+  - (b) `record-by-another-spelling-reads-unmeasured` reaches ws-expire. Task 8's EXP-2 pins two things: a later pass re-proves the whole ladder and the server's token, carrying nothing from the earlier pass; and the lane keeps reporting the unmeasured row with its why.
+  - (c) R45 is consented by content: the printf in `_ws_expire_audit_contained` whose format holds `"mode":"expire","archivedAt"`. This plan's line numbers for it are hints, re-measured at Task 0 (Step 2's (b22b)). Task 14's boundary check fails when the statement's middle argument line changes (its C1 (a) branch, seeded by (4h)'s C9b).
+  - (d) The keys are described by the plan's definition: `legacyRows` counts rows in a `legacy-*` state, and `pendingRows` counts rows whose field reads `pending`. An unmeasured field is in neither, and it holds the child.
+  - (e) The consent's completed function list, which names the two R54 arms `_ws_reclaim_recorded_git` and `_ws_reclaim_recorded_crumb`, `_ws_reclaim_ladder`, `_ws_reclaim_eval_absent`, `_ws_collect_mountinfo` as a new caller only, and `wsaudit.ts`'s one sentence, replaces Task 0 Step 8's list. Task 0 Step 8 records "consent 7443 given", so the brief carries it.
 
 ### Proposed by the frame (confirmed by R44; binding)
 
@@ -527,6 +535,7 @@ These settle the places where the rulings, the spec and the measured code meet, 
 - **P10. The legacy count's spelling (R9).**
   - The rung sets `_WS_LEGACY_ROWS` and `_WS_PENDING_ROWS` (integers) after its registry loop on every call that lists the registry. `_ws_reclaim_reset` clears them to `''`, and so does the rung at its entry, beside `_WS_RECORDED_GDIRS`, so its early `return 2` (a failed registry listing) leaves them `''`.
   - The reclaim document prints `"legacyRows":<n|null>,"pendingRows":<n|null>`, where `null` means "not counted": the ladder never reached the rung, or the rung could not list the registry.
+  - `legacyRows` counts the other rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`. A field that reads `unmeasured` is in neither, and it holds the child (R75 (d)).
   - `parseChildReclaimAudit` tolerates extra keys (measured).
 - **P11. The record reader's why.** `_WS_REC_WHY` is set on every rc 2.
   - The list-failure cause keeps its exact prefix, "could not read $main's worktree list".
@@ -560,10 +569,10 @@ These settle the places where the rulings, the spec and the measured code meet, 
 ### Conflicts the frame found, as ruled (R45 to R51)
 
 Each conflict is ruled, and the task text carries its ruling. Only C1 still waits on an outside party's answer.
-- **C1. R9's expire half against R41: R45.** The expire audit document is printed only inside `_ws_expire_audit_contained` (export `:34842`, in the function defined at `:34822`), which R41 fenced.
-  - The coordinator asks workspace-lifecycle, with the W3 consent request, for one in-place printf edit there (its format line `:34842` and its last argument line `:34844`, the middle argument line `:34843` unchanged; it lies above no corpus anchor), together with R53's one-line expire key pin in `ccd-ws-expire-audit.test.ts`. With that consent, R41's fence is amended by exactly those edits.
+- **C1. R9's expire half against R41: R45.** The expire audit document is printed only inside `_ws_expire_audit_contained` (export hints `:34842`, in the function defined at `:34822`; Task 0 re-measures both), which R41 fenced.
+  - The coordinator asks workspace-lifecycle, with the W3 consent request, for one in-place printf edit there, named by content: the printf whose format holds `"mode":"expire","archivedAt"`, its format line and its last argument line, with its middle argument line byte-identical (export hints `:34842-34844`, re-measured at Task 0; it lies above no corpus anchor), together with R53's one-line expire key pin in `ccd-ws-expire-audit.test.ts`. With that consent, R41's fence is amended by exactly those edits.
   - If the consent is refused, the expire half is dropped as the substantive departure `legacy-count-expire-half-fenced`.
-  - Task 6 builds the reclaim half either way, and STOPs before the expire half until the brief carries the consent or the refusal. This is the one conflict whose gate remains.
+  - Task 6 builds the reclaim half either way, and STOPs before the expire half until the brief carries the consent or the refusal. Consent 7443 has answered it (R75), so C1 is (a) and no conflict's gate remains.
 - **C2. R13's "both boxes": R46.** In remote mode, ccd's reclaim, expiry and collect verbs run only on the fleet box. The server box drives the fleet through the agent and never runs them, so its device match is moot. In local mode the single box is the fleet box. The worker reads the fleet box only, and CI's match is Task 3's real-table CONTROL case, read at Task 14's full run.
 - **C3. "Two lines" against four physical lines: R47.** Each launch statement (`:23425-23426`, `:23486-23487`) spans two physical lines. The edit inserts `_spawn_workdirid_pending "$id" "$workdir" || :` above each and edits each command-string line (into R56's shape, in R60's spelling). R7 and R41 read "the two launch statements: the two inserted `_spawn_workdirid_pending` lines and the two edited command-string lines", quoted by content. The consent request and Task 14's check ("two added lines and two changed lines inside `_spawn_start`") use those words.
 - **C4. Per-task plan-text numbers: R48.** R40 is amended. The allocator issues one number per task for plan-text corrections (slug `w3-task-<n>-plan-text`, one per task, Tasks 0 to 14, fifteen numbers), one per substantive departure slug, and a six-number wave-time block. Each is defined singly in §Deviations found.
@@ -582,6 +591,7 @@ Each conflict is ruled, and the task text carries its ruling. Only C1 still wait
      - a gone row with a valid field recording an outside path, beside a blank admin entry (R97);
      - a gone row released by either R54 arm, now carrying a field;
      - a record naming the child only through another spelling;
+     - two records naming the child, one by its string and one under another spelling, through the reclaim and through ws-expire (R75);
      - a row naming the main checkout by git's own spelling, beside a record naming it under another spelling (R67);
      - a bind-spelled main checkout;
      - a birth time that could not be read (`B un`) on a recycled inode;
@@ -689,7 +699,7 @@ Each conflict is ruled, and the task text carries its ruling. Only C1 still wait
 | `server/test/ccd-child-reclaim-audit.test.ts` | 6 (R53) | its reclaim `Object.keys` pin gains `'legacyRows', 'pendingRows'` after `'generation'`, one line |
 | `server/test/ccd-ws-expire-audit.test.ts` | 6 (R53; under R45's consent only) | its expire `Object.keys` pin gains the same two keys after `'sensitive'`, one line |
 | `server/test/ccd-reclaim-moved-identity.test.ts` (new) | 7 | the identity moved-check |
-| `server/test/ccd-reclaim-main-identity.test.ts` (new) | 8, 10 | the record reader's refusals, owned's `-ef` and its order, the ladder's `-ef`; `FORCED_DARWIN` takes `DARWIN_LSOF_STUB` (10) |
+| `server/test/ccd-reclaim-main-identity.test.ts` (new) | 8, 10 | the record reader's refusals, owned's `-ef` and its order, the ladder's `-ef`; ws-expire in the record reader's two rc-2 shapes (EXP-1, EXP-2; R75); `FORCED_DARWIN` takes `DARWIN_LSOF_STUB` (10) |
 | the other three DARWIN prefixes | 8, 10 | `DARWIN_IDENT_SHIMS` (8, or 6 under P13's contingency); `DARWIN_LSOF_STUB` (10) |
 | `server/test/ccd-child-reclaim-verb.test.ts` | 8, 10 (R50) | its `darwin()` helper takes the shims (and the stub, if measured) |
 | `server/test/ccd-cwd-users.test.ts` (new) | 9 | the probe, its physical resolve, and the expiry adapter |
@@ -1076,6 +1086,7 @@ grep -c '^WS_PATH_USERS_SCAN_S=10\b\|^WS_EXPIRE_LSOF_DEADLINE_S=20\b\|^REAP_SCAN
 grep -c 'its nine callers' ccd/ccd                                                   # (b20) 2: `_ws_dir_physical`'s census, said twice (hints 32046, 32064); Task 2 moves both to eleven, and Task 9 to twelve (P12, R61)
 grep -nF 'printf '"'"'"mode":"reclaim","childOf":%s,"generation":%s,'"'"' \' ccd/ccd   # (b21) one line (13318 at the export)
 awk '/^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{n=$0} /"mode":"expire","archivedAt"/{sub(/\(\).*/,"",n); print "expire printf in", n; exit}' ccd/ccd   # (b22) "expire printf in _ws_expire_audit_contained": C1
+awk '/^_ws_expire_audit_contained\(\) \{/{f=1; a=NR} f&&!s&&/"mode":"expire","archivedAt"/{s=NR} f&&s&&!/\\$/{printf "(b22b) file lines %d-%d, lines %d-%d of the function\n", s, NR, s-a+1, NR-a+1; exit}' ccd/ccd   # (b22b) record: R45's statement by content (R75): three lines; lines 21-23 of the function on the main consent 7443 read; its file lines are hints (34842-34844 at the export)
 grep -c 'The row pass has no bound of its own;\|^# row pass has no bound of its own;' ccd/ccd   # (b23) 1: the collector header's sentence (it may wrap)
 grep -c "BOUNDED, AND INSIDE THE RUNNER'S ROW BUT FOR THE ROW PASS" ccd/ccd          # (b24) 1
 grep -c 'containment-refuted' ccd/ccd                                                # (b25) 2: the one emission site and its comment
@@ -1088,7 +1099,7 @@ grep -nF 'local -x GIT_OPTIONAL_LOCKS=0' ccd/ccd | head -1                      
 grep -c '^PROJECTS_ROOT="\$HOME/projects"' ccd/ccd                                   # (b32) 1: Step 6's projects root is ccd's own
 ```
 
-Record every line in the ledger, next to its hint. (b22) printing anything but `_ws_expire_audit_contained` is a STOP, `expire-printf-moved`, because R45's consent request names that function. Record what it printed.
+Record every line in the ledger, next to its hint. (b22) printing anything but `_ws_expire_audit_contained` is a STOP, `expire-printf-moved`, because R45's consent request names that function. Record what it printed. (b22b) re-measures R45's statement by content (R75 (c)): the printf whose format holds `"mode":"expire","archivedAt"`, which must span three lines (its format line, its middle argument line and its last argument line). Its file lines are hints: `:34842-34844` at the export, and 34939 to 34941 (lines 21 to 23 of the function) on the `main` that consent 7443 read. Any other length is a STOP, `expire-printf-shape`, because the consent names the middle argument line.
 
 - [ ] **Step 3: The baselines, the censuses, the generated gate lists and the corpus**
 
@@ -1439,26 +1450,32 @@ gh pr list --state open --limit 1000 --json number,files --jq '.[] | select(any(
 ```
 
 The brief must carry each of the following. If any is absent, **STOP**. The exceptions: the R7 consent's absence STOPs Task 5 only, and an absent answer to R45's request STOPs only Task 6's expire half (§Execution order).
-- **Workspace-lifecycle's coordinator's consent (PG2 A)**, by function list:
-  - the rows rung `_ws_reclaim_workdir_shared`, with its new walk (`_ws_reclaim_idwalk`), field reader (`_ws_workdirid_read`) and identity helpers (`_ws_path_ident`, `_ws_ident_eq`, `_ws_ident_compose`);
-  - `_ws_collect_mountinfo` in its new role as the rung's second reader (a mount under the collector's leaf now holds before the move, not only at step 5);
+- **Workspace-lifecycle's coordinator's consent (PG2 A): consent 7443 given** (R75 (e)), scoped to W3; the brief carries it. Its completed function list, which Tasks 7, 8 and 9 confirm their edits against:
+  - `_ws_reclaim_workdir_shared`, including Task 6's field read, field arms, counts and `unpend`, `unfield` and `unrec` whys, Task 7's recording of `_WS_RECORDED_IDS`, and Task 12's three reworded sentences;
+  - `_ws_reclaim_idwalk`, `_ws_workdirid_read`, `_ws_path_ident`, `_ws_ident_eq` and `_ws_ident_compose`;
   - `_ws_reclaim_moved_check` and the `_ws_reclaim_recorded` header sentence;
-  - `_ws_reclaim_record`, its two shadowing R54 arms and the three callers' whys;
+  - `_ws_reclaim_record`;
+  - the two R54 arms, `_ws_reclaim_recorded_git` and `_ws_reclaim_recorded_crumb` (their `_WS_REC_WHY=''` locals);
+  - `_ws_reclaim_ladder` (the `-ef` main-checkout compare, as a refusal: R17) and `_ws_reclaim_eval_absent` (Task 8 Step 3e's list-failure why). The three callers' whys are the ladder's, `_ws_reclaim_eval_absent`'s and `_ws_reclaim_owned`'s;
   - `_ws_reclaim_reset`;
-  - the ladder's main-checkout compare (R17);
-  - `_ws_reclaim_owned`, `_ws_reclaim_nested_proven` and the new `_ws_reclaim_reask`;
+  - `_ws_reclaim_owned`, including Task 7's moved-check gate widening to `"$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS"` and Task 11's header paragraph;
+  - `_ws_reclaim_nested_proven`;
+  - `_ws_reclaim_reask`;
   - `_ws_reclaim_tmproot_quiet`;
-  - `_ws_reclaim_tail`'s post-kill wait, its owned-identity copies, and its step-3 and step-4 asks (eight new asks; the new `containment-refuted` emission site, R29);
-  - the new `_ws_cwd_users`, with `_ws_expire_cwd_users`' body and header, the `_ws_expire_presence` header and the seams' comment (R22);
-  - comment-only edits to `_ws_dir_physical`'s census, `_ws_path_users`' cross-reference, and R31's corrections of `_ws_reclaim_workdir_shared`'s header sentence ("No `_ws_realpath` answer is read here.") and of `_ws_reclaim_resolve`'s ("… is not edited, and nothing on this path reads it"), both Task 8.
+  - `_ws_reclaim_tail` at the four sites, in the order cwd probe, re-ask, W2's mount ask, `keep_of` or the forced removal (R55), with the post-kill wait and the owned-identity copies the request listed (the new `containment-refuted` emission site, R29);
+  - `_ws_cwd_users`, with `_ws_expire_cwd_users` as a thin adapter keeping its name, contract and preamble (R22);
+  - the `_ws_expire_presence` header and the seams' comment;
+  - the comment-only edits to `_ws_dir_physical` and `_ws_path_users`, and R31's two header corrections (`_ws_reclaim_workdir_shared`'s "No `_ws_realpath` answer is read here." and `_ws_reclaim_resolve`'s "… is not edited, and nothing on this path reads it", both Task 8);
+  - `_ws_collect_mountinfo`, as a new caller only: its code is not edited, and the consent is not consent to an edit of it;
+  - outside ccd, `server/src/wsaudit.ts`'s `SENTENCES['worktree-remove-failed']` rewording (Task 10, R24): operator text for an expiry, which changes no word.
 
-  It must state that `cmd_ws_expire`, `_ws_expire_locked`, `_ws_expire_audit_contained` (beyond R45's one printf edit, if it consents), `_ws_expire_resume_eval`, `_ws_expire_refuse_return`, EXPIRE-V1 and the vocabulary stay unchanged. It is also the forwarding of `human-gated-removals-ask-no-cwd`, and the notice that `no-whole-child-mount-ask-before-step-3` closes, `audit-normalise-has-no-mount-ask` narrows, and W2's tail mount asks become a backstop (P19).
-- **Workspace-lifecycle's answer to R45's request**, asked with the consent above: consent for one in-place edit of `_ws_expire_audit_contained`'s document printf (its format line `:34842` and its last argument line `:34844`, in place; the middle argument line `:34843` unchanged) together with R53's one-line expire key pin in `ccd-ws-expire-audit.test.ts`, or a refusal (then the expire half is dropped as `legacy-count-expire-half-fenced`). Its absence STOPs only Task 6's expire half.
+  It states that these stay unchanged and fenced: `cmd_ws_expire`, `_ws_expire_locked`, `_ws_expire_audit_contained` (beyond R45), `_ws_expire_resume_eval`, `_ws_expire_refuse_return`, EXPIRE-V1, the refusal vocabulary (`ccd-refusal-scan` at 16), the journal acts and sanctioned dies, and the server's expiry executors and readers (beyond that one `wsaudit.ts` sentence). It receives `human-gated-removals-ask-no-cwd` as forwarded (received, not closed), and this wave's four stated residuals. It notes that `no-whole-child-mount-ask-before-step-3` closes (counted closed only once W3 lands with its review confirming it), that `audit-normalise-has-no-mount-ask` narrows, and that W2's tail mount asks become a backstop (`w2-mount-asks-shadowed-by-the-reask`, P19). It accepts the adapter's second absence check as it is. It proves nothing W3 still owes, and any further name or body change that ws-expire reaches goes back to workspace-lifecycle's coordinator.
+- **Workspace-lifecycle's answer to R45's request: consent 7443 given** (R75 (c)), by content: the printf in `_ws_expire_audit_contained` whose format holds `"mode":"expire","archivedAt"`. It consents to exactly Task 6 Step 4m's After text (the format line and the last argument line in place, the middle argument line byte-identical, line-neutral, nine `%s` for nine arguments), with R53's one-line expire key pin after `'sensitive'` in `ccd-ws-expire-audit.test.ts`. So C1 is (a), and Task 14's `$L/c1` reads `a`. The statement's line numbers are hints that Step 2's (b22b) re-measures (`:34842-34844` at the export; lines 21 to 23 of the function on the `main` the consent read). Its two conditions are built: Task 14's boundary check fails when the middle argument line changes (its C1 (a) branch, seeded by (4h)'s C9b), and the keys are described by the plan's definition (R75 (d)). Only Task 6's expire half STOPs if the brief lacks it.
 - **R7's consent.** Run 308's coordinator AND the delegation broker's coordinator, or #435 merged plus delegation's. It covers, by content, R47's words, "the two launch statements: the two inserted `_spawn_workdirid_pending` lines and the two edited command-string lines" (each command string edited so that `cd '$workdir' && exec env` reads `cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env`: R56's behaviour, in R60's spelling), and (g2)'s test hunks.
 - **The delegation broker's coexistence:** `_reg_purge`, `cmd_caps`, `_child_tmpdir` and the spool helper untouched; `ccd-workspaces.test.ts` unedited at RM_CALLS 29.
 - **ccrc history's acknowledgement:** `session-hook.test.ts` is not edited; `'ccd/ccd'` and `'ccd/ccrc'` stay where Step 3 measured them; four in-place hunks at or before line 19162 and one in ccrc.
 - **Child-reclamation's acknowledgement** is given in R50, R51 and R53 (its coordinator is this programme's): the one helper of `ccd-child-reclaim-verb.test.ts`, the one case of `ccd-ws-collect-reprove.test.ts` and the one key pin of `ccd-child-reclaim-audit.test.ts`. The brief need not carry it again.
-- **R44 to R73 are written into this plan:** P1 to P23 confirmed (P14 as R55 amends it), C1 to C7 ruled (R45 to R51), Step 6's three beyond-the-letter reads licensed (R52), round 2's seams settled (R60 to R64, R64 being the rows rung's own completeness check on the walk's reply), and the integration's six items ruled (R65 to R70: the residuals `fish-spawn-cd-reads-backslash-escapes` and `workdirid-physical-control-byte-stays-pending`, with Step 6's `spell-c1` STOP; the record reader's guard on git's main stanza; the walk's refusal of a last record with no NUL; R64 confirmed as built; and the macOS round-trip record), R71's four confirmations (`spell-c1` under surrogateescape, R70's record as built, R67's `-ef`-only main hit at rc 1, and `record-by-another-spelling-reads-unmeasured` numbered as a substantive departure), R72's relative `.workdir` (Step 6's `spell-not-absolute` STOP, the transcript-path claims narrowed to an absolute `.workdir`, and the residual `relative-workdir-second-cd-does-not-enter`), and R73's deviation numbers (W2's form, no conditional slot, six single wave-time entries). The brief need not restate them.
+- **R44 to R75 are written into this plan:** P1 to P23 confirmed (P14 as R55 amends it), C1 to C7 ruled (R45 to R51), Step 6's three beyond-the-letter reads licensed (R52), round 2's seams settled (R60 to R64, R64 being the rows rung's own completeness check on the walk's reply), and the integration's six items ruled (R65 to R70: the residuals `fish-spawn-cd-reads-backslash-escapes` and `workdirid-physical-control-byte-stays-pending`, with Step 6's `spell-c1` STOP; the record reader's guard on git's main stanza; the walk's refusal of a last record with no NUL; R64 confirmed as built; and the macOS round-trip record), R71's four confirmations (`spell-c1` under surrogateescape, R70's record as built, R67's `-ef`-only main hit at rc 1, and `record-by-another-spelling-reads-unmeasured` numbered as a substantive departure), R72's relative `.workdir` (Step 6's `spell-not-absolute` STOP, the transcript-path claims narrowed to an absolute `.workdir`, and the residual `relative-workdir-second-cd-does-not-enter`), R73's deviation numbers (W2's form, no conditional slot, six single wave-time entries), R74's resumption after a `spell-not-absolute` STOP, and R75's application of consent 7443 (`record-two-spellings-reads-unmeasured` numbered `D-6161`, Task 8's EXP-1 and EXP-2, R45 by content, the keys' definitions and the completed function list). The brief need not restate them.
 - **The run id, and R40's issued numbers** already written into this plan. The worker never calls the allocator.
 
 No live claim may hold `ccd/ccd`, `ccd/ccrc` or a file this wave edits, unless the brief records the coordinator's agreement.
@@ -8306,7 +8323,7 @@ It is also the first task in which a field that `cmd_ws_add` seeded changes a ve
   - The two count globals, directly after the rung's globals line.
   - `_ws_reclaim_reset`: `_WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""`.
   - `cmd_ws_audit`'s reclaim printf and its argument line (export `:13318-13319`), in place and line-neutral (R9, P10).
-  - Under R45's consent only: `_ws_expire_audit_contained`'s printf format line and its last argument line (export `:34842` and `:34844`; the statement spans `:34842-34844`, and its middle argument line `:34843` is unchanged), in place.
+  - Under R45's consent only: `_ws_expire_audit_contained`'s printf format line and its last argument line (the printf whose format holds `"mode":"expire","archivedAt"`, by content; export hints `:34842-34844`, which Task 0 re-measures), its middle argument line byte-identical, in place. Consent 7443 gives it (R75).
 
   Restamp.
 - Create `server/test/ccd-rows-rung-entry.test.ts`.
@@ -8348,7 +8365,7 @@ It is also the first task in which a field that `cmd_ws_add` seeded changes a ve
   - `EXP_ID`, `expireAudit` and `makeArchived` (`wsExpireFixture.ts`);
   - `parseChildReclaimAudit` and `parseChildReclaimAuditFailed` (`../src/coord/childReclaim.js`), and `parseExpireAudit` (`../src/archivedExpiry.js`).
 - **Produces:**
-  - `_WS_LEGACY_ROWS` and `_WS_PENDING_ROWS`: integers, set after the registry loop on every call that lists the registry. `''` means not counted: they are cleared at rung entry and by `_ws_reclaim_reset`.
+  - `_WS_LEGACY_ROWS` and `_WS_PENDING_ROWS`: integers, set after the registry loop on every call that lists the registry. `_WS_LEGACY_ROWS` counts the other rows whose field is in a `legacy-*` state, and `_WS_PENDING_ROWS` those whose field reads `pending`; a field that reads `unmeasured` is in neither, and it holds the child (R75 (d)). `''` means not counted: they are cleared at rung entry and by `_ws_reclaim_reset`.
   - The not-asked buckets `unpend`, `unfield` and `unrec`, plus the `B`/`F` entries of `unwalk` (P20).
   - The per-row field read leaves the reader's globals `_WS_WDID_STATE` and `_WS_WDID_IDENT` set for the CURRENT row, from its read through that row's R54 arm; Task 7 reads those two to build `_WS_RECORDED_IDS`. The rung locals `efst` and `efid` hold the same two values and are this task's own.
   - The reclaim document keys `"legacyRows":<n|null>,"pendingRows":<n|null>`, and the same pair on the expire document under R45's consent.
@@ -8450,8 +8467,9 @@ Set `EXPIRE_HALF` below from the brief (R45): `true` when it carries workspace-l
 // NESTED); and, for a row that still resolves completely, did it enter a directory other than the one its spelling
 // names now, one that can no longer be placed (a hold). A PENDING field or one that is not a regular file holds, by
 // row id; a LEGACY one changes nothing and is counted. No field releases a row: a gone row is released only by its
-// git record or its breadcrumb, as before. The rung counts the other rows whose field reads legacy and pending, and
-// the reclaim audit document prints them (`legacyRows`, `pendingRows`; `null` when not counted).
+// git record or its breadcrumb, as before. The rung counts the other rows whose field is in a `legacy-*` state
+// (`legacyRows`) and those whose field reads `pending` (`pendingRows`); a field that reads `unmeasured` is in neither,
+// and it holds the child. The reclaim audit document prints both, `null` when not counted.
 //
 // FIXTURE HOMEs ONLY (`makePrHarness`): every repository, row, field and leaf lives under the harness's HOME, and ccd
 // runs as sourced functions under `CHILD_STUBS`, never against the live HOME. Rows are hand-planted unless a case
@@ -9229,9 +9247,11 @@ After:
   # outside the child is negative evidence, never a licence, so a blank admin
   # entry still holds every child while a gone row of its repository exists
   # (`_ws_reclaim_admin_entries`).
-  # THE COUNTS. `_WS_LEGACY_ROWS` and `_WS_PENDING_ROWS` are the OTHER rows
-  # whose `.workdir` read and whose field reads legacy, and pending: set after
-  # the registry loop on every call that lists the registry, and '' when not
+  # THE COUNTS. `_WS_LEGACY_ROWS` counts the OTHER rows whose `.workdir` read
+  # and whose field is in a `legacy-*` state, and `_WS_PENDING_ROWS` those
+  # whose field reads `pending`; an `unmeasured` field is in neither, and it
+  # holds the child (above). Both are set after the registry loop on every
+  # call that lists the registry, and '' when not
   # counted (cleared here and by `_ws_reclaim_reset`; a registry that will not
   # list leaves them ''). `cmd_ws_audit` prints them in the reclaim document as
   # `legacyRows` and `pendingRows`, `null` when not counted.
@@ -9459,7 +9479,7 @@ After:
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
 ```
 
-**4m. `_ws_expire_audit_contained`'s document: in place, under R45's consent only.** Edit the format line and the last argument line; the middle argument line is unchanged. Before:
+**4m. `_ws_expire_audit_contained`'s document: in place, under R45's consent only (consent 7443 gives it: R75).** Locate it by content: the printf whose format holds `"mode":"expire","archivedAt"`. Edit the format line and the last argument line; the middle argument line stays byte-identical, which Task 14's boundary check pins. Before:
 ```bash
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
@@ -9753,9 +9773,11 @@ A birth time that could not be read holds; it is never read as none
 kept. Nothing removes a row from any bucket, and a gone row is still
 released only by its git record or its breadcrumb.
 
-The rung counts the other rows whose field reads legacy and pending.
-ws-audit --reclaim prints them as legacyRows and pendingRows, null when
-the rung was not reached or could not list the registry.
+The rung counts the other rows whose field is in a legacy state
+(legacyRows) and those whose field reads pending (pendingRows); a field
+that reads unmeasured is in neither, and it holds the child.
+ws-audit --reclaim prints both, null when the rung was not reached or
+could not list the registry.
 EOF
 ```
 
@@ -10775,11 +10797,12 @@ EOF
 - **Consumes:**
   - Task 2's `_ws_path_ident PATH [follow]`, with `_WS_IDENT`, `_WS_IDENT_KIND` and `_WS_IDENT_WHY`;
   - the rows rung's contract (Tasks 3, 6 and 7) and `_ws_reclaim_moved_check` (Task 7), both unchanged here;
-  - `DARWIN_IDENT_SHIMS` (`server/test/worktreeIdentityFixture.ts`, Task 2, P18);
+  - `DARWIN_IDENT_SHIMS` (`server/test/worktreeIdentityFixture.ts`, Task 2, P18), and `FAKE_PROC_SELF` (the same file, Task 1);
   - `makePrHarness` and `PrHarness` (`ccdPrHelpers.ts`), and `CCD` (`ccdWsHelpers.ts`);
+  - for EXP-1 and EXP-2 (R75): `EXP_BRANCH`, `EXP_ID`, `expireAudit`, `expireEvalOf`, `expireToken`, `expireVerb`, `makeArchived` and `Archived` (`wsExpireFixture.ts`), `refusalsOf` (`lifecycleHelpers.ts`), and `parseExpireAudit` and `parseExpireResult` (`server/src/archivedExpiry.ts`, read, never edited);
   - `CHILD_BRANCH`, `CHILD_ID`, `childReclaimVerb`, `evalOf`, `makeChild` and `Child` (`childReclaimFixture.ts`);
   - `verbHelpers(...).failedPairAgrees` (`childReclaimVerbHelpers.ts`).
-- **Test-local names** that no later task reads: `REALPATH_ECHOES`, `LIST_FAILS`, `REC_SPY`, `FAILS_AT`, `PROC_SPY`, `FORCED_DARWIN`, `rec`, `owned`, `row`, `adminOf`, `plantEntry`, `wtAlias`, `stanzas`, `linkedProject`, `linesIn`, `IDENT`, `devino` and `devinoOf`.
+- **Test-local names** that no later task reads: `REALPATH_ECHOES`, `LIST_FAILS`, `REC_SPY`, `FAILS_AT`, `PROC_SPY`, `FORCED_DARWIN`, `rec`, `owned`, `row`, `adminOf`, `plantEntry`, `wtAlias`, `stanzas`, `linkedProject`, `linesIn`, `IDENT`, `devino`, `devinoOf`, `EXP_PRE`, `plantExpEntry` and `intact`.
 
 - [ ] **Step 0: Entry conditions (Task 7 is committed; measure, never assume)**
 
@@ -10899,7 +10922,9 @@ A red baseline is recorded before any edit. Re-run a load-flake file ALONE first
 // FIXTURE HOME ONLY (`makePrHarness`): every repository, row, admin entry and link is under the HOME, and the reader,
 // the ladder and the owned check run as sourced functions. The two forced-Darwin cases run the reclaim verb with the
 // unit and pane calls recorded (`CHILD_STUBS`) and assert that no process table was walked (`PROC_SPY`): on Darwin the
-// temp root's probe answers before it reads one, and no other case here runs a tail.
+// temp root's probe answers before it reads one, and no other case here runs a tail. The two EXP cases (R75) run
+// ws-expire's audit and verb in the record reader's two rc-2 shapes, with the expiry's probe on a fixture process root
+// (`FAKE_PROC_SELF`): each answers before the tail, and none walks the host's /proc.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10907,7 +10932,12 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
-import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
+import { DARWIN_IDENT_SHIMS, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
+import {
+  EXP_BRANCH, EXP_ID, expireAudit, expireEvalOf, expireToken, expireVerb, makeArchived, type Archived,
+} from './wsExpireFixture.js';
+import { refusalsOf } from './lifecycleHelpers.js';
+import { parseExpireAudit, parseExpireResult } from '../src/archivedExpiry.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-reclaim-main-identity-'); });
@@ -11118,6 +11148,104 @@ describe('_ws_reclaim_record: identity only refuses (path-identity spec §4.8, P
   }, 120_000);
 });
 
+describe('ws-expire in the record reader’s two rc-2 shapes: answered before the tail, asked afresh, never parked (R75)', () => {
+  /** The host's process-table walks recorded (`PROC_SPY`), then the expiry's probe pointed at a fixture root
+   *  (`FAKE_PROC_SELF`, after the spy, so its root wins): no case here walks the host's /proc. */
+  const EXP_PRE = `${PROC_SPY} ${FAKE_PROC_SELF}`;
+  /** A second admin entry for the archived tree: a copy of its own, its `gitdir` naming `<spelling>/.git`, its HEAD
+   *  DETACHED at the tree's tip, as `plantEntry` plants one for the child. */
+  const plantExpEntry = (a: Archived, name: string, spelling: string): void => {
+    fs.cpSync(adminOf(a.main, 'quiet-dune'), adminOf(a.main, name), { recursive: true });
+    fs.writeFileSync(path.join(adminOf(a.main, name), 'gitdir'), `${spelling}/.git\n`);
+    fs.writeFileSync(path.join(adminOf(a.main, name), 'HEAD'), `${a.tip}\n`);
+  };
+  /** Everything an unmeasured answer or a refusal leaves standing, and no walk of the host's /proc. */
+  const intact = (a: Archived): void => {
+    expect(fs.existsSync(path.join(a.wt, 'f1.txt')), 'the archived tree stands').toBe(true);
+    expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'its branch stands').toContain(EXP_BRANCH);
+    expect(h.reg(EXP_ID, 'archived'), 'the archive stands').not.toBeNull();
+    expect(h.reg(EXP_ID, 'reaping'), 'no breadcrumb was written').toBeNull();
+    expect(fs.existsSync(path.join(sessions(), '.reaped', `${EXP_ID}.json`)), 'no tombstone: nothing was pinned').toBe(false);
+    expect(h.calls().filter((l) => l.startsWith('unsupervise')), 'the unit was not touched').toEqual([]);
+    expect(h.calls(), 'the pane was not touched').not.toContain(`tmux kill-session -t =cc-${EXP_ID}:`);
+    expect(linesIn('proc-walks'), 'no walk of the host’s /proc').toEqual([]);
+  };
+
+  it('EXP-1 two records name the archived tree (REC-1’s shape): ws-expire answers unmeasured, removes nothing and mints no token', () => {
+    const a = makeArchived(h);
+    const wd = h.reg(EXP_ID, 'workdir')!;
+    expect(fs.existsSync(adminOf(a.main, 'quiet-dune')), 'the CONTROL: git’s admin entry for the tree').toBe(true);
+    const tok = expireToken(h, { pre: EXP_PRE });
+    expect(tok, 'the CONTROL: the expiry ladder passes before the plant').toMatch(/^[0-9a-f]{64}$/);
+    const alias = path.join(path.dirname(wtAlias()), 'quiet-dune');
+    plantExpEntry(a, 'qd-alias', alias);
+    expect(stanzas(a.main), 'the CONTROL: git lists the alias record').toContain(alias);
+    expect(stanzas(a.main), 'the CONTROL: and the tree’s own').toContain(a.wt);
+    const e = expireEvalOf(h, { pre: EXP_PRE });
+    expect(e.verdict, e.detail).toBe('unmeasured');
+    expect(e.token).toBe('');
+    expect(e.detail).toBe(`two of ${a.main}'s worktree records name the tree at ${wd}, so which one is its record was never settled,`
+      + ` so whether git records ${wd} was never asked`);
+    const audit = expireAudit(h, { pre: EXP_PRE });
+    expect(audit.code, 'an unmeasured audit exits 1').toBe(1);
+    const doc = JSON.parse(audit.stdout) as Record<string, unknown>;
+    expect(doc['verdict']).toBe('unmeasured');
+    expect(doc['token'], 'no token is minted').toBeUndefined();
+    expect(doc['detail']).toBe(e.detail);
+    const r = expireVerb(h, tok, { pre: EXP_PRE });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout), 'the token minted before the plant carries nothing: the lock asks the ladder again')
+      .toEqual({ failed: 'probe-unmeasured', detail: e.detail, crumb: false });
+    intact(a);
+  }, 120_000);
+
+  it('EXP-2 only another spelling records the archived tree (REC-2’s shape): each pass asks afresh, the lane reads unmeasured with its why, and nothing carries to the next pass', () => {
+    const a = makeArchived(h);
+    const wd = h.reg(EXP_ID, 'workdir')!;
+    const own = path.join(adminOf(a.main, 'quiet-dune'), 'gitdir');
+    const recorded = fs.readFileSync(own, 'utf8');
+    const tok = expireToken(h, { pre: EXP_PRE });
+    expect(tok, 'the CONTROL: the expiry ladder passes before the plant').toMatch(/^[0-9a-f]{64}$/);
+    const alias = path.join(path.dirname(wtAlias()), 'quiet-dune');
+    fs.writeFileSync(own, `${alias}/.git\n`);
+    expect(stanzas(a.main), 'the CONTROL: git lists the tree under the alias spelling').toContain(alias);
+    expect(stanzas(a.main), 'the CONTROL: and under no other').not.toContain(a.wt);
+    const why = `${a.main}'s worktree records name the tree at ${wd} only under another spelling, so which one is its`
+      + ` record was never settled, so whether git records ${wd} was never asked`;
+    // Pass 1, audited twice as the lane audits on each of its passes: each audit asks the whole ladder, mints no token
+    // and exits 1, which the lane reads as unmeasured with its why, never as a terminal refusal it would park.
+    for (const n of [1, 2]) {
+      const audit = expireAudit(h, { pre: EXP_PRE });
+      expect(audit.code, `audit ${n} exits 1: unmeasured`).toBe(1);
+      const doc = JSON.parse(audit.stdout) as Record<string, unknown>;
+      expect(doc['verdict'], `audit ${n}`).toBe('unmeasured');
+      expect(doc['token'], `audit ${n} mints no token`).toBeUndefined();
+      expect(parseExpireAudit(EXP_ID, audit.code === 0, audit.stdout), `the lane's read of audit ${n}`)
+        .toEqual({ kind: 'unreadable', detail: `ws-audit --expire measured nothing: ${why}` });
+    }
+    expect(refusalsOf(h.home), 'never journaled as the terminal no-worktree-record')
+      .not.toContainEqual({ act: 'expire', token: 'no-worktree-record' });
+    // The token minted before the plant carries nothing into this state: the verb asks the whole ladder again in its lock.
+    const r1 = expireVerb(h, tok, { pre: EXP_PRE });
+    expect(r1.code, r1.stdout + r1.stderr).toBe(1);
+    expect(parseExpireResult(EXP_ID, r1.stdout, r1.stderr), 'the lane starts its next pass from a fresh audit')
+      .toEqual({ kind: 'restart', detail: `probe-unmeasured: ${why}` });
+    intact(a);
+    // Pass 2: git's record names the tree by its string again. A fresh audit asks the whole ladder and mints its own
+    // token, and the verb re-proves the token it is given inside its lock, so one this pass did not mint refuses.
+    fs.writeFileSync(own, recorded);
+    expect(stanzas(a.main), 'the CONTROL: git lists the tree by its own spelling again').toContain(a.wt);
+    const audit2 = expireAudit(h, { pre: EXP_PRE });
+    expect(audit2.code, audit2.stdout + audit2.stderr).toBe(0);
+    const read2 = parseExpireAudit(EXP_ID, true, audit2.stdout);
+    expect(read2.kind === 'document' ? read2.verdict.kind : read2.kind, 'the whole ladder passes, asked afresh').toBe('expirable');
+    const r2 = expireVerb(h, 'f'.repeat(64), { pre: EXP_PRE });
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0);
+    expect((JSON.parse(r2.stdout) as Record<string, unknown>)['refused'], 'a token this pass did not mint').toBe('state-changed');
+    intact(a);
+  }, 180_000);
+});
+
 describe('_ws_reclaim_owned: the project directory by device and inode, asked last (path-identity spec §4.8)', () => {
   it('OWN-1 the tree is the project directory under another spelling: 1, by device and inode', () => {
     const c = makeChild(h);
@@ -11308,6 +11436,8 @@ FAIL:
 - OWN-8: `expected '1|<unset>|<unset>' to be '1||'`.
 - LAD-1: its CONTROL passes, then `expected 'branch-elsewhere' to be 'not-a-workspace'`. The drafted verdict is `branch-elsewhere`: the ladder passes the git-directory rung, and the child's branch is checked out at the child's own tree. Record the measured verdict.
 - DAR-2: `expected 0 to be 1`. The child is reclaimed today.
+- EXP-1 (R75): `expected 'expirable' to be 'unmeasured'`. Today the alias record is read, never compared, so the expiry ladder passes and mints a token.
+- EXP-2 (R75): `audit 1 exits 1: unmeasured: expected 0 to be 1`. Today the expiry ladder answers the terminal `no-worktree-record`, in a document that exits 0.
 - SRC-1, SRC-2 and SRC-3: each finds no new line.
 
 PASS today, and each must stay green:
@@ -11316,7 +11446,7 @@ PASS today, and each must stay green:
 - OWN-5 (an order pin; Step 7's B3 makes it bite);
 - DAR-1 (CONTROL).
 
-Any other case that passes here is a defect in the case: fix the case, never the code. REC-1's red must come from the reader's answer, never from its CONTROLs. A red CONTROL means git did not list the planted record: STOP `rec-1-record-not-listed`.
+Any other case that passes here is a defect in the case: fix the case, never the code. REC-1's red must come from the reader's answer, never from its CONTROLs. A red CONTROL means git did not list the planted record: STOP `rec-1-record-not-listed`. EXP-1's and EXP-2's reds must come after their CONTROLs too (a token minted before the plant, and git listing the planted spelling); a red CONTROL there is a STOP, `exp-control-red`.
 
 - [ ] **Step 3: Implement in `ccd/ccd`, each edit located by its quoted text**
 
@@ -11697,9 +11827,9 @@ Expected: `bash -n` and `--check` exit 0, and both suites PASS.
 (cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-main-identity.test.ts)
 ```
 
-Expected: PASS, 24 tests (REC-9 included, R67). On a Darwin host DAR-2 skips, so 23 pass and 1 is skipped. Record the file's wall time.
+Expected: PASS, 26 tests (REC-9 included, R67; EXP-1 and EXP-2, R75). On a Darwin host DAR-2 skips, so 25 pass and 1 is skipped. Record the file's wall time.
 
-A red here STOPs the task. Report it by its tag, with the measured text. A red DAR-1 or DAR-2 at its `proc-walks` assertion means a forced-Darwin tail walked a process table, so this file would join CLAUDE.md's list: STOP `main-identity-walks-proc`.
+A red here STOPs the task. Report it by its tag, with the measured text. A red DAR-1, DAR-2, EXP-1 or EXP-2 at its `proc-walks` assertion means a case walked the host's process table, so this file would join CLAUDE.md's list: STOP `main-identity-walks-proc`.
 
 - [ ] **Step 6: The forced-Darwin suites: measure their red, then give them the identity shims (P13, R50)**
 
@@ -11873,9 +12003,9 @@ Then each row is ONE Bash call, run from the workspace root, in the foreground, 
 
 No mutation is restamped: no case these rows run reads the stamp. Every red below was drafted, not measured. Record each measured text and vitest's count of tests run and failed. A row listed as red that stays green is a STOP, reported by its row id. A `mut:` refusal (exit 3) is a STOP too: an anchor moved.
 
-**A1. The identity refusal deleted (`return 2` becomes `continue`).** Must red REC-1 (rc 0) and REC-2 (rc 1): 2 run, 2 failed.
+**A1. The identity refusal deleted (`return 2` becomes `continue`).** Must red REC-1 (rc 0), REC-2 (rc 1), EXP-1 (the expiry ladder passes and mints a token: R75 (a)) and EXP-2 (its first audit answers the terminal `no-worktree-record` and exits 0: R75 (b)): 4 run, 4 failed.
 ```bash
-S=.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identity/task8-mut; node "$S/mut.mjs" ccd/ccd sub '      return 2   # identity only refuses: never a hit' '      continue   # identity only refuses: never a hit' && (cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-main-identity.test.ts -t 'REC-1 |REC-2 '); cp "$S/ccd.task8" ccd/ccd && cmp ccd/ccd "$S/ccd.task8" && echo restored
+S=.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identity/task8-mut; node "$S/mut.mjs" ccd/ccd sub '      return 2   # identity only refuses: never a hit' '      continue   # identity only refuses: never a hit' && (cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-main-identity.test.ts -t 'REC-1 |REC-2 |EXP-1 |EXP-2 '); cp "$S/ccd.task8" ccd/ccd && cmp ccd/ccd "$S/ccd.task8" && echo restored
 ```
 **A2. The first-stanza `-ef` sets no `RECLAIM_REC_MAIN`.** Must red REC-3 (`main: '0'`, and the ladder answers `containment-unproven`): 1 run, 1 failed.
 ```bash
@@ -12025,9 +12155,10 @@ In the SDD ledger, `.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identi
 - every measured red text of Steps 2, 6a and 7, with vitest's run and failed counts per row;
 - the two named survivors, A4 and A6c, each with its reason;
 - which forced-Darwin files took the shims in this task, and which already carried them from Task 6;
-- the new file's wall time, and that it walks no process table (DAR-1 and DAR-2's `PROC_SPY`), so it does not join CLAUDE.md's list. Record its stem, `ccd-reclaim-main-identity`, on its own line as a verb file measured to walk no `/proc`: Task 14 copies that line into `$L/verb-no-walk`, so its verb-file check reads the file as measured, not as missing from `$L/flake-recorded`;
+- the new file's wall time, and that it walks no process table (DAR-1's, DAR-2's, EXP-1's and EXP-2's `PROC_SPY`; the EXP cases ask the expiry's probe of a fixture root), so it does not join CLAUDE.md's list. Record its stem, `ccd-reclaim-main-identity`, on its own line as a verb file measured to walk no `/proc`: Task 14 copies that line into `$L/verb-no-walk`, so its verb-file check reads the file as measured, not as missing from `$L/flake-recorded`;
 - `gates-tail-task8.txt`'s count, with each file's verdict and wall time;
 - the substantive departure `record-by-another-spelling-reads-unmeasured`, which R71 numbers (its slot is below): REC-2's shape moves from the ladder's terminal `no-worktree-record` to the retryable `unmeasured`. R31's letter and spec §4.8 produce it; see Drafter's correction 3. Its second shape, a string hit on git's main stanza beside another stanza that names the main checkout under another spelling, is closed by R67's guard (`record-main-hit-keeps-the-terminal-refusal`, REC-9 and A9);
+- the substantive departure `record-two-spellings-reads-unmeasured`, which R75 numbers (its slot is below): REC-1's shape, whose rc 2 comes before the ladder's terminal `branch-elsewhere`, `containment-unproven` and `tree-unreadable`; and EXP-1's and EXP-2's measured answers through ws-expire (R75 (a), (b)), with A1's measured counts;
 - the found-while-building item, by slug, for the wave-done:
   - `record-ef-has-no-deadline`: a stanza on a hung network mount blocks the `-ef` stat with no bound. That is the class of the reader's own unbounded `git worktree list` and `_ws_realpath`'s `cd`. It is a candidate for Task 13's residual list.
 
@@ -12080,7 +12211,8 @@ Before running the commit, end the message with one blank line and then the attr
 **Deviation slots:**
 - `D-6129` (`ladder-main-checkout-ef`) (substantive; R17): the spec put `-ef` in the owned arm. The ladder's string compare gains it too, as an add-only `not-a-workspace` refusal.
 - `D-6130` (`record-main-hit-keeps-the-terminal-refusal`) (substantive; R67, a narrowing of R31's rc-2 rule): once git's main stanza names the tree, by its string or by `-ef`, the identity pass asks no later stanza, so a string hit on the main stanza keeps the ladder's terminal `not-a-workspace` and owned's rc 1. Pinned by REC-9 and A9.
-- `D-6131` (`record-by-another-spelling-reads-unmeasured`) (substantive; R31, R71): REC-2's shape. When only a stanza naming the tree under another spelling records the standing child, the record reader answers 2, so the ladder's terminal `no-worktree-record` (whose detail was false: git does record the tree) becomes the retryable `unmeasured`, and owned answers 2. It is a refusal either way: no token is minted and nothing is released. Pinned by REC-2, with A1 as its mutation row.
+- `D-6131` (`record-by-another-spelling-reads-unmeasured`) (substantive; R31, R71): REC-2's shape. When only a stanza naming the tree under another spelling records the standing child, the record reader answers 2, so the ladder's terminal `no-worktree-record` (whose detail was false: git does record the tree) becomes the retryable `unmeasured`, and owned answers 2. It is a refusal either way: no token is minted and nothing is released. Pinned by REC-2 and, through ws-expire, by EXP-2 (R75 (b)), with A1 as their mutation row.
+- `D-6161` (`record-two-spellings-reads-unmeasured`) (substantive; R31, R75): REC-1's shape. When two of git's records name the standing child, one by its string and another under another spelling, the record reader answers 2 ("two of … worktree records name the tree"). That comes before the ladder's terminal `branch-elsewhere`, `containment-unproven` and `tree-unreadable`, so where one of them would have answered, the retryable `unmeasured` answers, and owned answers 2. It is an added hold, not a release: no token is minted and nothing is removed. Pinned by REC-1 and, through ws-expire, by EXP-1 (R75 (a)), with A1 as their mutation row.
 - `D-6137` (`darwin-prefixes-take-the-identity-shims`) (substantive; shared with Task 10, which adds the listing stub): this task's half covers:
   - the identity shims in this programme's four forced-Darwin prefixes;
   - the `darwin()` helper of `ccd-child-reclaim-verb.test.ts`, as R50 rules C6 (a);
@@ -12096,6 +12228,7 @@ Before running the commit, end the message with one blank line and then the attr
    - The fence has no row for this shape.
    - It does touch the letter of the add-only constraint ("a stronger refusal word into a weaker one"). R71 rules it a substantive departure with its own number, `record-by-another-spelling-reads-unmeasured` (this task's slot above), which the add-only constraint excepts by name: a refusal either way, and nothing is removed.
    - The same weakening had a second shape, also R31's letter. When the strings match git's first (main) stanza and another stanza names the main checkout under another spelling, the identity pass would skip the string-matched stanza, reach that one and answer 2. The ladder tests `rc == 2` before `RECLAIM_REC_MAIN`, so its terminal `not-a-workspace` would become the retryable `unmeasured`, and `_ws_reclaim_owned`'s proof rc 1 ("$wd is $main's main checkout") rc 2. R67 rules option (b), a narrowing of R31's rc-2 rule: `(( ! RECLAIM_REC_MAIN )) || continue` stands directly above `if (( hit )); then` (Step 3b), so once git's main stanza names the tree, by its string or by `-ef`, no later stanza is asked. REC-9 pins it, A9 is its mutation row, and it is the substantive departure `record-main-hit-keeps-the-terminal-refusal`. So `record-by-another-spelling-reads-unmeasured` names REC-2's shape alone.
+   - REC-1's shape is a departure of its own (R75 (a)). There the strings match the tree's own stanza and another stanza names it under another spelling, so the reader answers 2 ("two of … worktree records name the tree"). That 2 comes before the ladder's terminal `branch-elsewhere`, `containment-unproven` and `tree-unreadable`, so where one of them would have answered, the retryable `unmeasured` answers. It is an added hold, not a release. Workspace-lifecycle accepted it for ws-expire on condition that it is numbered and pinned: it is `record-two-spellings-reads-unmeasured` (this task's slot above), pinned through ws-expire by EXP-1. EXP-2 pins the conditions on REC-2's shape through ws-expire (R75 (b)).
 4. **P11's sentence in the identity cases.** P11's caller form appends ", so whether git records … was never asked" to every reason. An identity reason therefore reads with two clauses ("…was never settled, so whether git records … was never asked"). It is kept as P11 spells it. The list failure's sentence is byte-identical at all three callers (REC-5b).
 5. **REC-1 plants a detached copy.** With the copied HEAD (`ref: refs/heads/ws/quiet-basin`), the ladder before this task already refuses `branch-elsewhere` at rung 7, because the alias stanza holds the child's branch. That would hide the red. Detached at the child's tip, today's ladder mints a token, which is the red the frame names. REC-3's planted entry is detached for the same reason.
 6. **A4 cannot red a behaviour case.** `-ef` is false when either stat fails, so the `-d` guard is structural. REC-4 stays green, a named survivor, and SRC-1 pins the guard. The frame asked for this to be measured and recorded.
@@ -12103,7 +12236,8 @@ Before running the commit, end the message with one blank line and then the attr
    - REC-5a, REC-8 and OWN-8, with A7, A8 and B4: the reason is set, the reset clears it, and the owned check clears its identities;
    - OWN-4, with B2b: the tree's own measure failing. The frame's `_plat_btime` answering `x` fails the project directory's measure first, so the tree half had no red;
    - A6a, A6b and A6c: the three callers read the reason. A6c is a named survivor;
-   - SRC-2 and SRC-3: the ladder's adjacency and P21's position.
+   - SRC-2 and SRC-3: the ladder's adjacency and P21's position;
+   - EXP-1 and EXP-2, which R75 asks for: ws-expire's audit and verb in REC-1's and REC-2's shapes, on a fixture process root, both under A1.
 8. **The import lines.** R50 licenses the verb file's `darwin()` helper only, and the HARD BOUNDARY names `ccd-reclaim-tail-mounts.test.ts`'s DARWIN prefix only. Each also needs one import line for `DARWIN_IDENT_SHIMS`, which has one definition (P18). Task 14's boundary check admits these two import lines, and Step 6g measures each file at two added lines and one removed, with no `expect(` line.
 9. **The two files that already shimmed `_plat_devino`** alias their constant to `DARWIN_IDENT_SHIMS`, rather than appending a second spelling of `_plat_btime`. That keeps one definition of the pair, and their use sites stay byte-identical.
 10. **The CLAUDE.md edit is replaced by an assertion.** The frame said "Modify `CLAUDE.md`, as measured". The new file's only tail runs are the two forced-Darwin cases. On Darwin the temp root's probe answers before it reads a process table, and both cases assert that through `PROC_SPY`. So the file does not join the load-flake list, and a red there STOPs.
@@ -14691,8 +14825,8 @@ const edit = (p, pairs) => {
   console.log(`own-tail-files: ${p} edited`);
 };
 edit('server/test/ccd-reclaim-main-identity.test.ts', [
-  ["import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';\n",
-    "import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB } from './worktreeIdentityFixture.js';\n"],
+  ["import { DARWIN_IDENT_SHIMS, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';\n",
+    "import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';\n"],
   ["const FORCED_DARWIN = 'CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0;';\n",
     'const FORCED_DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_LSOF_STUB}`;\n'],
 ]);
@@ -17517,7 +17651,8 @@ const NOTE_RULES = ['R31', 'R54', 'R56', 'R83', 'R89', 'R93', 'R94', 'R95', 'R97
 /** The substantive departures this wave made, by slug. */
 const DEPARTURES = ['workdirid-pending-form', 'workdirid-unreadable-holds', 'rows-walk-second-mountinfo-reader',
   'unproc-also-by-walked-position', 'ladder-main-checkout-ef', 'record-main-hit-keeps-the-terminal-refusal',
-  'record-by-another-spelling-reads-unmeasured', 'reappeared-tree-refuses', 'cwd-wait-only-waits',
+  'record-by-another-spelling-reads-unmeasured', 'record-two-spellings-reads-unmeasured', 'reappeared-tree-refuses',
+  'cwd-wait-only-waits',
   'cwd-refusal-reuses-worktree-remove-failed', 'reask-words-follow-the-owned-call', 'cwd-probe-adopts-the-path-users-walk',
   'darwin-prefixes-take-the-identity-shims', 'w2-mount-asks-shadowed-by-the-reask', 'collect-reprove-table-moves-to-the-gap',
   'audit-document-key-pins-outside-the-boundary'];
@@ -18032,8 +18167,9 @@ into a pass.
   nothing by itself. It only tells the mismatch rule that the path does not stand.
 - A pending field holds (`unpend`), and so does a field that is not a regular file or cannot be read (`unfield`). A
   legacy field, whatever its word, leaves its row to today's string rule plus the ancestry above.
-- The count. The reclaim audit document carries `"legacyRows"` and `"pendingRows"`: how many of the other rows read
-  legacy, and how many pending. `null` means not counted: the ladder never reached the rung, or the rung could not list
+- The count. The reclaim audit document carries `"legacyRows"` and `"pendingRows"`: `legacyRows` counts the other
+  rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`. A field that reads
+  `unmeasured` is in neither, and it holds the child. `null` means not counted: the ladder never reached the rung, or the rung could not list
   the registry. <n:expire-half> No server reader was added.
 
 **The moved-check (R54).**
@@ -18058,7 +18194,12 @@ into a pass.
   `record-by-another-spelling-reads-unmeasured`: when only a stanza naming the tree under another spelling records it,
   the reader answers 2, so the ladder answers the retryable `unmeasured` where it answered the terminal
   `no-worktree-record`, whose detail was false (git does record the tree), and the owned check answers 2. Both refuse,
-  and nothing is removed. Identity never makes a hit. Every 2 carries its cause in `_WS_REC_WHY`, which
+  and nothing is removed. `record-two-spellings-reads-unmeasured`: when two of git's records name the standing tree,
+  one by its string and one under another spelling, the reader's 2 comes before the ladder's terminal
+  `branch-elsewhere`, `containment-unproven` and `tree-unreadable`, so where one of them would have answered, the
+  ladder answers the retryable `unmeasured`, and the owned check answers 2. That is an added hold: no token is minted,
+  and nothing is removed. ws-expire reaches both shapes, and a later pass asks the whole ladder again and mints its
+  own token, carrying nothing from the pass that answered unmeasured. Identity never makes a hit. Every 2 carries its cause in `_WS_REC_WHY`, which
   its three callers print, and a list failure keeps its exact sentence. The comments that said no `_ws_realpath` answer
   is read there were corrected.
 
@@ -18330,8 +18471,9 @@ the spec, never this contract.
     the platform composer's line, ws-add's `.workdir` line and the reclaim document's printf;
   - `ccd/ccrc` has one, in its platform layer;
   - the five citation passes stayed green at the number they read on `main`, with no number edited.
-- The wave added two keys to the reclaim audit document, `legacyRows` and `pendingRows`, and changed one server
-  sentence: `worktree-remove-failed`'s now ends "or a process still works inside it". It added no route, table,
+- The wave added two keys to the reclaim audit document: `legacyRows`, the other rows whose field is in a `legacy-*`
+  state, and `pendingRows`, those whose field reads `pending` (a field that reads `unmeasured` is in neither, and it
+  holds the child). It changed one server sentence: `worktree-remove-failed`'s now ends "or a process still works inside it". It added no route, table,
   migration, capability word, ccd verb, refusal token, journal act, probe word, sanctioned `die` line, agent grant or
   exec-whitelist entry.
 - In remote mode the reclaim, expiry and collect verbs run only on the fleet box. So the mount table's device match was
@@ -18380,8 +18522,8 @@ the spec, never this contract.
 - The field: `workdirid-pending-form` and `workdirid-unreadable-holds`.
 - The rung: `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`
   and `collect-reprove-table-moves-to-the-gap`.
-- The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal` and
-  `record-by-another-spelling-reads-unmeasured`.
+- The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`,
+  `record-by-another-spelling-reads-unmeasured` and `record-two-spellings-reads-unmeasured`.
 - The probe: `cwd-probe-adopts-the-path-users-walk`, `cwd-wait-only-waits` and
   `cwd-refusal-reuses-worktree-remove-failed`.
 - The tail window: `reask-words-follow-the-owned-call` and `reappeared-tree-refuses`.
@@ -18713,6 +18855,7 @@ Replace the last line of the message with your session's attribution line before
 15. **Mutation rows run through section-scoped editors.** §3.10 spells several of §4.12's phrases ("counts only:", "**Stated residuals.**"), so a whole-file first-match edit would land in W2's record. Every mutation of §4.12 or of the note is confined to its own section. The planted deviation token is composed from its parts, so this plan carries none.
 16. **R65, R66 and R67 add three slugs.** `record-main-hit-keeps-the-terminal-refusal` joins `DEPARTURES` (R67), and `fish-spawn-cd-reads-backslash-escapes` and `workdirid-physical-control-byte-stays-pending` join `BASE_RESIDUALS` (R65, R66). Both records name all three. §4.12's round-trip sentence reads as R65 narrows it, its walk sentence names the walk's refusal of a last request cut before its end (R68), and its entry counts carry `spell-c1` (R66), which Step 0's (e27) reads.
 17. **R71 and R72 add two slugs.** `record-by-another-spelling-reads-unmeasured` joins `DEPARTURES` (R71), so Step 1's `FOUND_WHILE_BUILDING` leaves it out, and `relative-workdir-second-cd-does-not-enter` joins `BASE_RESIDUALS` (R72). Both records name both: §4.12's record-reader bullet and the note's main-checkout departures carry the first, and both stated-residual lists carry the second. §4.12's launch bullet narrows "no transcript path changed" to an absolute `.workdir` (R72).
+18. **R75 adds one slug.** `record-two-spellings-reads-unmeasured` joins `DEPARTURES` (R75 (a)), so Step 1's `FOUND_WHILE_BUILDING` leaves it out. Both records name it: §4.12's record-reader bullet and the note's main-checkout departures. §4.12's count bullet and the note's keys sentence describe `legacyRows` and `pendingRows` by R75 (d)'s definition. Neither record cites R75: its number is a plan ruling, which correction 7 keeps out of both.
 
 ### Task 14: Whole-branch verification, the full-run CI, and the PR (R39)
 
@@ -19174,7 +19317,7 @@ cat > "$L/identity.sh" <<'EOF'
 #!/usr/bin/env bash
 # base head c1 -> every fenced function and note byte-identical base to head (R41, R6, R7, R22, R45, P22), _ws_path_users'
 # code lines identical, and _ws_expire_audit_contained identical under c1 b or changed only inside its expire printf
-# statement under c1 a; rc 1 on any other answer
+# statement under c1 a, its middle argument line byte-identical (consent 7443, R75); rc 1 on any other answer
 b="$1" h="$2" c1="${3-}"; rc=0
 fn_of() { awk -v fn="$1" '$0 ~ "^" fn "\\(\\) *\\{" {f=1} f{print} f&&/^}/{exit}' "$2"; }
 for fn in _reg_purge cmd_caps _child_tmpdir _delegation_spool_dir _sync_uuid _route_note_clear _route_type_model _route_readback \
@@ -19195,8 +19338,9 @@ elif [[ "$c1" == a ]]; then
   s=$(grep -n '"mode":"expire","archivedAt"' "$b.eac" | cut -d: -f1); e=$(awk -v s="$s" 'NR>=s && !/\\$/{print NR; exit}' "$b.eac")
   r=$(git diff --no-index --no-color -U0 -- "$b.eac" "$h.eac" | awk -v s="$s" -v e="$e" '/^@@ /{o=$2; n=$3; sub(/^-/,"",o); sub(/^\+/,"",n); split(o,x,","); split(n,y,","); a=x[1]+0; bb=(2 in x)?x[2]+0:1; c=y[1]+0; d=(2 in y)?y[2]+0:1; k++; if (bb==0 || a<s || a+bb-1>e || a!=c || bb!=d) bad++} END{print k+0, bad+0}')
   keys=$(sed -n "${s},${e}p" "$h.eac" | grep -c 'legacyRows.*pendingRows')
-  if [[ -n "$s" && -n "$e" && "$r" =~ ^[1-9][0-9]*\ 0$ && "$keys" -ge 1 ]]; then echo "_ws_expire_audit_contained: its expire printf statement only, in place (C1 a; lines $s-$e of the function)"
-  else echo "_ws_expire_audit_contained DIFFERS beyond its printf (C1 a; hunks/bad $r, keys $keys)"; rc=1; fi
+  mid=0; [[ "$s" =~ ^[0-9]+$ && "$e" == "$(( s + 2 ))" ]] && cmp -s <(sed -n "$(( s + 1 ))p" "$b.eac") <(sed -n "$(( s + 1 ))p" "$h.eac") && mid=1   # consent 7443 (R75): three lines, the middle one byte-identical
+  if [[ -n "$s" && -n "$e" && "$r" =~ ^[1-9][0-9]*\ 0$ && "$keys" -ge 1 && "$mid" == 1 ]]; then echo "_ws_expire_audit_contained: its expire printf's format and last argument lines only, in place, its middle argument line byte-identical (C1 a; lines $s-$e of the function)"
+  else echo "_ws_expire_audit_contained DIFFERS beyond its printf's format and last argument lines (C1 a; hunks/bad $r, keys $keys, middle identical $mid)"; rc=1; fi
 else echo "c1 is neither a nor b"; rc=2; fi
 for note in EXPIRE-V1 COLLECT-V1; do
   awk -v n="$note" '$0 ~ "^# " n "\\." {f=1} f&&!/^#/{exit} f{print}' "$b" > "$b.note"
@@ -19211,7 +19355,7 @@ bash "$L/identity.sh" "$L/ccd.base" "$L/ccd.head" "$(cat "$L/c1")"; echo "identi
 Expected:
 - `identical` for every function in the loop. The one exception is `_operator_choice_promote absent in both`, which holds when #435 has not merged; it is not defined at the export. A function that exists in only one of the two files is `DIFFERS`.
 - `_ws_path_users code identical`: Task 9 changes one comment sentence only.
-- Under C1 (b): `_ws_expire_audit_contained identical (C1 b)`. Under C1 (a): `…its expire printf statement only, in place (C1 a; lines 21-23 of the function)` at the export. The statement spans three physical lines there: the format line and two argument lines (34842 to 34844 in the file).
+- Under C1 (b): `_ws_expire_audit_contained identical (C1 b)`. Under C1 (a), which consent 7443 gives: `_ws_expire_audit_contained: its expire printf's format and last argument lines only, in place, its middle argument line byte-identical (C1 a; lines 21-23 of the function)`. The statement is found by content, the printf whose format holds `"mode":"expire","archivedAt"`, and spans three physical lines: the format line, the middle argument line and the last argument line. Its file lines are hints that Task 0's (b22b) re-measured (34842 to 34844 at the export).
 - `EXPIRE-V1 note identical` and `COLLECT-V1 note identical`.
 - `identity rc=0`.
 
@@ -19362,6 +19506,12 @@ L=.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identity/task14; sed '/^
 ```
 Expected: `_reg_purge DIFFERS` and `rc=1`.
 
+C9b (R75 (c)), one space prepended to the middle argument line of `_ws_expire_audit_contained`'s expire printf: the identity check reds. Run it when `$L/c1` reads `a`, as consent 7443 makes it.
+```bash
+L=.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identity/task14; node -e 'const fs=require("fs"); const L=fs.readFileSync(process.argv[1],"utf8").split("\n"); const a=L.findIndex(l=>l.startsWith("_ws_expire_audit_contained() {")); const s=L.findIndex((l,i)=>i>a && l.includes("\"mode\":\"expire\",\"archivedAt\"")); if (a<0 || s<0) { console.log("anchor missing"); process.exit(1); } L[s+1]=" "+L[s+1]; fs.writeFileSync(process.argv[2], L.join("\n"));' "$L/ccd.head" "$L/ccd.mut"; bash "$L/identity.sh" "$L/ccd.base" "$L/ccd.mut" "$(cat "$L/c1")" | grep DIFFERS; echo "rc=${PIPESTATUS[0]}"
+```
+Expected: `_ws_expire_audit_contained DIFFERS beyond its printf's format and last argument lines (C1 a; hunks/bad 1 0, keys 1, middle identical 0)` and `rc=1`. Without consent 7443's condition this hunk passed: it lies inside the statement, in place.
+
 C10, an `expect(` line touched in an unlicensed case of `ccd-reclaim-tail-mounts.test.ts`: Step 5's test-hunk licence reds. Run this row after Step 5 has written `$L/test-hunks.mjs`.
 ```bash
 L=.superpowers/sdd/2026-10-20-path-identity-w3-worktree-identity/task14; BASE=$(git merge-base HEAD origin/main); git show "$BASE":server/test/ccd-reclaim-tail-mounts.test.ts > "$L/tm.base"; node -e 'const fs=require("fs"); const L=fs.readFileSync(process.argv[1],"utf8").split("\n"); const i=L.findIndex(l=>l.includes("the nested branch went")); L[i]=L[i]+" "; fs.writeFileSync(process.argv[2], L.join("\n"));' server/test/ccd-reclaim-tail-mounts.test.ts "$L/tm.mut"; node "$L/test-hunks.mjs" "$L/tm.base" "$L/tm.mut" 'N1:|N2:|C1:|C2:|C3:|C4:|C6:|E1:' '' MOUNT_AT_ASK | tail -n 3; echo "rc=${PIPESTATUS[0]}"
@@ -19380,7 +19530,7 @@ git status --porcelain --untracked-files=no | wc -l
 ```
 
 Expected: `tree and copies untouched`, then `0`.
-- A row from C1 to C10 (C8b and C8c included), other than C5, that stays green means its check is blind. STOP, and report `task14-check-<row>-blind`.
+- A row from C1 to C10 (C8b, C8c and C9b included), other than C5, that stays green means its check is blind. STOP, and report `task14-check-<row>-blind`.
 - C5 is the one row that must stay green. If it reds, the scan is stricter than R41: STOP, and report `task14-check-C5-over-strict`.
 
 - [ ] **Step 5: The hard boundary (R41, with R45, R47, R50, R51 and R53)**
@@ -19625,7 +19775,7 @@ Write the body to `$L/pr-body.md` with the Write tool, from the template below.
 ```markdown
 Wave 4 of 4 of the path-identity programme: the spec's W3 (`docs/superpowers/specs/2026-10-12-path-identity-design.md`, section 4; as built in 4.12). Safety subject: which tree `git worktree remove` may delete.
 
-**Deploy class: `ccd/ccd` plus one server string. The fleet box moves first**, which is `ccrc rollout`'s default order (no `--server-first`). `ccd/ccrc` changes by one byte-identical platform-block line that ccrc's own code never calls. `server/src/wsaudit.ts` changes one sentence. The PWA, the agent and `shared/` do not change. No frame field and no field the server reads changes: ids still come from `*.uuid` names only. The reclaim audit document gains two additive keys, `legacyRows` and `pendingRows`, with no server reader{{C1 (a): "; the expire document gains the same pair"}}. No `FLEET_PROTO` bump and no coord.db migration.
+**Deploy class: `ccd/ccd` plus one server string. The fleet box moves first**, which is `ccrc rollout`'s default order (no `--server-first`). `ccd/ccrc` changes by one byte-identical platform-block line that ccrc's own code never calls. `server/src/wsaudit.ts` changes one sentence. The PWA, the agent and `shared/` do not change. No frame field and no field the server reads changes: ids still come from `*.uuid` names only. The reclaim audit document gains two additive keys, `legacyRows` (the other rows whose field is in a `legacy-*` state) and `pendingRows` (those whose field reads `pending`; a field that reads `unmeasured` is in neither, and it holds the child), with no server reader{{C1 (a): "; the expire document gains the same pair"}}. No `FLEET_PROTO` bump and no coord.db migration.
 - Rollback: an older ccd ignores `$REG/<id>.workdirid`, and its `_reg_purge` loop still unlinks it.
 - Re-upgrade: a field written before the rollback either matches its logical spelling or reads stale or legacy. A field that went stale under the older ccd can only add a placement or a hold; it never releases a row.
 - The window between the two boxes: the old server shows the old `worktree-remove-failed` sentence, which is true of every failure the old ccd emits and slightly incomplete for a new ccd's cwd refusals. Nothing is decided on it.
@@ -19668,7 +19818,7 @@ Wave 4 of 4 of the path-identity programme: the spec's W3 (`docs/superpowers/spe
 - {{every slug in spec §4.12's closed and narrowed carries as committed, each with its word (closed or narrowed)}}
 
 ### Departures (by slug; each is numbered in the plan's §Deviations found)
-- `workdirid-pending-form`, `workdirid-unreadable-holds`, `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`, `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`, `record-by-another-spelling-reads-unmeasured`, `reappeared-tree-refuses`, `cwd-wait-only-waits`, `cwd-refusal-reuses-worktree-remove-failed`, `reask-words-follow-the-owned-call`, `cwd-probe-adopts-the-path-users-walk`, `darwin-prefixes-take-the-identity-shims`, `collect-reprove-table-moves-to-the-gap`, `audit-document-key-pins-outside-the-boundary`{{, `legacy-count-expire-half-fenced` if workspace-lifecycle refused R45's consent (it then takes a wave-time number)}}{{, `ws-add-seed-subsumed-by-spawn-pending` only if the code lacks the ws-add seed (a fix round's ruling, under a wave-time number)}}.
+- `workdirid-pending-form`, `workdirid-unreadable-holds`, `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`, `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`, `record-by-another-spelling-reads-unmeasured`, `record-two-spellings-reads-unmeasured`, `reappeared-tree-refuses`, `cwd-wait-only-waits`, `cwd-refusal-reuses-worktree-remove-failed`, `reask-words-follow-the-owned-call`, `cwd-probe-adopts-the-path-users-walk`, `darwin-prefixes-take-the-identity-shims`, `collect-reprove-table-moves-to-the-gap`, `audit-document-key-pins-outside-the-boundary`{{, `legacy-count-expire-half-fenced` if workspace-lifecycle refused R45's consent (it then takes a wave-time number)}}{{, `ws-add-seed-subsumed-by-spawn-pending` only if the code lacks the ws-add seed (a fix round's ruling, under a wave-time number)}}.
 - Found during the wave: {{each slug the ledger names}}.
 
 ### Commits
@@ -19782,14 +19932,14 @@ Expected:
    - C6: a head-only function above the bound;
    - C7: the frame's ccrc row.
 
-   Three rows are added for this wave's own checks: C8, C8b and C8c (R47's `_spawn_start` check; C8c is a launch line put back at the pre-R56 `…)exec env`), C9 (byte identity) and C10 (the test-hunk licence).
+   Three rows are added for this wave's own checks: C8, C8b and C8c (R47's `_spawn_start` check; C8c is a launch line put back at the pre-R56 `…)exec env`), C9 and C9b (byte identity; C9b seeds a change to the expire printf's middle argument line, which consent 7443 conditions: R75) and C10 (the test-hunk licence).
 3. **The hunk scan is checked against an exact list.** `hunks-above.sh` calls an in-place one-for-one hunk `ok`, so on its own it would pass a fifth in-place hunk at or before line 19162 (row C3 measures this). The frame says a fifth hunk STOPs, so (4b) also diffs the scan against `$L/hunks.expected`. That file is built from the base's anchors by content: slot 390, seed 7417 and printf 13318 at the export, each verified at the export (390 is blank after `_plat_epoch_ms`'s closing brace; 13318 to 13319 are the printf's format and argument lines).
 4. **`starts.sh` gains a head-only listing and a `kind` argument.** The frame asks that `_plat_workdirid_pane` be "listed and expected". W2's script joined only the base's functions, so it gains a `join -v2` listing against all of the base's functions, with an allowed-name argument. The `kind` argument lets the same script run on `ccd/ccrc` without the `_lc_json` and line-4896 checks, which belong to `ccd/ccd` alone.
 5. **The full-run exclusion is spelled `--exclude '**/ccd-tick-diet-equivalence.test.ts'`.** That is the glob form this repository's plans already use with `--shard` (the GPT-lane 3a and 3b plans' `--exclude '**/ccrc-doctor.test.ts'`). Step 1 also checks that no shard log names the file.
 6. **The flake-list check reads ledger records.** No file states whether it walks `/proc`, so the worker writes `$L/flake-recorded` and `$L/verb-no-walk` from the per-task records. Step 0 then checks four things: every recorded name is in HEAD's bullet; no name is recorded both ways; every test-file stem the wave added to the bullet was recorded (the bullet's other backticked words, such as `worktree-remove-failed`, name no file and are dropped); and every new file with a verb case (`childReclaimVerb(` or `expireVerb(`) is in one of the two lists, which is the Global Constraints' "every new file with a verb case is measured". Measured is not the same as walking: Tasks 3, 6 and 8's verb files record, by `PROC_SPY`, that they walk no `/proc`, and they do not join the bullet.
 7. **The modified-test list has a ledger-fed tail.** `ccd-id-cap.test.ts` gains its row in Task 4, or in Task 5 when its Step 0 (r) printed 0, and `FAKE_PROC_SELF` heavy suites are edited only as Tasks 10 and 11 measure (R25). Both come through `$L/modified-extra`. The fixed sixteen include `ccd-child-reclaim-verb.test.ts`, `ccd-ws-collect-reprove.test.ts` and `ccd-child-reclaim-audit.test.ts`, because R50, R51 and R53 license them; `ccd-ws-expire-audit.test.ts` joins when `$L/c1` reads `a` (R53 under R45). Each audit file's edit is checked as one line, by its numstat and by its added key pin.
 8. **Timing-only and prefix-only test edits are checked hunk by hunk.** The frame asks this of `ccd-reclaim-tail-mounts.test.ts`. The same licence applies to `ccd-ws-collect-reprove.test.ts` (R51: "every assertion stays byte-identical"), to `ccd-child-reclaim-verb.test.ts`'s `darwin()` helper (R50), and to the three other DARWIN-prefix files (P13, R25). So one script, `test-hunks.mjs`, classes each hunk and reds on any touched `expect(` line. The case titles are the export's (`N1:` to `E1:` at lines 114 to 244; the reprove case at line 277). The verb helper starts at `const darwin = ` (line 555) and ends at its first line ending "`;" (line 558).
-9. **`_ws_expire_audit_contained` follows R45.** Under C1 (b) it is byte-identical. Under C1 (a) only its expire printf statement may change, in place. That statement spans three physical lines at the export (34842 to 34844: the format line and two argument lines), not the "format and argument line" R45 names, so the check admits the whole statement, from the format line to its first line not ending in `\`.
+9. **`_ws_expire_audit_contained` follows R45, by content (R75 (c)).** Under C1 (b) it is byte-identical. Under C1 (a), which consent 7443 gives, only its expire printf statement may change, in place: the printf whose format holds `"mode":"expire","archivedAt"`. That statement spans three physical lines (the format line, the middle argument line and the last argument line; 34842 to 34844 at the export, hints that Task 0's (b22b) re-measures), not the "format and argument line" R45 names. So the check admits in-place hunks only inside the statement, from the format line to its first line not ending in `\`, and requires the statement to be three lines whose middle argument line is byte-identical: a change to that line fails it, as consent 7443 conditions (C9b seeds one).
 10. **`_operator_choice_promote` is not defined at the export.** It is #435's. The identity check accepts "absent in both" for it alone, as the frame's "(if present)" allows. Any other fenced function missing from either side is `DIFFERS`.
 11. **`_ws_path_users` is compared by its code lines.** Task 9 may change one comment sentence in it (the HARD BOUNDARY), so comment-only lines are dropped before the compare.
 12. **The canonical-text greps are added in W2's (4e) shape.** Each comes from §Interfaces' spelling or a ruling's wording. A differing count is checked against the building task's own plan-text record before it STOPs, because W3's tasks are drafted separately.
@@ -19867,7 +20017,7 @@ Against Task 0 Step 6's counts:
 
 ## Deviations found
 
-**The block (R40 as amended by R48 and R73).** Numbers are issued by the allocator before the plan is committed, once the departures below are counted: one per unconditional substantive departure (sixteen), one per task for its plan-text corrections and extra pins (Tasks 0 to 14, fifteen numbers), and a reserved six-number wave-time block, thirty-seven in all. Each is defined here singly, on a line of its own. No conditional slot is issued: `legacy-count-expire-half-fenced` takes a wave-time number only if workspace-lifecycle refuses R45's request, and `ws-add-seed-subsumed-by-spawn-pending` has no slot, because P4 builds the ws-add seed (R73).
+**The block (R40 as amended by R48, R73 and R75).** Numbers are issued by the allocator before the plan is committed, once the departures below are counted: one per unconditional substantive departure (seventeen: sixteen issued with the block, and `record-two-spellings-reads-unmeasured`, issued `D-6161` after it under R75), one per task for its plan-text corrections and extra pins (Tasks 0 to 14, fifteen numbers), and a reserved six-number wave-time block, thirty-eight in all. Each is defined here singly, on a line of its own. No conditional slot is issued: `legacy-count-expire-half-fenced` takes a wave-time number only if workspace-lifecycle refuses R45's request, and `ws-add-seed-subsumed-by-spawn-pending` has no slot, because P4 builds the ws-add seed (R73).
 
 **No concrete placeholder may stand in a committed file.** `dtbd.test.ts` reds one in any tracked file. Before the commit the coordinator replaces every `D-TBD-<slug>` token in this plan with its issued number, mechanically, in W2's form: `D-<n>` followed by its slug in backticks (R73).
 - Each entry below is one line that begins ``- **D-TBD-<slug>** (``. It becomes ``- **D-<n>** (`` with its parenthesis unchanged, then a space and `` `<slug>` ``, then the rest of its line unchanged: for example, ``- **D-<n>** (Tasks 4, 5; R1, R2) `workdirid-pending-form`: the spec's v1 line gains …``. `ledger.ts`'s DEFINITION pattern still reads `- **D-<n>** (` as that number's one definition, and the slug stays beside it.
@@ -19900,6 +20050,7 @@ Each entry, filled at the fix round, names what the spec said, what the code at 
 - **D-6137** (Tasks 8, 10; P13, R50) `darwin-prefixes-take-the-identity-shims`: the four DARWIN prefixes (and, as R50 licenses, `ccd-child-reclaim-verb.test.ts`'s `darwin()` helper, and only that helper) take `_plat_devino` and `_plat_btime` shims beside R25's listing stub.
 - **D-6138** (Task 3; R51) `collect-reprove-table-moves-to-the-gap`: the collector's row rule reads the mount table before its move, so `ccd-ws-collect-reprove.test.ts`'s case "a table that cannot be read" installs its unreadable table at the `moved` gap with `gapAt('moved', …)`. It is a timing-only change: every assertion stays byte-identical, and W3's own file pins the pre-move answer.
 - **D-6139** (Task 6; R53) `audit-document-key-pins-outside-the-boundary`: R9's two keys red the exact `Object.keys` pins of two files outside the wave's own. `ccd-child-reclaim-audit.test.ts`'s reclaim pin gains `'legacyRows', 'pendingRows'` after `'generation'` in one line, and, only under R45's consent, `ccd-ws-expire-audit.test.ts`'s expire pin gains them after `'sensitive'`. Every other assertion is byte-identical.
+- **D-6161** (Task 8; R31, R75) `record-two-spellings-reads-unmeasured`: REC-1's shape. When two of git's records name the standing child, one by its string and another under another spelling, spec §4.8 and R31's rc-2 rule make the record reader answer 2 ("two records name one tree"). That comes before the ladder's terminal words `branch-elsewhere`, `containment-unproven` and `tree-unreadable`, so where one of them would have answered, the retryable `unmeasured` answers, and owned answers 2. It is an added hold, not a release: no token is minted and nothing is removed. ws-expire reaches it, and workspace-lifecycle's consent 7443 accepted it on condition that it is numbered and pinned (EXP-1). It was issued after the block (R75).
 
 ### Plan-text corrections and extra pins, one number per task (R48)
 
