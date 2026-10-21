@@ -226,3 +226,37 @@ describe('notifyEach: a batch through the funnel, stopping at its first failed a
     expect(rec.calls).toEqual([]);
   });
 });
+
+// D-5860 `notice-dedupe-key` (Task C1f; ARCH-55 #790): a notice's once-only key reaches the archive and nothing else.
+// The archive refuses nothing and the funnel never suppresses the ring or the push on a key (O11 (a)): whether to raise
+// a notice at all is the caller's `hasNotice` read, made before the write.
+describe('notify: the once-only key reaches the archive and decides nothing (D-5860)', () => {
+  it('opts.dedupeKey is archived beside the row, and hasNotice reads it back by kind, session and key', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-key-'));
+    expect(rec.coord.hasNotice('done', A, 'k1')).toBe(false);
+    notify(sinks(rec), EVENT, 'record-only', { dedupeKey: 'k1' });
+    expect(rec.coord.hasNotice('done', A, 'k1')).toBe(true);
+    expect(rec.coord.hasNotice('done', A, 'k2')).toBe(false);
+    expect(rec.coord.hasNotice('done', 'acct-a-project-b', 'k1')).toBe(false);
+    expect(rec.coord.hasNotice('ask', A, 'k1')).toBe(false);
+  });
+
+  it('an archive refusal never suppresses the ring: a key already archived is recorded, archived and pushed again', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-key-again-'));
+    const first = notify(sinks(rec), EVENT, 'push', { dedupeKey: 'k1' });
+    const again = notify(sinks(rec), EVENT, 'push', { dedupeKey: 'k1' });
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'push', 'record', 'archive', 'push']);
+    expect(rec.ring).toHaveLength(2);
+    expect(rec.archived).toHaveLength(2);
+    expect(rec.pushes).toHaveLength(2);
+    expect([first, again]).toEqual([{ recorded: true, archived: 'landed' }, { recorded: true, archived: 'landed' }]);
+  });
+
+  it('a notice with no key archives a NULL key, which no key read matches', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-nokey-'));
+    notify(sinks(rec), EVENT, 'record-only');
+    expect((rec.coord.db.prepare('SELECT dedupe_key AS k FROM feed_events').all() as { k: string | null }[]))
+      .toEqual([{ k: null }]);
+    expect(rec.coord.hasNotice('done', A, '')).toBe(false);
+  });
+});

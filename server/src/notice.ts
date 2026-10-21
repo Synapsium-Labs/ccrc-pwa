@@ -43,6 +43,10 @@ export interface NoticeOpts {
   readonly url?: string;
   /** The writer's degrade sentence: the text after `— ` in the archive-failure warning. */
   readonly degraded?: string;
+  /** D-5860: the notice's once-only key, archived beside its row (`CoordStore.hasNotice` reads it). Passed through to
+   *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
+   *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
+  readonly dedupeKey?: string;
 }
 
 /** What happened: whether the ring recorded it, and the archive's fate (`'none'`: no `notifyLog` or no `coord`, or
@@ -109,7 +113,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     if (flush) void log.flush();
     if (deps.coord) {
       try {
-        deps.coord.recordFeedEvent(log.epoch, ev);
+        if (opts.dedupeKey === undefined) deps.coord.recordFeedEvent(log.epoch, ev);
+        else deps.coord.recordFeedEvent(log.epoch, ev, opts.dedupeKey);
         archived = 'landed';
       } catch (err) {
         archived = 'failed';
