@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2f255fb8bce8106056661123cb014a58dc5687dcb484484dcce984d859996ccf
+# ccrc:generated 1 sha256=1993c1fbe1e44ed4e42cc3a64998e69b73a1cd6d26b82ffb286e8bd4444732f6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -34600,10 +34600,15 @@ _ws_reclaim_tmproot_wait_s() {   # -> the bound, whole seconds: WS_RECLAIM_TMPRO
   if [[ "$o" =~ ^[0-9]{1,6}$ ]] && (( 10#$o < b )); then b=$(( 10#$o )); fi
   printf '%s' "$b"
 }
-_ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2), asked until it says nobody
-  #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed on the clock between asks
+_WS_QUIET_TREE=0   # `_ws_reclaim_tmproot_quiet`'s last answer about the TREE (0/1/2); 0 when it was given none
+_ws_reclaim_tmproot_quiet() {   # path [tree] -> `_ws_path_users`' LAST answer (0/1/2), asked until it says nobody
+  #                                or `_ws_reclaim_tmproot_wait_s` seconds have passed on the clock between asks.
+  #                                With `tree`, every ask also asks `_ws_cwd_users` of it, and the wait ends early
+  #                                only when BOTH say nobody; _WS_QUIET_TREE holds the tree's last answer. The
+  #                                answer is the temp root's either way (path-identity spec §4.6)
   # Asked every quarter second. ON DARWIN the probe answers unmeasured without
-  # looking, so it is asked ONCE: waiting cannot change that answer.
+  # looking, so it is asked ONCE: waiting cannot change that answer. A tree is
+  # asked once there too, beside it.
   # TWO ENDS, and the first one reached ends it: the wall clock, and a count
   # of `bound * 4 + 1` asks. The clock alone is not a bound: it is
   # `EPOCHREALTIME`, so a clock stepped backwards would lengthen the wait
@@ -34616,21 +34621,27 @@ _ws_reclaim_tmproot_quiet() {   # path -> `_ws_path_users`' LAST answer (0/1/2),
   # `_plat_timeout`'s kill grace (3 s) when the walk ignores TERM. So on a
   # working clock the worst case is the bound, plus that one walk, plus the
   # tail's own ask at step (6): about 35 s, or 41 s when both walks ignore TERM
-  # and run to the end of their grace. With a clock frozen or running
+  # and run to the end of their grace. With a tree each ask on Linux is two walks, the
+  # second bounded by `WS_CWD_USERS_SCAN_S` (10 s) and its own grace: about
+  # 45 s, or 54 s. With a clock frozen or running
   # backwards only the count ends the loop, and when every walk also runs out
   # its bound that is `(bound * 4 + 1) * (WS_PATH_USERS_SCAN_S + 0.25)`
-  # seconds, about 625 s: past the 240 s budget a remote caller allows. THAT IS
+  # seconds, about 625 s, and with a tree
+  # `(bound * 4 + 1) * (WS_PATH_USERS_SCAN_S + WS_CWD_USERS_SCAN_S + 0.25)`,
+  # about 1235 s: past the 240 s budget a remote caller allows. THAT IS
   # SAFE, and is stated rather than prevented: a remote kill at the budget
-  # lands in this wait, which runs BEFORE the tombstone is read and before
+  # lands in this wait, which runs BEFORE the tombstone is validated and before
   # anything is deleted, and the breadcrumb the caller wrote already resumes
   # the tail on the next attempt.
-  local p="$1" bound end rc n=0 max
+  local p="$1" t="${2-}" bound end rc trc=0 n=0 max
+  _WS_QUIET_TREE=0
   bound=$(_ws_reclaim_tmproot_wait_s)
   max=$(( bound * 4 + 1 ))
   end=$(( $(_plat_epoch_ms) + bound * 1000 ))
   while :; do
     _ws_path_users "$p"; rc=$?
-    (( rc != 0 )) || return 0
+    if [[ -n "$t" ]]; then _ws_cwd_users "$t"; trc=$?; _WS_QUIET_TREE=$trc; fi
+    (( rc != 0 || trc != 0 )) || return 0
     [[ "$CCD_OS" != darwin ]] || return "$rc"
     n=$(( n + 1 ))
     (( n < max )) || return "$rc"
@@ -34649,7 +34660,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc wdrc
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc wdrc cwrc qwd
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   # Every failure from here on is printed past a breadcrumb, for both verbs
   # (`crumb`, spec §5.6).
@@ -34769,13 +34780,22 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # So the tail asks `_ws_path_users` of the temp root until it answers
   # nobody, or `_ws_reclaim_tmproot_wait_s` seconds have passed on the clock
   # between asks (the wall time can be longer, and `_ws_reclaim_tmproot_quiet`
-  # states how much), BEFORE anything further is deleted: the worktree's
-  # removal below runs after this wait and is otherwise unchanged (a writer
-  # into a removed worktree path after the bound is a stated residual). Not a
+  # states how much), BEFORE anything further is deleted (a writer into a
+  # removed worktree path after the last ask is a stated residual). Not a
   # gate: step (6) asks again at the instant of removal, and in use or
   # unmeasured there, the temp root is KEPT and said, and the act still
   # completes.
-  _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/$id" || :   # its answer is re-asked at step (6)
+  # WHO WORKS INSIDE THE TREE IS WAITED FOR TOO (path-identity spec §4.6):
+  # the same wait asks `_ws_cwd_users` of the tree the tombstone names, and
+  # ends early only when both say nobody. That one field is read here, BEFORE
+  # the tombstone is validated below, for this wait ALONE: a record that
+  # cannot be read passes no tree, and the read below refuses it as it always
+  # did. The wait ONLY WAITS (`cwd-wait-only-waits`): nothing reads what it
+  # answered, and a process still inside, or a question that could not be
+  # asked, is refused at step (3) and step (4), which ask again directly
+  # before each standing forced removal.
+  qwd=$(_ws_tomb_str "$tomb" workdir 2>/dev/null) || qwd=''
+  _ws_reclaim_tmproot_quiet "$HOME/.cc-tmp/$id" ${qwd:+"$qwd"} || :   # its answers are asked again at steps (3), (4) and (6)
   # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
   # resumed alike: the fresh arm wrote it a moment ago, the resumed arm finds
   # it. The PROJECT, the WORKDIR and the BRANCH come from it — never from the
@@ -34912,8 +34932,19 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # (`_ws_reclaim_nested_proven` resolved it in this iteration), so the ask
   # enters nothing. A checkout PROVEN gone is not asked: its arm clears a
   # record, with no force flag, over nothing that stands. And the child's
-  # whole tree is not asked before this loop: a mount outside every nested
-  # checkout is step (4)'s to find.
+  # whole tree is asked before this loop, by the rows rung's mount hold at
+  # the owned call: a mount that appears after it, outside every nested
+  # checkout, is step (4)'s to find.
+  # NOR WHILE A PROCESS WORKS INSIDE THE CHILD (path-identity spec §4.6).
+  # Each of a standing checkout's two mount asks is preceded by one ask of
+  # `_ws_cwd_users` of the CHILD's tree (`$workdir`, a superset of the
+  # checkout): a process whose working directory is at or under it, by the
+  # string of its cwd link against the tree's physical spelling or by
+  # device and inode ancestry, fails `worktree-remove-failed` here, and so
+  # does a probe that could not be asked, with the breadcrumb and the
+  # checkout standing and the probe's reason cut by `_ws_leaf_why_line`.
+  # Process state never grants: a probe that says nobody only lets the
+  # mount ask be asked. A checkout PROVEN gone is not asked.
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
@@ -34969,10 +35000,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this $noun pinned, so nothing further was deleted"
           return 1
         fi
+        _ws_cwd_users "$workdir"; cwrc=$?
+        (( cwrc == 0 )) \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_removal_mounts_clear "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
+        _ws_cwd_users "$workdir"; cwrc=$?
+        (( cwrc == 0 )) \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_removal_mounts_clear "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
@@ -35054,6 +35091,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # resolves it first (`resolve`): a standing tree that cannot be resolved
   # is not asked, and so fails here too, before its keep. A tree PROVEN gone
   # is not asked: step (5) clears its record with no force flag.
+  # AND WHO WORKS INSIDE IT (path-identity spec §4.6), as step (3) asks:
+  # one ask of `_ws_cwd_users` before each of the two mount asks.
+  # It is given the record's spelling and resolves the physical one itself,
+  # as `/proc` and lsof print it. A process inside, or a probe that could
+  # not be asked, fails `worktree-remove-failed` with the breadcrumb and the
+  # tree standing. Each ask is bounded on Linux (`WS_CWD_USERS_SCAN_S`). On
+  # Darwin lsof's own deadline bounds the listing, and its parse runs
+  # unbounded, as ws-expire's always did (`darwin-cwd-parse-unbounded-as-today`).
+  # A remote kill that lands in one leaves the breadcrumb at this step, and
+  # the next attempt asks again.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
       _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
@@ -35061,10 +35108,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ -d "$workdir" ]]; then
+      _ws_cwd_users "$workdir"; cwrc=$?
+      (( cwrc == 0 )) \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_removal_mounts_clear "$workdir" resolve \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
         || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
+      _ws_cwd_users "$workdir"; cwrc=$?
+      (( cwrc == 0 )) \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_removal_mounts_clear "$workdir" resolve \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \

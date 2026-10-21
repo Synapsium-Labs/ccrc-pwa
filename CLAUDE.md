@@ -222,6 +222,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   as an unmeasured answer (`the walk of /proc did not finish within 10s`), and a process anywhere on the box sitting
   in a directory that cannot be searched makes the probe answer unmeasured while it sits there; any other red is a
   real break, so re-run the file alone first.
+  `ccd-reclaim-tail-cwd` (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures with
+  real processes standing in their trees, and walks the real `/proc` (`_ws_cwd_users`) at the post-kill wait and
+  before every standing forced removal, at about 6 s a case at worst, so under load it fails in two shapes:
+  vitest's `Test timed out in <n>ms`, or a `worktree-remove-failed` whose detail says a walk of `/proc` did not
+  finish within its bound. Any other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required

@@ -25,7 +25,7 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
-import { DARWIN_IDENT_SHIMS, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
+import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
 import {
   EXP_BRANCH, EXP_ID, expireAudit, expireEvalOf, expireToken, expireVerb, makeArchived, type Archived,
 } from './wsExpireFixture.js';
@@ -57,7 +57,7 @@ const FAILS_AT = (fn: '_plat_devino' | '_plat_btime', dir: string): string =>
 /** Every /proc walk the tail could start, recorded before it reads: the forced-Darwin cases assert none ran. */
 const PROC_SPY = '_ws_path_users_proc_root() { echo walk >> "$HOME/proc-walks"; printf "%s" /proc; };'
   + ' _ws_expire_proc_root() { echo walk >> "$HOME/proc-walks"; printf "%s" /proc; };';
-const FORCED_DARWIN = 'CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0;';
+const FORCED_DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_LSOF_STUB}`;
 
 const sessions = (): string => path.join(h.home, '.cc-sessions');
 const linesIn = (name: string): string[] => {

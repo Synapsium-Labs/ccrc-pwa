@@ -23,7 +23,7 @@ import { CCD } from './ccdWsHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 import { EXP_ID, expireToken, expireVerb, makeArchived } from './wsExpireFixture.js';
-import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
+import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB } from './worktreeIdentityFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-tmproot-drop-prop-'); });
@@ -45,7 +45,7 @@ const NOBODY = '_ws_path_users() { _WS_PATH_USERS_PIDS=""; _WS_PATH_USERS_WHY=""
  *  reaches no `rm -rfx` (no clips leaf, no temp leaf, a stubbed drop); since path-identity W3 its tail's owned check
  *  measures identities through `_plat_devino` and `_plat_btime`, so the fixture's host-conditional
  *  `DARWIN_IDENT_SHIMS` rides it. */
-const DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_IDENT_SHIMS}`;
+const DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_IDENT_SHIMS} ${DARWIN_LSOF_STUB}`;
 /** The in-use probe's `/proc` walk, recorded to `$HOME/proc-walks` before it reads: every verb case asserts none ran. */
 const PROC_SPY = '_ws_path_users_proc_root() { echo walk >> "$HOME/proc-walks"; printf "%s" /proc; };';
 /** The drop, stubbed: kept (1) or unmeasured (2), with a reason a case finds in the row. It touches nothing. */

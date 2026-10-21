@@ -24,7 +24,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
-import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
+import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB } from './worktreeIdentityFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-tmproot-witness-drop-'); });
@@ -46,7 +46,7 @@ const witnessed = (): string => {
 
 const IN_USE = 'CCD_RECLAIM_TMPROOT_WAIT_S=0; _ws_path_users() { _WS_PATH_USERS_PIDS=4242; _WS_PATH_USERS_WHY="stub: in use"; return 1; };';
 const UNMEASURED = 'CCD_RECLAIM_TMPROOT_WAIT_S=0; _ws_path_users() { _WS_PATH_USERS_PIDS=""; _WS_PATH_USERS_WHY="stub: not measured"; return 2; };';
-const DARWIN = 'CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0;';
+const DARWIN = `CCD_OS=darwin; CCD_RECLAIM_TMPROOT_WAIT_S=0; ${DARWIN_LSOF_STUB}`;
 /** Simulated Darwin on a Linux host: `_plat_devino`'s Darwin arm runs BSD `stat -f`, which GNU `stat` refuses, so the
  *  drop's device question would read unreadable. The Linux arm stands in for it there; on a Darwin host nothing is
  *  added. With it, the Darwin row takes the drop's second-read path (path-identity spec §3.2). Since path-identity W3

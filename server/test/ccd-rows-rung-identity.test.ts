@@ -142,8 +142,11 @@ const held = (r: LadderAnswer, id: string, word: string): void => {
 
 /** The reclaim tail's in-use probe answering "nobody", so its post-kill wait never walks the real `/proc`. */
 const NOBODY = '_ws_path_users() { _WS_PATH_USERS_PIDS=""; _WS_PATH_USERS_WHY=""; return 0; };';
-/** Records any walk of the in-use probe's process table to `$HOME/proc-walks`. */
-const PROC_SPY = '_ws_path_users_proc_root() { echo walk >> "$HOME/proc-walks"; printf "%s" /proc; };';
+/** Records any walk of the in-use probe's process table, and any walk of the real one by the cwd probe, to
+ *  `$HOME/proc-walks`. The cwd probe's root is wrapped, so a fixture root placed before it (`FAKE_PROC_SELF`) is no walk. */
+const PROC_SPY = '_ws_path_users_proc_root() { echo walk >> "$HOME/proc-walks"; printf "%s" /proc; };'
+  + ' eval "_t_epr_real()$(declare -f _ws_expire_proc_root | tail -n +2)";'
+  + ' _ws_expire_proc_root() { local r; r=$(_t_epr_real); [[ "$r" != /proc ]] || echo walk >> "$HOME/proc-walks"; printf "%s" "$r"; };';
 /** W2's helper, wrapped: logs `<dir>|<mode>` to `$HOME/ask-calls`, then asks the real one. */
 const ASK_LOG = 'eval "_t_ask_real()$(declare -f _ws_removal_mounts_clear | tail -n +2)";'
   + ' _ws_removal_mounts_clear() { printf \'%s|%s\\n\' "$1" "${2-}" >> "$HOME/ask-calls"; _t_ask_real "$@"; };';
@@ -394,7 +397,7 @@ describe.skipIf(!LINUX)('the earlier catches: the in-lock recompute and the tail
     const tok = resumeToken('worktree');
     realMounts(h);
     mountAt(path.join(fs.realpathSync(c.wt), 'sub'));
-    const r = childReclaimVerb(h, tok, { pre: `${MOUNTS_SEAM} ${NOBODY} ${KEEP_LOG} ${ASK_LOG} ${PROC_SPY}` });
+    const r = childReclaimVerb(h, tok, { pre: `${FAKE_PROC_SELF} ${MOUNTS_SEAM} ${NOBODY} ${KEEP_LOG} ${ASK_LOG} ${PROC_SPY}` });
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const d = docOf(r.stdout);
     expect(d['failed']).toBe('worktree-remove-failed');
