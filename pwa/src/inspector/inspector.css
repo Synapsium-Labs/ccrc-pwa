@@ -1,0 +1,86 @@
+/* The inspector's shared sections (W2 Task S8, D-5474). Structure only: layout, spacing and type on tokens. No rule
+   here declares a colour: the headings, the notes and the rows take the ink of the column they sit in, the chips and
+   the PR cap keep `chat.css`'s rules and the meter its own, so nothing here is a new contrast identity. */
+.insp-section {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  min-width: 0;
+}
+.insp-heading {
+  margin: 0;
+  font: var(--weight-medium) var(--fs-meta) / var(--lh-normal) var(--family-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.insp-empty,
+.insp-lane-name {
+  margin: 0;
+  font-size: var(--fs-meta);
+}
+.insp-lane-name {
+  font-family: var(--family-mono);
+  overflow-wrap: anywhere;
+}
+.insp-tasks {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.insp-task {
+  display: grid;
+  grid-template-columns: 1.25em minmax(0, 1fr);
+  gap: var(--sp-1);
+}
+.insp-task-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.insp-task[data-status='completed'] .insp-task-subject {
+  text-decoration: line-through;
+}
+.insp-task-detail,
+.insp-note {
+  font-size: var(--fs-meta);
+}
+.insp-routing {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+}
+.insp-routing-row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The model and effort doors reach the tap floor here: the rail has the room the header's chip row does not. */
+.insp-routing-row button {
+  min-height: var(--tap-min);
+}
+.insp-routing-row dt {
+  font-size: var(--fs-meta);
+}
+.insp-routing-row dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+}
+.insp-link {
+  justify-self: start;
+  min-height: var(--tap-min);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

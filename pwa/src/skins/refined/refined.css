@@ -102,3 +102,25 @@
   gap: var(--sp-2);
   padding-top: var(--sp-1);
 }
+
+/* W2 Task S8 (D-5474): Refined's inspector rail. The frame mounts the `<aside aria-label="Inspector">` in every width;
+   `InspectorRail` fills it only at >=1600 on a session route, so an EMPTY aside takes no cell and no track. A filled
+   one is a third, 320 column right of the reading column, from under the bar to the foot, and scrolls itself. The first
+   two tracks are the frame's own (`shell.css`'s desktop grid) until S4b moves Refined's grid here. The edge reuses the
+   bar's own (`shell.css`'s `.shell-accounts` border), so nothing here is a new contrast identity. */
+.ref-frame > .shell-inspector:empty {
+  display: none;
+}
+@media (min-width: 1600px) {
+  .ref-frame:has(> .shell-inspector:not(:empty)) {
+    grid-template-columns: clamp(300px, 25vw, 380px) minmax(0, 1fr) 320px;
+  }
+  .ref-frame > .shell-inspector:not(:empty) {
+    grid-column: 3;
+    grid-row: 2;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-left: 1px solid var(--edge-subtle);
+  }
+}
