@@ -258,6 +258,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       ['a padded ref', { GITHUB_REF: ' refs/pull/1100/merge' }, null],
       ['a queue branch with no sha', { GITHUB_REF: 'refs/heads/gh-readonly-queue/main/pr-1100' }, null],
       ['a branch merely named like a queue entry', { GITHUB_REF: `refs/heads/ws/gh-readonly-queue/main/pr-1100-${SHA}` }, null],
+      ['a branch whose name embeds a queue ref', { GITHUB_REF: `refs/heads/lane-a/refs/heads/gh-readonly-queue/main/pr-1100-${SHA}` }, null],
     ];
     for (const [what, env, want] of table) expect(prNumberFromEnv(env), what).toBe(want);
   });
