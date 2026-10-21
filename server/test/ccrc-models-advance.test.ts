@@ -74,6 +74,7 @@ if ((process.env.OP_HANG ?? '').split(',').includes(a[0])) {
   process.exit(1);
 }
 if ((process.env.OP_GARBAGE ?? '') === a[0]) { process.stdout.write('not one object\\n'); process.exit(0); }
+if (a[0] === 'advance-plan' && process.env.OP_PLAN_RAW) { process.stdout.write(process.env.OP_PLAN_RAW + '\\n'); process.exit(0); }
 if ((process.env.OP_REFUSE ?? '') === a[0]) {
   process.stdout.write(JSON.stringify({ ok: false, error: 'registry-invalid', detail: 'the fixture refuses this op.' }) + '\\n');
   process.exit(1);
@@ -143,7 +144,7 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
     'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
-    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_EXTRA', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
+    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_RAW', 'OP_PLAN_EXTRA', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
     delete inherited[k];
   }
@@ -1836,6 +1837,8 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read cannot be failed by a 
   it.each([
     ['is not an object', { OP_GARBAGE: 'advance-plan' }],
     ['is refused by the planner (an error answer, exit 1)', { OP_REFUSE: 'advance-plan' }],
+    ['is valid JSON that is not a plan (an answer with no classes, exit 0)', { OP_PLAN_RAW: '{"ok":true,"eligible":true}' }],
+    ['is a JSON array', { OP_PLAN_RAW: '[]' }],
   ] as [string, NodeJS.ProcessEnv][])('a plan that %s still ends the lane: no backfill, nothing settled', async (_w, extra) => {
     await setup({ opStub: OP_STUB });
     tier(0);
