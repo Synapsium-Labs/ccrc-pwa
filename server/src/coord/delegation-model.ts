@@ -1251,12 +1251,17 @@ export function projectionViewOfDelegationCheckpoint(checkpoint: DelegationCheck
  * `prior` and not by `next`, is not a delta (`reason`). A row that is the same object in both is unchanged (a fast path only);
  * otherwise both are encoded by the codec and compared column by column, over the codec's own column list, so an encode refusal
  * (`bad-row`, `bad-instant`) fires here exactly as it does in the full projection. `frozen` names the rows this table may not
- * change or add in a delta at all.
+ * change or add in a delta at all. A row's key is spelled once, by `keyColumns` (the column's own name is the row's property):
+ * a single column is its text, several are the JSON list of their values.
  */
 function diffProjectionTable<Row, Col extends string>(
-  codec: DelegationRowCodec<Row, Col>, keyColumns: readonly Col[], keyOf: (row: Row) => string,
+  codec: DelegationRowCodec<Row, Col>, keyColumns: readonly Col[],
   frozen: (prior: Row | undefined, next: Row) => boolean, prior: readonly Row[], next: readonly Row[],
 ): { reason: string } | { updates: DelegationProjectionUpdate[]; inserts: DelegationProjectionInsert[] } {
+  const keyOf = (row: Row): string => {
+    const parts = keyColumns.map((c) => (row as Readonly<Record<string, unknown>>)[c]);
+    return parts.length === 1 ? String(parts[0]) : JSON.stringify(parts);
+  };
   const priorByKey = new Map<string, Row>();
   for (const r of prior) {
     const k = keyOf(r);
@@ -1302,12 +1307,11 @@ function diffProjectionTable<Row, Col extends string>(
  */
 export function diffDelegationProjection(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectionDiff {
   const parts = [
-    diffProjectionTable(delegationSessionCodec, ['sessionId', 'parentIncarnation'], (r) => JSON.stringify([r.sessionId, r.parentIncarnation]),
-      () => false, prior.sessions, next.sessions),
-    diffProjectionTable(delegationActivityCodec, ['activityId'], (r) => r.activityId, () => false, prior.activities, next.activities),
-    diffProjectionTable(delegationAttemptCodec, ['attemptId'], (r) => r.attemptId, () => false, prior.attempts, next.attempts),
-    diffProjectionTable(delegationLeaseCodec, ['leaseId'], (r) => r.leaseId, () => true, prior.leases, next.leases),
-    diffProjectionTable(delegationLineageCodec, ['lineageId'], (r) => r.lineageId,
+    diffProjectionTable(delegationSessionCodec, ['sessionId', 'parentIncarnation'], () => false, prior.sessions, next.sessions),
+    diffProjectionTable(delegationActivityCodec, ['activityId'], () => false, prior.activities, next.activities),
+    diffProjectionTable(delegationAttemptCodec, ['attemptId'], () => false, prior.attempts, next.attempts),
+    diffProjectionTable(delegationLeaseCodec, ['leaseId'], () => true, prior.leases, next.leases),
+    diffProjectionTable(delegationLineageCodec, ['lineageId'],
       (p, n) => (p !== undefined && p.leaseId !== null) || n.leaseId !== null, prior.lineage, next.lineage),
   ];
   const updates: DelegationProjectionUpdate[] = [];
@@ -1325,6 +1329,28 @@ export function diffDelegationProjection(prior: DelegationCheckpointV1, next: De
     { table: delegationLineageCodec.table, count: next.lineage.length },
   ];
   return { applicable: true, updates, inserts, counts };
+}
+
+/**
+ * Everything the store's delta method refuses BEFORE its transaction, in the full projection's own order and with its own codes and
+ * messages (the full projection's twin checks, so the two refuse a bad checkpoint the same way): the version, the applied position,
+ * the wave-3 lease invariants, then `diffDelegationProjection(prior, next)` (which throws `bad-row` or `bad-instant` for a changed or
+ * new row it cannot encode), then a session key repeated inside `next`. Pure; returns the diff the store then writes or, when it is
+ * not applicable, replaces by the full projection.
+ */
+export function prepareDelegationProjectionChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectionDiff {
+  if (next.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(next.v)} is not a version-1 checkpoint`);
+  const applied = next.appliedJournalSequence;
+  if (!Number.isSafeInteger(applied) || applied < 0) throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
+  assertWave3Leases(next);
+  const diff = diffDelegationProjection(prior, next);
+  const staying = new Set<string>();
+  for (const r of next.sessions) {
+    const key = JSON.stringify([r.sessionId, r.parentIncarnation]);
+    if (staying.has(key)) throw new DelegationModelError('bad-checkpoint', `session ${String(r.sessionId)} (incarnation ${String(r.parentIncarnation)}) appears more than once`);
+    staying.add(key);
+  }
+  return diff;
 }
 
 // ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────

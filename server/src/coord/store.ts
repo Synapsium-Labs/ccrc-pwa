@@ -1,4 +1,4 @@
-import type { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
@@ -39,11 +39,9 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec, prepareDelegationProjectionChanges,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
-  diffDelegationProjection,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
-  type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult, type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
@@ -9025,66 +9023,37 @@ export class CoordStore {
    * encoding, a session key repeated inside `next`, and a handle that does not enforce foreign keys.
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
-    if (next.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(next.v)} is not a version-1 checkpoint`);
-    const applied = next.appliedJournalSequence;
-    if (!Number.isSafeInteger(applied) || applied < 0) {
-      throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
-    }
-    assertWave3Leases(next);
-    const diff = diffDelegationProjection(prior, next);
-    const staying = new Set<string>();
-    for (const r of next.sessions) {
-      const key = JSON.stringify([r.sessionId, r.parentIncarnation]);
-      if (staying.has(key)) {
-        throw new DelegationModelError('bad-checkpoint', `session ${String(r.sessionId)} (incarnation ${String(r.parentIncarnation)}) appears more than once`);
-      }
-      staying.add(key);
-    }
+    const diff = prepareDelegationProjectionChanges(prior, next);
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
-    if (fk !== 1) {
-      throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
-    }
-    if (!diff.applicable) {
-      this.projectDelegationCheckpoint(next);
-      return { mode: 'full' };
-    }
-
+    if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
+    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     tx(this.db, () => {
-      const swap = <Row, Col extends string>(head: string, codec: DelegationRowCodec<Row, Col>, u: DelegationProjectionUpdate): void => {
-        const written = codec.columns.filter((c) => !u.keyColumns.includes(c));
-        const res = this.db.prepare(`${head} SET ${written.map((c) => `${c} = ?`).join(', ')} WHERE ${codec.columns.map((c) => `${c} IS ?`).join(' AND ')}`)
-          .run(...written.map((c) => u.next[c]!), ...codec.columns.map((c) => u.prior[c]!));
-        if (Number(res.changes) !== 1) {
-          throw new DelegationModelError('projection-delta-mismatch',
-            `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
+      // Each statement is prepared at most once per call, the first time its table needs it (as the full path prepares once per table).
+      const prepared = new Map<string, StatementSync>();
+      const prep = (key: string, sql: () => string): StatementSync => { const st = prepared.get(key) ?? this.db.prepare(sql()); prepared.set(key, st); return st; };
+      const swap = <Row, Col extends string>(head: string, codec: DelegationRowCodec<Row, Col>, insertSql: () => string) => ({
+        update: (u: DelegationProjectionUpdate): void => {
+          const written = codec.columns.filter((c) => !u.keyColumns.includes(c));
+          const res = prep(head, () => `${head} SET ${written.map((c) => `${c} = ?`).join(', ')} WHERE ${codec.columns.map((c) => `${c} IS ?`).join(' AND ')}`)
+            .run(...written.map((c) => u.next[c] as DelegationSqlValue), ...codec.columns.map((c) => u.prior[c] as DelegationSqlValue));
+          if (Number(res.changes) !== 1) throw new DelegationModelError('projection-delta-mismatch', `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
+        },
+        insert: (i: DelegationProjectionInsert): void => { prep(i.table, insertSql).run(...codec.columns.map((c) => i.values[c] as DelegationSqlValue)); },
+      });
+      const at = (table: string) => {
+        switch (table) {
+          case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
+          case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
+          case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
+          default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
         }
       };
-      const add = <Row, Col extends string>(sql: string, codec: DelegationRowCodec<Row, Col>, i: DelegationProjectionInsert): void => {
-        this.db.prepare(sql).run(...codec.columns.map((c) => i.values[c]!));
-      };
-      for (const u of diff.updates) {
-        switch (u.table) {
-          case delegationSessionCodec.table: swap('UPDATE delegation_sessions', delegationSessionCodec, u); break;
-          case delegationActivityCodec.table: swap('UPDATE delegation_activities', delegationActivityCodec, u); break;
-          case delegationAttemptCodec.table: swap('UPDATE delegation_attempts', delegationAttemptCodec, u); break;
-          case delegationLineageCodec.table: swap('UPDATE delegation_lineage', delegationLineageCodec, u); break;
-          default: throw new DelegationModelError('projection-delta-mismatch', `${u.table}: the delta projection has no statement for this table`);
-        }
-      }
-      for (const i of diff.inserts) {
-        switch (i.table) {
-          case delegationSessionCodec.table: add(delegationInsertSql(delegationSessionCodec), delegationSessionCodec, i); break;
-          case delegationActivityCodec.table: add(delegationInsertSql(delegationActivityCodec), delegationActivityCodec, i); break;
-          case delegationAttemptCodec.table: add(delegationInsertSql(delegationAttemptCodec), delegationAttemptCodec, i); break;
-          case delegationLineageCodec.table: add(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, i); break;
-          default: throw new DelegationModelError('projection-delta-mismatch', `${i.table}: the delta projection has no statement for this table`);
-        }
-      }
+      for (const u of diff.updates) at(u.table).update(u);
+      for (const i of diff.inserts) at(i.table).insert(i);
       for (const c of diff.counts) {
         const held = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${c.table}`).get() as { n: number | bigint }).n);
-        if (held !== c.count) {
-          throw new DelegationModelError('projection-delta-mismatch', `${c.table} holds ${String(held)} rows after the delta, expected ${String(c.count)}`);
-        }
+        if (held !== c.count) throw new DelegationModelError('projection-delta-mismatch', `${c.table} holds ${String(held)} rows after the delta, expected ${String(c.count)}`);
       }
     });
     return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };

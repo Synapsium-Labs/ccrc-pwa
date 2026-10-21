@@ -1756,8 +1756,10 @@ export class DelegationDurability {
    * checkpoint revision, SQLite's `(count, max)` equal the evidence index's, and the hourly forced full (`DELEGATION_REPAIR_FULL_MS`) is
    * not due; any one failing makes it the full repair. The residual, WIDENED by the delta projection: out-of-band VALUE drift on a row no
    * delta touches, with every count equal, survives the applications that follow (each writes only the rows it changed); it heals at the
-   * hourly forced full or at recovery, no longer at the next application that projects, and never at the next pass. Out-of-band inserts
-   * and deletes of rows trip the delta's count check at once (the delta refuses, the projection goes stale, the next repair is full).
+   * next FULL projection (a fallback application, a repair after stale or drift, the hourly forced full, recovery), no longer at the
+   * next application that projects, and never at the next pass. The delta's count check trips at once only on a NET count change
+   * (an out-of-band insert or delete: the delta refuses, the projection goes stale, the next repair is full); a balanced delete and
+   * insert in one table passes it, and the compare-and-swap catches that only if the delta updates that row.
    */
   repairProjection(opts?: { perPass?: boolean }): Promise<DelegationProjectionRepairReport | null> {
     const perPass = opts?.perPass === true;

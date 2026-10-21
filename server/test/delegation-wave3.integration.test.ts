@@ -1156,10 +1156,10 @@ describe('8. the closed scope census', () => {
     // the delta projection is the one per-row updater, and its compare-and-swap UPDATEs are exactly these four (sessions, activities,
     // attempts, lineage), each spelling its table literally: a fifth UPDATE, one on another table, or one in another delegation method reds this
     expect(updatesInDelegationMethods, 'an UPDATE inside a delegation method of the store: the delta projection\'s four compare-and-swaps and nothing else').toEqual([
-      "projectDelegationCheckpointChanges: case delegationSessionCodec.table: swap('UPDATE delegation_sessions', delegation",
-      "projectDelegationCheckpointChanges: case delegationActivityCodec.table: swap('UPDATE delegation_activities', delegat",
-      "projectDelegationCheckpointChanges: case delegationAttemptCodec.table: swap('UPDATE delegation_attempts', delegation",
-      "projectDelegationCheckpointChanges: case delegationLineageCodec.table: swap('UPDATE delegation_lineage', delegationL",
+      "projectDelegationCheckpointChanges: case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', del",
+      "projectDelegationCheckpointChanges: case delegationActivityCodec.table: return swap('UPDATE delegation_activities', ",
+      "projectDelegationCheckpointChanges: case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', del",
+      "projectDelegationCheckpointChanges: case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', dele",
     ]);
     // a lease never changes in a delta: no line of the delta method (statements, tripwire, messages) names the lease table or its codec,
     // and the method is not empty (so a renamed method cannot turn this into a scan of nothing)
@@ -1540,7 +1540,7 @@ describe('8. the closed scope census', () => {
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
     // the lane's whole contact with the coordination store: four calls, all through the applier's projection port (and the store's
-    // presence, tested once); a fourth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
+    // presence, tested once); a fifth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
     expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
       'const coord = this.deps.coord;',
       'projection: coord === undefined ? null : {',
