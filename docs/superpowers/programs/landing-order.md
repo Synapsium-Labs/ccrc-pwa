@@ -23,7 +23,9 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
-| 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan `docs/superpowers/plans/2026-10-21-landing-order-wave3d-trailing-removal.md` | planned; before wave 2b |
+| 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088 | run 751 (the run's wave 6) dispatched 2026-10-21; before wave 2b |
+| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills | wave 3d | — | ruled 2026-10-21 (Decisions, 2026-10-21 16:41); to plan after wave 3d |
+| 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -846,6 +848,24 @@ carries it (spec §5.1, amended 2026-09-24).
   - **The plan.** `docs/superpowers/plans/2026-10-21-landing-order-wave3d-trailing-removal.md`, drafted
     prototype-first and read by three review lenses, each finding refuted or folded. It also makes the `merged`
     feed record once-only across a server restart. Its run and its block of numbers open at dispatch.
+- **2026-10-21 16:41 — the landing route from the repository's own rules, ruled.**
+  - **Why.** A repository that depends on ccrc's landing will allow merge commits only and require a check from a
+    third-party App. Today the coordinator squashes on every repository without a queue, and it never asks which
+    methods the rules allow or where the required checks live. On this repository the four required checks live
+    in classic protection only, so reading the rules alone would find none.
+  - **A write-free observation first.** What ccrc does today with a check that is not required, while the required
+    checks pass: nothing ccrc gates on reads it. A non-required red turns the PR's keycap red (measured on #1068).
+    A pending commit status speeds the PR sweep to 30 s. A queued or running check run reads as passing, required
+    or not, because gh writes its conclusion as an empty string (measured on #1010).
+  - **The amendment.** Spec §5.7: the coordinator's reads before each landing, the method set, the required set
+    and the other gates, three routes, the stops, what does not change, and the measurements. It is skill text
+    and its pins only.
+  - **The operator's rulings (2026-10-21), all as recommended:** squash then merge; a rebase-only repository
+    stops; on a 401 or 403 the check set comes from the branch's public protection view; the approval licence
+    stays on both direct routes, stated narrowly, until wave 2b; the running-check fix is a separate small server
+    wave; the skill wave is planned after wave 3d; the text is a new §5.7; rollout to the prerelease that carries
+    it, then the installed text is verified; the reads ask about the PR's own base. They are §11, items 7 to 15.
+  - **Next.** Waves 3e (skills) and 3f (server) are added to the table. The plan for 3e follows wave 3d's merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -919,6 +939,9 @@ queue merge.
   first read, as now. There is no two-sweep wait (the operator's ruling, 2026-10-21).
 - The evidence is the re-run's (a2) readings and the reasons measured on 16 queue merges.
 - It also makes the `merged` feed record once-only across a server restart (Carried constraints).
+
+**Then waves 3e and 3f** (Decisions, 2026-10-21 16:41): the landing route from the repository's own rules (spec
+§5.7, skills only), planned after wave 3d merges, then the server's running-check fix.
 
 **Wave 3b (stage 3, `ccd-land-probe`)** stays planned, run 310 open.
 - **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned after wave 3d.
