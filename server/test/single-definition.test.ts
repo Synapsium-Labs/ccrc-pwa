@@ -8149,6 +8149,52 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   });
 });
 
+// D-5866 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1k, Step 4;
+// ARCH-71 (#806); spec §5.1 rule 3). The capability ratchet, placed directly after the ARCH-40 tail block and ahead of
+// the next appended block, so no cited line above it moves. Every verb question goes through `ccdCan(state, row)`:
+// a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
+// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there), and in
+// `watch.ts`, whose commit waits its turn in the one `watch.ts` queue behind C1f (named in the C1k PR body as the
+// follow-up `c1k-watch-after-c1f`). Both sets may only shrink. Flag and verb-precondition sites are reported, never
+// ratcheted. The census is loaded inside the rows, so this block adds no import line.
+describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
+  /** `watch.ts`'s legacy verb calls at C1k's tip: the name sweep's probe, child reclaim's and the collector's gates
+   *  (each with its pause beside it), the expiry selection and the project PR read. */
+  const WATCH_DEFERRED = 7;
+
+  it('no verb question outside ccdCan, except W4\'s three (and watch.ts\'s deferred commit)', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('./consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
+    const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
+    expect(show(legacy.filter((x) => x.file !== 'server/src/watch.ts')), 'ask ccdCan(state, row) instead').toEqual([]);
+    expect(legacy.filter((x) => x.file === 'server/src/watch.ts').length, 'watch.ts may only shrink')
+      .toBeLessThanOrEqual(WATCH_DEFERRED);
+    const w4 = sites.filter((x) => x.tag === 'w4-held');
+    expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
+      .toBeLessThanOrEqual(3);
+    expect(w4.every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    console.log(`capability census: flag ${sites.filter((x) => x.tag === 'flag').length}, verb-precondition ${
+      sites.filter((x) => x.tag === 'verb-precondition').length}, w4-held ${w4.length}, ccdCan ${
+      sites.filter((x) => x.form === 'ccdCan').length}`);
+  });
+
+  it('CONTROL: the census tags a planted verbSupported( outside W4 as a verb', async () => {
+    const { capabilityChoiceSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'ccd-can-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/x.ts'), 'if (!verbSupported(state, CCD_ARGV.wsHold(id, r, null))) return;\n');
+      const [x] = await capabilityChoiceSites(tree);
+      expect([x?.form, x?.tag]).toEqual(['verbSupported', 'verb']);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s

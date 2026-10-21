@@ -26,7 +26,8 @@
 // WHAT THIS DOES NOT COVER, stated plainly rather than left to be assumed: the
 // scan recognises a call site by the literal text `CCD_ARGV.<name>(`, and a
 // gate by the literal text `verbSupported(` somewhere in the enclosing
-// function. Code that reaches `deps.runCcd` with an argv obtained some other
+// function, or (D-5866) a `ccdCan(<state>, '<row>')` there whose row emits
+// the call site's own verb. Code that reaches `deps.runCcd` with an argv obtained some other
 // way — a `CcdArgv` passed in as a parameter, an aliased `const A = CCD_ARGV`,
 // a table lookup `CCD_ARGV[k]` — is invisible to it, and a `verbSupported`
 // call in a sibling branch of the same function counts as a gate even if the
