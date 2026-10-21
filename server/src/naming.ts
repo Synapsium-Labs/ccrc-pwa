@@ -10,6 +10,14 @@
  * surrender that property for nothing.
  */
 
+// `slugifyWords`/`fitSlug` live in `shared/slug.ts`, not here: the PWA needs
+// them too (the sheet previews the slug the server will derive), and a
+// server-only copy is exactly the drift `single-definition.test.ts` exists to
+// fail the build over. The cut rule's two details (a cut that already lands on
+// a word boundary drops nothing back; one long word hard-cuts) are written
+// down, and pinned, at `fitSlug`.
+import { slugifyWords, fitSlug } from '../../shared/slug.js';
+
 /** The slug budget, EXCLUDING the three characters of `ws/`. */
 export const SLUG_MAX = 40;
 
@@ -30,20 +38,7 @@ export const SLUG_MAX = 40;
  * `bad-branch`.
  */
 export function deriveBranch(title: string): string | null {
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = slugifyWords(title);
   if (slug === '') return null;
-  if (slug.length <= SLUG_MAX) return `ws/${slug}`;
-
-  // Cut at SLUG_MAX, then drop back to the last `-` at or before the cut. Two
-  // details the naive form gets wrong:
-  //   * `slug[SLUG_MAX] === '-'` means the cut ALREADY landed on a word
-  //     boundary, so there is nothing to drop back over — a blind
-  //     `lastIndexOf` would throw the last whole word away.
-  //   * no `-` at all in the first SLUG_MAX characters (one long word) means
-  //     there is no boundary to find, and the rule hard-cuts rather than
-  //     emitting nothing.
-  const cut = slug.slice(0, SLUG_MAX);
-  if (slug[SLUG_MAX] === '-') return `ws/${cut}`;
-  const at = cut.lastIndexOf('-');
-  return `ws/${at === -1 ? cut : cut.slice(0, at)}`;
+  return `ws/${fitSlug(slug, SLUG_MAX).slug}`;
 }

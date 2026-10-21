@@ -761,7 +761,7 @@ export async function assembleFleet(
     const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
-      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name, title: r.title, status, statusUpdatedAt,
       // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
       // (D-2921) — the walk starts at this row's own id and every later hop
       // asks the same question of the coordinator it just reached. Built ONCE

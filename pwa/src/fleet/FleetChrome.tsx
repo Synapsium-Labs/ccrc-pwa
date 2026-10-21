@@ -37,6 +37,9 @@ export interface FleetChrome {
   setArchiveAllFor: (project: string | null) => void;
   newOpen: boolean;
   setNewOpen: (open: boolean) => void;
+  /** Which project's `+` sheet is open (named workspaces S7), or none. */
+  addWorkspaceFor: string | null;
+  setAddWorkspaceFor: (project: string | null) => void;
   /** The guarded reap flow's subject, by id only: the session is looked up fresh from the live list. */
   reapId: string | null;
   setReapId: (id: string | null) => void;
@@ -55,10 +58,11 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   const archiveAll = useArchiveAll(store);
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
   const [reapId, setReapId] = useState<string | null>(null);
   const value: FleetChrome = {
     store, health, updates, projects, actions, archiveAll,
-    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, reapId, setReapId,
+    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, addWorkspaceFor, setAddWorkspaceFor, reapId, setReapId,
   };
   return <FleetChromeContext.Provider value={value}>{children}</FleetChromeContext.Provider>;
 }

@@ -55,7 +55,7 @@ const plant = (home: string, id: string, over: Record<string, string> = {}): voi
 /** A COMPLETE fleet row (`stall-sweep.test.ts`'s `fleetRow`, copied), alive and running. */
 const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: `/w/${id}`,
-  workspace: id, name: null, status: 'idle', statusUpdatedAt: T0, limits: null,
+  workspace: id, name: null, title: null, status: 'idle', statusUpdatedAt: T0, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,

@@ -21,6 +21,7 @@ import {
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
+import { workspaceId } from '../../shared/slug.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -31,7 +32,8 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, capSupported, deviceActor,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
+         capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -63,6 +65,11 @@ import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
+import { registerLinearRoutes } from './linear/routes.js';
+import { createAccountGate } from './accounts/gate.js';
+import { resolveTitle } from './linear/resolve.js';
+import { classifyAddFailure, planCreate } from './workspaceCreate.js';
+import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1751,6 +1758,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
+  // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
+  // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
+  const accountGate = createAccountGate({
+    enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
+  });
+  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, gate: accountGate, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
@@ -1989,7 +2002,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 21 request-id routes (17 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 22 request-id routes (18 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -2646,9 +2659,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
   };
 
+  /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
+  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: res.stderr });
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
-    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+    return res.ok ? { ok: true } : ccd502(reply, res);
   };
 
   /**
@@ -2888,14 +2903,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    const body = (req.body ?? {}) as { route?: unknown };
+    const body = (req.body ?? {}) as { route?: unknown; name?: unknown; wrapper?: unknown };
     const routed = parseOperatorRoute(reply, body.route);
     if (routed.reply !== null) return routed.reply;
+    // NAMED WORKSPACES (S5): what to do with `name`/`wrapper` is `planCreate`'s (L1, `workspaceCreate.ts`), decided
+    // before any argv exists; this handler only acts on it. `plain` is today's create, below, untouched.
+    const plan = planCreate(project, body, {
+      title: capSupported(deps.fleetState, WS_TITLE_CAP), wrapper: capSupported(deps.fleetState, WS_WRAPPER_CAP),
+    });
+    if (plan.kind === 'refuse') return refuseRoute(reply, plan.refusal.error, plan.refusal.extra);
     // The operator's create declares who made it (D-5301): `pwaDec`, the
     // human-driven routes' one dec, cap-gated so an old ccd gets the bare argv.
     // D-5369: the actor is the device actually used, not spec §8's literal
     // `--actor operator`.
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
+    if (plan.kind === 'plain') return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
+
+    // The title is resolved HERE, at the create, with the preview's own `resolveTitle`, so the one the board shows is
+    // the one the sheet showed whenever Linear answers; every failure arm degrades to the offline title and the create
+    // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
+    // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
+    const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
+      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    });
+    const slug = plan.ask.slug;
+    const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
+    if (res.ok) return { ok: true, id: workspaceId(project, slug), slug, title };
+    const failure = classifyAddFailure(res);
+    switch (failure.kind) {
+      case 'slug-taken': return refuseRoute(reply, 'slug-taken');
+      case 'bad-slug': return refuseRoute(reply, 'bad-slug');
+      // `leftBehind` only when true: a pre-flight refusal keeps its body, and the post-worktree one is told apart by it.
+      case 'account-refused': return refuseRoute(reply, 'account-refused', failure.leftBehind ? { reason: failure.reason, leftBehind: true } : { reason: failure.reason });
+      case 'other': return ccd502(reply, res);
+    }
   });
 
   /**
@@ -3857,6 +3897,48 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     return runCcdOr502(reply, argv);
+  });
+
+  /**
+   * Rename an existing workspace (named workspaces S9, design 2026-10-20 §6): set its display title, or clear it. The
+   * SLUG NEVER CHANGES: ccd's `ws-title` writes the registry's `title` and `named` fields and nothing else. Body:
+   * `{title: string}` (free text, a Linear ticket or a pasted link, resolved with the create's own `resolveTitle`) or
+   * `{clear: true}`. Answers `{ok: true, id, title}` (`title: null` after a clear).
+   *
+   * What to do with the body, and what each ccd refusal MEANS, are `workspaceTitle.ts`'s (L1); this handler acts on
+   * them. A box that does not list the verb `ws-title` in `ccd caps` is `501 unsupported` before any argv exists
+   * (`capSupported`, never `verbSupported`: no evidence refuses). Session-gated when the auth gate is armed, like every
+   * other PWA write; NO box token, it is not coordination. A MAIN CHECKOUT is refused by ccd (`not-a-workspace`), and the
+   * PWA does not offer it there. Nothing caches the title: `/api/fleet` and the watcher's frame re-read the registry.
+   */
+  app.post('/api/sessions/:id/title', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
+    if (!(await knownId(id))) return refuseRoute(reply, 'unknown-session');
+    const body = (req.body ?? {}) as { title?: unknown; clear?: unknown };
+    const plan = planRetitle(body, { verb: ccdCan(deps.fleetState, 'wsTitle') });
+    if (plan.kind === 'refuse') return refuseRoute(reply, plan.refusal.error, plan.refusal.extra);
+
+    // The title is resolved HERE, as the create does: Linear's when the text is a ticket and Linear answers, the offline
+    // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
+    // through a lookup.
+    const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ticket, {
+      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    })).title;
+    const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });
+    // Through the per-session queue, like the reap and the forget, so a rename cannot interleave with another write to
+    // the same session.
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    if (res.ok) return { ok: true, id, title };
+    const failure = classifyTitleFailure(res);
+    switch (failure.kind) {
+      case 'bad-session-id': return refuseRoute(reply, 'bad-session-id');
+      case 'unknown-session': return refuseRoute(reply, 'unknown-session');
+      case 'not-a-workspace': return refuseRoute(reply, 'not-a-workspace');
+      case 'bad-title': return refuseRoute(reply, 'bad-title', { reason: failure.reason });
+      case 'not-saved': return refuseRoute(reply, 'title-not-saved');
+      case 'other': return ccd502(reply, res);
+    }
   });
 
   app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
