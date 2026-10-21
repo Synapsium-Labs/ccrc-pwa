@@ -261,7 +261,7 @@ _home_measured_to	C1
 _avail	C1
 _swap_target	C1
 _pane_measurable	C3
-_pane_narrow_note	C3
+_pane_narrow_note	C1
 _pane_auto_continue_armed	C3
 _pane_born	C3
 _session_hard_blocked	C1
@@ -444,6 +444,10 @@ _crosspool_tick	C1
 _tick_undecidable	C1
 _tick_strand_undecidable	C1
 _tick_decided	C1
+_standdown_evidence	C1
+_standdown_probe	C1
+_standdown_outside_tail	C3
+_standdown_note	C1
 _crosspool_mark	C1
 _swap_lastswap_restore	C1
 _rescue_prev_save	C1
