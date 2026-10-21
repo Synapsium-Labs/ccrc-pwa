@@ -79,10 +79,13 @@ export function notify(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, 
  *  archive and push, for a writer that writes several rows in one try (`endDeadCoordinator.ts`): the batch STOPS at
  *  its first failed archive, so the rows after it reach neither the ring nor the archive and the caller's sentence is
  *  printed once, and the ring is flushed once, after the records. The outcome is the batch's: `recorded` if any row
- *  was, `archived` the failed row's `'failed'`, else `'landed'` if any row's archive landed, else `'none'`. */
+ *  was, `archived` the failed row's `'failed'`, else `'landed'` if any row's archive landed, else `'none'`.
+ *  D-5860: a batch carries no once-only key (one key on every row would make each row "already sent" for the others),
+ *  so `dedupeKey` is not in its opts and is stripped if forced in. */
 export function notifyEach(
-  deps: NoticeDeps, events: readonly NoticeRecord[], mode: NoticeMode, opts: NoticeOpts = {},
+  deps: NoticeDeps, events: readonly NoticeRecord[], mode: NoticeMode, batchOpts: Omit<NoticeOpts, 'dedupeKey'> = {},
 ): NoticeOutcome {
+  const { dedupeKey: _unkeyed, ...opts } = batchOpts as NoticeOpts;
   let recorded = false;
   let archived: NoticeOutcome['archived'] = 'none';
   try {

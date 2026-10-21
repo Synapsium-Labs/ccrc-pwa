@@ -225,6 +225,14 @@ describe('notifyEach: a batch through the funnel, stopping at its first failed a
     expect(notifyEach(sinks(rec), [], 'record-only')).toEqual({ recorded: false, archived: 'none' });
     expect(rec.calls).toEqual([]);
   });
+
+  it('a batch carries no once-only key: a dedupeKey forced into its opts reaches no row (D-5860)', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-each-nokey-'));
+    notifyEach(sinks(rec), ROWS, 'record-only', { dedupeKey: 'k1' } as never);
+    expect((rec.coord.db.prepare('SELECT dedupe_key AS k FROM feed_events').all() as { k: string | null }[]))
+      .toEqual([{ k: null }, { k: null }, { k: null }]);
+    expect(rec.coord.hasNotice('run', A, 'k1')).toBe(false);
+  });
 });
 
 // D-5860 `notice-dedupe-key` (Task C1f; ARCH-55 #790): a notice's once-only key reaches the archive and nothing else.
