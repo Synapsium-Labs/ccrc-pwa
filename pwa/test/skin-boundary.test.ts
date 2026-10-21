@@ -435,6 +435,10 @@ describe('(d) no font family of a skin\'s own', () => {
     const tree = planted(REF_CSS, '.ref-x { font: 400 12px / 1 Georgia }\n.ref-y { font: var(--weight-regular) var(--fs-meta) / 1 var(--family-ui) }');
     expect(families(tree)).toEqual([`${SKIN_ROOT}/${REF_CSS}: font: 400 12px / 1 Georgia names a family other than var(--family-ui) or var(--family-mono)`]);
   });
+  it('a font shorthand whose pair token is not last is red', () => {
+    const tree = planted(REF_CSS, '.ref-x { font: 12px var(--family-ui), Georgia }');
+    expect(families(tree)).toEqual([`${SKIN_ROOT}/${REF_CSS}: font: 12px var(--family-ui), Georgia names a family other than var(--family-ui) or var(--family-mono)`]);
+  });
   it('an arbitrary family utility and an inline family are red', () => {
     const tree = planted(REF_PARTS, "export const F = () => <span className=\"font-['Comic_Sans']\" style={{ fontFamily: 'x' }} />;");
     expect(families(tree)).toEqual(expect.arrayContaining([
@@ -451,6 +455,10 @@ describe('(e) every box-shadow is an elevation or a glow token', () => {
   it('a shadow of the skin\'s own is red', () => {
     const tree = planted(REF_CSS, '.ref-x { box-shadow: 0 0 8px var(--accent) }');
     expect(shadows(tree)).toContain(`${SKIN_ROOT}/${REF_CSS}: box-shadow: 0 0 8px var(--accent) is not a var(--elev-*) or var(--glow-*) token`);
+  });
+  it('a token inside a shadow of the skin\'s own is still red', () => {
+    const tree = planted(REF_CSS, '.ref-x { box-shadow: 0 0 8px var(--elev-card) }');
+    expect(shadows(tree)).toEqual([`${SKIN_ROOT}/${REF_CSS}: box-shadow: 0 0 8px var(--elev-card) is not a var(--elev-*) or var(--glow-*) token`]);
   });
   it('tokens, a list of tokens and none pass', () => {
     const tree = planted(REF_CSS, '.ref-x { box-shadow: var(--elev-card) }\n.ref-y { box-shadow: var(--elev-card), var(--glow-busy) }\n.ref-z { box-shadow: none }');
@@ -508,6 +516,13 @@ describe('(h) the scan is looking at something', () => {
       `${INSTRUMENT} has no .css file: the scan sees nothing`,
     ]);
   });
+  it('a .ts helper does not stand in for the .tsx', () => {
+    const tree = plantedTree();
+    rmSync(path.join(tree, SKIN_ROOT, INSTRUMENT), { recursive: true });
+    append(tree, `${INSTRUMENT}/helper.ts`, 'export const h = 1;');
+    append(tree, `${INSTRUMENT}/instrument.css`, '.ins-x { margin: 0 }');
+    expect(vacuity(tree)).toEqual([`${INSTRUMENT} has no .tsx file: the scan sees nothing`]);
+  });
 });
 
 describe('(i) motion is tokened', () => {
@@ -532,6 +547,14 @@ describe('(i) motion is tokened', () => {
     const tree = planted(REF_PARTS, 'export const M = () => <span className="transition duration-[250ms]" />;');
     expect(motion(tree)).toContain(`${SKIN_ROOT}/${REF_PARTS}: "transition duration-[250ms]" is an arbitrary duration utility`);
   });
+  it('an arbitrary delay utility is red', () => {
+    const tree = planted(REF_PARTS, 'export const M = () => <span className="delay-[100ms]" />;');
+    expect(motion(tree)).toEqual([`${SKIN_ROOT}/${REF_PARTS}: "delay-[100ms]" is an arbitrary duration utility`]);
+  });
+  it('a curve longhand that is not a token is red', () => {
+    const tree = planted(REF_CSS, '.ref-x { transition-timing-function: ease-in }');
+    expect(motion(tree)).toEqual([`${SKIN_ROOT}/${REF_CSS}: transition-timing-function: ease-in: "ease-in" is not a var(--curve-*)`]);
+  });
 });
 
 describe('(j) no skin stylesheet hides by width', () => {
@@ -545,6 +568,10 @@ describe('(j) no skin stylesheet hides by width', () => {
   it('visibility: hidden under @media is red', () => {
     const tree = planted(REF_CSS, '@media (min-width: 900px) { .ref-fab { visibility: hidden } }');
     expect(widthHiding(tree)).toContain(`${SKIN_ROOT}/${REF_CSS}: @media (min-width: 900px) { .ref-fab { visibility: hidden } hides by width: mount through useMediaQuery`);
+  });
+  it('display: none under @container is red', () => {
+    const tree = planted(REF_CSS, '@container (max-width: 400px) { .ref-fab { display: none } }');
+    expect(widthHiding(tree)).toEqual([`${SKIN_ROOT}/${REF_CSS}: @container (max-width: 400px) { .ref-fab { display: none } hides by width: mount through useMediaQuery`]);
   });
   it('a pseudo-element is exempt, but not when an element shares its selector list', () => {
     const tree = planted(REF_CSS, '@media (max-width: 899px) { .ref-rail::-webkit-scrollbar { display: none } .ref-fab, .ref-rail::after { display: none } }');
