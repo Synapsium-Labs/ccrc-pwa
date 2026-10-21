@@ -51,6 +51,11 @@ const NAMES = [
   'square',
   'shield',
   'x',
+  // Instrument's rail and top bar (W2 Task S9, D-5472): Fleet, Runs, Archive and New session's `+`.
+  'layout-list',
+  'workflow',
+  'archive',
+  'plus',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);
