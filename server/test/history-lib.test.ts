@@ -3152,9 +3152,9 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
   });
   it('(j23) the snippet keeps its second reading: a token is kept only if v2 over the unframed cut slice prints it too (D-6071, the amendment to review 725 F1, departure 1)', () => {
     const idx = idxOf([]);
-    // the corpus texts where the second reading changes the snippet (it is 8e2ff9040's definition, kept for the snippet only: it changes 3
-    // outputs over (j10)'s corpora, and only by masking more). Without it the first one prints ` two\"` where the pre-round output holds the
-    // value's second word masked; the second prints a colour sequence's rest where the pre-round output holds none
+    // the corpus texts where the second reading changes the snippet (8e2ff9040's definition, which the snippet keeps; the window has had its
+    // own again since review 744 F2, ef448e2db, see (j25)): it changes 3 outputs over (j10)'s corpora, and only by masking more. Without it
+    // the first prints ` two\"` where the pre-round output holds the value's second word masked; the second prints a colour sequence's rest, which the pre-round output lacks
     const c1 = r11Corpus(0x5746, 2000)[625]!;
     expect(c1.vs, 'the corpus is the one measured').toContain('hunter2q1p0z');
     expect(libRedact.displaySnippet(c1.t, ['hunter2q'], idx)).toBe(`{"text":"secret: ${M} ${M}"&token=${M}`);
@@ -3204,9 +3204,9 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // A literal mark sits just before the first value and another just after the last, and the window starts inside the first and ends inside
     // the second (a cut that splits a mark at the left edge and at the right). maskUnprinted tokenises the piece between those two edges, so a
     // token that touches a mark's fragment is a token of the piece only if the fragment is left out; the pre-round output's own tokens join
-    // the fragment to its neighbour, and a token of that joined spelling is what v2 masked. The window's second reading (8e2ff9040's, dropped
-    // in 66864b647 as redundant, and restored by review 744 F2) is those tokens: `pre`'s, taken over the whole string v2 returned. The text is
-    // from r11Corpus's seed 0x5746, rebuilt on neutral markers at the lengths of the planted values; the window is [22, 182) of 192 characters.
+    // the fragment to its neighbour. v2 PRINTED that joined spelling (the CONTROLs assert it); the second reading holds it, so maskUnprinted masks the bare token, which is not in the set.
+    // The window's second reading (8e2ff9040's, dropped in 66864b647, restored by review 744 F2) is those tokens: `pre`'s, taken over the whole string v2 returned. The text is from
+    // r11Corpus's seed 0x5746, rebuilt on neutral markers at the lengths of the planted values; the window is [22, 182) of 192 characters.
     const V = ['SECRETXznq1', 'SECRETXznr1', 'SECRETXzns1', 'SECRETXznt1', 'SECRETXznu1', 'SECRETXznv1'];
     const t = `{"token":\n"secret": "${M}${V[0]}"}\\"token="${V[1]}"'TOKEN=\\"${V[2]}\\"]Authorization: Bearer ${V[3]}\\nAuthorization: Bearer ${V[4]}(\\"token\\": \\"${V[5]}${M};`;
     expect(t.length, 'the text').toBe(192);

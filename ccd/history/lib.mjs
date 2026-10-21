@@ -2965,7 +2965,7 @@ function redactFinalTextWith(text, idx, rs) {
  *  holds the same string as a token too (maskUnprinted: a token v2 joined or decoded is masked unless the shown text holds that
  *  string as a token, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a
  *  window: v2 over its text with the note; tokensOf, null where v2 rewrote nothing), or of v2 over the unframed cut slice (a
- *  snippet; preRoundTokens). The window's
+ *  snippet; preRoundTokens). The window's second reading
  *  was dropped as redundant in 66864b647 and came back on review 744 F2: where the cut splits a mark, the piece's tokens leave the
  *  mark's fragment out and v2's own output's tokens join it to its neighbour; an edge token keeps its whole-token decision only
  *  where v2 left the edge as the cut made it); (4) v2 then reads the result. So the door only replaces spans of the pre-round
@@ -2985,7 +2985,7 @@ const DOOR_READINGS = (() => {
   // is the framed base snippet), each token of that output masked unless the widened rules print it over the base reading of the
   // margin-widened text AND the shown text holds the same string as a token (composedTokens, maskUnprinted, D-6071; a joined or
   // decoded token is masked unless the shown text holds that string), and the second reading holds it (both doors: the
-  // window's is the tokens of the pre-round output itself, tokensOf; the snippet's is the tokens of v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
+  // window's is the tokens of the pre-round output itself, tokensOf, null where v2 rewrote nothing (back since review 744 F2: a cut that splits a mark leaves the fragment out of the piece's tokens); the snippet's is the tokens of v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),

@@ -317,7 +317,7 @@ export function redactAfter(lookBehind: string, text: string, idx: PairIndex): {
  *  the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text), the pre-round composition;
  *  (3) a token of that output is masked unless the widened rules, read over the base reading of the margin-widened text, print it
  *  AND the shown text holds the same string as a token too (a token `v2` joined or decoded is masked unless the shown text holds that
- *  string, on purpose, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a window: `v2` over its text with the note), or of `v2` over the unframed cut slice (a snippet)); (4) `v2` then
+ *  string, on purpose, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a window: `tokensOf`, the tokens of `v2` over its text with the note, null where `v2` changed nothing; it came back on review 744 F2, because a cut that splits a mark leaves the mark's fragment out of the piece's tokens while the pre-round output's own tokens join it to its neighbour), or of `v2` over the unframed cut slice (a snippet)); (4) `v2` then
  *  reads the result. So the door only replaces spans of the pre-round composition's output with marks. The door is `v2(base)` for a
  *  window of the whole text, where no margin is read (longer than DISPLAY_WINDOW_MAX), and where the widened reading changes nothing.
  *  A test seam:
