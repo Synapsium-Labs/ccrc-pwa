@@ -22,9 +22,16 @@
 // checkout's, takes the PR number from `GITHUB_REF` and its event, and withholds
 // every exemption when the diff the run measures edits the growth check's own
 // files. The HEAD copy's shape is checked on every run, CI or not.
+//
+// D-6223: the reviewed waiver ledger, `growth-waivers.json`. A PR that must grow
+// a listed file past the limit adds one dated entry for that file in its own
+// diff; the entry waives that file only while the measured delta stays at or
+// below its `maxDelta`, and an entry the merge-base already holds waives
+// nothing. The ledger is debt consolidation W5 pays; entries cite D-numbers
+// the plans define.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +41,7 @@ import {
   classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
+  GROWTH_WAIVERS_FILE, parseWaivers, waiversAdded, waiversInDiff, type GrowthWaiver,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -533,6 +541,175 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
   });
 });
 
+describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
+  const today = new Date('2026-10-21T12:00:00Z');
+  const PAYER = 'consolidation W5 (ccd in place) pays every entry down';
+  const waiver = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    file: 'ccd/ccd', maxDelta: 60, d: 'D-6223', reason: 'a fixture: the verb grows ccd/ccd by design', added: '2026-10-21', ...over,
+  });
+  const ledger = (...waivers: unknown[]): string => JSON.stringify({ payer: PAYER, waivers }, null, 2);
+
+  it('a well-formed ledger parses; one file may carry entries under two D-numbers', () => {
+    expect(parseWaivers(ledger(), GROWTH_FILES, today)).toEqual({ payer: PAYER, entries: [], problems: [] });
+    const two = parseWaivers(ledger(waiver(), waiver({ d: 'D-6178', maxDelta: 41 })), GROWTH_FILES, today);
+    expect(two.problems).toEqual([]);
+    expect(two.entries.map((e) => `${e.file} ${e.d} ${e.maxDelta}`)).toEqual(['ccd/ccd D-6223 60', 'ccd/ccd D-6178 41']);
+  });
+
+  it('every malformed shape is a problem, and a ledger with one waives nothing', () => {
+    const noD = waiver();
+    delete noD['d'];
+    const shapes: [string, string, string][] = [
+      ['not JSON', '{"waivers": [', 'not JSON'],
+      ['a top-level array', '[]', 'two keys, `payer` and `waivers`'],
+      ['no payer', JSON.stringify({ waivers: [] }), 'two keys, `payer` and `waivers`'],
+      ['an extra key', JSON.stringify({ payer: PAYER, waivers: [], x: 1 }), 'two keys, `payer` and `waivers`'],
+      ['waivers not an array', JSON.stringify({ payer: PAYER, waivers: {} }), 'two keys, `payer` and `waivers`'],
+      ['a payer that is not W5', JSON.stringify({ payer: 'someone, later', waivers: [] }), 'the payer must name consolidation W5'],
+      ['a two-line payer', JSON.stringify({ payer: 'consolidation\nW5', waivers: [] }), 'the payer must name consolidation W5'],
+      ['an entry that is not an object', ledger('ccd/ccd'), '#0: not an object'],
+      ['a missing key', ledger(noD), '#0: missing `d`'],
+      ['an unknown key', ledger(waiver({ pr: 1 })), '#0: unknown key `pr`'],
+      ['a file that is not listed', ledger(waiver({ file: 'server/src/index.ts' })), '#0: file must be one of the listed files'],
+      ['a maxDelta at the limit', ledger(waiver({ maxDelta: GROWTH_LIMIT })), '#0: maxDelta must be an integer above 40'],
+      ['a fractional maxDelta', ledger(waiver({ maxDelta: 60.5 })), '#0: maxDelta must be an integer above 40'],
+      ['a string maxDelta', ledger(waiver({ maxDelta: '60' })), '#0: maxDelta must be an integer above 40'],
+      ['a d that is not a D-number', ledger(waiver({ d: 'ARCH-01' })), '#0: d must be a D-number'],
+      ['a d with a suffix', ledger(waiver({ d: 'D-6223a' })), '#0: d must be a D-number'],
+      ['an empty reason', ledger(waiver({ reason: '' })), '#0: the reason must be one non-empty line'],
+      ['a two-line reason', ledger(waiver({ reason: 'a\nb' })), '#0: the reason must be one non-empty line'],
+      ['a reason that is not a string', ledger(waiver({ reason: 7 })), '#0: reason and added must be strings'],
+      ['an added that is not a day', ledger(waiver({ added: '2026-02-30' })), "#0: since '2026-02-30' is not a YYYY-MM-DD day"],
+      ['an added in the future', ledger(waiver({ added: '2026-10-22' })), "#0: since '2026-10-22' is in the future"],
+      ['two entries for one file and one D-number', ledger(waiver(), waiver({ maxDelta: 90 })), '#1: a second entry for ccd/ccd and D-6223'],
+    ];
+    for (const [what, text, problem] of shapes) {
+      const got = parseWaivers(text, GROWTH_FILES, today);
+      expect(got.problems.some((p) => p.includes(problem)), `${what}: ${JSON.stringify(got.problems)}`).toBe(true);
+      expect(got.entries, what).toEqual([]);
+    }
+  });
+
+  it('an entry counts as added only when the base holds no entry for its file and D-number', () => {
+    const w = (o: Record<string, unknown> = {}): GrowthWaiver => waiver(o) as unknown as GrowthWaiver;
+    expect(waiversAdded([], [w()])).toEqual([w()]);
+    expect(waiversAdded([w()], [w()])).toEqual([]);
+    // Raising an entry the base already holds is not adding one: it waives nothing.
+    expect(waiversAdded([w()], [w({ maxDelta: 400 })])).toEqual([]);
+    expect(waiversAdded([w()], [w(), w({ d: 'D-6178' })])).toEqual([w({ d: 'D-6178' })]);
+    expect(waiversAdded([w()], [w(), w({ file: 'ccd/ccrc' })])).toEqual([w({ file: 'ccd/ccrc' })]);
+  });
+
+  it('the decision: an over row passes only on an added entry for its file whose maxDelta covers the delta', () => {
+    const row = (delta: number, file = 'ccd/ccd'): GrowthRow => ({ file, base: 1000, head: 1000 + delta, delta, atBoth: true });
+    const w = (o: Record<string, unknown> = {}): GrowthWaiver => waiver(o) as unknown as GrowthWaiver;
+    const table: [string, GrowthRow, GrowthWaiver[], boolean, string][] = [
+      ['+60, no entry', row(60), [], true, 'ccd/ccd: delta +60 (GROWTH_OVER)'],
+      ['+60, an entry of maxDelta 60', row(60), [w()], false, 'ccd/ccd: delta +60 (GROWTH_OVER, waived: D-6223, max 60)'],
+      ['+60, an entry of maxDelta 50', row(60), [w({ maxDelta: 50 })], true,
+        'ccd/ccd: delta +60 (GROWTH_OVER, over its ledger max of 50 under D-6223)'],
+      ['+60, an entry for another file', row(60), [w({ file: 'ccd/ccrc' })], true, 'ccd/ccd: delta +60 (GROWTH_OVER)'],
+      ['+60, two entries, the larger covers', row(60), [w({ maxDelta: 50 }), w({ d: 'D-6178', maxDelta: 70 })], false,
+        'ccd/ccd: delta +60 (GROWTH_OVER, waived: D-6178, max 70)'],
+      ['+10, not over, no note', row(10), [w()], false, 'ccd/ccd: delta +10'],
+    ];
+    for (const [what, r, waivers, fails, title] of table) {
+      const [v] = growthVerdicts([r], r.delta > GROWTH_LIMIT ? [r.file] : [], [], null, [], waivers);
+      expect({ fails: v!.fails, title: v!.title }, what).toEqual({ fails, title });
+    }
+    expect(growthVerdicts([row(60)], ['ccd/ccd'], [], null, [], [w({ maxDelta: 50 })])[0]!.why)
+      .toBe('ccd/ccd grew by 60 net code lines, over its ledger max of 50 under D-6223');
+    expect(overLine(['ccd/ccd'], [], (f) => f, growthVerdicts([row(60)], ['ccd/ccd'], [], null, [], [w()]).flatMap((v) => (v.waiver ? [v.waiver] : []))))
+      .toBe('ccd/ccd (waived: D-6223, max 60, ledger entry added 2026-10-21)');
+  });
+
+  it('the armed path, end to end: only an entry the PR\'s own diff adds waives, and only up to its maxDelta', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-waiver-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(dir, rel))]);
+        writeFileSync(path.join(dir, rel), text);
+      };
+      const lines = (n: number): string => Array.from({ length: n }, (_, i) => `echo line-${i}\n`).join('');
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      put('ccd/ccd', lines(10));
+      put(GROWTH_WAIVERS_FILE, ledger());
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/main', base);
+      const ccd = (head: string) => armedGrowth(GROWTH_FILES, dir, git('merge-base', 'origin/main', head), head, {}, today)
+        .verdicts.find((v) => v.file === 'ccd/ccd')!;
+      /** A PR off `from` that grows ccd/ccd by 60 and writes `text` as the ledger (unchanged when undefined). */
+      const pr = (name: string, from: string, text?: string) => {
+        git('checkout', '-q', '-B', name, from);
+        put('ccd/ccd', lines(70));
+        if (text !== undefined) put(GROWTH_WAIVERS_FILE, text);
+        git('add', '-A');
+        git('commit', '-q', '-m', name);
+        return ccd(git('rev-parse', 'HEAD'));
+      };
+      expect(pr('no-entry', base).fails, '+60 with no entry').toBe(true);
+      const sixty = pr('max-60', base, ledger(waiver()));
+      expect({ fails: sixty.fails, max: sixty.waiver?.entry.maxDelta }, '+60 with maxDelta 60').toEqual({ fails: false, max: 60 });
+      expect(pr('max-50', base, ledger(waiver({ maxDelta: 50 }))).fails, '+60 with maxDelta 50').toBe(true);
+      expect(pr('other-file', base, ledger(waiver({ file: 'ccd/ccrc' }))).fails, 'an entry for another file').toBe(true);
+      const malformed = pr('malformed', base, ledger(waiver({ maxDelta: 60.5 })));
+      expect(malformed.fails, 'a malformed ledger waives nothing').toBe(true);
+      // An entry an EARLIER commit on main added does not waive a later PR.
+      git('checkout', '-q', '-B', 'main-side', base);
+      put(GROWTH_WAIVERS_FILE, ledger(waiver()));
+      git('commit', '-q', '-am', 'an earlier PR lands its entry');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const onMain = git('rev-parse', 'HEAD');
+      expect(pr('later', onMain).fails, 'an entry already on main').toBe(true);
+      expect(pr('raised', onMain, ledger(waiver({ maxDelta: 400 }))).fails, 'raising main\'s entry').toBe(true);
+      expect(pr('own-entry', onMain, ledger(waiver(), waiver({ d: 'D-6178' }))).fails, 'its own new entry beside main\'s').toBe(false);
+      // A malformed ledger at the merge-base waives nothing either, so old entries cannot pass as new.
+      git('checkout', '-q', '-B', 'main-bad', base);
+      put(GROWTH_WAIVERS_FILE, '{"waivers": [');
+      git('commit', '-q', '-am', 'main holds a broken ledger');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const badBase = waiversInDiff(GROWTH_FILES, git('rev-parse', 'HEAD'), git('rev-parse', 'max-60'), dir, today);
+      expect(badBase.added).toEqual([]);
+      expect(badBase.problems.some((p) => p.startsWith('base: ')), JSON.stringify(badBase.problems)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it(`the HEAD copy of ${GROWTH_WAIVERS_FILE} is well formed, names W5 as the payer, and cites only D-numbers the plans define`, () => {
+    const text = readFileSync(path.join(ROOT, GROWTH_WAIVERS_FILE), 'utf8');
+    const got = parseWaivers(text, GROWTH_FILES);
+    expect(got.problems).toEqual([]);
+    expect(got.payer).toMatch(/\bconsolidation W5\b/);
+    const defined = definedDNumbers();
+    expect(got.entries.filter((e) => !defined.has(e.d)).map((e) => `${e.file} ${e.d}`), 'define the D-number in a plan first').toEqual([]);
+    // The ledger's own number is defined once, in the W0 plan, and names W5 as the payer.
+    const w0 = readFileSync(path.join(ROOT, 'docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md'), 'utf8')
+      .split('\n').filter((l) => l.startsWith('- **D-6223**'));
+    expect(w0).toHaveLength(1);
+    expect(w0[0]).toContain('shrink-only debt that consolidation W5');
+    expect(w0[0]).toMatch(/\) pays/);
+  });
+});
+
+/** The D-numbers a plan defines: a `- **D-N**` bullet or a `## D-N` heading, deviation-refs' DEFINED shape. */
+function definedDNumbers(): Set<string> {
+  const dir = path.join(ROOT, 'docs/superpowers/plans');
+  const out = new Set<string>();
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.md'))) {
+    for (const line of readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      const m = /^(?:#{2,4} |- \*\*)(D-\d+)\b/.exec(line);
+      if (m) out.add(m[1]!);
+    }
+  }
+  return out;
+}
+
 /** The base, or why the growth rows cannot measure. */
 function resolveBase(): { base: string } | { skip: string } {
   if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
@@ -594,7 +771,7 @@ const measured = 'base' in resolved
       // D-6119: absolute numbers go to the job summary only, never an assertion.
       const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows: armed.rows, over: armed.over,
-        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions }));
+        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers }));
       return { ...armed, summaryWritten };
     })()
   : null;
@@ -604,10 +781,14 @@ if (measured === null) {
 } else {
   console.log(['growth-check: net code lines against the merge-base',
     ...measured.rows.map((r) => `  ${r.file.padEnd(28)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
-    `GROWTH_OVER: ${overLine(measured.over, measured.exemptions)}`,
+    `GROWTH_OVER: ${overLine(measured.over, measured.exemptions, (f) => f, measured.waivers)}`,
     `PR: ${measured.pr === null ? '(none: no entry applies)' : `#${measured.pr}`}; `
       + `exemption entries on origin/main: ${measured.onMain.entries.length}; `
-      + `growth-check files this diff edits: ${measured.touched.length ? measured.touched.join(', ') : '(none)'}`].join('\n'));
+      + `growth-check files this diff edits: ${measured.touched.length ? measured.touched.join(', ') : '(none)'}; `
+      + `ledger entries this diff adds: ${measured.ledger.added.map((w) => `${w.file} ${w.d} max ${w.maxDelta}`).join(', ') || '(none)'}`].join('\n'));
+  for (const p of measured.ledger.problems) {
+    console.warn(`growth-check: ${GROWTH_WAIVERS_FILE} is malformed, so it waives nothing: ${p}`);
+  }
   for (const p of measured.onMain.problems) {
     console.warn(`growth-check: origin/main's ${GROWTH_EXEMPTIONS_FILE} is malformed, so it exempts nothing: ${p}`);
   }
@@ -619,6 +800,20 @@ if (measured === null) {
 describe.skipIf(measured === null)('growth-check: the listed files against the merge-base (D-5848)', () => {
   it('the job summary is written whenever the runner names a summary file (D-6119)', () => {
     expect(measured!.summaryWritten).toBe(Boolean(process.env['GITHUB_STEP_SUMMARY']));
+  });
+  it(`${GROWTH_WAIVERS_FILE} is shrink-only debt: no entry the merge-base holds is edited, and every added one cites a defined D-number (D-6223)`, () => {
+    const at = (sha: string): GrowthWaiver[] => {
+      const text = gitRead(['show', `${sha}:${GROWTH_WAIVERS_FILE}`], ROOT);
+      return parseWaivers(text, GROWTH_FILES).entries;
+    };
+    let base: GrowthWaiver[] = [];
+    // Absent at the merge-base (the ledger's own landing), the base holds no entry.
+    try { base = at((resolved as { base: string }).base); } catch { base = []; }
+    const head = parseWaivers(readFileSync(path.join(ROOT, GROWTH_WAIVERS_FILE), 'utf8'), GROWTH_FILES).entries;
+    const edited = head.filter((h) => base.some((b) => b.file === h.file && b.d === h.d && JSON.stringify(b) !== JSON.stringify(h)));
+    expect(edited.map((e) => `${e.file} ${e.d}`), 'an entry on the merge-base is never edited; add a new one under its own D-number').toEqual([]);
+    const defined = definedDNumbers();
+    expect(waiversAdded(base, head).filter((w) => !defined.has(w.d)).map((w) => w.d)).toEqual([]);
   });
   for (const v of measured?.verdicts ?? []) {
     it(v.title, () => {
