@@ -1,0 +1,4 @@
+{
+  "payer": "consolidation W5 (ccd in place) pays every entry down; an entry is never edited, only added by the PR that needs it or removed once paid (D-6223)",
+  "waivers": []
+}
