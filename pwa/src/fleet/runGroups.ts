@@ -1,13 +1,14 @@
-// U6's model (D-5587): the run board's runs grouped by what they need, in the
-// order the board reads them — Needs you, then Running by programme, then
-// Finished. Pure: the board (P5) and Instrument's runs split (P9) both render
-// this one answer, so the two skins cannot group the runs two ways.
+// U6's model (D-5587): the run board's runs grouped by what they wait on, in
+// the order the board reads them — Waiting, then Running by programme, then
+// Finished. Pure: the board and Instrument's runs split both render this one
+// answer, so the two skins cannot group the runs two ways.
 //
-// THE STATE MAP (Step 0, measured on the base this module landed on):
+// THE STATE MAP (D-6170 reverses D-5587's `awaiting-review` row):
 //
 //   state            isRunClosed  RUN_ORDER rank  group
-//   awaiting-review  no           0 (first)       needs    — the one state that
-//                                                            waits on the operator
+//   awaiting-review  no           0 (first)       waiting  — a run waiting on
+//                                                            its review, not on
+//                                                            the operator
 //   failed           yes          1               finished — closed, so never in
 //                                                            the board's `active`
 //   working          no           2               running
@@ -19,12 +20,12 @@
 //   unknown          no           8 (last)        running  — we-do-not-know is
 //                                                            not a call to act
 //
-// `RUN_WORD` names `awaiting-review` "awaiting review", the only open state
-// whose word asks someone for something; the fleet's attention buckets read
-// session state, never `RunState`, so nothing else files a run as the
-// operator's. `failed` stays in Finished, where the board shows it today, with
-// its own word and glyph: drawing it from Finished would file every failed run
-// ever recorded under Needs you.
+// NO RUN STATE WAITS ON THE OPERATOR (D-6170). `awaiting-review` waits on a
+// reviewer the coordinator dispatches; filing it as the operator's taught the
+// page to say "needs you" about work nobody asked them for. "Needs you" is read
+// from sessions (the rollup's `operatorAsk`, D-6088) and from the run-close
+// lane's refusals (D-6173), never from `RunState`. `failed` stays in Finished,
+// where the board shows it, with its own word and glyph.
 //
 // The record carries a third value, `finished`, beside the plan's two
 // (D-5650): a `Record<RunState, …>` is total, so `done` and `failed` need an
@@ -33,13 +34,13 @@
 import type { RunState, RunSummary } from '../../../shared/api';
 import { programWave, programmeTitle, runState, runsByProgram } from './runWords';
 
-export type RunGroup = 'needs' | 'running' | 'finished';
+export type RunGroup = 'waiting' | 'running' | 'finished';
 
 /** Which group each state files under. A `Record` over `RunState`, so a state
  *  added to the wire type is a compile error here, never a silently missing
  *  row (D-5587). */
 export const RUN_GROUP: Readonly<Record<RunState, RunGroup>> = Object.freeze({
-  'awaiting-review': 'needs',
+  'awaiting-review': 'waiting',
   planned: 'running',
   dispatched: 'running',
   working: 'running',
@@ -50,14 +51,14 @@ export const RUN_GROUP: Readonly<Record<RunState, RunGroup>> = Object.freeze({
   failed: 'finished',
 });
 
-/** A Needs-you row: the run, and its programme's title so the row can say
+/** A Waiting row: the run, and its programme's title so the row can say
  *  whose it is outside its programme's group. */
-export interface NeedsRow {
+export interface WaitingRow {
   readonly run: RunSummary;
   readonly title: string;
 }
 
-/** One programme's open runs that do not wait on the operator. */
+/** One programme's open runs that are not waiting. */
 export interface ProgramGroup {
   readonly program: string;
   readonly title: string;
@@ -67,7 +68,7 @@ export interface ProgramGroup {
 }
 
 export interface RunGroups {
-  readonly needs: readonly NeedsRow[];
+  readonly waiting: readonly WaitingRow[];
   readonly running: readonly ProgramGroup[];
   readonly finished: readonly RunSummary[];
 }
@@ -86,11 +87,11 @@ export function groupRuns(active: readonly RunSummary[], finished: readonly RunS
     return true;
   };
 
-  const needs: NeedsRow[] = [];
+  const waiting: WaitingRow[] = [];
   const running: ProgramGroup[] = [];
   const closedInActive: RunSummary[] = [];
   for (const { program, runs } of runsByProgram(active)) {
-    // The programme's wave is over all its open runs, Needs-you ones included:
+    // The programme's wave is over all its open runs, Waiting ones included:
     // it is the programme's fact, read by `programWave` and never re-derived.
     const { wave, waveOf } = programWave(runs);
     const rest: RunSummary[] = [];
@@ -98,7 +99,7 @@ export function groupRuns(active: readonly RunSummary[], finished: readonly RunS
       const group = RUN_GROUP[runState(run)];
       if (group === 'finished') closedInActive.push(run);
       else if (!once(run)) continue;
-      else if (group === 'needs') needs.push({ run, title: titleOf(program) });
+      else if (group === 'waiting') waiting.push({ run, title: titleOf(program) });
       else rest.push(run);
     }
     if (rest.length > 0) running.push({ program, title: titleOf(program), wave, waveOf, runs: rest });
@@ -107,5 +108,5 @@ export function groupRuns(active: readonly RunSummary[], finished: readonly RunS
   // `active` is `!isRunClosed` on the board, so `closedInActive` is empty
   // there; a caller that leaks a closed run still gets it under Finished.
   const done = [...finished, ...closedInActive].filter(once);
-  return { needs, running, finished: done };
+  return { waiting, running, finished: done };
 }
