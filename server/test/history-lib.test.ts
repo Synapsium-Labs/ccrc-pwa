@@ -3150,6 +3150,18 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(r11Holds(win.base(t, 0, 31, idx), V), 'CONTROL base window').toBe(true);
     expect(r11Holds(snip.base(t, ['ZQX'], idx), V), 'CONTROL base snippet').toBe(true);
   });
+  it('(j23) the snippet keeps its second reading: a token is kept only if v2 over the unframed cut slice prints it too (D-6071, the amendment to review 725 F1, departure 1)', () => {
+    const idx = idxOf([]);
+    // the corpus texts where the second reading changes the snippet (it is 8e2ff9040's definition, kept for the snippet only: it changes 3
+    // outputs over (j10)'s corpora, and only by masking more). Without it the first one prints ` two\"` where the pre-round output holds the
+    // value's second word masked; the second prints a colour sequence's rest where the pre-round output holds none
+    const c1 = r11Corpus(0x5746, 2000)[625]!;
+    expect(c1.vs, 'the corpus is the one measured').toContain('hunter2q1p0z');
+    expect(libRedact.displaySnippet(c1.t, ['hunter2q'], idx)).toBe(`{"text":"secret: ${M} ${M}"&token=${M}`);
+    const c2 = r11AnsiCorpus(0x1b5748, 1000)[680]!;
+    expect(c2.vs, 'the corpus is the one measured').toContain('hunter2q1mnz');
+    expect(libRedact.displaySnippet(c2.t, ['hunter2q'], idx)).toBe(`...d]${M}&TOKEN=${M} see hunt\x1b[32mer2q1moz here,`);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
