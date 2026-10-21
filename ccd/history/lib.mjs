@@ -7756,13 +7756,26 @@ function displayWindowRead(text, from, to, idx, rs) {
  *  unquoted in `read`), are not in the margin the widened reading reads. */
 const UNION_TOKEN_RE = new RegExp(`${MARK_RE_SRC}|(?:(?!${MARK_RE_SRC})[^\\s"'\`,;&])+`, 'g');
 
-function composedTokens(read, idx) {
+function composedTokens(read, idx, shown) {
   if (read === null) return null;
   const dc = redactForDisplayWith(read, idx, CONTEXT_RULES);
   if (dc === read) return null;
   const printed = new Set();
   for (const m of dc.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) printed.add(m[0]);
-  return { printed };
+  return { printed, pre: preRoundTokens(shown, idx) };
+}
+
+/** The second reading of the union (D-6071, review 721 item 1): the tokens the pre-round composition printed, v2 over the base
+ *  door's shown text, `shown`, which is read as the cut left it (an edge fragment is tested as itself). A token the first reading
+ *  prints is kept only when this one prints it too: the widened reading of `read` can end a value before a second pair's value and
+ *  swallow that pair's NAME, and maskUnprinted then marks the NAME, so the last v2 pass would find no NAME to read the value by.
+ *  null when v2 changes nothing: this reading then masks nothing. */
+function preRoundTokens(shown, idx) {
+  const v2 = redactForDisplayWith(shown, idx, CONTEXT_RULES);
+  if (v2 === shown) return null;
+  const pre = new Set();
+  for (const m of v2.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) pre.add(m[0]);
+  return pre;
 }
 
 /** What a cut at position `p` of `d` splits: null when it splits no token (an end of `d`, a break either side, or a mark's
@@ -7790,7 +7803,7 @@ function splitAt(d, p) {
  *  (`d` null for an inexact window, which is not a slice of its read: no edge leniency). A token the cut at either end splits is
  *  decided by its whole token in `d` (splitAt); a mark it splits is kept as written. */
 function maskUnprinted(piece, view, d, p0) {
-  const { printed } = view;
+  const { printed, pre } = view;
   const m0 = d === null ? null : splitAt(d, p0);
   const m1 = d === null ? null : splitAt(d, p0 + piece.length);
   let lo = 0;
@@ -7809,7 +7822,7 @@ function maskUnprinted(piece, view, d, p0) {
     let full = tok;
     if (leftFull !== null && m.index === 0) full = leftFull;
     else if (rightFull !== null && at === mid.length) full = rightFull;
-    out += tok === REDACTED_MARK || printed.has(full) ? tok : REDACTED_MARK;
+    out += tok === REDACTED_MARK || (printed.has(full) && (pre === null || pre.has(tok))) ? tok : REDACTED_MARK;
   }
   return out + mid.slice(at) + piece.slice(hi);
 }
@@ -7826,7 +7839,7 @@ export function redactDisplayWindow(text, from, to, idx) {
 /** A display window composed (D-6071): the base window with the tokens the widened reading of its margin-widened text no longer
  *  prints replaced by the mark. A window of the whole text is redactForDisplay's reading and is left to v2. */
 function composedWindow(w, idx) {
-  const view = w.whole === true ? null : composedTokens(w.read, idx);
+  const view = w.whole === true ? null : composedTokens(w.read, idx, w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`);
   return view === null ? w : { ...w, text: maskUnprinted(w.text, view, w.at === undefined ? null : w.read, w.at ?? 0) };
 }
 
@@ -7869,9 +7882,9 @@ function displaySnippetWith(text, terms, idx, rs, composed = false) {
   };
   const shown = snippetWindow(w.text, terms);
   if (!composed) return fmt(shown);
-  const view = composedTokens(w.whole === true ? w.text : w.read, idx);
-  if (view === null) return { base: fmt(shown), out: fmt(shown) };
   const b = snippetBounds(w.text, terms);
+  const view = composedTokens(w.whole === true ? w.text : w.read, idx, w.text.slice(b.start, b.end));
+  if (view === null) return { base: fmt(shown), out: fmt(shown) };
   const sliced = maskUnprinted(w.text.slice(b.start, b.end), view, w.whole === true ? w.text : w.at === undefined ? null : w.read, (w.whole === true ? 0 : w.at ?? 0) + b.start);
   return { base: fmt(shown), out: fmt(`${b.pre}${sliced.trim()}${b.suf}`) };
 }

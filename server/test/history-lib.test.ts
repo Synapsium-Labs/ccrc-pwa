@@ -2994,6 +2994,46 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // CONTROL: the base snippet's cut does split the mark (it starts `...redacted]`)
     expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, ['ghi'], idx).startsWith('...redacted]')).toBe(true);
   });
+  it('(j18) a value the pre-round composition masked stays masked: a first widened value that swallows the second NAME and ends before the second value (D-6071, review 721 item 1)', () => {
+    const idx = idxOf([]);
+    const both = (t: string, anchor: string, len: number, value: string): { win: string; snip: string } => {
+      const from = t.indexOf(anchor);
+      return { win: libRedact.redactDisplayWindow(t, from, from + len, idx), snip: libRedact.displaySnippet(t, [value], idx) };
+    };
+    const cases: Record<string, [string, string, number]> = {
+      // R1: an odd quote, then an escaped quote: NAME1's widened value runs to the `\"` that opens value 2 and swallows NAME2
+      oddQuote: [String.raw`intro words password="]SECRETX1Z river stone end; ,token=\"SECRETXQ2Z\" zqxpost after words`, 'token', 30],
+      oddQuoteNear: [String.raw`intro words password="]SECRETX1Z end; ,token=\"SECRETXQ2Z\" zqxpost after words`, 'token', 30],
+      oddQuoteColon: [String.raw`intro words password: "]SECRETX1Z end; ,token=\"SECRETXQ2Z\" zqxpost after words`, 'token', 30],
+      // R2: an unclosed quote after a coloured NAME1, JSON-escaped once: NAME1's widened value ends at value 2's opening quote
+      unclosedColour: [JSON.stringify({ text: 'intro words \x1b[31mpassword\x1b[0m="SECRETX1Z river stone token="SECRETXQ2Z zqxpost" end after words' }), 'token', 40],
+    };
+    for (const [name, [t, anchor, len]] of Object.entries(cases)) {
+      const { win, snip } = both(t, anchor, len, 'SECRETXQ2Z');
+      expect(r11Holds(win, 'SECRETXQ2Z'), `${name}: redactDisplayWindow prints value 2: ${JSON.stringify(win)}`).toBe(false);
+      expect(r11Holds(snip, 'SECRETXQ2Z'), `${name}: displaySnippet prints value 2: ${JSON.stringify(snip)}`).toBe(false);
+      // CONTROL: rev 3.6's base doors print it (the pre-round composition masked it only through its cut), so this is not a base equivalence
+      const baseWin = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!.base(t, t.indexOf(anchor), t.indexOf(anchor) + len, idx);
+      expect(r11Holds(baseWin, 'SECRETXQ2Z'), `${name}: CONTROL base window`).toBe(true);
+    }
+    // the corpus-1 texts the fuzz found: the seed (j10) uses, window text 1965 (value 3) and snippet text 830 (the hit term)
+    const c1 = r11Corpus(0x5746, 2000);
+    const w1 = c1[1965]!;
+    expect(w1.vs, 'the corpus is the one measured').toContain('hunter2q5bjz');
+    expect(r11Holds(libRedact.redactDisplayWindow(w1.t, Math.floor(w1.t.length / 4), Math.ceil((3 * w1.t.length) / 4), idx), 'hunter2q5bjz'), 'window text 1965').toBe(false);
+    const s1 = c1[830]!;
+    expect(s1.vs, 'the corpus is the one measured').toContain('hunter2q29az');
+    expect(r11Holds(libRedact.displaySnippet(s1.t, ['hunter2q29az'], idx), 'hunter2q29az'), 'snippet text 830').toBe(false);
+    // CONTROL: the adjacent shapes the review named, where the first value covers the second pair whole, still mask it
+    for (const [t, anchor, len] of [
+      ['intro words password="a SECRETX1Z b token=SECRETXQ2Z c" after words', 'token', 25],
+      ['intro words password=abc;token=SECRETXQ2Z after words', 'token', 20],
+    ] as Array<[string, string, number]>) {
+      const { win, snip } = both(t, anchor, len, 'SECRETXQ2Z');
+      expect(r11Holds(win, 'SECRETXQ2Z'), `CONTROL window of ${JSON.stringify(t)}`).toBe(false);
+      expect(r11Holds(snip, 'SECRETXQ2Z'), `CONTROL snippet of ${JSON.stringify(t)}`).toBe(false);
+    }
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
