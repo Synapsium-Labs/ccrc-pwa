@@ -98,7 +98,7 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     const r = src({ meas: { childOf: '41', tmpRootKept: 'in-use' }, detail: 'temp root kept (in-use): pid 7' });
     expect(derive([r])).toEqual([{
       item: { kind: 'leaf-kept', sessionId: ID, runId: 41, sentence: TMP_IN_USE, at: NOW - DAY },
-      source: r.id, detail: 'temp root kept (in-use): pid 7', clipsClause: null,
+      source: r.id, detail: 'temp root kept (in-use): pid 7', clipsClause: null, foundNothing: false,
     }]);
   });
 
@@ -132,7 +132,7 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     expect(derive([r])).toEqual([{
       item: { kind: 'leaf-kept', sessionId: ID, runId: null, sentence: TRUNCATED, at: NOW - DAY }, source: r.id,
       detail: 'clips kept (refused)',
-      clipsClause: `whether its clips directory ~/.cc-clips/${ID} was kept is not known`,
+      clipsClause: `whether its clips directory ~/.cc-clips/${ID} was kept is not known`, foundNothing: false,
     }]);
   });
 
@@ -192,16 +192,16 @@ describe('how the item ends', () => {
 
   it('a later collect ends the temp-root half only, never the clips half', () => {
     const tmpOnly = src({ meas: { childOf: '41', tmpRootKept: 'in-use' } });
-    expect(derive([tmpOnly], ends([{ id: tmpOnly.id + 1, act: 'collect', at: NOW - 1 }]))).toEqual([]);
+    expect(derive([tmpOnly], ends([{ id: tmpOnly.id + 1, act: 'collect', at: NOW - 1, leaf: { kind: 'keyless' } }]))).toEqual([]);
     const both = src({ meas: { childOf: '41', clipsKept: 'refused', tmpRootKept: 'in-use' } });
-    expect(derive([both], ends([{ id: both.id + 1, act: 'collect', at: NOW - 1 }])).map((k) => k.item.sentence))
+    expect(derive([both], ends([{ id: both.id + 1, act: 'collect', at: NOW - 1, leaf: { kind: 'keyless' } }])).map((k) => k.item.sentence))
       .toEqual([CLIPS_REFUSED]);
     const cut = src({ truncated: true, meas: null, detail: 'clips kept (refused)' });
-    expect(derive([cut], ends([{ id: cut.id + 1, act: 'collect', at: null }])).map((k) => k.item.sentence))
+    expect(derive([cut], ends([{ id: cut.id + 1, act: 'collect', at: null, leaf: { kind: 'keyless' } }])).map((k) => k.item.sentence))
       .toEqual([TRUNCATED_COLLECTED]);
     // A cut line with no detail names where to look, and a collected temp root is no longer one of the places.
     const bare = src({ truncated: true, meas: null });
-    expect(derive([bare], ends([{ id: bare.id + 1, act: 'collect', at: null }])).map((k) => k.item.sentence))
+    expect(derive([bare], ends([{ id: bare.id + 1, act: 'collect', at: null, leaf: { kind: 'keyless' } }])).map((k) => k.item.sentence))
       .toEqual(['The reclaim of this child completed, but the journal line ccd wrote for it was cut to fit, so whether '
         + "its clips directory or its temp root was kept is not known; ccd's line kept no detail either, so the feed "
         + `cannot name it; look for ~/.cc-clips/demo-gone on the fleet box. Its temp root has since been collected. ${HORIZON}`]);
@@ -209,7 +209,7 @@ describe('how the item ends', () => {
 
   it('a collect that does not follow the row ends nothing', () => {
     const r = src({ meas: { tmpRootKept: 'in-use' } });
-    for (const e of [{ id: r.id + 1, act: 'collect' as const, at: r.at - 1 }, { id: r.id - 1, act: 'collect' as const, at: r.at + 1 }]) {
+    for (const e of [{ id: r.id + 1, act: 'collect' as const, at: r.at - 1, leaf: { kind: 'keyless' as const } }, { id: r.id - 1, act: 'collect' as const, at: r.at + 1, leaf: { kind: 'keyless' as const } }]) {
       expect(derive([r], ends([e])).map((k) => k.item.sentence), JSON.stringify(e)).toEqual([TMP_IN_USE]);
     }
   });
@@ -225,7 +225,7 @@ describe('how the item ends', () => {
 describe('on the list: one item per child, and the collapse', () => {
   const item = (sessionId: string, runId: number | null = 41): ChildReclaimLeafKeptAttention =>
     ({ kind: 'leaf-kept', sessionId, runId, sentence: `s ${sessionId}`, at: NOW });
-  const y = (a: ChildReclaimLeafKeptAttention): ChildReclaimLeafKept => ({ item: a, source: 1, detail: null, clipsClause: null });
+  const y = (a: ChildReclaimLeafKeptAttention): ChildReclaimLeafKept => ({ item: a, source: 1, detail: null, clipsClause: null, foundNothing: false });
 
   it('a leaf item yields to any item the list already holds for the id, a stuck item and a kept-many member included', () => {
     const list: ChildReclaimAttention[] = [
@@ -273,7 +273,7 @@ describe('childReclaimDetailText — ccd’s detail as one bounded plain line', 
   const LONG = `${'x'.repeat(10)}${NL}${RLO}${'y'.repeat(9988)}`;
   const leaf = (detail: string | null) => ({
     item: { kind: 'leaf-kept' as const, sessionId: ID, runId: null, sentence: 's.', at: NOW }, source: 1, detail,
-    clipsClause: null });
+    clipsClause: null, foundNothing: false });
 
   it('a 10,000-character detail holding a newline and a bidi override reads as one line of at most LC_LINE_MAX + 1 characters', () => {
     expect(LONG).toHaveLength(10_000);

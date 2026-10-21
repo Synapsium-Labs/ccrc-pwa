@@ -20,7 +20,7 @@ import {
   catchUpBody, catchUpExpected, degradeLine, feedRecorder, flushedAfterRecord, interruptDeps, withoutFlush,
   type FeedRecorder,
 } from './feedWriterFixture.js';
-import { NOTICE_DEGRADED_DEFAULT, notify, type NoticeMode, type NoticeRecord } from '../src/notice.js';
+import { NOTICE_DEGRADED_DEFAULT, notify, notifyEach, type NoticeMode, type NoticeRecord } from '../src/notice.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -173,5 +173,56 @@ describe('notify: the sinks are independently optional (D-5857)', () => {
     notify({ ...sinks(rec), presence: { isVisible } }, EVENT, 'record-only');
     expect(isVisible).not.toHaveBeenCalled();
     expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+  });
+});
+
+// D-5859 (Task C1e; departure `funnel-batch-one-flush`): the dead-coordinator executor writes several rows in ONE try
+// (spec K6: "stop-on-first-failed-row batch", kept), and its pin counts one flush per batch. `notifyEach` is that
+// batch through the funnel: each row through the same gate, ring and guarded archive as `notify`, the batch stops at
+// its first failed archive (the rows after it reach neither the ring nor the archive), the caller's sentence is
+// printed once, and the ring is flushed once, after the records.
+describe('notifyEach: a batch through the funnel, stopping at its first failed archive (D-5859)', () => {
+  const ROWS: NoticeRecord[] = [1, 2, 3].map((n) => ({ kind: 'run', sessionId: A, runId: null, title: `row ${n}`, body: `b${n}` }));
+
+  it('records and archives each row in order, one flush after the records, and never pushes in record-only', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-each-'));
+    rec.setVisible([]);
+    expect(notifyEach(sinks(rec), ROWS, 'record-only', { degraded: 'batch degraded' }))
+      .toEqual({ recorded: true, archived: 'landed' });
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'record', 'archive', 'record', 'archive']);
+    expect(rec.calls.filter((c) => c === 'flush')).toHaveLength(1);
+    expect(rec.calls.at(-1)).toBe('flush');
+    expect(rec.archived.map((e) => e.title)).toEqual(['row 1', 'row 2', 'row 3']);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('stops at the first failed archive: the row is in the ring only, the rows after it in neither, one sentence', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-each-fail-'));
+    rec.archiveThrowsOn(2);
+    expect(notifyEach(sinks(rec), ROWS, 'record-only', { degraded: 'batch degraded' }))
+      .toEqual({ recorded: true, archived: 'failed' });
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'record', 'archive']);
+    expect(rec.calls.filter((c) => c === 'flush')).toHaveLength(1);
+    expect(rec.ring.map((e) => e.title)).toEqual(['row 1', 'row 2']);
+    expect(rec.archived.map((e) => e.title)).toEqual(['row 1']);
+    expect(rec.warned().filter((l) => l.includes('recordFeedEvent failed'))).toEqual([degradeLine('batch degraded')]);
+  });
+
+  it('each row takes the mode: push rows push unless visible, as notify does', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-each-push-'));
+    rec.setVisible([]);
+    notifyEach(sinks(rec), ROWS.slice(0, 2), 'push');
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'push', 'record', 'archive', 'push']);
+    rec.setVisible([A]);
+    const at = rec.mark();
+    expect(notifyEach(sinks(rec), ROWS.slice(0, 2), 'push')).toEqual({ recorded: false, archived: 'none' });
+    expect(rec.since(at)).toEqual([]);
+  });
+
+  it('no notify log: no ring, no archive row, no flush; an empty batch does nothing', async () => {
+    const rec = await feedRecorder(mkTmp('ccrc-notice-each-none-'));
+    expect(notifyEach({ coord: rec.coord }, ROWS, 'record-only')).toEqual({ recorded: false, archived: 'none' });
+    expect(notifyEach(sinks(rec), [], 'record-only')).toEqual({ recorded: false, archived: 'none' });
+    expect(rec.calls).toEqual([]);
   });
 });

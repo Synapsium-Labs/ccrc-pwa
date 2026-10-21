@@ -3768,13 +3768,26 @@ describe('the hold reason', () => {
     // too; and `'program:'` as a whole quoted token is caught, while
     // `"program:name wave:2/4"` (the composer's placeholder, a prose example)
     // is not, because the quote must close immediately after the colon.
+    //
+    // ONE SANCTIONED READER since D-6091 (fleet capacity W1-1): `programmeHoldOf` in `coord/rundefs.ts` reads the
+    // text back through `HOLD_REASON_PATTERN`, so the run-done policy can tell a programme's hold from an operator's.
+    // It is cut out of its file before the scan, and nothing else in either ring may parse one. Run-awareness still
+    // comes from coord.db: a `run:` id is only looked up there (its state), never trusted as state itself.
+    const sanctioned = /^export const programmeHoldOf = [\s\S]*?^};$/m;
+    let cut = 0;
     for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
       for (const f of sourcesUnder(dir)) {
-        const src = readFileSync(f, 'utf8');
+        let src = readFileSync(f, 'utf8');
+        if (f === path.join(repoRoot, 'server', 'src', 'coord', 'rundefs.ts')) {
+          expect(sanctioned.test(src), 'programmeHoldOf is where the exemption says').toBe(true);
+          src = src.replace(sanctioned, '');
+          cut++;
+        }
         expect(/['"`](?:run|program):['"`]|run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+    expect(cut, 'the exemption cut exactly one file').toBe(1);
   });
 });
 

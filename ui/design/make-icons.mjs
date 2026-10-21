@@ -44,6 +44,8 @@ const NAMES = [
   'refresh-cw',
   'search',
   'settings',
+  // Stop's, in the composer's send slot (D-5471).
+  'square',
   'shield',
 ];
 

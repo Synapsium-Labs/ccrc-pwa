@@ -20,12 +20,14 @@ import {
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import {
   CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
   type ChildReclaimGeneration, type ChildReclaimGenerationKey, type LifecycleAct, type LifecycleOutcome,
   type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord, type LcRefusalToken,
   isChildReclaimKeptWord,
 } from '../../../shared/api.js';
+import { notify } from '../notice.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -1008,9 +1010,8 @@ export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequ
 export async function childReclaimPauseRead(
   io: Pick<FleetIO, 'readdir'>, registryDir: string,
 ): Promise<MarkerState> {
-  const names = await io.readdir(registryDir);
-  if (names === null) return 'unmeasurable';
-  return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
+  // A rejecting `readdir` is NOT folded into `null` here: it propagates, and each caller's try keeps its own sentence.
+  return readSwitches(await io.readdir(registryDir))[RECLAIM_PAUSE_MARKER];
 }
 
 /** THE ONE READ of a registry row's generation, `$REG/<id>.generation` (spec §5.5): the sweep's third key, the
@@ -1703,25 +1704,17 @@ export function childReclaimFeedSkips(o: Exclude<ChildReclaimOutcome, { kind: 'g
  * lane skips observations — a design that assumed a row would have delivered
  * none. `kind: 'run'`, recorded and NEVER
  * pushed (the operator's ruling: every reclaim lands in the feed; no push per
- * reap). The `POST /api/coord/caps` pattern exactly: a missing log degrades
- * the record and never the act, `recordFeedEvent` throws synchronously and is
- * caught, and the flush is in a `finally` (D-1213's reason).
+ * reap). Through the funnel (`notice.ts`, D-5859): a missing log degrades
+ * the record and never the act, a throwing archive is caught and said in this
+ * writer's own sentence, and the ring is flushed after its record.
  */
 function recordChildReclaimFeed(
   deps: ChildReclaimDeps, o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
 ): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    const ev = log.record({ kind: 'run', sessionId: o.sessionId, runId: o.runId,
-      title: CHILD_RECLAIM_FEED_TITLE[o.kind], body: childReclaimFeedBody(o, req, (deps.now ?? Date.now)()) });
-    deps.coord.recordFeedEvent(log.epoch, ev);
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim ${o.kind}, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  // Through the funnel (`notice.ts`, D-5859), `'record-only'`: every reclaim lands in the feed; no push per reap.
+  notify(deps, { kind: 'run', sessionId: o.sessionId, runId: o.runId,
+    title: CHILD_RECLAIM_FEED_TITLE[o.kind], body: childReclaimFeedBody(o, req, (deps.now ?? Date.now)()) },
+  'record-only', { degraded: `child reclaim ${o.kind}, feed archive degraded` });
 }
 
 /** The title of the one feed row a kept child writes (spec §5.9). */
@@ -1730,25 +1723,17 @@ export const CHILD_RECLAIM_KEPT_FEED_TITLE = 'child reclaim kept';
 /**
  * ONE feed row for a child the sweep keeps on purpose (spec §5.9), in `recordChildReclaimFeed`'s idiom
  * exactly: `kind: 'run'`, recorded and NEVER pushed; a missing log degrades the record and never the
- * sweep; `recordFeedEvent` throws synchronously and is caught; the flush is in a `finally`. The caller
+ * sweep; through the funnel, which catches a throwing archive and flushes the ring. The caller
  * decides when to write it — once per child, per word, per process — so this writes whatever it is
  * handed, and the row says what the attention item says.
  */
 export function recordChildReclaimKeptFeed(
   deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, a: ChildReclaimKeptAttention,
 ): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    const ev = log.record({ kind: 'run', sessionId: a.sessionId, runId: a.runId,
-      title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: `${a.sessionId}, child of run #${a.runId}: ${a.sentence}` });
-    deps.coord.recordFeedEvent(log.epoch, ev);
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim kept, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
+  notify(deps, { kind: 'run', sessionId: a.sessionId, runId: a.runId,
+    title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: `${a.sessionId}, child of run #${a.runId}: ${a.sentence}` },
+  'record-only', { degraded: 'child reclaim kept, feed archive degraded' });
 }
 
 /** The title of the one feed row a kept leaf writes (spec §5.9). */
@@ -1769,25 +1754,17 @@ export function childReclaimLeafKeptFeedBody(k: ChildReclaimLeafKept): string {
 
 /**
  * ONE feed row for a kept leaf (spec §5.9), in `recordChildReclaimKeptFeed`'s idiom exactly: `kind: 'run'`,
- * recorded and NEVER pushed; a missing log degrades the record and never the sweep; `recordFeedEvent`
- * throws synchronously and is caught; the flush is in a `finally`. The caller decides when to write it:
+ * recorded and NEVER pushed; a missing log degrades the record and never the sweep; through the funnel,
+ * which catches a throwing archive and flushes the ring. The caller decides when to write it:
  * once per source row, per process.
  */
 export function recordChildReclaimLeafKeptFeed(
   deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, k: ChildReclaimLeafKept,
 ): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    const ev = log.record({ kind: 'run', sessionId: k.item.sessionId, runId: k.item.runId,
-      title: CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, body: childReclaimLeafKeptFeedBody(k) });
-    deps.coord.recordFeedEvent(log.epoch, ev);
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim leaf kept, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
+  notify(deps, { kind: 'run', sessionId: k.item.sessionId, runId: k.item.runId,
+    title: CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, body: childReclaimLeafKeptFeedBody(k) },
+  'record-only', { degraded: 'child reclaim leaf kept, feed archive degraded' });
 }
 
 // ── Wave 5: the closed run's chip (spec §5.9) ───────────────────────────────

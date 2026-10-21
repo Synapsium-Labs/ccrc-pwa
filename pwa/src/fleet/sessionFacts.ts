@@ -198,6 +198,11 @@ const markerNote = (
   return { note, title: reason ?? note };
 };
 
+/** The word a row says for its state: `asleep` for a hibernated row, otherwise its bucket's `STATE_WORD`. The one
+ *  spelling, read by the row's facts below and by the rollup's worker line (D-6088), which counts rows by it. */
+export const rowStateWord = (session: FleetSession): string =>
+  hibernatedSince(session) !== null ? 'asleep' : STATE_WORD[session.bucket];
+
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
@@ -206,7 +211,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   } = input;
   const dead = session.status === 'dead';
   const asleepAt = hibernatedSince(session);
-  const state = asleepAt !== null ? 'asleep' : STATE_WORD[session.bucket];
+  const state = rowStateWord(session);
 
   const childOf = childOfRunLabel(session, childRun);
   const activeRun = childRun?.run ?? null;

@@ -2,7 +2,8 @@
 // "everything expanded", never to a fleet the reader cannot see.
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { cleanup, renderHook, act } from '@testing-library/react';
-import { loadFolded, saveFolded, useFolded } from '../src/fleet/foldState';
+import { loadFolded, loadRollupPrefs, saveFolded, useFolded, useRollupPrefs } from '../src/fleet/foldState';
+import { NO_ROLLUP_PREFS, toggleChildren } from '../src/fleet/rollup';
 
 const KEY = 'ccrc.fleet-folded.v1';
 
@@ -87,5 +88,35 @@ describe('useFolded', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
     const { result } = renderHook(() => useFolded());
     expect([...result.current[0]]).toEqual([]);
+  });
+});
+
+// D-6088: the rollup preferences fail the same way — to NO preferences, which is the default rule (a quiet project
+// rolled up, an active one open, an operator-facing question never hidden), never to a stored state nobody chose.
+describe('loadRollupPrefs (D-6088)', () => {
+  const RKEY = 'ccrc.fleet-rollup.v1';
+  it('reads an absent, corrupt or wrongly shaped store as no preferences', () => {
+    expect(loadRollupPrefs()).toEqual(NO_ROLLUP_PREFS);
+    window.localStorage.setItem(RKEY, '{not json');
+    expect(loadRollupPrefs()).toEqual(NO_ROLLUP_PREFS);
+    window.localStorage.setItem(RKEY, '[1,2]');
+    expect(loadRollupPrefs()).toEqual({ projects: {}, openChildren: [] });
+  });
+
+  it('keeps the well-formed entries and drops the junk, field by field', () => {
+    window.localStorage.setItem(RKEY, JSON.stringify({
+      projects: { a: { collapsed: false, cls: 'inactive' }, b: { collapsed: 'yes', cls: 'inactive' }, c: { collapsed: true, cls: 'busy' } },
+      openChildren: ['coord', 7, null],
+    }));
+    expect(loadRollupPrefs()).toEqual({ projects: { a: { collapsed: false, cls: 'inactive' } }, openChildren: ['coord'] });
+  });
+
+  it('persists an update and writes nothing for an update that changes nothing', () => {
+    const { result } = renderHook(() => useRollupPrefs());
+    const setItem = vi.spyOn(window.localStorage, 'setItem');
+    act(() => result.current[1]((p) => p));
+    expect(setItem).not.toHaveBeenCalled();
+    act(() => result.current[1]((p) => toggleChildren(p, 'coord')));
+    expect(JSON.parse(window.localStorage.getItem(RKEY) ?? 'null')).toEqual({ projects: {}, openChildren: ['coord'] });
   });
 });

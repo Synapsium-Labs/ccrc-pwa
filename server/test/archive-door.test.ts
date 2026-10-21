@@ -70,7 +70,7 @@ const box = async (cfg: BoxCfg = {}, over: Partial<Deps> = {}) => {
     statMeasured: async (p: string) => (p.includes(worktrees) ? { ok: false as const, reason: 'unreadable' as const }
       : base.io.statMeasured(p)) };
   const watcher = cfg.pending === undefined ? undefined : { currentPending: () => new Set(cfg.pending),
-    currentStatuslines: () => new Map(), stop: () => {} } as unknown as FleetWatcher;
+    currentStatuslines: () => new Map(), stop: () => {}, serverCapsSettled: async () => {} } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, io, coord, ...over }, new Bus(), watcher);
   open.push(app);
   return { home, calls, app, coord, ccd: () => calls.filter((c) => CCD_VERBS.has(c[0] ?? '')) };

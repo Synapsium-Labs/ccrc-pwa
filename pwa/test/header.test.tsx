@@ -2,7 +2,7 @@
 // the screen-level api.interrupt wiring (incl. the 409 not-busy toast), and
 // the visualViewport keyboard-inset hook.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
@@ -318,8 +318,30 @@ describe('SessionScreen interrupt wiring', () => {
     act(() => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
     expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
+  });
+
+  it('the composer\'s send slot is Stop while busy and calls api.interrupt with keycap; idle, the slot is Send (W2 Task S7b, D-5471)', () => {
+    const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    const { store, fleet } = makeStores();
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
+    act(() => {
+      store.setState({ uuid: 'u1', status: 'busy' });
+    });
+    const head = document.querySelector<HTMLElement>('.chat-head')!;
+    const slot = screen.getAllByRole('button', { name: 'Stop' }).filter((b) => !head.contains(b));
+    expect(slot).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+    fireEvent.click(slot[0]!);
+    expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
+    act(() => {
+      store.setState({ status: 'idle' });
+      fleet.setState({ sessions: [fleetSession({ status: 'idle' })] });
+    });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('button', { name: 'Stop' }).filter((b) => !head.contains(b))).toHaveLength(0);
   });
 
   it('a 409 not-busy answer surfaces as a quiet toast', async () => {
@@ -336,7 +358,8 @@ describe('SessionScreen interrupt wiring', () => {
     act(() => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
     expect(await screen.findByText(/nothing to stop/)).toBeInTheDocument();
   });
 });

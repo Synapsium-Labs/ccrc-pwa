@@ -139,6 +139,7 @@ const box = async (cfg: BoxCfg = {}) => {
   const wakes = cfg.wakes;
   const watcher = { currentPending: () => new Set(cfg.pending ?? []), currentStatuslines: () => new Map(),
     stop: () => {},
+    serverCapsSettled: async () => {},
     ...(wakes === undefined ? {} : { admitWake: (k: string, id: string) => { wakes.calls.push(`${k}:${id}`); return wakes.admit; } }),
   } as unknown as FleetWatcher;
   const app = await buildServer({ ...base, mailToken: TOKEN, coord }, new Bus(), watcher);

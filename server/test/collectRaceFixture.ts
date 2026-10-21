@@ -121,7 +121,8 @@ export const g2Spawn = (id = COL_ID, scratch = 'g2.txt'): string =>
   `d=$(_child_tmpdir ${id}) && printf '%s' "$d" > "$HOME/g2-dir"`
   + (scratch === '' ? '' : ` && printf 'g2 scratch\\n' > "$d/${scratch}"`);
 /** The recycled child LEAVES, as its own reclaim leaves: its tail removes its temp root and drops the witness
- *  (`_ws_tmproot_remove`, wave 6), and its row goes. */
+ *  unless a quarantine slot of the id stands (`_ws_tmproot_remove`, wave 6; path-identity W2, TR4 A: the drop keeps
+ *  a witness beside any slot of its id), and its row goes. */
 export function g2Departs(h: PrHarness, id = COL_ID): void {
   h.sh(`_ws_tmproot_remove ${id} >/dev/null 2>&1; :`);
   for (const f of ['uuid', 'project', 'workdir', 'child']) fs.rmSync(path.join(regOf(h), `${id}.${f}`), { force: true });
@@ -132,9 +133,9 @@ const linesOf = (p: string): string[] => (fs.existsSync(p) ? fs.readFileSync(p, 
 /** `_ws_collect_gap`, redefined: every point the verb passes is appended to `$HOME/gaps`, and a point named in `acts`
  *  runs its snippet in a SUBSHELL — nothing it sets leaks into the verb's own variables — and a snippet that fails is
  *  recorded in `$HOME/gap-errors`, so a case can prove its injection ran. */
-const armsOf = (acts: Partial<Record<Point, string>>): string => Object.entries(acts)
+const armsOf = (acts: Partial<Record<KillPoint, string>>): string => Object.entries(acts)
   .map(([p, s]) => `${p}) ( ${s} ) || echo "${p}" >> "$HOME/gap-errors" ;;`).join(' ');
-export const gapAt = (acts: Partial<Record<Point, string>>): string =>
+export const gapAt = (acts: Partial<Record<KillPoint, string>>): string =>
   `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${armsOf(acts)} esac; };`;
 export const gapsOf = (h: PrHarness): string[] => linesOf(path.join(h.home, 'gaps'));
 export const gapErrorsOf = (h: PrHarness): string[] => linesOf(path.join(h.home, 'gap-errors'));
@@ -143,7 +144,7 @@ export const gapErrorsOf = (h: PrHarness): string[] => linesOf(path.join(h.home,
  *  ancestors first and itself last, so no shell between them returns into the verb and carries on. A kill, not an exit:
  *  no trap runs, nothing is cleaned up. `$HOME/crashed-at` says it fired. Linux (`/proc/<pid>/stat`). `acts` run at
  *  EARLIER points exactly as `gapAt`'s do, so a race and a crash can meet in one run. */
-export const crashAt = (point: KillPoint, acts: Partial<Record<Point, string>> = {}): string =>
+export const crashAt = (point: KillPoint, acts: Partial<Record<KillPoint, string>> = {}): string =>
   `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${armsOf(acts)} esac; [[ "$1" == ${point} ]] || return 0;`
   + ' printf \'%s\' "$1" > "$HOME/crashed-at"; local p=$BASHPID pp; local -a chain=();'
   + ' while [[ "$p" != "$$" ]]; do chain=("$p" ${chain[@]+"${chain[@]}"});'
