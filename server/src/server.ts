@@ -1688,11 +1688,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // server knows and its roster parses; it then replaces `cfg.roster` when the
     // answer differs from the roster in memory and, in remote mode, rewrites
     // this box's copy from it too. So the fix that works, in both modes, is the
-    // lane's row in THIS box's accounts.json, then a restart. In LOCAL mode that
-    // file is the box's own. In REMOTE mode it is a copy of the fleet box's
-    // roster, which the next roster answer from the fleet box that differs from
-    // memory replaces wholesale, so the fleet box's row must say the same or the
-    // fix is undone.
+    // lane's row in THIS box's accounts.json, then a restart. A codex row needs
+    // its whole exec block, not `exec.kind` alone (`parseRoster` in
+    // shared/roster.ts requires `provider` "openai", `authDir` and two ports of
+    // its own), and a roster with an incomplete one stops the server at start,
+    // since index.ts runs `loadConfig` at module top level, uncaught. In LOCAL
+    // mode that file is the box's own. In REMOTE mode it is a copy of the fleet
+    // box's roster, which the next roster answer from the fleet box that differs
+    // from memory replaces wholesale, so the remedy is to copy the lane's whole
+    // row from the fleet box's file.
     //
     // What a pushable line can carry is stated in the policy's docstring: up to
     // 120 characters of printable ASCII in a failure line's reason slot, and
@@ -1750,10 +1754,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
             + '(the server decides from the roster it holds)'
             + (deps.cfg.fleetMode === 'remote'
-              ? '; make the lane\'s row in this server box\'s accounts.json carry it, and restart the server: that file '
-                + 'is a copy of the fleet box\'s roster, which a later roster answer from the fleet box replaces, so the '
-                + 'fleet box\'s row must say the same'
-              : '; make the lane\'s row in this box\'s accounts.json carry it, and restart the server')
+              ? '; copy the lane\'s whole row from the fleet box\'s accounts.json into this server box\'s accounts.json, '
+                + 'and restart the server: this server box\'s file is a copy of the fleet box\'s roster, and a later '
+                + 'roster answer from the fleet box replaces it'
+              : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
+                + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
+                + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
+                + 'start: fix the row, and restart the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'

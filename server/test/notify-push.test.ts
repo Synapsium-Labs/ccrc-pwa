@@ -47,15 +47,22 @@ const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
 
 const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind lane';
 /** What a refused lane tells the operator to fix, per server mode. In both modes it is the lane's row in this box's
- *  accounts.json and a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. In remote mode
- *  the file is a copy of the fleet box's roster, which a later roster answer replaces, so the fleet box's row must say
- *  the same. */
-const REMOTE_FIX = "make the lane's row in this server box's accounts.json carry it, and restart the server: "
-  + "that file is a copy of the fleet box's roster, which a later roster answer from the fleet box replaces, "
-  + "so the fleet box's row must say the same";
-const LOCAL_FIX = "make the lane's row in this box's accounts.json carry it, and restart the server";
+ *  accounts.json and a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. A codex row needs
+ *  its whole exec block, and the server refuses a roster with an incomplete one at start, so remote mode copies the
+ *  lane's whole row from the fleet box (this box's file is a copy that a later roster answer replaces), and local mode
+ *  says the block must be complete. */
+const REMOTE_FIX = "copy the lane's whole row from the fleet box's accounts.json into this server box's accounts.json, "
+  + "and restart the server: this server box's file is a copy of the fleet box's roster, and a later roster answer "
+  + 'from the fleet box replaces it';
+const LOCAL_FIX = "if the lane is meant to be a codex lane, its row in this box's accounts.json needs a complete codex "
+  + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, exec.proxyPort '
+  + 'and exec.litellmPort), and the server refuses a roster with an incomplete one at start: fix the row, and restart '
+  + 'the server';
+/** The exact tail of a lane refusal in a mode: the common clause, the mode's remedy and the closing words, contiguous. */
+const laneTail = (fix: string): string =>
+  `(the server decides from the roster it holds); ${fix}; the banner went out, the phone push did not`;
 /** The one answer a remedy may name: the one that undoes a remote fix. No remedy says a verb or an answer picks one up. */
-const UNDOES = 'which a later roster answer from the fleet box replaces';
+const UNDOES = 'and a later roster answer from the fleet box replaces it';
 
 /** A recording `curl` stand-in: the argv it saw, one word to a line, in `$HOME/curl-argv`, and its stdin, byte for byte,
  *  in `$HOME/curl-stdin`; rc 0. */
@@ -419,8 +426,8 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     const said = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
     expect(said).toHaveLength(2);
     for (const l of said) {
-      expect(l).toContain(own);
-      expect(l, 'the remedy ends where the mode\'s clause ends').toContain(`${own}; the banner went out, the phone push did not`);
+      // The exact tail, contiguous: nothing between the common clause and the remedy, and nothing after it.
+      expect(l.slice(-laneTail(own).length), 'the lane refusal\'s tail').toBe(laneTail(own));
       expect(l, 'the other mode\'s remedy').not.toContain(other);
       // What picks the fix up is a restart, and nothing else: no account verb, and no answer but the one that undoes it.
       expect(l, 'the remedy names no restart').toContain(', and restart the server');
