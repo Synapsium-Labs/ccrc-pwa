@@ -20,6 +20,7 @@
 //        code the full path gives (measured here on a twin store, not typed)
 //   R17  an intent-change shaped next (every reference new) writes exactly one session row; an interval-only next writes none
 //   R18  a new session and its first activity in one delta: the activity INSERT follows its session's (the foreign key)
+//        plus an UPDATE onto a parent new in the same delta (an attempt to a new session, a lineage row to a new activity): the INSERT goes first
 //   R21  the rows written do not scale with the table: the same count at 1k and at 20k activities, counted, never timed
 //   R24  a fault at each statement of a multi-row delta, the UPDATEs included, leaves SQLite as it was
 //
@@ -448,6 +449,13 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     ['a session key repeated, identically', (cp) => ({ ...cp, sessions: [...cp.sessions, cp.sessions[0]!] }), 'bad-checkpoint'],
     ['a session key repeated with other content', (cp) => ({ ...cp,
       sessions: [cp.sessions[0]!, { ...cp.sessions[0]!, claudeSessionIds: ['other'], lastObservedAt: at(25) }, ...cp.sessions.slice(1)] }), 'bad-checkpoint'],
+    // Doubly corrupt: the full path walks sessions, activities, attempts, leases, lineage in that order and the first it cannot encode
+    // decides. A table the diff declines (a repeat, a leave) is not encoded by the diff, so the delta must hand the whole answer to the full path.
+    ['a session key repeated, the repeat carrying a malformed instant', (cp) => ({ ...cp,
+      sessions: [cp.sessions[0]!, { ...cp.sessions[0]!, firstObservedAt: '2026-10-14 00:00:00' }, ...cp.sessions.slice(1)] }), 'bad-instant'],
+    ['a session that leaves, a session in next that cannot encode, and a new activity that cannot encode', (cp) => ({ ...cp,
+      sessions: [{ ...cp.sessions[0]!, effectiveBasis: ['made-up'] as unknown as DelegationSessionRow['effectiveBasis'] }, ...cp.sessions.slice(1, 3)],
+      activities: [...cp.activities, activityRow(12, natural('lane-a-demo', 'g1', 'agent', 'agent-12'), { openedAt: '2026-10-14 00:00:00' })] }), 'bad-row'],
     ['a checkpoint that is not version 1', (cp) => ({ ...cp, v: 2 as unknown as 1 }), 'bad-checkpoint'],
     ['a negative applied sequence', (cp) => ({ ...cp, appliedJournalSequence: -1 }), 'bad-checkpoint'],
     ['a fractional applied sequence', (cp) => ({ ...cp, appliedJournalSequence: 1.5 }), 'bad-checkpoint'],
@@ -780,6 +788,28 @@ describe('R18: a new session and its first activity in one delta insert the sess
       activities: [newActivity, ...w.prior.activities], sessions: [newSession, ...w.prior.sessions] };
     expect(changes(w.s, w.prior, next)).toEqual({ mode: 'delta', rows: 4 });
     expect(w.t.words()).toEqual(['insert delegation_sessions', 'insert delegation_activities', 'insert delegation_attempts', 'insert delegation_lineage']);
+    expectParity(w.s, next);
+  });
+});
+
+describe('R18 (ii): an update onto a parent that is new in the same delta inserts the parent first', () => {
+  const newSession = sessionRow('lane-e-demo', 'g1', { explicitIntentAt: at(10), effective: true, effectiveBasis: ['explicit'], firstObservedAt: at(10), lastObservedAt: at(10) });
+  it('R18 (ii): an attempt whose parent moves to a session that is new in next is a delta, the session INSERT first, and parity holds', () => {
+    const w = openWorld();
+    const next: DelegationCheckpointV1 = { ...w.prior, sessions: [...w.prior.sessions, newSession],
+      attempts: w.prior.attempts.map((a) => (a.attemptId === 'attempt-2' ? { ...a, parentId: 'lane-e-demo', parentIncarnation: 'g1' } : a)) };
+    expect(changes(w.s, w.prior, next)).toEqual({ mode: 'delta', rows: 2 });
+    expect(w.t.words(), 'the new parent is inserted before the row that points at it is updated').toEqual(['insert delegation_sessions', 'update delegation_attempts']);
+    expectParity(w.s, next);
+  });
+
+  it('R18 (ii): an activity-owned lineage row whose activity moves to an activity that is new in next is a delta, the activity INSERT first, and parity holds', () => {
+    const w = openWorld();
+    const newActivity = activityRow(13, natural('lane-a-demo', 'g1', 'agent', 'agent-13'), { openedAt: at(10), lastEventAt: at(10) });
+    const next: DelegationCheckpointV1 = { ...w.prior, activities: [...w.prior.activities, newActivity],
+      lineage: w.prior.lineage.map((n) => (n.activityId === w.prior.activities[0]!.activityId && n.leaseId === null ? { ...n, activityId: newActivity.activityId } : n)) };
+    expect(changes(w.s, w.prior, next)).toEqual({ mode: 'delta', rows: 2 });
+    expect(w.t.words()).toEqual(['insert delegation_activities', 'update delegation_lineage']);
     expectParity(w.s, next);
   });
 });
