@@ -1237,7 +1237,7 @@ function healthy(prefix: string): string {
   // roster declares one telemetry:'anthropic' account, so there is one file it
   // must have. Contents are never read by the check (or by this fixture) —
   // existence and non-emptiness are the whole question.
-  mkdirSync(join(home, '.cc-secrets'), { recursive: true }); writeFileSync(join(home, '.ccrc', 'snapshot-posture'), 'none\n');   // A11b: the stated answer
+  mkdirSync(join(home, '.cc-secrets'), { recursive: true }); writeFileSync(join(home, '.ccrc', 'snapshot-posture'), 'none\n'); plantHealthyBackupTools(home);   // A11b: the stated answer, and macOS's two tools
   writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
     'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-real-token\n', { mode: 0o600 });
   // …and it knows where its server is, and that server says the two boxes
@@ -16834,10 +16834,21 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     expect(r.code, r.stdout).toBe(0);
   });
 
-  itDarwin('a healthy macOS box, through the whole run: snapshot-posture SKIPs, and the two darwin checks answer a verdict', () => {
+  itDarwin('a healthy macOS box, through the whole run: snapshot-posture SKIPs, and the two darwin checks PASS', () => {
     const r = runDoctor(healthy('ccrc-doctor-a11b-whole-mac-'));
     expect(anyVerdictFor(r.stdout, 'snapshot-posture')).toMatch(/^SKIP snapshot-posture: /);
-    expect(lineFor(r.stdout, 'filevault')).toMatch(/^(PASS|WARN|FAIL) filevault: /);
-    expect(lineFor(r.stdout, 'secrets-backup-excluded')).toMatch(/^(PASS|WARN|FAIL) secrets-backup-excluded: /);
+    expect(lineFor(r.stdout, 'filevault')).toBe('PASS filevault: FileVault is On (fdesetup status)');
+    expect(lineFor(r.stdout, 'secrets-backup-excluded')).toBe('PASS secrets-backup-excluded: ~/.cc-secrets excluded from Time Machine (tmutil isexcluded)');
+    expect(r.code, r.stdout).toBe(0);
   });
 });
+
+/** `healthy()`'s macOS half of the A11b checks: a `tmutil` that answers `[Excluded]` and an `fdesetup` that answers
+ *  On, so a healthy Mac PASSes `secrets-backup-excluded` and `filevault` (healthy()'s contract: every check PASSes;
+ *  the contained PATH holds no system directory). Declared here, at the end, so `healthy()` calls it without moving
+ *  a line another file cites. Planted on every platform: a Linux box SKIPs both checks before either tool runs. */
+function plantHealthyBackupTools(home: string): void {
+  writeFileSync(join(stubBin(home), 'tmutil'),
+    `#!${BASH}\n[ "$1" = isexcluded ] || exit 64\nprintf '[Excluded]    %s\\n' "$2"\n`, { mode: 0o755 });
+  writeFileSync(join(stubBin(home), 'fdesetup'), `#!${BASH}\n[ "$1" = status ] || exit 64\necho 'FileVault is On.'\n`, { mode: 0o755 });
+}
