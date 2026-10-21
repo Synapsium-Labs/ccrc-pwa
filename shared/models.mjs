@@ -115,19 +115,28 @@ export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
  *  log. The cap is not raised to make them fit. */
 export const MODELS_PUSH_MAX = 300;
 
+/** Whether `message` is a string longer than the cap: the ONE place the cap is compared, read by `modelsPushOf` (which
+ *  refuses such a message) and by `modelsPushDecision` (which names that refusal `over-cap`), so the two can never
+ *  disagree on a boundary. */
+const overCap = (message) => typeof message === 'string' && message.length > MODELS_PUSH_MAX;
+
 /** The lane, class and model-id patterns without their anchors, so the three
  *  shapes below are built from `MODELS_LANE_ID_RE`, `CLASSES` and
- *  `MODEL_ID_RE` and never spell any of them a second time. */
+ *  `MODEL_ID_RE` and never spell any of them a second time; and the reason
+ *  slot of the two failure shapes, written once: up to 120 printable-ASCII
+ *  characters in brackets. */
 const pushInner = (re) => re.source.replace(/^\^/, '').replace(/\$$/, '');
 const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;
 const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;
+const PUSH_REASON = '\\([\\x20-\\x7e]{0,120}\\)';
 const PUSH_SHAPES = Object.freeze([
   ['moved', new RegExp(`${PUSH_HEAD}${PUSH_ID} → ${PUSH_ID}$`)],
-  ['canary-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: ${PUSH_ID} failed its canary \\([\\x20-\\x7e]{0,120}\\)$`)],
-  ['move-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: moving to ${PUSH_ID} failed \\([\\x20-\\x7e]{0,120}\\)$`)],
+  ['canary-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: ${PUSH_ID} failed its canary ${PUSH_REASON}$`)],
+  ['move-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: moving to ${PUSH_ID} failed ${PUSH_REASON}$`)],
 ]);
 
-/** The ONE reader of the advance step's push lines (auto-advance spec §3.8;
+/** The ONE reader of the advance step's push lines (the auto-advance plan's
+ *  `### 3.8 Push`, docs/superpowers/plans/2026-10-15-model-class-auto-advance-codex-arm.md;
  *  `ccd/ccrc`'s receipt program and its `recovered` definition write them):
  *  `{lane, cls, kind}` for a message of exactly one of the three shapes
  *    `<lane>: <class> <from|none> → <to>`                                        kind `moved`
@@ -140,7 +149,7 @@ const PUSH_SHAPES = Object.freeze([
  *  characters. It is a PARSER only: whether a line may reach a phone is
  *  `modelsPushDecision`'s, which calls it. */
 export function modelsPushOf(message) {
-  if (typeof message !== 'string' || message.length > MODELS_PUSH_MAX) return null;
+  if (typeof message !== 'string' || overCap(message)) return null;
   for (const [kind, re] of PUSH_SHAPES) {
     const m = re.exec(message);
     if (m !== null) return { lane: m[1], cls: m[2], kind };
@@ -149,14 +158,13 @@ export function modelsPushOf(message) {
 }
 
 /** THE POLICY OF `POST /api/notify`'s `push: true` (auto-advance plan W2
- *  Task 12, D-5211, ruling RB10): pure, no I/O, no Fastify, no push call. The box
- *  token proves only "a process on the fleet box" (`deploy/notify.sh`'s own
- *  header), so the route will not turn free text into a phone notice under a
- *  system title: a message may go to the phone only when `modelsPushOf` reads
- *  it AND its lane is a row of `roster` whose `exec.kind` is `codex`. The
- *  roster arrives as a PARAMETER, anything with a `get(laneId)` that answers
- *  the lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`,
- *  is one), so this file reads no file and imports nothing.
+ *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
+ *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
+ *  so the route sends a message to the phone only when `modelsPushOf` reads it
+ *  AND its lane is a row of `roster` whose `exec.kind` is `codex`. The roster
+ *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
+ *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
+ *  one), so this file reads no file and imports nothing.
  *
  *  Answers one of two shapes, and never a bare null: `{verdict: 'pushable',
  *  lane, cls, kind, tag}` or `{verdict: 'refused', reason}` with the reason one
@@ -165,22 +173,26 @@ export function modelsPushOf(message) {
  *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
  *    `unknown-lane`      a model line of a lane the roster has no row for
  *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
- *  The roster is asked only about a line that matched, once. The tag is per
- *  lane AND class (D-5212): a phone REPLACES a notification that carries the
- *  same tag (`pwa/public/push-sw.js`), so a constant tag would let a second
- *  move or failure in one run erase the first. RESIDUAL, accepted for the
- *  auto-advance plan (ruling RC6) and stated here, not hidden: a box-token
- *  holder can still send a WELL-SHAPED line for a codex-kind lane (attribution,
- *  not authentication), and a models push gets no feed record and no per-(lane,
- *  class) rate cap. */
+ *  The last two also carry the `lane` (grammar-checked, so safe to print), for
+ *  the operator's remedy. The roster is asked only about a line that matched,
+ *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
+ *  notification that carries the same tag (`pwa/public/push-sw.js`), so a
+ *  constant tag would let a second move or failure in one run erase the first.
+ *
+ *  WHAT A PUSHABLE LINE CAN CARRY, stated exactly: the lane, the class and the
+ *  model ids are grammar-checked, but a model id may be URL-shaped (`:` and `/`
+ *  are in MODEL_ID_RE) and the reason slot of a failure line takes up to 120
+ *  characters of ANY printable ASCII. So a box-token holder can put a sentence
+ *  of up to 120 characters in the reason slot of a well-shaped failure line for
+ *  a codex-kind lane and have it pushed under the title "Model classes"
+ *  (attribution, not authentication); a models push also gets no feed record
+ *  and no per-(lane, class) rate cap. That residual is accepted (D-5211). */
 export function modelsPushDecision(message, roster) {
   const line = modelsPushOf(message);
-  if (line === null) {
-    return { verdict: 'refused', reason: typeof message === 'string' && message.length > MODELS_PUSH_MAX ? 'over-cap' : 'not-a-model-line' };
-  }
+  if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
   const row = roster.get(line.lane);
-  if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane' };
-  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane' };
+  if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
+  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
   return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
 }
 

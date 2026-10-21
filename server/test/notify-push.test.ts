@@ -1,22 +1,23 @@
 // The advance step's push (auto-advance spec §2.3 steps 5 and 6; plan W2 Task 12): `deploy/notify.sh --push`,
 // `POST /api/notify`'s `push: true`, the one reader of a models push line (`modelsPushOf`) and the pure policy that
-// decides which of those lines reach a phone (`modelsPushDecision`, ruling RB10). The script runs against a fixture HOME
+// decides which of those lines reach a phone (`modelsPushDecision`). The script runs against a fixture HOME
 // whose PATH holds a recording `curl` stub and the real tools it shells out to (`notify-addr.test.ts`'s arrangement):
 // the network call never fires. The route runs in-process with a fake push service and a roster of neutral fixture
 // lanes. The advance step's own messages are rendered by the REAL jq programs of `ccd/ccrc`, sourced in a fixture HOME
-// (ruling T12-1): no test here keeps a copy of a message template. Neutral ids only: this repository is public.
+// (no test here keeps a copy of a message template). Neutral ids only: this repository is public.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, reloadRoster } from '../src/config.js';
 import type { PushPayload, PushService } from '../src/push.js';
 import {
-  CLASSES, MODEL_ID_RE, MODELS_PUSH_MAX, modelsPushDecision, modelsPushOf, type ModelsPushRoster,
+  CLASSES, MODEL_ID_RE, MODELS_PUSH_MAX, modelsPushDecision, modelsPushOf,
+  type ModelsPushDecision, type ModelsPushKind, type ModelsPushRefusal, type ModelsPushRoster,
 } from '../../shared/models.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -45,8 +46,9 @@ const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
 
 const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind lane';
 
-/** A recording `curl` stand-in: the argv it saw, one word to a line, in `$HOME/curl-argv`; its stdin drained; rc 0. */
-const CURL_STUB = '#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done > "$HOME/curl-argv"\ncat > /dev/null\nexit 0\n';
+/** A recording `curl` stand-in: the argv it saw, one word to a line, in `$HOME/curl-argv`, and its stdin, byte for byte,
+ *  in `$HOME/curl-stdin`; rc 0. */
+const CURL_STUB = '#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done > "$HOME/curl-argv"\ncat > "$HOME/curl-stdin"\nexit 0\n';
 
 /** A fixture HOME with a recording `curl` in `stub-bin`, the real tools notify.sh shells out to, and a box token. */
 function notifyHome(): { home: string; bin: string } {
@@ -63,39 +65,52 @@ const curlArgv = (home: string): string[] => {
   const p = path.join(home, 'curl-argv');
   return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter((l) => l !== '') : [];
 };
+const curlStdin = (home: string): string => {
+  const p = path.join(home, 'curl-stdin');
+  return existsSync(p) ? readFileSync(p, 'utf8') : '';
+};
 const bodyArg = (argv: string[]): string => argv[argv.indexOf('-d') + 1]!;
+const TOKEN_ON_BOX = 'y'.repeat(64);
 
-/** Runs the real `deploy/notify.sh` with `args`; answers the argv its `curl` saw. */
-function runNotify(args: string[]): string[] {
+/** Runs the real `deploy/notify.sh` with `args`; answers the argv its `curl` saw and the stdin it was fed. */
+function runNotify(args: string[]): { argv: string[]; stdin: string } {
   const { home, bin } = notifyHome();
   const r = spawnSync(BASH, [NOTIFY_SH, ...args],
     { env: { HOME: home, PATH: bin, CCRC_ADDR: 'http://127.0.0.1:9' }, encoding: 'utf8', input: '' });
   expect(r.status, r.stderr).toBe(0);
-  return curlArgv(home);
+  return { argv: curlArgv(home), stdin: curlStdin(home) };
 }
 
 describe('deploy/notify.sh --push (plan W2 Task 12)', () => {
   it('without the flag the body is exactly what it was', () => {
-    expect(bodyArg(runNotify([MOVED]))).toBe(JSON.stringify({ message: MOVED }));
+    expect(bodyArg(runNotify([MOVED]).argv)).toBe(JSON.stringify({ message: MOVED }));
   });
 
   it('a leading --push adds push:true, and the message is the next word', () => {
-    expect(bodyArg(runNotify(['--push', MOVED]))).toBe(JSON.stringify({ message: MOVED, push: true }));
+    expect(bodyArg(runNotify(['--push', MOVED]).argv)).toBe(JSON.stringify({ message: MOVED, push: true }));
   });
 
   it('only a LEADING --push is the flag: one later in the message is sent as it is', () => {
-    expect(bodyArg(runNotify(['cc swap: s1 moved lane-a -> lane-b --push']))).toBe(
+    expect(bodyArg(runNotify(['cc swap: s1 moved lane-a -> lane-b --push']).argv)).toBe(
       JSON.stringify({ message: 'cc swap: s1 moved lane-a -> lane-b --push' }));
   });
 
   it('the flag is consumed once: a second --push is the message itself', () => {
-    expect(bodyArg(runNotify(['--push', '--push']))).toBe(JSON.stringify({ message: '--push', push: true }));
+    expect(bodyArg(runNotify(['--push', '--push']).argv)).toBe(JSON.stringify({ message: '--push', push: true }));
   });
 
-  it('the token still rides curl\'s stdin and the address is still the one asked for, with the flag', () => {
-    const argv = runNotify(['--push', MOVED]);
-    expect(argv.join('\n')).not.toContain('y'.repeat(64));
+  it('with the flag, the box token reaches curl on stdin as the -K config line and is nowhere in argv', () => {
+    const { argv, stdin } = runNotify(['--push', MOVED]);
+    expect(stdin).toBe(`header = "x-ccrc-mail-token: ${TOKEN_ON_BOX}"\n`);
+    expect(argv.join('\n')).not.toContain(TOKEN_ON_BOX);
+    expect(argv.slice(argv.indexOf('-K'), argv.indexOf('-K') + 2)).toEqual(['-K', '-']);
     expect(argv).toContain('http://127.0.0.1:9/api/notify');
+  });
+
+  it('its header usage line says the flag: [--push] <message>', () => {
+    const usage = readFileSync(NOTIFY_SH, 'utf8').split('\n').find((l) => l.startsWith('# ccd swap hook'));
+    expect(usage, 'notify.sh has no "# ccd swap hook" header line').toBeDefined();
+    expect(usage).toContain('[--push] <message>');
   });
 
   it('its header comment does not spell the two assignments the token slice is cut between (the slice must start at the real ones)', () => {
@@ -108,20 +123,20 @@ describe('deploy/notify.sh --push (plan W2 Task 12)', () => {
   });
 });
 
-describe('the real _models_push and the real notify.sh agree on the call (ruling T12-2)', () => {
+describe('the real _models_push and the real notify.sh agree on the call: --push first, then the message', () => {
   it('_models_push hands the hook --push first and the message second, and the body carries push:true', () => {
     const { home, bin } = notifyHome();
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     copyFileSync(NOTIFY_SH, path.join(home, '.cc-sessions', 'notify.sh'));
     chmodSync(path.join(home, '.cc-sessions', 'notify.sh'), 0o755);
-    const env = { ...cleanEnv(), HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, CCRC_ADDR: 'http://127.0.0.1:9' };
+    const env = ghContainedEnv(home, { ...cleanEnv(), HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, CCRC_ADDR: 'http://127.0.0.1:9' });
     const r = spawnSync(BASH, ['-c', `umask 022\n. ${q(CCRC_SRC)}\n_models_push ${q(MOVED)}`], { env, encoding: 'utf8', input: '' });
     expect(r.status, r.stderr).toBe(0);
     expect(bodyArg(curlArgv(home))).toBe(JSON.stringify({ message: MOVED, push: true }));
   });
 });
 
-describe('modelsPushDecision, the policy of push:true (plan W2 Task 12, ruling RB10)', () => {
+describe('modelsPushDecision, the policy of push:true (plan W2 Task 12)', () => {
   const lanes: ModelsPushRoster = new Map([
     ['lane-a', { exec: { kind: 'codex' } }], ['lane-b', { exec: { kind: 'codex' } }],
     ['lane-c', { exec: { kind: 'generated' } }], ['lane-up', { exec: { kind: 'upstream' } }],
@@ -131,23 +146,34 @@ describe('modelsPushDecision, the policy of push:true (plan W2 Task 12, ruling R
     [MOVED, { lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
     [CANARY_FAILED, { lane: 'lane-a', cls: 'haiku', kind: 'canary-failed', tag: 'models-advance:lane-a:haiku' }],
     [MOVE_FAILED, { lane: 'lane-b', cls: 'sonnet', kind: 'move-failed', tag: 'models-advance:lane-b:sonnet' }],
+    // THE ACCEPTED RESIDUAL, measured rather than discovered: a well-shaped line carries up to 120 characters of any
+    // printable ASCII in its reason slot, and model ids may be URL-shaped (`:` and `/` are in MODEL_ID_RE).
+    ['lane-a: opus stays on none: model-6-alpha failed its canary (Re-authenticate now at https://example.invalid/login)',
+      { lane: 'lane-a', cls: 'opus', kind: 'canary-failed', tag: 'models-advance:lane-a:opus' }],
+    ['lane-a: opus https://example.invalid/x → https://example.invalid/y',
+      { lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
   ] as [string, Record<string, string>][])('%s is pushable, with the tag of its lane and class', (message, want) => {
     expect(modelsPushDecision(message, lanes)).toEqual({ verdict: 'pushable', ...want });
   });
 
   it.each([
-    ['a cc swap: notice', 'cc swap: s1 moved lane-a -> lane-b', 'not-a-model-line'],
-    ['free text', 'lane-a: re-authenticate at http://example.invalid now', 'not-a-model-line'],
-    ['a word that is not a class', 'lane-a: subagent model-5.6-gamma → model-6.1-gamma', 'not-a-model-line'],
-    ['a second line', `${MOVED}\nlane-a: opus x → y`, 'not-a-model-line'],
-    ['a lane the roster does not have', 'lane-z: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane'],
-    ['a lane of generated kind', 'lane-c: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane'],
-    ['the upstream lane', 'lane-up: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane'],
+    ['a cc swap: notice', 'cc swap: s1 moved lane-a -> lane-b', 'not-a-model-line', undefined],
+    ['free text', 'lane-a: re-authenticate at http://example.invalid now', 'not-a-model-line', undefined],
+    ['a word that is not a class', 'lane-a: subagent model-5.6-gamma → model-6.1-gamma', 'not-a-model-line', undefined],
+    ['a second line', `${MOVED}\nlane-a: opus x → y`, 'not-a-model-line', undefined],
+    ['a lane the roster does not have', 'lane-z: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'lane-z'],
+    ['a lane of generated kind', 'lane-c: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane', 'lane-c'],
+    ['the upstream lane', 'lane-up: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane', 'lane-up'],
+    // A key every object inherits, and a valid lane word (lowercase letters): it is not a roster row.
+    ['a lane named like an inherited object key', 'constructor: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'constructor'],
     ['a well-shaped line one character over the cap',
-      `lane-a: opus stays on ${'m'.repeat(128)}: ${'n'.repeat(128)} failed its canary ()`, 'over-cap'],
-    ['free text over the cap', 'x'.repeat(MODELS_PUSH_MAX + 1), 'over-cap'],
-  ] as [string, string, string][])('%s is refused, and the refusal names why', (_w, message, reason) => {
-    expect(modelsPushDecision(message, lanes)).toEqual({ verdict: 'refused', reason });
+      `lane-a: opus stays on ${'m'.repeat(128)}: ${'n'.repeat(128)} failed its canary ()`, 'over-cap', undefined],
+    // The boundary of the over-cap reason: exactly the cap is NOT over it, one more is.
+    ['free text of exactly the cap', 'x'.repeat(MODELS_PUSH_MAX), 'not-a-model-line', undefined],
+    ['free text one character over the cap', 'x'.repeat(MODELS_PUSH_MAX + 1), 'over-cap', undefined],
+  ] as [string, string, string, string | undefined][])('%s is refused, and the refusal names why', (_w, message, reason, lane) => {
+    expect(modelsPushDecision(message, lanes)).toEqual(
+      lane === undefined ? { verdict: 'refused', reason } : { verdict: 'refused', reason, lane });
   });
 
   it.each([[42], [undefined], [null], [{ message: MOVED }]] as [unknown][])(
@@ -168,11 +194,11 @@ describe('modelsPushDecision, the policy of push:true (plan W2 Task 12, ruling R
   it('the decision follows the roster it is given: the same line is pushable for one roster and refused for another', () => {
     const flipped: ModelsPushRoster = new Map([['lane-a', { exec: { kind: 'external' } }]]);
     expect(modelsPushDecision(MOVED, lanes).verdict).toBe('pushable');
-    expect(modelsPushDecision(MOVED, flipped)).toEqual({ verdict: 'refused', reason: 'not-a-codex-lane' });
-    expect(modelsPushDecision(MOVED, new Map())).toEqual({ verdict: 'refused', reason: 'unknown-lane' });
+    expect(modelsPushDecision(MOVED, flipped)).toEqual({ verdict: 'refused', reason: 'not-a-codex-lane', lane: 'lane-a' });
+    expect(modelsPushDecision(MOVED, new Map())).toEqual({ verdict: 'refused', reason: 'unknown-lane', lane: 'lane-a' });
   });
 
-  describe('the cap (ruling item 4: the cap stays, and what it refuses is stated)', () => {
+  describe('the cap: it stays at 300, and what it refuses is stated', () => {
     const longest = Math.max(...CLASSES.map((c) => c.length));
     const widest = CLASSES.find((c) => c.length === longest)!;
     const laneId = 'a'.repeat(32);
@@ -204,13 +230,14 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   const TOKEN = 'f'.repeat(64);
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; vi.restoreAllMocks(); });
-  /** A server whose roster has lane-a and lane-b codex-kind, lane-c an Anthropic lane, and no lane-z. Its ports are
-   *  pure-parse: nothing here connects to them. */
-  const lanesDeps = (): Deps => {
+  const LANE_A = { proxyPort: 45020, litellmPort: 45021, authDir: codexAuthDir('lane-a') };
+  const LANE_B = { proxyPort: 45030, litellmPort: 45031, authDir: codexAuthDir('lane-b') };
+  /** A server whose roster has lane-a and (unless `laneBCodex` is false) lane-b codex-kind, lane-c an Anthropic lane,
+   *  and no lane-z. Its ports are pure-parse: nothing here connects to them. */
+  const lanesDeps = (laneBCodex = true): Deps => {
     const h = mkTmp('ccrc-');
     const d = testDeps(h);
-    seedRoster(h, stepRoster({ proxyPort: 45020, litellmPort: 45021, authDir: codexAuthDir('lane-a') },
-      { proxyPort: 45030, litellmPort: 45031, authDir: codexAuthDir('lane-b') }));
+    seedRoster(h, laneBCodex ? stepRoster(LANE_A, LANE_B) : stepRoster(LANE_A));
     return { ...d, cfg: loadConfig({ CCRC_HOME: h }) };
   };
   const fakePush = (impl: (p: PushPayload) => Promise<void> = async () => {}) => {
@@ -259,14 +286,15 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   });
 
   it.each([
-    ['a cc swap: notice', 'cc swap: s1 moved lane-a -> lane-b', 'not-a-model-line'],
-    ['a lane the roster does not have', 'lane-z: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane'],
-    ['a lane that is not codex-kind', 'lane-c: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane'],
-    ['a word that is not a class', 'lane-a: subagent model-5.6-gamma → model-6.1-gamma', 'not-a-model-line'],
-    ['free text', 'lane-a: re-authenticate at http://example.invalid now', 'not-a-model-line'],
+    ['a cc swap: notice', 'cc swap: s1 moved lane-a -> lane-b', 'not-a-model-line', undefined],
+    ['a lane the roster does not have', 'lane-z: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'lane-z'],
+    ['a lane that is not codex-kind', 'lane-c: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane', 'lane-c'],
+    ['a lane named like an inherited object key', 'constructor: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'constructor'],
+    ['a word that is not a class', 'lane-a: subagent model-5.6-gamma → model-6.1-gamma', 'not-a-model-line', undefined],
+    ['free text', 'lane-a: re-authenticate at http://example.invalid now', 'not-a-model-line', undefined],
     ['a well-shaped line over the length cap',
-      `lane-a: opus stays on ${'m'.repeat(128)}: ${'n'.repeat(128)} failed its canary (${'x'.repeat(20)})`, 'over-cap'],
-  ] as [string, string, string][])('push:true on %s gives the banner, no phone push, and one warning naming why', async (_w, message, reason) => {
+      `lane-a: opus stays on ${'m'.repeat(128)}: ${'n'.repeat(128)} failed its canary (${'x'.repeat(20)})`, 'over-cap', undefined],
+  ] as [string, string, string, string | undefined][])('push:true on %s gives the banner, no phone push, and one warning naming why', async (_w, message, reason, lane) => {
     // Review Focus: a box-token holder is any process on the fleet box (notify.sh's own header), so push:true is
     // honoured only for the advance step's lines.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -282,6 +310,76 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(said).toHaveLength(1);
     expect(said[0]).toContain(`(${reason})`);
     expect(said[0], 'the refusal must not echo the message').not.toContain(message.slice(0, 40));
+    // A refusal about a lane names the lane and the remedy; one about the message names neither.
+    if (lane !== undefined) {
+      expect(said[0]).toContain(`lane ${lane} must exist and carry exec.kind "codex"`);
+      expect(said[0]).toContain("the server box's roster row");
+    } else {
+      expect(said[0]).not.toContain('exec.kind');
+    }
+  });
+
+  it('a refusal about a lane prints the lane id and the remedy, and none of the message (the reason slot is free text)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = fakePush();
+    app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
+    const secret = 'Re-authenticate at https://example.invalid/login';
+    for (const lane of ['lane-z', 'lane-c']) {
+      const message = `${lane}: opus stays on none: model-6-alpha failed its canary (${secret})`;
+      expect((await post(app, { message, push: true })).statusCode).toBe(200);
+    }
+    const said = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
+    expect(said).toHaveLength(2);
+    expect(said[0]).toContain('lane lane-z must exist and carry exec.kind "codex"');
+    expect(said[0]).toContain('(unknown-lane)');
+    expect(said[1]).toContain('lane lane-c must exist and carry exec.kind "codex"');
+    expect(said[1]).toContain('(not-a-codex-lane)');
+    for (const l of said) {
+      for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {
+        expect(l, `the warning echoes "${leaked}"`).not.toContain(leaked);
+      }
+    }
+    expect(p.notify).not.toHaveBeenCalled();
+  });
+
+  it('the roster is read at each request: a lane that becomes codex-kind is pushable from the next request, and one that stops is refused again', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = fakePush();
+    const d = lanesDeps(false);   // lane-b is external-kind at boot
+    app = await buildServer({ ...d, mailToken: TOKEN, push: p.push });
+    const refusals = (): string[] => warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
+    // The roster changes the way the server changes it: reloadRoster reassigns cfg.roster in place.
+    const reload = (roster: unknown): void => {
+      const r = reloadRoster(d.cfg, { roster, fleetIdentity: 'fleet-x', fingerprints: null }, { fleetIdentity: () => 'fleet-x' });
+      expect(r).toEqual({ ok: true, changed: true });
+    };
+    expect((await post(app, { message: MOVED_B, push: true })).statusCode).toBe(200);
+    expect(p.notify).not.toHaveBeenCalled();
+    expect(refusals()).toHaveLength(1);
+    expect(refusals()[0]).toContain('(not-a-codex-lane)');
+
+    reload(stepRoster(LANE_A, LANE_B));   // lane-b becomes codex-kind
+    expect((await post(app, { message: MOVED_B, push: true })).statusCode).toBe(200);
+    expect(p.notify).toHaveBeenCalledTimes(1);
+    expect(p.notify.mock.calls[0]![0].tag).toBe('models-advance:lane-b:opus');
+    expect(refusals()).toHaveLength(1);
+
+    reload(stepRoster(LANE_A));           // and stops being
+    expect((await post(app, { message: MOVED_B, push: true })).statusCode).toBe(200);
+    expect(p.notify).toHaveBeenCalledTimes(1);
+    expect(refusals()).toHaveLength(2);
+  });
+
+  it('the response never waits for the push: a push service whose notify never resolves still answers 200 within 3 seconds', async () => {
+    const p = fakePush(() => new Promise<void>(() => {}));
+    app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
+    let timer: NodeJS.Timeout | undefined;
+    const bound = new Promise<'timed-out'>((resolve) => { timer = setTimeout(() => resolve('timed-out'), 3000); });
+    const res = await Promise.race([post(app, { message: MOVED, push: true }), bound]);
+    clearTimeout(timer);
+    expect(res, 'the route waited for a push that never resolves').not.toBe('timed-out');
+    expect((res as { statusCode: number }).statusCode).toBe(200);
+    expect(p.notify).toHaveBeenCalledTimes(1);
   });
 
   it('with no VAPID keys there is no push service: push:true on a model line answers 200, throws nothing and warns nothing', async () => {
@@ -291,7 +389,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('/api/notify'))).toEqual([]);
   });
 
-  it('with no push service the eligibility is still decided: push:true on a line that is no model line still warns (ruling item 3)', async () => {
+  it('with no push service the eligibility is still decided: push:true on a line of a lane that is not codex-kind still warns', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     app = await buildServer({ ...lanesDeps(), mailToken: TOKEN });
     expect((await post(app, { message: 'lane-c: opus model-5.6-gamma → model-6.1-gamma', push: true })).statusCode).toBe(200);
@@ -383,7 +481,7 @@ describe('modelsPushOf, the one reader of a models push line (plan W2 Task 12)',
   });
 });
 
-/** The advance step's REAL jq programs, in `ccd/ccrc` sourced in a fixture HOME (ruling T12-1). Nothing here reaches a
+/** The advance step's REAL jq programs, in `ccd/ccrc` sourced in a fixture HOME. Nothing here reaches a
  *  live HOME, a registry, tmux or the network: HOME is a `mkTmp` directory and the `curl` first on PATH is a recording
  *  stand-in. */
 function inCcrc(call: string, stdin = '', edit?: (src: string) => string): { code: number; stdout: string; stderr: string } {
@@ -411,7 +509,7 @@ function receiptPushes(kind: 'backfill' | 'commit', args: [string, string, strin
 const commitAnswer = (o: Record<string, unknown>): Record<string, unknown> =>
   ({ ok: true, op: 'advance-commit', id: 'lane-a', class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', push: true, recovered: false, ...o });
 
-describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12, ruling T12-1)', () => {
+describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12)', () => {
   it.each([
     ['a move', commitAnswer({ outcome: 'moved' }), 'passed', 'moved'],
     ['a failed canary', commitAnswer({ outcome: 'failed', reason: 'http 500: upstream error' }), 'failed', 'canary-failed'],
@@ -477,7 +575,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
   });
 });
 
-describe('the check is not vacuous: a message template that drifts from modelsPushOf is caught (ruling T12-1)', () => {
+describe('the check is not vacuous: a message template that drifts from modelsPushOf is caught', () => {
   // Each case sources a COPY of ccd/ccrc whose text has drifted in one place, renders the same line the real one renders,
   // and expects the reader to refuse it. `replaceAll` of a phrase that is not there would drift nothing, so each edit
   // asserts it found its phrase.
@@ -511,10 +609,96 @@ describe('the check is not vacuous: a message template that drifts from modelsPu
     expect(modelsPushOf(drifted[0]!), drifted[0]).toBeNull();
   });
 
-  it('the recovered line: a hand-verb and receipt line whose arrow drifted is refused', () => {
+  it('the recovered move: the line the receipt builds AND the line a hand verb builds are each refused once the arrow drifts', () => {
     const answer = { ok: true, op: 'advance-backfill', id: 'lane-a', recoveredMove: { class: 'sonnet', from: 'model-5.6-beta', to: 'model-6-beta', how: 'advance' } };
-    const drifted = receiptPushes('backfill', ['lane-a', '-', '-', '-', '-'], answer, drift(' → ', ' -> '));
-    expect(drifted).toHaveLength(1);
-    expect(modelsPushOf(drifted[0]!), drifted[0]).toBeNull();
+    const handCall = `_models_push() { printf '%s\\n' "$1"; }\n_models_hand_settled lane-a ${q(JSON.stringify(answer))}`;
+    // Controls: the real file's two lines are read.
+    const realReceipt = receiptPushes('backfill', ['lane-a', '-', '-', '-', '-'], answer);
+    expect(realReceipt).toHaveLength(1);
+    expect(modelsPushOf(realReceipt[0]!), realReceipt[0]).not.toBeNull();
+    const realHand = inCcrc(handCall);
+    expect(realHand.code, realHand.stderr).toBe(0);
+    expect(modelsPushOf(realHand.stdout.trim()), realHand.stdout).not.toBeNull();
+    // Drifted.
+    const viaReceipt = receiptPushes('backfill', ['lane-a', '-', '-', '-', '-'], answer, drift(' → ', ' -> '));
+    expect(viaReceipt).toHaveLength(1);
+    expect(modelsPushOf(viaReceipt[0]!), viaReceipt[0]).toBeNull();
+    const viaHand = inCcrc(handCall, '', drift(' → ', ' -> '));
+    expect(viaHand.code, viaHand.stderr).toBe(0);
+    expect(viaHand.stdout.trim(), 'the hand verb built no line').not.toBe('');
+    expect(modelsPushOf(viaHand.stdout.trim()), viaHand.stdout).toBeNull();
+  });
+});
+
+describe('the push patterns are derived from their owners, and each rule is written once (text pins on shared/models.mjs)', () => {
+  const src = readFileSync(path.join(REPO, 'shared', 'models.mjs'), 'utf8');
+  const count = (re: RegExp): number => src.match(re)?.length ?? 0;
+
+  it('PUSH_HEAD and PUSH_ID are built from pushInner(MODELS_LANE_ID_RE), CLASSES.join and pushInner(MODEL_ID_RE)', () => {
+    expect(src).toContain("const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;");
+    expect(src).toContain('const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;');
+  });
+
+  it('the lane and model-id repetition literals each occur once in the whole file: their definitions', () => {
+    expect(count(/\{0,31\}/g), 'the lane pattern is spelled a second time').toBe(1);
+    expect(count(/\{0,127\}/g), 'the model-id pattern is spelled a second time').toBe(1);
+  });
+
+  it('the reason grammar is written once, and the cap is compared in one place', () => {
+    expect(count(/\{0,120\}/g), 'the reason limit is spelled more than once').toBe(1);
+    expect(count(/x20-\\+x7e/g), 'the reason alphabet is spelled more than once').toBe(1);
+    expect(count(/[<>]=?\s*MODELS_PUSH_MAX/g), 'the cap is compared in more than one place').toBe(1);
+  });
+});
+
+describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6)', () => {
+  // The notify funnel (notice.ts) is the one way a notice is raised; two callers still reach the push service directly:
+  // the watcher's release sender and /api/notify's models push, which has no session and, by D-5211, no feed record.
+  // The design's K6 funnel (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will
+  // absorb them. This list is what that wave finds them by, and a new direct caller is red until it is argued here.
+  const SRC = path.join(REPO, 'server', 'src');
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : []);
+  const callers = (): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const f of walk(SRC)) {
+      const n = readFileSync(f, 'utf8').split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .filter((l) => /\.notify\(/.test(l)).length;
+      if (n > 0) out[path.relative(SRC, f)] = n;
+    }
+    return out;
+  };
+
+  it('are the funnel, the watcher\'s release sender and this route, once each, and no others', () => {
+    expect(callers()).toEqual({ 'notice.ts': 1, 'server.ts': 1, 'watch.ts': 1 });
+  });
+});
+
+describe('the policy\'s types are held by a consumer, so typecheck-tests holds their parity', () => {
+  // Record<Union, true> is exhaustive in both directions: a word added to, removed from or renamed in the declaration is a
+  // compile error here, and the runtime checks below tie the same words to what the code produces.
+  const KIND_WORDS: Record<ModelsPushKind, true> = { moved: true, 'canary-failed': true, 'move-failed': true };
+  const REFUSAL_WORDS: Record<ModelsPushRefusal, true> = {
+    'not-a-model-line': true, 'over-cap': true, 'unknown-lane': true, 'not-a-codex-lane': true,
+  };
+  const VERDICTS: Record<ModelsPushDecision['verdict'], true> = { pushable: true, refused: true };
+  const roster: ModelsPushRoster = new Map([['lane-a', { exec: { kind: 'codex' } }], ['lane-c', { exec: { kind: 'generated' } }]]);
+
+  it('every kind modelsPushOf reads is a ModelsPushKind, and every ModelsPushKind is read', () => {
+    const read = [MOVED, CANARY_FAILED, MOVE_FAILED].map((m) => modelsPushOf(m)!.kind);
+    expect([...new Set(read)].sort()).toEqual(Object.keys(KIND_WORDS).sort());
+  });
+
+  it('every refusal word the policy produces is a ModelsPushRefusal, and every ModelsPushRefusal is produced', () => {
+    const decisions: ModelsPushDecision[] = [
+      modelsPushDecision('cc swap: s1 moved lane-a -> lane-b', roster),
+      modelsPushDecision('x'.repeat(MODELS_PUSH_MAX + 1), roster),
+      modelsPushDecision('lane-z: opus model-5.6-gamma → model-6.1-gamma', roster),
+      modelsPushDecision('lane-c: opus model-5.6-gamma → model-6.1-gamma', roster),
+    ];
+    const reasons = decisions.flatMap((d) => (d.verdict === 'refused' ? [d.reason] : []));
+    expect([...new Set(reasons)].sort()).toEqual(Object.keys(REFUSAL_WORDS).sort());
+    expect([...new Set([...decisions, modelsPushDecision(MOVED, roster)].map((d) => d.verdict))].sort()).toEqual(Object.keys(VERDICTS).sort());
   });
 });

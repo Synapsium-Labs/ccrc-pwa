@@ -28,7 +28,7 @@ export declare const MODEL_ID_RE: RegExp;
 export declare const MODELS_LANE_ID_RE: RegExp;
 export declare const MODELS_RESERVED_IDS: readonly string[];
 // Auto-advance plan W2 Task 12: the one reader of a models push line, its length cap and the pure policy of
-// `/api/notify`'s `push: true` (ruling RB10), each defined once in `shared/models.mjs`.
+// `/api/notify`'s `push: true`, each defined once in `shared/models.mjs`.
 export declare const MODELS_PUSH_MAX: number;
 export type ModelsPushKind = 'moved' | 'canary-failed' | 'move-failed';
 export declare function modelsPushOf(
@@ -39,10 +39,12 @@ export declare function modelsPushOf(
 export interface ModelsPushRoster {
   get(lane: string): { readonly exec: { readonly kind: string } } | undefined;
 }
-export type ModelsPushRefusal = 'not-a-model-line' | 'over-cap' | 'unknown-lane' | 'not-a-codex-lane';
 export type ModelsPushDecision =
   | { verdict: 'pushable'; lane: string; cls: ModelClass; kind: ModelsPushKind; tag: string }
-  | { verdict: 'refused'; reason: ModelsPushRefusal };
+  | { verdict: 'refused'; reason: 'not-a-model-line' | 'over-cap' }
+  | { verdict: 'refused'; reason: 'unknown-lane' | 'not-a-codex-lane'; lane: string };
+/** Every word a refusal can carry, derived from the decision so the two cannot differ. */
+export type ModelsPushRefusal = Extract<ModelsPushDecision, { verdict: 'refused' }>['reason'];
 export declare function modelsPushDecision(message: unknown, roster: ModelsPushRoster): ModelsPushDecision;
 export declare class RegistryInvalid extends Error { readonly field: string }
 export declare class CatalogueInvalid extends Error {}

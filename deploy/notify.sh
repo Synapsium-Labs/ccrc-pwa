@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set +x +a   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below. +x: an inherited xtrace would print it; +a: an inherited allexport (an exported SHELLOPTS) would export `tok` into curl's environment.
 umask 077
-# ccd swap hook -> ccrc. $1 = human-readable message.
+# ccd swap hook -> ccrc. Usage: notify.sh [--push] <message>, the message being human-readable text.
 #
 # The token authenticates THE BOX, which is the honest unit: every fleet session
 # runs as one UNIX user and can read this file, so it proves "a process on the
