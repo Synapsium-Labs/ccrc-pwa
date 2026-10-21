@@ -1,11 +1,10 @@
 // D-5848 (ARCH-01, #526; consolidation spec §5.2): the god-file growth check.
 // Net code-line growth of the listed files against the merge-base with
-// `origin/main`, one stripper per language (`growthCheck.ts`). It REPORTS: a file
-// that grew by more than GROWTH_LIMIT net code lines is printed with
-// `console.warn` and named in the `GROWTH_OVER` list, and the suite stays green
-// until the operator arms it (OA-C2), one commit that flips GROWTH_ARMED and
-// nothing else. No per-file absolute constant lives here, so two PRs in flight
-// cannot conflict on this file.
+// `origin/main`, one stripper per language (`growthCheck.ts`). It reported only
+// (`console.warn` and the `GROWTH_OVER` list) until the operator armed it on
+// 2026-10-21 (OA-C2, D-6178); a listed file that grows by more than
+// GROWTH_LIMIT net code lines now fails its row. No per-file absolute constant
+// lives here, so two PRs in flight cannot conflict on this file.
 //
 // It reads `.git` (`git merge-base`, `git show`), so the CI selector's rule 2
 // (ALWAYS) runs it on every PR without a workflow edit. Outside CI (no `CI` in
@@ -31,8 +30,9 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 
-/** Flipped to `true` by OA-C2 in one commit and nothing else. */
-const GROWTH_ARMED = false;
+/** Armed by OA-C2 (D-6178), ruled by the operator on 2026-10-21: a listed file
+ *  over the limit now fails its row. */
+const GROWTH_ARMED = true;
 
 /** The union of spec §5.2 and the ARCH-01 ticket. */
 const GROWTH_FILES = [
