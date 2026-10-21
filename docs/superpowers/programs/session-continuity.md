@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deploy AGENT-FIRST via ccrc's updater, then Task 5's week |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -935,6 +935,24 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     programme open. That wave stays deferred, as the operator ruled on 2026-10-20.
   - **Owed next:** the deploy through ccrc's updater, agent first, then Task 5's one-week measurement against
     baseline B. The scope sweep stays shadowed.
+- **2026-10-21 05:43 UTC - wave 4b deployed; Task 5's week starts.**
+  - **The deploy.** The operator applied v0.0.508, which carries `d8cd4765`, from the console. ccrc's updater
+    moved the fleet box first. Its update report reads done at 05:35:58 UTC, and the server box's at 05:38:59 UTC.
+    `ccrc version` on each box reads v0.0.508 with a complete install. Nothing was driven by hand.
+  - **Not measured:** the console's updater inventory (`GET /api/updates`). It needs a signed-in session, and this
+    coordinator has none.
+  - **The week.** This coordinator first saw the fleet box converged at about 05:37 UTC. The week starts at the
+    next whole minute, so it holds only time after the deploy:
+    - since `2026-10-21 05:38:00` UTC, until `2026-10-28 05:38:00` UTC;
+    - due 2026-10-28 05:38 UTC; owner: this coordinator;
+    - read with the installed `deploy/measure-continuity.py --stage 6`, both endpoints given, `--reap-baseline 0`
+      and `--all-copies`, under `TZ=UTC`, on the fleet box.
+  - **Exposure.** The variable reaches a pane at its next ordinary start. A pane that started before the deploy
+    and has not restarted since runs without it, and the reading names such panes as a confound. The environment
+    itself is unmeasured. No session is restarted to get a cleaner reading.
+  - **The rule.** Baseline B is unchanged: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4
+    unmeasured. Three or more reap-class stops in any measured week withdraws the variable through a follow-up
+    wave; two do not. An unmeasured reading is reported, never read as not triggered.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -997,9 +1015,9 @@ Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deplo
 is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured; the scope-sweep
 record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
 
-**Wave 4b is merged** (#435 `d8cd4765`, 2026-10-21 03:54 UTC; Decisions, 2026-10-21 03:55). What is owed now: the
-deploy through ccrc's updater (agent first), then Task 5's one-week measurement against baseline B. The scope sweep
-stays shadowed. Wave 5 stays deferred until the operator lifts the stop. Its run is open, planned, and has no worker.
+**Wave 4b is merged** (#435 `d8cd4765`, 2026-10-21 03:54 UTC; Decisions, 2026-10-21 03:55) **and deployed**
+(v0.0.508, 2026-10-21; Decisions, 05:43). What is owed now: Task 5's one-week measurement against baseline B, due
+2026-10-28 05:38 UTC, owned by this coordinator. The scope sweep stays shadowed. Wave 5 stays deferred until the operator lifts the stop. Its run is open, planned, and has no worker.
 The record below is the wave's history.
 
 Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
