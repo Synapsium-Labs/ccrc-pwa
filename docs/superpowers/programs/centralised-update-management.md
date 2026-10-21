@@ -2582,6 +2582,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           grows about 0.8G an hour. The rest is unattributed. Read-only; nothing deleted. The operator has the figures.
         - STATUS: fleet and server v0.0.528, newest v0.0.529, stable v0.0.502, intent dev/auto=off, backups fleet
           186M/server 10999M, disk free fleet 81G/work volume 14G/server 21G.
+      - **12:55 UTC: the work volume below 10G (9.1G), so `ws-add` refuses; the first `/health` miss on #832 paired.**
+        - Work volume: 17.8G at 10:58, 13.5G at 11:58, 9.0G at 13:03. Root disk: 82G at 11:58, 75G at 13:03.
+        - The owning session's evidence directory on the work volume grew from 23.1G to 25.5G in that hour, about half
+          the loss. It was asked (mail, 13:05) to point those writes at its root storage or pause them. Read-only;
+          nothing deleted. The operator was told at each check since 07:30.
+        - The probe's `/health` miss at about 12:58:05 falls in the 12:58:18 slow pass. That pass filed an attempt
+          (`attemptsSkipped=0`, `attempts` 25.2 s, `cpAttempts` 509 to 510), with `stallMid` 19.0 s, the largest yet.
+          Sent to the broker's coordinator as it asked.
+        - STATUS: fleet and server v0.0.528, newest v0.0.529, stable v0.0.502, intent dev/auto=off, backups fleet
+          186M/server 10999M, disk free fleet 74G/work volume 9G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
