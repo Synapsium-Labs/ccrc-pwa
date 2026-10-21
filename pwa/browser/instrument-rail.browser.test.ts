@@ -22,7 +22,7 @@ const VIEWS: AppView[] = THEMES.flatMap((theme) => WIDTHS.map((width) => ({ skin
 const named = (v: AppView, route: string): string => `${v.theme}, ${v.width}px, ${route}`;
 
 const FIXTURE: AppFixture = {
-  api: { '/api/accounts': { accounts: [], projected: null, roster: [] }, '/api/runs': [], '/api/claims': [] },
+  api: { '/api/accounts': { accounts: [], projected: null, roster: [] }, '/api/runs': { runs: [] }, '/api/claims': [] },
   fleetFrames: [{ type: 'fleet', sessions: [] }],
 };
 
