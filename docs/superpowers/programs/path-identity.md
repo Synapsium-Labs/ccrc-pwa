@@ -1,7 +1,7 @@
 # Program: path-identity
 
 Spec: `docs/superpowers/specs/2026-10-12-path-identity-design.md` (W0; merged as #360 = `837a099c0`, 2026-10-12 18:48)
-Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` (W1a), `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (W1b), `docs/superpowers/plans/2026-10-15-path-identity-w2-absences-and-mounts.md` (W2); the W3 plan later
+Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` (W1a), `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (W1b), `docs/superpowers/plans/2026-10-15-path-identity-w2-absences-and-mounts.md` (W2), `docs/superpowers/plans/2026-10-20-path-identity-w3-worktree-identity.md` (W3)
 Contract: `docs/superpowers/programs/child-reclamation-contract.md` (this programme continues child-reclamation's contract; its rulings land in a new section)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: **a fresh child per wave**
 Parent programme: `child-reclamation` (#166). Its contract R71 names this follow-up.
@@ -25,9 +25,23 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | 2 | W1b correction | the census guard's `_reg_get_to`/`_reg_read_to` blind spot (review 575 F4), a mutation proof for the census rows `6968de956` added, and the records the landing left owed | server test + docs | #735 | **merged** `397be1ec5` (2026-10-19 22:31), head `8f0d1121b`; review 647; run **640 closed** done (2026-10-19) |
 | 2 | W1 records follow-up | appended corrections to the W1a plan, the W1b plan and the spec, after reviews 647 and 649 | docs | #838 | **merged** `eb488c288` (2026-10-20 01:03), head `2d62a63e2`; reviews 661 and 663; run **655 closed** done |
 | 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server, fleet box first | #1008 | **merged** `ab4cc62cb` (2026-10-20 22:29), head `8b3ce4b9d`; five absorptions of main, each on a measured conflict (the stamp, or foot appends); full CI run 39500623605 read the equivalence file 100/100; reviews 709 and 719; run **652 closed** done |
-| 4 | W3 | worktree path identity (spec section 4) | ccd/ccd + one server string, fleet box first | — | run **722 planned** (opened 2026-10-20 22:30, before run 652 closed); plan in review; dispatch needs the plan merged and the consents (workspace-lifecycle PG2 A, plus run 308 and delegation for `_spawn_start`'s two launch statements) |
+| 4 | W3 | worktree path identity (spec section 4) | ccd/ccd + one server string, fleet box first | — | run **722 planned** (opened 2026-10-20 22:30, before run 652 closed); plan written (this PR); dispatch needs the plan merged and the consents (workspace-lifecycle PG2 A, plus run 308 and delegation for `_spawn_start`'s two launch statements) |
 
 ## Decisions & deviations
+
+- **2026-10-21 — W3'S PLAN IS WRITTEN: `2026-10-20-path-identity-w3-worktree-identity.md`, 15 tasks (0 to 14), one PR from a fresh child.**
+  - **How it was made.** It was grounded in six areas against W2's frozen head, then framed by an architect, a critic and a reviser, and drafted by one Opus drafter per task. It went through two review rounds over seven slices plus cross-task and safety lenses, each finding put to a Sonnet refuter (69 findings, then 61, all confirmed and fixed), three single-author integration passes, and a final verification.
+  - **The coordinator's rulings, R1 to R74,** are written into the plan.
+    - Seams: one launch-line spelling (R60), the `_ws_dir_physical` census at twelve (R61), the reader's bounded read (R62), anchored entry greps (R63), and the walk's caller-side completeness check (R64).
+    - Fail-closed edges: `workdirid-unreadable-holds`, a field that cannot be read holds (R57); a request record cut before its NUL (R68); C1 bytes, a STOP at Task 0 (R66); a relative `.workdir`, a STOP at Task 0 and a stated residual (R72).
+    - Refusal words: the main checkout keeps its terminal refusal (R67); a record only under another spelling reads retryable `unmeasured`, a numbered departure (R71).
+  - **Numbers issued** (R48, R73): 6124, 6125, 6126, 6127, 6128, 6129, 6130, 6131, 6132, 6133, 6134, 6135, 6136, 6137, 6138, 6139, 6140, 6141, 6142, 6143, 6144, 6145, 6146, 6147, 6148, 6149, 6150, 6151, 6152, 6153, 6154, 6155, 6156, 6157, 6158, 6159, 6160. These are the 16 substantive departures, one plan-text slot per task (15), and six reserved wave-time numbers, each defined singly in the plan's Deviations found.
+  - **One more number, 6161**, issued for `record-two-spellings-reads-unmeasured`, which workspace-lifecycle's consent asked to be named as a departure (R75).
+  - **Consents in hand:** workspace-lifecycle 7443 (PG2 A by function, and R45 by content), run 308 7440 (the four `_spawn_start` lines; #435 lands first), delegation 7437, ccrc history 7436 (acknowledged), and model-class auto-advance 7441 (the composer line in the platform blocks).
+  - **Dispatch gates.**
+    - Workspace-lifecycle's PG2 A consent for the ladder, the tail and ws-expire's probe, which includes R45's one printf edit in `_ws_expire_audit_contained` and R53's expire key pin. If R45 is refused, the expire half is dropped, under a wave-time number.
+    - Run 308's and delegation's consents for `_spawn_start`'s two launch statements, in R47's words: the two inserted `_spawn_workdirid_pending` lines and the two edited command-string lines. Without them, Task 5 waits.
+    - Task 0's counts-only STOPs on the fleet box.
 
 - **2026-10-20 22:35 — W2 IS LANDED (#1008); RUN 652 IS CLOSED; W3'S RUN 722 IS OPEN.**
   - **The wave.** W2 built the spec's section 3 as planned, with three merge-semantic departures, each licensed in its own commit:
