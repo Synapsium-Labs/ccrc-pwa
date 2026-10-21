@@ -19,7 +19,7 @@ import { SessionScreen } from '../src/screens/SessionScreen';
 import { SkinSetProvider } from '../src/skins/frame';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import { REFINED_SET } from '../src/skins/refined/parts';
-import { useFleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore } from '../src/stores/fleet';
 import { createSessionStore, getSessionStore } from '../src/stores/session';
 import { fleetSession } from './fleetFixture';
 
@@ -119,6 +119,17 @@ describe('the inspector sections', () => {
       expect(r.container.innerHTML, S.name).toBe('');
       r.unmount();
     }
+  });
+
+  it("the lane's reading is the fleet store's own read of the accounts, kept across a malformed answer", async () => {
+    let answer: unknown = { accounts: [USAGE], projected: null, roster: [] };
+    const fleet = createFleetStore({ fetchAccounts: async () => answer as never });
+    expect(fleet.getState().usage).toBeNull();
+    await fleet.getState().refreshAccounts();
+    expect(fleet.getState().usage).toEqual([USAGE]);
+    answer = { projected: null, roster: [] };
+    await fleet.getState().refreshAccounts();
+    expect(fleet.getState().usage).toEqual([USAGE]);
   });
 
   it('the tasks section is always expanded', () => {
