@@ -266,3 +266,78 @@ export function runCcdOldFoldSites(root: string = REPO): CensusSite[] {
   }
   return out;
 }
+
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
+ *  `w4-held`, and W4 moves them. */
+export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+
+/** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
+ *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
+ *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
+ *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+
+/** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
+ *  census does not resolve), and its tag. */
+export interface CapabilitySite extends CensusSite {
+  readonly form: 'verbSupported' | 'capSupported' | 'ccdCan';
+  readonly token: string | null;
+  readonly tag: CapabilityTag;
+}
+
+/** The text of a call's second argument, from just after its `(` on one line; `null` when the call does not close on
+ *  that line or has no second argument. */
+function secondArg(code: string, open: number): string | null {
+  let depth = 1; let comma = -1;
+  for (let i = open; i < code.length; i++) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) return comma < 0 ? null : code.slice(comma + 1, i).trim();
+    } else if (c === ',' && depth === 1 && comma < 0) comma = i;
+  }
+  return null;
+}
+
+/**
+ * D-5866 (Task C1k; ARCH-71 #806; spec §5.1 rule 3): every `verbSupported(`, `capSupported(` and `ccdCan(` call under
+ * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
+ * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
+ * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
+ * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
+ * its tag is `flag` unless its form says otherwise.
+ */
+export async function capabilityChoiceSites(root: string = REPO): Promise<CapabilitySite[]> {
+  const argv = await import('../src/ccdargv.js') as unknown as Record<string, unknown> & {
+    CCD_CAN: Record<string, { readonly token: string } | 'none'>;
+  };
+  const rowTokens = new Set(Object.values(argv.CCD_CAN).flatMap((r) => (r === 'none' ? [] : [r.token])));
+  const tokenOf = (expr: string | null): string | null => {
+    if (expr === null) return null;
+    const quoted = /^(['"])([^'"]*)\1$/.exec(expr);
+    if (quoted) return quoted[2]!;
+    const v = /^[A-Z_][A-Z0-9_]*$/.test(expr) ? argv[expr] : undefined;
+    return typeof v === 'string' ? v : null;
+  };
+  const out: CapabilitySite[] = [];
+  for (const f of sourceFiles(root, 'server/src')) {
+    const file = path.relative(root, f).split(path.sep).join('/');
+    if (file === 'server/src/ccdargv.ts') continue;
+    readFileSync(f, 'utf8').split('\n').forEach((text, i) => {
+      const code = codeOf(text);
+      for (const m of code.matchAll(/\b(verbSupported|capSupported|ccdCan)\s*\(/g)) {
+        const form = m[1] as CapabilitySite['form'];
+        const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
+        const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
+        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
+          : form !== 'capSupported' ? 'verb'
+            : beside ? 'verb-precondition'
+              : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
+        out.push({ file, line: i + 1, text, form, token, tag });
+      }
+    });
+  }
+  return out;
+}

@@ -42,7 +42,7 @@ import {
 } from '../fleet/movePlan';
 import { ACK_UNREADABLE_TEXT, AckConfirm, ackNote, canAck, sendAck } from '../fleet/updateAck';
 import {
-  ResultLine, UPDATES_TEXT, nodeRollbackNote, nodeUpdateNote, useResultLine, type ResultLineValue,
+  ResultLine, nodeRollbackNote, nodeUpdateNote, useResultLine, type ResultLineValue,
 } from '../fleet/settingsText';
 import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
@@ -591,7 +591,8 @@ function ReleaseGroup({ label, title, items, ...rest }: {
   if (items.length === 0) return null;
   return (
     <>
-      {title !== null && <h3 className="settings-section-title">{title}</h3>}
+      {/* h4: the release groups sit inside Updates' Fleet version card, whose title is the h3 (settings Task R2b2). */}
+      {title !== null && <h4 className="settings-section-title">{title}</h4>}
       <ul className={`settings-releases ${RESET_LIST}`} aria-label={label}>
         {items.map((it) => (
           <ReleaseItem
@@ -684,7 +685,7 @@ export function ReleaseList({
       ) : w.running !== null ? (
         <p className="settings-release-running">{`Every managed node runs ${w.running.tag}.`}</p>
       ) : null}
-      {w.rollback.length > 0 && <h3 className="settings-section-title">Roll back to</h3>}
+      {w.rollback.length > 0 && <h4 className="settings-section-title">Roll back to</h4>}
       <p className="settings-note">{rollbackLead(w)}</p>
       <ReleaseGroup label="Roll back to" title={null} items={w.rollback} buttons {...shared} />
       {w.olderHidden > 0 && <p className="settings-note">{olderClosingLine(w.olderHidden)}</p>}
@@ -946,7 +947,7 @@ export function NodeList({ nodes, releases, now, catalogueLastOkAt, haltedBy = n
   const halted = haltedReason(nodes) !== null;
   return (
     <>
-      <p className="settings-note">{UPDATES_TEXT.nodesLead}</p>
+      {/* The lead (`UPDATES_TEXT.nodesLead`) is the Nodes card's purpose line (settings Task R2b2). */}
       <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
         {nodes.map((n) => (
           <NodeItem

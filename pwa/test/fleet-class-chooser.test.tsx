@@ -1,8 +1,8 @@
 // The fleet screen's class chooser (routing slice 5, Task 6): a `<select>`
 // beside the fleet head that re-fetches `GET /api/projects?class=<cls>` and
 // seeds the same class into the `+`'s `route` body. Verified seams: `api.projects(cls?)`
-// already appends `?class=` (slice 4); `api.workspaceAdd` gains an optional
-// second `route?: RouteFields` parameter this task adds; `ProjectCard` already
+// already appends `?class=` (slice 4); `api.workspaceAdd` takes an options object
+// whose `route` this task adds (named workspaces S7 widened it with `name` and `wrapper`); `ProjectCard` already
 // renders `no lane can serve <class>` for a `{kind:'none', class}` placement
 // (D-2854) — this suite asserts against those exact rendered words, not a
 // paraphrase.
@@ -95,7 +95,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
   });
 
   it('tapping + while Fable is chosen posts route: { class: "fable" }', async () => {
-    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue(undefined);
+    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/api/accounts')) return accountsRoute();
       if (String(url).includes('/api/projects')) {
@@ -116,12 +116,15 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     fireEvent.change(select, { target: { value: 'fable' } });
 
     fireEvent.click(await screen.findByRole('button', { name: /New workspace on alpha/i }));
+    // The tap opens the sheet; the sheet's own confirm is what creates (named workspaces S7).
+    expect(add).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
-    expect(add).toHaveBeenCalledWith('alpha', { class: 'fable' });
+    expect(add).toHaveBeenCalledWith('alpha', { route: { class: 'fable' } });
   });
 
   it('the unset chooser posts no route and fetches without the query', async () => {
-    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue(undefined);
+    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(String(url));
@@ -146,12 +149,14 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     expect(urls.some((u) => u.includes('/api/projects?class='))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
-    expect(add).toHaveBeenCalledWith('alpha');
+    // No route and no name: the options object is empty, and `api.workspaceAdd` sends no body for it.
+    expect(add).toHaveBeenCalledWith('alpha', {});
   });
 
   it('choosing Default fetches with ?class=default and posts route: { class: "default" }', async () => {
-    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue(undefined);
+    const add = vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(String(url));
@@ -175,8 +180,9 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     await waitFor(() => expect(urls.some((u) => u.includes('/api/projects?class=default'))).toBe(true));
 
     fireEvent.click(await screen.findByRole('button', { name: /New workspace on alpha/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
-    expect(add).toHaveBeenCalledWith('alpha', { class: 'default' });
+    expect(add).toHaveBeenCalledWith('alpha', { route: { class: 'default' } });
   });
 
   it('offers the four classes in capability order, plus Coordinator row and Default', () => {

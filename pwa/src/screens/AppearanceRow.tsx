@@ -1,6 +1,6 @@
-// One row of Settings → Appearance: a radio, a name over a note, and (for a
-// palette) its swatch. Two fieldsets draw it: Theme (SettingsScreen.tsx) and
-// Layout (SkinFieldset.tsx).
+// One row of Settings → Appearance: a radio, a name over a note. Layout
+// (SkinFieldset.tsx) draws it; Theme is a preview grid of cards since settings
+// Task R2e (D-5503), which reads its choices from `THEME_CHOICES` below.
 //
 // IT LEFT SettingsScreen.tsx WHEN THE SECOND FIELDSET ARRIVED (D-5458). It was
 // `ThemeRow` there, and the plan's Task 12b asks for the Layout rows "built
@@ -21,7 +21,7 @@
 // .test.ts). With the row gone, SettingsScreen.tsx no longer rendered a
 // `<Radio>`, so the frame both fieldsets share lives here too.
 import type { ReactNode } from 'react';
-import { PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio } from '@ccrc/ui';
+import { RADIO_FIELDSET, RADIO_LEGEND, Radio, SYSTEM, THEMES } from '@ccrc/ui';
 import { doorMark } from '../command/door';
 
 /** One Appearance fieldset: the set, and its legend. `command` is the
@@ -39,26 +39,25 @@ export function AppearanceFieldset(
   );
 }
 
-/** A group heading inside a fieldset — not a second <legend>, which would be
- *  invalid, and not a control. */
-export function AppearanceGroup({ children }: { children: ReactNode }): ReactNode {
-  return <p className={`${RADIO_LEGEND} settings-theme-group`}>{children}</p>;
-}
+/** Theme's choices, one list (settings Task R2e, D-5503): "Follow system", then the catalogue in its own order (the
+ *  eight dark, then the four light). "Follow system" is not a palette, and deliberately not in `THEMES`: the generator
+ *  writes that list and `themes:check` rules on it. It is the choice that says "whichever of Phosphor & Ink and
+ *  Phosphor Daylight the device is in". */
+const FOLLOW_SYSTEM = {
+  id: SYSTEM,
+  label: 'Follow system',
+  note: 'Phosphor & Ink after dark, Phosphor Daylight otherwise.',
+};
+export const THEME_CHOICES: readonly { id: string; label: string; note: string }[] = [FOLLOW_SYSTEM, ...THEMES];
 
-export function AppearanceRow({ choice, current, onPick, group, swatch = true }: {
+export function AppearanceRow({ choice, current, onPick, group }: {
   /** Structural, not `ThemeChoice`: "Follow system" is not a palette and
-   *  carries no `mode`, but it IS this row — same label over the same note,
-   *  same radio, in the same group. It was written out a second time instead,
-   *  and the markup census found it. A skin is this row too (D-5458). */
+   *  carries no `mode`. A skin is this row (D-5458). */
   choice: { id: string; label: string; note: string };
   current: string;
   onPick: (id: string) => void;
   /** The radio group's `name`: one per fieldset (D-5458). */
   group: string;
-  /** "Follow system" draws none: there is no single palette to preview, and
-   *  five swatches of whichever one happens to be applied would be a preview
-   *  of the wrong thing. A skin draws none either: a skin owns no colour. */
-  swatch?: boolean;
 }): ReactNode {
   const active = current === choice.id;
   return (
@@ -72,34 +71,7 @@ export function AppearanceRow({ choice, current, onPick, group, swatch = true }:
       bare
     >
       <span className="settings-theme-body">
-        {/* THE SWATCH RIDES THE NAME'S LINE, not the row's far edge. As the
-            row's last flex item behind a `flex: 1` body it sat at the right
-            edge of the section — about 1400px from its own name at a 1920px
-            window — so a palette and its preview read as two columns that
-            happened to share a stripe of tint. Beside the name it is that
-            palette's preview at every width, phone to wide. */}
-        <span className="settings-theme-head">
-          <span className="settings-theme-name">{choice.label}</span>
-          {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
-              attribute selectors, so they resolve on ANY element, not just the
-              root. The preview is therefore the real palette rather than a
-              hand-copied approximation of it. `phosphor` carries no block — it
-              is :root — so it deliberately stamps nothing and inherits the
-              default. */}
-          {swatch && (
-            <span
-              className="settings-theme-swatch"
-              aria-hidden="true"
-              {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
-            >
-              <i style={{ background: 'var(--bg-surface)' }} />
-              <i style={{ background: 'var(--ink-primary)' }} />
-              <i style={{ background: 'var(--accent)' }} />
-              <i style={{ background: 'var(--status-attention)' }} />
-              <i style={{ background: 'var(--status-dead)' }} />
-            </span>
-          )}
-        </span>
+        <span className="settings-theme-name">{choice.label}</span>
         <span className="settings-note">{choice.note}</span>
       </span>
     </Radio>

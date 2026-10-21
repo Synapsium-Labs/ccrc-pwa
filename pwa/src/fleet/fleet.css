@@ -3309,13 +3309,8 @@ button.proj-card-pool::before {
 }
 
 /* ------------------------------------------------------------------ *
- *  Appearance — the theme picker (SettingsScreen.tsx).                *
- *                                                                     *
- *  THE SWATCHES CARRY `data-theme` THEMSELVES, so the five chips in   *
- *  each row resolve that palette's own tokens rather than a copy of   *
- *  them. Nothing here names a colour: every value below is a token,   *
- *  and inside a stamped swatch the token resolves to the palette      *
- *  being previewed. That is why there is no list of hexes to drift.   *
+ *  Appearance — the Layout picker's row (AppearanceRow.tsx). Theme is *
+ *  a preview grid since settings Task R2e (settings.css, D-5503).     *
  * ------------------------------------------------------------------ */
 /* The radio rides the NAME's line (D-5458): on a phone the note wraps to two
    or three lines, and a radio centred on the whole row floated beside the
@@ -3343,41 +3338,10 @@ button.proj-card-pool::before {
   min-width: 0;
   flex: 1;
 }
-/* The name and its swatch, on one line — the swatch is the name's preview, so
-   it sits beside it rather than at the row's far edge (1400px away at 1920).
-   Wraps under the name only if a phone cannot fit both. */
-.settings-theme-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
 .settings-theme-name {
   font-family: var(--family-ui);
   font-size: var(--fs-ui);
   color: var(--ink-primary);
-}
-/* A group heading inside the fieldset — not a second <legend>, which would be
-   invalid, and not a token the screen reader reads as a control. */
-.settings-theme-group {
-  margin-top: var(--sp-3);
-}
-.settings-theme-swatch {
-  display: flex;
-  flex: none;
-  gap: 0;
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  /* The hairline keeps a light palette's white surface chip from dissolving
-     into a light THEME's own background. Decorative — no contrast claim, the
-     same exemption every other hairline in this file takes. */
-  border: 1px solid var(--edge-strong);
-}
-.settings-theme-swatch i {
-  display: block;
-  width: 14px;
-  height: 22px;
 }
 
 /* ── reduced motion, part two ──────────────────────────────────────────

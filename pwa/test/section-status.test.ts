@@ -15,6 +15,7 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   updates: { view: updatesView(), failure: null, seq: 1, reload: () => 0 },
   stall: { view: stallView('log'), failure: null, reload: noop, settle: noop },
   collect: { view: collectView('live'), failure: null, reload: noop, settle: noop },
+  linear: { view: null, failure: null, reload: noop, settle: noop },
   pause: { kind: 'read', marker: 'clear' },
   auth: { kind: 'read', status: { authed: true, passkeysEnrolled: 2, mode: 'passphrase' } },
   push: 'on',

@@ -9540,6 +9540,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `ccd/ccd:11665-11670`, `ccd/ccd:11669`, `ccd/ccd:13650-13652`, `ccd/ccd:2433-2439`, `ccd/ccd:3037-3089`,
     // `ccd/ccd:3038`, `ccd/ccd:3070` x3, `ccd/ccd:5385-5388`. Measured by diffing the dumped failure sets of the
     // two trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S1 (`ws-add --title` / `--wrapper`, `_ws_lane_why`, two caps tokens), 54 -> 53.
+    // ONE LEFT, NONE ENTERED: the second site of the spec-2123 anchor into ccd (the list's own entry names it). `ccd/ccd`
+    // grows above every anchor in this set, so
+    // a line slid under that site whose token the row quotes. Neither frozen corpus document changed, so nothing was
+    // re-pointed and no rule changed; a coincidental pass is not a green anchor. Measured by running this test on the
+    // pre-S1 tree and on this one, never retyped. S6-R11 covers the re-measurement, so no D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -9805,6 +9811,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces: each side moved the second
+        // site of this anchor out of the set on its own, and together their `ccd/ccd` growth slides a line back under
+        // it that no longer carries its row's token, so it fails again. Measured data, not a prose citation: it is
+        // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
+        'ccd/ccd' + ':13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9878,6 +9889,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:12032-12034` x2, `spec:2209 ccd/ccd:4046` and `spec:2220 ccd/ccd:2874` x2 enter and `spec:2125
     // ccd/ccd:13673`, `spec:2220 ccd/ccd:3050` x2 leave on M's lines. 40, FROM THE SAME RUN as the row-pass set
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S1, 35 -> 34, FROM THE SAME RUN as the row-pass set above: the spec-2210 site of
+    // the same ccd anchor leaves, the one site of that anchor the `|`-row set also lost. Nothing was re-pointed.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -10026,6 +10039,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces, from the same run as the
+        // `|`-row set above: the spec-2210 site returns for the reason given there, spelled in two parts for the same one.
+        'spec:2210 ccd/ccd' + ':13573-13575',
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         'spec:2220 ccd/ccd:2874',

@@ -1,7 +1,8 @@
-// Settings › Updates (settings spec §3.1, §4.1; D-5503, D-5504): the fleet's release, the channel and auto-install,
-// Check now and the catalogue line, the release window and the nodes, over the frame's ONE /api/updates poll
-// (`SettingsDataProvider`). Settings Task R2b1 moved this body here from `SettingsScreen.tsx` unchanged; the page's
-// `<h2>` is the frame's.
+// Settings › Updates (settings spec §3.1, §3.3, §4.1; D-5503, D-5504): three cards over the frame's ONE /api/updates
+// poll (`SettingsDataProvider`), in §3.3's order from one list (`UPDATES_CARDS`): Fleet version (the halt line first,
+// then the status, Check now, the catalogue line and the release window), then Nodes, then Update policy (Channel,
+// Auto-install). Versions first, policy last (§15 D7). The page's `<h2>` is the frame's; each card's title is an
+// `<h3>`.
 import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
@@ -9,9 +10,10 @@ import type {
 } from '../../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, UPDATE_CHANNELS } from '../../../../shared/api';
 import { carriesUpdateGate } from '../../../../shared/update-move';
-import { Button, Skeleton, useNow } from '@ccrc/ui';
+import { Button, Section, Skeleton, useNow } from '@ccrc/ui';
 import {
-  CATALOGUE_EXPLAIN_TEXT, NotedRadioSet, ResultLine, UNCONFIRMED_TEXT, UPDATES_TEXT, autoGateNoteText, useResultLine,
+  CATALOGUE_EXPLAIN_TEXT, NotedRadioSet, ResultLine, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, UPDATES_TEXT,
+  autoGateNoteText, useResultLine,
 } from '../../fleet/settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../../fleet/movePlan';
 import { UpdateMoveSheet } from '../../fleet/UpdateMoveSheet';
@@ -134,6 +136,18 @@ function gateRefusalOf(err: unknown): string[] | null {
 // The row the Theme fieldset draws moved to `AppearanceRow.tsx` (D-5458): the
 // Layout fieldset draws it too, and two copies of its markup are what the
 // markup census refuses.
+/** Updates' cards, in §3.3's order: versions first, policy last (§15 D7). THE ONE ORDER: the page renders this list
+ *  and nothing else decides it, so the Claude Code card (the binary-lifecycle plan's CB1h, §15.3 C5) is one id
+ *  inserted between `nodes` and `policy`. */
+export const UPDATES_CARDS = ['fleetVersion', 'nodes', 'policy'] as const satisfies readonly (keyof typeof SETTINGS_CARDS.updates)[];
+type UpdatesCardId = (typeof UPDATES_CARDS)[number];
+
+/** One Updates card: its head from the word table, its body given. */
+function UpdatesCard({ id, children }: { id: UpdatesCardId; children: ReactNode }): ReactNode {
+  const card = SETTINGS_CARDS.updates[id];
+  return <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose} data-card={id}>{children}</Section>;
+}
+
 /** The Updates page's body: the three states before any view exists — loading, a box with no control plane, a first
  *  read that failed — each its own render (AccountsScreen's three-state discipline), so "don't know yet" never borrows
  *  the rendering of "nothing there". The poll is the frame's one (`SettingsDataProvider`); the heading is the
@@ -141,14 +155,19 @@ function gateRefusalOf(err: unknown): string[] | null {
 export function UpdatesSection({ poll }: { poll: UpdatesPoll }): ReactNode {
   const now = useNow(30_000);
   const { view, failure, reload } = poll;
+  // Before a view, the one state sits in Fleet version's card: Nodes and Update policy have nothing to show yet.
   return view !== null ? (
     <UpdatesBody view={view} stale={failure !== null} now={now} reload={reload} />
-  ) : failure === 'not-configured' ? (
-    <p className="settings-note">{NOT_CONFIGURED_TEXT}</p>
-  ) : failure === 'failed' ? (
-    <p className="settings-note">{UNREAD_TEXT}</p>
   ) : (
-    <Skeleton lines={3} />
+    <UpdatesCard id="fleetVersion">
+      {failure === 'not-configured' ? (
+        <p className="settings-note">{NOT_CONFIGURED_TEXT}</p>
+      ) : failure === 'failed' ? (
+        <p className="settings-note">{UNREAD_TEXT}</p>
+      ) : (
+        <Skeleton lines={3} />
+      )}
+    </UpdatesCard>
   );
 }
 
@@ -292,68 +311,34 @@ function UpdatesBody({ view, stale, now, reload }: {
       .finally(() => { setBusy(false); reload(); });
   };
 
-  return (
-    <>
-      {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
-      {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
-      {halt !== null && <HaltLine id={haltId} text={halt} />}
-      {waiting !== null && (
-        <>
-          <div className="settings-release-actions">
-            <span className="settings-note">{`${waiting.tag} available`}</span>
-            <WhatsNewButton onClick={() => setWhatsNew(true)}>{"See what's new"}</WhatsNewButton>
-          </div>
-          {moveResult?.key === WHATS_NEW_FROM && <ResultLine line={moveResult.line} />}
-          <p className="settings-note">{UPDATES_TEXT.whatsNewNote}</p>
-          <p className="settings-note">{UPDATES_TEXT.whatsNewWhen}</p>
-        </>
-      )}
-      {/* Spec §5.1's options with their notes: each note under its option, read as its description. */}
-      <NotedRadioSet
-        legend="Channel"
-        name="settings-channel"
-        options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c], note: CHANNEL_NOTES[c] }))}
-        value={fleet?.channel ?? null}
-        onPick={(c) => writeIntent({ channel: c })}
-        disabled={busy}
-      />
-      <ResultLine line={channelLine.line} />
-      <p className="settings-note">{UPDATES_TEXT.channelPurpose}</p>
-      <p className="settings-note">{UPDATES_TEXT.channelWhen}</p>
-      <NotedRadioSet
-        legend="Auto-install"
-        name="settings-auto"
-        /* D-3315: only the non-'off' choices are gated on the node caps — the
-           route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
-           so disabling the whole fieldset would remove the one safe action
-           exactly when the gate is incomplete. */
-        options={AUTO_MODES.map((m) => ({
-          value: m,
-          label: AUTO_LABELS[m],
-          note: AUTO_NOTES[m],
-          disabled: m !== 'off' && missing.length > 0,
-        }))}
-        value={fleet?.auto ?? null}
-        onPick={(m) => writeIntent({ auto: m })}
-        disabled={busy}
-        describedBy={gateNote !== null ? gateNoteId : undefined}
-      />
-      <ResultLine line={autoLine.line} />
-      {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
-      {gateNote !== null && <p className="settings-note">{UPDATES_TEXT.autoGateWhen}</p>}
-      <p className="settings-note">{UPDATES_TEXT.autoPurpose}</p>
-      <p className="settings-note">{UPDATES_TEXT.autoWhen}</p>
-      <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
-        Check now
-      </Button>
-      <ResultLine line={checkLine.line} />
-      <p className="settings-note">{UPDATES_TEXT.checkNowNote}</p>
-      <p className="settings-note">{UPDATES_TEXT.checkNowWhen}</p>
-      <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
-        {line.text}
-      </p>
-      <p className="settings-note">{CATALOGUE_EXPLAIN_TEXT}</p>
-      {view !== null && (
+  const bodies: Record<UpdatesCardId, ReactNode> = {
+    fleetVersion: (
+      <>
+        {/* The one halt line leads the card (spec §5.1, audit U9). */}
+        {halt !== null && <HaltLine id={haltId} text={halt} />}
+        {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
+        {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
+        {waiting !== null && (
+          <>
+            <div className="settings-release-actions">
+              <span className="settings-note">{`${waiting.tag} available`}</span>
+              <WhatsNewButton onClick={() => setWhatsNew(true)}>{"See what's new"}</WhatsNewButton>
+            </div>
+            {moveResult?.key === WHATS_NEW_FROM && <ResultLine line={moveResult.line} />}
+            <p className="settings-note">{UPDATES_TEXT.whatsNewNote}</p>
+            <p className={SETTINGS_WHEN}>{UPDATES_TEXT.whatsNewWhen}</p>
+          </>
+        )}
+        <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
+          Check now
+        </Button>
+        <ResultLine line={checkLine.line} />
+        <p className="settings-note">{UPDATES_TEXT.checkNowNote}</p>
+        <p className={SETTINGS_WHEN}>{UPDATES_TEXT.checkNowWhen}</p>
+        <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
+          {line.text}
+        </p>
+        <p className="settings-note">{CATALOGUE_EXPLAIN_TEXT}</p>
         <ReleaseList
           releases={view.releases} nodes={view.nodes} channel={fleet?.channel ?? null} source={view.source}
           haltedBy={halt !== null ? haltId : null}
@@ -361,13 +346,60 @@ function UpdatesBody({ view, stale, now, reload }: {
           whatsNewSince={waiting !== null ? whatsNewReleases(view, waiting.tag).since : null}
           onMove={openMove} result={moveResult}
         />
-      )}
-      {view !== null && (
-        <NodeList
-          nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
-          haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove} result={moveResult}
+      </>
+    ),
+    nodes: (
+      <NodeList
+        nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
+        haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove} result={moveResult}
+      />
+    ),
+    policy: (
+      <>
+        {/* Spec §5.1's options with their notes: each note under its option, read as its description. */}
+        <NotedRadioSet
+          legend="Channel"
+          name="settings-channel"
+          options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c], note: CHANNEL_NOTES[c] }))}
+          value={fleet?.channel ?? null}
+          onPick={(c) => writeIntent({ channel: c })}
+          disabled={busy}
         />
-      )}
+        <ResultLine line={channelLine.line} />
+        <p className="settings-note">{UPDATES_TEXT.channelPurpose}</p>
+        <p className={SETTINGS_WHEN}>{UPDATES_TEXT.channelWhen}</p>
+        <NotedRadioSet
+          legend="Auto-install"
+          name="settings-auto"
+          /* D-3315: only the non-'off' choices are gated on the node caps — the
+             route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
+             so disabling the whole fieldset would remove the one safe action
+             exactly when the gate is incomplete. */
+          options={AUTO_MODES.map((m) => ({
+            value: m,
+            label: AUTO_LABELS[m],
+            note: AUTO_NOTES[m],
+            disabled: m !== 'off' && missing.length > 0,
+          }))}
+          value={fleet?.auto ?? null}
+          onPick={(m) => writeIntent({ auto: m })}
+          disabled={busy}
+          describedBy={gateNote !== null ? gateNoteId : undefined}
+        />
+        <ResultLine line={autoLine.line} />
+        {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
+        {gateNote !== null && <p className={SETTINGS_WHEN}>{UPDATES_TEXT.autoGateWhen}</p>}
+        <p className="settings-note">{UPDATES_TEXT.autoPurpose}</p>
+        <p className={SETTINGS_WHEN}>{UPDATES_TEXT.autoWhen}</p>
+      </>
+    ),
+  };
+
+  return (
+    <>
+      {/* A fleet with no node yet has no Nodes card: an empty card says nothing the purpose line does not. */}
+      {UPDATES_CARDS.filter((id) => id !== 'nodes' || view.nodes.length > 0)
+        .map((id) => <UpdatesCard key={id} id={id}>{bodies[id]}</UpdatesCard>)}
       <WhatsNewSheet
         open={whatsNew && waiting !== null}
         view={view}

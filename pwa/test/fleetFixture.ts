@@ -23,7 +23,7 @@ import type { FleetSession } from '../../shared/api';
 
 export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w', workspace: null, name: null,
+  workdir: '/w', workspace: null, name: null, title: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
   ctxPct: null, paneCols: null, tasks: null, pr: null,
