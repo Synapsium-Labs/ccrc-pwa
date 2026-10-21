@@ -3224,6 +3224,56 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(r11Holds(win.v2(base, idx), v), `CONTROL the pre-round composition prints ${v}`).toBe(true);
     }
   });
+  it('(j26) CONTROL: bar (c)\'s class (ii), a value in JSON-escaped double quotes whose NAME an earlier unit\'s odd double quote swallows, prints at the window door and at the whole-text door (D-6071, the ruling on review 744 F1)', () => {
+    const idx = idxOf([]);
+    const win = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    // Class (ii) of bar (c) is one named shape. The value sits in JSON-escaped double quotes, and an earlier unit's open or odd double quote
+    // closes at the escaped quote that opens it, so the rules read `,private_key=\` as the end of that quote's value and the pair's NAME is
+    // swallowed: nothing names the value. Here `auth="` opens a double quote whose value runs `,private_key=\` to the escaped quote. This is
+    // review 744's F1 at the smallest window that reproduces it (the shape's tests, 61 of 4,000 generated cases at windows 596, 696 and 4,000,
+    // shrunk by deleting characters until none could go: 67 characters, the window all but the last). 8e2ff9040 masked the value's first word
+    // only incidentally, through its order; every other reading prints the value whole, the whole-text door among them.
+    // It is a CONTROL of what prints TODAY, and only a change to the RULES (the widened ones, D-5745's, which reach every door) would turn it:
+    // no door-local reading can, because every reading the window door computes prints all of the value's words (the ruling's panel tried two
+    // head guards, which closed 60 and 58 of 61 and changed 1,324 and 62 of 9,600 corpus windows). That change is the coordinator's follow-up;
+    // when it lands this case is rewritten, not deleted.
+    const V = 'ZQXRIVER41 ZQXSTONE17 ZQXLAMP63';
+    const t = String.raw`private_key=" auth=",private_key=\"${V}"`;
+    const [a, b] = [0, t.length - 1];
+    expect(t.length, 'the text').toBe(67);
+    const out = libRedact.redactDisplayWindow(t, a, b, idx);
+    expect(r11Holds(out, V), `the window prints the value: ${JSON.stringify(out)}`).toBe(true);
+    const whole = libRedact.redactForDisplay(t, idx);
+    expect(r11Holds(whole, V), `the whole-text door prints it too: ${JSON.stringify(whole)}`).toBe(true);
+    // CONTROL: rev 3.6's base door and the pre-round composition print it as well
+    const base = win.base(t, a, b, idx);
+    expect(r11Holds(base, V), 'CONTROL base').toBe(true);
+    expect(r11Holds(win.v2(base, idx), V), 'CONTROL the pre-round composition').toBe(true);
+  });
+  it('(j27) the snippet\'s head guard: where v2 rewrites the snippet\'s head `...`, the core is one mark (D-6071, the ruling on review 744 F4)', () => {
+    const idx = idxOf([]);
+    const snip = libRedact.redactDoorReadings(libRedact.displaySnippet)!;
+    // H, the snippet's head, ends in the `...` the read adds. v2 over the framed snippet `H + core + T` can rewrite that `...` itself, and then it
+    // is no longer ahead of the core: the cut slice starts in a token (`%+` and a header's first characters, here), followed by a C1 CSI with a `-`
+    // intermediate and a 7-bit CSI with a `*` intermediate. Removing those two sequences glues the token into one that v2 masks starting at the `...`.
+    // The guard reads that as v2 having rewritten H and masks the whole core: the snippet is `...` + one mark + `...`, fail closed. Without it the
+    // snippet prints the core's remaining words from the head's mark on (availability only: every token it then holds is a token of the pre-round
+    // output, so the mutant prints no value more). Review 744 found the case live in 2 of 80,000 generated calls (a search over short atoms
+    // joined into the text), and a search over the words alone found none in 54,000, so it is built from its parts here. The header atom is built
+    // at run time and never held as a literal: it is the first three characters of a token's base64.
+    const fill = (n: number): string => 'river stone lamp maple '.repeat(Math.ceil(n / 23)).slice(0, n);
+    const atom = Buffer.from('{"').toString('base64').slice(0, 3);
+    const t = `${fill(150)} api_key=abc&def ${fill(37)}%+\x9b-a\x1b[*${atom} ${'y'.repeat(13)} zqxhit tail ${fill(60)}`;
+    expect(t.length, 'the text').toBe(302);
+    const out = libRedact.displaySnippet(t, ['zqxhit'], idx);
+    expect(out, 'the guard: one mark between the head and the tail').toBe(`...${M}...`);
+    // CONTROL: the pre-round composition (v2 over the base snippet) rewrote the head: its text does not start with the base snippet's `...`
+    const base = snip.base(t, ['zqxhit'], idx);
+    expect(base.startsWith('...'), 'CONTROL the base snippet starts with the head').toBe(true);
+    const pre = snip.v2(base, idx);
+    expect(pre.startsWith('...'), 'CONTROL v2 rewrote the head').toBe(false);
+    expect(pre.startsWith(M), 'CONTROL v2 starts with a mark').toBe(true);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
