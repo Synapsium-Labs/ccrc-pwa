@@ -113,8 +113,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     if (flush) void log.flush();
     if (deps.coord) {
       try {
-        if (opts.dedupeKey === undefined) deps.coord.recordFeedEvent(log.epoch, ev);
-        else deps.coord.recordFeedEvent(log.epoch, ev, opts.dedupeKey);
+        // ONE call line: the feed-writer ratchet (D-5859) counts call lines. No key, no third argument.
+        deps.coord.recordFeedEvent(log.epoch, ev, ...(opts.dedupeKey === undefined ? [] : [opts.dedupeKey] as const));
         archived = 'landed';
       } catch (err) {
         archived = 'failed';
