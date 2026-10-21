@@ -279,7 +279,7 @@ the proof halts and the operator decides then — clause 15 forbids a coordinato
    exists; a scratch-branch queue ruleset is an alternative for the proof);
 3. **the proof run**, which is stage 2's own gate: enqueue two or three trivial PRs at once and check one push
    event and one prerelease per merge; if a group lands several commits in one push, keep group size and
-   concurrency at 1 or make release-main tag every commit in the pushed range; confirm `is_ours` still binds
+   concurrency at 1 or make release-main tag every commit in the pushed range; confirm `ours_of` still binds
    after a queue merge; measure whether GitHub records a removal event on a successful queue merge (if it does,
    a queue-merged PR reads `none`, not `landed`); measure that gh's enqueue binds `--match-head-commit` (a
    deliberately wrong sha is refused and nothing is queued); measure the armed path — an enqueue whose required
