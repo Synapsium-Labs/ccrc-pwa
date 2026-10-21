@@ -15230,8 +15230,20 @@ _inst_enable_darwin() {
   # edited plist, which `systemctl restart` does on the other platform.
   _svc_launchctl bootout "$(_svc_domain)/$label" 2>/dev/null
   _svc_launchctl enable "$(_svc_domain)/$label" 2>/dev/null
-  _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist" \
-    || _ccrc_die "launchctl bootstrap failed for $label, so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
+  # A BOOTOUT THAT RETURNED IS NOT A JOB THAT LEFT. launchd answers `bootout`
+  # while the old process is still in its graceful shutdown (the server's
+  # takes seconds), and `bootstrap` on a label it still holds fails with 5.
+  # Measured on a macOS box: every update after one build died here and was
+  # reverted, while the revert's own bootstrap (nothing left running) passed.
+  # So a refused bootstrap waits, bounded, for the label to leave and tries once more.
+  if ! _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist"; then
+    local waited=0
+    while _svc_is_loaded "$main" && [ "$waited" -lt "${CCRC_BOOTOUT_WAIT_S:-60}" ]; do
+      sleep 1 & wait $!; waited=$((waited + 1))
+    done
+    _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist" \
+      || _ccrc_die "launchctl bootstrap failed for $label (again after ${waited}s waiting for the old job to leave), so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
+  fi
   # ── AND THEN THE STAY-UP GATE, WHOSE FAILURE IS FATAL ────────────────────
   # `bootstrap` returns as soon as launchd accepts the job — the same fork-
   # time success `systemctl enable --now` reports, and the same gap the Linux
