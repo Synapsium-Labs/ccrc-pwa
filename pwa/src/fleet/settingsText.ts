@@ -312,8 +312,25 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.box, title: 'Sign-in gate',
       purpose: 'Whether this console asks who you are before it opens. The gate is set on the server, not here.',
     },
+    // Your sign-in and This session came from Accounts (settings Task R2d, D-5508); Security shows them only while
+    // the gate is armed.
+    signIn: {
+      scope: SETTINGS_SCOPE.you, title: 'Your sign-in',
+      purpose: 'The passkeys that can sign you in to this console without the passphrase.',
+    },
+    session: {
+      scope: SETTINGS_SCOPE.browser, title: 'This session',
+      purpose: 'The sign-in this browser holds now.',
+    },
     // Box token's purpose line names the rotation interval, so it is built beside the card from the interval
     // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here.
+    // The Linear card (named workspaces S4b) follows Box token: the key is a credential this box holds, so its scope
+    // is the box's, and it sits after the reserved "Recent account changes" slot and Box token so adding it moves
+    // neither. Its body, the state sentences and the controls are `LinearSection.tsx`'s.
+    linear: {
+      scope: SETTINGS_SCOPE.box, title: 'Linear',
+      purpose: 'Connect Linear so a ticket you paste into a new session shows its real title. Without it the title is read from what you paste.',
+    },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 

@@ -27,6 +27,7 @@ import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
 import { HoldControl } from './HoldControl';
+import { RenameSheet } from './RenameSheet';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -86,6 +87,8 @@ export function SessionActionsSheet({
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
   const [archiveOpen, setArchiveOpen] = useState(false);
+  /** Rename's sheet (named workspaces S9) is open over this one: the title only, the slug stays. */
+  const [renameOpen, setRenameOpen] = useState(false);
   // Hold's composer is `HoldControl`'s own — state, send and refusal reader
   // together, including the reset this effect used to carry for it.
   // Release's consequence confirm — a QuickConfirm sibling, same shape as
@@ -132,6 +135,7 @@ export function SessionActionsSheet({
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
     setArchiveOpen(false);
+    setRenameOpen(false);
   }, [open, session?.id]);
 
   if (!session) return null;
@@ -377,6 +381,16 @@ export function SessionActionsSheet({
             Swap account
           </Button>
 
+          {/* Rename (named workspaces S9): a WORKSPACE's title, never its slug, and never offered on a main checkout,
+              whose name is its project. Offered on every workspace row, auto-named ones included, and on an archived
+              one: ccd's `ws-title` writes two registry fields and touches no pane. The PWA cannot see what `ccd caps`
+              lists, so a box whose ccd predates the verb answers in the Rename sheet itself. */}
+          {session.workspace !== null && (
+            <Button variant="ghost" onClick={() => setRenameOpen(true)}>
+              Rename
+            </Button>
+          )}
+
           {/* Every session offers Archive (spec §5.2) — a workspace and a main checkout alike; every row the
               Archived fold holds offers Restore instead. Never both.
 
@@ -476,6 +490,15 @@ export function SessionActionsSheet({
           )}
         </div>
       </Sheet>
+
+      {session.workspace !== null && (
+        <RenameSheet
+          session={session}
+          open={open && renameOpen}
+          onClose={() => setRenameOpen(false)}
+          onRenamed={onClose}
+        />
+      )}
 
       <SwapSheet
         session={session}

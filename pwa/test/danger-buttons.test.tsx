@@ -27,7 +27,8 @@ import { ArchiveConflictSheet } from '../src/fleet/ArchiveConflictSheet';
 import { ArchiveAllConfirm } from '../src/fleet/ArchiveAllPlane';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
 import { ReapSheet } from '../src/session/ReapSheet';
-import { AuthSection } from '../src/screens/AuthSection';
+import { ThisSessionCard } from '../src/screens/settings/ThisSessionCard';
+import { YourSignInCard } from '../src/screens/settings/YourSignInCard';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -109,16 +110,26 @@ describe('every destructive confirm is the danger variant', () => {
   });
 
   it('Sign out is the way out, a ghost, not a commit', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (u.startsWith('/api/auth/status')) return json(200, { authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
-      if (u === '/api/auth/passkeys') return json(200, { credentials: [], storeUnreadable: false });
-      return json(404, { error: 'not-found' });
-    }));
-    render(<AuthSection />);
+    render(<ThisSessionCard />);
     const btn = await screen.findByRole('button', { name: /^sign out$/i });
     expect(btn).toHaveClass('btn-ghost');
     expect(btn).not.toHaveClass('btn-primary');
+  });
+
+  it("a passkey's Revoke is danger-ghost at its row's end, and its confirm is danger (settings Task R2d)", async () => {
+    const key = { credentialIdB64url: 'AQEB', label: 'Device A', enrolledAt: Date.now() - 86_400_000, lastUsedAt: 0, uvAtEnrollment: true };
+    render(
+      <YourSignInCard
+        status={{ authed: true, passkeysEnrolled: 1, mode: 'passphrase' }}
+        passkeys={{ kind: 'read', list: { credentials: [key], storeUnreadable: false } }}
+        refreshAuth={() => {}}
+      />,
+    );
+    const revoke = screen.getByRole('button', { name: 'Revoke passkey Device A' });
+    expect(revoke).toHaveClass('btn-danger-ghost');
+    expect(revoke.closest('li')?.lastElementChild).toBe(revoke);
+    fireEvent.click(revoke);
+    expect(screen.getByRole('button', { name: 'Revoke' })).toHaveClass('btn-danger');
   });
 });
 

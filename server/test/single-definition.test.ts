@@ -8259,6 +8259,33 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
   });
 });
 
+// Named workspaces review fixes: vocabularies the PWA and the server both read are declared ONCE in `shared/` and the
+// other side imports them. Each was spelled twice before (the rename words' `BAD_TITLE_REASONS`; the Linear failure
+// arms as the server's `LINEAR_FAILURES` beside the PWA's `LOOKUP_NOTE` keys, and the preview's wire type as a loose
+// interface), which is how an arm gets added on one side only.
+describe('the named-workspace vocabularies have one home each', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('LINEAR_FAILURES').test("export const LINEAR_FAILURES = [")).toBe(true);
+    expect(decl('LINEAR_FAILURES').test("import { LINEAR_FAILURES } from '../../../shared/linear';")).toBe(false);
+  });
+  it('the Linear failure arms and the preview answer are declared once, in shared/linear.ts', () => {
+    for (const c of ['LINEAR_FAILURES', 'LinearFailure', 'ResolveAnswer']) expect(holders(decl(c)), c).toEqual(['shared/linear.ts']);
+  });
+  it('the bad-title reasons are declared once, in shared/refusal.ts, and no source spells the three words as a list', () => {
+    for (const c of ['BAD_TITLE_REASONS', 'BadTitleReason']) expect(holders(decl(c)), c).toEqual(['shared/refusal.ts']);
+    expect(holders(/'blank'\s*,\s*'control-characters'\s*,\s*'too-long'/)).toEqual(['shared/refusal.ts']);
+  });
+  it('the workspace id `${project}-${slug}` is spelled once, by workspaceId in shared/slug.ts', () => {
+    const spelled = /`[^`]*\$\{\s*(?:ctx\.)?project\s*\}-\$\{\s*(?:ctx\.|preview\.|plan\.ask\.)?slug\s*\}/;
+    expect(spelled.test('`${project}-${slug}`'), 'CONTROL: the pattern sees the spelling').toBe(true);
+    expect(spelled.test('`new workspace ${project}-${preview.slug} · branch`'), 'CONTROL: and the preview line').toBe(true);
+    expect(holders(spelled).filter((f) => f !== 'shared/slug.ts')).toEqual([]);
+    expect(holders(/\bexport const workspaceId\b/)).toEqual(['shared/slug.ts']);
+  });
+});
+
 // PATH IDENTITY W2 (spec 2026-10-12 §3.4). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
 // citation audit cites this file by line. A `collect` `done`'s leaf words (`meas.leaf`) are ONE L0 table's keys in
 // `shared/api.ts`, and the runtime list derives from it. A second hand copy (a reader in `childReclaimSweep.ts` that

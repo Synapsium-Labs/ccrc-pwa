@@ -267,9 +267,15 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.msg-assist h4',
   '.msg-assist strong',
   '.msg-assist ul, .msg-assist ol',
-  '.msg-assist li::marker',
+  // `.msg-assist li::marker` is REGISTERED in INHERITED_GROUNDS now: prose.css
+  // restored the markers, so the hue paints a real bullet and a real number.
   '.msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
-  '.msg-assist .task-list-item:has(input:checked)',
+  // The done item's dim. The SAME identity as main's `:has(input:checked)`,
+  // narrowed to the item's own box (review 2026-10-20, S1: a checked
+  // grandchild struck its unchecked parent through) — rekeyed, not added, the
+  // way the move rekeyed every prose entry. Still a blind spot, honestly: its
+  // ground is the page, a quote's surface or a callout's tint by context.
+  '.msg-assist .task-list-item:has(> input:checked, > p:first-child > input:checked)',
   '.msg-assist a',
   '.msg-assist .kbd-plus',
   '.msg-assist .hljs-comment, .msg-assist .hljs-quote',
@@ -1495,6 +1501,36 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     );
     expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
+  });
+
+  // The list number inside a callout (prose.css's `.msg-assist .callout
+  // li::marker`, --ink-secondary) is text on the callout's tint, and the
+  // markers' restoration made it real. It needs NO INHERITED_GROUNDS entry
+  // and must not get one: its selector names `.msg-assist .callout`, so the
+  // descendant route measures it through that painter in all five variant
+  // contexts, off the tints the stylesheet binds — where a registration is
+  // one fixed layer stack, and `var(--callout-tint)` is no palette token.
+  // Measured 2026-10-20: worst 4.67, the warning tint in catppuccin-mocha.
+  it.each(VARIANTS)("measures the list number inside the %s callout on its own tint", (v) => {
+    const rows = report.measured.filter(
+      (m) => m.label.includes('.msg-assist .callout li::marker [in .msg-assist .callout] [as')
+        && m.label.includes(`'${v}'`),
+    );
+    expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('var(--ink-secondary) on var(--callout-tint)');
+      expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
+    }
+  });
+
+  it('measures the callout list number through the painter, not by registration', () => {
+    const key = '.msg-assist .callout li::marker';
+    expect(INHERITED_GROUNDS[key]).toBeUndefined();
+    expect(report.uncovered).not.toContain(key);
+    // base context + one per variant, in every palette
+    const rows = report.measured.filter((m) =>
+      m.label.replace(/^\S+\s+/, '').startsWith(`${key} [in .msg-assist .callout]`));
+    expect(rows).toHaveLength(THEME_COUNT * (1 + VARIANTS.length));
   });
 
   it('takes the tints from the stylesheet, not from a list in this file', () => {
