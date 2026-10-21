@@ -472,7 +472,7 @@ describe('D-6180: one episode per arm, so two arms on one tick do not flood', ()
     ticks(DRAFT, 360, { step: 5 });
     expect(standDowns().length).toBeLessThanOrEqual(2 * Math.ceil((360 * 5) / floor));
     expect(dispatches()).toEqual([]);
-  });
+  }, 120_000);   // 360 real bash ticks: ~16 s on a laptop, past CI's 20 s default on a loaded runner
 
   it('a dispatch ends both arms\' episodes', () => {
     seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]); HOLD();
