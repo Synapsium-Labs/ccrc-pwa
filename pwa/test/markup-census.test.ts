@@ -578,3 +578,63 @@ describe('a chip tone is a name, not a string a call site remembers', () => {
     expect(metaChipTone('plain')).toBe('metachip');
   });
 });
+
+// ── settings Task R1b's row, landed with R2b2 (D-5507, spec §6.3, §11.4) ─────
+// In a `.settings-move` group the danger control comes after the safe one: a
+// `danger-ghost` (Roll back, Ack) never precedes a `ghost` (Install, Update).
+// The group is one element's children, however a fragment, a ternary or a `&&`
+// buries them (`kids`). A move control is `MoveButton` (its `tone`: absent or
+// "move" is the ghost, "danger" the danger-ghost) or a `Button` wearing
+// `settings-move` (its `variant`). A computed tone answers neither and is
+// skipped: the row reads only what the source states.
+describe('a .settings-move group puts its danger control last (R1b)', () => {
+  type Tone = 'ghost' | 'danger' | null;
+  const attr = (n: Jsx, name: string): ts.JsxAttribute | undefined =>
+    opening(n).attributes.properties.find((a): a is ts.JsxAttribute => ts.isJsxAttribute(a) && a.name.getText() === name);
+  const literal = (a: ts.JsxAttribute | undefined): string | null | undefined => {
+    if (a === undefined) return undefined;
+    return a.initializer !== undefined && ts.isStringLiteral(a.initializer) ? a.initializer.text : null;
+  };
+  /** A move control's tone; `undefined` when the element is not one. */
+  const toneOf = (n: Jsx): Tone | undefined => {
+    const tag = opening(n).tagName.getText();
+    if (tag === 'MoveButton') {
+      const tone = literal(attr(n, 'tone'));
+      return tone === undefined || tone === 'move' ? 'ghost' : tone === 'danger' ? 'danger' : null;
+    }
+    if (tag === 'Button' && classOf(n).split(' ').includes('settings-move')) {
+      const v = literal(attr(n, 'variant'));
+      return v === 'ghost' ? 'ghost' : v === 'danger-ghost' ? 'danger' : null;
+    }
+    return undefined;
+  };
+  const groups = (): { where: string; tones: Tone[] }[] => {
+    const out: { where: string; tones: Tone[] }[] = [];
+    for (const [tag, file] of APP) {
+      const src = parse(file);
+      const visit = (n: ts.Node): void => {
+        if (ts.isJsxElement(n)) {
+          const tones = kids(n).map(toneOf).filter((t): t is Tone => t !== undefined);
+          if (tones.length >= 2) {
+            const line = src.getLineAndCharacterOfPosition(n.getStart()).line + 1;
+            out.push({ where: `${tag}:${line}`, tones });
+          }
+        }
+        n.forEachChild(visit);
+      };
+      visit(src);
+    }
+    return out;
+  };
+
+  it('no danger-ghost precedes a ghost in any .settings-move group', () => {
+    const found = groups();
+    // Vacuity: the node row's Update, Roll back and Ack are one such group today.
+    expect(found.some((g) => g.tones.includes('ghost') && g.tones.includes('danger'))).toBe(true);
+    const wrong = found.filter((g) => {
+      const firstDanger = g.tones.indexOf('danger');
+      return firstDanger !== -1 && g.tones.slice(firstDanger).includes('ghost');
+    }).map((g) => `${g.where} ${g.tones.join(',')}`);
+    expect(wrong).toEqual([]);
+  });
+});

@@ -1,13 +1,15 @@
-// Settings › Notifications (settings spec §3.1; D-5503): the Bell and Announce new releases. Settings Task R2b1 moved
-// it here from `SettingsScreen.tsx` unchanged; the page's `<h2>` is the frame's, and whether this browser can take a
-// push is the frame's read (`SettingsDataProvider`'s `push`), not this file's.
+// Settings › Notifications (settings spec §3.3, §5.3; D-5503): two cards, each a `Section` with its scope: This
+// browser (the literal Bell), then Whole fleet (Announce new releases). The page's `<h2>` is the frame's, and whether
+// this browser can take a push is the frame's read (`SettingsDataProvider`'s `push`), not this file's.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyMode, UpdatesView } from '../../../../shared/api';
 import { FLEET_SCOPE, NOTIFY_MODES, isNotifyMode } from '../../../../shared/api';
-import { RadioFieldset } from '@ccrc/ui';
+import { RadioFieldset, Section } from '@ccrc/ui';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { NOTIFICATIONS_TEXT, ResultLine, UNCONFIRMED_TEXT, useResultLine } from '../../fleet/settingsText';
+import {
+  NOTIFICATIONS_TEXT, ResultLine, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, useResultLine,
+} from '../../fleet/settingsText';
 import { api, updateErrorText } from '../../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -84,21 +86,23 @@ export function NotificationsSection({ view, reload, supported }: {
     reload();
   };
 
+  const { browser, fleet } = SETTINGS_CARDS.notifications;
   return (
     <>
-      {supported ? (
-        <div className="settings-bell-row">
-          <NotificationBell />
-          {/* the label says push, never a device: notifications-label-says-push (D-4036) */}
-          <span>Push notifications for this browser</span>
-        </div>
-      ) : (
-        <p className="settings-note">This browser cannot receive Web Push.</p>
-      )}
-      <p className="settings-note">{NOTIFICATIONS_TEXT.browserPurpose}</p>
-      <p className="settings-note">{NOTIFICATIONS_TEXT.browserWhen}</p>
+      <Section level={3} scope={browser.scope} title={browser.title} purpose={browser.purpose}>
+        {supported ? (
+          <div className="settings-bell-row">
+            <NotificationBell />
+            {/* the label says push, never a device: notifications-label-says-push (D-4036) */}
+            <span>Push notifications for this browser</span>
+          </div>
+        ) : (
+          <p className="settings-note">This browser cannot receive Web Push.</p>
+        )}
+        <p className={SETTINGS_WHEN}>{NOTIFICATIONS_TEXT.browserWhen}</p>
+      </Section>
       {view !== null && (
-        <>
+        <Section level={3} scope={fleet.scope} title={fleet.title} purpose={fleet.purpose}>
           <RadioFieldset
             legend={NOTIFICATIONS_TEXT.announceLegend}
             name="settings-notify"
@@ -108,9 +112,8 @@ export function NotificationsSection({ view, reload, supported }: {
             disabled={saving}
           />
           <ResultLine line={result.line} />
-          <p className="settings-note">{NOTIFICATIONS_TEXT.announcePurpose}</p>
-          <p className="settings-note">{NOTIFICATIONS_TEXT.announceWhen}</p>
-        </>
+          <p className={SETTINGS_WHEN}>{NOTIFICATIONS_TEXT.announceWhen}</p>
+        </Section>
       )}
     </>
   );

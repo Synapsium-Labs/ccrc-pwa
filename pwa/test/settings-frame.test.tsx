@@ -10,6 +10,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { SETTINGS_SECTIONS } from '../src/lib/routes';
+import { SETTINGS_SCOPE } from '../src/fleet/settingsText';
 import { SettingsDataProvider, useSettingsView } from '../src/screens/settings/SettingsDataProvider';
 import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { useFleetStore } from '../src/stores/fleet';
@@ -74,7 +75,7 @@ describe('the index and the section routes', () => {
       appearance: () => screen.findByRole('group', { name: 'Theme' }),
       notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
       automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
-      security: () => screen.findByRole('status', { name: 'Loading' }),
+      security: () => screen.findByRole('heading', { level: 3, name: 'Sign-in gate' }),
     };
     for (const s of SETTINGS_SECTIONS) {
       renderSettings(s.id);
@@ -96,11 +97,11 @@ describe('the index and the section routes', () => {
     expect(within(index()).getAllByRole('link')).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its two cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its three cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3]);
   });
 });
 
@@ -269,5 +270,42 @@ describe('the move: nothing lost, nothing twice', () => {
       cleanup();
     }
     expect(pages).toEqual(['automation']);
+  });
+});
+
+// Settings Task R2b2 (D-5503; spec §3.3): every card on every section page is a `Section` with its scope word and its
+// purpose line, in §3.3's order.
+describe('the cards: scope and purpose, in order (spec §3.3)', () => {
+  const ORDER: Record<string, readonly string[]> = {
+    updates: ['Fleet version', 'Nodes', 'Update policy'],
+    appearance: ['Layout and theme'],
+    notifications: ['Push notifications', 'Release announcements'],
+    automation: ['Stall watch', 'Temp root collector', 'Cleanup pause'],
+    security: ['Sign-in gate', 'Box token'],
+  };
+  const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
+
+  it('each card carries its scope word and purpose line, on all five pages (the scope census)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    for (const s of SETTINGS_SECTIONS) {
+      renderSettings(s.id);
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      const titles = screen.getAllByRole('heading', { level: 3 });
+      expect(titles.map((h) => h.textContent), s.id).toEqual(ORDER[s.id]);
+      for (const h of titles) {
+        const head = h.parentElement!;
+        const scope = [...head.children].find((el) => el !== h && el.tagName === 'P');
+        expect(scope?.textContent, `${s.id} › ${h.textContent}: its scope`).toBeTruthy();
+        expect(SCOPES, `${s.id} › ${h.textContent}: a scope word`).toContain(scope!.textContent);
+        const purpose = head.nextElementSibling;
+        expect(purpose?.tagName, `${s.id} › ${h.textContent}: its purpose line`).toBe('P');
+        expect(purpose!.textContent!.length, `${s.id} › ${h.textContent}: a purpose`).toBeGreaterThan(20);
+        expect(h.closest('section')!.getAttribute('aria-labelledby')).toBe(h.id);
+      }
+      cleanup();
+    }
   });
 });
