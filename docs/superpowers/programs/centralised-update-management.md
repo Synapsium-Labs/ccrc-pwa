@@ -2509,6 +2509,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           artifact, kept with the earlier slow lines and their checksums. The 15.4 s stall is `stallMid` on a pass that
           is not hourly (`repairSkipped=1`, `rewrites=2`), and four passes share that shape. On ordinary passes,
           `stallFlush` tracks `rewrite`. Its next follow-up, run 728 (the delta projection), removes flush's full rewrite.
+      - **06:45 UTC: the broker's growth measured on copies (mail 7555, operator-approved); v0.0.514 tapped, clean.**
+        - Asked by the broker's coordinator on the operator's word: counts only, on copies only. The copies were an online
+          backup of `coord.db` from a read-only connection, plus file copies of the checkpoint and journal. One script
+          read them at nice 19 and ionice idle, took 19 s and removed every copy by its literal path. Sent as mail 7561.
+        - What it found:
+          - 84,302 activities, 90% of them `bash-worktree`.
+          - Bash calls with a listing, paired Pre to Post: 73,841 equal and 921 different, so 98.8% never changed.
+            Those pairs match the `bash-worktree` counts: 74,762 pairs against 74,800 ended, and the 1,397 Pres with
+            no Post equal the 1,397 active.
+          - Attempts: 309 of 351 rows share one key, and `cpAttempts` has risen 20 to 36 an hour since 19:00 yesterday.
+          - The checkpoint is 70.8M, of which activities 41.9M, the natural-key index 15.3M and attempts 10.6M.
+        - The operator's tap to v0.0.514 (#1062) ran at the same time. Fleet 06:40:53 to 06:42:18. Server 06:43:26 to
+          06:46:52, its backup step 06:43:28 to 06:45:28, overlapping the 19 s read, and `ccrc.service` restarted at
+          06:45:38. Both `done`, gates passed, doctor 0 failed on both. Start to restart took 132 s against 96 s at
+          05:36, so the concurrent copy likely cost the move about half a minute.
+        - Server backups 10262M, 10 kept: over the probe's 10240M size line, the known growth this ledger expected.
+          Free disk 21.6G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
