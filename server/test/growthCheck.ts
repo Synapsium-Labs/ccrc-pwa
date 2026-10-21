@@ -26,6 +26,17 @@
 // files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
 // `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
 // the pure decision inside it.
+//
+// D-6223: a fourth waiver, the reviewed ledger. `growth-waivers.json` holds
+// `{payer, waivers}`, each waiver `{file, maxDelta, d, reason, added}`. A PR
+// that must grow a listed file past the limit adds one entry for that file in
+// its own diff, where review sees it; the entry waives that file while the
+// measured delta stays at or below `maxDelta`. The ledger is read at the
+// merge-base and at HEAD, and only an entry whose file and D-number the
+// merge-base does not hold counts (`waiversAdded`): an entry on main waives
+// nothing for a later PR, and raising one waives nothing. A malformed ledger
+// at either sha waives nothing. The entries are debt the payer, consolidation
+// W5, pays down; none is ever edited.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { parseSource } from './scan/parse.js';
@@ -316,6 +327,91 @@ export const GROWTH_MACHINERY: readonly string[] = [
   'server/test/scan/parse.ts',
 ];
 
+/** The waiver ledger, repo-relative (D-6223). */
+export const GROWTH_WAIVERS_FILE = 'server/test/growth-waivers.json';
+
+/** One ledger entry: `file` may grow by up to `maxDelta` net code lines in the PR whose diff adds it. */
+export interface GrowthWaiver { file: string; maxDelta: number; d: string; reason: string; added: string }
+
+const WAIVER_KEYS: readonly (keyof GrowthWaiver)[] = ['file', 'maxDelta', 'd', 'reason', 'added'];
+
+/** `text` as the ledger. Any problem (not JSON, a wrong shape, a payer that does
+ *  not name consolidation W5, a key missing or unknown, a value out of range, a
+ *  second entry for one file and D-number) is named, and then no entry is
+ *  answered: a malformed ledger waives nothing. */
+export function parseWaivers(text: string, files: readonly string[], today: Date = new Date()):
+  { payer: string; entries: GrowthWaiver[]; problems: string[] } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { payer: '', entries: [], problems: [`not JSON: ${(e as Error).message}`] };
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || Object.keys(raw).sort().join() !== 'payer,waivers'
+    || !Array.isArray((raw as { waivers: unknown }).waivers)) {
+    return { payer: '', entries: [], problems: ['the ledger must be an object with two keys, `payer` and `waivers` (an array)'] };
+  }
+  const { payer, waivers: list } = raw as { payer: unknown; waivers: unknown[] };
+  const problems: string[] = [];
+  if (!isLine(payer) || !/\bconsolidation W5\b/.test(payer as string)) problems.push('the payer must name consolidation W5, on one line');
+  const seen = new Set<string>();
+  list.forEach((e, i) => {
+    const at = `#${i}`;
+    if (typeof e !== 'object' || e === null || Array.isArray(e)) { problems.push(`${at}: not an object`); return; }
+    const o = e as Record<string, unknown>;
+    for (const k of Object.keys(o)) if (!(WAIVER_KEYS as readonly string[]).includes(k)) problems.push(`${at}: unknown key \`${k}\``);
+    for (const k of WAIVER_KEYS) if (!(k in o)) problems.push(`${at}: missing \`${k}\``);
+    if (typeof o['file'] !== 'string' || !files.includes(o['file'])) problems.push(`${at}: file must be one of the listed files`);
+    if (!Number.isInteger(o['maxDelta']) || (o['maxDelta'] as number) <= GROWTH_LIMIT) {
+      problems.push(`${at}: maxDelta must be an integer above ${GROWTH_LIMIT}`);
+    }
+    if (typeof o['d'] !== 'string' || !/^D-[1-9]\d*$/.test(o['d'])) problems.push(`${at}: d must be a D-number, D-<n>`);
+    if (typeof o['reason'] !== 'string' || typeof o['added'] !== 'string') {
+      problems.push(`${at}: reason and added must be strings`);
+    } else {
+      problems.push(...malformedEntries({ [at]: { reason: o['reason'], since: o['added'] } }, today));
+    }
+    const key = `${String(o['file'])} and ${String(o['d'])}`;
+    if (seen.has(key)) problems.push(`${at}: a second entry for ${key}`);
+    seen.add(key);
+  });
+  return problems.length ? { payer: '', entries: [], problems } : { payer: payer as string, entries: list as GrowthWaiver[], problems };
+}
+
+/** The entries of `head` whose file and D-number `base` does not hold: the ones
+ *  the diff adds. An entry on the base, raised or not, is never added. */
+export function waiversAdded(base: readonly GrowthWaiver[], head: readonly GrowthWaiver[]): GrowthWaiver[] {
+  return head.filter((h) => !base.some((b) => b.file === h.file && b.d === h.d));
+}
+
+/** The ledger entries the diff `baseSha..headSha` adds. Absent at a sha, the
+ *  ledger holds nothing there; malformed at either, nothing is added and the
+ *  problems say which side. */
+export function waiversInDiff(files: readonly string[], baseSha: string, headSha: string, cwd: string,
+  today: Date = new Date()): { added: GrowthWaiver[]; problems: string[] } {
+  const read = (sha: string) => {
+    const text = fileAt(GROWTH_WAIVERS_FILE, sha, cwd);
+    return text === null ? { entries: [], problems: [] } : parseWaivers(text, files, today);
+  };
+  const base = read(baseSha);
+  const head = read(headSha);
+  const problems = [...base.problems.map((p) => `base: ${p}`), ...head.problems.map((p) => `head: ${p}`)];
+  return { added: problems.length ? [] : waiversAdded(base.entries, head.entries), problems };
+}
+
+/** The added entry that best covers one over file: the largest `maxDelta` for it. */
+export interface WaiverMatch { file: string; entry: GrowthWaiver; applies: boolean }
+function matchWaiver(row: GrowthRow, added: readonly GrowthWaiver[]): WaiverMatch | undefined {
+  const mine = added.filter((w) => w.file === row.file);
+  if (!mine.length) return undefined;
+  const entry = mine.reduce((a, b) => (b.maxDelta > a.maxDelta ? b : a));
+  return { file: row.file, entry, applies: row.delta <= entry.maxDelta };
+}
+
+const waiverNote = (w: WaiverMatch): string => (w.applies
+  ? `waived: ${w.entry.d}, max ${w.entry.maxDelta}`
+  : `over its ledger max of ${w.entry.maxDelta} under ${w.entry.d}`);
+
 /** For each file in `over`, the entry naming it for PR `pr`, and whether it
  *  applies: the measured delta is at or below the entry's cap, and the measured
  *  diff touched none of `GROWTH_MACHINERY` (`touched` names what it did touch).
@@ -341,33 +437,43 @@ const notExempt = (m: ExemptionMatch): string => (m.touched.length
 
 /** One listed file's verdict: its row's title, whether the row fails, and why. */
 export interface GrowthVerdict {
-  file: string; over: boolean; exemption: ExemptionMatch | undefined; fails: boolean; title: string; why: string;
+  file: string; over: boolean; exemption: ExemptionMatch | undefined; waiver: WaiverMatch | undefined;
+  fails: boolean; title: string; why: string;
 }
 
 /** The armed decision, pure: a row fails when its file grew over the limit,
- *  unwaived, and no entry applies to it. */
+ *  unwaived, and neither an exemption nor a ledger entry the diff adds
+ *  (`waivers`, D-6223) applies to it. */
 export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string[],
-  entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[]): GrowthVerdict[] {
+  entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[],
+  waivers: readonly GrowthWaiver[] = []): GrowthVerdict[] {
   const matches = matchExemptions(over, rows, entries, pr, touched);
   return rows.map((r) => {
     const isOver = over.includes(r.file);
     const m = matches.find((x) => x.file === r.file);
-    const note = m === undefined ? '' : m.applies ? `, exempt: PR #${m.entry.pr}, cap ${m.entry.cap}` : `, ${notExempt(m)}`;
+    const w = isOver ? matchWaiver(r, waivers) : undefined;
+    const notes = [
+      ...(m === undefined ? [] : [m.applies ? `exempt: PR #${m.entry.pr}, cap ${m.entry.cap}` : notExempt(m)]),
+      ...(w === undefined ? [] : [waiverNote(w)]),
+    ];
+    const reason = w !== undefined && !w.applies ? waiverNote(w)
+      : m === undefined ? `over the limit of ${GROWTH_LIMIT}` : notExempt(m);
     return {
       file: r.file,
       over: isOver,
       exemption: m,
-      fails: isOver && m?.applies !== true,
-      title: `${r.file}: delta ${signed(r.delta)}${isOver ? ` (GROWTH_OVER${note})` : ''}`,
-      why: `${r.file} grew by ${r.delta} net code lines, ${m === undefined ? `over the limit of ${GROWTH_LIMIT}` : notExempt(m)}`,
+      waiver: w,
+      fails: isOver && m?.applies !== true && w?.applies !== true,
+      title: `${r.file}: delta ${signed(r.delta)}${isOver ? ` (GROWTH_OVER${notes.map((n) => `, ${n}`).join('')})` : ''}`,
+      why: `${r.file} grew by ${r.delta} net code lines, ${reason}`,
     };
   });
 }
 
 /** The armed rows' whole read and decision between `base` and `head` in
  *  `root`: each file's growth, the two waivers, origin/main's exemption list,
- *  the PR number, the growth check's own files the measured diff touches, and
- *  the verdict per file. */
+ *  the PR number, the growth check's own files the measured diff touches, the
+ *  ledger entries the diff adds (D-6223), and the verdict per file. */
 export function armedGrowth(files: readonly string[], root: string, base: string, head: string,
   env: NodeJS.ProcessEnv, today: Date = new Date()) {
   const rows = files.map((f) => netGrowth(f, base, head, root));
@@ -375,23 +481,27 @@ export function armedGrowth(files: readonly string[], root: string, base: string
   const pr = prNumberFromEnv(env);
   const onMain = exemptionsOnMain(files, root, today);
   const touched = changedFiles(base, head, root).filter((p) => GROWTH_MACHINERY.includes(p));
-  const verdicts = growthVerdicts(rows, over, onMain.entries, pr, touched);
+  const ledger = waiversInDiff(files, base, head, root, today);
+  const verdicts = growthVerdicts(rows, over, onMain.entries, pr, touched, ledger.added);
   const exemptions = verdicts.flatMap((v) => (v.exemption === undefined ? [] : [v.exemption]));
-  return { rows, over, pr, onMain, touched, verdicts, exemptions };
+  const waivers = verdicts.flatMap((v) => (v.waiver === undefined ? [] : [v.waiver]));
+  return { rows, over, pr, onMain, touched, ledger, verdicts, exemptions, waivers };
 }
 
 /** `GROWTH_OVER`'s list: every file that grew over the limit, an exempted one
  *  annotated with its PR, cap and ruling, and one whose entry does not apply
  *  said why: past its cap, or the measured diff edits the growth check's own files. */
 export function overLine(over: readonly string[], exemptions: readonly ExemptionMatch[] = [],
-  quote: (f: string) => string = (f) => f): string {
+  quote: (f: string) => string = (f) => f, waivers: readonly WaiverMatch[] = []): string {
   if (!over.length) return '(none)';
   return over.map((f) => {
     const m = exemptions.find((x) => x.file === f);
-    if (m === undefined) return quote(f);
-    return m.applies
-      ? `${quote(f)} (exempt: PR #${m.entry.pr}, cap ${m.entry.cap}, ruling: ${m.entry.ruling})`
-      : `${quote(f)} (${notExempt(m)})`;
+    const w = waivers.find((x) => x.file === f);
+    const notes = [
+      ...(m === undefined ? [] : [m.applies ? `exempt: PR #${m.entry.pr}, cap ${m.entry.cap}, ruling: ${m.entry.ruling}` : notExempt(m)]),
+      ...(w === undefined ? [] : [`${waiverNote(w)}, ledger entry added ${w.entry.added}`]),
+    ];
+    return notes.length ? `${quote(f)} (${notes.join('; ')})` : quote(f);
   }).join(', ');
 }
 
@@ -426,6 +536,7 @@ export interface GrowthSummaryInput {
   methods: { base: number; head: number };
   armed: boolean;
   exemptions?: readonly ExemptionMatch[];
+  waivers?: readonly WaiverMatch[];
 }
 
 /** The CI job summary: one row per listed file with its absolute code lines,
@@ -442,7 +553,7 @@ export function growthSummary(i: GrowthSummaryInput): string {
     '',
     `${METHOD_COUNT_CLASS} methods (\`${METHOD_COUNT_FILE}\`): base ${i.methods.base}, head ${i.methods.head}, delta ${signed(i.methods.head - i.methods.base)}`,
     '',
-    `GROWTH_OVER: ${overLine(i.over, i.exemptions, (f) => `\`${f}\``)}`,
+    `GROWTH_OVER: ${overLine(i.over, i.exemptions, (f) => `\`${f}\``, i.waivers)}`,
     '',
   ].join('\n');
 }
