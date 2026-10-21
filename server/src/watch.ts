@@ -787,6 +787,11 @@ const APPROVAL_RULED_GRACE_MS = 10_000;
  *  what is genuinely the same statement). A workspace outlives its own merge
  *  now, so `id` alone is not an identity. */
 const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
+/** The merged announcement's body, built in ONE place (landing-order wave 3d): `announceMerged` writes it, and
+ *  `sweepMerged`'s durable read matches a row archived before the once-only key existed by exactly this text. */
+const mergedBody = (number: number | null, reason: string | null): string => reason === null
+  ? `PR #${number ?? '?'} merged; nothing archived.`
+  : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`;
 
 /** What one `FleetWatcher.pushRelease` call did (design 2026-09-20 §13; plan W3 Task 3). Each arm is a fact
  *  a caller or a test tells apart: nothing to decide; decided and marked with no push, every measured node
@@ -933,13 +938,18 @@ export class FleetWatcher {
    * SECOND PR, and `boundRow` binds the newest one. A key of `id` alone would
    * announce the first merge and silently swallow every one after it.
    *
-   * IN-MEMORY BY DESIGN, not a gap: a server restart forgets the latch and
-   * may repeat the push, but `announceMerged` tags it `merged-<id>#<number>` —
-   * the same key — so the repeat REPLACES that PR's own prior notification
-   * rather than stacking a duplicate, while a DIFFERENT PR's announcement,
-   * which is a different statement, still stands beside it. The cost of losing
-   * this latch on restart is one redundant, silently-replaced notification;
-   * persisting it would buy nothing back for that price.
+   * THIS PROCESS'S LATCH, and a restart forgets it. What stops a restart
+   * repeating the announcement is the archive (landing-order wave 3d): the
+   * feed row carries this same key, and `sweepMerged` reads it back through
+   * `hasNotice` before announcing. The tray tag alone was not enough: it made a
+   * repeated push REPLACE that PR's own notification, but every push is also a
+   * feed row, and nothing replaced the row. Measured 2026-10-21: a restart
+   * wrote a merged PR's `merged` row a second time. Three repeats remain, by
+   * design: a row pruned past `FEED_RETENTION` reads as never written; a push
+   * the presence gate kept out of the archive wrote no row to find; and a row
+   * archived before the key existed is matched only by its exact body, so one
+   * whose reason clause changed since (its run closed after it was written)
+   * repeats once, at the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
   /** The merge-queue word each session's last full pr-state line carried
@@ -8333,9 +8343,9 @@ export class FleetWatcher {
     this.pushOne({
       kind: 'merged', sessionId: r.id, project: r.project,
       title: `✓ merged › ${r.workspace}`,
-      body: reason === null
-        ? `PR #${number ?? '?'} merged; nothing archived.`
-        : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`,
+      body: mergedBody(number, reason),
+      // The once-only key, archived beside the row for `hasNotice` (landing-order wave 3d). It decides nothing here.
+      dedupeKey: key,
       // EXPLICIT, because `pushOne`'s default (`${kind}-${sessionId}`) is one
       // key short of this lane's own. The latch is per (workspace, PR) so a
       // second PR from the same workspace is announced — and an id-only
@@ -8344,9 +8354,10 @@ export class FleetWatcher {
       // that #43 landed and never that #42 did. Same shape and the same
       // reason as the mail lane's `mail-<toId>-<mailId>` just above.
       //
-      // It still collapses where it should: a restart forgets the latch and
-      // may repeat ONE PR's push, and that repeat carries this same tag, so
-      // it replaces rather than stacks.
+      // It still collapses where it should: a repeat the archive cannot stop
+      // (a row pruned past `FEED_RETENTION`, a push the presence gate kept out
+      // of it, or a pre-key row whose body changed since) carries this same
+      // tag, so it replaces rather than stacks.
       tag: `merged-${key}`,
     }, this.activeProjects);
   }
@@ -8461,6 +8472,18 @@ export class FleetWatcher {
           : unreadable
             ? 'a run may still be open — the run rows could not be read'
             : null;
+      // ONCE ACROSS A RESTART TOO (landing-order wave 3d): the latch above is this process's; the archive is every
+      // process's. The key is read first; the body matches a row archived before the key existed. A read that
+      // throws announces, as this lane did before the read existed, and never costs `sweepLanding` its sweep: this
+      // loop runs inside `sweepPr`'s `try` with no `catch`.
+      try {
+        if (this.deps.coord?.hasNotice('merged', r.id, key, mergedBody(pr.number, reason)) === true) {
+          this.mergedNotified.add(key);
+          continue;
+        }
+      } catch (err) {
+        console.warn(`ccrc-server: merged notice read for ${r.id} failed (${err instanceof Error ? err.message : String(err)}); announcing`);
+      }
       this.announceMerged(key, r, pr.number, reason);
     }
   }
