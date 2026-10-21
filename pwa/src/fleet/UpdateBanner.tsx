@@ -114,6 +114,12 @@ export function updateBannerText(view: UpdatesView, health?: FleetHealth | null)
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 
+/** Does the update banner show? A view has landed and it names a release to move to (`bannerRelease`, the same
+ *  answer the render below gates on). The banner stack asks it (W2 Task S2c, BannerStack.tsx). */
+export function updateBannerShows(view: UpdatesView | null): boolean {
+  return view !== null && bannerRelease(view) !== null;
+}
+
 export function UpdateBanner({ updates: injected, health = null, onMoved, stale: staleInjected = false }: {
   updates?: UpdatesView | null; health?: FleetHealth | null; onMoved?: () => void; stale?: boolean;
 } = {}): ReactNode {
@@ -138,7 +144,8 @@ export function UpdateBanner({ updates: injected, health = null, onMoved, stale:
   const halted = halting.length > 0 ? updateAllHaltedText(halting) : null;
   return (
     <>
-      {view !== null && release !== null && text !== null && (
+      {/* The render reads its own check (W2 Task S2c); the sheets below stay mounted either way. */}
+      {updateBannerShows(view) && view !== null && release !== null && text !== null && (
         <div className="update-banner" role="status">
           <span className="update-banner-msg">{text}</span>
           {halted !== null && <span className="update-banner-msg" id={haltedId}>{halted}</span>}

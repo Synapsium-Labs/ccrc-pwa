@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { syncBuiltinESMExports } from 'node:module';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S, SCHEMA_VERSION, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, SCHEMA_VERSION, journalRecord, floorThreshold, historyPaths, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import { exportCensus, homeOfPath, newBudget } from '../../ccd/history/sweep.mjs';
 import {
@@ -609,10 +609,10 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     heldPasses(box);
     return box;
   };
-  const verdict = (box: HistoryBox): Array<{ word: string; detail: string }> => {
+  const verdict = (box: HistoryBox): Array<{ word: string; detail: string; remedy: string }> => {
     const r = runCli(box, ['status', '--json']);
     expect(r.code, r.stderr).toBe(0);
-    return (r.json!['health'] as { fail: Array<{ word: string; detail: string }> }).fail;
+    return (r.json!['health'] as { fail: Array<{ word: string; detail: string; remedy: string }> }).fail;
   };
   const setMetaRaw = (box: HistoryBox, k: string, v: string): void => {
     const db = new DatabaseSync(paths(box).db);
@@ -635,6 +635,10 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     const fail = verdict(box);
     expect(fail.map((i) => i.word).sort()).toEqual(['lag-high', 'migration-needs-op']);
     expect(fail.find((i) => i.word === 'lag-high')!.detail).toContain('over 1800 s');
+    // W5h-2 Task 5 (R6): the lag cannot drain while the hold stands, so lag-high's remedy is the hold's own, end to end through status.
+    const needsOp = fail.find((i) => i.word === 'migration-needs-op')!.remedy;
+    expect(needsOp, 'CONTROL: the hold\'s own remedy names the verb').toContain('ccrc history doctor --migrate');
+    expect(fail.find((i) => i.word === 'lag-high')!.remedy).toBe(`no scheduled pass ingests while migration-needs-op stands, so this lag cannot drain until it clears: ${needsOp}`);
   });
 
   it('F1 (review 466): a store newer than this build is refused at openStore, before the held arm: schema-newer, exit 5, NO held_pass_ms, so tick-stale stands beside schema-newer', () => {
@@ -990,8 +994,15 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
 describe('the op marker (§9.6)', () => {
   const opFile = (box: HistoryBox): string => path.join(paths(box).root, 'op');
   const dead = (pid: number): boolean => { try { process.kill(pid, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH'; } };
+  /** D-5748: a process's identity read from /proc the way D-5016 reads it (field 22 of its stat, and the boot id). */
+  const bootNow = (): string => bootIdOf(fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'))!;
+  const identityOf = (pid: number): { procStart: string; bootId: string } => {
+    const procStart = procStartOf(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    if (procStart === null) throw new Error(`no /proc identity for pid ${pid}`);
+    return { procStart, bootId: bootNow() };
+  };
 
-  it('an --op pass writes `<verb> <pid> <start_ms>` once it holds the lock; a scheduled pass then removes it, the pass being dead', () => {
+  it('an --op pass writes `<verb> <pid> <start_ms> <proc_start> <boot_id>` once it holds the lock; a scheduled pass then removes it, the pass being dead (D-5748)', () => {
     const box = boundBox('ccrc-hist-opm-a-');
     plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
     plantTranscript(box, 'claude-a', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000000c1', 'marker words', iso(0))]);
@@ -1003,8 +1014,9 @@ describe('the op marker (§9.6)', () => {
     expect(killed.code, 'killed mid-pass').toBeNull();
     expect(fs.existsSync(opFile(box)), 'the marker stands while the pass runs').toBe(true);
     const text = fs.readFileSync(opFile(box), 'utf8');
-    const m = /^import ([1-9][0-9]*) ([0-9]+)\n$/.exec(text);
+    const m = /^import ([1-9][0-9]*) ([0-9]+) ([0-9]{1,20}) ([0-9a-f-]{36})\n$/.exec(text);
     expect(m, JSON.stringify(text)).not.toBeNull();
+    expect(m![4], 'D-5748: the boot id is this box\'s, measured now').toBe(bootNow());
     expect(Number(m![2]), 'the start time is the pass clock').toBeGreaterThanOrEqual(t0 - 1000);
     expect(Number(m![2])).toBeLessThanOrEqual(Date.now() + 1000);
     expect(dead(Number(m![1])), 'the pid names the killed pass').toBe(true);
@@ -1041,6 +1053,37 @@ describe('the op marker (§9.6)', () => {
     const r = runSweep(box);
     expect(r.code, r.stderr).toBe(0);
     expect(fs.readFileSync(opFile(box), 'utf8'), 'a live pid\'s marker is another pass\'s, and stands').toBe(live);
+  });
+
+  // D-5748 (history-op-marker-identity): a marker that names its process is live only when the identity measured now equals it,
+  // so a reused pid or another boot is stale whatever kill(pid, 0) says; the legacy three-field marker above keeps the kill probe.
+  it('D-5748: a scheduled pass keeps a marker whose identity measures equal, and removes one naming a live pid with another start time or another boot', () => {
+    const box = boundBox('ccrc-hist-opm-d-');
+    const me = identityOf(process.pid);
+    const OTHER_BOOT = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+    expect(me.bootId, 'CONTROL: the fixture boot id is not this box\'s').not.toBe(OTHER_BOOT);
+    const own = `migrate ${process.pid} 1700000000000 ${me.procStart} ${me.bootId}\n`;
+    fs.writeFileSync(opFile(box), own);
+    expect(runSweep(box).code).toBe(0);
+    expect(fs.readFileSync(opFile(box), 'utf8'), 'CONTROL: the identity measured equal is a live pass, and its marker stands').toBe(own);
+    for (const [what, text] of [
+      ['a live pid with another start time (a reused pid)', `migrate ${process.pid} 1700000000000 ${String(Number(me.procStart) + 1)} ${me.bootId}\n`],
+      ['a live pid recorded under another boot', `migrate ${process.pid} 1700000000000 ${me.procStart} ${OTHER_BOOT}\n`],
+    ] as const) {
+      fs.writeFileSync(opFile(box), text);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.existsSync(opFile(box)), `${what}: the marker is stale, and the pass removes it`).toBe(false);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('D-5748: a legacy marker naming a pid this user may not signal (kill answers EPERM) is stale, and a scheduled pass removes it', () => {
+    const box = boundBox('ccrc-hist-opm-e-');
+    expect(() => process.kill(1, 0), 'CONTROL: pid 1 is another user\'s process here').toThrow(/EPERM/);
+    fs.writeFileSync(opFile(box), 'import 1 1700000000000\n');
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(opFile(box)), 'EPERM is not ours: the fleet is one UNIX user').toBe(false);
   });
 });
 

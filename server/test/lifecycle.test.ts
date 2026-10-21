@@ -16,6 +16,7 @@ import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
+import { parseOpMarker, parsePassMarker } from '../../ccd/history/lib.mjs';
 
 const ID = 'claude9-Project-F';
 
@@ -1088,7 +1089,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   });
 
   // ── ccrc history (spec 2026-10-05 §9.4, pin O17) ────────────────────────
-  // Thirteen classes, landed across six PRs. `LifecycleClass` has no "lands in" field — the manifest says what
+  // Thirteen classes, landed across seven PRs. `LifecycleClass` has no "lands in" field — the manifest says what
   // IS, not what a plan will add — so which PR adds which row lives here, beside the assertion that reads it.
   // Each later PR appends its key to HISTORY_LANDED in the commit that adds its rows.
   const HISTORY_ROWS_BY_PR = {
@@ -1167,6 +1168,27 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('a scheduled pass removes its own pass in its finally');
     expect(c!.ruling).toContain('records a killed pass\'s leftover in pass-died and overwrites the marker');
     expect(c!.ruling).toContain('the first pass that commits a tick removes pass-died');
+  });
+
+  // W5h-2 Task 4 (D-5748, and review 467 F4's erratum): the tier's two marker bounds are the longest lines the op and pass grammars
+  // take, measured here from lib's parsers rather than restated, so a grammar that widens or a tier that drifts goes red.
+  it('the history-store-id tier states the longest op and pass marker lines the grammars accept: 119 B and 86 B (D-5748)', () => {
+    const tier = LIFECYCLE.find((x) => x.name === 'history-store-id')!.tier;
+    const BOOT = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+    const passFields = ['9'.repeat(10), '9'.repeat(16), '9'.repeat(20)];
+    const opFields = ['a'.repeat(32), ...passFields];
+    const line = (f: string[]): string => `${f.join(' ')} ${BOOT}\n`;
+    expect(parsePassMarker(line(passFields)), 'the longest pass marker parses').not.toBeNull();
+    expect(parseOpMarker(line(opFields)), 'the longest op marker parses').not.toBeNull();
+    for (let i = 0; i < passFields.length; i += 1) {
+      expect(parsePassMarker(line(passFields.map((v, j) => (j === i ? `9${v}` : v)))), `pass field ${i} one longer`).toBeNull();
+    }
+    for (let i = 0; i < opFields.length; i += 1) {
+      expect(parseOpMarker(line(opFields.map((v, j) => (j === i ? `${v[0]}${v}` : v)))), `op field ${i} one longer`).toBeNull();
+    }
+    expect(tier).toContain(`pass (a marker line of about 70 B, at most ${Buffer.byteLength(line(passFields))} B)`);
+    expect(tier).toContain(`op (a marker line of about 77 B, at most ${Buffer.byteLength(line(opFields))} B)`);
+    expect(tier).not.toContain('at most 87 B');
   });
 
   it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
