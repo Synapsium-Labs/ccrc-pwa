@@ -2566,6 +2566,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         keeps a link at each original path and checks every copy; the root disk fell from 132G to 125G free. Nothing
         here was touched. STATUS: fleet and server v0.0.514, newest v0.0.521, stable v0.0.502, intent dev/auto=off,
         backups fleet 186M/server 10262M, disk free fleet 122G/work volume 13G/server 22G.
+      - 09:55: no anomalies; the work volume is back to 21G free as the owning session's move proceeds (root disk
+        101G free, about 24G moved there). STATUS: fleet and server v0.0.514, newest v0.0.526, stable v0.0.502, intent
+        dev/auto=off, backups fleet 186M/server 10262M, disk free fleet 99G/work volume 21G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
