@@ -3162,6 +3162,42 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(c2.vs, 'the corpus is the one measured').toContain('hunter2q1mnz');
     expect(libRedact.displaySnippet(c2.t, ['hunter2q'], idx)).toBe(`...d]${M}&TOKEN=${M} see hunt\x1b[32mer2q1moz here,`);
   });
+  it('(j24) CONTROL: the first reading\'s token-level same-characters residual prints a value\'s word that recurs in the margin text; its margin-blanked twin masks both words (D-6071, the amendment to review 725 F1 on the worker\'s 7523)', () => {
+    const idx = idxOf([]);
+    const win = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    // This is the residual D-6071 names at the token level: a token the widened reading prints ANYWHERE in the margin text is kept, wherever it
+    // stands. The item-3 sweep found one window value of 357,363 (a 65,536-character window) that 8e2ff9040 masked and the door prints; this is
+    // that shape scaled down to a 296-character window. A first pair whose single quote is never closed (it runs to the next `'`, past the
+    // second pair) and a second pair of two words, the window ending after it; the words recur plainly in the margin, after the window.
+    // It is a CONTROL of what prints TODAY: a position-aware first reading (the coordinator's follow-up) would turn it, and then this case
+    // is rewritten, not deleted. rev 3.6 and the pre-round composition print both words.
+    const filler = (n: number): string => 'field lamp stone '.repeat(Math.ceil(n / 17)).slice(0, n);
+    const u0 = "intro words pa\x1b[31mssword='SECRETXf0Z river lamp maple table garden field window window window garden cedar river window stone maple cloud table secret=\\\"ZQXEMBER46\\\" ";
+    const u1 = 'intro words api_key="]SECRETXf1Z garden flint garden field cloud maple flint maple lamp stone green ember ember window garden river stone end; ,secret=\\"ZQXTABLE75 ZQXGREEN51\\" ';
+    const u2 = "intro words password='SECRETXf2Z river secret=\\\"ZQXFLINT43 ZQXEMBER74 ZQXCLOUD89\\\" ";
+    const build = (recurrence: string): { t: string; a: number; b: number } => {
+      const head = `${filler(30)}${u0}${u1}`;
+      return { t: `${head}${u2}${filler(100)}${recurrence}${filler(200)}`, a: 30 + 48, b: head.length };
+    };
+    const rec = 'zqxrecf4 ZQXGREEN51 and ZQXTABLE75 here ';
+    const blank = 'zqxrecf4 plainwrd01 and plainwrd02 here ';
+    expect(blank.length).toBe(rec.length);
+    const c = build(rec);
+    expect(c.b - c.a, 'the window').toBe(296);
+    const out = libRedact.redactDisplayWindow(c.t, c.a, c.b, idx);
+    expect(r11Holds(out, 'ZQXTABLE75'), `the residual prints the value's first word: ${JSON.stringify(out)}`).toBe(true);
+    // CONTROL: rev 3.6's base door and the pre-round composition print both words
+    const base = win.base(c.t, c.a, c.b, idx);
+    for (const w of ['ZQXTABLE75', 'ZQXGREEN51']) {
+      expect(r11Holds(base, w), `CONTROL base prints ${w}`).toBe(true);
+      expect(r11Holds(win.v2(base, idx), w), `CONTROL the pre-round composition prints ${w}`).toBe(true);
+    }
+    // the twin: the same text with the recurring words replaced by filler of equal length (every offset unchanged): both words are masked
+    const twin = build(blank);
+    expect(twin.t.length).toBe(c.t.length);
+    const tw = libRedact.redactDisplayWindow(twin.t, twin.a, twin.b, idx);
+    for (const w of ['ZQXTABLE75', 'ZQXGREEN51']) expect(r11Holds(tw, w), `the margin-blanked twin prints ${w}: ${JSON.stringify(tw)}`).toBe(false);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
