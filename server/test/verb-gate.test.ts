@@ -144,7 +144,7 @@ const VERB_OF: Record<string, string> = Object.fromEntries(
  *  position and newline so line numbers and brace depth stay true. Without
  *  this, `CCD_ARGV.ensure('x')` inside ccdargv.ts's own doc comment reads as a
  *  call site, and prose mentioning `verbSupported` reads as a gate. */
-function blankCommentsAndStrings(text: string): string {
+function blankCommentsAndStrings(text: string, keepStrings = false): string {
   const out = text.split('');
   const blank = (a: number, b: number): void => {
     for (let k = a; k < b; k++) if (out[k] !== '\n') out[k] = ' ';
@@ -168,7 +168,7 @@ function blankCommentsAndStrings(text: string): string {
         else if (text[j] === c) break;
         else j++;
       }
-      blank(i + 1, Math.min(j, text.length));
+      if (!keepStrings) blank(i + 1, Math.min(j, text.length));
       i = Math.min(j + 1, text.length);
     } else i++;
   }
@@ -200,10 +200,37 @@ function isHandlerHead(head: string): boolean {
   return /\)\s*(?::[^{]*)?\{\s*$/.test(head);
 }
 
-interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null; body: string }
+/** `body` is the scope with comments AND strings blanked; `src` blanks comments only, so a `ccdCan` row literal is
+ *  readable there (D-5866). */
+interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null; body: string; src: string }
+
+/** D-5866 (Task C1k): the verbs a `ccdCan(<state>, <row>)` call in `code[from, to)` asks about. The row is a
+ *  `CCD_ARGV` key, read from the ORIGINAL text at the call's own argument span (`code` has its strings blanked), so a
+ *  ternary between two rows (`ok ? 'wsHold' : 'wsRelease'`) gates both, and each row maps to its verb through
+ *  `VERB_OF`. A `ccdCan(` in a comment or a string is blanked in `code` and is never read. */
+function canVerbsIn(text: string, code: string, from: number, to: number): Set<string> {
+  const out = new Set<string>();
+  const re = /\bccdCan\s*\(/g;
+  re.lastIndex = from;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null && m.index < to) {
+    let end = m.index + m[0].length; let depth = 1;
+    while (end < code.length && depth > 0) {
+      if (code[end] === '(') depth++;
+      else if (code[end] === ')') depth--;
+      end++;
+    }
+    for (const r of text.slice(m.index, end).matchAll(/'([A-Za-z]\w*)'/g)) {
+      const verb = VERB_OF[r[1]!];
+      if (verb !== undefined) out.add(verb);
+    }
+  }
+  return out;
+}
 
 function scanCcdCallSites(text: string, file: string): Site[] {
   const code = blankCommentsAndStrings(text);
+  const prose = blankCommentsAndStrings(text, true);
   const depthStack: number[] = [];
   const chains: number[][] = new Array(code.length);
   for (let i = 0; i < code.length; i++) {
@@ -247,7 +274,7 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       if (isHandlerHead(code.slice(lineStart(b), b + 1))) { open = b; break; }
     }
     if (open === null) {
-      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null, body: '' });
+      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null, body: '', src: '' });
       continue;
     }
     let depth = 0; let end = code.length;
@@ -260,9 +287,11 @@ function scanCcdCallSites(text: string, file: string): Site[] {
     sites.push({
       file, line: lineOf(m.index), key, verb,
       gated: /verbSupported\s*\(/.test(scopeText)
-        || (CAP_GATED_VERBS.has(verb) && /capSupported\s*\(/.test(scopeText)),
+        || (CAP_GATED_VERBS.has(verb) && /capSupported\s*\(/.test(scopeText))
+        || canVerbsIn(text, code, open, end).has(verb),
       scope: text.slice(text.lastIndexOf('\n', open) + 1, open + 1).trim(),
       body: scopeText,
+      src: prose.slice(open, end),
     });
   }
   return sites;
@@ -350,6 +379,27 @@ describe('the scanner itself', () => {
     expect([ungated!.key, ungated!.gated]).toEqual(['wsArchive', false]);
   });
 
+  // D-5866 (Task C1k): `ccdCan(state, row)` is a gate for the verb its ROW emits, never for another verb.
+  it('counts a ccdCan( as the gate for its own row\'s verb', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = CCD_ARGV.wsArchive(id);\n    if (!ccdCan(deps.fleetState, 'wsArchive')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(s!.gated).toBe(true);
+  });
+
+  it('does NOT count a ccdCan( for another row\'s verb as this site\'s gate', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = CCD_ARGV.wsArchive(id);\n    if (!ccdCan(deps.fleetState, 'wsReclaim')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(s!.gated).toBe(false);
+  });
+
+  it('a ccdCan( over a ternary of two rows gates both rows\' sites', () => {
+    const sites = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = ok ? CCD_ARGV.wsHold(id, r, null) : CCD_ARGV.wsRelease(id, null);\n    if (!ccdCan(deps.fleetState, ok ? 'wsHold' : 'wsRelease')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(sites.map((x) => [x.key, x.gated])).toEqual([['wsHold', true], ['wsRelease', true]]);
+  });
+
+  it('a ccdCan( named only in a comment or a string is not a gate', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    // ccdCan(deps.fleetState, 'wsArchive')\n    const note = "ccdCan(deps.fleetState, 'wsArchive')";\n    return run(reply, CCD_ARGV.wsArchive(id));\n  });`), 'f.ts');
+    expect(s!.gated).toBe(false);
+  });
+
   it('ignores a call site and a gate that are only mentioned in a comment', () => {
     const sites = scanCcdCallSites(
       `/** Do not write CCD_ARGV.ensure('x') here. */\n// nor claim verbSupported() in prose\nexport const x = 1;\n`, 'f.ts');
@@ -429,15 +479,26 @@ const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-a
 // one site is the executor's `collectAudit`, which the learning audit and the act job both call.
 // `ws-audit` itself is never added to CAP_GATED_VERBS.
 describe('every wsCollectAudit( scope asks the collector’s capability too (spec §5.10)', () => {
-  const COLLECT_GATE = /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)/;
+  // D-5866 (Task C1k): the collector's gate is `capSupported(…, COLLECT_CAP)` or `ccdCan(<state>, 'wsCollect')`, read
+  // on `src` (comments blanked, the row literal kept); no other row and no other token.
+  const COLLECT_GATE = /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)|ccdCan\s*\(\s*[\w.]+\s*,\s*'wsCollect'\s*\)/;
+  const AUDIT_VERB_GATE = /verbSupported\s*\(|ccdCan\s*\(\s*[\w.]+\s*,\s*'wsCollectAudit'\s*\)/;
   const sites = ALL_SITES.filter((s) => s.key === 'wsCollectAudit');
 
   it('CONTROL: the gate pattern sees the call, not another token, and not prose', () => {
     expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, COLLECT_CAP)) return x;')).toBe(true);
     expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) return x;')).toBe(false);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollect')) return x;")).toBe(true);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsReclaim')) return x;"), 'another row is not the collector\'s gate').toBe(false);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return x;"), 'the audit row is not the token').toBe(false);
+    expect(AUDIT_VERB_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return x;")).toBe(true);
+    expect(AUDIT_VERB_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollect')) return x;")).toBe(false);
     const [s] = scanCcdCallSites('export function f(deps: D) {\n  // capSupported(deps.fleetState, COLLECT_CAP)\n'
       + '  return deps.runCcd(CCD_ARGV.wsCollectAudit(id));\n}\n', 'f.ts');
-    expect(COLLECT_GATE.test(s!.body), 'a comment is not a gate').toBe(false);
+    expect(COLLECT_GATE.test(s!.src), 'a comment is not a gate').toBe(false);
+    const [c] = scanCcdCallSites("export function f(deps: D) {\n  // ccdCan(deps.fleetState, 'wsCollect')\n"
+      + '  return deps.runCcd(CCD_ARGV.wsCollectAudit(id));\n}\n', 'f.ts');
+    expect(COLLECT_GATE.test(c!.src), 'a commented ccdCan is not a gate').toBe(false);
   });
 
   it('the one site is the executor’s collectAudit, shared by the learning audit and the act job', () => {
@@ -446,7 +507,7 @@ describe('every wsCollectAudit( scope asks the collector’s capability too (spe
   });
 
   it('each holds capSupported(…, COLLECT_CAP) and verbSupported( in its own scope', () => {
-    expect(sites.filter((s) => !COLLECT_GATE.test(s.body)).map(show)).toEqual([]);
-    expect(sites.filter((s) => !/verbSupported\s*\(/.test(s.body)).map(show)).toEqual([]);
+    expect(sites.filter((s) => !COLLECT_GATE.test(s.src)).map(show)).toEqual([]);
+    expect(sites.filter((s) => !AUDIT_VERB_GATE.test(s.src)).map(show)).toEqual([]);
   });
 });
