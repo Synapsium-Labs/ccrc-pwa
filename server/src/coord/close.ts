@@ -3,7 +3,7 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, verifyReviewDone, type DoneClaim } from './fingerprint.js';
 import {
@@ -398,7 +398,10 @@ export async function closeRun(
         ? CCD_ARGV.wsHold(run.sessionId, handoff.reason,
             sweepDec(deps.fleetState, `run:${id} close`))
         : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-      if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+      // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
+      if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
+        return { ok: false, kind: 'unsupported' };
+      }
       if (sweep !== undefined) {
         const gate = await sweepGate(sweep);
         if (gate !== null) return gate;
@@ -566,12 +569,12 @@ export async function closeRun(
   // when the close asked for an archive.
   if (state === 'failed' && archive && safe && !childGate.decision.reclaim) {
     const argv = CCD_ARGV.wsArchive(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+    if (!ccdCan(deps.fleetState, 'wsArchive')) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
   } else if ((final && safe) || childGate.decision.reclaim) {
     const argv = CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+    if (!ccdCan(deps.fleetState, 'wsRelease')) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
     released = true;
@@ -592,7 +595,7 @@ export async function closeRun(
       run.sessionId, nextHold.reason,
       sweepDec(deps.fleetState, `run:${id} close`),
     );
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+    if (!ccdCan(deps.fleetState, 'wsHold')) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
   }
@@ -729,7 +732,10 @@ async function closeReviewRun(
   const argv = handoff !== null && handoff.ok
     ? CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`))
     : CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
-  if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+  // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
+  if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
+    return { ok: false, kind: 'unsupported' };
+  }
   const res = await deps.runCcd(argv);
   if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
 
