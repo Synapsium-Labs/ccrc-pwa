@@ -3886,16 +3886,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), and D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 47: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # The 50: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
+  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -19376,6 +19376,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     local rtx="" rtxb=""
     rtx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$rtx" ]] && rtxb=$(_plat_size "$rtx" 2>/dev/null) || { rtx=""; rtxb=""; }
     [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
+    [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"   # D-6180: both arms' episodes
     _dispatch_swap "$id" "$target" rescue "$last" "$now" "$dfrom" "$dto" "$rtx" "$rtxb"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
@@ -19429,6 +19430,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local lane; _swap_lane_to lane "$target"   # D-6180
   echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home] lane=$lane" >> "$REG/swap.log"
   [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
+  [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"   # D-6180: both arms' episodes
   _dispatch_swap "$id" "$target" affinity "$last" "$now" "$dfrom" "$dto"
   return 0
 }
@@ -27716,12 +27718,19 @@ _tick_decided() { [[ -e "$REG/$1.tickstuck" ]] && rm -f -- "$REG/$1.tickstuck"; 
 # helpers say it, and decide nothing: every caller returns exactly where it
 # returned before, with the same rc, whether a line is written or not.
 #
-# ONE LINE PER EPISODE. The episode is keyed on the reason word in the registry
-# field `standdown` (`<epoch> <reason>`): the same word inside COMPACT_NOTE_FLOOR
-# writes nothing, a new word or an older stamp writes again. `_tick_decided`
+# ONE LINE PER EPISODE, PER ARM. The episode is keyed on the reason word in a
+# registry field (`<epoch> <reason>`): the same word inside COMPACT_NOTE_FLOOR
+# writes nothing, a new word or an older stamp writes again. Each arm keeps its
+# own field — `standdown` for the limit arm (a site that passes the tick's tail:
+# cooldown, swapblocked, carried-in, draft, running, stalepress, the hard-blocked
+# target-unavailable) and `standdownaff` for the affinity arm (the other
+# target-unavailable, hold, woke, idle-gate). One shared field let a tick that
+# writes one word from each arm (a carried-in banner under `.hold`, say) end its
+# own episode every tick: two lines per tick, forever. Per arm, a reason word
+# ends only its own arm's episode (departure `standdown-per-arm`). `_tick_decided`
 # does NOT clear it — it runs on the very cooldown and policy returns that write
 # these lines, so clearing there would write a line every tick. The episode ends
-# at a new reason word or at a dispatch (`_auto_swap_check` removes the field at
+# at a new reason word or at a dispatch (`_auto_swap_check` removes both fields at
 # both `_dispatch_swap` call sites). The steady-state tick never reaches a note,
 # so it neither reads nor writes the field.
 
@@ -27756,10 +27765,17 @@ _standdown_evidence() {
 # and writing no `carried-in` note, unlike `_limit_dated`, whose rc 3 calls
 # `_carried_in_note`: the probe observes, it never speaks for the transcript arm.
 _standdown_probe() {
-  local id="$1" now="$2" f="$3" born="$4" rc=1
+  local id="$1" now="$2" f="$3" born="$4" rc=1 out="" sw=""
   [[ "$now" =~ ^[0-9]+$ ]] || _now_s_to now
   STANDDOWN_EV=none
-  [[ -n "$f" ]] && { _limit_read "$id" "$f" "$born" >/dev/null 2>&1; rc=$?; }
+  [[ -n "$f" ]] && { out=$(_limit_read "$id" "$f" "$born" 2>/dev/null); rc=$?; }
+  # rc 3 is refined exactly as `_limit_dated` refines it, minus its note: a row
+  # no swap followed, or a process that never came up, is a block there, so it
+  # is `transcript` here too (D-6180; the review's carried-in-kept-block).
+  if (( rc == 3 )); then
+    _reg_get_to sw "$id" lastswap
+    { [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) && ! _never_came_up "$id" "$born"; } || rc=0
+  fi
   case "$rc" in 0) STANDDOWN_EV=transcript ;; 3) STANDDOWN_EV=carried-in ;; esac
   _reg_set "$id" standdownprobe "$now $STANDDOWN_EV" 2>/dev/null || true
   return 0
@@ -27803,12 +27819,13 @@ _swap_lane_to() {
 # asks for `banner-outside-tail`; an affinity-arm site passes the reason alone.
 # Every write is best-effort: a line that cannot be written changes nothing.
 _standdown_note() {
-  local id="$1" why="$2" ev="${3:-}" now rec ts ot=""
+  local id="$1" why="$2" ev="${3:-}" now rec ts ot="" fld=standdownaff
+  (( $# >= 4 )) && fld=standdown   # ONE EPISODE PER ARM (D-6180): see the header
   _now_s_to now
-  _reg_get_to rec "$id" standdown
+  _reg_get_to rec "$id" "$fld"
   ts="${rec%% *}"
   [[ "${rec#* }" == "$why" && "$ts" =~ ^[0-9]+$ ]] && (( now - ts < COMPACT_NOTE_FLOOR )) && return 0
-  _reg_set "$id" standdown "$now $why" 2>/dev/null || true
+  _reg_set "$id" "$fld" "$now $why" 2>/dev/null || true
   (( $# >= 4 )) && ot=$(_standdown_outside_tail "$id" "$4")
   { echo "$(date '+%F %T') stand-down $id: $why${ev:+ evidence=$ev}${ot:+ banner-outside-tail=$ot}" \
       >> "$REG/swap.log"; } 2>/dev/null || true

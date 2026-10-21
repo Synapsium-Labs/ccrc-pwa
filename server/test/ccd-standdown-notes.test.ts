@@ -209,10 +209,10 @@ describe('characterization: what each silent exit writes today', () => {
 
 /** Many ticks in ONE shell (the supervisor's own shape: globals and the
  *  registry carry between ticks), `step` seconds apart from `from`. */
-const ticks = (pane: string, n: number, opts: { from?: number; step?: number; target?: string | null; extra?: string } = {}): void => {
+const ticks = (pane: string, n: number, opts: { from?: number; step?: number; target?: string | null; extra?: string; born?: number } = {}): void => {
   const from = opts.from ?? T0; const step = opts.step ?? 5;
   h.sh(`${STUBS(pane, opts.target === undefined ? 'claude-a' : opts.target)} ${opts.extra ?? ''}
-    for ((i = 0; i < ${n}; i++)); do FAKE_NOW=$(( ${from} + i * ${step} )); _auto_swap_check ${ID}; done`, env(from));
+    for ((i = 0; i < ${n}; i++)); do FAKE_NOW=$(( ${from} + i * ${step} )); _auto_swap_check ${ID}; done`, env(from, opts.born));
 };
 /** The evidence probe's own fork: `_pane_born` asks tmux for the session's birth,
  *  and no other step of a cooldown tick does. */
@@ -418,5 +418,91 @@ describe('D-6180: every silent stand-down logged, once per episode, with a re-lo
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
     expect(swapLog().split('\n').filter(Boolean).map((l) => l.split(' ')[2])).toEqual(['auto-rescue']);
     expect(h.reg(ID, 'standdownprobe'), 'no probe on the rescue path').toBeNull();
+  });
+});
+
+// ── ONE EPISODE PER ARM (review round 1, finding 1) ─────────────────────────
+// A tick that is not hard-blocked can say a limit-arm word (carried-in, draft,
+// stalepress, running) and then pass `_rescue_policy` into the affinity arm and
+// say an affinity word (hold, woke, idle-gate, target-unavailable). On one shared
+// field the two words ended each other's episode every tick: two lines per tick,
+// a `capture-pane` each, and a swap.log that pushes rule 3's real rescue lines
+// out of its 1 MiB tail. Each arm keeps its own field (departure
+// `standdown-per-arm`); every row below wrote 2 lines PER TICK before it.
+describe('D-6180: one episode per arm, so two arms on one tick do not flood', () => {
+  const HOLD = (): void => { fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:1/1 run:1'); };
+  /** A carried-in pane banner: the limit row predates this process and a swap followed it. */
+  const carriedIn = (): void => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 2000}`);
+    writeTranscript([limitRow(T0 - 3000)]);
+  };
+  const words = (): string[] => standDowns().map((l) => l.replace(/^.* stand-down \S+ /, '').split(' ')[0]);
+
+  it('a draft over a limit row under .hold writes exactly two lines over 12 ticks', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]); HOLD();
+    ticks(DRAFT, 12, { step: 5 });
+    expect(words()).toEqual(['draft', 'hold']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a carried-in pane banner under .hold writes exactly two lines over 12 ticks', () => {
+    carriedIn(); HOLD();
+    ticks(STALLED, 12, { step: 5, born: T0 - 1900 });
+    expect(words()).toEqual(['carried-in', 'hold']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a carried-in pane banner with the target unavailable writes exactly two lines over 12 ticks', () => {
+    carriedIn();
+    ticks(STALLED, 12, { step: 5, born: T0 - 1900, extra: '_avail() { return 1; };' });
+    expect(words()).toEqual(['carried-in', 'target-unavailable']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a carried-in pane banner inside the .woke cooldown writes exactly two lines over 12 ticks', () => {
+    carriedIn(); fs.writeFileSync(regFile(`${ID}.woke`), `${T0 - 10}\n`);
+    ticks(STALLED, 12, { step: 5, born: T0 - 1900, extra: AFFINITY });
+    expect(words()).toEqual(['carried-in', 'woke']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('360 ticks of both arms stay at or below 2 × ceil(duration / COMPACT_NOTE_FLOOR) lines', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]); HOLD();
+    const floor = Number(h.sh('echo "$COMPACT_NOTE_FLOOR"'));
+    ticks(DRAFT, 360, { step: 5 });
+    expect(standDowns().length).toBeLessThanOrEqual(2 * Math.ceil((360 * 5) / floor));
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a dispatch ends both arms\' episodes', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]); HOLD();
+    tick(DRAFT);
+    expect(h.reg(ID, 'standdown')).toBe(`${T0} draft`);
+    expect(h.reg(ID, 'standdownaff')).toBe(`${T0} hold`);
+    fs.rmSync(regFile(`${ID}.hold`));
+    tick(STALLED, { extra: AFFINITY, now: T0 + 10 });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
+    expect(h.reg(ID, 'standdown')).toBeNull();
+    expect(h.reg(ID, 'standdownaff')).toBeNull();
+  });
+
+  // Review round 1, finding 2: `_limit_dated` turns rc 3 into a block when no
+  // swap followed the row; the probe answers as it does, so a cooldown over
+  // that kept block is said with evidence=transcript.
+  it('a cooldown over a carried-in row no swap followed is said as transcript', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 300}`);
+    writeTranscript([limitRow(T0 - 200)]);
+    tick(PROMPT, { born: T0 - 50 });
+    expect(h.reg(ID, 'standdownprobe')).toBe(`${T0} transcript`);
+    expect(standDowns()).toEqual([expect.stringMatching(/: cooldown evidence=transcript banner-outside-tail=no$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('the same row with a swap after it stays carried-in, and the cooldown says nothing', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([limitRow(T0 - 200)]);
+    tick(PROMPT, { born: T0 - 50 });
+    expect(h.reg(ID, 'standdownprobe')).toBe(`${T0} carried-in`);
+    expect(standDowns()).toEqual([]);
   });
 });
