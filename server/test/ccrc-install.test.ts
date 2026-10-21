@@ -8505,6 +8505,8 @@ function fleetBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolea
       `CLAUDE_CODE_OAUTH_TOKEN=${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
     writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'),
       `${FLEET_TOKEN_FILE_COMMENT}\n${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    // A box holding lane secrets states its provider snapshot posture (accounts plan A11b), or `snapshot-posture` WARNs.
+    writeFileSync(join(home, '.ccrc', 'snapshot-posture'), 'none\n');
     const generation = randomBytes(8).toString('hex');
     writeFileSync(join(home, '.ccrc', NODE_FILES.tokenGeneration), `${generation}\n`, { mode: 0o600 });
     writeFileSync(join(home, '.ccrc', 'token-sync.json'),
@@ -8543,7 +8545,9 @@ const PROVISIONED_BOX_TOKEN =
  *  hand-edited. The merge of `main` that added `delegation-hooks` and
  *  `oom-policy` was re-measured from both box-token cases' own failing diff:
  *  each is PASS at every stage. So was the next, which added `update-sweep`
- *  and the four `approval-*` checks: each is SKIP at every stage. */
+ *  and the four `approval-*` checks: each is SKIP at every stage. Accounts plan A11b added the three backups checks:
+ *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
+ *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`. */
 const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -8564,6 +8568,7 @@ const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "docs": "PASS",
   "docs-sw": "SKIP",
   "exposure": "SKIP",
+  "filevault": "SKIP",
   "fleet": "SKIP",
   "flock": "PASS",
   "gh": "PASS",
@@ -8591,9 +8596,11 @@ const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "routing": "PASS",
   "scope-sweep": "SKIP",
   "scopes": "SKIP",
+  "secrets-backup-excluded": "SKIP",
   "server-caps": "PASS",
   "services": "PASS",
   "skills": "PASS",
+  "snapshot-posture": "SKIP",
   "timeout": "PASS",
   "tmux": "PASS",
   "tmux_skew": "PASS",
@@ -8709,7 +8716,7 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     const home = fleetBox('ccrc-rehearsal-provisioned-', { fleetFiles: true });
     homes.push(home);
     // `~/.cc-secrets` exists here, so `credentials` is owed and PASSes: the one class that differs (measured)
-    const provisioned = { ...FLEET_BOX_CLASSES, credentials: 'PASS' };
+    const provisioned = { ...FLEET_BOX_CLASSES, credentials: 'PASS', 'snapshot-posture': 'PASS' };   // and `snapshot-posture` reads its stated `none` (A11b)
     // two installs: the second is what every update's staged spine runs
     for (const pass of [1, 2]) {
       const r = runInstall(home, ['install', '--role', 'fleet'], READY);
