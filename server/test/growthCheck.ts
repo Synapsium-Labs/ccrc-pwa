@@ -19,9 +19,12 @@
 // D-6211: a third waiver, a PR the operator names exempt. `growth-exemptions.json`
 // lists entries of `{pr, file, cap, reason, ruling, since}`, and the armed rows
 // read it from `origin/main`'s copy only (`exemptionsOnMain`), so a PR's own
-// entry never exempts that PR. The PR number comes from `GITHUB_REF` alone
-// (`prNumberFromEnv`). An entry waives its own file for its own PR while the
-// measured delta stays at or below its cap (`matchExemptions`).
+// entry never exempts that PR. The PR number comes from `GITHUB_REF`, paired
+// with its event (`prNumberFromEnv`). An entry waives its own file for its own
+// PR while the measured delta stays at or below its cap, and only when the PR
+// leaves the check's own files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
+// `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
+// the pure decision inside it.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { parseSource } from './scan/parse.js';
@@ -29,6 +32,8 @@ import { malformedEntries } from './rings/exemptions.js';
 
 /** A listed file may grow by this many net code lines before it is named. */
 export const GROWTH_LIMIT = 40;
+
+const signed = (n: number): string => `${n >= 0 ? '+' : ''}${n}`;
 
 /** The waiver list: growth over the limit is waived when the same diff adds a
  *  new file under one of these (the 08-10 architecture spec's ring table: the
@@ -187,6 +192,14 @@ export function netGrowth(file: string, baseSha: string, headSha: string, cwd: s
   return { file, base: b, head: h, delta: h - b, atBoth: base !== null && head !== null };
 }
 
+/** Paths the diff `baseSha..headSha` touches: added, modified and deleted, and
+ *  both sides of a rename. */
+export function changedFiles(baseSha: string, headSha: string, cwd: string): string[] {
+  const out = execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', baseSha, headSha],
+    { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+  return out.split('\0').filter((p) => p !== '');
+}
+
 /** Paths the diff `baseSha..headSha` adds. */
 export function addedFiles(baseSha: string, headSha: string, cwd: string): string[] {
   const out = execFileSync('git', ['diff', '--name-only', '--diff-filter=A', '-z', baseSha, headSha],
@@ -221,13 +234,15 @@ const EXEMPTION_KEYS: readonly (keyof GrowthExemption)[] = ['pr', 'file', 'cap',
 const PR_REF_RE = /^refs\/pull\/([1-9]\d*)\/merge$/;
 const QUEUE_REF_RE = /^refs\/heads\/gh-readonly-queue\/.+\/pr-([1-9]\d*)-[0-9a-f]{40,64}$/;
 
-/** The PR this CI run tests, from `GITHUB_REF` alone: a pull request's
- *  `refs/pull/<n>/merge`, or a merge-queue run's
+/** The PR this CI run tests, from `GITHUB_REF` read with its event: a
+ *  `pull_request` run's `refs/pull/<n>/merge`, or a `merge_group` run's
  *  `refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>`. Null for anything else
- *  (a push, a schedule, a workflow_dispatch, no env). */
+ *  (a push, a schedule, a workflow_dispatch on any branch, a ref under the
+ *  other event, no env). */
 export function prNumberFromEnv(env: NodeJS.ProcessEnv): number | null {
   const ref = env['GITHUB_REF'] ?? '';
-  const m = PR_REF_RE.exec(ref) ?? QUEUE_REF_RE.exec(ref);
+  const event = env['GITHUB_EVENT_NAME'];
+  const m = event === 'pull_request' ? PR_REF_RE.exec(ref) : event === 'merge_group' ? QUEUE_REF_RE.exec(ref) : null;
   return m === null ? null : Number(m[1]);
 }
 
@@ -273,34 +288,93 @@ export function parseExemptions(text: string, files: readonly string[], today: D
   return problems.length ? { entries: [], problems } : { entries: list as GrowthExemption[], problems };
 }
 
-/** The exemption list as `ref` (by default `origin/main`) holds it, never the
- *  working tree's: a PR's own edit never exempts that PR. Absent at `ref`, it
+/** The exemption list as `origin/main` holds it in `cwd`, never HEAD's or the
+ *  working tree's: a PR's own edit never exempts that PR. Absent there, it
  *  holds no entries; malformed there, it exempts nothing and says why. */
-export function exemptionsOnMain(files: readonly string[], cwd: string, ref = 'origin/main', today: Date = new Date()):
+export function exemptionsOnMain(files: readonly string[], cwd: string, today: Date = new Date()):
   { entries: GrowthExemption[]; problems: string[] } {
-  const text = fileAt(GROWTH_EXEMPTIONS_FILE, ref, cwd);
+  const text = fileAt(GROWTH_EXEMPTIONS_FILE, 'origin/main', cwd);
   return text === null ? { entries: [], problems: [] } : parseExemptions(text, files, today);
 }
 
+/** The growth check's own files. A PR whose diff touches any of them gets no
+ *  exemption, its own entry included, so the list, the code that reads it and
+ *  the rows that decide stay outside the reach of the PR they judge. */
+export const GROWTH_MACHINERY: readonly string[] = [
+  'server/test/growthCheck.ts',
+  'server/test/growth-check.test.ts',
+  GROWTH_EXEMPTIONS_FILE,
+  'server/test/rings/exemption-age.test.ts',
+  'server/test/rings/exemption-age.data.ts',
+];
+
 /** For each file in `over`, the entry naming it for PR `pr`, and whether it
- *  applies: the measured delta is at or below the entry's cap. No PR number,
- *  no match. */
-export interface ExemptionMatch { file: string; entry: GrowthExemption; applies: boolean }
+ *  applies: the measured delta is at or below the entry's cap, and the PR
+ *  touched none of `GROWTH_MACHINERY` (`touched` names what it did touch). No
+ *  PR number, no match. */
+export interface ExemptionMatch { file: string; entry: GrowthExemption; applies: boolean; touched: readonly string[] }
 export function matchExemptions(over: readonly string[], rows: readonly GrowthRow[],
-  entries: readonly GrowthExemption[], pr: number | null): ExemptionMatch[] {
+  entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[] = []): ExemptionMatch[] {
   if (pr === null) return [];
   const out: ExemptionMatch[] = [];
   for (const file of over) {
     const entry = entries.find((e) => e.pr === pr && e.file === file);
     const row = rows.find((r) => r.file === file);
     if (entry === undefined || row === undefined) continue;
-    out.push({ file, entry, applies: row.delta <= entry.cap });
+    out.push({ file, entry, applies: row.delta <= entry.cap && touched.length === 0, touched });
   }
   return out;
 }
 
+/** Why an entry that names a file does not apply. */
+const notExempt = (m: ExemptionMatch): string => (m.touched.length
+  ? `not exempt: PR #${m.entry.pr} edits the growth check's own ${m.touched.join(', ')}`
+  : `over its exemption cap of ${m.entry.cap} for PR #${m.entry.pr}`);
+
+/** One listed file's verdict: its row's title, whether the row fails, and why. */
+export interface GrowthVerdict {
+  file: string; over: boolean; exemption: ExemptionMatch | undefined; fails: boolean; title: string; why: string;
+}
+
+/** The armed decision, pure: a row fails when its file grew over the limit,
+ *  unwaived, and no entry applies to it. */
+export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string[],
+  entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[]): GrowthVerdict[] {
+  const matches = matchExemptions(over, rows, entries, pr, touched);
+  return rows.map((r) => {
+    const isOver = over.includes(r.file);
+    const m = matches.find((x) => x.file === r.file);
+    const note = m === undefined ? '' : m.applies ? `, exempt: PR #${m.entry.pr}, cap ${m.entry.cap}` : `, ${notExempt(m)}`;
+    return {
+      file: r.file,
+      over: isOver,
+      exemption: m,
+      fails: isOver && m?.applies !== true,
+      title: `${r.file}: delta ${signed(r.delta)}${isOver ? ` (GROWTH_OVER${note})` : ''}`,
+      why: `${r.file} grew by ${r.delta} net code lines, ${m === undefined ? `over the limit of ${GROWTH_LIMIT}` : notExempt(m)}`,
+    };
+  });
+}
+
+/** The armed rows' whole read and decision between `base` and `head` in
+ *  `root`: each file's growth, the two waivers, origin/main's exemption list,
+ *  the PR number, the growth check's own files the diff touches, and the
+ *  verdict per file. */
+export function armedGrowth(files: readonly string[], root: string, base: string, head: string,
+  env: NodeJS.ProcessEnv, today: Date = new Date()) {
+  const rows = files.map((f) => netGrowth(f, base, head, root));
+  const over = growthOver(rows, addedFiles(base, head, root));
+  const pr = prNumberFromEnv(env);
+  const onMain = exemptionsOnMain(files, root, today);
+  const touched = changedFiles(base, head, root).filter((p) => GROWTH_MACHINERY.includes(p));
+  const verdicts = growthVerdicts(rows, over, onMain.entries, pr, touched);
+  const exemptions = verdicts.flatMap((v) => (v.exemption === undefined ? [] : [v.exemption]));
+  return { rows, over, pr, onMain, touched, verdicts, exemptions };
+}
+
 /** `GROWTH_OVER`'s list: every file that grew over the limit, an exempted one
- *  annotated with its PR, cap and ruling, and one past its cap said so. */
+ *  annotated with its PR, cap and ruling, and one whose entry does not apply
+ *  said why: past its cap, or the PR edits the growth check itself. */
 export function overLine(over: readonly string[], exemptions: readonly ExemptionMatch[] = [],
   quote: (f: string) => string = (f) => f): string {
   if (!over.length) return '(none)';
@@ -309,7 +383,7 @@ export function overLine(over: readonly string[], exemptions: readonly Exemption
     if (m === undefined) return quote(f);
     return m.applies
       ? `${quote(f)} (exempt: PR #${m.entry.pr}, cap ${m.entry.cap}, ruling: ${m.entry.ruling})`
-      : `${quote(f)} (over its exemption cap of ${m.entry.cap} for PR #${m.entry.pr})`;
+      : `${quote(f)} (${notExempt(m)})`;
   }).join(', ');
 }
 
@@ -345,8 +419,6 @@ export interface GrowthSummaryInput {
   armed: boolean;
   exemptions?: readonly ExemptionMatch[];
 }
-
-const signed = (n: number): string => `${n >= 0 ? '+' : ''}${n}`;
 
 /** The CI job summary: one row per listed file with its absolute code lines,
  *  the method count, and GROWTH_OVER. Markdown. */
