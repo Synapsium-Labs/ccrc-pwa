@@ -284,11 +284,20 @@ describe('_plat_timeout_capability and _plat_timeout_strict (plan W2 Task 11)', 
       });
 
       itDelegating('refuses a deadline it cannot read as whole seconds, and runs nothing', () => {
-        const r = run(`_plat_timeout_capability >/dev/null\nfor d in abc '' '-1' 1x 5s 1m; do _plat_timeout_strict "$d" bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s ' "$?"; done`);
+        const r = run(`_plat_timeout_capability >/dev/null\nfor d in abc '' '-1' 1x 5s 1m 0 00 0.0 0.5; do _plat_timeout_strict "$d" bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s ' "$?"; done`);
         // `5s` and `1m` are deadlines GNU timeout accepts, and the owner passes no `-k` for them (its grace is paid
-        // only for a deadline it reads as whole seconds): a strict call may not run them.
-        expect(r.rc, `stderr: ${r.err}`).toBe('125 125 125 125 125 125');
+        // only for a deadline it reads as whole seconds): a strict call may not run them. `0`, `00`, `0.0` and `0.5` are
+        // the other kind: GNU `timeout` reads a zero as "no deadline at all", so the call would run unbounded and unkilled.
+        expect(r.rc, `stderr: ${r.err}`).toBe('125 125 125 125 125 125 125 125 125 125');
         expect(existsSync(path.join(r.home, 'ran'))).toBe(false);
+      });
+
+      itDelegating('reads a leading-zero deadline in base 10: 08 and 09 run, and 00 does not', () => {
+        const r = run(`_plat_timeout_capability >/dev/null\nfor d in 08 09 00; do _plat_timeout_strict "$d" bash -c ': > @HOME@/ran-$0' "$d" >/dev/null 2>&1; printf '%s ' "$?"; done`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('0 0 125');
+        expect(existsSync(path.join(r.home, 'ran-08')) && existsSync(path.join(r.home, 'ran-09'))).toBe(true);
+        expect(existsSync(path.join(r.home, 'ran-00'))).toBe(false);
+        expect(r.err).toBe('');
       });
 
       itDelegating('refuses, rather than falling back, once the PATH is not the one the capability was proved for', () => {

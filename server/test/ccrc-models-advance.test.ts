@@ -24,7 +24,7 @@ import {
   laneProxyRequests, spawnFakeLaneProxy, trackChild, type FakeLaneProxy,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
-import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRaw, stepRoster } from './fixtures/advanceCases.js';
+import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRaw, stepRoster, stepRow } from './fixtures/advanceCases.js';
 import { REASON_MAX } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,7 +64,8 @@ const FAKES = [
 /** A models-op stand-in: logs each call's op and flags (paths dropped) to `$HOME/op-calls`, hangs (ignoring TERM) for
  *  any op named in `OP_HANG`, then runs the REAL program in this very process. */
 const OP_STUB = `#!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 const a = process.argv.slice(2);
 appendFileSync(\`\${process.env.HOME}/op-calls\`, a.filter((x) => !x.includes('/')).join(' ') + '\\n');
 if ((process.env.OP_HANG ?? '').split(',').includes(a[0])) {
@@ -73,7 +74,27 @@ if ((process.env.OP_HANG ?? '').split(',').includes(a[0])) {
   process.exit(1);
 }
 if ((process.env.OP_GARBAGE ?? '') === a[0]) { process.stdout.write('not one object\\n'); process.exit(0); }
-await import(${JSON.stringify(path.join(REPO, 'deploy', 'models-op.mjs'))});
+if (a[0] === 'advance-plan' && process.env.OP_PLAN_EXTRA) {
+  // The real planner's answer with extra class rows appended: a row the frame protocol cannot carry.
+  const r = spawnSync(process.execPath, [${JSON.stringify(path.join(REPO, 'deploy', 'models-op.mjs'))}, ...a], { encoding: 'utf8', env: process.env });
+  const j = JSON.parse(r.stdout);
+  j.classes.push(...JSON.parse(process.env.OP_PLAN_EXTRA));
+  process.stdout.write(JSON.stringify(j) + '\\n');
+  process.exit(r.status ?? 1);
+}
+let real = ${JSON.stringify(path.join(REPO, 'deploy', 'models-op.mjs'))};
+if (process.env.OP_FAIL_ADVANCE_WRITE) {
+  // The Nth write of the advance file refuses, as a file that became unwritable would. Done on a COPY of the op beside this
+  // stub (its imports are relative to deploy/, which the fixture tree mirrors): the repository's op is never altered.
+  const head = 'function writeAdvance(id, advance) {\\n';
+  const src = readFileSync(real, 'utf8');
+  if (!src.includes(head)) throw new Error('writeAdvance moved');
+  writeFileSync(new URL('./models-op-failing.mjs', import.meta.url),
+    src.replace(head, head + "  if (process.env.OP_FAIL_ADVANCE_WRITE === String((globalThis.__aw = (globalThis.__aw ?? 0) + 1))) "
+      + "return ['advance-unwritable', 'the fixture refused this write.'];\\n"));
+  real = new URL('./models-op-failing.mjs', import.meta.url).href;
+}
+await import(real);
 `;
 
 interface TreeOpts { canaryStub?: string; opStub?: string; realCcrc?: boolean }
@@ -116,7 +137,7 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
     'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
-    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'BASH_ENV', 'ENV',
+    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_PLAN_EXTRA', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
     delete inherited[k];
   }
@@ -217,7 +238,7 @@ const spy = (fn: string, file: string, fields = '"$*"'): string => wrap(fn, { be
  *  HOUR: a refresh that probes the neutral catalogue, materialises, renders the LiteLLM list (the tier answers 1, so
  *  nothing is stopped or started) and, its tier down, waits. With `laneB`, lane-b is a second codex-kind lane on ports
  *  of its own (and no registry yet). The first hour runs with the step off, so it never needs the second pass. */
-async function setup(o: { registry?: unknown; advance?: unknown; laneB?: boolean } & TreeOpts = {}): Promise<void> {
+async function setup(o: { registry?: unknown; advance?: unknown; laneB?: boolean; catalogue?: { models: ReadonlyArray<ReturnType<typeof stepRow>> } } & TreeOpts = {}): Promise<void> {
   home = mkTmp('ccrc-models-advance-');
   proxy = await spawnFakeLaneProxy(home);
   const laneB = o.laneB === true
@@ -230,7 +251,7 @@ async function setup(o: { registry?: unknown; advance?: unknown; laneB?: boolean
   if (o.advance !== null) {
     fs.writeFileSync(models('lane-a.advance.json'), `${JSON.stringify(o.advance ?? stepAdvance(), null, 2)}\n`, { mode: 0o600 });
   }
-  fs.writeFileSync(rawPath(), JSON.stringify(stepRaw(STEP_CATALOGUE)));
+  fs.writeFileSync(rawPath(), JSON.stringify(stepRaw(o.catalogue ?? STEP_CATALOGUE)));
   const lane = join(home, '.ccrc', 'codex', 'lane-a');
   fs.mkdirSync(lane, { recursive: true, mode: 0o700 });
   fs.writeFileSync(join(lane, 'runtime.env'), `LITELLM_MASTER_KEY=${KEY}\n`, { mode: 0o600 });
@@ -1600,7 +1621,7 @@ describe("the automatic stages' spelling, pinned in source (plan W2 Task 11)", (
 
   it('the child runner, the identity read, the lock stages, the writer and the hook name _plat_timeout_strict', () => {
     expect(code('_models_advance_child')).toContain('_plat_timeout_strict "$1" "$BASH" -c "$MODELS_ADVANCE_CHILD"');
-    expect(code('_codex_tier_read')).toContain('_plat_timeout_strict "${1:-0}" "$BASH" -c "$MODELS_ADVANCE_CHILD"');
+    expect(code('_codex_tier_read')).toContain('_plat_timeout_strict "${1-}" "$BASH" -c "$MODELS_ADVANCE_CHILD"');
     const lock = code('_models_lock');
     for (const stage of ['chmod -- 700 "$d"', 'mkdir -p -- "$d"', 'flock -w "$bound" "$fd"']) {
       expect(lock, `the automatic ${stage} is not a strict deadline`).toContain(`_plat_timeout_strict`);
@@ -1627,5 +1648,290 @@ describe("the automatic stages' spelling, pinned in source (plan W2 Task 11)", (
     expect(code('_models_advance_steps')).toContain('local MODELS_AUTO_DEADLINE="$2" MODELS_AUTO_TAIL_S=0');
     expect(src.split('\n').filter((l) => /^\s*(export|declare -x)\b.*MODELS_AUTO_/.test(l))).toEqual([]);
     expect(src.split('\n').filter((l) => !/^\s*#/.test(l)).filter((l) => /^MODELS_AUTO_/.test(l))).toEqual([]);
+  });
+});
+
+// ══ FIX ROUND 1 ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// Rulings R1-R13 of the independent review. Every clock movement below happens in the STEP'S OWN shell, between two
+// of its phases (a parent-side phase function wrapped to add seconds), because a jump inside a `$( )` or in the first
+// pass never reaches the admission that follows the backfill.
+
+describe.skipIf(PY === null || !HAS_FLOCK)('every re-admission after the backfill decides on its own (R1)', () => {
+  const READY1 = { CCRC_CODEX_READY_S: '1' };
+  const bump = (fn: string, secs: number): string => wrap(fn, { before: `SECONDS=$(( SECONDS + ${secs} ))` });
+  const opNames = (): string[] => opCalls().map((l) => l.split(' ')[0]!);
+  const run = (n: number, pre: string, extra: NodeJS.ProcessEnv = {}): Result =>
+    sourced(`${SHAPE}\nSECONDS=0\n_models_advance_lane lane-a ${n}`, extra, pre);
+
+  it('a hook with no time left is skipped, never run late: the event stays, the push does not go out', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    plantLandedIntent();
+    const r = run(130, bump('_models_push', 125), READY1);
+    expect(JSON.parse(r.stdout)).toEqual([{ ...MOVED, recovered: true }]);
+    expect(notifyCalls(), 'a hook was run with the budget gone').toEqual([]);
+    // The control: the same call without the jump pushes.
+    plantLandedIntent();
+    expect(JSON.parse(run(130, '', READY1).stdout)).toEqual([{ ...MOVED, recovered: true }]);
+    expect(notifyCalls()).toEqual(['--push\tlane-a: opus model-5.6-gamma → model-6.1-gamma']);
+  }, T);
+
+  it.each([
+    ['plan', '_models_advance_plan', 240, 250, (): boolean => !opNames().includes('advance-plan')],
+    ['check', '_models_advance_check', 240, 250, (): boolean => !opNames().includes('litellm')],
+  ] as [string, string, number, number, () => boolean][])(
+    'a %s read with less than its allowance left is refused and runs no child', async (_p, fn, secs, d, notRun) => {
+      await setup({ opStub: OP_STUB });
+      tier(0);
+      const r = run(d, bump(fn, secs), READY1);
+      expect(JSON.parse(r.stdout)).toEqual([]);
+      expect(notRun(), `the ${_p} child ran: ${opCalls().join(' | ')}`).toBe(true);
+    }, T);
+
+  it('a canary read with less than its allowance left (the candidate was admitted before) sends no request', async () => {
+    await setup();
+    tier(0);
+    const r = run(300, bump('_models_advance_canary', 200), READY1);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(laneProxyRequests(proxy), 'the canary went out with the budget gone').toEqual([]);
+  }, T);
+
+  it('a receipt read with less than its allowance left reports nothing and runs no child', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    plantLandedIntent();
+    const dir = mkTmp('ccrc-receipt-jq-');
+    const realJq = spawnSync('bash', ['-c', 'type -P jq'], { encoding: 'utf8' }).stdout.trim();
+    bashStub(dir, 'jq', `case "$*" in *EVENT*) : >> "$HOME/receipt-ran";; esac\nexec ${realJq} "$@"`);
+    const r = run(130, bump('_models_advance_receipt', 120), { ...READY1, PATH: `${dir}:${SYS_PATH}` });
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(fs.existsSync(join(home, 'receipt-ran')), 'the receipt child ran with the budget gone').toBe(false);
+    expect(notifyCalls()).toEqual([]);
+  }, T);
+
+  it('the shim question is not asked once the LiteLLM question has spent the time it needed', async () => {
+    await setup();
+    tier(0);
+    const r = run(250, bump('_models_lane_verdict', 0).replace('SECONDS=$(( SECONDS + 0 ))', ':')
+      + '\n' + wrap('_models_lane_verdict', { after: 'SECONDS=$(( SECONDS + 160 ))' }).replace(/^eval.*\n/, ''), {});
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(laneCalls(), 'the second tier was asked with its allowance gone').toEqual(['ours lane-a litellm']);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  }, T);
+
+  describe('two candidates', () => {
+    const twoCandidates = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, haiku: 'model-5.6-alpha' } };
+    /** The first canary returns, and 120 s are gone before the second candidate is considered. */
+    const afterFirstCanary = wrap('_models_advance_canary',
+      { after: '[ -f "$HOME/first-canary" ] || { : > "$HOME/first-canary"; SECONDS=$(( SECONDS + 120 )); }' });
+
+    it('a second candidate with less than the candidate reserve left is never canaried', async () => {
+      await setup({ registry: twoCandidates });
+      tier(0);
+      const r = run(300, afterFirstCanary, {});
+      expect(JSON.parse(r.stdout)).toEqual([{ class: 'haiku', from: 'model-5.6-alpha', to: 'model-6-alpha', outcome: 'moved' }]);
+      expect(laneProxyRequests(proxy).map((q) => q.model), 'a second canary went out on 180 s').toEqual(['model-6-alpha']);
+      expect(classes()['opus']).toBe('model-5.6-gamma');
+    }, T);
+
+    it('and with the time it needs, both are canaried and move (the control)', async () => {
+      await setup({ registry: twoCandidates });
+      tier(0);
+      const r = run(600, '', {});
+      expect(JSON.parse(r.stdout)).toEqual([{ class: 'haiku', from: 'model-5.6-alpha', to: 'model-6-alpha', outcome: 'moved' }, MOVED]);
+      expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6-alpha', 'model-6.1-gamma']);
+    }, T);
+  });
+});
+
+describe.skipIf(PY === null || !HAS_FLOCK)('the step reads a recovery whether or not the commit that settled it was ok (D-6067, R7)', () => {
+  it('a commit that refuses AFTER settling another writer\'s intent still reports that recovery, and the lane ends', async () => {
+    // haiku's commit settles sonnet's landed intent (left during the parked canary), persists its own intent, then its
+    // materialise fails twice (the render target is a directory) and the failure record cannot be written: a refusal
+    // that carries the recovered move. The recovered event and its push are the step's to report; nothing else will.
+    await setup({ opStub: OP_STUB, registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, haiku: 'model-5.6-alpha' } } });
+    tier(0);
+    laneProxyMode(proxy, 'park', 'model-6-alpha');
+    const run = refreshAsync({ OP_FAIL_ADVANCE_WRITE: '2' });
+    await eventually(() => laneProxyParked(proxy) >= 1, 'the parked canary', 30_000);
+    fs.writeFileSync(models('lane-a.advance.json'), `${JSON.stringify(stepAdvance({}, { class: 'sonnet',
+      from: 'model-5.6-beta', to: 'model-6-beta', effortFrom: 'high', effortTo: 'high', at: '2026-10-22T09:05:11Z' }), null, 2)}\n`);
+    fs.rmSync(models('lane-a.classes.tsv'));
+    fs.mkdirSync(models('lane-a.classes.tsv'));
+    laneProxyRelease(proxy);
+    const r = await run;
+    expect(rowOf(r)['advance']).toEqual([
+      { class: 'sonnet', from: 'model-5.6-beta', to: 'model-6-beta', outcome: 'moved', recovered: true },
+      { class: 'haiku', from: 'model-5.6-alpha', to: 'model-6-alpha', outcome: 'abandoned', why: 'advance-unwritable' },
+    ]);
+    expect(notifyCalls()).toEqual(['--push\tlane-a: sonnet model-5.6-beta → model-6-beta']);
+    expect(opCalls().filter((l) => l.startsWith('advance-commit')), 'the lane went on after a refused commit').toHaveLength(1);
+  }, T);
+});
+
+describe.skipIf(PY === null || !HAS_FLOCK)('a direct caller on a substrate without a strong deadline is refused by the prerequisite itself (R8)', () => {
+  const REAL = (n: string): string => spawnSync('bash', ['-c', `type -P ${n}`], { encoding: 'utf8' }).stdout.trim();
+  const noTimeout = 'command() { if [ "${1:-}" = -v ]; then case "${2:-}" in timeout|gtimeout) return 1;; esac; fi; builtin command "$@"; }';
+  it.each([
+    ['weak', (): { extra: NodeJS.ProcessEnv; pre: string } => {
+      const dir = mkTmp('ccrc-weak-');
+      bashStub(dir, 'timeout', `case "$1" in -*) exit 1;; esac\nexec ${REAL('timeout')} "$@"`);
+      return { extra: { PATH: `${dir}:${SYS_PATH}` }, pre: '' };
+    }],
+    ['none', (): { extra: NodeJS.ProcessEnv; pre: string } => ({ extra: {}, pre: noTimeout })],
+  ] as [string, () => { extra: NodeJS.ProcessEnv; pre: string }][])('a %s substrate reaches no read phase: the plan phase is never entered', async (_w, mk) => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    const { extra, pre } = mk();
+    const r = sourced(lane(250), extra, `${pre}\n${spy('_models_advance_plan', 'plan-calls', '"$1"')}`);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(lines('plan-calls'), 'the step went on to its first read').toEqual([]);
+    expect(opCalls()).toEqual([]);
+    expect(laneCalls()).toEqual([]);
+  }, T);
+});
+
+describe.skipIf(PY === null || !HAS_FLOCK)('the plan read cannot be failed by a candidate row (R13, D-5215)', () => {
+  const BAD_ROW = { class: 'Bad Class!', pin: null, family: 'x', held: false, candidate: 'model-9-x', reason: 'newer',
+    blocked: null, effortTo: null, canaryEffort: null };
+  const TAB_EFFORT = { class: 'sonnet', pin: 'model-6-beta', family: 'beta', held: false, candidate: 'model-7-beta',
+    reason: 'newer', blocked: null, effortTo: 'high', canaryEffort: 'a\tb' };
+
+  it('a malformed candidate row is dropped; the backfill still settles a landed intent and the push goes out', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    plantLandedIntent();
+    const r = sourced(lane(250), { OP_PLAN_EXTRA: JSON.stringify([BAD_ROW, TAB_EFFORT]) });
+    expect(JSON.parse(r.stdout)).toEqual([{ ...MOVED, recovered: true }]);
+    expect(opCalls().map((l) => l.split(' ')[0])).toContain('advance-backfill');
+    expect(advanceFile().pending).toBeNull();
+    expect(notifyCalls()).toEqual(['--push\tlane-a: opus model-5.6-gamma → model-6.1-gamma']);
+  }, T);
+
+  it('a candidate that is fine beside a malformed row still gets its canary and moves', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    const r = sourced(lane(250), { OP_PLAN_EXTRA: JSON.stringify([BAD_ROW, TAB_EFFORT]) });
+    expect(JSON.parse(r.stdout)).toEqual([MOVED]);
+    expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);
+  }, T);
+
+  it('an effort the canary takes ("High", capital and all) reaches the canary: the plan is not failed by it', async () => {
+    const cat = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) =>
+      m.id === 'model-6.1-gamma' ? stepRow('model-6.1-gamma', ['High']) : m) };
+    await setup({ catalogue: cat });
+    tier(0);
+    const r = refresh();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);
+    expect((laneProxyRequests(proxy)[0]!.body as { output_config?: { effort?: string } }).output_config?.effort).toBe('High');
+    expect(rowOf(r)['advance']).toEqual([MOVED]);
+  }, T);
+
+  it('a plan that is not an object, or that the planner refused, still ends the lane', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    expect(JSON.parse(sourced(lane(250), { OP_GARBAGE: 'advance-plan' }).stdout)).toEqual([]);
+    expect(opCalls().some((l) => l.startsWith('advance-backfill'))).toBe(false);
+  }, T);
+
+  it('the effort pattern is the canary\'s own, held equal to it', () => {
+    const canary = /^const EFFORT_RE = \/(.+)\/;$/m.exec(fs.readFileSync(join(REPO, 'deploy', 'models-canary.mjs'), 'utf8'));
+    const defs = /^def eff: type == "string" and test\("(.+)"\);$/m.exec(fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(canary, 'the canary has no EFFORT_RE').not.toBeNull();
+    expect(defs, 'ccd/ccrc has no `def eff`').not.toBeNull();
+    // jq's pattern (Oniguruma) has no non-capturing group syntax this file uses, and spells the escapes with a doubled backslash.
+    expect(defs![1]!.replace(/\\\\/g, '\\')).toBe(canary![1]!.replace('(?:', '('));
+  });
+});
+
+describe('an empty or zero deadline is refused by the bounded identity question (R3)', () => {
+  it.skipIf(PY === null)('_codex_tier_ours --bounded-read "" runs no child, and a zero is refused too', async () => {
+    home = mkTmp('ccrc-models-tier0-');
+    proxy = await spawnFakeLaneProxy(home);
+    installTree(home, stepRoster({ proxyPort: proxy.port, litellmPort: await freePort(), authDir: codexAuthDir('lane-a') }), { realCcrc: true });
+    env(home);
+    const dir = mkTmp('ccrc-ps-marker-');
+    bashStub(dir, 'ps', ': > "$HOME/ps-ran"; exit 1');
+    fs.mkdirSync(join(home, '.ccrc', 'codex', 'lane-a'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(join(home, '.ccrc', 'codex', 'lane-a', 'shim.pid'), '4242\n');
+    for (const d of ['""', '0', '00', '0.0']) {
+      const r = sourced(`${SHAPE}\n_plat_timeout_capability >/dev/null\nout="$(_codex_tier_ours --bounded-read ${d} lane-a shim)"; echo "rc=$? out=[$out]"`,
+        { PATH: `${dir}:${SYS_PATH}` });
+      expect(r.stdout.trim(), `deadline ${d}`).toBe('rc=125 out=[]');
+    }
+    expect(fs.existsSync(join(home, 'ps-ran')), 'a child was started on a deadline of nothing').toBe(false);
+  }, T);
+});
+
+describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", () => {
+  const src = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+  const code = (text: string): string => text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  /** Every function defined at column 0, with its comment-free body. A one-line definition (`f() { …; }`) ends on its own
+   *  line: the multi-line reading, to the next `}` at column 0, would swallow whatever follows it. */
+  const defs = (): Map<string, string> => {
+    const m = new Map<string, string>();
+    for (const x of src.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{([^\n]*)(?:\n|$)/gm)) {
+      const oneLine = /^ .*\}\s*$/.test(x[2]!);
+      const body = oneLine ? x[0] : /^[\s\S]*?\n\}/.exec(src.slice(x.index))![0];
+      m.set(x[1]!, code(body));
+    }
+    return m;
+  };
+  /** The functions the step reaches, DERIVED: every defined function named, transitively, from the step's entry points
+   *  (the lane, its dispatcher for the read children, the identity read, the notifier and the hand-verb reader). */
+  const reachable = (): string[] => {
+    const all = defs();
+    const seen = new Set<string>();
+    const todo = ['_models_advance_lane', '_models_advance_steps', '_models_advance_read_body', '_codex_tier_read', '_models_push', '_models_hand_settled'];
+    while (todo.length > 0) {
+      const f = todo.pop()!;
+      if (seen.has(f) || !all.has(f)) continue;
+      seen.add(f);
+      for (const n of all.get(f)!.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []) if (all.has(n) && !seen.has(n)) todo.push(n);
+    }
+    return [...seen].sort();
+  };
+
+  it('no function the step reaches takes the tier lock (_codex_lock): the read bodies and the parent readers included', () => {
+    const all = defs();
+    const reach = reachable();
+    for (const must of ['_models_advance_steps', '_models_adv_body_plan', '_models_adv_body_check', '_models_adv_body_canary',
+      '_models_adv_body_receipt', '_codex_tier_read_body', '_models_advance_read_body', '_models_advance_plan', '_models_advance_check',
+      '_models_advance_canary', '_models_advance_receipt', '_codex_tier_ours', '_models_node_locked', '_models_lock']) {
+      expect(reach, `${must} is not reached: the derivation lost the step`).toContain(must);
+    }
+    expect(reach.filter((f) => /\b_codex_lock\b/.test(all.get(f)!)), 'a function the step reaches takes the tier lock').toEqual([]);
+  });
+
+  it('the jq vocabulary is written once, in MODELS_JQ_DEFS, and every step program begins with it', () => {
+    for (const d of ['tok', 'word', 'flat', 'eff', 'ofpin']) {
+      expect(src.match(new RegExp(`\\bdef ${d}[:(]`, 'g')), `def ${d} is written more than once`).toHaveLength(1);
+    }
+    const all = defs();
+    for (const fn of ['_models_adv_body_plan', '_models_adv_body_canary', '_models_adv_body_receipt', '_models_hand_settled']) {
+      expect(all.get(fn), `${fn} does not start from the shared definitions`).toContain('"$MODELS_JQ_DEFS"');
+    }
+  });
+
+  it('MODELS_AUTO_TAIL_S is read in one place, and the lock and the writer both ask it', () => {
+    const all = defs();
+    const readers = [...all].filter(([, body]) => /MODELS_AUTO_TAIL_S:-/.test(body)).map(([n]) => n);
+    expect(readers).toEqual(['_models_auto_tail_secs']);
+    for (const fn of ['_models_lock', '_models_node_locked']) expect(all.get(fn)).toContain('$(_models_auto_tail_secs)');
+  });
+
+  it('no RESTOREFAIL frame is sent: the row fails from the events themselves', () => {
+    expect(src.split('\n').filter((l) => /RESTOREFAIL/.test(l) && !/^\s*#/.test(l))).toEqual([]);
+    expect(src).not.toMatch(/\bdeclare -F _(?:codex_tier_read_body|models_advance_read_body)\b/);
+  });
+
+  it('the notify hook\'s deadline is the hook\'s own curl -m, read from deploy/notify.sh and never edited here', () => {
+    const notify = fs.readFileSync(join(REPO, 'deploy', 'notify.sh'), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const m = /^curl\b[^\n]* -m (\d+)\b/m.exec(notify);
+    const h = /^MODELS_HOOK_S=(\d+)$/m.exec(src);
+    expect(m, 'deploy/notify.sh has no curl -m').not.toBeNull();
+    expect(h, 'ccd/ccrc has no MODELS_HOOK_S').not.toBeNull();
+    expect(Number(h![1])).toBe(Number(m![1]));
   });
 });

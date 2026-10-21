@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5cf4309fce76fae4624f82c1a0acda0c3ce12a2e783d8a4771353b9495b18864
+# ccrc:generated 1 sha256=38b7059fccf60c24f7ecf25f235f8f3127a1c1405f8bead91af052e67d4ce024
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -707,9 +707,13 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
 # whose `sleep` ends by itself within the second); nothing is signalled.
 #
 # `_plat_timeout_strict <seconds> <cmd> [args...]` is today's deadline, today's grace clamp, today's escalation
-# (it IS `_plat_timeout`) and rc 125 with NO program run unless the deadline reads as whole seconds, the
-# capability is `strong`, and the PATH is the one it was proved for. It never falls back. It is an installed-tool
-# check, not a defence against a hostile replacement binary.
+# (it IS `_plat_timeout`) and rc 125 with NO program run unless the deadline reads as at least one whole second (GNU
+# `timeout` reads 0 as "no deadline"), the capability is `strong`, and the PATH is the one it was proved for. It does
+# not fall back to the pure-bash arm on a substrate it has proved. ONE RESIDUAL, stated exactly: the proof is keyed
+# on the PATH string, not on the file. A binary that vanishes during a run, AFTER bash's command hash has been
+# cleared (a PATH assignment, `hash -r`), lets `_plat_timeout` select again, and that one stage can then reach the
+# pure-bash arm and its single TERM. Nothing on the advance step's path assigns PATH or clears the hash, and the
+# unit's own stop is the backstop. It is an installed-tool check, not a defence against a hostile replacement binary.
 _plat_timeout_capability() {   # -> prints strong|weak|none; sets CCD_TIMEOUT_CAPABILITY; rc 0
   unset _CCD_TIMEOUT_K
   _plat_timeout 1 true >/dev/null 2>&1 || :
@@ -725,6 +729,7 @@ _plat_timeout_capability() {   # -> prints strong|weak|none; sets CCD_TIMEOUT_CA
 _plat_timeout_strict() {   # <seconds> <cmd> [args...] -> rc 125, nothing run, unless the capability is strong
   local secs="${1-}"
   case "${secs%%[.,]*}" in ''|*[!0-9]*|??????????*) return 125 ;; esac
+  [ "$(( 10#${secs%%[.,]*} ))" -ge 1 ] || return 125
   [ "${CCD_TIMEOUT_CAPABILITY:-}" = strong ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] \
     && [ "${_CCD_TIMEOUT_PROVED_PATH-}" = "$PATH" ] || return 125
   _plat_timeout "$@"
