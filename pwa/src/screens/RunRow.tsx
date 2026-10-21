@@ -246,11 +246,16 @@ export function RunRow({
   // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
   // whole row body in `<button className="run-open">`, and a `<button>`
   // inside a `<button>` is invalid HTML and unreachable to a screen reader.
-  // It renders on EVERY row, including the inert (no-session) one just below
+  // It renders on every OPEN row, including the inert (no-session) one just below
   // — an inert row is exactly the wedge shape (`ambiguous-dispatch`, a
   // `planned` run with no session) this control exists to release
   // (`abandon-sheet.test.tsx`'s own pin on that case).
-  const abandonButton = (
+  //
+  // D-6170 (G5 (a)): drawn on OPEN rows only. A closed run has nothing left to
+  // release, and a door on every finished row invites the act the runs page
+  // exists to make rare. A `planned` run with no session is open, so the
+  // wedge door above stands (D-282).
+  const abandonButton = isRunClosed(run) ? null : (
     <button
       type="button"
       className="run-abandon"

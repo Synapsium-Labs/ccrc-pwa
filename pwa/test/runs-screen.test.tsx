@@ -1253,9 +1253,10 @@ describe('the resume door on the run board', () => {
     // door IS on the open row of the same program, in the same render.
     const btn = screen.getByRole('button', { name: /resume run 4/i });
     expect(rowOf(btn).title).toBe('run 4 · open-cove');
-    // The release valve on the terminal row is untouched either way: a closed
-    // run can still be the wedge `.run-abandon` exists for.
-    expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+    // D-6170 (G5 (a)): Abandon is drawn on open rows only — the terminal row
+    // offers none, the open row of the same program keeps it.
+    expect(screen.queryByRole('button', { name: /abandon run 3/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /abandon run 4/i })).toBeInTheDocument();
   });
 
   it('hides it on an all-terminal program while the claimant is only UNKNOWN — the widened term does not weaken the first', async () => {
@@ -1612,7 +1613,8 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
     expect(document.querySelector('.run-open')).toBeNull();
     const li = chipEl()!.closest('li');
     expect(li).toHaveAttribute('data-inert', 'true');
-    expect(li!.querySelector('.run-abandon')).not.toBeNull();
+    // D-6170: a reclaimed child's run is closed, so its row offers no Abandon.
+    expect(li!.querySelector('.run-abandon')).toBeNull();
   });
 
   it.each(['pending', 'deferred', 'paused', 'refused'] as const)('keeps the open door on a %s row', async (word) => {
@@ -1629,10 +1631,10 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
     expect(chipEl()!.closest('li')).not.toHaveAttribute('data-inert');
   });
 
-  // The inert row keeps both controls, and keeps them where they were: last,
-  // the resume door before the abandon control. A dead coordinator and a
-  // programme with no open run are what make the resume door render at all.
-  it('keeps the resume door and the abandon control on a reclaimed row — its last two children, in that order', async () => {
+  // The inert row keeps the resume door where it was: last. A dead coordinator
+  // and a programme with no open run are what make it render at all. The run is
+  // closed, so D-6170 draws no abandon control after it.
+  it('keeps the resume door on a reclaimed row, its last child, and no abandon control', async () => {
     const store = makeStore();
     act(() => {
       store.setState({
@@ -1648,7 +1650,8 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
     const li = resume.closest('li')!;
     expect(li).toHaveAttribute('data-inert', 'true');
     expect(document.querySelector('.run-open')).toBeNull();
-    expect([...li.children].slice(-2).map((c) => c.className)).toEqual(['run-resume', 'run-abandon']);
+    expect([...li.children].at(-1)?.className).toBe('run-resume');
+    expect(li.querySelector('.run-abandon')).toBeNull();
   });
 });
 

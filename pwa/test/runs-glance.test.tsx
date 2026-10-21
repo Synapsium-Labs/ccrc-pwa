@@ -73,19 +73,19 @@ describe('kept: across D-6170', () => {
   });
 });
 
-describe('today: before D-6170', () => {
-  it('today: a done row and a failed row each render Abandon', async () => {
+describe('the runs ledger at a glance (D-6170)', () => {
+  it('no closed row renders Abandon', async () => {
     const c = await board([run({ id: 1 })], [
       run({ id: 2, state: 'done', closedAt: Date.now() - 2_000 }),
       run({ id: 3, state: 'failed', closedAt: Date.now() - 3_000 }),
     ]);
-    await screen.findByRole('button', { name: 'Abandon run 2' });
+    await screen.findByTitle(/run 2/);
     expect(rows(c)).toHaveLength(3);
-    expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Abandon run 2' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Abandon run 3' })).toBeNull();
   });
-});
 
-describe('the runs ledger at a glance (D-6170)', () => {
   it("no row's visible name equals its run id, its workspace or its branch", async () => {
     const c = await board([
       run({ id: 1 }),
