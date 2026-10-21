@@ -254,9 +254,9 @@
          says `shadow-glow-busy`, not a hand-rolled box-shadow. --------- */
   --shadow-card:  var(--elev-card);
   --shadow-sheet: var(--elev-sheet);
-  /* The Popover's (D-5934), on the sheet's elevation until the Sheet's
-     desktop arm (D-5933) declares `--elev-pop` and repoints it (D-6019). */
-  --shadow-pop:   var(--elev-sheet);
+  /* The Popover's (D-5934) and the Sheet's desktop arm's (D-5933): a centred
+     panel's downward lift, `--elev-pop` (D-6019). */
+  --shadow-pop:   var(--elev-pop);
   --shadow-glow-busy:          var(--glow-busy);
   --shadow-glow-attention:     var(--glow-attention);
   --shadow-glow-dot-busy:      var(--glow-dot-busy);
@@ -304,4 +304,13 @@
 }
 @keyframes toast-in {
   from { transform: translateY(var(--sp-2)); opacity: 0; }
+}
+/* The Sheet's desktop arm (D-5933): a fade with a small rise in, a fade out. Named by `sheet.tsx`'s literal
+   `min-[900px]:` classes in place of vaul's slide, and timed by its `--vaul-*` variables, so the tokens'
+   reduced-motion block reaches them. Declared here once. */
+@keyframes sheet-pop-in {
+  from { transform: translateY(var(--sp-2)); opacity: 0; }
+}
+@keyframes sheet-pop-out {
+  to { opacity: 0; }
 }
