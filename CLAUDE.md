@@ -209,7 +209,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   is a real break, so re-run the file alone first. `ccd-collect-aside-settle` (path-identity W2) runs the real
   collector, reclaim and expire verbs on git fixtures, its in-use probes stubbed but its ws-expire case with the
   expiry ladder's real `/proc` walk, at about 10 s a case at worst, so under load it fails as vitest's `Test timed out
-  in <n>ms`; any other red is a real break, so re-run the file alone first.
+  in <n>ms`; any other red is a real break, so re-run the file alone first. `ccd-worktree-identity-fence`
+  (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures, their tail's post-kill wait
+  walking the real `/proc`, and one expiry case's ladder walking it too, so under load it fails as vitest's `Test
+  timed out in <n>ms`; any other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
