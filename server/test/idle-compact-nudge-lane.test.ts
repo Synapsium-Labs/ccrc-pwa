@@ -14,6 +14,7 @@ import type { SessionRecord } from '../src/registry.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { redactCommand } from '../src/coord/redact.js';
 import { configDirFor } from '../src/config.js';
 import { transcriptPath } from '../src/transcript/resolve.js';
 import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody, idleNudgeRefusedBody } from '../src/idlenudge.js';
@@ -366,5 +367,114 @@ describe('sweepIdleCompactNudge: a real-shaped compaction uuid survives the feed
     await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(literalSends(first.h.calls)).toHaveLength(1);
     expect(nudgeRows(first.coord)).toHaveLength(1);
+  });
+});
+
+// D-5860 (Task C1f): `alreadyNudged` reads the compaction's KEY (`hasNotice`), no longer the archived body. Step 1
+// pinned these rows on the body read; Step 3 changed only the rows OA-C3 ruled (operator, 2026-10-21: "A: the label
+// decides"), each marked RULED with what it did before. Rows (a), (b) and (e) of the plan's table are the "happy path"
+// and "at most once per compaction" blocks above (first nudge, the same compaction again, ACROSS A RESTART); the
+// landing gate's row (the record throws, nothing typed) is "HOLD: the notify log is present but the coord.db row
+// throws" above and C0c's feed-writers-pin row. Nudge rows are `recordOnly`: they are never pushed, before or after.
+describe('C1f: the nudge\'s "already nudged" read is the compaction\'s key (D-5860, OA-C3 ruled A)', () => {
+  const REWORDED = 'Nudging with a "continue" prompt (an earlier wording) (compaction b1)';
+  it('(c) the row\'s body changed (a reworded deploy), same process: held by this process\'s own set', async () => {
+    const { h, coord, w } = await rig();
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    coord.db.prepare("UPDATE feed_events SET body = ? WHERE kind = 'nudge'").run(REWORDED);
+    at(NOW + IDLE_NUDGE_SWEEP_MS);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(coord)).toHaveLength(1);
+  });
+  // RULED (OA-C3, A). Before: typed AGAIN, a second row (the body read missed the reworded row).
+  it('(c) the row\'s body changed, then a restart: the key matches, so the same compaction is NOT typed again', async () => {
+    const first = await rig();
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    first.coord.db.prepare("UPDATE feed_events SET body = ? WHERE kind = 'nudge'").run(REWORDED);
+    const second = await rig({ home: first.h, coord: first.coord });
+    await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(first.coord).map((r) => r.body)).toEqual([REWORDED]);
+    expect(warned(`idle-compact-nudge ${ID} compaction b1: typed`)).toBe(1);
+  });
+  // Departure `dedupe-key-legacy-text`: a row archived BEFORE the key (NULL) is still matched by its body, so the
+  // deploy itself types nothing a second time.
+  it('a row archived before the key existed is matched by its body: a restart onto the new build types nothing', async () => {
+    const first = await rig();
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    first.coord.db.prepare("UPDATE feed_events SET dedupe_key = NULL WHERE kind = 'nudge'").run();
+    const second = await rig({ home: first.h, coord: first.coord });
+    await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(first.coord)).toHaveLength(1);
+  });
+  it('(d) a ring restart (a new epoch), same process: held by this process\'s own set', async () => {
+    const { h, coord, w, deps, log } = await rig();
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    const fresh = new NotifyLog(path.join(mkTmp('ccrc-idle-nudge-ring-'), 'notify.json'));
+    await fresh.load();
+    expect(fresh.epoch).not.toBe(log.epoch);
+    (deps as unknown as { notifyLog: NotifyLog }).notifyLog = fresh;
+    at(NOW + IDLE_NUDGE_SWEEP_MS);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(coord)).toHaveLength(1);
+  });
+  it('(d)+(e) a new epoch AND a restarted watcher: the archived row is matched whatever epoch wrote it', async () => {
+    const first = await rig();
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    // A new home: a new notify log (a fresh epoch) and a new watcher, over the SAME coord.db.
+    const second = await rig({ coord: first.coord });
+    expect(second.log.epoch).not.toBe(first.log.epoch);
+    await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(second.h.calls)).toEqual([]);
+    expect(nudgeRows(first.coord)).toHaveLength(1);
+  });
+
+  // A SECOND compaction in the same session, later. The fixture keys (`b1`, `b2`) survive the redactor, so the block
+  // above nudges it; Claude Code's real compaction uuids are 36-character token-shaped runs that `recordFeedEvent`
+  // masks (D-5298), so every nudge row of a session archives with ONE body and the read matches the earlier one.
+  const U1 = '3f1c2a7e-9b4d-4e21-8c6a-1d2e3f4a5b6c';
+  const U2 = '9a8b7c6d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+  const later = 4 * 3_600_000;
+  const shift = (r: object, uuid: string): object =>
+    ({ ...r, uuid, timestamp: new Date(Date.parse((r as { timestamp: string }).timestamp) + later).toISOString() });
+  const twoCompactions = async (k1: string, k2: string, between: (r: Rig) => void = () => {}): Promise<Rig> => {
+    const r = await rig();
+    const first = IDLE_TAIL.map((x) => (x === ROW.boundary ? { ...ROW.boundary, uuid: k1 } : x));
+    seedTranscript(r.h.home, first);
+    await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    between(r);
+    seedTranscript(r.h.home, [...first, ROW.nudge, shift(ROW.endTurn, 'a9'), shift(ROW.stopHook, 'h9'),
+      shift(ROW.boundary, k2), shift(ROW.summary, 's2'), shift(ROW.notice, 'n2')]);
+    seedLive(r.h.home, { statusUpdatedAt: T_NOTICE + later });
+    seedTasks(r.h.home, -later + 10 * 60_000);
+    at(NOW + later);
+    await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    return r;
+  };
+  it('CONTROL: a second compaction whose key survives the redactor is nudged once more', async () => {
+    const r = await twoCompactions('b1', 'b2');
+    expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT, IDLE_COMPACT_NUDGE_PROMPT]);
+  });
+  // RULED (OA-C3; fixed under A and B alike). Before: the second compaction read as already nudged, nothing typed.
+  it('a second compaction with a REAL-SHAPED uuid is nudged once more, though the redacted bodies collide', async () => {
+    expect(redactCommand(idleNudgeFeedBody(U1))).toBe(redactCommand(idleNudgeFeedBody(U2)));
+    const r = await twoCompactions(U1, U2);
+    expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT, IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(r.coord)).toHaveLength(2);
+    expect(warned(`idle-compact-nudge ${ID} compaction ${U2}: typed`)).toBe(1);
+  });
+  // Departure `landing-gate-by-key`: once a later compaction can be nudged, a body re-read after its record would match
+  // the EARLIER compaction's masked row and type over a row that did not land. The gate re-reads the key.
+  it('the landing gate: a second compaction whose own row did not land types nothing, though the earlier row\'s body matches', async () => {
+    const r = await twoCompactions(U1, U2, (x) => {
+      vi.spyOn(x.coord, 'recordFeedEvent').mockImplementation(() => { throw new Error('database is locked'); });
+    });
+    expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(r.coord).map((x) => x.body), 'the premise: a body read would say landed')
+      .toEqual([redactCommand(idleNudgeFeedBody(U2))]);
+    expect(warned(`compaction ${U2}: the feed record did not land — nothing typed`)).toBe(1);
   });
 });

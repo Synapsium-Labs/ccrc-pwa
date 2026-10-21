@@ -226,7 +226,8 @@ describe('landing reads a sweep-failed run as it reads an operator abandon (spec
       expect(ask).not.toBeNull();
       steps.push(landingVerdict(ask!, { runs: { ok: true, run: survivorOf(sib.siblings) } }));
     }
-    expect(steps[0]).toEqual({ step: 'toldFeed', body: expect.stringContaining('No open run names a coordinator to tell.') });
+    expect(steps[0]).toEqual({ step: 'toldFeed', key: `${W}#7:dequeued@`,
+      body: expect.stringContaining('No open run names a coordinator to tell.') });
     expect(steps[1]).toEqual(steps[0]);
   });
 

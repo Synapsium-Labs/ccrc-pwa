@@ -76,11 +76,12 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
   });
 
   // D-5857 (Task C1c): pushOne's archive write moved into the funnel (`notice.ts` `notify`), so the real-tree anchor
-  // follows it there; the row's other halves are unchanged.
+  // follows it there; the row's other halves are unchanged. D-5860 (Task C1f): the write also passes the notice's
+  // once-only key when it has one, so the anchor matches the call's first two arguments.
   it("REAL: it finds the funnel's archive write in notice.ts, and every site is a call", () => {
     const sites = feedRecordCallSites();
     show('feedRecordCallSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev\)/.test(s.text)),
+    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev[,)]/.test(s.text)),
       "the funnel's archive write is not among the sites").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brecordFeedEvent\s*\(/);
     expect(files(sites)).not.toContain('server/src/coord/store.ts');
