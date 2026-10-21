@@ -2492,6 +2492,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         should cut `rewrite`; rollout is the operator's tap. STATUS: fleet and server v0.0.493, newest v0.0.508,
         stable v0.0.502, intent dev/auto=off, backups fleet 185M/server 8951M, disk free fleet 182G/work volume
         46G/server 23G, no anomalies.
+      - **05:55 UTC: both boxes on v0.0.508 (#435) by the operator's tap, clean; #832 is live and halves the block.**
+        - Fleet 05:34:30 to 05:35:58, server 05:36:26 to 05:38:59 (`ccrc.service` restarted 05:38:02). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both.
+        - The broker's slow-pass line now carries #832's fields. Over 15 passes since 05:41, block's mean is 15.9 s
+          (38.5 s from 04:00 to 05:34) and rewrite's 7.0 s (12.8 s). `repairSkipped=1` on 13 of 15 passes.
+        - The measured event-loop stall, `stallMax`, has a mean of 7.8 s and a max of 15.4 s, above the review's
+          estimate of about 3 s. Over the probe's 5 s timeout, that is enough to explain each `/health` miss. Sent
+          to the broker's coordinator as mail 7528, data only. The 05:58 probe answered first time.
+        - Server backups 9613M, 10 kept, the newest 1399M. The next tap will likely cross the probe's 10240M size line
+          as known growth. Free disk is 22.3G, so the 15G line is about ten to twelve taps away. That is about a day
+          at yesterday's pace. Mail 7528 said two to three days; the soak mail corrects it.
+        - STATUS: fleet and server v0.0.508, newest v0.0.509, stable v0.0.502, intent dev/auto=off, backups fleet
+          186M/server 9613M, disk free fleet 159G/work volume 28G/server 22G, no anomalies.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
