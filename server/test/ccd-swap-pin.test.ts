@@ -251,7 +251,7 @@ describe('source pins: the two properties no fixture can observe', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const rescue = src.indexOf('auto-rescue $id: $wrapper (blocked)');
     const pinCheck = src.indexOf('if _swap_pinned "$id" "$wrapper"; then');
-    const hold = src.indexOf('[[ -e "$REG/$id.hold" ]] && return 0');
+    const hold = src.indexOf('[[ -e "$REG/$id.hold" ]] && { _standdown_note "$id" hold; return 0; }');   // D-6180 says the hold
     expect(rescue, 'the rescue log line moved or was renamed').toBeGreaterThan(0);
     expect(pinCheck, 'the pin check is gone from _auto_swap_check').toBeGreaterThan(0);
     expect(hold, 'the hold check moved or was renamed').toBeGreaterThan(0);

@@ -816,7 +816,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     const f = path.join(h.home, '.cc-sessions', 'swap.log');
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
   };
-  const notes = (): string[] => swapLog().split('\n').filter((l) => l.includes(' carried-in '));
+  const notes = (): string[] => swapLog().split('\n').filter((l) => l.split(' ')[2] === 'carried-in');   // the note itself: a D-6180 stand-down line names the word too
   const stranded = (): boolean => fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`));
   const authdead = (): string | null => {
     const f = path.join(h.home, '.cc-sessions', 'claude-authdead');

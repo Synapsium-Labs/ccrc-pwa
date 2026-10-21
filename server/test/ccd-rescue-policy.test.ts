@@ -234,7 +234,7 @@ describe('the dated row the waits read (session-continuity §5.4 rule 2)', () =>
     tick(ARMED, 'claude-a', { TMUX_CREATED: String(born) });
     expect(dispatches()).toEqual([]);
     expect(h.reg(ID, 'rescuewait')).toBeNull();
-    expect(logLines('carried-in')).toHaveLength(1);
+    expect(swapLog().split('\n').filter((l) => l.split(' ')[2] === 'carried-in'), 'the carried-in note itself (D-6180 stand-down lines name the word too)').toHaveLength(1);
   });
 });
 

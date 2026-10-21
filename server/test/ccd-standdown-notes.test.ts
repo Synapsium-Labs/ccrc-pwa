@@ -8,7 +8,8 @@
 //
 // THE CHARACTERIZATION BLOCK comes first and was green on the base: "today:"
 // rows are the ones D-6180's commits flip (each flipped row is rewritten in
-// the commit that flips it and keeps its name), "kept:" rows must never move.
+// the commit that flips it and keeps its name, so the name records the base and
+// the body the flipped answer), "kept:" rows must never move.
 //
 // FIXTURE HOME ONLY (`makeCcdHarness`). tmux answers one pane from
 // `$HOME/pane.txt` and, while `TMUX_CREATED` is set, the pane's
@@ -107,7 +108,8 @@ describe('characterization: what each silent exit writes today', () => {
     seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
     writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
     tick(PROMPT);
-    expect(swapLog()).toBe('');
+    // flipped by D-6180's call sites: one stand-down line, and still no move
+    expect(swapLog().split('\n').filter(Boolean)).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: cooldown evidence=transcript banner-outside-tail=no$/)]);
     expect(dispatches()).toEqual([]);
   });
 
@@ -115,14 +117,16 @@ describe('characterization: what each silent exit writes today', () => {
     seed(); h.sh(`_reg_set ${ID} swapblocked "${T0 - 100} refused"`);
     writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
     tick(PROMPT);
-    expect(swapLog()).toBe('');
+    // flipped by D-6180's call sites
+    expect(swapLog().split('\n').filter(Boolean)).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: swapblocked evidence=transcript banner-outside-tail=no$/)]);
     expect(dispatches()).toEqual([]);
   });
 
   it('today: a draft stand-down over a limit row writes nothing', () => {
     seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
     tick(DRAFT, { target: '' });
-    expect(swapLog()).toBe('');
+    // flipped by D-6180's call sites
+    expect(swapLog().split('\n').filter(Boolean)).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: draft evidence=transcript banner-outside-tail=no$/)]);
     expect(dispatches()).toEqual([]);
   });
 
@@ -137,7 +141,8 @@ describe('characterization: what each silent exit writes today', () => {
   it('today: the rescue\'s dropped target writes nothing', () => {
     seed(); writeTranscript([turn(T0 - 60)]);
     tick(STALLED, { extra: '_avail() { return 1; };' });
-    expect(swapLog()).toBe('');
+    // flipped by D-6180's call sites
+    expect(swapLog().split('\n').filter(Boolean)).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: target-unavailable evidence=(pane|banner) banner-outside-tail=no$/)]);
     expect(dispatches()).toEqual([]);
   });
 
@@ -145,7 +150,8 @@ describe('characterization: what each silent exit writes today', () => {
     seed(); idleStatus(); writeTranscript([turn(T0 - 60)]);
     fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:1/1 run:1');
     tick(PROMPT, { extra: AFFINITY });
-    expect(swapLog()).toBe('');
+    // flipped by D-6180's call sites
+    expect(swapLog().split('\n').filter(Boolean)).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: hold$/)]);
     expect(dispatches()).toEqual([]);
   });
 
@@ -195,5 +201,177 @@ describe('characterization: what each silent exit writes today', () => {
     seed(); writeTranscript([turn(T0 - 60)]);
     tick(BUSY, { target: '' });
     expect(swapLog()).toBe('');
+  });
+});
+
+// ── D-6180: THE STAND-DOWN LINES ─────────────────────────────────────────────
+
+/** Many ticks in ONE shell (the supervisor's own shape: globals and the
+ *  registry carry between ticks), `step` seconds apart from `from`. */
+const ticks = (pane: string, n: number, opts: { from?: number; step?: number; target?: string | null; extra?: string } = {}): void => {
+  const from = opts.from ?? T0; const step = opts.step ?? 5;
+  h.sh(`${STUBS(pane, opts.target === undefined ? 'claude-a' : opts.target)} ${opts.extra ?? ''}
+    for ((i = 0; i < ${n}; i++)); do FAKE_NOW=$(( ${from} + i * ${step} )); _auto_swap_check ${ID}; done`, env(from));
+};
+/** The evidence probe's own fork: `_pane_born` asks tmux for the session's birth,
+ *  and no other step of a cooldown tick does. */
+const probes = (): number => h.calls().filter((l) => l.includes('display-message')).length;
+const standDowns = (): string[] => lines('stand-down');
+
+describe('D-6180: every silent stand-down logged, once per episode, with a re-log floor', () => {
+  it('a cooldown over a limit row writes one stand-down line', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(PROMPT);
+    expect(standDowns()).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: cooldown evidence=transcript banner-outside-tail=no$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a second tick in the same episode writes nothing', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(PROMPT);
+    tick(PROMPT, { now: T0 + 5 });
+    expect(standDowns()).toHaveLength(1);
+  });
+
+  it('fifteen cooldown ticks over one limit row write one line', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    ticks(PROMPT, 15, { step: 60 });
+    expect(standDowns()).toHaveLength(1);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('180 consecutive SWAP_COOLDOWN ticks over a limit row write exactly one stand-down line and probe at most once per TRANSCRIPT_ARM_INTERVAL', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    const interval = Number(h.sh('echo "$TRANSCRIPT_ARM_INTERVAL"'));
+    ticks(PROMPT, 180, { step: 5 });
+    expect(standDowns()).toHaveLength(1);
+    expect(probes()).toBeGreaterThan(0);
+    expect(probes()).toBeLessThanOrEqual(Math.ceil((180 * 5) / interval));
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('the same with no limit row: no line, and the none answer is cached', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    writeTranscript([turn(T0 - 60)]);
+    ticks(PROMPT, 12, { step: 5 });
+    expect(standDowns()).toEqual([]);
+    expect(probes(), 'one probe at T0, one at T0+30').toBe(2);
+    expect(h.reg(ID, 'standdownprobe')).toBe(`${T0 + 30} none`);
+  });
+
+  it('a limit row that appears 5 minutes into SWAP_COOLDOWN is logged within TRANSCRIPT_ARM_INTERVAL', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    const tx = writeTranscript([turn(T0 - 60)]);
+    ticks(PROMPT, 60, { step: 5 });   // T0 .. T0+295
+    expect(standDowns()).toEqual([]);
+    fs.appendFileSync(tx, `${limitRow(T0 + 297)}\n`);
+    ticks(PROMPT, 7, { from: T0 + 300, step: 5 });   // T0+300 .. T0+330
+    expect(standDowns()).toEqual([expect.stringMatching(/: cooldown evidence=transcript /)]);
+  });
+
+  it('the probe writes no carried-in line', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([limitRow(T0 - 3000)]);
+    tick(PROMPT, { born: T0 - 1900 });
+    expect(h.reg(ID, 'standdownprobe')).toBe(`${T0} carried-in`);
+    expect(lines('carried-in')).toEqual([]);
+    expect(standDowns(), 'only transcript evidence counts at the cooldown').toEqual([]);
+  });
+
+  it('the episode is re-logged after the floor', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    const floor = Number(h.sh('echo "$COMPACT_NOTE_FLOOR"'));
+    tick(DRAFT, { target: '' });
+    tick(DRAFT, { target: '', now: T0 + 60 });
+    expect(standDowns()).toHaveLength(1);
+    tick(DRAFT, { target: '', now: T0 + floor });
+    expect(standDowns()).toHaveLength(2);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a dispatch or a new reason word ends the episode', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(DRAFT, { target: '' });
+    h.sh(`_reg_set ${ID} lastswap ${T0 + 10}`);
+    tick(PROMPT, { now: T0 + 20 });
+    h.sh(`rm -f "$REG/${ID}.lastswap"`);
+    tick(DRAFT, { target: '', now: T0 + 30 });
+    expect(standDowns().map((l) => l.replace(/^.* stand-down \S+ /, ''))).toEqual([
+      'draft evidence=transcript banner-outside-tail=no',
+      'cooldown evidence=transcript banner-outside-tail=no',
+      'draft evidence=transcript banner-outside-tail=no',
+    ]);
+    tick(STALLED, { extra: AFFINITY, now: T0 + 40 });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
+    expect(h.reg(ID, 'standdown'), 'the dispatch ended the episode').toBeNull();
+  });
+
+  it('a cooldown with no limit evidence writes nothing', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([turn(T0 - 60)]);
+    tick(PROMPT);
+    expect(h.reg(ID, 'standdownprobe'), 'the probe ran and answered none').toBe(`${T0} none`);
+    expect(swapLog()).toBe('');
+  });
+
+  it('draft over a limit row is logged with evidence=transcript', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(DRAFT, { target: '' });
+    expect(standDowns()).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: draft evidence=transcript banner-outside-tail=no$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('target-unavailable is logged when hard-blocked', () => {
+    seed(); writeTranscript([turn(T0 - 60)]);
+    tick(STALLED, { extra: '_avail() { return 1; };' });
+    expect(standDowns()).toEqual([expect.stringMatching(/: target-unavailable evidence=(pane|banner) banner-outside-tail=no$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('target-unavailable on the affinity path is logged only when ccd had a target other than cur', () => {
+    seed(); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    tick(PROMPT, { target: 'claude', extra: '_avail() { return 1; };' });
+    expect(standDowns(), 'no target other than cur: nothing').toEqual([]);
+    tick(PROMPT, { now: T0 + 5, extra: '_avail() { return 1; };' });
+    expect(standDowns()).toEqual([expect.stringMatching(/: target-unavailable$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('an affinity move held by .hold is logged only when ccd had a target', () => {
+    seed(); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    fs.writeFileSync(regFile(`${ID}.hold`), 'program:demo wave:1/1 run:1');
+    tick(PROMPT, { target: '', extra: AFFINITY });
+    expect(standDowns()).toEqual([]);
+    tick(PROMPT, { now: T0 + 5, extra: AFFINITY });
+    expect(standDowns()).toEqual([expect.stringMatching(/: hold$/)]);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('negative writes no line', () => {
+    seed(); writeTranscript([turn(T0 - 60)]);
+    tick(PROMPT, { target: '' });
+    tick(PROMPT, { target: '', now: T0 + 60 });
+    expect(swapLog()).toBe('');
+    expect(h.reg(ID, 'standdownprobe'), 'and the steady tick never probes').toBeNull();
+  });
+
+  it('banner-outside-tail is yes when only the whole pane shows the banner', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
+    writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    const dialog = ["You've hit your session limit · resets 9:10pm (UTC)", ...Array.from({ length: 10 }, (_, i) => `  ${i + 1}. an option`), PROMPT].join('\n');
+    tick(dialog);
+    expect(standDowns()).toEqual([expect.stringMatching(/: cooldown evidence=transcript banner-outside-tail=yes$/)]);
+  });
+
+  it('the rescue still dispatches on the tick it detects, with no line before it', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(STALLED, { extra: AFFINITY });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
+    expect(swapLog().split('\n').filter(Boolean).map((l) => l.split(' ')[2])).toEqual(['auto-rescue']);
+    expect(h.reg(ID, 'standdownprobe'), 'no probe on the rescue path').toBeNull();
   });
 });
