@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=eec18f52bd8caf1e6e19e6e4a50a2438112f186487ae18da7f748bb464c96784
+# ccrc:generated 1 sha256=f68518c1a9e86b88a58de5d7b05c2d05ee2787b58e75853c30b3e3ea31b2a410
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29443,7 +29443,7 @@ _ws_workdirid_read() {   # id logical -> 0 `valid` (_WS_WDID_IDENT "<dev>:<ino>:
   _WS_WDID_STATE=valid; return 0
 }
 
-_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
+_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''
 _WS_LEGACY_ROWS=''; _WS_PENDING_ROWS=''   # THE COUNTS of `_ws_reclaim_workdir_shared` ('' = not counted)
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
   #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
@@ -29648,8 +29648,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # collected as a row that cannot be placed, as before. A record says where a
   # tree WAS, not that it is gone rather than moved, so the admin directory
   # the git-record arm named is kept in _WS_RECORDED_GDIRS (`id<TAB>dir`
-  # lines, reset on every call); the ladder after its nested scan, and
-  # `_ws_reclaim_owned`, ask `_ws_reclaim_moved_check` of it.
+  # lines, reset on every call), and, for a row either arm places whose entry
+  # field is valid, the identity of the directory it entered is kept in
+  # _WS_RECORDED_IDS (`id<TAB>identity` lines, reset beside it; path-identity
+  # spec §4.5, step 4); the ladder after its nested scan, and
+  # `_ws_reclaim_owned`, ask `_ws_reclaim_moved_check` of both.
   #
   # NOR AT, INSIDE OR THROUGH A LEAF THE TAIL REMOVES WITH IT (spec §5.5,
   # §5.6). "Inside the child" is all three trees the tail deletes: the
@@ -29769,7 +29772,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local minebasis='' mi='' mreq=0 nbt=0 jb t0='' ri hk hi hw ha hrest q unwalk='' unmount=''
   local -a rid=() req=()
   local _WS_IDWALK_OUT='' _WS_IDWALK_WHY=''
-  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
+  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''
   # The entry field's state for this ONE call (AND WHERE EACH ROW ENTERED, above); `efst` and `efid` are the
   # CURRENT row's field state and identity, from its field read to the end of that row's pass.
   local efst="" efid="" unpend="" unfield="" unrec="" nlegacy=0 npending=0 efbt0=-1
@@ -29864,6 +29867,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
         || { unres+="${unres:+, }$o"; continue; }
       wr="$_WS_RECORDED_AT"; rok=1
       [[ -z "$_WS_RECORDED_G" ]] || _WS_RECORDED_GDIRS+="$o"$'\t'"$_WS_RECORDED_G"$'\n'
+      # And the identity of the directory it entered, when its entry field is
+      # valid (`_ws_workdirid_read`, asked of this row above, kept as efst and
+      # efid): a checkout inside the child that IS that directory is its moved
+      # tree, and holds it (`_ws_reclaim_moved_check`; path-identity spec §4.5,
+      # step 4).
+      [[ "$efst" != valid ]] || _WS_RECORDED_IDS+="$o"$'\t'"$efid"$'\n'
     fi
     # The THROUGH arm's RESOLVED disjunct (the last `elif`'s second half) is
     # defence in depth that no realistic row reaches since D-3731 (review 213,
@@ -30087,8 +30096,12 @@ _ws_reclaim_recorded() {   # id workdir -> rc 0 when the OTHER row id, whose wor
   # worktree pruning; delete the admin directory or purge the other row (it
   # only stops that row holding others); read process, pane, tmux or unit
   # state; follow a leaf link; or read an unreadable `worktrees/` or `gitdir`
-  # as "no record". Device and inode ancestry are the path-identity
-  # follow-up's.
+  # as "no record". Device and inode identity only ever adds a hold here
+  # (path-identity spec §4.5, step 4): for a row either arm places whose entry
+  # field is valid, the rows rung keeps the identity of the directory it
+  # entered, and `_ws_reclaim_moved_check` holds the child when a checkout
+  # inside it is that directory. A row that entered a subdirectory of the moved
+  # tree is not matched (`moved-check-misses-a-subdirectory-of-a-moved-tree`).
   local o="$1" w="$2"
   _WS_RECORDED_AT=''; _WS_RECORDED_G=''
   [[ "$w" != *[[:cntrl:]]* ]] && _ws_reclaim_plain_path "$w" || return 1
@@ -30208,7 +30221,8 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
 
 _ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resolved roots, one per line, as
   #                                `_ws_nested_checkouts` prints them) uses an admin directory a recovered row
-  #                                named (_WS_RECORDED_GDIRS); 1 (_WS_MOVED_WHY) when one does; 2
+  #                                named (_WS_RECORDED_GDIRS), or is the directory a recovered row entered
+  #                                (_WS_RECORDED_IDS); 1 (_WS_MOVED_WHY) when one does or is; 2
   #                                (_WS_MOVED_WHY) when that could not be asked
   # A RECORD SAYS WHERE A TREE WAS, NOT THAT IT IS GONE RATHER THAN MOVED
   # (spec §5.5). A move leaves git's stanza exactly as a deletion does —
@@ -30219,23 +30233,61 @@ _ws_reclaim_moved_check() {   # nested -> rc 0 when no checkout in nested (resol
   # one of another repository passes when clean. So no nested checkout, of ANY
   # repository, may resolve its git directory to an admin directory a
   # recovered row named. A git directory that cannot be read, or resolved
-  # completely, is unmeasured, never "not that tree".
-  local p pg o g
+  # completely, is unmeasured, never "not that tree". git is asked this only
+  # while an admin directory was recorded: with none, no answer of it could
+  # match.
+  # NOR MAY ANY BE THE DIRECTORY A RECOVERED ROW ENTERED (path-identity spec
+  # §4.5, step 4). The breadcrumb arm places a gone row while git keeps no
+  # record of its tree, so no admin directory names that tree once it is
+  # moved; but a row whose entry field is valid (`_ws_workdirid_read`) recorded
+  # the identity of the directory its session entered, and a moved directory
+  # keeps its inode and its birth time. So, while _WS_RECORDED_IDS holds any,
+  # each checkout's identity (`_ws_path_ident`, its leaf never followed) is
+  # compared with every recorded one by the one identity rule (`_ws_ident_eq`:
+  # dev:ino, and the birth times where both carry one), and an equal one is
+  # that row's moved tree. This only ever HOLDS: no identity releases a row,
+  # and a checkout measured equal to none answers exactly as before. A
+  # checkout whose identity cannot be measured, or an answer of the rule other
+  # than equal or not equal (a recorded identity that does not parse), is
+  # unmeasured, unless another checkout or recorded identity proves a moved
+  # tree: a measure failure never pre-empts a proof (P21). Its
+  # limit, a stated residual (`moved-check-misses-a-subdirectory-of-a-moved-tree`):
+  # a row that entered a SUBDIRECTORY of a moved tree recorded that
+  # subdirectory, which is no checkout's root, so it matches nothing here.
+  local p pg o g r erc uwhy=''
   _WS_MOVED_WHY=''
-  [[ -n "$_WS_RECORDED_GDIRS" ]] || return 0
+  [[ -n "$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS" ]] || return 0
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    pg=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$pg" ]] \
-      || { _WS_MOVED_WHY="could not read the git directory of the checkout at $p, so whether it is a gone row's moved tree was never asked"; return 2; }
-    _ws_reclaim_resolve "$pg" && [[ "$_WS_RESOLVE_BASIS" == complete ]] \
-      || { _WS_MOVED_WHY="could not resolve the git directory of the checkout at $p completely, so whether it is a gone row's moved tree was never asked"; return 2; }
-    pg="$_WS_RESOLVED"
-    while IFS=$'\t' read -r o g; do
-      [[ -n "$o" && "$pg" == "$g" ]] || continue
-      _WS_MOVED_WHY="the checkout at $p uses the git directory git records for registry row $o, whose workdir is gone — that row's tree was moved inside this child, so ccd cannot prove the tree is this child's own"
-      return 1
-    done <<< "$_WS_RECORDED_GDIRS"
+    if [[ -n "$_WS_RECORDED_GDIRS" ]]; then
+      pg=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$pg" ]] \
+        || { _WS_MOVED_WHY="could not read the git directory of the checkout at $p, so whether it is a gone row's moved tree was never asked"; return 2; }
+      _ws_reclaim_resolve "$pg" && [[ "$_WS_RESOLVE_BASIS" == complete ]] \
+        || { _WS_MOVED_WHY="could not resolve the git directory of the checkout at $p completely, so whether it is a gone row's moved tree was never asked"; return 2; }
+      pg="$_WS_RESOLVED"
+      while IFS=$'\t' read -r o g; do
+        [[ -n "$o" && "$pg" == "$g" ]] || continue
+        _WS_MOVED_WHY="the checkout at $p uses the git directory git records for registry row $o, whose workdir is gone — that row's tree was moved inside this child, so ccd cannot prove the tree is this child's own"
+        return 1
+      done <<< "$_WS_RECORDED_GDIRS"
+    fi
+    [[ -n "$_WS_RECORDED_IDS" ]] || continue
+    _ws_path_ident "$p" \
+      || { [[ -n "$uwhy" ]] || uwhy="could not read the identity of the checkout at $p (${_WS_IDENT_WHY:-it reads $_WS_IDENT_KIND}), so whether it is a gone row's moved tree was never asked"; continue; }
+    while IFS=$'\t' read -r o r; do
+      [[ -n "$o" ]] || continue
+      _ws_ident_eq "$r" "$_WS_IDENT"; erc=$?
+      case "$erc" in
+        1) : ;;   # another directory: no match
+        0) _WS_MOVED_WHY="the checkout at $p is the directory registry row $o entered, whose workdir is gone — that row's tree was moved inside this child, so ccd cannot prove the tree is this child's own"
+           return 1 ;;
+        *) [[ -n "$uwhy" ]] || uwhy="the identity registry row $o recorded for the directory it entered could not be compared with the checkout at $p (the identity rule answered $erc), so whether that checkout is the row's moved tree was never asked" ;;
+      esac
+    done <<< "$_WS_RECORDED_IDS"
   done <<< "$1"
+  # An identity that could not be asked answers only here, once no checkout
+  # and no recorded identity proved a moved tree (P21): the first one kept.
+  [[ -z "$uwhy" ]] || { _WS_MOVED_WHY="$uwhy"; return 2; }
   return 0
 }
 
@@ -32933,9 +32985,11 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] || { _WS_OWNED_WHY="$wd has registry row(s) $_WS_NESTED_ROWS rooted inside it, or in its clips directory or temp root, each another session's tree"; return 1; }
   [[ -z "$_WS_THROUGH_ROWS" ]] || { _WS_OWNED_WHY="registry row(s) $_WS_THROUGH_ROWS spell their workdir through $wd, not as one plain path, so ccd cannot prove it lies outside $wd"; return 1; }
-  # Scanned only when a row was placed on git's record: every other tail asks
-  # exactly what it asked before (`_ws_reclaim_moved_check` says why).
-  if [[ -n "$_WS_RECORDED_GDIRS" && -d "$wd" ]]; then
+  # Scanned only when a gone row was placed on git's record, or left the
+  # identity of the directory it entered (path-identity spec §4.5, step 4):
+  # every other tail asks exactly what it asked before
+  # (`_ws_reclaim_moved_check` says why).
+  if [[ -n "$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS" && -d "$wd" ]]; then
     nested=$(_ws_nested_checkouts "$wd") \
       || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 2; }
     _ws_reclaim_moved_check "$nested"; rc=$?
