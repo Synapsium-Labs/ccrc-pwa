@@ -9010,19 +9010,21 @@ export class CoordStore {
    * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
    * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
    * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
-   *   1. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
+   *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
+   *      parent that is new in this same delta;
+   *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
    *      value (`IS ?`, so a NULL matches), so a row somebody edited since `prior` was projected changes nothing and the call
    *      refuses; each must change exactly one row;
-   *   2. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage);
    *   3. `SELECT COUNT(*)` on each of the five tables, each held to `next`'s length, on EVERY delta, a zero-row one included, so a
    *      row that went missing or turned up out of band is found at once.
-   * A miss at 1 or 3 throws `projection-delta-mismatch` naming the table and the key or the two counts, the transaction rolls back,
+   * A miss at 2 or 3 throws `projection-delta-mismatch` naming the table and the key or the two counts, the transaction rolls back,
    * and the caller repairs with the full projection. Any other change runs `projectDelegationCheckpoint(next)` and answers
    * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
    *
    * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
    * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
-   * encoding, a session key repeated inside `next`, and a handle that does not enforce foreign keys.
+   * encoding, and a handle that does not enforce foreign keys. A session key repeated inside `next` is not a delta: it runs the
+   * full projection, which refuses it.
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
     const diff = prepareDelegationProjectionChanges(prior, next);
@@ -9052,8 +9054,8 @@ export class CoordStore {
           default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
         }
       };
-      for (const u of diff.updates) at(u.table).update(u);
       for (const i of diff.inserts) at(i.table).insert(i);
+      for (const u of diff.updates) at(u.table).update(u);
       for (const c of diff.counts) {
         const held = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${c.table}`).get() as { n: number | bigint }).n);
         if (held !== c.count) throw new DelegationModelError('projection-delta-mismatch', `${c.table} holds ${String(held)} rows after the delta, expected ${String(c.count)}`);

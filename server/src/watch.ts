@@ -9898,8 +9898,9 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
  *  CPU when `cpuThread=1`, else process CPU); `stallMax`, `stallP99` and the `stall*` stretches are stall ms; the rest are sizes and counts,
  *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. `rewrite` times the
  *  port's every call, the delta projection's included, so it now holds the delta's time too; `rewrites` counts both kinds, `projectDelta` and `projectFull` count the
- *  delta method's calls by the mode it answered (a fallback is `projectFull`) and `deltaRows` sums the rows the deltas wrote, so `rewrites - (projectDelta +
- *  projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
+ *  delta method's calls by the mode it answered (a fallback is `projectFull`; a call that threw counts in neither) and `deltaRows` sums the rows the deltas wrote, so
+ *  `rewrites - (projectDelta + projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full) plus any delta call that threw (the `delegation
+ *  projection stale:` warn line names it). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
  *  (its no-op compare's two, the written checkpoint's one, `verifyDecodable`'s re-encode) and `cpBytes` the bytes of the last checkpoint it wrote, absent on a pass that
  *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
  *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
