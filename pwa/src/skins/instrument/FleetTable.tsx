@@ -7,8 +7,11 @@
 // model's, never this file's. Needs you, Working and Done are open; Idle, Cleanup, Archived and Dead fold. A fold is
 // `useFolded`'s, under `status::<bucket>`, and the key means "not as it starts": for a folding group its presence
 // opens it (the archived fold's inversion, `FleetScreen`'s comment), for an open one its presence closes it. So a
-// device that never touched a fold sees the defaults, and an unanswered question is never folded away by default
-// (Needs you is always open until the operator closes it, the fleet rollup's rule, D-6088).
+// device that never touched a fold sees the defaults. Needs you, while it holds a row, is HELD open whatever is stored:
+// an operator-facing session is never rolled up (the fleet rollup's rule 5, D-6088). Its head stays focusable
+// (aria-disabled, never `disabled`), says why in text, and its click is ignored, as `ProjectCardHead`'s held ▾ does.
+// The keys share `useFolded`'s one set with the project cards' `<project>::<fold>` keys, so a project literally named
+// `status` would share its sub-folds' keys with these groups; accepted, the plan names the keys.
 //
 // A ROW IS THE SHARED `SessionLine`, in a dense arrangement (`ins-row`, `min-h-row`: `--row-h`, 44 under a coarse
 // pointer and 32 under a fine one, skins.css). The line already carries its lamp, its state word (`sessionFacts`'s,
@@ -26,9 +29,10 @@
 //
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: All shows
-// every group with its folds.
-import { useState, useSyncExternalStore } from 'react';
-import type { ReactNode } from 'react';
+// every group with its folds. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
+// (the settings theme grid's pattern), and the tabs control the tabpanel that holds the groups.
+import { useId, useState, useSyncExternalStore } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
 import type { FleetSession, SessionBucket } from '../../../../shared/api';
 import { FleetCards } from '../../fleet/FleetCards';
@@ -77,6 +81,18 @@ type PhoneTab = 'attention' | 'working' | 'done' | 'all';
 const PHONE_TABS: readonly PhoneTab[] = ['attention', 'working', 'done', 'all'];
 const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : STATUS_GROUPS[t].label);
 
+const STEP: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+/** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. */
+function rovingKey(e: KeyboardEvent<HTMLElement>, at: number, n: number, role: string, pick: (i: number) => void): void {
+  const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1
+    : STEP[e.key] === undefined ? null : (at + STEP[e.key]! + n) % n;
+  if (next === null) return;
+  e.preventDefault();
+  pick(next);
+  e.currentTarget.querySelectorAll<HTMLElement>(`[role="${role}"]`)[next]?.focus();
+}
+
 /** The fold key of a status group. */
 const foldKey = (bucket: SessionBucket): string => `status::${bucket}`;
 
@@ -95,13 +111,20 @@ export function FleetTable(): ReactNode {
 
   return (
     <div className="ins-table" data-mode={mode}>
-      <div role="radiogroup" aria-label="Group sessions by" className="ins-toggle">
+      <div
+        role="radiogroup"
+        aria-label="Group sessions by"
+        className="ins-toggle"
+        onKeyDown={(e) => rovingKey(e, MODES.findIndex((m) => m.id === mode), MODES.length, 'radio',
+          (i) => choose(MODES[i]!.id))}
+      >
         {MODES.map((m) => (
           <Button
             key={m.id}
             variant="ghost"
             role="radio"
             aria-checked={mode === m.id}
+            tabIndex={mode === m.id ? 0 : -1}
             className="ins-toggle-option"
             onClick={() => choose(m.id)}
           >
@@ -133,6 +156,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
   const [folded, toggleFold] = useFolded();
+  const tabsId = useId();
 
   const groups = groupByStatus(sessions, acks);
   // Read by key, never compared: the bucket a group holds is the model's answer (instrument-shell's scan).
@@ -177,47 +201,69 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     );
   };
 
-  const isOpen = (g: StatusGroup): boolean => g.folds === folded.has(foldKey(g.bucket));
+  // Needs you holding a row is held open, whatever is stored (D-6088 rule 5); every other group follows its fold.
+  const held = (g: StatusGroup): boolean => g.bucket === 'attention' && g.sessions.length > 0;
+  const isOpen = (g: StatusGroup): boolean => held(g) || g.folds === folded.has(foldKey(g.bucket));
   // At a desk and under All, every group that holds a row; under a phone tab, that one group, even when empty.
   const shown = phoneTab === null || phoneTab === 'all'
     ? groups.filter((g) => g.sessions.length > 0)
     : [byBucket.get(phoneTab)].filter((g): g is StatusGroup => g !== undefined);
 
+  const tabId = (t: PhoneTab): string => `${tabsId}-tab-${t}`;
+  const panelId = `${tabsId}-panel`;
+  const body = shown.map((g) => {
+    const open = isOpen(g);
+    const hold = held(g);
+    return (
+      <section key={g.bucket} className="ins-group" data-status-group={g.bucket} aria-label={g.label}>
+        <BareRow
+          className="ins-group-head"
+          aria-expanded={open}
+          aria-disabled={hold ? true : undefined}
+          onClick={() => { if (!hold) toggleFold(foldKey(g.bucket)); }}
+        >
+          <span className="ins-group-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          <span className="ins-group-word">{g.label}</span>
+          <span className="ins-group-count"> · {g.sessions.length}</span>
+          {g.unseen > 0 && <CountBadge aria-label={`${g.unseen} unseen`}>{g.unseen}</CountBadge>}
+          {hold && <span className="sr-only">held open: a question here is waiting on you</span>}
+        </BareRow>
+        {open && g.sessions.length > 0 && <ul className="ins-rows">{g.sessions.map(row)}</ul>}
+      </section>
+    );
+  });
+
+  if (phoneTab === null) return <>{body}</>;
   return (
     <>
-      {phoneTab !== null && (
-        <div role="tablist" aria-label="Sessions by status" className="ins-tabs">
-          {PHONE_TABS.map((t) => {
-            const count = t === 'all' ? sessions.length : byBucket.get(t)?.sessions.length ?? 0;
-            return (
-              <Button
-                key={t}
-                variant="ghost"
-                role="tab"
-                aria-selected={phoneTab === t}
-                className="ins-tab"
-                onClick={() => onTab(t)}
-              >
-                {tabLabel(t)}
-                <span className="ins-tab-count"> {count}</span>
-              </Button>
-            );
-          })}
-        </div>
-      )}
-      {shown.map((g) => {
-        const open = isOpen(g);
-        return (
-          <section key={g.bucket} className="ins-group" data-status-group={g.bucket} aria-label={g.label}>
-            <BareRow className="ins-group-head" aria-expanded={open} onClick={() => toggleFold(foldKey(g.bucket))}>
-              <span className="ins-group-word">{g.label}</span>
-              <span className="ins-group-count"> · {g.sessions.length}</span>
-              {g.unseen > 0 && <CountBadge aria-label={`${g.unseen} unseen`}>{g.unseen}</CountBadge>}
-            </BareRow>
-            {open && g.sessions.length > 0 && <ul className="ins-rows">{g.sessions.map(row)}</ul>}
-          </section>
-        );
-      })}
+      <div
+        role="tablist"
+        aria-label="Sessions by status"
+        className="ins-tabs"
+        onKeyDown={(e) => rovingKey(e, PHONE_TABS.indexOf(phoneTab), PHONE_TABS.length, 'tab',
+          (i) => onTab(PHONE_TABS[i]!))}
+      >
+        {PHONE_TABS.map((t) => {
+          const count = t === 'all' ? sessions.length : byBucket.get(t)?.sessions.length ?? 0;
+          return (
+            <Button
+              key={t}
+              id={tabId(t)}
+              variant="ghost"
+              role="tab"
+              aria-selected={phoneTab === t}
+              aria-controls={panelId}
+              tabIndex={phoneTab === t ? 0 : -1}
+              className="ins-tab"
+              onClick={() => onTab(t)}
+            >
+              {tabLabel(t)}
+              <span className="ins-tab-count"> {count}</span>
+            </Button>
+          );
+        })}
+      </div>
+      <div role="tabpanel" id={panelId} aria-labelledby={tabId(phoneTab)} className="ins-panel">{body}</div>
     </>
   );
 }

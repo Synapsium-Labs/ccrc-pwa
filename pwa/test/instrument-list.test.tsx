@@ -291,3 +291,107 @@ describe('phone', () => {
     expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
   });
 });
+
+// The review's fixes (D-5473 extended). RED FIRST on the first S10 head: every case below failed there except the two
+// that pin behaviour the head already had untested (empty groups, the selected row), which the mutants below turn red.
+//   the attention hold dropped (isOpen ignores the held group) ... "Needs you is held open while it holds a row…"
+//   the held head's toggle not ignored .......................... "Needs you is held open while it holds a row…"
+//   the fold mark dropped or fixed to ▾ ......................... "each group head draws a fold mark…"
+//   the checked radio marked by weight alone .................... "the checked toggle option carries an accent edge…"
+//   the selected tab growing its border ......................... "every tab keeps a 2px bottom edge…"
+//   empty groups shown at a desk ................................ "a group with no rows is absent at a desk and under All…"
+//   the selected row's flag dropped ............................. "the open session's row is marked selected…"
+//   arrow keys ignored on either group .......................... "arrow keys move and choose…"
+describe('review fixes', () => {
+  it('Needs you is held open while it holds a row, whatever is stored (the fleet rollup\'s rule, D-6088)', () => {
+    localStorage.setItem('ccrc.fleet-folded.v1', JSON.stringify(['status::attention']));
+    mount();
+    const h = head(groupOf('attention'));
+    expect(h.getAttribute('aria-expanded')).toBe('true');
+    expect(h.getAttribute('aria-disabled')).toBe('true');
+    expect(h.hasAttribute('disabled')).toBe(false);
+    expect(h.textContent).toContain('held open: a question here is waiting on you');
+    expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
+    cleanup();
+    localStorage.clear();
+    mount();
+    fireEvent.click(head(groupOf('attention')));
+    expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
+    expect(JSON.parse(localStorage.getItem('ccrc.fleet-folded.v1') ?? '[]')).not.toContain('status::attention');
+    cleanup();
+    mount();
+    expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
+    // Only the group holding a waiting row is held: Working still folds.
+    expect(head(groupOf('working')).hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('each group head draws a fold mark matching its aria-expanded', () => {
+    mount();
+    const mark = (g: HTMLElement): string => head(g).querySelector('.ins-group-chevron[aria-hidden="true"]')?.textContent ?? '';
+    for (const g of groups()) expect(mark(g)).toBe(head(g).getAttribute('aria-expanded') === 'true' ? '▾' : '▸');
+    fireEvent.click(head(groupOf('idle')));
+    expect(mark(groupOf('idle'))).toBe('▾');
+  });
+
+  it('the checked toggle option carries an accent edge, not weight alone', () => {
+    expect(declsOf(".ins-toggle-option[aria-checked='true']")).toMatch(/(border|box-shadow)[^;]*var\(--accent\)/);
+  });
+
+  it('every tab keeps a 2px bottom edge, so choosing one moves no label', () => {
+    expect(declsOf('.ins-tab')).toMatch(/border-bottom:\s*2px solid transparent/);
+    expect(declsOf(".ins-tab[aria-selected='true']")).not.toMatch(/border-bottom:/);
+    expect(declsOf(".ins-tab[aria-selected='true']")).toMatch(/border-bottom-color:\s*var\(--accent\)/);
+  });
+
+  it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {
+    const sparse = FLEET.filter((s) => s.bucket !== 'attention' && s.bucket !== 'idle');
+    mount(sparse);
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['working', 'done', 'cleanup', 'archived', 'dead']);
+    cleanup();
+    stubWidth(false, false);
+    mount(sparse);
+    const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
+    fireEvent.click(tab(/^All/));
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).not.toContain('idle');
+    fireEvent.click(tab(/^Needs you/));
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['attention']);
+  });
+
+  it('the open session\'s row is marked selected in status mode', () => {
+    mount();
+    act(() => navigate('/s/project-a-quiet'));
+    fireEvent.click(head(groupOf('idle')));
+    act(() => navigate('/s/project-a-asks'));
+    const line = (id: string): Element | null => table().querySelector(`[data-row="${id}"] .sess-line`);
+    expect(line('project-a-asks')?.classList.contains('sess-line--active')).toBe(true);
+    expect(line('project-a-quiet')?.classList.contains('sess-line--active')).toBe(false);
+  });
+
+  it('arrow keys move and choose in the toggle and the phone tabs; the tabs control a tabpanel', () => {
+    stubWidth(false, false);
+    mount();
+    const status = within(toggle()).getByRole('radio', { name: 'Status' });
+    expect(status.getAttribute('tabindex')).toBe('0');
+    expect(within(toggle()).getByRole('radio', { name: 'Project' }).getAttribute('tabindex')).toBe('-1');
+    status.focus();
+    fireEvent.keyDown(status, { key: 'ArrowRight' });
+    expect(table().getAttribute('data-mode')).toBe('project');
+    expect(document.activeElement?.textContent).toBe('Project');
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+    expect(table().getAttribute('data-mode')).toBe('status');
+    const list = screen.getByRole('tablist', { name: 'Sessions by status' });
+    const all = within(list).getByRole('tab', { name: /^All/ });
+    expect(all.getAttribute('tabindex')).toBe('0');
+    all.focus();
+    fireEvent.keyDown(all, { key: 'Home' });
+    const needs = within(list).getByRole('tab', { name: /^Needs you/ });
+    expect(needs.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(needs);
+    fireEvent.keyDown(needs, { key: 'End' });
+    expect(all.getAttribute('aria-selected')).toBe('true');
+    const panel = screen.getByRole('tabpanel');
+    expect(all.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel.getAttribute('aria-labelledby')).toBe(all.id);
+    expect(panel.querySelector('[data-status-group]')).not.toBeNull();
+  });
+});
