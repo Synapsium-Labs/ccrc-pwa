@@ -2663,6 +2663,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         peaked at 25.1 s (21:04). Sent to the broker's coordinator. The work volume is at 7.9G (its ANOMALY stands).
         STATUS: fleet and server v0.0.541, newest v0.0.541, stable v0.0.502, intent dev/auto=off, backups fleet
         228M/server 14778M, disk free fleet 132G/work volume 8G/server 17G.
+      - 22:55: an operator tap moved both boxes to v0.0.544 (#1100): the fleet box 22:39 to 22:40:21, then the server
+        22:40:39 to 22:43:16. Both gates passed, doctor reported 0 failed on each, and the watchdog left the move in
+        flight. The fleet sweep again skipped three supervisor units that have stood failed since 2026-10-12, as on
+        every sweep today. v0.0.542 to v0.0.545 carry docs, a test exemption and PWA work, nothing in the broker. The
+        newest server backup is 1768M, so backups total 15508M and pass the probe's 15G size line (an ANOMALY: known
+        snapshot growth, coord.db 1.09G). The server has 15957M free, about 0.6G above the operator's 15G line, so the
+        next tap likely crosses it. The broker's signals stay clean on the new build. The work volume is up to 9.1G
+        (its ANOMALY stands). STATUS: fleet and server v0.0.544, newest v0.0.545, stable v0.0.502, intent
+        dev/auto=off, backups fleet 228M/server 15508M, disk free fleet 144G/work volume 10G/server 16G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
