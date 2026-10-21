@@ -287,6 +287,9 @@ function plantLandedIntent(o: { cls?: string; from?: string; to?: string; effort
 const MOVED = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', outcome: 'moved' };
 const QUIET_ROW = { id: 'lane-a', probe: 'codex', ok: true, count: STEP_CATALOGUE.models.length, litellm: 'unchanged' };
 const BOTH_TIERS = ['ours lane-a litellm', 'ours lane-a shim'];
+/** What a budget that is not a whole number says on stderr: the variable, and the step off, never the value. */
+const BUDGET_OFF_LINE = 'ccrc: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off '
+  + 'for this run';
 /** A canary stand-in that logs its call to `lane-calls` and answers not-ready. */
 const LOGGING_CANARY = '#!/usr/bin/env node\n'
   + "import { appendFileSync } from 'node:fs';\n"
@@ -552,6 +555,22 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     expect(fs.existsSync(models('lane-a.advance.json'))).toBe(false);
     expect(laneCalls()).toEqual([]);
     expect(laneProxyRequests(proxy)).toEqual([]);
+  }, T);
+
+  it('a budget of off is not a whole number, so the step is off for the run, and one stderr line says so', async () => {
+    // The budget ruling (fails closed): before it, `off` read as the default and the step ran.
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    const r = refresh({ CCRC_MODELS_ADVANCE_BUDGET_S: 'off' }, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(r)).toEqual(QUIET_ROW);
+    expect(lines('adv-calls'), 'a lane was entered with the budget off').toEqual([]);
+    expect(fs.existsSync(models('lane-a.advance.json'))).toBe(false);
+    expect(laneCalls()).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expect(notifyCalls()).toEqual([]);
+    expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual([BUDGET_OFF_LINE]);
   }, T);
 
   it("the advance step runs after every lane's refresh, so a canary never delays another lane's LiteLLM render", async () => {
@@ -903,6 +922,43 @@ describe.skipIf(PY === null)('the advance deadline: one clipped clock, taken aft
     expect(rowOf(r)).toEqual(QUIET_ROW);
     expect(opCalls().some((l) => l.startsWith('advance-'))).toBe(false);
   }, T);
+});
+
+// ── THE BUDGET FAILS CLOSED (the budget ruling, D-TBD-budget-fails-closed) ─────────────────────────────────────────────
+// An operator who sets the budget to `off`, `false` or `-1` to stop the step is obeyed: a value that is not a whole
+// number is 0 for the run, said once on stderr without the value. A whole number over 3600 is 3600, decided by its digit
+// count before any `$(( ))`. Unset or empty is still the default, 250.
+describe('the advance budget fails closed (plan W2 Task 11, the budget ruling)', () => {
+  /** `_models_advance_budget_secs` alone, in a fixture tree, with the variable unset (`undefined`) or set to `v`. */
+  const budgetOf = (v: string | undefined): Result => {
+    home = mkTmp('ccrc-models-budget-');
+    installTree(home, stepRoster({ proxyPort: 45020, litellmPort: 45021, authDir: codexAuthDir('lane-a') }));
+    return sourced('_models_advance_budget_secs', v === undefined ? {} : { CCRC_MODELS_ADVANCE_BUDGET_S: v });
+  };
+
+  it.each([
+    ['off', 'off'], ['-1', '-1'], ['false', 'false'], ['1.5', '1.5'], ['a space', ' '],
+    ['a value the line must not echo', 'value-the-line-must-not-echo'],
+  ])('%s is not a whole number: 0, the step off for this run, and one stderr line naming the variable', (_w, v) => {
+    const r = budgetOf(v);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('0');
+    expect(r.stderr).toBe(`${BUDGET_OFF_LINE}\n`);
+  });
+
+  it.each([
+    ['unset', '250', undefined], ['empty', '250', ''], ['0250, read base 10,', '250', '0250'], ['0', '0', '0'],
+    ['3600', '3600', '3600'], ['4000, over the cap,', '3600', '4000'],
+    // 2^64 x 10^10: thirty digits that bash's 64-bit arithmetic wraps to 0, so only a digit count taken before any
+    // `$(( ))` reads them as over the cap.
+    ['a 30-digit number', '3600', '184467440737095516160000000000'],
+    ['thirty zeros and 250', '250', `${'0'.repeat(30)}250`],
+  ] as [string, string, string | undefined][])('%s reads as %s, with nothing on stderr', (_w, want, v) => {
+    const r = budgetOf(v);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(want);
+    expect(r.stderr).toBe('');
+  });
 });
 
 describe.skipIf(PY === null)('the reserves are derived sums, and admission is exact (plan W2 Task 11)', () => {

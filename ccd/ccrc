@@ -1390,13 +1390,13 @@ _models_answer() {
 #   comes, which would hang this lock with no bound at all, and opening through a symlink would create or lock its
 #   target. The test and the open are two steps, and only this account can swap the file between them: the
 #   directory is its own, 0700.
-# - THE CONTRACT, `_codex_lock`'s (ruling R19): rc 0 with the lock HELD (MODELS_LOCK_FD and MODELS_LOCK_ID set);
-#   rc 0 with MODELS_LOCK_FD EMPTY where `flock` is missing; rc 1 with MODELS_LOCK_ERR and MODELS_LOCK_WHY set —
-#   `lock-busy` (held past the bound), `lock-unwritable` (the directory or the file cannot be made, made 0700 or
-#   opened, or the path is a symlink or not a regular file) or `install-incomplete` (the wrapper-shape contract is
-#   missing), three remedies never folded into one (D-5204); rc 2,
-#   MODELS_LOCK_ERR=bad-account-id, for an id no lock path may be built from. It prints nothing: each of its two
-#   callers prints the one refusal in its own shape.
+# - THE CONTRACT, `_codex_lock`'s (ruling R19): rc 0 with the lock HELD (MODELS_LOCK_FD and MODELS_LOCK_ID set); rc 0
+#   with MODELS_LOCK_FD EMPTY where `flock` is missing; rc 1 with MODELS_LOCK_ERR and MODELS_LOCK_WHY set — `lock-busy`
+#   (held past the bound), `lock-unwritable` (the directory or the file cannot be made, made 0700 or opened, or the path
+#   is a symlink or not a regular file) or `install-incomplete` (the wrapper-shape contract is missing), three remedies
+#   never folded into one (D-5204), and in the automatic context only `budget-deferred` too (the run's budget cannot
+#   carry the locked change; D-TBD-auto-lock-refusal-shape); rc 2, MODELS_LOCK_ERR=bad-account-id, for an id no lock
+#   path may be built from. It prints nothing: each of its two callers prints the one refusal in its own shape.
 # - RE-ENTRANT for the lane this shell, or a subshell of it, already holds: a second `flock` on a new open of the
 #   path would wait on this very process's lock. A call for another lane releases the first (one lane per shell).
 #   The two wrappers release only what THEIR call took, so a wrapper called by a shell that already holds the
@@ -11196,14 +11196,14 @@ MODELS_INVOKE_CEILING_S=300
 # A notify hook's own deadline in seconds (`deploy/notify.sh`'s `curl -m 5`), the soft half of its reserve.
 MODELS_HOOK_S=5
 
-# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, a whole number from 0
-# to 3600, else 250. 0 turns the step off. Read ONCE per run, AFTER the first pass; the deadline it makes is clipped to
-# what is left of the invocation (below), so a large value cannot enlarge the unit's 300 seconds.
+# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, 250 when unset or empty; a
+# whole number is itself, base 10 (`0250` is 250), and 3600 at most, capped by its digit count before `$(( ))` could overflow
+# on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-TBD-budget-fails-closed).
 _models_advance_budget_secs() {
   local s="${CCRC_MODELS_ADVANCE_BUDGET_S:-250}"
-  case "$s" in ''|*[!0-9]*|?????*) s=250 ;; esac
-  s=$(( 10#$s ))
-  [ "$s" -le 3600 ] || s=250
+  case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
+  s="${s#"${s%%[!0]*}"}"; [ "${#s}" -le 4 ] || s=3600
+  s=$(( 10#${s:-0} )); [ "$s" -le 3600 ] || s=3600
   printf '%s' "$s"
 }
 

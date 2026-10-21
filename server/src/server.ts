@@ -1702,10 +1702,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // shared/roster.ts requires `provider` "openai", `authDir` and two ports of
     // its own), and a roster with an incomplete one stops the server at start,
     // since index.ts runs `loadConfig` at module top level, uncaught. In LOCAL
-    // mode that file is the box's own. In REMOTE mode it is a copy of the fleet
-    // box's roster, which the next roster answer from the fleet box that differs
-    // from memory replaces wholesale, so the remedy is to copy the lane's whole
-    // row from the fleet box's file.
+    // mode this box's accounts.json is the box's own. In REMOTE mode it is a
+    // copy of the fleet box's roster, which the next roster answer from the
+    // fleet box that differs from memory replaces wholesale (`reloadRoster`
+    // writes the answer's whole roster over it), so the remedy is to copy the
+    // fleet box's whole accounts.json over it: a copy of the lane's row alone can
+    // still stop the restart, as a second row with the same id, or a port the
+    // fleet box has since given another lane.
     //
     // What a pushable line can carry is stated in the policy's docstring: up to
     // 120 characters of printable ASCII in a failure line's reason slot, and
@@ -1763,7 +1766,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
             + '(the server decides from the roster it holds)'
             + (deps.cfg.fleetMode === 'remote'
-              ? '; copy the lane\'s whole row from the fleet box\'s accounts.json into this server box\'s accounts.json, '
+              ? '; copy the fleet box\'s whole accounts.json over this server box\'s accounts.json, '
                 + 'and restart the server: this server box\'s file is a copy of the fleet box\'s roster, and a later '
                 + 'roster answer from the fleet box replaces it'
               : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '

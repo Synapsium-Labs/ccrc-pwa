@@ -49,9 +49,10 @@ const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a m
 /** What a refused lane tells the operator to fix, per server mode. In both modes it is the lane's row in this box's
  *  accounts.json and a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. A codex row needs
  *  its whole exec block, and the server refuses a roster with an incomplete one at start, so remote mode copies the
- *  lane's whole row from the fleet box (this box's file is a copy that a later roster answer replaces), and local mode
- *  says the block must be complete. */
-const REMOTE_FIX = "copy the lane's whole row from the fleet box's accounts.json into this server box's accounts.json, "
+ *  fleet box's whole accounts.json over this box's (this box's file is a copy that a later roster answer replaces
+ *  wholesale, and a row copied alone can still stop the restart: a second row with the same id, or a port the fleet box
+ *  has since given another lane), and local mode says the block must be complete. */
+const REMOTE_FIX = "copy the fleet box's whole accounts.json over this server box's accounts.json, "
   + "and restart the server: this server box's file is a copy of the fleet box's roster, and a later roster answer "
   + 'from the fleet box replaces it';
 const LOCAL_FIX = "if the lane is meant to be a codex lane, its row in this box's accounts.json needs a complete codex "
@@ -61,8 +62,9 @@ const LOCAL_FIX = "if the lane is meant to be a codex lane, its row in this box'
 /** The exact tail of a lane refusal in a mode: the common clause, the mode's remedy and the closing words, contiguous. */
 const laneTail = (fix: string): string =>
   `(the server decides from the roster it holds); ${fix}; the banner went out, the phone push did not`;
-/** The one answer a remedy may name: the one that undoes a remote fix. No remedy says a verb or an answer picks one up. */
-const UNDOES = 'and a later roster answer from the fleet box replaces it';
+/** The one answer a remedy may name: the one that replaces this box's copy, which is why the remote remedy copies the
+ *  fleet box's whole file. No remedy says a verb or an answer picks a fix up. */
+const REPLACES_COPY = 'and a later roster answer from the fleet box replaces it';
 
 /** A recording `curl` stand-in: the argv it saw, one word to a line, in `$HOME/curl-argv`, and its stdin, byte for byte,
  *  in `$HOME/curl-stdin`; rc 0. */
@@ -429,10 +431,11 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
       // The exact tail, contiguous: nothing between the common clause and the remedy, and nothing after it.
       expect(l.slice(-laneTail(own).length), 'the lane refusal\'s tail').toBe(laneTail(own));
       expect(l, 'the other mode\'s remedy').not.toContain(other);
-      // What picks the fix up is a restart, and nothing else: no account verb, and no answer but the one that undoes it.
+      // What picks the fix up is a restart, and nothing else: no account verb, and no answer but the one that replaces
+      // this box's copy.
       expect(l, 'the remedy names no restart').toContain(', and restart the server');
       expect(l, 'the remedy promises an account verb').not.toContain('account verb');
-      expect(l.replace(UNDOES, ''), 'the remedy promises an answer').not.toMatch(/\banswer/);
+      expect(l.replace(REPLACES_COPY, ''), 'the remedy promises an answer').not.toMatch(/\banswer/);
       expect(l).toContain('must exist and carry exec.kind "codex" (the server decides from the roster it holds)');
       expect(l, 'the old, false phrase').not.toContain('alone does not make it pushable');
       for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {

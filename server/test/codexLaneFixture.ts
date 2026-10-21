@@ -2089,9 +2089,10 @@ export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[
 // as the lane it was started for (or as another lane, or 404, by a `lane` file
 // in its record directory), and `POST /v1/messages` the way the lane's shim and
 // LiteLLM can, by a MODE FILE there (`mode.<model>` first, then `mode`, default
-// `ok`). It records every POST (its path, its header NAMES, its Authorization
-// VALUE and its body) to `req.<n>.json`, and every GET to `get.<n>.json`. The
-// key it records is the fixture's own, minted per case.
+// `ok`). It records every POST (its path, its header NAMES and VALUES, its
+// Authorization VALUE once more on its own, and its body) to `req.<n>.json`,
+// and every GET (the same, with no body) to `get.<n>.json`. The key it records
+// is the fixture's own, minted per case.
 // ════════════════════════════════════════════════════════════════════════
 
 /** One mode per row of the canary's classification table (plan §3.6), and the
@@ -2232,9 +2233,13 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             COUNT[0] += 1
             n = COUNT[0]
+        headers = {}
+        for name, value in self.headers.items():
+            headers.setdefault(name.lower(), []).append(value)
         with open(os.path.join(REC, "req.%d.json" % n), "w") as f:
             json.dump({"n": n, "path": self.path, "model": model,
                        "headerNames": sorted(k.lower() for k in self.headers.keys()),
+                       "headers": headers,
                        "authorization": self.headers.get("Authorization"), "body": body}, f)
         mode = mode_for(model or "")
         if mode == "ok":
@@ -2296,7 +2301,8 @@ server.serve_forever()
 
 export interface FakeLaneProxy { port: number; rec: string; child: ChildProcess }
 export interface LaneProxyRequest {
-  n: number; path: string; model: string | null; headerNames: string[]; authorization: string | null; body: unknown;
+  n: number; path: string; model: string | null; headerNames: string[]; headers: Record<string, string[]>;
+  authorization: string | null; body: unknown;
 }
 export interface LaneProxyGet {
   n: number; path: string; headerNames: string[]; headers: Record<string, string[]>; authorization: string | null;

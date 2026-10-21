@@ -170,8 +170,20 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     expect(q!.headerNames).toEqual([
       'accept', 'anthropic-version', 'authorization', 'connection', 'content-length', 'content-type', 'host',
     ]);
-    expect(q!.body).toEqual({ model: 'model-6.1-gamma', max_tokens: 512, stream: true,
-      messages: [{ role: 'user', content: 'Reply with the single word OK.' }], output_config: { effort: 'low' } });
+    const sent = { model: 'model-6.1-gamma', max_tokens: 512, stream: true,
+      messages: [{ role: 'user', content: 'Reply with the single word OK.' }], output_config: { effort: 'low' } };
+    expect(q!.body).toEqual(sent);
+    // The POST's header VALUES. The Authorization value is asserted without printing it (a boolean), and no other
+    // header may carry the key, so the value-printing equality below never shows a credential.
+    const { authorization: auth, ...others } = q!.headers;
+    expect(auth?.length === 1 && auth[0] === `Bearer ${key}`, 'the POST carries the lane key once, as a bearer').toBe(true);
+    expect(Object.values(others).flat().every((v) => !v.includes(key) && !v.includes(key.slice(3))),
+      'a header other than Authorization carries the key').toBe(true);
+    expect(others).toEqual({
+      accept: ['text/event-stream'], 'anthropic-version': ['2023-06-01'], 'content-type': ['application/json'],
+      'content-length': [String(Buffer.byteLength(JSON.stringify(sent)))], connection: ['keep-alive'],
+      host: [`127.0.0.1:${proxy.port}`],
+    });
   });
 
   it("a listener that answers the lane probe as another lane is unavailable, and nothing carrying the key is sent", () => {

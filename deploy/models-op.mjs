@@ -1690,7 +1690,9 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }) });
   w = writeAdvance(a.id, adv);
   // A history that could not be written leaves the intent on disk: the next
-  // locked writer records the move as landed. The class DID move.
+  // locked writer records the move as landed. The class DID move. So this
+  // arm's move is pushed now, and again when that writer reports it recovered:
+  // the double report D-6067 accepts ("never zero pushes" over "never two").
   return answer('moved', { push: true,
     ...(w === null ? {} : { reason: historyReason(`moved, but its history could not be written (${w[0]})`) }) });
 }

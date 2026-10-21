@@ -4156,13 +4156,59 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(rename).toBeGreaterThan(intent);
   });
 
-  it('a move whose previous registry cannot be written back records the failure and keeps the intent, in source', () => {
-    // No fixture can let the first rename through and refuse the second inside
-    // one op, so this arm is pinned where it lives (D-5217).
-    const body = commitSource();
-    const arm = body.slice(body.indexOf('if (back !== null) {'), body.indexOf('const again = materialise('));
-    expect(arm, 'advanceCommitOp has no back !== null arm').not.toBe('');
-    expect(arm).toMatch(/return fail\([\s\S]*'passed', \{ restored: false \}, intent\);/);
+  /** The op's own arguments for the opus move every commit case here plans. */
+  const OPUS_MOVE = ['advance-commit', '--class', 'opus', '--from', 'model-5.6-gamma', '--to', 'model-6.1-gamma',
+    '--canary', 'passed'];
+  /** The intent that move writes at step 6, under this file's clock. */
+  const OPUS_INTENT = { ...INTENT, at: NOW };
+
+  it('a move whose previous registry cannot be written back records the failure, restored false, and keeps the intent (D-5217)', () => {
+    // A copy whose write-back of the previous registry, and only that write,
+    // is aimed under the registry FILE, so its mkdir fails: the rename before
+    // it lands, and the materialise between them fails on its own (the tsv a
+    // directory). The registry still pins `--to`, so the intent is kept for
+    // the next locked writer, which records the move as landed.
+    plantStep();
+    const tsv = path.join(home, '.ccrc', 'models', 'lane-a.classes.tsv');
+    fs.rmSync(tsv);
+    fs.mkdirSync(tsv);
+    const r = through([["    const back = writeRegistry(a.id, registry);\n    if (back !== null) {\n      // The registry",
+      "    const back = writeJsonFile(path.join(registryPath(a.id), 'x'), registry, 'registry-unwritable');\n"
+      + '    if (back !== null) {\n      // The registry']], OPUS_MOVE);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, outcome: 'failed', restored: false, push: true, recovered: false });
+    expect(String(r.body['reason'])).toMatch(
+      /^materialise failed \(materialise-failed\) and the previous registry could not be written back \(registry-unwritable\): /);
+    expect(classesOf('lane-a')['opus']).toBe('model-6.1-gamma');
+    expect(laneAdvance().pending).toEqual(OPUS_INTENT);
+    expect(opusOf().history).toEqual([expect.objectContaining({
+      how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: false, canary: 'passed' })]);
+    expect(backfill().body['recoveredMove']).toEqual(RECOVERED);
+    expect(laneAdvance().pending).toBeNull();
+  });
+
+  it('a move whose final history write fails still answers moved with a push, keeps the intent, and the next writer reports it again (D-6067)', () => {
+    // The double report D-6067's cost accepts: the receipt pushes this move
+    // now, and the next locked writer settles the kept intent as a recovered
+    // advance, which is pushed again. A copy fails that one final write only:
+    // it is aimed under the advance FILE, so its mkdir fails.
+    plantStep();
+    const r = through([['  w = writeAdvance(a.id, adv);\n  // A history',
+      "  w = writeJsonFile(path.join(advancePath(a.id), 'x'), adv, 'advance-unwritable');\n  // A history"]], OPUS_MOVE);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, outcome: 'moved', push: true, recovered: false,
+      reason: 'moved, but its history could not be written (advance-unwritable)' });
+    expect(r.body).not.toHaveProperty('recoveredMove');
+    expect(classesOf('lane-a')['opus']).toBe('model-6.1-gamma');
+    expect(env()['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-6.1-gamma');
+    expect(laneAdvance().pending).toEqual(OPUS_INTENT);
+    expect(opusOf().history).toEqual([]);
+    const next = backfill();
+    expect(next.code, next.stdout + next.stderr).toBe(0);
+    expect(next.body['recoveredMove']).toEqual(RECOVERED);
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history).toEqual([{ ...RECOVERED_ENTRY, at: NOW }]);
+    expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
   });
 
   it('moving to a model with no measured window drops the lane to the default window rule', () => {

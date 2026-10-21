@@ -1924,10 +1924,11 @@ lane, whose probe may refresh its token first), nothing times a probe as a whole
 its 300 seconds; so the probe and render pass has no budget of its own, and a slow one leaves the step less time,
 possibly none.
 
-**Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off, and only a whole number from 0 to 3600 is read
-as a budget: an empty value, `off`, `false`, `-1` or a number over 3600 reads as the default, 250, with no warning, and
-the step stays on. Set it in the environment of each run you mean to switch off. The hourly unit gets it from a drop-in
-of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
+**Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off. So does any value that is not a whole number
+(`off`, `false`, `-1`, `1.5`, a space): the step is off for that run, and the refresh says so in one line on standard
+error, which names the variable but not its value. Unset or empty, the budget is the default, 250; a whole number is read
+in base 10 (`0250` is 250), and one over 3600 is read as 3600. Set it in the environment of each run you mean to switch
+off. The hourly unit gets it from a drop-in of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
 `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without the `[Service]` line systemd ignores the assignment). A hand
 `ccrc models refresh`, including the one `ccrc doctor`'s remedies name, does not read the drop-in: it reads its own
 environment, so it runs the step unless its command line sets the variable too. `~/.ccrc/ccrc.env` does not set it: the
@@ -1986,7 +1987,8 @@ tails `ccrc.service`). That roster is the server box's roster file, `~/.ccrc/acc
 (in `~/.ccrc/ccrc.env`) names, read when the server starts. Nothing re-reads it for an `exec.kind`-only change: the
 comparison the two boxes make of their rosters leaves `exec.kind` out, the only other re-read follows a box-token
 rotation, and in this release no account route changes it. So the server box's roster must hold the lane's complete
-codex row (in remote mode, copied from the fleet box's), and the server must be restarted afterwards. A complete codex
+codex row (in remote mode, copy the fleet box's whole accounts.json over this server box's accounts.json), and the server
+must be restarted afterwards. A complete codex
 row has `exec.kind: "codex"`, `exec.provider: "openai"`, an `exec.authDir` and two ports of its own, `exec.proxyPort` and
 `exec.litellmPort`, and a codex row without them stops the server at start. In remote mode that file is a copy of the
 fleet box's roster, which a later roster answer from the fleet box replaces wholesale.
