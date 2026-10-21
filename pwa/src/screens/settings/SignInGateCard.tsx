@@ -14,18 +14,12 @@
 // The banner draws only in the exposed state. Every non-answer draws NOTHING, because a red banner is a claim about
 // this box, and a status read that told us nothing is not evidence of an open gate.
 import type { ReactNode } from 'react';
-import type { AuthStatus } from '../../../../shared/api';
-import { LOOPBACK_HOSTS } from '../../../../shared/base-url';
 import { Section, Skeleton, TextLink } from '@ccrc/ui';
 import { SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SIGN_IN_GATE_TEXT, inAppClick } from '../../fleet/settingsText';
 import type { AuthRead } from './SettingsDataProvider';
 
-/** (D-3298) true iff status?.mode === 'off' exactly AND the page's hostname is not one of shared/base-url.ts's
- *  LOOPBACK_HOSTS: the one list of loopback spellings, reused rather than re-spelled (single-definition.test.ts's
- *  LOOP_SET scan holds that). */
-export function unarmedExposure(status: Partial<AuthStatus> | null, hostname: string): boolean {
-  return status?.mode === 'off' && !LOOPBACK_HOSTS.includes(hostname);
-}
+import { unarmedExposure } from './signInGate';
+export { unarmedExposure };
 
 /** The gate's state as the card says it. `pending` until the read lands; `unread` for every answer that is not one
  *  of the three modes. */

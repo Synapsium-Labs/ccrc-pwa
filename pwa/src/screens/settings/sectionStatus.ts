@@ -14,7 +14,7 @@ import { readBoxTokenView } from '../../lib/api';
 import type { SettingsSectionId } from '../../lib/routes';
 import type { PushState, SettingsView } from './SettingsDataProvider';
 import { boxTokenSummary } from './SecuritySection';
-import { unarmedExposure } from './SignInGateCard';
+import { unarmedExposure } from './signInGate';
 import { AUTO_LABELS, CHANNEL_SENTENCES } from './UpdatesSection';
 
 /** `attention` is a release waiting (the word and `↑`); amber and red are the page's own warn tones. */
