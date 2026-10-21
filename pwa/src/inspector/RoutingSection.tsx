@@ -27,7 +27,8 @@ function RoutingRow({ label, command, tone, text, note }: {
     <div className="insp-routing-row">
       <dt>{label}</dt>
       <dd>
-        <button type="button" className={metaChipTone(tone)} {...commandDoor(command)}>
+        {/* Named by its field: the `dt` is a sibling, so a reader moving by buttons would hear the value alone. */}
+        <button type="button" className={metaChipTone(tone)} aria-label={`${label}: ${text}, change`} {...commandDoor(command)}>
           <span className="metachip-text">{text}</span>
         </button>
         {note}

@@ -5,12 +5,15 @@
 //   the column keeps the task strip at 1600 ............................... "…one instance per width"
 //   a section re-implemented inside `InspectorRail.tsx` .................... "…are the shared components"
 //   `useInspectorSession` reads the id from a prop the frame never passes .. "…nothing off a session route"
+//   the section ignores `tasksTouchedAt` (D-5372 lost at >=1600) ............ "…a stale plan is a plan left open"
+//   a section re-implemented as an arrow or an aliased import .............. "…the same markup as the shared ones"
+//   the model and effort doors named by their value alone .................. "…named by their field"
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, FleetSession, MailSummary, TaskItem } from '../../shared/api';
+import { TASKS_STALE_MS, type AccountUsage, type FleetSession, type MailSummary, type TaskItem } from '../../shared/api';
 import {
   HistorySection, InspectorSections, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../src/inspector/InspectorSections';
@@ -112,12 +115,17 @@ describe('the inspector sections', () => {
     expect(section('history').querySelector("[data-command='open-history']")).not.toBeNull();
     unmount();
 
-    // Off a session route, every section renders nothing.
-    goTo('/runs');
-    for (const S of [TasksSection, MailSection, PrSection, RoutingSection, LaneSection, HistorySection]) {
-      const r = render(<S />);
-      expect(r.container.innerHTML, S.name).toBe('');
-      r.unmount();
+    // Off a session route, every section renders nothing; a route with a param of its own is not a session either.
+    for (const p of ['/runs', '/settings/nope']) {
+      goTo(p);
+      for (const S of [TasksSection, MailSection, PrSection, RoutingSection, LaneSection, HistorySection]) {
+        const r = render(<S />);
+        expect(r.container.innerHTML, `${p} ${S.name}`).toBe('');
+        r.unmount();
+      }
+      const rail = render(<Rail />);
+      expect(rail.container.innerHTML, p).toBe('');
+      rail.unmount();
     }
   });
 
@@ -145,6 +153,37 @@ describe('the inspector sections', () => {
     // The terminal's order: running, then left, then done.
     expect([...container.querySelectorAll('.insp-task-subject')].map((e) => e.textContent))
       .toEqual(['build the rail', 'ship it', 'write the spec']);
+  });
+
+  it('a stale plan is a plan left open (D-5372): its age, "open", no running mark; a fresh one names its running work', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    const store = getSessionStore(ID);
+    // Fresh: the running task's activeForm heads the plan, and its row says running.
+    act(() => store.getState().apply({ type: 'tasks', tasks: PLAN, touchedAt: Date.now() - 60_000 }));
+    let r = render(<TasksSection />);
+    expect(r.container.querySelector('.insp-tasks-head')?.textContent).toBe('doing build the rail');
+    expect(r.container.textContent).toContain('(running)');
+    expect(r.container.textContent).not.toContain('untouched');
+    r.unmount();
+
+    // Stale: nothing has written the list for longer than TASKS_STALE_MS.
+    act(() => store.getState().apply({ type: 'tasks', tasks: PLAN, touchedAt: Date.now() - TASKS_STALE_MS - 3_600_000 }));
+    r = render(<TasksSection />);
+    expect(r.container.querySelector('.insp-tasks-head')?.textContent).toBe('Plan · untouched 7h');
+    expect(r.container.textContent).not.toContain('running');
+    expect(r.container.textContent).not.toContain('doing build the rail');
+    expect(r.container.textContent).toContain('(open)');
+    expect(r.container.querySelector("[data-section='tasks'] .insp-tasks")?.getAttribute('data-stale')).toBe('true');
+    r.unmount();
+  });
+
+  it('the model and effort doors are named by their field, not by their value alone', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    render(<RoutingSection />);
+    expect(screen.getByRole('button', { name: 'Model: model-x, change' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Effort: high, change' })).toBeInTheDocument();
   });
 });
 
@@ -221,8 +260,25 @@ describe("Refined's inspector rail", () => {
       expect(code, name).toMatch(new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from '\\.\\./\\.\\./inspector/`));
       expect(code, name).toContain(`<${name} />`);
     }
-    // It defines one component, the rail, and reads no store itself.
+    // It defines one component, the rail, and reads no store itself: no arrow component, no aliased import.
     expect([...code.matchAll(/\bfunction\s+(\w+)/g)].map((m) => m[1])).toEqual(['InspectorRail']);
+    expect(code).not.toMatch(/\bconst\s+[A-Z]\w*\s*=/);
+    expect(code).not.toMatch(/import \{[^}]*\bas\b[^}]*\}/);
     expect(code).not.toMatch(/getSessionStore|useSyncExternalStore|useFleetStore|<section|<ol\b|<Meter|MailStrip|PrKeycap/);
+  });
+
+  it("the rail's sections render the same markup as the shared ones, in the spec's order", () => {
+    stubWidth(1600);
+    goTo(`/s/${ID}`);
+    const rail = render(<Rail />);
+    // React's generated ids differ between two renders; everything else must match.
+    const markup = (e: Element): string => e.outerHTML.replace(/_r_\w+_/g, 'ID');
+    const railSections = [...rail.container.querySelectorAll('[data-section]')].map(markup);
+    rail.unmount();
+    const shared = render(<InspectorSections />);
+    const sharedSections = [...shared.container.querySelectorAll('[data-section]')].map(markup);
+    shared.unmount();
+    expect(railSections).toHaveLength(6);
+    expect(railSections).toEqual(sharedSections);
   });
 });

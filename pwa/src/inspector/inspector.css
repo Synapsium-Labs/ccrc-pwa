@@ -65,6 +65,19 @@
   min-height: var(--tap-min);
   border-radius: var(--r-md);
 }
+/* The whole value, wrapped: the header's row shows the full model id, so the rail (a superset) never cuts it. */
+.insp-routing-row .metachip-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.3;
+  text-align: start;
+}
+.insp-tasks-head {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
 /* The mail strip's own sheet insets it from a chat column's edge; the section already has its gutter. */
 .insp-section .mail-strip {
   margin: 0;
