@@ -309,6 +309,21 @@ export function redactFinal(text: string, idx: PairIndex): string;
 export function redactFinalJson<T>(value: T, idx: PairIndex): T;
 export function redactFinalText(text: string, idx: PairIndex): string;
 export function redactFinalLines(text: string, idx: PairIndex): string;
+export const RELAY_LOOKBEHIND_BYTES: 16384;
+export function redactAfter(lookBehind: string, text: string, idx: PairIndex): { emit: string; keep: string };
+/** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
+ *  rules over the base reading's output (`v2`); null for any other function. A display window's and a snippet's also carry
+ *  `whole`, the door they return, answering `{ base, out }` from one read (D-6071): (1) the cut stays the base door's; (2) `v2` reads
+ *  the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text), the pre-round composition;
+ *  (3) a token of that output is masked unless the widened rules, read over the base reading of the margin-widened text, print it
+ *  AND the shown text holds the same string as a token too (a token `v2` joined or decoded is masked unless the shown text holds that
+ *  string, on purpose, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a window: `tokensOf`, the tokens of `v2` over its text with the note, null where `v2` changed nothing; it came back on review 744 F2, because a cut that splits a mark leaves the mark's fragment out of the piece's tokens while the pre-round output's own tokens join it to its neighbour), or of `v2` over the unframed cut slice (a snippet)); (4) `v2` then
+ *  reads the result. So the door only replaces spans of the pre-round composition's output with marks. The door is `v2(base)` for a
+ *  window of the whole text, where no margin is read (longer than DISPLAY_WINDOW_MAX), and where the widened reading changes nothing.
+ *  A test seam:
+ *  no shipped file calls it. */
+export function redactDoorReadings(door: (...args: never[]) => unknown):
+  { base: (...args: any[]) => any; v2: (out: any, idx: PairIndex | null) => any; whole?: (...args: any[]) => { base: any; out: any } } | null;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
 export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
 export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;
@@ -359,7 +374,13 @@ export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
-export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;
+/** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */
+export interface OpMarker { readonly verb: string; readonly pid: number; readonly startMs: number; readonly procStart: string | null; readonly bootId: string | null }
+export function parseOpMarker(text: string): OpMarker | null;
+export function formatOpMarker(marker: OpMarker): string;
+/** D-5748: what the caller measured of an op marker's pid just now: its identity (both null when unmeasurable) and kill(pid, 0) as a word. */
+export interface OpMeasure { readonly procStart: string | null; readonly bootId: string | null; readonly kill: 'ok' | 'esrch' | 'eperm' }
+export function decideOpLive(marker: OpMarker | null, measured: OpMeasure | null): boolean;
 export interface ProcIdentity { readonly procStart: string; readonly bootId: string }
 export function parsePassMarker(text: string): { pid: number; startMs: number; procStart: string; bootId: string } | null;
 export function formatPassMarker(pid: number, startMs: number, identity: ProcIdentity): string;
