@@ -140,6 +140,9 @@ _ws_slug_residue	C4
 _ws_slug_new	C4
 _ws_least_loaded	C1
 _ws_disk_free_gb	C4
+_ws_pool_read	C1
+_ws_lane_why	C1
+_ws_wrapper_why	C1
 cmd_ws_add	C4
 _ws_realpath	C4
 _ws_common_dir	C4
@@ -661,3 +664,8 @@ cmd_docs_show	C9
 cmd_docs_fetch	C9
 _docs_py	C9
 _launchd_class	C2
+_ws_title	C1
+_ws_title_check	C1
+_ws_title_set	C1
+_ws_title_clear	C1
+cmd_ws_title	C1
