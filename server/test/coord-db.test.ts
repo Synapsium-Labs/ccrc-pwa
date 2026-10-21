@@ -683,10 +683,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // D-5298, coordinator-first Task 16) and MIGRATIONS[24] (the digests table
     // and asks.corrected, D-5300, coordinator-first Task 17), MIGRATIONS[25]
     // (account_events, D-5516, accounts plan Task A7), MIGRATIONS[26]
-    // (the mail_deliveries park columns, D-5838) and MIGRATIONS[27]
-    // (secret_fingerprints, D-5513, accounts plan Task A10).
-    expect(COORD_SCHEMA_VERSION).toBe(28);
-    expect(MIGRATIONS.length).toBe(28);
+    // (the mail_deliveries park columns, D-5838), MIGRATIONS[27]
+    // (secret_fingerprints, D-5513, accounts plan Task A10) and MIGRATIONS[28]
+    // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f).
+    expect(COORD_SCHEMA_VERSION).toBe(29);
+    expect(MIGRATIONS.length).toBe(29);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -749,9 +750,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
     // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
     // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
-    // (account_events), MIGRATIONS[26] (the mail_deliveries park columns) and MIGRATIONS[27] (secret_fingerprints);
-    // the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(28);
+    // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
+    // MIGRATIONS[28] (feed_events.dedupe_key); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(29);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2242,5 +2243,56 @@ describe('coord.db: account_events, the session-only account audit (D-5516, acco
     expect(() => db.prepare("INSERT INTO account_events (at, actor, act, outcome) VALUES (1, 'a 00000000', 'check', 'maybe')").run())
       .toThrow(/CHECK/);
     db.close();
+  });
+});
+
+describe('coord.db: feed_events.dedupe_key, a notice\'s once-only key (D-5860, consolidation W1a Task C1f)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded: a branch that merges first moves it up a slot. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('dedupe_key')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const keyColumn = (db: DatabaseSync): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(feed_events)').all() as unknown as ColumnInfo[]).find((c) => c.name === 'dedupe_key');
+
+  it('ONE nullable column with no default and no CHECK, and one index: nothing an older build would trip on', () => {
+    expect(SLOT, 'no MIGRATIONS entry adds dedupe_key').toBeGreaterThanOrEqual(29);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const c = keyColumn(db);
+    expect(c).toBeDefined();
+    expect(c!.type).toBe('TEXT');
+    expect(c!.notnull, 'dedupe_key must be nullable (rule 3: an older build inserts without it)').toBe(0);
+    expect(c!.dflt_value).toBeNull();
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration adds one column and one index')
+      .toBe('ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;\n  CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);');
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it, and its rows read back with a NULL key', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'queue', 's', 't', 'b', NULL)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT body, dedupe_key FROM feed_events').all()).toEqual([{ body: 'b', dedupe_key: null }]);
+    db.close();
+  });
+
+  it('rollback is real: an older build meeting the file at this version reads it and inserts without naming the key', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    // An older build's insert never names `dedupe_key`.
+    b.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'nudge', 's', 't', 'b', NULL)").run();
+    expect(b.prepare('SELECT body, dedupe_key FROM feed_events').all()).toEqual([{ body: 'b', dedupe_key: null }]);
+    warnSpy.mockRestore();
+    b.close();
   });
 });
