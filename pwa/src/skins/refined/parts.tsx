@@ -5,6 +5,7 @@ import { REFINED } from '@ccrc/ui';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { FleetColumn } from '../../screens/FleetColumn';
 import type { SkinSet } from '../types';
+import { InspectorRail } from './InspectorRail';
 import { SessionChrome } from './SessionChrome';
 import { TranscriptRow } from './TranscriptRow';
 import './refined.css';
@@ -20,7 +21,8 @@ export const REFINED_SET: SkinSet = {
   SessionChrome,
   // W2 Task S13b (D-5475): a run of tool entries reads as one plain-language row.
   TranscriptRow,
-  Inspector: null,
+  // W2 Task S8 (D-5474): the shared sections in a 320 rail at >=1600, on a session route only.
+  Inspector: InspectorRail,
   StatusBar: null,
   PhoneNav: null,
   transcriptGrouping: 'tool-runs',

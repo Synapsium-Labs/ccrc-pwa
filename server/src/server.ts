@@ -14,7 +14,7 @@ import { readLaneStates, readLimits, projectHome, projectPlacement } from './lim
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
-import { CLASSES, type ModelClass } from '../../shared/models.js';
+import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type ModelClass } from '../../shared/models.js';
 import {
   accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
@@ -1612,7 +1612,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Swap-notice ingestion: ccd's ~/.cc-sessions/notify.sh hook POSTs here.
   // Every notice fans out fleet-wide; a `cc swap:` message also targets the
-  // moved session's stream so its chat surfaces the account change inline.
+  // moved session's stream so its chat surfaces the account change inline; and
+  // a model-class line carrying `push: true` (the models advance step's,
+  // `notify.sh --push`) also goes to the operator's phone.
   //
   // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
   // one box->server ingress carrying zero identity while the server
@@ -1647,7 +1649,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         '(add --url <server> on a box with no ~/.ccrc/agent.env)');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
     }
-    const body = (req.body ?? {}) as { message?: unknown };
+    const body = (req.body ?? {}) as { message?: unknown; push?: unknown };
     if (typeof body.message !== 'string') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
@@ -1655,6 +1657,135 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.emit('notice', { message });
     const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
     if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+    // Auto-advance spec §2.3 steps 5 and 6 (plan W2 Task 12): a class that
+    // moved, or was held back, reaches the PHONE too - the banner alone reaches
+    // only an open console. Exactly `true`, never a truthy string, and behind
+    // the same box-token gate as the banner above.
+    //
+    // WHETHER IT MAY IS NOT DECIDED HERE: `modelsPushDecision` (shared/models.mjs,
+    // pure) answers pushable or refused-with-a-reason, from the message and the
+    // roster this server holds at this request, and this route only applies the
+    // answer. The box token proves "a process on the fleet box" and no more
+    // (notify.sh's own header), so only a model-class line of a codex-kind lane
+    // is pushable (D-5211). THE LANE MUST BE codex-kind IN THE ROSTER THIS
+    // SERVER HOLDS, not only in the one the advance step read: the step gates
+    // on `~/.ccrc/accounts.json` on the box it runs on, and this route on
+    // `deps.cfg.roster`. In local mode that is one box, and one file while the
+    // server reads its default path (`CCRC_HOME` and `CCRC_ACCOUNTS` can move
+    // it), though the roster in memory can still lag the file (below). In
+    // remote mode they are two rosters on two boxes, which the server compares
+    // only by a digest of accounts.sh, and that digest does not carry a lane's
+    // `exec.kind`, so the two can differ there and still read as agreed. The
+    // refusal names the lane and says what to fix in this server's own mode.
+    //
+    // WHAT TO FIX, BY MODE. This route reads `deps.cfg.roster` at each request
+    // and keeps no copy of its own. `cfg.roster` itself is read once, from this
+    // box's accounts.json, by `loadRoster` in `loadConfig` (config.ts), and
+    // nothing watches the file. After that only `reloadRoster` changes it. Its
+    // one caller is the reload hook of index.ts's `reconcilingAccountOps`
+    // wrapper, whose answers arrive from two places: the egress masker's re-key
+    // (a `roster` sub, run only while the masker holds rows of an older
+    // box-token generation, that is after a rotation), and the divergence
+    // reconcile (remote mode only, run when the fleet's `rosterFp` differs from
+    // the digest of the accounts.sh this server's roster generates). No route
+    // drives an account verb yet: deps.ts names the account routes as the
+    // wrapper's consumers, and none exists. So nothing re-reads the roster
+    // because a lane's `exec.kind` alone differs: the divergence reconcile's
+    // digest does not carry `exec.kind`, the re-key runs only after a box-token
+    // rotation, and no account route drives a verb. When a roster answer does
+    // land, `reloadRoster` takes it only if its fleet identity is the one the
+    // server knows and its roster parses; it then replaces `cfg.roster` when the
+    // answer differs from the roster in memory and, in remote mode, rewrites
+    // this box's copy from it too. So the fix that works, in both modes, is
+    // made in THIS box's accounts.json, then a restart. A codex row needs
+    // its whole exec block, not `exec.kind` alone (`parseRoster` in
+    // shared/roster.ts requires `provider` "openai", `authDir` and two ports of
+    // its own), and a roster with an incomplete one stops the server at start,
+    // since index.ts runs `loadConfig` at module top level, uncaught. In LOCAL
+    // mode this box's accounts.json is the box's own. In REMOTE mode it is a
+    // copy of the fleet box's roster, which the next roster answer from the
+    // fleet box that differs from memory replaces wholesale (`reloadRoster`
+    // writes the answer's whole roster over it), so the remedy is to copy the
+    // fleet box's whole accounts.json over it: a copy of the lane's row alone can
+    // still stop the restart, as a second row with the same id, or a port the
+    // fleet box has since given another lane.
+    //
+    // What a pushable line can carry is stated in the policy's docstring: up to
+    // 120 characters of printable ASCII in a failure line's reason slot, and
+    // URL-shaped model ids. That residual is accepted (D-5211), and a models
+    // push records no feed entry and has no per-(lane, class) rate cap. A line
+    // over the cap (a failure line with long model ids) is refused too, by
+    // design: it gets the banner, and the log line says that and why, with the
+    // cap written from MODELS_PUSH_MAX. The message itself is never logged: it
+    // is free text from a process we do not trust.
+    //
+    // THIS IS A DIRECT `PushService.notify`, OUTSIDE notice.ts's `notify()` FUNNEL,
+    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The
+    // composition root's bound sink (`notice = noticeSink(deps)`, above) records
+    // every notice it can push: in `raise` (notice.ts) `push` and `record-always`
+    // run `log.record` and then `recordFeedEvent` before `deps.push?.notify`
+    // (`record-only` records and never pushes; index.ts passes the ring in
+    // `deps`), and the one path that records nothing, `push` for a session the
+    // operator is looking at, pushes nothing either. D-5211 rules a feed record out
+    // for this push in W2. (A notice with no session is not the obstacle: the
+    // daily digest goes through the funnel with `sessionId: ''`.) (2) The raw
+    // `notify` with a push-only set of sinks is reachable (`NoticeDeps`' sinks are
+    // each optional, and watch.ts already passes subsets), but its event is a
+    // `NoticeRecord`, which carries a `NotifyEvent` kind, and no kind in
+    // shared/api.ts's union fits a model-class notice: a new kind widens that union
+    // and the PWA's per-kind tables (`KIND_WORD` and `KIND_GLYPH` in
+    // MailScreen.tsx), and an existing kind misfiles it. (3) The owner that will
+    // absorb it is the consolidation design's K6 funnel, whose ARCH-59 item moves
+    // the notify.sh banner into the funnel
+    // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
+    // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
+    // the direct callers of `PushService.notify` in server/src, so that wave
+    // finds this one mechanically. It is lexical. It strips a line's inline
+    // `/* … */` spans first, so a line that begins with an inline block comment
+    // and then has code is counted, and it skips the line when what is left
+    // begins with `//`, `/*` or `*`. On every other line it counts a spelling
+    // of a call of a member named `notify`: a call, an optional or
+    // non-null-asserted call, a call with a type argument that has no nested
+    // angle brackets or parentheses, a `bind`/`call`/`apply`, a bracketed name,
+    // or a line ending in `.notify` or `.notify!`. It sees only those
+    // spellings. It does not see any other spelling (a parenthesised member,
+    // `Reflect.apply`, a reference destructured or aliased and called later),
+    // or code on a line that begins with `*` or `*/`.
+    //
+    // The decision is made whether or not a push service exists: no VAPID keys
+    // is delivery configuration, not a way around the policy. With none,
+    // `deps.push` is undefined and nothing is sent. The response never waits
+    // for the send, and a send that rejects (a subscription store that cannot
+    // be written) is logged rather than left unhandled: the banner has already
+    // gone out. The tag is the decision's (per lane and class, D-5212).
+    if (body.push === true) {
+      const decision = modelsPushDecision(message, deps.cfg.roster.byId);
+      if (decision.verdict === 'refused') {
+        // Per reason, what to do or what to expect; never the message.
+        const detail = 'lane' in decision
+          ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
+            + '(the server decides from the roster it holds)'
+            + (deps.cfg.fleetMode === 'remote'
+              ? '; copy the fleet box\'s whole accounts.json over this server box\'s accounts.json, '
+                + 'and restart the server: this server box\'s file is a copy of the fleet box\'s roster, and a later '
+                + 'roster answer from the fleet box replaces it'
+              : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
+                + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
+                + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
+                + 'start: fix the row, and restart the server')
+          : decision.reason === 'over-cap'
+            ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
+              + 'ids is refused this way by design, and the banner carries it'
+            : '';
+        console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
+          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
+      } else {
+        void deps.push?.notify({ title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' })
+          .catch((err: unknown) => {
+            console.warn(`ccrc-server: /api/notify: the push did not go out (${err instanceof Error ? err.message : String(err)})`);
+          });
+      }
+    }
     return { ok: true };
   });
 

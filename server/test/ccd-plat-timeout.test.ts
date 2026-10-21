@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
@@ -47,9 +47,10 @@ const COPIES: Array<[string, string, string]> = [
   ['helper', 'ccd-account-auth', '_auth_timeout'],
 ];
 interface Run { home: string; rc: string; ms: number; out: string; err: string }
-function drive(file: string, name: string, script: string, pathPrefix?: string): Run {
+function drive(file: string, name: string, script: string, pathPrefix?: string, also: string[] = []): Run {
   const home = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-'));
-  writeFileSync(path.join(home, 'shim.sh'), body(file, name));
+  // `also` names further functions of the SAME file to source beside the shim (the strict neighbours, below).
+  writeFileSync(path.join(home, 'shim.sh'), [name, ...also].map((n) => body(file, n)).join(''));
   // THE POISONED `gh` SURVIVES THE PATH THESE CASES BUILD. Several of them hand
   // the shim a PATH holding nothing but a planted `timeout`, which is the whole
   // point — that is how the fallback arm and the hostile-binary arm are reached.
@@ -187,4 +188,162 @@ describe('D-2764', () => {
         .not.toMatch(/kill\s+-(9|KILL)\b/);
     }
   });
+});
+
+// ── The strict neighbours (auto-advance Codex arm, plan W2 Task 11) ──────────────────────────────────────
+// `_plat_timeout_capability` and `_plat_timeout_strict` sit beside `_plat_timeout` in the platform block, in
+// `ccd/ccd` and `ccd/ccrc` alike, so they are measured on both copies. The hourly advance step runs automatic
+// work (a lock, a writer, a canary, a hook) only where an escalating deadline exists, so it asks the OWNER of the
+// deadline, through the ONE `-k` probe and the ONE first-selected-binary policy it already has: `strong` (the
+// selected utility's `-k` is proved), `weak` (one is selected and its `-k` is not) or `none` (no `timeout` or
+// `gtimeout`: the pure-bash arm would run). `_plat_timeout_strict` runs a program only on a strong one. They are
+// NEIGHBOURS, not modes of `_plat_timeout`, because its body is byte-pinned against two more copies
+// (`ccd-account-auth`, `ccgpt-runtime`) this change must leave alone; `_auth_timeout`, the table's third row, has
+// neither and is not in this describe.
+const PLATFORM_COPIES = COPIES.filter(([, , name]) => name === '_plat_timeout');
+const NEIGHBOURS = ['_plat_timeout_capability', '_plat_timeout_strict'];
+
+/** The first executable file named `n` on this process's PATH, as `type -P` finds it, or null. Never `command -v`'s
+ *  answer: a builtin (`printf`, `true`) answers its bare name there, and a link to a bare name is a dangling one. The
+ *  programs a probe or a case execs must be files. Walked here rather than asked of a shell, so this helper spawns no
+ *  bash outside the harness's containment (`ccd-workspaces.test.ts`'s scan of every bash call site). */
+function onPath(n: string): string | null {
+  for (const d of (process.env['PATH'] ?? '').split(':')) {
+    if (d === '') continue;
+    const p = path.join(d, n);
+    try {
+      accessSync(p, constants.X_OK);
+      if (statSync(p).isFile()) return p;
+    } catch { /* not in this directory */ }
+  }
+  return null;
+}
+
+/** A directory holding ONLY the named programs, each a symlink to the system's own. A PATH made of it (and the
+ *  harness's gh poison) has exactly those tools: `timeout`, `gtimeout` or `sleep` absent is a fact about it. */
+function toolDir(names: string[]): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'ccd-tm11-tools-'));
+  for (const n of names) {
+    const p = onPath(n);
+    if (p !== null) symlinkSync(p, path.join(dir, n));
+  }
+  return dir;
+}
+const BASE_TOOLS = ['bash', 'printf', 'touch', 'true'];
+
+describe('_plat_timeout_capability and _plat_timeout_strict (plan W2 Task 11)', () => {
+  it('are spelled identically in the ccd script and in ccrc: the platform block is one definition', () => {
+    for (const fn of NEIGHBOURS) expect(body('ccd', fn), `${fn} differs between ccd and ccrc`).toBe(body('ccrc', fn));
+  });
+
+  for (const [label, file, name] of PLATFORM_COPIES) {
+    describe(label, () => {
+      const run = (script: string, prefix?: string, grace = '2'): Run =>
+        drive(file, name, `export CCD_TIMEOUT_KILL_AFTER=${grace}\n${script}`, prefix, NEIGHBOURS);
+
+      itDelegating('answers strong for the system timeout, prints it, and leaves it in the calling shell', () => {
+        const r = run(`out=$(_plat_timeout_capability); printf '%s|' "$out"\n_plat_timeout_capability >/dev/null\nprintf '%s' "\${CCD_TIMEOUT_CAPABILITY:-unset}"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('strong|strong');
+      });
+
+      itDelegating('answers strong for a gtimeout alone', () => {
+        const dir = toolDir(BASE_TOOLS);
+        // A wrapper, not a link: a multi-call coreutils answers only to its own applet name.
+        writeFileSync(path.join(dir, 'gtimeout'), `#!/bin/sh\nexec ${REAL_TIMEOUT} "$@"\n`);
+        chmodSync(path.join(dir, 'gtimeout'), 0o755);
+        const r = run(`_plat_timeout_capability >/dev/null; printf '%s' "$CCD_TIMEOUT_CAPABILITY"`, dir);
+        expect(r.rc, `stderr: ${r.err}`).toBe('strong');
+      });
+
+      itDelegating('answers weak for a selected timeout that cannot prove -k, even with a strong gtimeout behind it', () => {
+        const dir = toolDir(BASE_TOOLS);
+        writeFileSync(path.join(dir, 'timeout'),
+          `#!/usr/bin/env bash\ncase "$1" in -*) exit 1 ;; esac\nexec ${REAL_TIMEOUT} "$@"\n`);
+        chmodSync(path.join(dir, 'timeout'), 0o755);
+        writeFileSync(path.join(dir, 'gtimeout'), `#!/bin/sh\nexec ${REAL_TIMEOUT} "$@"\n`);
+        chmodSync(path.join(dir, 'gtimeout'), 0o755);
+        const r = run(`_plat_timeout_capability >/dev/null; printf '%s|' "$CCD_TIMEOUT_CAPABILITY"\n_plat_timeout_strict 5 bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s' "$?"`,
+          `${dir}:${process.env.PATH}`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('weak|125');
+        expect(existsSync(path.join(r.home, 'ran')), 'a weak utility ran the automatic target').toBe(false);
+      });
+
+      for (const [sleepWord, sleepBody] of [['a working sleep', null], ['no sleep at all', 'absent'], ['a sleep that refuses', '#!/bin/sh\nexit 1\n']] as const) {
+        it(`answers none with no timeout utility, ${sleepWord}, and the strict call runs nothing`, () => {
+          const dir = toolDir(sleepBody === null ? [...BASE_TOOLS, 'sleep'] : BASE_TOOLS);
+          if (sleepBody !== null && sleepBody !== 'absent') {
+            writeFileSync(path.join(dir, 'sleep'), sleepBody);
+            chmodSync(path.join(dir, 'sleep'), 0o755);
+          }
+          const r = run(`out=$(_plat_timeout_capability); printf '%s|' "$out"\n_plat_timeout_capability >/dev/null\n`
+            + `_plat_timeout_strict 5 bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s' "$?"`, dir);
+          expect(r.rc, `stderr: ${r.err}`).toBe('none|125');
+          expect(existsSync(path.join(r.home, 'ran')), 'the pure-bash fallback ran the automatic target').toBe(false);
+        });
+      }
+
+      it('refuses with no proof at all: a shell that never asked for the capability runs nothing', () => {
+        const r = run(`_plat_timeout_strict 5 bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s' "$?"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('125');
+        expect(existsSync(path.join(r.home, 'ran'))).toBe(false);
+      });
+
+      itDelegating('runs the program on a strong substrate, passes its status through, and ends a TERM-ignoring child at the deadline', () => {
+        const r = run(`_plat_timeout_capability >/dev/null\n_plat_timeout_strict 5 bash -c 'exit 7' >/dev/null 2>&1; a=$?\n_plat_timeout_strict 5 true >/dev/null 2>&1; b=$?\n`
+          + `_plat_timeout_strict 1 bash -c 'trap "" TERM; sleep 9; : > @HOME@/outlived' >/dev/null 2>&1; c=$?\nprintf '%s %s %s' "$a" "$b" "$c"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('7 0 124');
+        expect(existsSync(path.join(r.home, 'outlived')), `the child outlived its deadline (${r.ms}ms)`).toBe(false);
+        expect(r.ms, 'the escalation did not land inside secs + grace').toBeLessThan(8000);
+      });
+
+      itDelegating('refuses a deadline it cannot read as whole seconds, and runs nothing', () => {
+        const r = run(`_plat_timeout_capability >/dev/null\nfor d in abc '' '-1' 1x 5s 1m 0 00 0.0 0.5; do _plat_timeout_strict "$d" bash -c ': > @HOME@/ran' >/dev/null 2>&1; printf '%s ' "$?"; done`);
+        // `5s` and `1m` are deadlines GNU timeout accepts, and the owner passes no `-k` for them (its grace is paid
+        // only for a deadline it reads as whole seconds): a strict call may not run them. `0`, `00`, `0.0` and `0.5` are
+        // the other kind: GNU `timeout` reads a zero as "no deadline at all", so the call would run unbounded and unkilled.
+        expect(r.rc, `stderr: ${r.err}`).toBe('125 125 125 125 125 125 125 125 125 125');
+        expect(existsSync(path.join(r.home, 'ran'))).toBe(false);
+      });
+
+      itDelegating('reads a leading-zero deadline in base 10: 08 and 09 run, and 00 does not', () => {
+        const r = run(`_plat_timeout_capability >/dev/null\nfor d in 08 09 00; do _plat_timeout_strict "$d" bash -c ': > @HOME@/ran-$0' "$d" >/dev/null 2>&1; printf '%s ' "$?"; done`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('0 0 125');
+        expect(existsSync(path.join(r.home, 'ran-08')) && existsSync(path.join(r.home, 'ran-09'))).toBe(true);
+        expect(existsSync(path.join(r.home, 'ran-00'))).toBe(false);
+        expect(r.err).toBe('');
+      });
+
+      itDelegating('refuses, rather than falling back, once the PATH is not the one the capability was proved for', () => {
+        // THE PROOF BELONGS TO THE SELECTION IT WAS MADE FOR. A PATH that has since resolved `timeout` to another
+        // file selects another utility, and strict execution refuses it; the capability question, asked again,
+        // proves the new one.
+        const a = toolDir(BASE_TOOLS);
+        const b = toolDir(BASE_TOOLS);
+        const sys = REAL_TIMEOUT ?? '/nonexistent';
+        symlinkSync(sys, path.join(a, 'timeout'));
+        symlinkSync(sys, path.join(b, 'timeout'));
+        const r = run(`_plat_timeout_capability >/dev/null\nexport PATH=${JSON.stringify(`${b}:${a}`)}\n`
+          + `_plat_timeout_strict 5 bash -c ': > @HOME@/ran-stale' >/dev/null 2>&1; printf '%s|' "$?"\n`
+          + `_plat_timeout_capability >/dev/null; printf '%s|' "$CCD_TIMEOUT_CAPABILITY"\n`
+          + `_plat_timeout_strict 5 bash -c ': > @HOME@/ran-fresh' >/dev/null 2>&1; printf '%s' "$?"`, a);
+        expect(r.rc, `stderr: ${r.err}`).toBe('125|strong|0');
+        expect(existsSync(path.join(r.home, 'ran-stale')), 'a stale capability ran the target').toBe(false);
+        expect(existsSync(path.join(r.home, 'ran-fresh'))).toBe(true);
+      });
+
+      itDelegating('asking again after a PATH change re-proves through the owner: a weak utility behind a strong one is weak', () => {
+        // The owner caches its `-k` proof for the life of the shell. The capability question must not inherit
+        // that cache across a change of selection: the second answer is about the second utility.
+        const strong = toolDir(BASE_TOOLS);
+        symlinkSync(REAL_TIMEOUT!, path.join(strong, 'timeout'));
+        const weak = toolDir(BASE_TOOLS);
+        writeFileSync(path.join(weak, 'timeout'),
+          `#!/usr/bin/env bash\ncase "$1" in -*) exit 1 ;; esac\nexec ${REAL_TIMEOUT} "$@"\n`);
+        chmodSync(path.join(weak, 'timeout'), 0o755);
+        const r = run(`_plat_timeout_capability >/dev/null; printf '%s|' "$CCD_TIMEOUT_CAPABILITY"\n`
+          + `export PATH=${JSON.stringify(`${weak}:${process.env.PATH}`)}\n_plat_timeout_capability >/dev/null; printf '%s' "$CCD_TIMEOUT_CAPABILITY"`, strong);
+        expect(r.rc, `stderr: ${r.err}`).toBe('strong|weak');
+      });
+    });
+  }
 });

@@ -25,6 +25,8 @@ _plat_uuid	K
 _plat_ppid	K
 _plat_cgroup	K
 _plat_timeout	K
+_plat_timeout_capability	K
+_plat_timeout_strict	K
 _svc_label	C2
 _svc_plist	C2
 _svc_domain	C2
