@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=11fee83b012c0fb2b25ec6fa9d56ae9a3a55ad15c6f0870a70bf71ad4e28607d
+# ccrc:generated 1 sha256=27e52d867348fcc0accac2e884cce35d8d43666619b71d01dd5508b6ac824adf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19371,7 +19371,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"
+    local lane; _swap_lane_to lane "$target"   # D-6180
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra) lane=$lane" >> "$REG/swap.log"
     local rtx="" rtxb=""
     rtx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$rtx" ]] && rtxb=$(_plat_size "$rtx" 2>/dev/null) || { rtx=""; rtxb=""; }
     [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
@@ -19425,7 +19426,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # The degrade rung rides into the unit with the move; `cmd_swap` stamps it
   # after re-running this same idle gate at the act (D-5240).
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
+  local lane; _swap_lane_to lane "$target"   # D-6180
+  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home] lane=$lane" >> "$REG/swap.log"
   [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
   _dispatch_swap "$id" "$target" affinity "$last" "$now" "$dfrom" "$dto"
   return 0
@@ -27784,6 +27786,15 @@ _standdown_outside_tail() {
   else
     echo no
   fi
+}
+
+# var account -> var = anthropic | other: the `lane=` word that ends the
+# `auto-rescue`, `auto-home` and `auto-pool` lines (D-6180), so landings are
+# counted by backend without re-deriving the roster. "other" is defined here, once,
+# as "not `_is_anthropic_backend`" — not `_swap_target`'s non-home-able overflow
+# bracket, which is a placement question rather than a backend one.
+_swap_lane_to() {
+  if _is_anthropic_backend "$2"; then printf -v "$1" '%s' anthropic; else printf -v "$1" '%s' other; fi
 }
 
 # id reason [evidence] [tail] -> one `stand-down` line per episode.

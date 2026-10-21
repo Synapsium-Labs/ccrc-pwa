@@ -762,7 +762,7 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     seed(); const t = now();
     writeTranscript([limitRow(t - 10, t + 9000, 'five_hour')]);
     tick(PROMPT);
-    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`via=transcript reset=${t + 9000} type=five_hour row=${t - 10}$`));
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`via=transcript reset=${t + 9000} type=five_hour row=${t - 10} lane=anthropic$`));
   });
 
   it('control: with no history the least-used lane takes the rescue', () => {
@@ -791,7 +791,7 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     seed('claude-a'); lanes(); const t = now();
     writeTranscript([limitRow(t - 5, t - 8 * 86400, 'seven_day')]);
     tick(STALLED, null);
-    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`claude-a \\(blocked\\) -> claude-b \\[home=claude\\] via=banner type=seven_day row=${t - 5}$`));
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`claude-a \\(blocked\\) -> claude-b \\[home=claude\\] via=banner type=seven_day row=${t - 5} lane=anthropic$`));
     h.sh(`_reg_set ${ID} wrapper claude-b; _reg_set ${ID} lastswap ${t - 1000}`);
     tick(STALLED, null);
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`, `dispatch ${ID} -> claude-d`]);
@@ -1064,7 +1064,7 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     h.sh(`_reg_set ${ID} lastswap ${t - 1000}; _reg_set ${ID} spawn "${born + 30} 4"`);
     tick(ARMED, 'claude-a', { TMUX_CREATED: String(born) });
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
-    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`\\[home=claude\\] row=${t - 3000}$`));
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`\\[home=claude\\] row=${t - 3000} lane=anthropic$`));
     expect(h.sh(`_hard_block_date 3 5 100; echo "$HARD_BLOCK_RESET|$HARD_BLOCK_TYPE|$HARD_BLOCK_ROW"`)).toBe('||100');
   });
 });

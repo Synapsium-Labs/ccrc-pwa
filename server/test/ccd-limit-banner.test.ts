@@ -379,7 +379,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.assistant()]);
     h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'typing' });
     expect(dispatches()).toHaveLength(1);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\]$/m);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] lane=\S+$/m);   // D-6180's lane= word ends the line
   });
   it('no destination: a transcript banner marks the row stranded, like a pane banner does', () => {
     seed(); writeTranscript([L.banner()]);

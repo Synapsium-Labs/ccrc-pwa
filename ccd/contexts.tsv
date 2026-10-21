@@ -447,6 +447,7 @@ _tick_decided	C1
 _standdown_evidence	C1
 _standdown_probe	C1
 _standdown_outside_tail	C3
+_swap_lane_to	C1
 _standdown_note	C1
 _crosspool_mark	C1
 _swap_lastswap_restore	C1

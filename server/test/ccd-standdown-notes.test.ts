@@ -158,7 +158,8 @@ describe('characterization: what each silent exit writes today', () => {
   it('today: an auto-rescue line ends at its [home=…]/via= suffix', () => {
     seed(); writeTranscript([turn(T0 - 60)]);
     tick(STALLED, { extra: AFFINITY });
-    expect(swapLog()).toMatch(/auto-rescue lane-a-project-a: claude \(blocked\) -> claude-a \[home=claude\]( via=\S+)?( reset=\S+)?( type=\S+)?( row=\S+)?$/m);
+    // flipped by D-6180's lane= word: the line now ends one word later
+    expect(swapLog()).toMatch(/auto-rescue lane-a-project-a: claude \(blocked\) -> claude-a \[home=claude\]( via=\S+)?( reset=\S+)?( type=\S+)?( row=\S+)? lane=anthropic$/m);
   });
 
   it('kept: a session in cooldown with no limit row writes nothing', () => {
@@ -397,6 +398,18 @@ describe('D-6180: every silent stand-down logged, once per episode, with a re-lo
     const dialog = ["You've hit your session limit · resets 9:10pm (UTC)", ...Array.from({ length: 10 }, (_, i) => `  ${i + 1}. an option`), PROMPT].join('\n');
     tick(dialog);
     expect(standDowns()).toEqual([expect.stringMatching(/: cooldown evidence=transcript banner-outside-tail=yes$/)]);
+  });
+
+  it('auto-rescue and auto-home lines carry lane=', () => {
+    seed(); writeTranscript([turn(T0 - 60)]);
+    tick(STALLED, { extra: `${AFFINITY} CCRC_ANTHROPIC_BACKEND=(claude);` });
+    expect(lines('auto-rescue')).toEqual([expect.stringMatching(/ -> claude-a \[home=claude\].* lane=other$/)]);
+    const h2 = h; h = makeCcdHarness('ccrc-ccd-standdown-notes-');
+    try {
+      seed(); idleStatus(); writeTranscript([turn(T0 - 60)]);
+      tick(PROMPT, { extra: AFFINITY });
+      expect(lines('auto-home')).toEqual([expect.stringMatching(/auto-home lane-a-project-a: claude -> claude-a \[home=claude\] lane=anthropic$/)]);
+    } finally { h.cleanup(); h = h2; }
   });
 
   it('the rescue still dispatches on the tick it detects, with no line before it', () => {
