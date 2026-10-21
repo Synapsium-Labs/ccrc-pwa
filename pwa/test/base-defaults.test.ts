@@ -37,11 +37,16 @@ const PREVIEW_CSS = readFileSync(path.join(REPO, 'ui', '.storybook', 'preview.cs
 
 /** Every palette block in tokens.css: `:root` (Phosphor & Ink) and each
  *  `[data-theme='<id>']`, hand-tuned or generated. Each runs to the first `}`
- *  at the start of a line, which is how the file closes a block. */
+ *  at the start of a line, which is how the file closes a block. `:root` is two
+ *  top-level blocks, its colours (which also answer to `[data-theme='phosphor']`,
+ *  D-5503) and then the rest, merged here into the one palette they are. */
 function palettes(): [string, string][] {
   const out: [string, string][] = [];
-  for (const m of TOKENS_CSS.matchAll(/^(:root|\[data-theme='[a-z-]+'\]) \{\n([\s\S]*?)^\}/gm)) {
-    out.push([m[1]!, m[2]!]);
+  const re = /^(?:\[data-theme='phosphor'\],\n)?(:root|\[data-theme='[a-z-]+'\]) \{\n([\s\S]*?)^\}/gm;
+  for (const m of TOKENS_CSS.matchAll(re)) {
+    const prior = out.find(([sel]) => sel === m[1]);
+    if (prior !== undefined) prior[1] += m[2]!;
+    else out.push([m[1]!, m[2]!]);
   }
   return out;
 }

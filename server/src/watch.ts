@@ -787,6 +787,11 @@ const APPROVAL_RULED_GRACE_MS = 10_000;
  *  what is genuinely the same statement). A workspace outlives its own merge
  *  now, so `id` alone is not an identity. */
 const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
+/** The merged announcement's body, built in ONE place (landing-order wave 3d): `announceMerged` writes it, and
+ *  `sweepMerged`'s durable read matches a row archived before the once-only key existed by exactly this text. */
+const mergedBody = (number: number | null, reason: string | null): string => reason === null
+  ? `PR #${number ?? '?'} merged; nothing archived.`
+  : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`;
 
 /** What one `FleetWatcher.pushRelease` call did (design 2026-09-20 §13; plan W3 Task 3). Each arm is a fact
  *  a caller or a test tells apart: nothing to decide; decided and marked with no push, every measured node
@@ -933,13 +938,18 @@ export class FleetWatcher {
    * SECOND PR, and `boundRow` binds the newest one. A key of `id` alone would
    * announce the first merge and silently swallow every one after it.
    *
-   * IN-MEMORY BY DESIGN, not a gap: a server restart forgets the latch and
-   * may repeat the push, but `announceMerged` tags it `merged-<id>#<number>` —
-   * the same key — so the repeat REPLACES that PR's own prior notification
-   * rather than stacking a duplicate, while a DIFFERENT PR's announcement,
-   * which is a different statement, still stands beside it. The cost of losing
-   * this latch on restart is one redundant, silently-replaced notification;
-   * persisting it would buy nothing back for that price.
+   * THIS PROCESS'S LATCH, and a restart forgets it. What stops a restart
+   * repeating the announcement is the archive (landing-order wave 3d): the
+   * feed row carries this same key, and `sweepMerged` reads it back through
+   * `hasNotice` before announcing. The tray tag alone was not enough: it made a
+   * repeated push REPLACE that PR's own notification, but every push is also a
+   * feed row, and nothing replaced the row. Measured 2026-10-21: a restart
+   * wrote a merged PR's `merged` row a second time. Three repeats remain, by
+   * design: a row pruned past `FEED_RETENTION` reads as never written; a push
+   * the presence gate kept out of the archive wrote no row to find; and a row
+   * archived before the key existed is matched only by its exact body, so one
+   * whose reason clause changed since (its run closed after it was written)
+   * repeats once, at the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
   /** The merge-queue word each session's last full pr-state line carried
@@ -3766,6 +3776,20 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // A HUMAN'S NAME IS FINAL (named workspaces S2, D-6163). A workspace a human
+      // named — `ccd ws-add --title`, `ccd ws-title` — keeps its name. Its
+      // branch is still the birth branch `ws/<slug>`, so nothing above tells it
+      // from an auto-named one, and `sessionLabel` reads `branch` before
+      // `workspace`: without this clause the operator's `eng-1234` is rewritten
+      // to the model's title within one sweep of the first ai-title, with no
+      // verb able to put it back. Doubt reads as NAMED (`namedByOperator`'s
+      // ladder: a listed-but-unreadable or empty marker is true) — the same
+      // ruling as `held` below, for the same asymmetry: renaming over a human's
+      // choice is unrecoverable, skipping an auto row leaves it where it was.
+      // A field on the row this loop already read, so it sits before the
+      // `openRunsForSession` query and costs nothing; `--clear` removes the file
+      // and returns the row to the sweep.
+      if (r.namedByOperator) continue;
       // TWELFTH CONDITION (Wave 3 §3.1). A claimed workspace is not renamed —
       // `sessionLabel` reads `branch` before `workspace`, so a rename mid-wave
       // changes what every surface calls a worker the coordinator's ledger
@@ -8319,9 +8343,9 @@ export class FleetWatcher {
     this.pushOne({
       kind: 'merged', sessionId: r.id, project: r.project,
       title: `✓ merged › ${r.workspace}`,
-      body: reason === null
-        ? `PR #${number ?? '?'} merged; nothing archived.`
-        : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`,
+      body: mergedBody(number, reason),
+      // The once-only key, archived beside the row for `hasNotice` (landing-order wave 3d). It decides nothing here.
+      dedupeKey: key,
       // EXPLICIT, because `pushOne`'s default (`${kind}-${sessionId}`) is one
       // key short of this lane's own. The latch is per (workspace, PR) so a
       // second PR from the same workspace is announced — and an id-only
@@ -8330,9 +8354,10 @@ export class FleetWatcher {
       // that #43 landed and never that #42 did. Same shape and the same
       // reason as the mail lane's `mail-<toId>-<mailId>` just above.
       //
-      // It still collapses where it should: a restart forgets the latch and
-      // may repeat ONE PR's push, and that repeat carries this same tag, so
-      // it replaces rather than stacks.
+      // It still collapses where it should: a repeat the archive cannot stop
+      // (a row pruned past `FEED_RETENTION`, a push the presence gate kept out
+      // of it, or a pre-key row whose body changed since) carries this same
+      // tag, so it replaces rather than stacks.
       tag: `merged-${key}`,
     }, this.activeProjects);
   }
@@ -8447,6 +8472,18 @@ export class FleetWatcher {
           : unreadable
             ? 'a run may still be open — the run rows could not be read'
             : null;
+      // ONCE ACROSS A RESTART TOO (landing-order wave 3d): the latch above is this process's; the archive is every
+      // process's. The key is read first; the body matches a row archived before the key existed. A read that
+      // throws announces, as this lane did before the read existed, and never costs `sweepLanding` its sweep: this
+      // loop runs inside `sweepPr`'s `try` with no `catch`.
+      try {
+        if (this.deps.coord?.hasNotice('merged', r.id, key, mergedBody(pr.number, reason)) === true) {
+          this.mergedNotified.add(key);
+          continue;
+        }
+      } catch (err) {
+        console.warn(`ccrc-server: merged notice read for ${r.id} failed (${err instanceof Error ? err.message : String(err)}); announcing`);
+      }
       this.announceMerged(key, r, pr.number, reason);
     }
   }
@@ -9921,8 +9958,13 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
 /** D-5692: every key the line may carry, in the one order it is written. Phases, parts, `rewrite`, `repairRewrite` and `yields` are elapsed ms (an awaited
  *  one holds its waits, it is never CPU time); `blockCpu` and the `*Cpu` keys are CPU ms (main-thread
  *  CPU when `cpuThread=1`, else process CPU); `stallMax`, `stallP99` and the `stall*` stretches are stall ms; the rest are sizes and counts,
- *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. The
- *  formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. `rewrite` times the
+ *  port's every call, the delta projection's included, so it now holds the delta's time too; `rewrites` counts both kinds, `projectDelta` and `projectFull` count the
+ *  delta method's calls by the mode it answered (a fallback is `projectFull`; a call that threw counts in neither) and `deltaRows` sums the rows the deltas wrote, so
+ *  `rewrites - (projectDelta + projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full) plus any delta call that threw (the `delegation
+ *  projection stale:` warn line names it). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
+ *  (its no-op compare's two, the written checkpoint's one, `verifyDecodable`'s re-encode) and `cpBytes` the bytes of the last checkpoint it wrote, absent on a pass that
+ *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
  *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
@@ -9930,9 +9972,9 @@ export const DELEGATION_PASS_SLOW_KEYS = [
   'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
-  'rewrite', 'rewrites', 'rewriteEvents',
+  'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
-  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -9987,6 +10029,12 @@ type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
 interface LanePassTiming {
   ms: Map<DelegationPassSlowKey, number>; sizes: Map<DelegationPassSlowKey, number>; startedAt: number; durable: DelegationDurability | null;
   rewrites: number; rewriteEvents: number; step: (() => void) | null;
+  /** The delta projection's calls by their returned mode, and the rows the deltas wrote (`project()` counts in neither). */
+  projectDelta: number; projectFull: number; deltaRows: number;
+  /** The applier's cumulative `commitMeasures()` when the pass began (null: no applier yet, so the pass's encodes count from 0). `encodes` and
+   *  `cpBytes` cover the pass's WINDOW, from `startTiming` to the line, so under an overlap a late commit of a cut pass counts in both passes'
+   *  lines; `projectDelta`, `projectFull` and `deltaRows` follow `passTiming` like `rewrites`, and do not. */
+  measures: ReturnType<DelegationDurability['commitMeasures']> | null;
   /** D-5832: CPU microseconds per phase or part (summed), and whether the last CPU read was a thread's (null: none yet). */
   cpu: Map<DelegationPassSlowKey, number>; cpuThread: boolean | null;
   /** D-5832: the stretch open now (null: none has opened), and whether the `repair` part is open (`repairRewrite` charges only then). */
@@ -10552,6 +10600,7 @@ class DelegationLane {
   private startTiming(pass: LanePass): LanePassTiming {
     const t: LanePassTiming = {
       ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null,
+      projectDelta: 0, projectFull: 0, deltaRows: 0, measures: this.durable?.commitMeasures() ?? null,
       cpu: new Map(), cpuThread: null, stretch: null, repairOpen: false, yieldRepair: 0,
     };
     this.timings.set(pass, t);
@@ -10559,28 +10608,31 @@ class DelegationLane {
     this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
-  /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
+  /** D-5692: the applier's open options with the projection port's four calls timed (`rewritten`); the port itself is called as before. The
    *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
   private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
     const port = deps.projection;
     if (port === null) return deps;
     return { ...deps, projection: {
       project: (cp) => this.rewritten(() => port.project(cp), 1, 0),
+      projectChanged: (prior, next) => this.rewritten(() => port.projectChanged(prior, next), 1, 0, (r) => r.mode === 'delta' ? r.rows : null),
       insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
       eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
     } };
   }
-  /** D-5692: times one call of the coordination store's port (`project`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+  /** D-5692: times one call of the coordination store's port (`project`, `projectChanged`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
    *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
    *  which holds it too, so it is never summed into `block`. */
-  private rewritten<T>(fn: () => T, projects: number, events: number): T {
+  private rewritten<T>(fn: () => T, projects: number, events: number, delta?: (result: T) => number | null): T {
     const at = this.mono();
     this.seams.onPassPhase?.('rewrite');
-    try { return fn(); } finally {
+    let answered: number | null | undefined;   // undefined: not a delta call; null: it answered full; a number: it answered delta, with its rows
+    try { const result = fn(); if (delta !== undefined) answered = delta(result); return result; } finally {
       const t = this.passTiming;
       if (t !== null) {
         const ms = this.mono() - at;
         t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + ms); t.rewrites += projects; t.rewriteEvents += events;
+        if (answered !== undefined) { if (answered === null) t.projectFull += 1; else { t.projectDelta += 1; t.deltaRows += answered; } }
         if (t.repairOpen) t.ms.set('repairRewrite', (t.ms.get('repairRewrite') ?? 0) + ms);   // D-5832: `rewrite` less this is every other caller's time, flush's included (review 705 F3)
       }
     }
@@ -10619,12 +10671,15 @@ class DelegationLane {
       f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
       if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
       for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }
-      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
+      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; f.projectDelta = t.projectDelta; f.projectFull = t.projectFull; f.deltaRows = t.deltaRows; }
       if (t.durable !== null) {
         const cp = t.durable.state().checkpoint;
         f.cpSessions = cp.sessions.length; f.cpAttempts = cp.attempts.length; f.cpLeases = cp.leases.length; f.openLeases = cp.leases.filter((l) => l.releasedAt === null).length;
         f.cpLineage = cp.lineage.length; f.cpIntervals = cp.observationIntervals.length; f.cpCursors = cp.bucketCursors.length;
         f.cpActivities = cp.activities.length; f.cpMapping = Object.keys(cp.activityIdsByNaturalKey).length;
+        const now = t.durable.commitMeasures();
+        f.encodes = now.encodes - (t.measures?.encodes ?? 0);
+        if (now.cpBytes !== null && now.writes > (t.measures?.writes ?? 0)) f.cpBytes = now.cpBytes;
       }
       f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;
       f.lostPrefixes = this.lostPrefixes().size; f.lossy = this.lossy ? 1 : 0; f.droppedMeasured = this.evidenceLoaded ? 1 : 0;
@@ -10861,6 +10916,7 @@ class DelegationLane {
             dir: this.deps.cfg.ccrcDir,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
+              projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
             },

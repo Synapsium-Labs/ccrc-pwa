@@ -224,7 +224,11 @@ and the class of act that opened the livelock window.
   within the 70% of it that `pr-timeout-budget.test.ts` allows across the two languages. The map is keyed by the
   verb, so `--session` rises with `--project` (ruled 2026-09-24); child reclamation's close gate reads it up to
   twice inside `coordMutex`, so a close's worst case is about 50 s against its 30 s client timeout — accepted by
-  the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s.
+  the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s. (Amended 2026-10-21,
+  wave 3d: GitHub records a removal with reason `merged` at every successful queue merge, at or one second before
+  the PR reads MERGED, so the add is never a landed PR's last act. The query also reads the removal's `reason`. A
+  removal with reason `merged` reads `landed`, whether the PR still reads open or already reads merged; any other
+  reason, or none, keeps the answers above. The reason chooses the word and never reaches the line.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
   name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
@@ -238,7 +242,10 @@ and the class of act that opened the livelock window.
   mailed too, and answered by the ordinary proof and close. The recipient is the open run the close itself would
   keep (`survivorOf`). Both notices need that run to be open, so on a native-queue project the producer lands
   before it closes (clause 15). A PR whose enqueue only ARMED auto-merge (below) reads `none` and gets no notice:
-  the coordinator's read-back of the queue entry catches it. (Amended 2026-09-29.)
+  the coordinator's read-back of the queue entry catches it. (Amended 2026-09-29.) (Amended 2026-10-21, wave 3d: a
+  dequeue is a removal for any reason but `merged`, and `failed_checks`, `manual` and `merge_conflict` were all
+  observed. It is announced on the first sweep that reads it. A removal with reason `merged` is the landing: it
+  announces nothing, and the `merged:#<n>` mail still comes from the PR's merged phase.)
 - **The merge gate becomes a mechanism.** Setting the approval count to zero means any session holding the
   fleet's login could land with a plain `gh pr merge`. So `session-hook.sh`'s PreToolUse arm DENIES `gh pr merge`
   in any session whose hold names a programme wave, a worker's or a reviewer's (`CCRC_HOLD_WAVE_RE`, the hook's
@@ -281,7 +288,8 @@ the proof halts and the operator decides then — clause 15 forbids a coordinato
    event and one prerelease per merge; if a group lands several commits in one push, keep group size and
    concurrency at 1 or make release-main tag every commit in the pushed range; confirm `ours_of` still binds
    after a queue merge; measure whether GitHub records a removal event on a successful queue merge (if it does,
-   a queue-merged PR reads `none`, not `landed`); measure that gh's enqueue binds `--match-head-commit` (a
+   a queue-merged PR reads `none`, not `landed` — measured yes on 2026-10-21, and wave 3d makes that removal read
+   `landed`); measure that gh's enqueue binds `--match-head-commit` (a
    deliberately wrong sha is refused and nothing is queued); measure the armed path — an enqueue whose required
    checks have not passed arms auto-merge and queues nothing — and whether an armed request survives a push by the
    fleet's login (amended 2026-09-29);
@@ -433,6 +441,264 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 - `delete_branch_on_merge` unchanged; fresh children remove the stacking hazard.
 - The ruleset changes of stage 2 and the strict-protection flips of stage 5.
 
+### 5.7 Stage 2 amendment — the landing route comes from the repository's own rules (skills only)
+
+Stage 2 taught the coordinator to land on a native-queue project, and kept #178's squash merge for every other
+repository. That squash is a fixed choice. A repository can forbid it, and a required check can live where the
+skill does not look. This subsection makes the coordinator read the repository before each landing, derive what
+it may do, and stop when the answers disagree. It adds no server code, no ccd verb, no merge endpoint and no gh
+grant. It is written as a new subsection so that §5.2's text, which wave 3d also edits, stays as it is.
+(Added 2026-10-21, on the operator's rulings of that day: §11, items 7 to 15.)
+
+#### 5.7.1 What the coordinator reads, before each landing
+
+The reads are all GETs, from the coordinator's own session, from a checkout of the PR's repository. They run
+again before every landing, never from memory, because the operator can change any of them between two PRs.
+
+| # | Read | What it gives | Confirmed absent | Unreadable (a STOP) |
+|---|---|---|---|---|
+| 1 | `gh pr view <pr> --json baseRefName,headRefOid,state,reviewDecision` | the base branch the PR targets; the head to compare with `handoffCommit`; whether the PR is open; whether its required approval is given | — | any error |
+| 2 | `gh api --paginate 'repos/{owner}/{repo}/rules/branches/<base>'` | every rule from every ACTIVE ruleset that targets the base, repository and organisation alike, each with its `ruleset_id`: `pull_request` (with `allowed_merge_methods` and `required_approving_review_count`), `merge_queue` (with `merge_method`), `required_status_checks`, `required_linear_history`, and the other gating types of 5.7.3 | `[]` with status 200 means no rule applies | any non-200 |
+| 3 | `gh api 'repos/{owner}/{repo}/branches/<base>/protection'` | classic protection: `required_status_checks` (`checks` with `app_id`, `contexts`, `strict`), `required_linear_history.enabled`, `enforce_admins.enabled`, `required_pull_request_reviews.required_approving_review_count`, `required_signatures.enabled` | status 404 AND message exactly `Branch not protected` | a 404 with any other message (`Branch not found`, `Not Found`), 5xx, a timeout; a 401 or 403 goes to read 3b |
+| 3b | `gh api 'repos/{owner}/{repo}/branches/<base>'`, only when read 3 answered 401 or 403 | classic `protection.required_status_checks` (`checks` with `app_id`, `contexts`), readable with plain read access | `protection.enabled: false` | any non-200 |
+| 4 | `gh api 'repos/{owner}/{repo}'` | `allow_squash_merge`, `allow_merge_commit`, `allow_rebase_merge`, `allow_auto_merge` | — | any non-200, or any of the four fields missing |
+| 5 | `gh api --paginate 'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs'` and `gh api --paginate 'repos/{owner}/{repo}/commits/<handoffCommit>/status'` | the head's check runs (`name`, `app.id`, `status`, `conclusion`; the endpoint's default `filter=latest` gives the newest run per name) and its commit statuses (`statuses[]`: `context`, `state`) | an empty list means nothing has reported, never a pass | any non-200 |
+| 6 | `gh api 'repos/{owner}/{repo}/rulesets/<ruleset_id>'`, only when the admin licence is weighed (5.7.4) | `current_user_can_bypass` for a ruleset that read 2 named | — | any non-200: the login counts as able to bypass |
+
+Read 2 answers for any branch name, including one that does not exist: GitHub returns the rules that would apply
+to a branch of that name. This repository's `[]` for a missing branch comes only from its ruleset targeting `main`
+alone; under a ruleset aimed at every branch, a misspelled base would return real rules. So the base always comes
+from read 1, never from a guess, and read 5 runs only once read 1 has shown the head is `handoffCommit`.
+
+Read 3 needs a login that may read the repository's administration settings. When it answers 401 or 403, read 3b
+gives the classic check set with plain read access (§11, item 9). Strictness, linear history, `enforce_admins`, approvals and
+signatures are then unknown, and the landing stops if the route would need one of them: the PR's head is behind the
+base (`gh api 'repos/{owner}/{repo}/compare/<base>...<handoffCommit>'` answers `behind_by` above 0, so land-sync
+would depend on strictness), the chosen method is `merge` (linear history), or the admin licence is weighed
+(`enforce_admins`). Without those, `--admin` is never used under read 3b, and GitHub enforces approvals and
+signatures at merge itself.
+
+Read 5's combined `state` answers `pending` for a head that carries no status at all (measured, 5.7.7), so the
+procedure reads the `statuses` array, never the combined state.
+
+#### 5.7.2 The effective method set
+
+The method set is an intersection. A method survives only if every source allows it.
+
+- Start from the repository settings: `squash` if `allow_squash_merge`, `merge` if `allow_merge_commit`, `rebase`
+  if `allow_rebase_merge`.
+- Intersect with `allowed_merge_methods` of EVERY `pull_request` rule in read 2, not the first one. A
+  `pull_request` rule with no `allowed_merge_methods` field allows all three.
+- Remove `merge` if linear history is required: a read-2 rule of `type == "required_linear_history"`, or read 3's
+  `required_linear_history.enabled == true`. The field's presence is not the test: classic protection always
+  returns a `required_linear_history` object, `{"enabled": false}` when linear history is not required (5.7.7).
+- Names are compared in lower case: rules spell `merge`, `squash`, `rebase`, and a queue rule spells `MERGE`,
+  `SQUASH`, `REBASE`.
+
+If a `merge_queue` rule applies, the queue owns the method: its `merge_method` must be in the method set, or the
+landing stops (5.7.5). Read 2 returns one rule per ruleset, so two active rulesets can each carry a `merge_queue`
+rule; if their `merge_method`s differ, the landing stops. Otherwise the coordinator picks from the set in a fixed
+order (§11, item 7): `squash`, then `merge`. `rebase` alone is a stop (§11, item 8).
+
+#### 5.7.3 The required check set and the other gates
+
+The required set is a union: every `required_status_checks` rule's `parameters.required_status_checks` from read 2
+(each a `context` and an optional `integration_id`), plus read 3's (or read 3b's) `required_status_checks.checks`
+(each a `context` and an optional `app_id`; an `app_id` of null or -1 names no App) and its legacy `contexts`.
+Strictness is the same union: a ruleset's `strict_required_status_checks_policy` or classic `strict` makes the
+repository strict-protection, and clause 15's land-sync rule applies as it does today.
+
+Required checks are not the only rules that gate a merge on results. Read 2's rule types `workflows` (required
+workflow runs), `code_scanning`, `required_deployments` and `required_signatures`, and read 3's
+`required_signatures.enabled == true`, are the **other gates**. The coordinator does not verify them itself.
+GitHub enforces them at merge, but not against `--admin` from a login that may bypass them. So any of them rules
+out route U and the admin licence (5.7.4), and with no `--admin` GitHub's own refusal is the stop.
+
+The procedure understands these read-2 rule types and no others: `pull_request`, `merge_queue`,
+`required_status_checks`, `required_linear_history`, `workflows`, `code_scanning`, `required_deployments`,
+`required_signatures`, `non_fast_forward`, `deletion`, `creation`. Any other type is a stop, never read as absent.
+
+Each required name is in one of four states, read from read 5, never from gh's exit code alone:
+
+| State | Read 5 shows, on the exact head |
+|---|---|
+| **passing** | a check run of that name with `status` `completed` and `conclusion` `success`, `neutral` or `skipped` (GitHub's own passing set for a required check), and, where the rule names an App (`integration_id` in a ruleset, `app_id` in classic protection), `app.id` equal to it; or, for a name no App is named for, a status of that context with `state` `success` |
+| **red** | a completed check run with any other conclusion (`failure`, `cancelled`, `timed_out`, `action_required`, `stale`), or a status `failure` or `error` |
+| **pending** | a check run not yet `completed`, or a status `pending` |
+| **not reported** | no check run or status of that name (from the named App, where one is named) |
+
+A required name pinned to an App that read 5 shows only as a commit status cannot be verified, because a status
+carries no App id. That is a stop.
+
+`gh pr checks <pr> --required` is still read, but it judges only checks that have reported, and its exit 1 means
+both "a required check failed" and "no checks reported at all" (measured, 5.7.7). So exit 1 is a failure only when
+read 5 shows a required name red. A required name that is missing is not reported, whatever gh's exit code.
+
+What follows from each state:
+
+- **Pending or not reported:** wait in the foreground. The wait has an end: one `gh pr checks <pr> --required
+  --watch` call, again if that call times out while a reported required check is still pending (as today), then
+  one fresh read 5. A required name that read still shows as not reported has not reported within the bound, and
+  that is a stop. `--watch` returns at once when every reported required check is green, so the plan fixes one
+  bounded foreground spelling for a required name that has not reported at all, and states its bound.
+- **Red, and the PR's own:** the existing fix-round rule (`wave-lifecycle.md` §5): a fix round to the owning
+  worker on `merging → working`, after the disarm on route Q. This is not a stop.
+- **Red, and not the PR's own:** the existing one `gh run rerun <run id> --failed` and the same wait, where the
+  check is a GitHub Actions run. A red check a rerun cannot reach (one posted by another App), or one still red
+  after the rerun, is a stop.
+
+The discovered set gates every route. On route Q it gates the enqueue too: every discovered required name passes on
+the head before `gh pr merge`, not only `--required` exiting 0, so a queue-route PR missing a required App check is
+never enqueued (gh would arm auto-merge instead). On route U the set is empty and nothing waits.
+
+#### 5.7.4 The three routes
+
+| Route | When | Spelling | Method flag | `--admin` |
+|---|---|---|---|---|
+| **Q — native queue** | a `merge_queue` rule applies to the base, with one queue method | `gh pr merge <pr> --match-head-commit <handoffCommit>`, after every discovered required check passes on the head (5.7.3) and `--required` exits 0, then the read-back and the disarm rule (§5.2, `wave-lifecycle.md` §5) | none: the queue's method applies | never |
+| **G — gated direct merge** | no queue rule; the required set is not empty, or another gate applies (5.7.3) | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, after every required check passes on the head, with `<method>` from 5.7.2; on a merge-commits-only repository, exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>` | exactly one, from the method set | only under the approval licence below; never as a fallback (§11, item 10) |
+| **U — ungated direct merge** | no queue rule; the required set is empty; no other gate applies; and every source was read, or read 3b stood in for read 3 | `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>` | exactly one, from the method set | only under the approval licence below; never under read 3b; never as a fallback (§11, item 10) |
+
+**The approval licence.** `--admin` is licensed on a direct route only when all three of these hold, each read
+fresh for this landing:
+
+1. **An approval the fleet cannot give is required, and missing.** Read 2's `pull_request` rule has
+   `required_approving_review_count` above 0, or read 3's `required_pull_request_reviews.required_approving_review_count`
+   is above 0, and read 1's `reviewDecision` is not `APPROVED`.
+2. **Every required check has passed on the head** (5.7.3).
+3. **`--admin` cannot skip a gate.** No other gate applies (5.7.3). Where read 3 carries required checks, its
+   `enforce_admins.enabled` is true, so an admin cannot pass over them. Every ruleset in read 2 that carries a
+   `required_status_checks` rule answers read 6 with `current_user_can_bypass: never`. Any other answer, or an
+   unreadable read 6, counts as able to bypass.
+
+If (1) holds and (2) or (3) does not, the landing stops. Without (1), `--admin` is never passed. An approval kept
+in classic protection with `enforce_admins` true binds an admin too, so `--admin` does not help there, and GitHub's
+refusal is the stop.
+
+This is today's licence, stated precisely. Today's sentence, "(plus `--admin` where the repository's ruleset
+requires it)", applies to every direct landing and names no gate. Read literally, it would also pass `--admin` over
+a required check an admin may skip, and the licence above withdraws that reading. It keeps every landing that works
+today: this repository's pre-queue configuration (5.7.7), which a queue rollback restores, goes to route G and
+lands under the licence. It is also not the "admin fallback" the agreed scope rules out. A fallback is `--admin`
+after a refusal. The licence is decided before the merge, from reads, and a refused merge is never retried with it.
+
+On every route the merge is proven the same way it is today: MERGED, with `headRefOid` equal to `handoffCommit`.
+A refused merge on route G or U is read, reported and stopped on. It is never retried with another method, with
+`--admin` or with `--auto`.
+
+```mermaid
+flowchart TD
+  A[Landing a reviewed PR at handoffCommit] --> B[Read 1-5: base and head, rules, classic protection, settings, the head's checks]
+  B -->|any source unreadable, an unknown rule type, head not handoffCommit, or the PR closed| S[STOP: tell the operator]
+  B -->|PR already MERGED| P
+  B --> C{merge_queue rule on the base?}
+  C -->|yes| D{one queue method, in the method set, auto-merge allowed?}
+  D -->|no| S
+  D -->|yes| Q[Route Q: every required check passes on the head, --required, enqueue with no method flag, read back, disarm what only armed]
+  C -->|no| E{method set empty, or rebase only?}
+  E -->|yes| S
+  E -->|no| F{required set empty and no other gate?}
+  F -->|no| G[Route G: every required check passes on the head, then --method --match-head-commit; --admin only under the approval licence]
+  F -->|yes| U[Route U: --method --match-head-commit; --admin only under the approval licence]
+  G --> P[Prove MERGED at handoffCommit, then close]
+  U --> P
+  Q --> W[Wait at merging for merged: or dequeued:]
+```
+
+*Figure 1. The landing route chosen from the repository's own rules. Every arrow into STOP goes to the operator,
+never to another route. A required check that is red and the PR's own goes to the fix-round rule on routes Q and G,
+not to STOP.*
+
+#### 5.7.5 Stops
+
+A stop leaves the run where it is (at `merging` or `awaiting-review`), enqueues nothing, merges nothing and
+changes nothing. The coordinator says in its turn's text which stop fired and what it read, for the operator.
+
+| Stop | Reading |
+|---|---|
+| A source is unreadable | read 1, 2, 4 or 5 is not a 200; read 3 is anything but a 200, the `Branch not protected` 404, or a 401/403 that read 3b answered with a 200 |
+| Read 3b leaves the route unknowable | read 3b stands in for read 3, and the head is behind the base, or the method is `merge` (5.7.1) |
+| The PR is not at the reviewed head | read 1's `headRefOid` is not `handoffCommit`, or its `state` is `CLOSED`. A `state` of `MERGED` is not a stop: it goes to the existing merge proof (MERGED with `headRefOid` equal to `handoffCommit`) |
+| An unknown rule type | read 2 carries a rule type 5.7.3 does not list |
+| The method set is empty | settings, every `pull_request` rule and linear history leave no method |
+| Rebase is the only method | a stop (§11, item 8) |
+| The queue's method is not allowed | the `merge_queue` rule's `merge_method` is not in the method set |
+| Two queue methods | more than one `merge_queue` rule applies, with differing `merge_method`s |
+| Auto-merge is off under a queue rule | a `merge_queue` rule applies and `allow_auto_merge` is false. A PRECAUTION, not measured: gh 2.45 reaches a required queue through the auto-merge mutation (read statically from the binary, not run), so the enqueue may be refused, but no enqueue has been tried with auto-merge off, since every recorded enqueue ran with it allowed. It holds until measured on a scratch repository. The wave 2 plan's Task 7 runbook, stop rule 4 (`docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md`), was conditional for the same reason |
+| A required check cannot be verified | a required name pinned to an App shows on the head only as a commit status |
+| A required check has not reported within the bound | the wait of 5.7.3 has ended, and a fresh read 5 still shows a required name as not reported |
+| A red required check nothing here can reach | a required check red on the head that is not the PR's own and is not a GitHub Actions run, or one still red after the one rerun |
+| The approval licence fails | an approval the fleet cannot give is required and missing, and a required check has not passed or `--admin` could skip a gate (5.7.4), an unreadable read 6 included |
+| GitHub refuses the merge | any rule GitHub enforces at merge (reviews, signatures, deployments, code scanning, required workflows) and the coordinator does not. With `--admin` passed only under the licence, the coordinator never works around a refusal |
+
+Not a stop: a required check red on the head that is the PR's own. That goes to the existing fix-round rule
+(`wave-lifecycle.md` §5), on route G exactly as on route Q today.
+
+#### 5.7.6 What does not change
+
+- Route Q is §5.2's route with two differences. The queue test reads `<base>` from read 1 instead of the literal
+  `main` (§11, item 15). The discovered required set gates the enqueue as well as `gh pr checks <pr> --required` (5.7.3).
+  Everything else stays word for word: no `--squash`, no `--admin`, read the entry back, disarm a request that only
+  armed.
+- Every `gh pr merge` spelling binds `--match-head-commit <handoffCommit>`.
+- `update-branch` stays named once, in clause 15, to forbid it.
+- No repository name appears in the skill. The route comes from what the repository answers, never from a list.
+- No new merge endpoint, no ccd verb, no gh exec-whitelist grant (`EXEC_COMMANDS` stays `['tmux','ccd']`).
+- No setting is written. Clause 15's list of what the coordinator never writes gains the merge-method settings.
+- The admin licence is today's, stated precisely (5.7.4): on a direct route only, for a missing approval only,
+  never past a required check or another gate an admin could skip, never as a fallback. The literal reading of
+  today's sentence, which would pass `--admin` over a required check an admin may skip, is withdrawn. The operator kept
+  it on both direct routes (§11, item 10). Wave 2b's fleet-wide `--admin` deny retires it when it ships, and this
+  amendment does not retire it in advance.
+
+#### 5.7.7 Measured on this repository, 2026-10-21, 16:03Z to 16:19Z
+
+| Read | Answer |
+|---|---|
+| `repos/{owner}/{repo}` | `allow_squash_merge: true`, `allow_merge_commit: false`, `allow_rebase_merge: false`, `allow_auto_merge: true`, `allow_update_branch: false`; the login holds the admin role |
+| `rules/branches/main` | two rules from one repository ruleset: `pull_request` with `allowed_merge_methods: ["merge","squash","rebase"]` and `required_approving_review_count: 0`; `merge_queue` with `merge_method: "SQUASH"`, group size 1, build concurrency 1. No `required_status_checks` rule, and no other gate |
+| `rulesets/<that ruleset>` | `current_user_can_bypass: pull_requests_only`; one bypass actor, the repository admin role, in pull-request mode |
+| `branches/main/protection` | 200: classic `required_status_checks` requires `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, each at one App id, `strict: false`; `enforce_admins.enabled: true`; `required_pull_request_reviews.required_approving_review_count: 0`; `required_linear_history: {"enabled": false}`, present although linear history is not required; `required_signatures.enabled: false` |
+| `branches/main`, unauthenticated | 200: `protection.required_status_checks` lists the same four contexts at the same App id; no strictness, linear history or `enforce_admins` |
+| `branches/stable/protection` | 404, `Branch not protected` (its ruleset carries `non_fast_forward` and `deletion` only); gh exits 1 |
+| `branches/<no such branch>/protection` | 404, `Branch not found`; gh exits 1. The same status as "not protected", a different meaning |
+| `rules/branches/<no such branch>` | 200, `[]`, because the ruleset targets `main` alone |
+| `branches/main/protection`, unauthenticated | 401, `Requires authentication` (the rules read answered 200 unauthenticated) |
+| `commits/<a PR head>/check-runs` | each run carries `name`, `app.id`, `status` and `conclusion`; `skipped` occurs among the conclusions |
+| `commits/<a PR head>/status`, on a head with no statuses | `state: "pending"` with an empty `statuses` array |
+| `gh pr checks <pr> --required`, on a public repository whose PR has no checks | prints "no checks reported on the '<branch>' branch" and exits 1, the same code as a failed check |
+| `gh pr merge --help` (2.45.0) | `--merge`, `--squash`, `--rebase`, `--match-head-commit`, `--auto`, `--admin`; "When targeting a branch that requires a merge queue, no merge strategy is required"; `--admin` "Use administrator privileges to merge a pull request that does not meet requirements" |
+
+So on this repository the effective set is `{squash}`, the queue's `SQUASH` is in it, and auto-merge is allowed:
+route Q, as today, with the four classic checks now gating the enqueue as the discovered set. The required checks
+live only in classic protection, so a coordinator that read the rules alone would see an empty required set here.
+A 403 was not produced read-only. GitHub documents it for a token that may not read administration settings, and
+the table sends it to read 3b.
+
+The configuration this repository had before its queue, recorded read-only in the wave 2 plan (a ruleset
+`pull_request` rule requiring one approval, the same four classic checks, `enforce_admins: true`, classic approvals
+0, auto-merge off), is also what a queue rollback restores. Under this amendment it goes to route G, and it lands
+under the approval licence: the approval is in a ruleset the login can bypass, the classic checks bind an admin, and
+that ruleset holds no required-checks rule.
+
+#### 5.7.8 The checks word (§11, item 11)
+
+The server makes one checks word per PR from every entry in the rollup, required or not
+(`server/src/prstate.ts` `checksFor`). A write-free observation on 2026-10-21 measured what that does:
+
+- A non-required red makes the word `fail`. The PR keycap shows red and the sheet says "Checks failing", with all
+  required checks green (measured on #1068: `gh pr checks --required` exit 0, GitHub's `mergeStateStatus`
+  `UNSTABLE`). `ACTION_REQUIRED` is in the same failed set, so an App that reports "waiting" that way reads red too.
+- A pending commit status makes the word `pending`, and any open PR reading `pending` moves the whole PR sweep
+  from 120 s to 30 s (`watch.ts`, `PR_SWEEP_ACTIVE_MS`).
+- gh writes a queued or running check run with `conclusion: ""`. `stateOf` keeps the empty string, because `??`
+  skips only null and undefined, so a running check run, required or not, reads `pass` (measured on #1010).
+- No gate reads the word. Close, advance, reclaim, dispatch, the landing lane and the stall watch read phase and
+  number only, and the skill's landing reads `--required` and, under this amendment, read 5.
+
+The operator ruled a separate small server wave for the running-check fix (§11, item 11); the
+required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
+
 ## 6. Surfaces touched
 
 | Area | Change |
@@ -441,7 +707,7 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`) and any workspace carrying the child marker, and on `--admin` and `gh api` merge calls (REST and GraphQL) for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
 | `server/src/remote/runner.ts`, `server/src/coord/{childSpent,routes,close}.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts; the four comments that stated 20 s (two in `childSpent.ts`, `routes.ts`'s rule-3 gate, `childGateAtClose`'s) say 25 s |
-| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `server/src/coord/store.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the landing lane: the dequeue feed event and mail, and the merged notice, with two durable "already told" reads (`hasMailWithSubject`, `hasFeedEvent`); the `operator` sender's gloss; `NotifyEvent` kind `queue` |
+| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `server/src/coord/store.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the landing lane: the dequeue feed event and mail, and the merged notice, with two durable "already told" reads (`hasMailWithSubject`, `hasNotice`); the merged lane's `merged` feed record kept once per workspace and PR across a restart while its row is archived (`hasNotice`, wave 3d); the `operator` sender's gloss; `NotifyEvent` kind `queue` |
 | `deploy/measure-landing.py` (new, read-only) | §10's instrument |
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
@@ -452,6 +718,7 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | `pwa/src` | predicted-conflict chip; the line on the project card; pause and withdraw |
 | `.github/workflows/ci.yml`, `.github/ci/select.mjs`, `.github/ci/verdict.mjs` | `merge_group`: its mode row and the pull-request arm (a queue run runs the selected tests), the pipeline check on a queue run, the macOS and `full-suite` skip, a run-unique concurrency arm |
 | `CLAUDE.md` | coord.db invariant (central landing state), box-token bullet, ccd-verb rule wording |
+| `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md`, `server/test/coordinator-skill.test.ts` | the landing route from the repository's own rules (§5.7): clause 15's route sentence, the route paragraph, the method-chosen direct spelling, the approval licence, and their pins |
 
 (Stage 2's rows amended 2026-09-29, when its wave was re-planned on `main` `6da36f0b`.)
 
@@ -556,6 +823,25 @@ Decided on stage 2's re-planned wave, 2026-09-29 (each as the re-plan proposed):
 6. **An enqueue refused because auto-merge is disabled halts the proof run** (stop rule 4), and the operator
    decides then; no stage-2 task changes `allow_auto_merge`.
 
+Decided on the draft of §5.7, 2026-10-21 (each as the draft recommended):
+
+7. **Method order.** When more than one method is allowed and no queue rule picks one, the coordinator uses
+   squash, then merge (§5.7.2).
+8. **A rebase-only repository** stops the landing (§5.7.2).
+9. **Classic protection that cannot be read.** On a 401 or 403 the check set comes from the branch's public
+   protection view (read 3b). Strictness, linear history and `enforce_admins` are then unknown: a route that
+   needs them stops, and `--admin` is never used. Every other unreadable answer stops (§5.7.1).
+10. **The approval licence stays on both direct routes**, stated narrowly (§5.7.4), until wave 2b's deny
+    retires it.
+11. **The server's checks word.** A separate small server wave makes a running check run read `pending`, with
+    the cost of the 30 s sweep cadence measured in its plan. The required/advisory split waits until a
+    non-required App check is live here and the operator rules how an advisory red should look (§5.7.8).
+12. **Sequencing.** The skill wave is planned after wave 3d merges and before wave 2b.
+13. **Placement.** The amendment is a new §5.7, so §5.2's text stays as wave 3d leaves it.
+14. **Rollout.** `ccrc rollout --to` the prerelease that carries the merge, then the installed skill text is
+    verified in every home.
+15. **The branch read.** The reads ask about the PR's own base branch, not the literal `main`.
+
 ## 12. Failure modes named
 
 - A composition tested green at base B lands after main moved to B′: the native queue re-tests; on a plain merge
@@ -573,6 +859,18 @@ Decided on stage 2's re-planned wave, 2026-09-29 (each as the re-plan proposed):
   shed the hold would reclaim its own pane (stage 2; added 2026-09-29).
 - A session hand-edits `$REG` or the box token is used by a worker to reorder: recorded with `setBy` and a feed
   event; identity is attribution, and this spec does not claim otherwise.
+- A repository whose rules allow merge commits only: route G lands with `--merge` at the reviewed head, never a
+  squash or admin fallback (§5.7; added 2026-10-21).
+- A required check kept only in classic protection, or only in a ruleset: the required set is their union
+  (§5.7.3).
+- A protection read the login may not make: read 3b gives the check set, and what it cannot show is a stop
+  (§5.7.1).
+- A required App check that has not reported: pending, then a stop after the bound, never passing (§5.7.3).
+- A required App check visible only as a commit status: a stop (§5.7.3).
+- A merge gated by a `workflows`, `code_scanning`, `required_deployments` or `required_signatures` rule: route G,
+  with no `--admin` (§5.7.3, §5.7.4).
+- A rule type the procedure does not know: a stop (§5.7.3).
+- An `--admin` that could skip a required check: the approval licence fails, and the landing stops (§5.7.4).
 
 ## 13. Out of scope, named
 

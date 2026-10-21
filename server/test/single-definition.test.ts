@@ -5289,6 +5289,8 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
     'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W5h-2 Task 3 (D-5747): the operator relay's look-behind window, declared once in lib.mjs.
+    'RELAY_LOOKBEHIND_BYTES',
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
@@ -7018,7 +7020,7 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const l = await lib();
     const code = codeLines(HOOK_SH);
     expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
-    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // The delegation spool's jq definitions (#448) spell its own 512-byte path bound, `def maxpath: 512;`, a different
     // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
     expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
     const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
@@ -8256,6 +8258,33 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+});
+
+// Named workspaces review fixes: vocabularies the PWA and the server both read are declared ONCE in `shared/` and the
+// other side imports them. Each was spelled twice before (the rename words' `BAD_TITLE_REASONS`; the Linear failure
+// arms as the server's `LINEAR_FAILURES` beside the PWA's `LOOKUP_NOTE` keys, and the preview's wire type as a loose
+// interface), which is how an arm gets added on one side only.
+describe('the named-workspace vocabularies have one home each', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('LINEAR_FAILURES').test("export const LINEAR_FAILURES = [")).toBe(true);
+    expect(decl('LINEAR_FAILURES').test("import { LINEAR_FAILURES } from '../../../shared/linear';")).toBe(false);
+  });
+  it('the Linear failure arms and the preview answer are declared once, in shared/linear.ts', () => {
+    for (const c of ['LINEAR_FAILURES', 'LinearFailure', 'ResolveAnswer']) expect(holders(decl(c)), c).toEqual(['shared/linear.ts']);
+  });
+  it('the bad-title reasons are declared once, in shared/refusal.ts, and no source spells the three words as a list', () => {
+    for (const c of ['BAD_TITLE_REASONS', 'BadTitleReason']) expect(holders(decl(c)), c).toEqual(['shared/refusal.ts']);
+    expect(holders(/'blank'\s*,\s*'control-characters'\s*,\s*'too-long'/)).toEqual(['shared/refusal.ts']);
+  });
+  it('the workspace id `${project}-${slug}` is spelled once, by workspaceId in shared/slug.ts', () => {
+    const spelled = /`[^`]*\$\{\s*(?:ctx\.)?project\s*\}-\$\{\s*(?:ctx\.|preview\.|plan\.ask\.)?slug\s*\}/;
+    expect(spelled.test('`${project}-${slug}`'), 'CONTROL: the pattern sees the spelling').toBe(true);
+    expect(spelled.test('`new workspace ${project}-${preview.slug} · branch`'), 'CONTROL: and the preview line').toBe(true);
+    expect(holders(spelled).filter((f) => f !== 'shared/slug.ts')).toEqual([]);
+    expect(holders(/\bexport const workspaceId\b/)).toEqual(['shared/slug.ts']);
   });
 });
 

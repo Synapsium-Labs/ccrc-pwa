@@ -5,7 +5,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -75,7 +75,13 @@ describe('the index and the section routes', () => {
       appearance: () => screen.findByRole('group', { name: 'Theme' }),
       notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
       automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
-      security: () => screen.findByRole('heading', { level: 3, name: 'Sign-in gate' }),
+      // Three cards load on this page, and exactly three: the sign-in gate's skeleton, the box token's and the Linear
+      // card's. A fourth (a card drawn twice, or a skeleton left behind) is a defect, so the count is asserted and
+      // not merely "some".
+      security: () => waitFor(() => {
+        expect(screen.getByRole('heading', { level: 3, name: 'Sign-in gate' })).toBeInTheDocument();
+        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(3);
+      }),
     };
     for (const s of SETTINGS_SECTIONS) {
       renderSettings(s.id);
@@ -218,16 +224,16 @@ describe('the provider: reads made once (spec §4.4)', () => {
     const files = readdirSync(dir).filter((f) => /\.tsx?$/.test(f));
     expect(files).toContain('SettingsDataProvider.tsx');
     expect(files.length).toBeGreaterThanOrEqual(9);
-    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
+    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useLinearConnection', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
     /** The value names a file imports (a `type` import reads nothing). */
     const imported = (text: string): string[] => [...text.matchAll(/^import \{([^}]*)\} from '[^']+';/gm)]
       .flatMap((m) => m[1]!.split(',').map((n) => n.trim()).filter((n) => n !== '' && !n.startsWith('type ')))
       .map((n) => n.split(' as ')[0]!.trim());
     const importers = files.filter((f) => imported(readFileSync(path.join(dir, f), 'utf8')).some((n) => READS.has(n)));
     expect(importers).toEqual(['SettingsDataProvider.tsx']);
-    // And the two cards outside the directory take the frame's poll rather than reading their own.
-    for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx')]) {
-      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatch|CollectLane)View\(/);
+    // And the three cards outside the directory take the frame's poll rather than reading their own.
+    for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx')]) {
+      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearConnection)\(/);
     }
   });
 });
@@ -281,7 +287,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
     automation: ['Stall watch', 'Temp root collector', 'Cleanup pause'],
-    security: ['Sign-in gate', 'Box token'],
+    security: ['Sign-in gate', 'Box token', 'Linear'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 

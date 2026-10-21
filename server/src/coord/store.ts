@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
@@ -42,7 +42,9 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 import {
   assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationRowCodec, type DelegationSqlValue,
+  prepareDelegationProjectionChanges,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
@@ -8930,9 +8932,11 @@ export class CoordStore {
 
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
   // The six `delegation_*` tables (MIGRATIONS entry 22) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
-  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these five methods (the projection, the event
-  // insert and its batch, the event stats and the read-back) only make SQLite say
-  // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
+  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these six methods (the full projection, the delta
+  // projection, the event insert and its batch, the event stats and the read-back) only make SQLite say
+  // what they say. The delta projection is the one per-row updater, and it never reaches a lease row: the full projection stays the
+  // parity reference it falls back to and the repair that heals what the delta's checks cannot see. `CoordStore` stays synchronous
+  // and holds no health and no coordinator intent as an authority: the
   // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
   // map before they reach this method.
   //
@@ -9018,6 +9022,64 @@ export class CoordStore {
       run(delegationInsertSql(delegationLeaseCodec), delegationLeaseCodec, leases);
       run(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, lineage);
     });
+  }
+
+  /**
+   * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
+   * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
+   * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
+   *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
+   *      parent that is new in this same delta;
+   *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
+   *      value (`IS ?`, so a NULL matches), so a row somebody edited since `prior` was projected changes nothing and the call
+   *      refuses; each must change exactly one row;
+   *   3. `SELECT COUNT(*)` on each of the five tables, each held to `next`'s length, on EVERY delta, a zero-row one included, so a
+   *      row that went missing or turned up out of band is found at once.
+   * A miss at 2 or 3 throws `projection-delta-mismatch` naming the table and the key or the two counts, the transaction rolls back,
+   * and the caller repairs with the full projection. Any other change runs `projectDelegationCheckpoint(next)` and answers
+   * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
+   *
+   * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
+   * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
+   * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
+   * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
+   */
+  projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
+    const diff = prepareDelegationProjectionChanges(prior, next);
+    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
+    const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
+    if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
+    tx(this.db, () => {
+      // Each statement is prepared at most once per call, the first time its table needs it (as the full path prepares once per table).
+      const prepared = new Map<string, StatementSync>();
+      const prep = (key: string, sql: () => string): StatementSync => { let st = prepared.get(key); if (st === undefined) { st = this.db.prepare(sql()); prepared.set(key, st); } return st; };
+      const swap = <Row, Col extends string>(head: string, codec: DelegationRowCodec<Row, Col>, insertSql: () => string) => ({
+        update: (u: DelegationProjectionUpdate): void => {
+          const written = codec.columns.filter((c) => !u.keyColumns.includes(c));
+          const res = prep(head, () => `${head} SET ${written.map((c) => `${c} = ?`).join(', ')} WHERE ${codec.columns.map((c) => `${c} IS ?`).join(' AND ')}`)
+            .run(...written.map((c) => u.next[c] as DelegationSqlValue), ...codec.columns.map((c) => u.prior[c] as DelegationSqlValue));
+          if (Number(res.changes) !== 1) throw new DelegationModelError('projection-delta-mismatch',
+            `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
+        },
+        insert: (i: DelegationProjectionInsert): void => { prep(i.table, insertSql).run(...codec.columns.map((c) => i.values[c] as DelegationSqlValue)); },
+      });
+      const at = (table: string) => {
+        switch (table) {
+          case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
+          case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
+          case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
+          default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
+        }
+      };
+      for (const i of diff.inserts) at(i.table).insert(i);
+      for (const u of diff.updates) at(u.table).update(u);
+      for (const c of diff.counts) {
+        const held = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${c.table}`).get() as { n: number | bigint }).n);
+        if (held !== c.count) throw new DelegationModelError('projection-delta-mismatch', `${c.table} holds ${String(held)} rows after the delta, expected ${String(c.count)}`);
+      }
+    });
+    return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };
   }
 
   /**

@@ -25,10 +25,14 @@ import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accoun
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
+import { ACCOUNTS_DOOR_LABEL, CompactGauges, type CompactArrangement } from './CompactGauges';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
 
-export function AccountsStrip(): ReactNode {
+/** The compact gauges (W2 Task S2c; D-5471, D-5472) live in CompactGauges.tsx; this strip only hands them its lanes. */
+export type { CompactArrangement } from './CompactGauges';
+
+export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}): ReactNode {
   const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
   // Same poll, same response — `roster` is read alongside `accounts` rather
   // than through the fleet store, since this component already runs its own
@@ -106,12 +110,14 @@ export function AccountsStrip(): ReactNode {
     openAccounts();
   };
 
+  if (compact !== undefined) return <CompactGauges compact={compact} lanes={live} roster={roster} placeholder={placeholder} />;
+
   return (
     <div
       className="accounts-strip"
       role="link"
       tabIndex={0}
-      aria-label="account usage — open accounts"
+      aria-label={ACCOUNTS_DOOR_LABEL}
       onClick={openAccounts}
       onKeyDown={onKeyDown}
     >

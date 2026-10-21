@@ -1,0 +1,12 @@
+{
+  "exemptions": [
+    {
+      "pr": 1099,
+      "file": "ccd/ccrc",
+      "cap": 480,
+      "reason": "model-class auto-advance W2: the hourly advance step is bash in ccd/ccrc's refresh arm, beside W1's lane-files lock, about 450 net code lines against the merge-base",
+      "ruling": "the operator, 2026-10-21: exempt #1099 for ccd/ccrc up to a cap of 480 (the measured 450 plus room for one merge of main)",
+      "since": "2026-10-21"
+    }
+  ]
+}

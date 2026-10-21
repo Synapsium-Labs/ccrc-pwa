@@ -53,7 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
-import type { CollectToken } from '../../shared/api.js';
+import { ACCOUNT_DENY_RULES, type CollectToken } from '../../shared/api.js';
 import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -166,7 +166,14 @@ const PROBES: Record<string, Probe> = {
   },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
-    setup: () => { h.makeRepo(PROJECT); },
+    // The account deny file is seeded as an installed box has it (D-6202): without it the spawn warns once per
+    // call naming the row, and the two arms' rows have different generated names.
+    setup: () => {
+      h.makeRepo(PROJECT);
+      fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'account-deny.settings.json'),
+        `${JSON.stringify({ permissions: { deny: [...ACCOUNT_DENY_RULES] } })}\n`);
+    },
     // `ws-add`'s exposure IS its positionals, so "it really got there" means
     // the control got PAST the slug binding: exactly one registry row, named
     // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit

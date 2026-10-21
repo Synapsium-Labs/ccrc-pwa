@@ -65,6 +65,24 @@ const makeStore = (): FleetStore => createFleetStore({
     close(): void {} }) as unknown as WebSocket,
 });
 
+// D-6170 keeps D-5589's id rule: the row is named in words, and the run number
+// lives only in the controls' accessible names and the row's title.
+it("the run number survives in Abandon's and Resume's accessible names and the row's title", () => {
+  const store = makeStore();
+  act(() => {
+    store.setState({
+      runs: [run()], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
+      sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
+    });
+  });
+  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Resume run 3' })).toBeInTheDocument();
+  const row = container.querySelector<HTMLElement>('li.run-row')!;
+  expect(row.title).toMatch(/\brun 3\b/);
+  expect(row.title).toContain('clear-cove');
+});
+
 // Review fix round 1, Important 1: `AbandonSheet` is mounted UNCONDITIONALLY
 // at screen level (`RunsScreen.tsx`, no `key`), so the only way to exercise
 // "Cancel run 3, then open run 7" or "run 3's request resolves after run 7's
@@ -451,7 +469,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     // No session to open — .run-open is absent — but the release valve
     // (an ambiguous-dispatch wedge is exactly a `planned` run with no
     // session) is still there.
-    expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toBeNull();
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
   });
 });

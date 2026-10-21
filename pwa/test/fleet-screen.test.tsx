@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { api } from '../src/lib/api';
+import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
@@ -677,8 +677,8 @@ describe('FleetScreen', () => {
     it('refreshes after a successful workspace add, but not after a failed one', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const add = vi.spyOn(api, 'workspaceAdd')
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('refused'));
+        .mockResolvedValueOnce({ named: false })
+        .mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'refused' }));
       const store = makeStore();
       renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
       seed(store, {
@@ -689,10 +689,14 @@ describe('FleetScreen', () => {
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
 
       fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
       await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      // A success closes the sheet.
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Add workspace' })).not.toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
       await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.getByText(/refused/)).toBeInTheDocument());
       expect(projects).toHaveBeenCalledTimes(2);
@@ -1435,6 +1439,7 @@ describe('FleetScreen', () => {
     const calls: string[] = [];
     vi.spyOn(api, 'workspaceAdd').mockImplementation(async (p: string) => {
       calls.push(p);
+      return { named: false };
     });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
@@ -1447,11 +1452,14 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    // Tapping + asks; it creates nothing until the sheet's own confirm (named workspaces S7).
+    expect(calls).toEqual([]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(calls).toEqual(['alpha']));
   });
 
-  it('surfaces a failure as a toast rather than a silent no-op', async () => {
-    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new Error('no origin/HEAD'));
+  it('surfaces a failure in the sheet, which stays open, rather than a silent no-op', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(502, { ok: false, stderr: 'no origin/HEAD' }));
     const store = makeStore();
     renderFleet(
       <>
@@ -1468,7 +1476,9 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
-    await waitFor(() => expect(screen.getByText(/no origin\/HEAD/)).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/no origin\/HEAD/));
+    expect(screen.getByRole('button', { name: 'Add workspace' })).toBeInTheDocument();
   });
 
   it('offers a + on a project holding a single session', () => {
@@ -1488,7 +1498,7 @@ describe('FleetScreen', () => {
     // longer the only thing standing between a double-tap and two worktrees.
     let release!: () => void;
     const add = vi.spyOn(api, 'workspaceAdd').mockImplementation(
-      () => new Promise<void>((resolve) => { release = resolve; }),
+      () => new Promise((resolve) => { release = () => resolve({ named: false }); }),
     );
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
@@ -1500,7 +1510,10 @@ describe('FleetScreen', () => {
     const alpha = screen.getByRole('button', { name: /New workspace on alpha/i });
     const beta = screen.getByRole('button', { name: /New workspace on beta/i });
     fireEvent.click(alpha);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(alpha).toBeDisabled());
+    // The sheet's own confirm stands down too: a second tap there cannot send a second request.
+    expect(screen.getByRole('button', { name: 'Adding…' })).toBeDisabled();
 
     // A second tap on the same project is refused…
     fireEvent.click(alpha);
@@ -1515,7 +1528,7 @@ describe('FleetScreen', () => {
   it('re-enables the + after a FAILED ws-add, so a refusal is not a dead button', async () => {
     let reject!: (e: Error) => void;
     vi.spyOn(api, 'workspaceAdd').mockImplementation(
-      () => new Promise<void>((_resolve, r) => { reject = r; }),
+      () => new Promise((_resolve, r) => { reject = r; }),
     );
     const store = makeStore();
     renderFleet(
@@ -1528,9 +1541,12 @@ describe('FleetScreen', () => {
 
     const plus = screen.getByRole('button', { name: /New workspace on alpha/i });
     fireEvent.click(plus);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() => expect(plus).toBeDisabled());
     await act(async () => { reject(new Error('no origin/HEAD')); });
     await waitFor(() => expect(plus).not.toBeDisabled());
+    // The confirm is armed again, with the sentence for a request that never answered.
+    expect(await screen.findByRole('button', { name: 'Add workspace' })).toBeEnabled();
   });
 
   it("surfaces ccd's stderr from a real 502, not a generic request-failed message", async () => {
@@ -1554,6 +1570,7 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add workspace' }));
     await waitFor(() =>
       expect(screen.getByText(/origin\/HEAD — run: git -C \/repo remote set-head/))
         .toBeInTheDocument());
@@ -3024,6 +3041,10 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     renderFleet(<FleetScreen store={makeStore()} />);
     const ackButton = await screen.findByRole('button', { name: 'Ack fleet' });
     expect(document.querySelector('.halt-banner-node-text')?.textContent).toBe('fleet: failed (last tried v0.0.84) — gate: unit not up');
+    // Three banners apply (the skew, the halt and the release line), so the stack (W2 Task S2c) shows the first two
+    // in rank order and folds the release line behind "+1 more"; open it to reach Update all.
+    expect(screen.queryByRole('button', { name: 'Update all' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '1 more banner' }));
     expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
     await waitFor(() => expect(screen.getByText(/run different builds/i)).toHaveTextContent('Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.'));
     expect(document.body.textContent).not.toContain('ccrc rollout');

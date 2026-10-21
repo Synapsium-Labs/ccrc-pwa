@@ -925,12 +925,20 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     w.stop();
 
     const coordless = vi.fn(async (_payload: PushPayload) => {});
+    // Landing-order wave 3d: the durable "already told" read is `?.` too. Without it the read would throw here and
+    // the lane's catch would still announce, so only the absence of its warning tells the two apart.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const w2 = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
       push: { notify: coordless } as never }, new Bus(), 10_000);
-    await w2.tick();
-    await vi.waitFor(() => expect(coordless).toHaveBeenCalledTimes(1));
-    expect(coordless.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');
-    w2.stop();
+    try {
+      await w2.tick();
+      await vi.waitFor(() => expect(coordless).toHaveBeenCalledTimes(1));
+      expect(coordless.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('merged notice read'))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      w2.stop();
+    }
   });
 
   it('addresses the push at the merged session and collapses on `merged-<id>#<pr>`', async () => {
@@ -938,11 +946,14 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     // passes no `actions[]`, so copy offering a choice would be a lie on the
     // lock screen — the body is a statement of fact and `sessionId` is the
     // only affordance, deep-linking to /s/<id>. The tag is the other half:
-    // `mergedNotified` is in-memory, so a restart may repeat this push, and
-    // the tag is what makes that repeat REPLACE the first rather than stack a
-    // second identical notification — and why the tag carries the PR NUMBER
-    // as well as the id: a workspace can land a second PR now, and an id-only
-    // key would let #43's announcement quietly overwrite #42's in the tray.
+    // since landing-order wave 3d a restart repeats this push only where the
+    // archive cannot stop it (a row pruned past `FEED_RETENTION`, a push the
+    // presence gate kept out of it, or a row archived before the key whose
+    // body changed since), and the tag is what makes that repeat
+    // REPLACE the first rather than stack a second identical notification —
+    // and why the tag carries the PR NUMBER as well as the id: a workspace can
+    // land a second PR now, and an id-only key would let #43's announcement
+    // quietly overwrite #42's in the tray.
     const home = seed(['demo-quiet-basin']);
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});

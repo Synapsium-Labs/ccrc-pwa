@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { isTmpRootId, type ChildMark } from '../../../shared/api.js';
+import { ACCOUNT_DENY_SUBS, isTmpRootId, type ChildMark } from '../../../shared/api.js';
 import { isUserVariable } from './bash-variables.js';
 import { APPROVAL_INPUT_MAX_BYTES } from './redact.js';
 
@@ -216,6 +216,13 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     { why: 'a registry path', re: /\/\.(?:cc-sessions|cc-limits|ccrc)(?![\w.-])/ },
     { why: 'reboot or shutdown', re: new RegExp(`${WB}(?:reboot|shutdown|poweroff|halt)(?=$|[\\s;&|)'"])`) },
     { why: 'ccrc update or rollback', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback)(?![\\w-])`) },
+    // D-6202 (spec §3.1): the account-management verbs are forbidden on every session's prompt, so no approval can
+    // rule them; the hook's `fmatch` holds the same three rows (`ACCTV` is its copy of `ACCOUNT_DENY_SUBS`). Never a swap verb (the operator's Q8 ruling).
+    ...ACCOUNT_DENY_SUBS.map((v) => ({
+      why: `ccrc account ${v}`, re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*account\\s+(?:-\\S+\\s+)*${reEsc(v)}(?![\\w-])`),
+    })),
+    { why: 'ccd account-pane', re: new RegExp(`${CCD_HEAD}account-pane(?![\\w-])`) },
+    { why: 'the ccd-account-auth helper', re: /(?:(?:^|[\s;&|()\x60'"=])|\/\.local\/bin\/)ccd-account-auth(?![\w.-])/ },
     { why: 'the approval surface', re: /(?:ccrc-api|\$\{?API\}?)['"]?\s+(?:-\S+\s+)*approvals(?![\w-])|\/api\/approvals(?![\w-])|approval-signing|approval-verify\.mjs/ },
     // D-5936: the workflow control verb is the operator's. Each segment tolerates one quote either side, as the row
     // above does, so a quote-split `".../workflows/$RUN"/control` still matches; no segment may hold a `/`, so the

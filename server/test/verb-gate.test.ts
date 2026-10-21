@@ -129,6 +129,8 @@ const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
  */
 const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   routeSet: ['x', { effort: 'x' }, null],
+  // `wsTitle`'s second parameter is a `WsTitleChange` object, not a string (named workspaces S9).
+  wsTitle: ['x', { title: 'x' }],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

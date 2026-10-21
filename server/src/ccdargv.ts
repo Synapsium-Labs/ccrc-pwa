@@ -4,6 +4,15 @@ import type { DocSectionSlug } from '../../shared/docs.js';
 
 declare const CcdArgvBrand: unique symbol;
 
+/** The verb that renames an existing workspace, spelled ONCE in `server/src`: `CCD_ARGV.wsTitle` builds its argv from
+ *  it and the route reads `ccd caps` for it (named workspaces S9). It is a VERB in the caps list, not the `ws-title-v1`
+ *  token (`WS_TITLE_CAP`), which only says that `ws-add` takes `--title` and is advertised before the verb exists. */
+export const WS_TITLE_VERB = 'ws-title';
+
+/** What a rename does to the title: set it to `title` (ccd also marks the workspace named), or clear it (both fields go,
+ *  which gives the workspace back to the ai-title sweep). Two shapes, never a `null` that means "clear". */
+export type WsTitleChange = { readonly title: string } | { readonly clear: true };
+
 /**
  * A ccd argv that provably came from `CCD_ARGV`. The brand is phantom — it
  * exists only in the type system — so this costs nothing at runtime, and an
@@ -398,6 +407,27 @@ export const CCD_ARGV = {
    *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
   wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
                argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
+  /** The operator's NAMED create (named workspaces S5, design 2026-10-20 §4.1-4.2): `ws-add` with a display `title`, the
+   *  operator's own `slug`, and, from the new-session sheet, the `wrapper` (account) they picked. A NEW KEY, never a
+   *  widened `wsAdd`: `whitelist-subset.test.ts`'s key equality fails on a new key and not on a widened optional, so
+   *  the grant's reach stays a decision somebody made.
+   *
+   *  `--title` AND `--wrapper` LEAD, before the project — `--no-rc` and `--route`'s own position — and the slug sits
+   *  right behind the project. An older ccd binds an unknown `--` token as a POSITIONAL (D-6164): leading, `--title`
+   *  lands in the project slot and is refused by `_ws_project_valid`; trailing, after `project slug`, it would be
+   *  dropped unread and the workspace created unnamed — and on the least-loaded lane when the dropped flag was
+   *  `--wrapper` — with exit 0. The caller ALSO gates each on its `ccd caps` token (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`),
+   *  and a `null` wrapper omits the pair entirely rather than send an empty token (ccd refuses a blank `--wrapper`).
+   *  `title` is never optional: ccd writes `named`, the sweep's exemption, ONLY when it is given.
+   *
+   *  `route` and `dec` ride as on `wsAdd` (a named create keeps the class route and the device actor, D-5301), the dec
+   *  trailing the slug, where `wsAddWorker` puts its own. `slug` is the operator's, ALREADY through `shared/slug.ts`'s
+   *  `deriveWorkspaceSlug`, so it starts with a letter or digit and can never be read as a flag; the caller never
+   *  passes an empty one (`['ws-add','demo','']` draws a random slug and exits 0). */
+  wsAddNamed: (p: string, slug: string, name: { title: string; wrapper: string | null },
+               route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+                 argv(['ws-add', '--title', name.title, ...(name.wrapper === null ? [] : ['--wrapper', name.wrapper]),
+                   ...routeFlags(route), p, slug, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after
@@ -559,6 +589,22 @@ export const CCD_ARGV = {
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
                argv(['ws-rename', '--session', id, '--branch', branch, ...decFlags(dec)]),
+  /** Rename an EXISTING workspace (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text> |
+   *  --clear)`, which writes a workspace's operator `title` and `named` marker, or removes both, and nothing else. A NEW
+   *  KEY: its own verb, its own two-token grant (`['ws-title','--session']`, enrolled in the agent's `REQUIRED_VERB_FLAG`).
+   *
+   *  `--session` LEADS and its value is the id, ALREADY a registry id (the route's `knownId`): ccd consumes the value
+   *  whole, so even a flag-shaped one could not be read as a flag, but the census still classifies this builder `'id'`.
+   *  The title is its OWN token after `--title`, verbatim: ccd takes the next word as the text, so a title that begins
+   *  with dashes is still a title, and it is never joined into one `--title=` word. The caller sends a title that is
+   *  non-blank, free of control characters and within `WS_TITLE_MAX_BYTES` (`planRetitle`'s sanitising), and ccd re-proves
+   *  all three. NO `dec`: ccd's verb takes no `--surface`/`--actor` (it moves no workspace and journals nothing), and would
+   *  refuse the flags with its usage line.
+   *
+   *  Sent only behind `ccdCan(state, 'wsTitle')` (D-5866's one verb question): a box whose caps list lacks the verb is
+   *  refused with 501 `unsupported`; no evidence at all permits, the verb rows' polarity, and an old ccd then answers 502. */
+  wsTitle:   (id: string, change: WsTitleChange) =>
+               argv([WS_TITLE_VERB, '--session', id, ...('clear' in change ? ['--clear'] : ['--title', change.title])]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
    *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
@@ -985,6 +1031,18 @@ export const COLLECT_CAP = 'collect-v1';
  *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
 export const SWAP_BUSY_CAP = 'swap-busy-v1';
 
+/** The `ccd caps` token that says this box's `ws-add` takes `--title <text>` (named workspaces, design 2026-10-20 §4.1). It
+ *  gates the route that names a workspace: no token, no `--title`. The server must not send it to a box that does not
+ *  list it — an older ccd binds an unknown `--` token as a positional (D-6164), so a trailing `--title` is dropped unread
+ *  and the workspace is created with exit 0, unnamed. Read it with `capSupported`, never `verbSupported` (a null list is
+ *  REFUSE here). ccd's `echo ws-title-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const WS_TITLE_CAP = 'ws-title-v1';
+
+/** The `ccd caps` token that says this box's `ws-add` takes `--wrapper <lane>` — the account the operator chose — and
+ *  refuses, rather than falls back, when that lane cannot take the workspace. Same gate, same reason, as `WS_TITLE_CAP`,
+ *  and a worse failure without it: a dropped `--wrapper` places the workspace on the least-loaded lane, not the chosen one. */
+export const WS_WRAPPER_CAP = 'ws-wrapper-v1';
+
 /** The `ccd caps` token that says this box's `cmd_hibernate` takes `--hold-ok <text>` (D-6091, fleet capacity W1-1):
  *  ccd passes a `.hold` that re-reads byte-identical to `<text>` and is a programme hold. It gates ONE decision, the
  *  run-done policy's: whether a finished child held only by its programme's hold may be put to sleep. Read through
@@ -1107,6 +1165,9 @@ export const CCD_CAN = {
   hibernate: verbRow('hibernate'),
   swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
   wsAdd: 'none', wsAddWorker: 'none',
+  // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
+  // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
+  wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),

@@ -3249,7 +3249,7 @@ general remote-shell:
   Every granted verb outside that bare-token handful, unlike `stop`, requires a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release`/`ws-rename`/`route`/`win-size` need `--session`;
+  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
   `coord-pause` and `reclaim-pause` need `--state` and `project-pool` needs `--project`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
@@ -3908,6 +3908,19 @@ runs `ws-release` only on a hold whose text is exactly what one of that child's 
 finished runs wrote, once that run's programme has no open run and the child is
 otherwise eligible; and every place the PWA renders the reason.
 Every ccd reader tests `-e`, so an *unreadable* hold counts as held.
+
+**The affinity arm also waits for background work.** A session idle at its prompt can still have
+subagents or shells running in the background, and the restart a move makes kills them, so
+`_swap_idle_gate` (the tick's decision and `cmd_swap`'s re-run at the act, one gate) declines while the
+session's turn marker (`$REG/<id>.turn.json`) reads `done` with `bg` above 0 (`-1`, a Stop that listed
+nothing or a `/clear`, counts as unknown and waits too) and its last Stop is under `SWAP_BG_HOLD_MAX`
+(7200 s) old; past it, today's behaviour returns, so a count that never clears cannot keep a session off
+its home account for ever. A marker for another conversation's id, a `working` or `failed` marker, and no
+marker at all (an older hook) do not wait; a marker that is present and cannot be read, or is not the
+hook's line, waits the same bounded time counted from the file's mtime. `swap.log` says it once per
+episode, `swap-defer <id>: background work (bg=N kinds=…)`, and once more as `swap-defer-end` if the
+bound ran out. A limit, spend banner or lost sign-in is not an affinity move and still evacuates at once,
+and a manual swap is never held.
 
 `sweepMerged`, the lane that watches for a merged PR, ANNOUNCES and never acts:
 nothing in this server archives a workspace unasked. The hold therefore no
@@ -4683,13 +4696,19 @@ never reclaimed out from under it, and closes only once the PR reads MERGED at `
 server reports how the queue answered: `ccd pr-state --project` makes one GraphQL read per repository
 per sweep (the newest open PRs and the most recently merged, under its own 4 s timeout) and stamps
 each line with an additive `queue` word — `queued`, `dequeued`, `landed`, `none`, or `unmeasured`
-when the read failed or the PR is outside its windows, which costs no row — and `queueAt`. The
+when the read failed or the PR is outside its windows, which costs no row — and `queueAt`. GitHub
+records a removal with reason `merged` at every successful queue merge, at or a second before the PR
+reads merged; that removal reads `landed`, never `dequeued`, and, while the PR is open, a removal for
+any other reason, or none, reads `dequeued` on the first sweep that sees it (landing-order wave 3d). The
 landing lane, `sweepLanding` (every decision in the pure `server/src/coord/landing.ts`), mails the
 coordinator of the open run naming that workspace a `status` mail from `operator`: `merged:#<n>` when
 the PR merges while its run waits at `merging`, asking for the merge proof before the close; or
 `dequeued:#<n>@<time>` when the queue removed it without landing — GitHub does not re-enqueue —
 naming the queue's own `merge_group` CI run as the place to read why, plus a `⤺ dequeued` feed
-record. Each notice goes out once; a restart repeats neither. `ci.yml` answers `merge_group` and runs
+record. Each notice goes out once; a restart repeats neither, and since wave 3d it does not repeat
+the merged lane's `✓ merged` feed record either while that record is still in the archive (one written
+before wave 3d whose run has closed since is repeated once, at the deploy). `ci.yml` answers
+`merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
 `--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,
 comments and heredoc bodies the way bash reads them, to any session whose hold names a programme wave
@@ -5348,8 +5367,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8495-8497`), each with an operator sentence of its own at `:8547`,
-`:8555` and `:8568`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
+`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5873,6 +5892,7 @@ implements — that list is the authority; the table below is a map:
 | `win-size --session <id> --mode smallest\|canonical` | un-pin / pin one session's window size |
 | `ws-add [--no-rc] [--route <field>=<value>]… <project> [slug]` · `ws-rename --session <id> --branch <name>` | a new worktree, branch and session for a project; rename a workspace's branch before it is pushed |
 | `ws-hold --session <id> --reason <text>` · `ws-release --session <id>` | declare / end a program's claim on a workspace |
+| `ws-title --session <id> (--title <text> \| --clear)` | set or clear a workspace's operator title and its `named` marker (the slug and branch never change); `--clear` hands the row back to the ai-title sweep |
 | `ws-archive` · `ws-restore` — `--session <id>` | fold an idle workspace out of the live fleet / back in — costs the tmux pane, deletes nothing |
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |

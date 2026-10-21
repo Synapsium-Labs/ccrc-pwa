@@ -22,9 +22,8 @@
 // pinned footer (D-5932): however many releases scroll, both stay in reach,
 // and the reason line sits in it, straight above Update all (D-6031).
 //
-// ≥900 IT IS A CENTRED DIALOG (the skins rules' desktop arm for a sheet):
-// `.whats-new-panel` in fleet.css re-places the shared Sheet's panel — layout
-// only, no colour — until the Sheet primitive grows that arm itself.
+// ≥900 IT IS A CENTRED DIALOG, the Sheet's own desktop arm (D-5933), in its
+// widest size: release notes read at a prose measure.
 import { useId } from 'react';
 import type { ReactNode } from 'react';
 import type { ReleaseWire, UpdatesView } from '../../../shared/api';
@@ -81,7 +80,7 @@ export function WhatsNewSheet({ open, view, tag, halted, onClose, onUpdateAll }:
       onClose={onClose}
       title={title}
       eyebrow={count}
-      className="whats-new-panel"
+      size="lg"
       // Pinned (D-5932): with several releases the notes scroll and Update all stays in reach.
       // The halted reason rides above the button it explains (D-6031): in the body it scrolled away from it.
       footer={<>

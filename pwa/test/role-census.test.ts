@@ -156,6 +156,8 @@ const ROLE_BEARING: Readonly<Record<string, RoleBearing>> = {
       TAP_FLOOR,
     ],
   },
+  // The Sheet's desktop arm's ✕ (D-5933, D-6033): an icon in a tap target, no type and no row.
+  'close-button.tsx': { roles: [], allow: [TAP_FLOOR] },
 };
 
 /** Everything else, with the reason it reads no role. */

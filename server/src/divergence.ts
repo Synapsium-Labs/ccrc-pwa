@@ -1,11 +1,12 @@
 import {
   corroboration, isActorClass, isDecSurface, SUPERVISED_FRESH_MS, type Divergence,
 } from '../../shared/api.js';
+import { workspaceId } from '../../shared/slug.js';
 
 /**
  * L1: pure, clock-free, `fs`-free, fastify-free — it imports L0 TYPES and
- * three L0 PURE VALUES (`corroboration`, the two guards it needs to call it
- * honestly, and `SUPERVISED_FRESH_MS`) and nothing else. THE CLOCK IS AN INPUT
+ * four L0 PURE VALUES (`corroboration`, the two guards it needs to call it
+ * honestly, `SUPERVISED_FRESH_MS`, and `workspaceId`) and nothing else. THE CLOCK IS AN INPUT
  * (`nowMs`), never read here. Gathering is L4's job
  * (`FleetWatcher.sweepDivergences`), THE CENSUS'S SINGLE PRODUCER.
  *
@@ -186,7 +187,7 @@ export function ccdIdForWorktree(project: string, wtPath: string): string | null
   const base = seg[seg.length - 1];
   if (base === undefined) return null;
   // NESTED — `$WORKTREES_ROOT/$project/$slug`, the only layout `ws-add` builds.
-  if (seg[seg.length - 2] === project) return `${project}-${base}`;
+  if (seg[seg.length - 2] === project) return workspaceId(project, base);
   // FLAT — the directory IS the id. Read only after the nested reading is out.
   if (base.length > project.length + 1 && base.startsWith(`${project}-`)) return base;
   return null;

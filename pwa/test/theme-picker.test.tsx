@@ -118,41 +118,8 @@ describe('the Appearance control', () => {
     render(<AppearanceSection />);
     expect((screen.getByRole('radio', { name: /^Tokyo Night/ }) as HTMLInputElement).checked).toBe(true);
   });
-
-  it('groups dark and light, so the first choice anyone makes is visible', () => {
-    render(<AppearanceSection />);
-    expect(screen.getByText('Dark')).toBeInTheDocument();
-    expect(screen.getByText('Light')).toBeInTheDocument();
-  });
-
-  it('each row previews its OWN palette, by stamping data-theme on the swatch', () => {
-    // The swatches are the palette, not a hand-copied approximation of it:
-    // tokens.css's blocks are plain attribute selectors, so they resolve on any
-    // element. A row therefore cannot lie about its colours. Phosphor is the
-    // one row that stamps nothing — it is :root.
-    render(<AppearanceSection />);
-    const swatches = [...document.querySelectorAll('.settings-theme-swatch')];
-    expect(swatches.length).toBe(THEMES.length);
-    expect(swatches.filter((s) => s.getAttribute('data-theme') === 'nord')).toHaveLength(1);
-    expect(swatches.filter((s) => !s.hasAttribute('data-theme'))).toHaveLength(1);
-  });
-
-  it('each swatch sits beside its own name, not at the far edge of the row', () => {
-    // As the row's last item behind a `flex: 1` body, the swatch rendered at
-    // the section's right edge — measured ~1400px from its name at a 1920px
-    // window. It is the name's preview, so it shares the name's line: the
-    // name's NEXT SIBLING, inside the one head, at every width.
-    render(<AppearanceSection />);
-    const swatches = [...document.querySelectorAll('.settings-theme-swatch')];
-    expect(swatches.length).toBe(THEMES.length);
-    for (const sw of swatches) {
-      const name = sw.previousElementSibling;
-      expect(name?.classList.contains('settings-theme-name')).toBe(true);
-      expect(sw.parentElement?.classList.contains('settings-theme-head')).toBe(true);
-      // and the head is inside the body the row's flex gives the width to
-      expect(sw.parentElement?.parentElement?.classList.contains('settings-theme-body')).toBe(true);
-    }
-  });
+  // The grid's own shape (13 cards, each stamped with its palette, the arrow keys, the check glyph) is
+  // settings-appearance.test.tsx's (settings Task R2e).
 });
 
 // D-5572: the palette's "Switch theme…" (command/commands.ts) calls setTheme

@@ -239,7 +239,6 @@ const CONTROLS: Record<string, string> = {
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
   'fleet/SessionMeta.tsx <button> sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
-  'screens/AuthSection.tsx <button> accounts-session': 'TOKEN. Revoke, on a passkey row — the SAME class the\n    session rows above it use, which is why the auth section leaving AccountsScreen for its own file put a\n    second key under one class rather than moving one.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
   'screens/FleetScreen.tsx <button> notice-x': 'TOKEN. The notice dismiss.',
@@ -280,6 +279,10 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
     + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
     + 'declares the floor.',
+  'fleet/CompactGauges.tsx <div> accounts-compact':
+    'TOKEN. The compact arrangement of the strip (W2 Task S2c), the gauges '
+    + 'both shells place: the same `role="link"` door to /accounts, one group. '
+    + '`.accounts-compact` declares the floor.',
   // THE TWO DROPDOWNS LEFT THIS CENSUS, and the right way round: they are
   // `<Select>` (@ccrc/ui) now, so the app draws no dropdown by hand and there
   // is nothing here to classify — the same reason no `<Button>` call site
