@@ -27,6 +27,23 @@ export declare const MODEL_ID_RE: RegExp;
 // words of `ccrc models`, each defined once in `shared/models.mjs`.
 export declare const MODELS_LANE_ID_RE: RegExp;
 export declare const MODELS_RESERVED_IDS: readonly string[];
+// Auto-advance plan W2 Task 12: the one reader of a models push line, its length cap and the pure policy of
+// `/api/notify`'s `push: true` (ruling RB10), each defined once in `shared/models.mjs`.
+export declare const MODELS_PUSH_MAX: number;
+export type ModelsPushKind = 'moved' | 'canary-failed' | 'move-failed';
+export declare function modelsPushOf(
+  message: unknown,
+): { lane: string; cls: ModelClass; kind: ModelsPushKind } | null;
+/** What the policy asks of a roster: a lane id to its row, or `undefined`. The server's `roster.byId` (a
+ *  `ReadonlyMap<string, AccountDef>`) is one. */
+export interface ModelsPushRoster {
+  get(lane: string): { readonly exec: { readonly kind: string } } | undefined;
+}
+export type ModelsPushRefusal = 'not-a-model-line' | 'over-cap' | 'unknown-lane' | 'not-a-codex-lane';
+export type ModelsPushDecision =
+  | { verdict: 'pushable'; lane: string; cls: ModelClass; kind: ModelsPushKind; tag: string }
+  | { verdict: 'refused'; reason: ModelsPushRefusal };
+export declare function modelsPushDecision(message: unknown, roster: ModelsPushRoster): ModelsPushDecision;
 export declare class RegistryInvalid extends Error { readonly field: string }
 export declare class CatalogueInvalid extends Error {}
 export declare function parseCatalogue(json: unknown): Catalogue;

@@ -14,7 +14,7 @@ import { readLaneStates, readLimits, projectHome, projectPlacement } from './lim
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
-import { CLASSES, type ModelClass } from '../../shared/models.js';
+import { CLASSES, modelsPushDecision, type ModelClass } from '../../shared/models.js';
 import {
   accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
@@ -1603,7 +1603,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Swap-notice ingestion: ccd's ~/.cc-sessions/notify.sh hook POSTs here.
   // Every notice fans out fleet-wide; a `cc swap:` message also targets the
-  // moved session's stream so its chat surfaces the account change inline.
+  // moved session's stream so its chat surfaces the account change inline; and
+  // a model-class line carrying `push: true` (the models advance step's,
+  // `notify.sh --push`) also goes to the operator's phone.
   //
   // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
   // one box->server ingress carrying zero identity while the server
@@ -1638,7 +1640,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         '(add --url <server> on a box with no ~/.ccrc/agent.env)');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
     }
-    const body = (req.body ?? {}) as { message?: unknown };
+    const body = (req.body ?? {}) as { message?: unknown; push?: unknown };
     if (typeof body.message !== 'string') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
@@ -1646,6 +1648,42 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.emit('notice', { message });
     const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
     if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+    // Auto-advance spec §2.3 steps 5 and 6 (plan W2 Task 12): a class that
+    // moved, or was held back, reaches the PHONE too - the banner alone reaches
+    // only an open console. Exactly `true`, never a truthy string, and behind
+    // the same box-token gate as the banner above.
+    //
+    // WHETHER IT MAY IS NOT DECIDED HERE (ruling RB10): `modelsPushDecision`
+    // (shared/models.mjs, pure) answers pushable or refused-with-a-reason, from
+    // the message and the roster this server booted with, and this route only
+    // applies the answer. The box token proves "a process on the fleet box" and
+    // no more (notify.sh's own header), so only a model-class line of a
+    // codex-kind lane is pushable (D-5211). The residual is stated, not hidden,
+    // and accepted for the auto-advance plan: a box-token holder can still send
+    // a WELL-SHAPED models line (attribution, not authentication), and a models
+    // push records no feed entry and has no per-(lane, class) rate cap. A line
+    // over the cap (a failure line with long model ids) is refused too: it gets
+    // the banner, and this log line says so. The message itself is never
+    // logged: it is free text from a process we do not trust.
+    //
+    // The decision is made whether or not a push service exists: no VAPID keys
+    // is delivery configuration, not a way around the policy. With none,
+    // `deps.push` is undefined and nothing is sent. A send that rejects (a
+    // subscription store that cannot be written) is logged rather than left
+    // unhandled: the banner has already gone out. The tag is the decision's
+    // (per lane and class, D-5212).
+    if (body.push === true) {
+      const decision = modelsPushDecision(message, deps.cfg.roster.byId);
+      if (decision.verdict === 'refused') {
+        console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
+          + `lane (${decision.reason}); the banner went out, the phone push did not`);
+      } else {
+        void deps.push?.notify({ title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' })
+          .catch((err: unknown) => {
+            console.warn(`ccrc-server: /api/notify: the push did not go out (${err instanceof Error ? err.message : String(err)})`);
+          });
+      }
+    }
     return { ok: true };
   });
 

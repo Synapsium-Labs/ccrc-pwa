@@ -103,6 +103,87 @@ export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  lane). Pinned equal to the bash list by the same test. */
 export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
 
+/** The longest models notice `/api/notify` sends to the phone (auto-advance
+ *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
+ *  fits: a `moved` line is at most a 32-character lane id, the longest class
+ *  word, two 128-character model ids and the fixed text between them, which
+ *  makes exactly 300, so it always fits (`server/test/notify-push.test.ts`
+ *  holds that sum); the two failure lines carry a reason of up to 120
+ *  characters on top of the same two ids, so with long ids they pass it. Such
+ *  a line still gets its banner and is refused the phone push, with the reason
+ *  `over-cap` in `modelsPushDecision`'s answer and one line in the server's
+ *  log. The cap is not raised to make them fit. */
+export const MODELS_PUSH_MAX = 300;
+
+/** The lane, class and model-id patterns without their anchors, so the three
+ *  shapes below are built from `MODELS_LANE_ID_RE`, `CLASSES` and
+ *  `MODEL_ID_RE` and never spell any of them a second time. */
+const pushInner = (re) => re.source.replace(/^\^/, '').replace(/\$$/, '');
+const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;
+const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;
+const PUSH_SHAPES = Object.freeze([
+  ['moved', new RegExp(`${PUSH_HEAD}${PUSH_ID} → ${PUSH_ID}$`)],
+  ['canary-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: ${PUSH_ID} failed its canary \\([\\x20-\\x7e]{0,120}\\)$`)],
+  ['move-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: moving to ${PUSH_ID} failed \\([\\x20-\\x7e]{0,120}\\)$`)],
+]);
+
+/** The ONE reader of the advance step's push lines (auto-advance spec §3.8;
+ *  `ccd/ccrc`'s receipt program and its `recovered` definition write them):
+ *  `{lane, cls, kind}` for a message of exactly one of the three shapes
+ *    `<lane>: <class> <from|none> → <to>`                                        kind `moved`
+ *    `<lane>: <class> stays on <from|none>: <to> failed its canary (<reason>)`   kind `canary-failed`
+ *    `<lane>: <class> stays on <from|none>: moving to <to> failed (<reason>)`    kind `move-failed`
+ *  and null for anything else: a `cc swap:` notice, a second line, a message
+ *  that is not a string, and any message over MODELS_PUSH_MAX included. The
+ *  lane is MODELS_LANE_ID_RE's, the class one of CLASSES, each model id
+ *  MODEL_ID_RE's (`none` is one) and the reason printable ASCII of at most 120
+ *  characters. It is a PARSER only: whether a line may reach a phone is
+ *  `modelsPushDecision`'s, which calls it. */
+export function modelsPushOf(message) {
+  if (typeof message !== 'string' || message.length > MODELS_PUSH_MAX) return null;
+  for (const [kind, re] of PUSH_SHAPES) {
+    const m = re.exec(message);
+    if (m !== null) return { lane: m[1], cls: m[2], kind };
+  }
+  return null;
+}
+
+/** THE POLICY OF `POST /api/notify`'s `push: true` (auto-advance plan W2
+ *  Task 12, D-5211, ruling RB10): pure, no I/O, no Fastify, no push call. The box
+ *  token proves only "a process on the fleet box" (`deploy/notify.sh`'s own
+ *  header), so the route will not turn free text into a phone notice under a
+ *  system title: a message may go to the phone only when `modelsPushOf` reads
+ *  it AND its lane is a row of `roster` whose `exec.kind` is `codex`. The
+ *  roster arrives as a PARAMETER, anything with a `get(laneId)` that answers
+ *  the lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`,
+ *  is one), so this file reads no file and imports nothing.
+ *
+ *  Answers one of two shapes, and never a bare null: `{verdict: 'pushable',
+ *  lane, cls, kind, tag}` or `{verdict: 'refused', reason}` with the reason one
+ *  of
+ *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
+ *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
+ *    `unknown-lane`      a model line of a lane the roster has no row for
+ *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
+ *  The roster is asked only about a line that matched, once. The tag is per
+ *  lane AND class (D-5212): a phone REPLACES a notification that carries the
+ *  same tag (`pwa/public/push-sw.js`), so a constant tag would let a second
+ *  move or failure in one run erase the first. RESIDUAL, accepted for the
+ *  auto-advance plan (ruling RC6) and stated here, not hidden: a box-token
+ *  holder can still send a WELL-SHAPED line for a codex-kind lane (attribution,
+ *  not authentication), and a models push gets no feed record and no per-(lane,
+ *  class) rate cap. */
+export function modelsPushDecision(message, roster) {
+  const line = modelsPushOf(message);
+  if (line === null) {
+    return { verdict: 'refused', reason: typeof message === 'string' && message.length > MODELS_PUSH_MAX ? 'over-cap' : 'not-a-model-line' };
+  }
+  const row = roster.get(line.lane);
+  if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane' };
+  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane' };
+  return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
+}
+
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
 
 /** The hostnames `parseRegistry`'s `baseUrl` scheme gate (C13) treats as a

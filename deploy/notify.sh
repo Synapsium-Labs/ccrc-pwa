@@ -17,6 +17,19 @@ umask 077
 # a nonzero exit would make an unprovisioned box look like a broken one. The
 # missing file is what `ccrc doctor`'s `box-token` check reports.
 #
+# `--push` (auto-advance plan W2 Task 12): a LEADING flag, the first argument and
+# never one later in the message, asks the server to send this notice to the
+# operator's phone as well as the banner; the body gains `push: true`. Only the
+# models advance step passes it (`_models_push`, ccd/ccrc), and the server honours
+# it only for a model-class line of a codex-kind lane (`modelsPushDecision`);
+# ccd's swap hook never passes it, so its body is byte for byte what it was. It is
+# parsed HERE, above the token lines, so that the slice `coord-token.test.ts`
+# runs, from the token-file assignment to the start of address resolution, stays
+# the token lines alone. (This comment names neither of those assignments: that
+# test finds each by its first occurrence in the file.)
+PUSH=false
+if [ "${1:-}" = "--push" ]; then PUSH=true; shift; fi
+#
 # THE EXTRACTION RULE BELOW MUST STAY IDENTICAL TO `coord/token.ts`'s
 # `readMailToken`/`extractToken`, WHICH READS THIS SAME COMMITTED FILE ON THE
 # OTHER BOX (fix-round finding 1): first line that is neither blank nor a
@@ -114,4 +127,4 @@ esac
 printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" |
 curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \
   -H 'content-type: application/json' \
-  -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true
+  -d "$(jq -cn --arg m "$1" --argjson push "$PUSH" 'if $push then {message:$m, push:true} else {message:$m} end')" >/dev/null 2>&1 || true
