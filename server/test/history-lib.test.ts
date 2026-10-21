@@ -10791,7 +10791,7 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G1), to: val(G2), prev_seen_ms: null }]);
   });
 
-  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; both counted', () => {
+  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; the state rows counted', () => {
     const p = plan({
       seenRaw: '01000',
       stateRows: [{ id: X, raw: '{"s":"maybe"}' }, { id: '../x', raw: roLib.canonicalJson(val(G1)) }],
@@ -10802,6 +10802,13 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(p.malformed).toBe(2);
     expect(p.del).toEqual([`${K.state}../x`]);
     expect(p.records.some((r) => r.fields['id'] === '../x'), 'no record names an id outside the grammar').toBe(false);
+  });
+
+  it('a seen_ms past Date\'s range reads as never observed, so status cannot throw on it', () => {
+    const KEY = roLib.RECALL_OFF_KEYS.seen;
+    expect(roLib.recallOffStatusOf(new Map([[KEY, '8640000000000000']])).seen_ms, 'CONTROL: Date\'s last ms').toBe(8_640_000_000_000_000);
+    expect(roLib.recallOffStatusOf(new Map([[KEY, '9000000000000000']])).seen_ms).toBeNull();
+    expect(gapsOf(plan({ seenRaw: '9000000000000000' })).map((g) => g['from'])).toEqual([null]);
   });
 
   it('refuses an observation that ends before it starts, and a file id outside the grammar', () => {

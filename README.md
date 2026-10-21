@@ -5743,7 +5743,7 @@ The write records the id's generation as `$REG/<id>.generation` holds it then, a
 anything: `generation-mismatch` when `--generation` names another generation or the registry holds none,
 `generation-malformed` when the registry holds something that is not a generation, and
 `generation-unreadable` when it cannot be read. `--clear-all` prints how many files it removed and the
-names it skipped (a directory, a FIFO, a socket or a device), which the operator removes by hand.
+names it skipped (a directory, a FIFO, a socket or a device, or an entry it could not measure or remove), which the operator removes by hand.
 
 ---
 

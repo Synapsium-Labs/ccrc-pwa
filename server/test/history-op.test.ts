@@ -1563,7 +1563,7 @@ describe('W1-j and O34: the journal audit', () => {
     try {
       const skipped = runDriver(box, { offsetMs: offset, managedSettings: [] });
       expect(skipped.code, skipped.stderr).toBe(0);
-      expect(q<{ n: number }>(box, `SELECT count(*) AS n FROM journal_outbox WHERE rec LIKE '%"k":"verdict"%'`)[0]!.n, 'the flush could not append, so the planted verdict waits (the tick\'s recall-off gap record, W2-D30, waits beside it)').toBe(1);
+      expect(q<{ n: number }>(box, `SELECT count(*) AS n FROM journal_outbox WHERE rec LIKE '%"k":"verdict"%'`)[0]!.n, 'the flush could not append, so the planted verdict waits (the tick\'s recall-off gap record, W2-D30, waits beside it)').toBe(1); expect(q<{ n: number }>(box, `SELECT count(*) AS n FROM journal_outbox WHERE rec LIKE '%"k":"recall-off"%'`)[0]!.n, 'exactly one recall-off record waits beside it').toBe(1);
       expect(counter(box, 'journal_write_failed'), 'the refusal was counted').toBeGreaterThan(0);
       expect(counter(box, 'journal_missing_verdict'), 'an in-flight verdict is not a missing one').toBe(0);
       expect(metaOf(box, 'journal_audit_ms'), 'the audit skipped').toBe(before);

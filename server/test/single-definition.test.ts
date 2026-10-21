@@ -5337,7 +5337,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
     // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
     'SEGMENT_HEADER_BYTES',
-    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, which sweep.mjs, cli.mjs and the gate read.
+    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
     'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
     // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META.
     'RECALL_OFF_KEYS'] as const;

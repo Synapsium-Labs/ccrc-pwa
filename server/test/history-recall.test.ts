@@ -5756,9 +5756,9 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(scopeOf(read).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G2]]);
 
     // 4. The drain counts recall_off_stale +1. The first tick renames the line, the second drains it while the file still
-    //    names G1. The drain runs before the hook, so the hook's own SessionStart(compact) line is never drained here.
-    //    (SessionStart(compact) is not a spool source, `SPOOL_SOURCES`, so the hook spools no line of its own for it.
-    //    Running the drain first still keeps the counted state exactly what W2-D32 lists, whatever the hook later spools.)
+    //    names G1. The drain runs before the hook. SessionStart(compact) is not a history spool source
+    //    (`SPOOL_SOURCES`), so the hook adds no history spool line;
+    //    draining first keeps the counted state exactly W2-D32's.
     for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
     expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8], [G2, 0]]);
     expect(counters(box)['recall_off_stale'], 'RP8: the drain counts the stale read once').toBe(1);
@@ -5801,7 +5801,7 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     // hook withholds that family's line and its read verb answers 8.
     for (const f of fams) {
       const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
-      expect(h.code, h.stderr).toBe(0);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
       expect(h.context ?? '', `${f.id}: no card line while its file names its generation`).not.toContain('History: node ');
       expect(answer(treeJson(box, f.id)), `${f.id}: exit 8 while recall is off`).toEqual([8, undefined]);
     }
@@ -5816,7 +5816,7 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(fs.readdirSync(hist(box, 'recall-off')), 'RP10: none left').toEqual([]);
     fams.forEach((f, k) => {
       const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
-      expect(h.code, h.stderr).toBe(0);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
       expect(h.context ?? '', `RP10: ${f.id}'s next card line serves`).toContain(lines[k]!);
       expect(treeJson(box, f.id).code, `${f.id}: its read verb reads again`).toBe(0);
     });

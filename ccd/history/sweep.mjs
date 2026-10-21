@@ -5232,7 +5232,8 @@ function scanRecallOff(home, dir) {
  *    only seen_ms moves. The records are flushed right after, as verdictTx flushes (a JournalError counted
  *    journal_write_failed; with no writer token they wait in the outbox), never through recordTick's best-effort append.
  *  Outside the run budget, as recordTick is: RECALL_OFF_SCAN_MAX bounds its reads. seen_ms is kept across a restore or an
- *  adopt, which only widens the next interval (D-6240 (history-recall-off-seen-survives-restore)). */
+ *  adopt. A restore only widens the next interval; an adopt carries the old box's seen_ms, which a clock running ahead of
+ *  this box's narrows, a residual D-6240 (history-recall-off-seen-survives-restore) names. */
 export function recordRecallOff(db, ctx) {
   if (isRecovering(db)) return;
   const startMs = ctx.now();
@@ -6458,9 +6459,9 @@ export function writeOpMarker(P, verb, nowMs) {
 //      directory, answers rc 1 with one line, before any write. The executor follows no link;
 //   3. recall-off/ is made 0700 when absent, by the write form only: a clear of a directory that does not exist is rc 0;
 //   4. every stale `~tmp.*` entry that is a regular file or a link is unlinked (D-6241). Under the lock any such entry is stale,
-//      since no other writer is mid-write. A directory, FIFO, socket or device of that name is not the writer's (it only makes
-//      regular temps), so it stays for `--clear-all` to name, and the write's failure path unlinks its own temp only when this
-//      pass created it;
+//      since no other writer is mid-write. A directory, FIFO, socket or device of that name, or one it cannot measure, is not the writer's (it only
+//      makes regular temps), so it stays for `--clear-all` to name, and the write's failure path unlinks its own temp only
+//      when this pass created it;
 //   5. the form:
 //      - the write goes through `recall-off/~tmp.<pid>` (`~` is outside ID_RE, so no reader takes it for an id), opened
 //        O_CREAT|O_EXCL|O_NOFOLLOW at 0600, written whole and fsynced, renamed over recall-off/<id>, and the directory

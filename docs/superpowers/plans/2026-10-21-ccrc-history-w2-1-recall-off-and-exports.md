@@ -83,7 +83,7 @@ No §16 row and no §17 line: 5h-1 and 5h-2 added none, and Task 6 Step 4 measur
 - **Node floor.** `>=22.16.0`, identical in `server/`, `agent/` and `pwa/`'s `engines`; no task changes it.
 - **Public repo.** No host, user, account, wrapper, lane, pool, session or person name, no private project name, no IP address, no absolute home path, no private ticket id and no docserver URL, in plan text, fixtures, comments, commits or the PR body. Task 6 Step 10 runs the private-name count over every added line, every commit message and the PR body; it must print 0.
 - **D-numbers.**
-  - This plan defines exactly five issued numbers, once each, in "Deviations found" at its end, in the em-dash form: **D-5763** and **D-5764** (Task 3; W2-D26, W2-D27; decisions §6's "Defined in"), and the three departures found while planning, **D-6238** (Task 1), **D-6239** (Task 3) and **D-6240** (Task 4), ruled by R1, R3 and R4. Their entries come with the plan, so they are on the base when the worker starts: a task cites the numbers its own text names, checks that each entry is there once, and never adds a second definition. A task edits its own entry only to correct a figure its own measurement changed.
+  - This plan defines exactly six issued numbers, once each, in "Deviations found" at its end, in the em-dash form: **D-5763** and **D-5764** (Task 3; W2-D26, W2-D27; decisions §6's "Defined in"), and the three departures found while planning, **D-6238** (Task 1), **D-6239** (Task 3) and **D-6240** (Task 4), ruled by R1, R3 and R4, and **D-6241** (Task 3), issued to the execution run and defined in the commit that first cites it. The first five entries come with the plan, so they are on the base when the worker starts: a task cites the numbers its own text names, checks that each entry is there once, and never adds a second definition. A task edits its own entry only to correct a figure its own measurement changed.
   - Earlier numbers are cited bare and never defined here, among them D-4170, D-4232, D-4596, D-4690, D-5747, D-5748, D-5770, D-5771, D-5772, D-5773, D-5774, D-5775, D-5893, D-6069 and D-6178.
   - Never write a number that was not issued, and never write a range: cite each number on its own. `dtbd.test.ts` reds any concrete `D-TBD-` token in a tracked file.
   - A departure the worker finds while executing takes the next unused number from the run's block named in the brief, defined in "Deviations found" in the commit that first cites it; otherwise it is reported, never invented.
@@ -144,7 +144,7 @@ These five inputs follow from the decisions and the spec and would bite an opera
 | `shared/lifecycle.ts` | modify | **Task 3:** the `history-recall-off` row (pattern O, creator `sweep.mjs --op recall-off`, root naming `recall-off/~tmp.<pid>`, tier at most 37 B), directly after `history-replay-out`. The only `shared/` file this PR edits. | L0 | 3 |
 | `README.md` | modify | **Task 3:** new lines after the "Box verbs and operator verbs." paragraph stating the verb; that paragraph's pinned words are kept. | docs | 3 |
 | `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` | modify | **Task 6:** errata E1, E3, E4, E5, E6, E12, E13, E14, E15, E16, E17, E18 and E26, and the three added errata (R6), in place, no line added or removed. | docs | 6 |
-| `docs/superpowers/plans/2026-10-21-ccrc-history-w2-1-recall-off-and-exports.md` (this plan) | modify only to correct a task's own entry | "Deviations found" defines D-5763, D-5764, D-6238, D-6239 and D-6240 once each, from the plan's own commit. Tasks 1, 3 and 4 check their entries; Task 6 Step 1 finds each once (its glob is `docs/superpowers/plans/*-ccrc-history-w2-1-*.md`). | docs | 1, 3, 4, 6 (check only) |
+| `docs/superpowers/plans/2026-10-21-ccrc-history-w2-1-recall-off-and-exports.md` (this plan) | modify only to correct a task's own entry | "Deviations found" defines D-5763, D-5764, D-6238, D-6239 and D-6240 once each, from the plan's own commit, and D-6241 (issued to the execution run, Task 3) from Task 3's. Tasks 1, 3 and 4 check their entries; Task 6 Step 1 finds each once (its glob is `docs/superpowers/plans/*-ccrc-history-w2-1-*.md`). | docs | 1, 3, 4, 6 (check only) |
 | `server/test/history-lib.test.ts` | modify | One describe appended per task: `stampAtOrBefore` (Task 1, 5 cases); the paths, constants, `isSyntheticModel` and the W2-D10 pin (Task 2, 20 cases); C16's two words, the grammar and `decideRecallOffWrite`'s rows (Task 3, which also re-expects `parseOpVerbArgs`' base case that refused `recall-off`, in place); the presence record (Task 4, 15 cases). | test | 1, 2, 3, 4 |
 | `server/test/history-recall.test.ts` | modify | **Task 1:** the exports describe (4 cases, darwin-skipped). **Task 3:** the `decideRecallOffPreflight` case replaced and its describe's title renamed in place, `C66 (B2 half)`'s `'the writing verb ships with W2'` line replaced, and the one-reader and RP10 verb-half describe appended. **Task 5:** one describe of four `it`s (RP8, RP10's card half, C66's and C67's W2 halves) with module-private helpers, and no import line. | test | 1, 3, 5 |
 | `server/test/history-op.test.ts` | modify | **Task 3:** two describes appended: C64's recall-off rows at both doors, and the writer through the shim (modes, W2-D27's table, temps, links, an unusable root or `recall-off/`, `--clear`, `--clear-all`), and in process (the pass's own modes under umask 022, open flags, directory fsync). **Task 4:** the O34 audit case's outbox count re-expected in place to count verdict rows only (the presence record's gap record waits beside them). | test | 3, 4 |
@@ -194,9 +194,9 @@ The decisions document was written at `bd363a76b`; the base is `02d75ae5f`. Each
 | W2-D32: "py raw rows → `buildWindows` → count" | The count is the gate's `windowTotals` (about :311); `windowOf` (about :273) is exported | RP8 counts with `windowTotals` and builds the unfiltered CONTROL with `windowOf` | 5 |
 | W2-D32: the analysis "does not count the G2 line" | The filter is `measure-history.py`'s `family_report` calls query (about :230); `buildWindows` counts whatever calls the report carries | The CONTROL is mutant M1 on the script plus an in-test recomputation; the gate is not touched | 5 |
 | W2-D32: "the hook serves the card line" | No shared helper runs `ccd/session-hook.sh` in a `makeHistoryBox` HOME; `_hook_history_card` serves only after a fresh PreCompact scope marker and a prediction written on a pass that read the transcript to its end | A module-private `rpCompactStart` plants the marker; one Stop-hinted pass precedes each prediction read | 5 |
-| W2-D32 lists the hook before the drain | Running the drain first keeps the counted state exactly W2-D32's, whatever the hook later spools (SessionStart(compact) is not in `SPOOL_SOURCES`, so the hook spools no line of its own for it) | The drain runs first; no asserted value changes | 5 |
+| W2-D32 lists the hook before the drain | Running the drain first keeps the counted state exactly W2-D32's, whatever the hook later spools (SessionStart(compact) is not in `SPOOL_SOURCES`, so the hook spools no history spool line for it; the delegation spool does record a compact start) | The drain runs first; no asserted value changes | 5 |
 | §2: "C66, C67, C68 (re-run)" with no holders named | C66 is held in `history-recall`, `history-lib`, `history-drain` and `history-card`; C67 in `history-recover`, `history-lib` and `history-recall`; C68 in `history-recall` and `session-hook` | Every holder re-runs unedited; the W2 halves go in `history-recall` only | 5 |
-| Spec §10.7: "a hand-planted file is pinned before W2 writes any" (C68) | The existing C68 cases plant `G1` with no LF; the verb writes `<G>\n` | Task 5 uses only verb-written files; mutant M5 (the hook's trim removed) reds only there | 5 |
+| Spec §10.7: "a hand-planted file is pinned before W2 writes any" (C68) | The existing C68 cases plant `G1` with no LF; the verb writes `<G>\n` | Task 5 uses only verb-written files; mutant M5 (the hook's trim removed) reds there and in session-hook.test.ts's C19/C68 parity rows, which plant LF-terminated files too (12 failed, measured) | 5 |
 | §6: rev 3.6 spec anchors (E1 :1670, E3 :1741, E4 :1798-1799, E6 :2169, E12 :2620-2624 and :2734-2737, E13 :2624 and O32 :2439, E14 :2459, E15 :3051, E16 :2727 and :2732, E17 :2638, E18 :2697) | E1 :1671, E5 :1737, E3 :1742, E4 :1799-1800, E6 :2170, E12 :2634, :2746 and :2749, E13 :2636 and O32 :2446, E14 :2466 and §10.7 :2907, E15 :3063, E16 :2739 and :2744, E17 :2650, E18 :2709, E26 :2684 | Each replacement is anchored by quoted content and asserted unique | 3, 6 |
 | §6 E6: the history-store-id row's 86 B correction is 5h-2's Task 4 | #1010 merged it: the row reads "at most 86 B" and op "at most 119 B; W5h-2, D-5748" | Task 6 checks the tokens and never writes the row | 6 |
 | §8.4's operator-verbs region as rev 3.6 wrote it | 5h-2 rewrote the relay bullet directly below "Dry run by default." (D-5747, D-6069) | E3 replaces only its own line; E3 and E5 show as one diff hunk but stay two asserted replacements | 6 |
@@ -225,7 +225,7 @@ The decisions document was written at `bd363a76b`; the base is `02d75ae5f`. Each
 3. `feat(history): recall-off writes through the shim, checks the id's generation under the lock, and has one writer (W2-1 Task 3; W2-D26, W2-D27, W2-D28, W2-D29; D-5763, D-5764, D-6239)`;
 4. `feat(history): record recall-off presence on every tick, journaled through the outbox, and report it in status (W2-1 Task 4; W2-D30, W2-D31; D-6240)`;
 5. `test(history): RP8 end to end, RP10, and C66, C67 and C68 re-run over the shipped recall-off verb (W2-1 Task 5; W2-D32)`;
-6. `docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764)`.
+6. `docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764, D-6241)`.
 
 Task 1 stands alone and goes first. Task 2's names are consumed by Tasks 3, 4 and 5; Task 3's verb by Task 5, and its O13 reader count by Task 4, whose scan adds the second `readBounded` line (R3); Task 4's record by Task 5's ticks; Task 6 states what Tasks 1 to 4 shipped and runs last. Every task leaves every suite green at its commit. The PR is opened by Task 6 Step 11, only after Steps 6 to 10 (the file list, the whole-PR checks, `deviation-refs` against `origin/main`, a clean tree, and the private-name count of 0), ready for review (not a draft), titled **"ccrc history wave W2-1: recall-off, the presence record and the deploy lane's exports"**, with the body Task 6 Step 10 gives.
 
@@ -743,8 +743,8 @@ rep('ccd/history/derive.mjs',
 r""" *  byte budget, as the FTS backfill's do. */
 function bodyOf(s, blobId, budget) {""",
 r""" *  byte budget, as the FTS backfill's do. Exported for the deploy lane (W2-D33): its driver passes blobReadStmts(db)
- *  as `s` and a `{ bytes }` object as `budget`. Its null still covers a tombstone, a body that is not JSON and an
- *  over-cap body alike. */
+ *  as `s` and a `{ bytes }` object as `budget`. Its null still folds no row, a tombstone or a damaged blob, a body that
+ *  is not JSON or is JSON null, and an over-cap body alike. */
 export function bodyOf(s, blobId, budget) {""")
 rep('ccd/history/derive.mjs',
 r"""/** A boundary's kept list (preservedMessages.allUuids, stored as its own blob by B1's ingest), as a set. */
@@ -1517,7 +1517,7 @@ with
 
 ```ts
     'SEGMENT_HEADER_BYTES',
-    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, which sweep.mjs, cli.mjs and the gate read.
+    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
     'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX'] as const;
 ```
 
@@ -3421,7 +3421,7 @@ The write records the id's generation as `$REG/<id>.generation` holds it then, a
 anything: `generation-mismatch` when `--generation` names another generation or the registry holds none,
 `generation-malformed` when the registry holds something that is not a generation, and
 `generation-unreadable` when it cannot be read. `--clear-all` prints how many files it removed and the
-names it skipped (a directory, a FIFO, a socket or a device), which the operator removes by hand.
+names it skipped (a directory, a FIFO, a socket or a device, or an entry it could not measure or remove), which the operator removes by hand.
 ```
 
 - [ ] **Step 8: Run them and see them pass.**
@@ -4140,7 +4140,7 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G1), to: val(G2), prev_seen_ms: null }]);
   });
 
-  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; both counted', () => {
+  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; the state rows counted', () => {
     const p = plan({
       seenRaw: '01000',
       stateRows: [{ id: X, raw: '{"s":"maybe"}' }, { id: '../x', raw: roLib.canonicalJson(val(G1)) }],
@@ -5049,7 +5049,8 @@ function scanRecallOff(home, dir) {
  *    only seen_ms moves. The records are flushed right after, as verdictTx flushes (a JournalError counted
  *    journal_write_failed; with no writer token they wait in the outbox), never through recordTick's best-effort append.
  *  Outside the run budget, as recordTick is: RECALL_OFF_SCAN_MAX bounds its reads. seen_ms is kept across a restore or an
- *  adopt, which only widens the next interval (D-6240 (history-recall-off-seen-survives-restore)). */
+ *  adopt. A restore only widens the next interval; an adopt carries the old box's seen_ms, which a clock running ahead of
+ *  this box's narrows, a residual D-6240 (history-recall-off-seen-survives-restore) names. */
 export function recordRecallOff(db, ctx) {
   if (isRecovering(db)) return;
   const startMs = ctx.now();
@@ -5504,11 +5505,11 @@ This task writes tests only. Its guards are Tasks 2 to 4's and W2-3's (`measure-
 - **The window spans the G2 call by its end, not by a clock seam (R5).** The CLI stamps its recall line with the wall clock, and `cli.mjs` has no test clock. G1's transcript ends with an assistant row stamped `Date.now() + RP_LATE_MS`. Its copy then has two turns after the summary (fewer than K) and no next boundary, so `windowOf` ends the window INCLUSIVE at the copy's last timed row (W2-D14, the gate's own rule). The window `[boundary ts, late]` spans every call the case makes while the case runs for less than a day. The case asserts that the window spans `rpTsOf(box, ID, G2)`, so a slow box cannot pass vacuously.
 - **The CONTROL is a recomputation, and the mutant is the filter.** RP8's CONTROL feeds `windowOf` the same boundary with every arm-NULL call of the id (`rpCallsOf`: no generation filter) and expects 2 calls, G1's exit 8 and the G2 read. So the fixture is sensitive, and only the filter keeps the G2 line out. Mutant M1 removes the filter from `measure-history.py` and reds the case's earlier assertion "the family's calls are G1's exit 8 alone" (`[8, 0]` vs `[8]`, measured), before `windowTotals` is reached.
 - **G1's own exit-8 read is in the window**, so the count asserted is 1, never a vacuous 0. The G2 line is the one that must not be counted.
-- **The drain runs before the hook.** Draining first keeps the counted state exactly what W2-D32 lists, whatever the hook later spools. (The reason is not that the SessionStart(compact) arm spools its own line: lib's `SPOOL_SOURCES` is `startup`, `resume`, `clear` and `fork`, and the hook's spool case leaves `compact` out.) The hook neither reads nor writes `recall_calls` or the counter, so this order changes no assertion of W2-D32's.
+- **The drain runs before the hook.** Draining first keeps the counted state exactly what W2-D32 lists, whatever the hook later spools. (The reason is not that the SessionStart(compact) arm spools its own history spool line (the delegation spool does record a compact start): lib's `SPOOL_SOURCES` is `startup`, `resume`, `clear` and `fork`, and the hook's spool case leaves `compact` out.) The hook neither reads nor writes `recall_calls` or the counter, so this order changes no assertion of W2-D32's.
 - **The scope marker is planted, not written by a driven PreCompact.** The card arm serves only after a fresh `main <psid> <ms>` marker (check 5). PreCompact's marker is S16's, pinned in `session-hook.test.ts`. `rpCompactStart` plants the same three fields, as that file's card describe does (`mark()`, about :12290).
 - **A Stop line and one pass before each prediction is read** (`rpPredicted`), the `pokeC` pattern of `history-card.test.ts` (about :563). The pass reads the transcript to its end, which is when the sweep writes `card/<id>/<uuid>.txt`. The case asserts that the file exists and matches `CARD_LINE_RE` before it relies on it.
 - **The purge is `_reg_purge`'s effect, done by hand in the fixture.** `rpPurge` removes every `$REG/<id>.*`. `recall-off/` lives under `~/.ccrc/history`, outside `$REG` (§9.7), so the case asserts that it survives. No `ccd` verb runs.
-- **No recall-off file is written by hand.** Every file is the verb's bytes, `<G>\n`. That is what distinguishes this re-run from B2's pins: the hook must trim the LF (mutant M5 reds only here), and the CLI and the drain trim in JS.
+- **No recall-off file is written by hand.** Every file is the verb's bytes, `<G>\n`. That is what distinguishes this re-run from B2's pins: the hook must trim the LF (mutant M5 reds here and in session-hook.test.ts's C19/C68 parity rows, 12 failed, measured), and the CLI and the drain trim in JS.
 - **The analysis lists only (ID, G1).** The pre-registered list is fixed before the reuse (§10.2, "What the analysis counts"), and the G2 family is a new family, off it. The analysis does not run `changedFamilies`, which W2-D32 does not name (R5): the verb's write at `Date.now()` lies inside `[T0, late]`, so a changed-family reading would flag G1, and changed-family reading is pinned by W2-3's and Task 4's own cases.
 
 - [ ] **Step 0: Check that the base holds Tasks 2 to 4.** From the repository root:
@@ -5702,9 +5703,9 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(scopeOf(read).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G2]]);
 
     // 4. The drain counts recall_off_stale +1. The first tick renames the line, the second drains it while the file still
-    //    names G1. The drain runs before the hook, so the hook's own SessionStart(compact) line is never drained here.
-    //    (SessionStart(compact) is not a spool source, `SPOOL_SOURCES`, so the hook spools no line of its own for it.
-    //    Running the drain first still keeps the counted state exactly what W2-D32 lists, whatever the hook later spools.)
+    //    names G1. The drain runs before the hook. SessionStart(compact) is not a history spool source
+    //    (`SPOOL_SOURCES`), so the hook adds no history spool line;
+    //    draining first keeps the counted state exactly W2-D32's.
     for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
     expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8], [G2, 0]]);
     expect(counters(box)['recall_off_stale'], 'RP8: the drain counts the stale read once').toBe(1);
@@ -5747,7 +5748,7 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     // hook withholds that family's line and its read verb answers 8.
     for (const f of fams) {
       const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
-      expect(h.code, h.stderr).toBe(0);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
       expect(h.context ?? '', `${f.id}: no card line while its file names its generation`).not.toContain('History: node ');
       expect(answer(treeJson(box, f.id)), `${f.id}: exit 8 while recall is off`).toEqual([8, undefined]);
     }
@@ -5762,7 +5763,7 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(fs.readdirSync(hist(box, 'recall-off')), 'RP10: none left').toEqual([]);
     fams.forEach((f, k) => {
       const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
-      expect(h.code, h.stderr).toBe(0);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
       expect(h.context ?? '', `RP10: ${f.id}'s next card line serves`).toContain(lines[k]!);
       expect(treeJson(box, f.id).code, `${f.id}: its read verb reads again`).toBe(0);
     });
@@ -5838,7 +5839,7 @@ Expected green (predicted). What each command selects:
 - `history-recall`:
   - `C66 (B2 half)`, whose last assertion Task 3 re-expected;
   - the four `C68 …` cases: the CLI half, newest family, replay half and joined generation;
-  - this task's `C66 W2 half` and `C67 W2 half`;
+  - this task's four cases (`RP8 end to end`, `RP10 the W2 close step`, `C66 W2 half` and `C67 W2 half`), all selected because their describe's title names C66, C67 and C68, and `C54 + C67 (harness half)`;
 - `history-lib`: the C66 and C67 pure halves and `decideBind`'s C67 case;
 - `history-drain`: the spool half;
 - `history-card`: the path helpers;
@@ -5893,6 +5894,7 @@ cp "$SCRATCH/hook.orig" ccd/session-hook.sh
 
 # M5 (RP8's card line, over the verb's bytes): the hook's ASCII trim of recall-off/<id> removed, so the verb's LF
 # reaches the grammar test and every verb-written file withholds. B2's hand-planted C68 file had no LF.
+# session-hook.test.ts's C19/C68 parity rows plant LF-terminated files too, so they red under M5 as well (12 failed, measured).
 mut ccd/session-hook.sh 'o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"' ':'
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)')
 cp "$SCRATCH/hook.orig" ccd/session-hook.sh
@@ -6044,7 +6046,7 @@ grep -c '~tmp.<pid>' shared/lifecycle.ts
 grep -nE "^  const HISTORY_LANDED: readonly HistoryPr\[\] = \[.*'W2-1'.*\];$" server/test/lifecycle.test.ts | cut -d: -f1
 sed -n '/^### Session history: lossless recall/,/^---$/p' README.md | grep -c 'recall-off'
 PLAN=$(ls docs/superpowers/plans/*-ccrc-history-w2-1-*.md); echo "$PLAN" | wc -l
-for d in D-5763 D-5764 D-6238 D-6239 D-6240; do printf '%s %s\n' "$d" "$(grep -c "^- \*\*$d\*\* — " "$PLAN")"; done
+for d in D-5763 D-5764 D-6238 D-6239 D-6240 D-6241; do printf '%s %s\n' "$d" "$(grep -c "^- \*\*$d\*\* — " "$PLAN")"; done
 grep -cE '^- \*\*D-[0-9]+\*\* — ' "$PLAN"
 ```
 
@@ -6055,7 +6057,7 @@ Expected:
 - `--verbose` at least `1`; one line number for `LIMITS_DEFAULTS`' two values;
 - `recall_off` at least `1` in `measure-history.py` and at least `1` in `cli.mjs`; `~tmp.<pid>` at least `1` in `lifecycle.ts`; one line number for `HISTORY_LANDED` holding `'W2-1'`;
 - README's history section: at least `1`;
-- `1` (exactly one W2-1 plan), then `D-5763 1`, `D-5764 1`, `D-6238 1`, `D-6239 1` and `D-6240 1`, then `5`: the plan defines those five numbers and no other.
+- `1` (exactly one W2-1 plan), then `D-5763 1`, `D-5764 1`, `D-6238 1`, `D-6239 1`, `D-6240 1` and `D-6241 1`, then `6`: the plan defines those six numbers and no other.
 
 A name, a value or an entry that is missing or differs is a finding against the task that owns it: report it to the coordinator, and never write it here. The sentences Step 3 writes state only what these measurements show.
 
@@ -6294,7 +6296,7 @@ Expected: `checked`, then `§17 lines naming 5h-1, 5h-2 or W2-1: 0`, then one fi
 
 ```bash
 git add docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
-git commit -m "docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764)"
+git commit -m "docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764, D-6241)"
 ```
 
 - [ ] **Step 6: Check that the PR holds only W2-1's files.** From the repository root:
@@ -6470,7 +6472,7 @@ Expected: the PR URL; `threads N open 0`; and, once CI settles, every required c
 
 **Mutants.** This task adds no guard, no test and no code path, so it has no mutant list. Its script's anchor assertions are its checks, and Step 2's CONTROL shows one of them red on a moved anchor before the real file is touched. Every guard this PR adds is in Tasks 1–5, each with its own mutant list.
 
-**Commit:** one, Step 5's: `docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764)`.
+**Commit:** one, Step 5's: `docs(history): spec errata for W2-1, W2-3 and W2-4, amended in place (W2-1 Task 6; W2-D3, D-5763, D-5764, D-6241)`.
 
 ---
 
@@ -6483,4 +6485,4 @@ D-5763 and D-5764 were issued on 2026-10-19 in the W2 decisions document's block
 - **D-6238** — `history-expand-body-five-states` (Task 1; W2-D33, R1): the body-pick helper split from `expandEntryText`, `expandEntryBody(rc, e)`, answers five state words, `'body'`, `'unparseable'`, `'tombstone'`, `'over-cap'` and `'undecodable'`, adding `'undecodable'` to the four W2-D33 lists (written before 5h-1's Task 6 merged). The merged `expandBlob` tells a damaged store (a NULL `z` with no `pruned_ms`, or bytes that do not decompress, which expand prints as "content does not decode") apart from a pruned blob; folding it into `'tombstone'`, or into `'unparseable'`, which carries a body, would put an overloaded value at a seam (CLAUDE.md, "No overloaded null at a seam"). The helper also hands back `causes` (read before the primary's bytes, D-4596) and `blob`, `expandBlob`'s untouched answer, so `expandEntryText` stays byte-identical. It takes `rc` (`{db, version, schema}`), not expand's statement set (R1). W2-5a discards on every non-body state and counts each by its own reason (W2-D68). Pins: history-recall's five-state case with `expandBlob`'s answer handed back, and the existing DM2b, D-4596 and nested-row cases; mutants M7 to M11 of Task 1.
 - **D-6239** — `history-recall-off-touches-no-store` (Task 3; W2-D28, R3): `recall-off`'s `--op` pass answers after the gate and the role check and before the lock-take journal half. It opens no store, writes no op marker, journals nothing and flushes no outbox. This departs from spec §9.2's "an --op pass runs the journal half too" (D-4232) and §8.4's "Every writing form flushes its outbox before it exits 0", both written for passes that write the store. The verb writes a control file outside the store; the store observes it only through Task 4's per-tick presence record (W2-D30). It runs on any store state, a recovery included (RB12). Pins: the arm's place after the gate and the role check is pinned by Task 3's C64 rows at both doors and its role-gate case (mutants M14 and M15), and its running under a registered recovery step by Task 3's RB12 case.
 - **D-6240** — `history-recall-off-seen-survives-restore` (Task 4; W2-D30, R4): W2-D30 says `seen_ms` is absent after a recovery. As built, a rebuild starts from an empty store, so it holds there; but a restore keeps the backup's `seen_ms`, and an adopt keeps the store's own. After a restore the next tick's interval runs from the backup's older `seen_ms`, which only widens it (a gap row is written once it exceeds `RECALL_OFF_GAP_MS`), so every change keeps a finite `prev_seen_ms` bound instead of −∞. Residual, named: after an adopt, the old box's state rows are compared with this box's directory. The named nodes' trees are frozen through the window, so neither a restore nor an adopt is expected there. No case drives the restore or adopt edge; the rebuild half is pinned by Task 4's history-recover cases (`seen_ms` never replayed, a gap from null after a rebuild).
-- **D-6241** — `history-recall-off-stale-temp-kinds` (Task 3; W2-D28, R3): W2-D28 and Task 3's text remove every stale `~tmp.*` entry at the start of a pass. As built, that loop unlinks only a regular file or a link: a directory, FIFO, socket or device named `~tmp.*` stays, `--clear-all` names it in `skipped`, and the writer's failure path unlinks its own temp only when this pass created it. `--clear-all` also names in `skipped` an entry the directory listing returned that `lstat` then answers absent (a name that is not valid UTF-8). Why: the writer only ever makes regular temps, so any other kind there is a planted entry the operator removes by hand, as R3 already rules for every other name `--clear-all` skips; removing it silently would leave the operator's close check (`skipped` empty) passing over a file left behind.
+- **D-6241** — `history-recall-off-stale-temp-kinds` (Task 3; W2-D28, R3): W2-D28 and Task 3's text remove every stale `~tmp.*` entry at the start of a pass. As built, that loop unlinks only a regular file or a link: a directory, FIFO, socket or device named `~tmp.*`, or one it cannot measure, stays, `--clear-all` names it in `skipped`, and the writer's failure path unlinks its own temp only when this pass created it. `--clear-all` also names in `skipped` an entry the directory listing returned that `lstat` then answers absent (a name that is not valid UTF-8). Why: the writer only ever makes regular temps, so any other kind there is a planted entry the operator removes by hand, as R3 already rules for every other name `--clear-all` skips; skipping it without a trace would let the operator's close check (`skipped` empty) pass over an entry left behind.

@@ -713,4 +713,20 @@ describe('the recall-off presence record, one tick step (W2-D30; W2-1 Task 4)', 
     expect(stateOf(presence(box), X), 'and the link is never followed').toBeUndefined();
     expect(counters(box)['recall_off_dir_unreadable']).toBe(1);
   }, 240_000);
+
+  it('a state row off its grammar is counted recall_off_state_malformed, once per tick that reads it', () => {
+    const box = makeHistoryBox('ccrc-history-roff-malformed-');
+    tickOk(box);
+    expect(counters(box)['recall_off_state_malformed'], 'CONTROL: a clean store counts none').toBeUndefined();
+    plant(box, X, `${G1}\n`);
+    const db = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(`${K.state}${X}`, '{"s":"maybe"}');
+    } finally {
+      db.close();
+    }
+    tickOk(box);
+    expect(counters(box)['recall_off_state_malformed']).toBe(1);
+    expect(stateOf(presence(box), X), 'the pass rewrote the row from the file it read').toEqual({ s: 'value', v: G1 });
+  }, 120_000);
 });

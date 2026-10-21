@@ -170,8 +170,8 @@ export function summaryDirectionOf(db, ictx, summaryEntryId, fileId) {
  *  its bound and throws without it, as B1's own storedBody passes it. The blob's raw_len is read by a statement of
  *  its own so that blobZ keeps the SQL Task 21's fault seam matches. Its compressed bytes count against the run's
  *  byte budget, as the FTS backfill's do. Exported for the deploy lane (W2-D33): its driver passes blobReadStmts(db)
- *  as `s` and a `{ bytes }` object as `budget`. Its null still covers a tombstone, a body that is not JSON and an
- *  over-cap body alike. */
+ *  as `s` and a `{ bytes }` object as `budget`. Its null still folds no row, a tombstone or a damaged blob, a body that
+ *  is not JSON or is JSON null, and an over-cap body alike. */
 export function bodyOf(s, blobId, budget) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
