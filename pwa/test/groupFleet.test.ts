@@ -410,7 +410,7 @@ describe('the unseen field\'s doc', () => {
    *  wording the doc no longer uses, `continue` fired twice, and the only
    *  assertion left standing was "the doc contains the phrase bucket bar". */
   const SURFACES = [
-    { claim: /bucket bar/i, file: path.join('screens', 'FleetScreen.tsx'), ships: true },
+    { claim: /bucket bar/i, file: path.join('fleet', 'BucketBar.tsx'), ships: true },
     { claim: /row'?s own badge/, file: path.join('fleet', 'SessionLine.tsx'), ships: false },
     { claim: /the bell/, file: path.join('fleet', 'NotificationBell.tsx'), ships: false },
   ];
@@ -426,7 +426,7 @@ describe('the unseen field\'s doc', () => {
     }
     // The loop is not allowed to be vacuous. The shipping surface must be
     // named AND must have been checked — which is what fails if either the
-    // doc stops naming the bucket bar or FleetScreen stops calling isUnseen.
+    // doc stops naming the bucket bar or BucketBar stops calling isUnseen.
     expect(doc).toMatch(SURFACES[0]!.claim);
     expect(checked).toBeGreaterThanOrEqual(1);
   });
