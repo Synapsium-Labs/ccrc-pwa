@@ -5289,6 +5289,8 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
     'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W5h-2 Task 3 (D-5747): the operator relay's look-behind window, declared once in lib.mjs.
+    'RELAY_LOOKBEHIND_BYTES',
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
@@ -7018,7 +7020,7 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const l = await lib();
     const code = codeLines(HOOK_SH);
     expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
-    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // The delegation spool's jq definitions (#448) spell its own 512-byte path bound, `def maxpath: 512;`, a different
     // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
     expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
     const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));

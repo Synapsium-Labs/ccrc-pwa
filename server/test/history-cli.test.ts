@@ -404,7 +404,9 @@ describe('ccrc history status (Linux)', () => {
     expect(fn![1]).toContain('redactFinalLines(');
     // D-4613 round 5: the other lines the CLI never frames take the per-line belt too (emitRefusal's human line, the operator relay's emit)
     expect(src).toContain('redactFinalLines(refusalLine(r.exit, r.reason), pairIdx)');
-    expect(src).toContain('emit(redactFinalLines(line, idx), toStderr)');
+    // D-5747 (W5h-2 Task 3): the relay's emit reads each SOURCE stream through its look-behind, lib redactAfter, whose every reading is redactFinalLines
+    expect(src).toContain('const r = healthLib.redactAfter(behind[k], text, idx);');
+    expect(src).toContain('emit(r.emit, fromStderr);');
     expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
   });
 
@@ -852,6 +854,45 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       const dir = statusOf(box);
       expect(dir.env!['pass_died']).toBe('unmeasured');
       expect(wordsOf(failOf(dir))).toEqual(['status-unreadable']);
+    });
+
+    // W5h-2 Task 4 (D-5748 (history-op-marker-identity)): the op marker names its process as the pass marker does, and status's
+    // op.alive is lib's decideOpLive over what it measures now. A marker behind a reused pid (D-5026's residual (i)) no longer reads
+    // as a live operator pass, so it holds back neither the death line nor the freshness FAILs; a legacy three-field marker, from a
+    // pass of the older build, is read by the kill probe, with EPERM not live.
+    const opFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'op');
+    const plantOp = (box: healthHh.HistoryBox, text: string): void => {
+      healthFs.mkdirSync(healthPath.dirname(opFile(box)), { recursive: true, mode: 0o700 });
+      healthFs.writeFileSync(opFile(box), text, { mode: 0o600 });
+    };
+    it('(D-5748) an op marker naming a live pid with another start time (a reused pid) is op.alive false: no op-running WARN, and the death line it hid FAILs tick-stale', () => {
+      const box = staleBox('ccrc-history-op-reused-');
+      plantDied(box, 20 * MIN);
+      const me = identityOf(process.pid);
+      const start = Date.now() - 30 * MIN;
+      plantOp(box, `prune ${process.pid} ${start} ${me.procStart} ${me.bootId}\n`);
+      const held = statusOf(box);
+      expect(held.env!['op'], 'CONTROL: the identity measured equal is a live operator pass').toEqual({ verb: 'prune', pid: process.pid, alive: true, start_ms: start });
+      expect(wordsOf(held.env!['health']['warn'])).toContain('op-running');
+      expect(wordsOf(failOf(held)), 'CONTROL: a live operator pass holds the death line back (D-5026, batch A2)').toEqual([]);
+      plantOp(box, `prune ${process.pid} ${start} ${String(Number(me.procStart) + 1)} ${me.bootId}\n`);
+      const r = statusOf(box);
+      expect(r.env!['op']).toEqual({ verb: 'prune', pid: process.pid, alive: false, start_ms: start });
+      expect(wordsOf(r.env!['health']['warn'])).not.toContain('op-running');
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain('ended without writing a tick');
+    });
+    it.skipIf(process.getuid?.() === 0)('(D-5748) a legacy three-field op marker is read by the kill probe: this test\'s own pid is live, and pid 1, which this user may not signal, is not', () => {
+      const box = staleBox('ccrc-history-op-legacy-');
+      plantOp(box, `prune ${process.pid} 1700000000000\n`);
+      const own = statusOf(box);
+      expect(own.env!['op'], 'the rollout window: an older build\'s pass reads live').toEqual({ verb: 'prune', pid: process.pid, alive: true, start_ms: 1700000000000 });
+      expect(wordsOf(failOf(own))).toEqual([]);
+      expect(() => process.kill(1, 0), 'CONTROL: pid 1 is another user\'s process here').toThrow(/EPERM/);
+      plantOp(box, 'prune 1 1700000000000\n');
+      const r = statusOf(box);
+      expect(r.env!['op']).toEqual({ verb: 'prune', pid: 1, alive: false, start_ms: 1700000000000 });
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
     });
   });
 

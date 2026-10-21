@@ -1392,7 +1392,7 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
-import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths } from '../../ccd/history/lib.mjs';
+import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths, formatOpMarker, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 // The PWA bundle's one fixture worker (Docs W4): `healthy()` plants it and the `docs-sw` describe at the end of
 // this file measures it. Imported here, below every line another file cites, for the block comment above's reason.
@@ -14316,6 +14316,13 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     freshTick(db);
     setHistoryMeta(db, k, v);
   };
+  /** D-5748: this test process's identity, read from /proc as D-5016 reads it, for an op marker that names its process. */
+  const ownIdentity = (): { procStart: string; bootId: string } => {
+    const procStart = procStartOf(readFileSync(`/proc/${process.pid}/stat`, 'utf8'));
+    const bootId = bootIdOf(readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'));
+    if (procStart === null || bootId === null) throw new Error('this box has no /proc identity');
+    return { procStart, bootId };
+  };
   const STATES: StateCase[] = [
     // §8.3's store-open refusals, each from the files that make it
     { word: 'store-unbound', cls: 'FAIL', plant: (home) => { rmSync(join(historyRoot(home), 'store.id')); },
@@ -14376,6 +14383,21 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
         withStore(home, tickAgo(2400));
         writeFileSync(join(historyRoot(home), 'op'), `prune ${dead} ${Date.now() - 2_400_000}\n`, { mode: 0o600 });
       } },
+    // W5h-2 Task 4 (D-5748): the op marker names its process; the two rows above plant the legacy three-field form an older build writes.
+    { name: 'D-5748: an op marker whose identity measures equal is a live operator pass, a WARN and never the stale-tick FAIL', word: 'op-running', cls: 'WARN',
+      plant: (home) => {
+        withStore(home, tickAgo(2400));
+        writeFileSync(join(historyRoot(home), 'op'), formatOpMarker({ verb: 'prune', pid: process.pid, startMs: Date.now() - 2_400_000, ...ownIdentity() }), { mode: 0o600 });
+      },
+      absent: ['FAIL history: tick-stale'] },
+    { name: 'D-5748: an op marker naming a live pid with another start time (a reused pid) holds nothing back', word: 'tick-stale', cls: 'FAIL',
+      plant: (home) => {
+        const me = ownIdentity();
+        withStore(home, tickAgo(2400));
+        writeFileSync(join(historyRoot(home), 'op'),
+          formatOpMarker({ verb: 'prune', pid: process.pid, startMs: Date.now() - 2_400_000, procStart: String(Number(me.procStart) + 1), bootId: me.bootId }), { mode: 0o600 });
+      },
+      absent: ['WARN history: op-running'] },
     { name: 'catching-up: bytes behind falling across three ticks is a WARN, never the lag FAIL', word: 'catching-up', cls: 'WARN',
       plant: (home) => withStore(home, (db) => {
         for (const [agoS, b] of [[90, 3000], [60, 2000], [30, 1000]] as const) {
