@@ -58,9 +58,16 @@
   align-items: center;
   gap: var(--sp-2);
 }
-/* The model and effort doors reach the tap floor here: the rail has the room the header's chip row does not. */
+/* The model and effort doors reach the tap floor here: the rail has the room the header's chip row does not. A
+   full-width field with the chip's own ink and edge, so a short value ("high") never draws as a 44px circle. */
 .insp-routing-row button {
+  width: 100%;
   min-height: var(--tap-min);
+  border-radius: var(--r-md);
+}
+/* The mail strip's own sheet insets it from a chat column's edge; the section already has its gutter. */
+.insp-section .mail-strip {
+  margin: 0;
 }
 .insp-routing-row dt {
   font-size: var(--fs-meta);
