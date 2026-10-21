@@ -168,6 +168,27 @@ describe('the app bar (W2 Task S4b)', () => {
     expect(within(primary()).getByRole('button', { name: 'Runs, 1 active' })).toBeInTheDocument();
   });
 
+  it('a badge prints at most 99+, while the tab\'s name carries the real count', () => {
+    atWidth(1280);
+    render(<App />);
+    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null }) as unknown as RunSummary);
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
+    const tab = within(primary()).getByRole('button', { name: 'Runs, 120 active' });
+    expect(tab).toHaveTextContent(/99\+$/);
+  });
+
+  // Under a coarse pointer the bar's icon doors were narrower than a finger (Settings 32 wide, the bell 28 square)
+  // where main's head door they replace was 73 x 44 (W2 Task S4b review). The floor is refined.css's (below); this
+  // half proves the floored classes are on the bar's real doors.
+  it('search and Settings carry the bar door class, and the bell sits in the doors row the floor reaches', () => {
+    atWidth(1280);
+    render(<App />);
+    const b = bar();
+    expect(within(b).getByRole('button', { name: 'Search and commands' })).toHaveClass('ref-bar-door');
+    expect(within(b).getByRole('button', { name: /^Settings/ })).toHaveClass('ref-bar-door');
+    expect(within(b).getByRole('button', { name: /^Notifications/ }).parentElement).toHaveClass('ref-bar-doors');
+  });
+
   it('New session opens the fleet flow\'s sheet; search opens the palette', () => {
     atWidth(1280);
     render(<App />);
@@ -238,6 +259,18 @@ describe("Refined's frame (refined.css)", () => {
   // The tab is the bar's full height, so a ring drawn OUTSIDE it (Door's FOCUS_RING, offset 2px) loses its top edge
   // off the top of the page and its bottom edge under the banners and the sidebar row: a keyboard user sees two side
   // lines and no box. The ring is drawn inside the tab instead (the inset-ring precedent in fleet.css).
+  it("the banner stack spans the frame in the row under the bar; the sidebar and the detail sit below it", () => {
+    const desk = block('(min-width: 900px)');
+    expect(declaredValues(desk, '.ref-frame > .shell-banners', 'grid-row')).toEqual(['2']);
+    expect(declaredValues(desk, '.ref-frame > .shell-banners', 'grid-column')).toEqual(['1 / -1']);
+    expect(declaredValues(desk, '.ref-frame > .shell-nav', 'grid-row')).toEqual(['3']);
+    expect(declaredValues(desk, '.ref-frame > .shell-detail', 'grid-row')).toEqual(['3']);
+  });
+  it("the bar's icon doors and its bell are at least one tap square, off the shared token", () => {
+    expect(declaredValues(css, '.ref-bar-door', 'min-width')).toEqual(['var(--tap-min)']);
+    expect(declaredValues(css, '.ref-bar-doors > .bell', 'min-width')).toEqual(['var(--tap-min)']);
+    expect(declaredValues(css, '.ref-bar-doors > .bell', 'min-height')).toEqual(['var(--tap-min)']);
+  });
   it("a focused tab's ring is drawn inside the tab, so the bar's edges cannot cut it", () => {
     const offsets = declaredValues(css, '.ref-tab:focus-visible', 'outline-offset');
     expect(offsets.length, 'refined.css sets the tab ring\'s offset').toBeGreaterThan(0);

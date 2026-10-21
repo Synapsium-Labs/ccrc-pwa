@@ -204,7 +204,18 @@
   gap: var(--sp-1);
 }
 .ref-bar-door {
+  justify-content: center;
+  min-width: var(--tap-min);
   padding: 0 var(--sp-2);
+}
+/* The bell is the fleet head's own control, 28 square there; in the bar it is a finger's square like its neighbours
+   (W2 Task S4b review: Door is one tap tall already, the icon doors and the bell were narrower). */
+.ref-bar-doors > .bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
 }
 .ref-bar-new {
   flex: none;

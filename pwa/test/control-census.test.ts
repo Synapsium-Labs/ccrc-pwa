@@ -139,6 +139,9 @@ const TWIN_FLOORS: Record<string, string> = {
   '.settings-bell-row .bell':
     'NotificationBell in SETTINGS, which has both floors. The fleet header copy '
     + 'is the one the `.bell` entry is about, and it is UNDER on main.',
+  '.ref-bar-doors > .bell':
+    "NotificationBell in REFINED'S DESK BAR, which has both floors (W2 Task S4b, D-5471). The fleet header copy, "
+    + 'still drawn on the phone and in Instrument, is the one the `.bell` entry is about.',
 };
 
 /** Does the rule with exactly this selector declare the floor token? */
