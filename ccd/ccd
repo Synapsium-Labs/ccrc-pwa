@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2f94f3b300f17aedb4442fcb600049f3a2f5ce7474c2afdc3c4ce60b258388c5
+# ccrc:generated 1 sha256=11fee83b012c0fb2b25ec6fa9d56ae9a3a55ad15c6f0870a70bf71ad4e28607d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27520,11 +27520,19 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
   # silent — the failure direction this file chooses everywhere else. A floor
   # would have to sit on the re-stamp path only, never on an episode's first
   # line, and no measured case asks for one yet.
-  local _tu_prev _tu_rc
+  local _tu_prev _tu_rc _tu_now _tu_ts _tu_still=""
   _tu_prev=$(_reg_read "$1" tickstuck); _tu_rc=$?
   [[ "$_tu_rc" -eq 2 ]] && return 0
-  [[ "$_tu_rc" -eq 0 && "${_tu_prev#* }" == "$2" ]] && return 0
-  _reg_set "$1" tickstuck "$(date +%s) $2" 2>/dev/null || true
+  _now_s_to _tu_now
+  # THE SAME FIELD IS SAID AGAIN after COMPACT_NOTE_FLOOR (D-6180), with how long
+  # since it was last said, so a session frozen for hours stays visible in the
+  # swap log instead of going quiet after its first line; the stamp is refreshed.
+  if [[ "$_tu_rc" -eq 0 && "${_tu_prev#* }" == "$2" ]]; then
+    _tu_ts="${_tu_prev%% *}"
+    [[ "$_tu_ts" =~ ^[0-9]+$ ]] && (( _tu_now - _tu_ts >= COMPACT_NOTE_FLOOR )) || return 0
+    _tu_still=" (still, $(( (_tu_now - _tu_ts) / 60 ))m)"
+  fi
+  _reg_set "$1" tickstuck "$_tu_now $2" 2>/dev/null || true
   # THE GROUP CARRIES THE REDIRECT, and the order is the whole point: in
   # `cmd >> file 2>/dev/null` the redirections are applied left to right, so
   # when `>>` fails bash reports "Is a directory" on a stderr that has not been
@@ -27532,7 +27540,7 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
   # that. `{ …; } 2>/dev/null` silences the group before the inner redirect is
   # attempted, which is the only spelling that keeps a failed append out of the
   # supervise journal.
-  { echo "$(date '+%F %T') tick-undecidable $1: $2 could not be measured — deciding nothing" \
+  { echo "$(date '+%F %T') tick-undecidable $1: $2 could not be measured — deciding nothing$_tu_still" \
       >> "$REG/swap.log"; } 2>/dev/null || true
   return 0
 }

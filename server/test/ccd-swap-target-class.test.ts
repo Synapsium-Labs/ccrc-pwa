@@ -261,7 +261,10 @@ describe('the tick spends rc 5 and rc 6', () => {
     tick();
     h.sh(`_reg_set ${ID} tickstuck "${now() - 31 * 60} classwindow"`);
     tick();
-    expect(swapLog().split('\n').filter((l) => l.includes(`tick-undecidable ${ID}: classwindow`))).toHaveLength(1);
+    // flipped by D-6180's re-log floor: the same field is said again, with its age
+    const said = swapLog().split('\n').filter((l) => l.includes(`tick-undecidable ${ID}: classwindow`));
+    expect(said).toHaveLength(2);
+    expect(said[1]).toMatch(/deciding nothing \(still, 31m\)$/);
   });
 
   it('rc 6 dispatches to the destination carrying the rung, and stamps nothing at the decision (D-5240)', () => {

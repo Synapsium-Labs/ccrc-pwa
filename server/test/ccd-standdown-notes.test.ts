@@ -376,6 +376,21 @@ describe('D-6180: every silent stand-down logged, once per episode, with a re-lo
     expect(h.reg(ID, 'standdownprobe'), 'and the steady tick never probes').toBeNull();
   });
 
+  it('tick-undecidable re-logs the same field after the floor', () => {
+    seed();
+    const floor = Number(h.sh('echo "$COMPACT_NOTE_FLOOR"'));
+    const say = (now: number): void => { h.sh(`${STUBS(PROMPT)} _tick_undecidable ${ID} pool`, env(now)); };
+    say(T0); say(T0 + 60);
+    expect(lines('tick-undecidable')).toHaveLength(1);
+    say(T0 + floor);
+    expect(lines('tick-undecidable')).toEqual([
+      expect.stringMatching(/tick-undecidable lane-a-project-a: pool could not be measured — deciding nothing$/),
+      expect.stringMatching(/tick-undecidable lane-a-project-a: pool could not be measured — deciding nothing \(still, 30m\)$/),
+    ]);
+    say(T0 + floor + 60);
+    expect(lines('tick-undecidable'), 'the stamp was refreshed').toHaveLength(2);
+  });
+
   it('banner-outside-tail is yes when only the whole pane shows the banner', () => {
     seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 100}`);
     writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
