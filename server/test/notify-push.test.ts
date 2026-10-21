@@ -407,6 +407,8 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(said).toHaveLength(2);
     for (const l of said) {
       expect(l).toContain(own);
+      expect(l, 'the remedy ends where the mode\'s clause ends').toContain(`${own}; the banner went out, the phone push did not`);
+      expect(l, 'no mode promises that a hand edit of the file is read by an answer').not.toContain('hand edit');
       expect(l, 'the other mode\'s remedy').not.toContain(other);
       expect(l).toContain('must exist and carry exec.kind "codex" (the server decides from the roster it holds)');
       expect(l, 'the old, false phrase').not.toContain('alone does not make it pushable');
