@@ -31,8 +31,9 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 
-/** Flipped to `true` by OA-C2 in one commit and nothing else. */
-const GROWTH_ARMED = false;
+/** Armed by OA-C2 (D-6178), ruled by the operator on 2026-10-21: a listed file
+ *  over the limit now fails its row. */
+const GROWTH_ARMED = true;
 
 /** The union of spec §5.2 and the ARCH-01 ticket. */
 const GROWTH_FILES = [
