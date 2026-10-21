@@ -710,7 +710,7 @@ A later W0 slice (spec §5.2), in stages 1 and 2's shape (#934, #944). **Routing
 ## Operator acts in this wave
 
 - **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
-- **OA-C2 (after C0a, when ready): arm the growth check.** Flip `GROWTH_ARMED` to `true` in one commit. The ask lists the PRs that were open when C0a landed and grow a listed file, so the operator can wait for them to merge or name them exempt (spec §5.2, rev 2; O3 (a)).
+- **OA-C2 (after C0a, when ready): arm the growth check.** Flip `GROWTH_ARMED` to `true` in one commit. The ask lists the PRs that were open when C0a landed and grow a listed file, so the operator can wait for them to merge or name them exempt (spec §5.2, rev 2; O3 (a)). **Ruled 2026-10-21: "Arm it (Recommended)".** Landed as D-6178: one commit flips the constant. Of the PRs open when C0a landed (#843, merged 2026-10-20), none that is still open grows a listed file. Of the PRs open on the day of arming, one turns red: #1050 grows `ccd/ccd` by 65 net code lines. #1054 grows `ccd/ccd`, `server/src/server.ts` and `pwa/src/lib/api.ts` past the limit but adds new files under `shared/`, so the waiver keeps it green. Neither PR was edited.
 - **No deploy.** W0 ships no production byte.
 
 ## Acceptance
@@ -836,6 +836,10 @@ Task C0k was issued three numbers, 6051 to 6053.
 ### Issued for C0a's job-summary follow-up and defined here
 
 - **D-6119** — `growth-check-job-summary` (C0a's follow-up; ARCH-01 (#526) acceptance 3; extends D-5848): the growth check appends a CI job summary to `$GITHUB_STEP_SUMMARY` from the test itself, so no workflow changes: each listed file's code lines at the merge-base and at HEAD with the net delta, `FleetWatcher`'s method count at both, read by ARCH-00's parser (`scan/parse.ts`, symbols of kind `method` keyed `FleetWatcher.<name>`; getters, setters, arrow properties, the constructor and nested functions are not counted), and `GROWTH_OVER`. The absolute numbers appear in the summary only, never in an assertion, so the test still holds no per-file constant. Arming stays OA-C2's (`GROWTH_ARMED` is unchanged). On the day it landed `FleetWatcher` had 181 methods; the ticket's 148 was counted at the audit.
+
+### Operator act OA-C2, defined here
+
+- **D-6178** — `growth-check-armed` (OA-C2; ARCH-01 (#526); extends D-5848 and D-6119): the operator ruled on 2026-10-21, answering "Arm the consolidation god-file growth check (OA-C2)?" with "Arm it (Recommended)". `GROWTH_ARMED` in `server/test/growth-check.test.ts` is now `true`, flipped in one commit that changes nothing else. A PR that grows a listed file by more than 40 net code lines against the merge-base fails that file's row in CI, unless the same diff adds a new file under `L1_L2_NEW_FILE_DIRS` or shrinks another listed file by at least as much. Outside CI the rows still skip with a printed notice, and the job summary drops its "reporting only" line. The open PRs measured on the day of arming are listed under OA-C2.
 
 ## Out of scope
 
