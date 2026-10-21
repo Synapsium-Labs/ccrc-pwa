@@ -483,6 +483,12 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '    if [ -f "$HOME/fixture-bootstrap-fail" ]; then',
     '      echo "Bootstrap failed: fixture" >&2; exit 1',
     '    fi',
+    // `fixture-draining` is an old job still in its graceful shutdown after
+    // `bootout` returned: launchd refuses the bootstrap with 5 while it holds the
+    // label, and the file's number is how many more `print`s still find it.
+    '    if [ -f "$HOME/fixture-draining" ]; then',
+    '      echo "Bootstrap failed: 5: Input/output error" >&2; exit 5',
+    '    fi',
     '    printf \'%s\\n\' "${3##*/LaunchAgents/}" >> "$HOME/launchctl-loaded"',
     '    exit 0 ;;',
     '  bootout)',
@@ -499,6 +505,11 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // answers right after `_inst_enable`.
     '  print)',
     '    lbl="${2##*/}"',
+    '    if [ -f "$HOME/fixture-draining" ]; then',
+    '      IFS= read -r n < "$HOME/fixture-draining"',
+    '      if [ "$n" -gt 0 ]; then echo "$((n - 1))" > "$HOME/fixture-draining"; echo "	state = stopping"; exit 0; fi',
+    '      rm -f "$HOME/fixture-draining"; exit 113',
+    '    fi',
     '    f="$HOME/fixture-unit-$lbl"',
     '    if [ -f "$f" ]; then IFS= read -r v < "$f"; [ "$v" = active ] || exit 113; fi',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
@@ -4928,6 +4939,27 @@ describeDarwin('ccrc install: the launchd failure branches — the refusal, and 
     expect(r.stderr).toMatch(/launchctl print gui\//);
     expect(r.stdout, 'the install must not report the step as done')
       .not.toMatch(/^install: services: app\.ccrc\.ccrc bootstrapped/m);
+  });
+
+  it('waits for an old job still shutting down after bootout, then bootstraps — a returned bootout is not a job that left', () => {
+    // The measured failure: launchd answered `bootout` while the old server was
+    // still in its graceful shutdown, the bootstrap was refused with 5, and the
+    // update was reverted. Delete the wait and this install dies instead.
+    const home = freshBox('ccrc-install-draining-');
+    writeFileSync(join(home, 'fixture-draining'), '2\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(home, 'launchctl-calls')).match(/^bootstrap gui\/\S+ \S*app\.ccrc\.ccrc\.plist/gm),
+      'the refused bootstrap was not tried again').toHaveLength(2);
+    expect(r.stdout).toMatch(/^install: services: app\.ccrc\.ccrc bootstrapped/m);
+  });
+
+  it('the wait is bounded: an old job that never leaves still fails the install, and says it waited', () => {
+    const home = freshBox('ccrc-install-draining-forever-');
+    writeFileSync(join(home, 'fixture-draining'), '100000\n');
+    const r = runInstall(home, undefined, { CCRC_BOOTOUT_WAIT_S: '1' });
+    expect(r.code, 'a job launchd never let go of must FAIL the install').not.toBe(0);
+    expect(r.stderr).toMatch(/launchctl bootstrap failed for app\.ccrc\.ccrc \(again after 1s waiting for the old job to leave\)/);
   });
 
   it('fails the install when the bootstrapped job does not stay up — fork-time success is not a service', () => {
