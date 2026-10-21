@@ -868,11 +868,10 @@ describe('binding, batched (landing-order wave 3c)', () => {
     expect(annotateCalls(rec.calls()).filter((c) => c === 'cat-file -e')).toHaveLength(3);
   });
 
-  it('(g) an abbreviation ambiguous between a commit and a blob answers false, as merge-base refused it', () => {
-    // Build a 7-hex collision by a birthday search, about 2^14 candidates a side: commits whose parent is the tip
-    // (fixed dates, a varying message) against blobs `blob <j>\n`. The commit becomes the branch's tip, so it IS
-    // reachable: only the ambiguity of the bare name can answer false, exactly as `merge-base -- X tip` exits 128.
-    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+  /** Writes a commit (parent `tip`) and a blob whose shas share their first 7 hex, found by a birthday search of about
+   *  2^14 candidates a side: commits with fixed dates and a varying message against blobs `blob <j>\n`. Returns the
+   *  commit's sha; its 7-hex abbreviation peels to the commit and is ambiguous bare. */
+  const ambiguousCommit = (main: string, tip: string): string => {
     const tree = h.git(main, 'rev-parse', `${tip}^{tree}`);
     const id = (type: string, body: string): string =>
       createHash('sha1').update(`${type} ${Buffer.byteLength(body)}\0${body}`).digest('hex');
@@ -887,10 +886,30 @@ describe('binding, batched (landing-order wave 3c)', () => {
     expect(commit, 'no 7-hex collision found in the search bound').not.toBe('');
     const csha = gitWrite(main, ['hash-object', '-w', '-t', 'commit', '--stdin'], commit);
     gitWrite(main, ['hash-object', '-w', '--stdin'], blob);
+    return csha;
+  };
+
+  it('(g) an abbreviation ambiguous between a commit and a blob answers false, as merge-base refused it', () => {
+    // The commit becomes the branch's tip, so it IS reachable: only the ambiguity of the bare name can answer false,
+    // exactly as `merge-base -- X tip` exits 128.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const csha = ambiguousCommit(main, tip);
     h.git(main, 'update-ref', 'refs/heads/ws/quiet-basin', csha);
     h.ghRows([mergedRow({ number: 1, headRefOid: csha.slice(0, 7) }), mergedRow({ number: 2, headRefOid: csha })]);
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([false, true]);
+  });
+
+  it('(h) with no tip, the same ambiguous abbreviation answers true, as one_ours\'s cat-file -e did', () => {
+    // (g)'s partner on deviation 7's path: the branch is renamed away, so `tip` is null and reachability is skipped.
+    // `X^{commit}` still peels to the commit, so the row binds; ambiguity only ever failed the reachability conjunct.
+    const { main, wt, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const csha = ambiguousCommit(main, tip);
+    h.git(wt, 'branch', '-m', 'ws/renamed');
+    h.ghRows([mergedRow({ number: 1, headRefOid: csha.slice(0, 7) }), mergedRow({ number: 2, headRefOid: csha })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.tip).toBeNull();
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([true, true]);
   });
 });
 
