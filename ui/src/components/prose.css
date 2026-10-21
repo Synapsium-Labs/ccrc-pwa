@@ -29,7 +29,13 @@
  * registry entry, every test selector and MessageBubble's own
  * `react-markdown` component map keep resolving. What moved is the file they
  * live in — which IS the gate's rule key (`<basename> <selector>`), so
- * twenty-five registry keys moved with them and the gate said so out loud. */
+ * twenty-five registry keys moved with them and the gate said so out loud.
+ *
+ * "Seventy-six" is the count that MOVED, not this file's count today: the
+ * list MARKERS block, and the list layout the markers revealed (the indents,
+ * the task list's block layout, the lists' spacing in quotes and callouts),
+ * were added afterwards, when the preflight's `list-style: none` was found to
+ * have kept every prose list bare since before the move. */
 @layer components {
   /* ------------------------------------------------------------------ *
    *  Assistant turns — output: flush markdown prose, wells for code.    *
@@ -88,20 +94,59 @@
     gap: var(--sp-2);
     color: var(--ink-primary);
   }
+  /* MARKERS — the preflight's `ol, ul { list-style: none }` reaches in here,
+     and without these the `::marker` hue below paints nothing. Rules of their
+     own: `ul` and `ol` want different types, and splitting the shared rule
+     above would rekey its contrast-gate entry. Longhand, so the minifier cannot
+     drop `disc` as an initial value; position is the initial `outside`, so
+     the marker hangs in the list's left padding. Nesting steps as the UA's
+     would. (0,1,x) all — the task-list rule below (0,2,0) still wins.
+     An ordered list's padding is sized for its NUMBER, not for a bullet: an
+     outside marker ends at the item's content edge, and in Geist at --fs-base
+     `10. ` measured 22.3px and `100. ` 32.4px (2.16em), so --sp-5 (20px) let
+     every two-digit number hang past the column's left edge, and the nested
+     --sp-4 into the parent's text. 2.25em holds three digits, at any size. */
+  .msg-assist ul { list-style-type: disc; }
+  .msg-assist ol { list-style-type: decimal; padding-left: 2.25em; }
+  .msg-assist :is(ul, ol) ul { list-style-type: circle; }
+  .msg-assist :is(ul, ol) :is(ul, ol) ul { list-style-type: square; }
   .msg-assist li::marker { color: var(--ink-tertiary); }
+  /* Inside a callout the ground is its tint, and --ink-tertiary — the NUMBER
+     is text, 4.5 — measured 3.81 on the warning tint (dracula) and under 4.5
+     on four of the five tints in some theme. --ink-secondary, the callout's
+     own body ink, measures 4.67 at its worst there. */
+  .msg-assist .callout li::marker { color: var(--ink-secondary); }
   .msg-assist li > ul, .msg-assist li > ol { margin-top: var(--sp-2); padding-left: var(--sp-4); }
+  .msg-assist li > ol { padding-left: 2.25em; }
 
   /* GFM task lists — terminal cells, not OS checkboxes. remark-gfm emits the
      markup; this repaints it. Must follow the ul/ol rule to win padding. */
   .msg-assist .contains-task-list { padding-left: 0; list-style: none; }
-  .msg-assist .task-list-item { display: flex; align-items: baseline; gap: var(--sp-2); }
+  /* Nested, it steps in like any nested list; flush, its boxes sat level with
+     the parent item's text and the depth read as ambiguous. (0,2,1) > (0,2,0). */
+  .msg-assist li > .contains-task-list { padding-left: var(--sp-4); }
+  /* A BLOCK, with the box hung in its padding — not a flex row. As a flex row
+     every child was a flex item: a nested task list stood as a column to the
+     RIGHT of its parent's label (squeezing the label until it broke mid-word
+     at 390px), and an inline `strong` or `code` in a label would split it into
+     separate items with gaps. Here the label is ordinary inline text that
+     wraps under itself, and a sublist is a block below it, like any list.
+     The box is out of flow, so the space remark-gfm writes after it falls at
+     the start of the line and collapses — the gap is the padding alone. Its
+     top centres it on the first line (1lh = that line's height); `p > input`,
+     a loose item's shape, is placed by the same rule, the li holding it. */
+  .msg-assist .task-list-item { position: relative; padding-left: calc(15px + var(--sp-2)); }
+  /* The unchecked box takes the SURFACE, not --bg-well: the well stays dark in
+     light by design (it is the code ground), so an empty box painted as a
+     solid near-black square — read as "on", and heavier than the checked one. */
   .msg-assist .task-list-item input[type='checkbox'] {
     appearance: none; -webkit-appearance: none;
-    flex: none; width: 15px; height: 15px; margin: 0; translate: 0 2px;
+    position: absolute; left: 0; top: calc(0.5lh - 7.5px);
+    width: 15px; height: 15px; margin: 0;
     border: 1px solid var(--edge-strong);
     border-radius: var(--r-sm);
-    background: var(--bg-well);
-    cursor: default; position: relative;
+    background: var(--bg-surface);
+    cursor: default;
   }
   .msg-assist .task-list-item input[type='checkbox']:checked {
     border-color: var(--accent); background: var(--accent-tint);
@@ -112,10 +157,23 @@
     font: var(--weight-semibold) 11px / 1 var(--family-mono);
     color: var(--accent);
   }
-  .msg-assist .task-list-item:has(input:checked) {   /* progressive; degrades to no-dim */
+  /* DONE is the item's OWN box, never a descendant's: a bare `:has(input:checked)`
+     found a checked grandchild and struck the unchecked parent through. The
+     box is the li's child in a tight list and its first paragraph's in a loose
+     one (mdast-util-to-hast puts it there), so both, and only those. */
+  .msg-assist .task-list-item:has(> input:checked, > p:first-child > input:checked) {   /* progressive; degrades to no-dim */
     color: var(--ink-tertiary);
     text-decoration: line-through;
     text-decoration-color: var(--edge-strong);
+  }
+  /* A done item's line-through would otherwise paint into its sublist: a text
+     decoration propagates to every in-flow descendant, and no descendant can
+     take it off. It does NOT propagate into an atomic inline — so the sublist
+     is one, as wide as the item, top-aligned so the line box adds no strut
+     below it. Its own items keep their own state: the colour does not leak
+     either, since `.msg-assist ul, .msg-assist ol` re-sets --ink-primary. */
+  .msg-assist .task-list-item > :is(ul, ol) {
+    display: inline-grid; width: 100%; vertical-align: top;
   }
 
   /* LINKS — accent with a restrained underline that firms on hover. */
@@ -138,6 +196,21 @@
   }
   .msg-assist blockquote > :first-child { margin-top: 0; }
   .msg-assist blockquote > :last-child { margin-bottom: 0; }
+  /* A LIST's own rhythm in a quote: the preflight zeroes every child margin
+     and a quote is not the grid `.msg-assist` is, so a list ran into the
+     paragraph above it and the one below. Lists only — a quote's paragraphs
+     keep main's spacing, and a heading after a list keeps its own top margin
+     (the heading rule is (0,1,1), and `:not(h1, h2, h3, h4)` keeps this one
+     off it rather than racing it on source order). */
+  .msg-assist blockquote > * + :is(ul, ol),
+  .msg-assist blockquote > :is(ul, ol) + :not(h1, h2, h3, h4) { margin-top: var(--sp-2); }
+  /* A list straight after a list must not read as one list: in a quote and in
+     a callout the step between their boxes was --sp-2, the same as the step
+     between items. Twice that, in both: the quote by margin alone, the callout
+     by margin over its grid's --sp-2 gap. The quote's rule is (0,1,3), level
+     with the rhythm's second selector, so it must stay AFTER it. */
+  .msg-assist blockquote > :is(ul, ol) + :is(ul, ol) { margin-top: var(--sp-4); }
+  .msg-assist .callout > :is(ul, ol) + :is(ul, ol) { margin-top: var(--sp-2); }
 
   /* SECTION RULE — hairline fading at both ends. */
   .msg-assist hr {

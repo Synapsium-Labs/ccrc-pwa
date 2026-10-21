@@ -1,13 +1,15 @@
-// Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then the Box
-// token card, then the Linear card (named workspaces S4b), each a `Section` with its scope ("This box"). R2d inserts
-// Your sign-in and This session between the first two; the slot before Box token is reserved for "Recent account
-// changes". The auth status the gate card reads, and the Linear connection, are the frame's.
+// Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then Your
+// sign-in and This session (`YourSignInCard.tsx`, `ThisSessionCard.tsx`; from Accounts, R2d, D-5508), then the Box
+// token card, then the Linear card (named workspaces S4b), each a `Section` with its scope. The slot before Box token
+// is reserved for "Recent account changes".
+// The auth status, the passkey list and the Linear connection the cards show are the frame's reads.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UpdatesView } from '../../../../shared/api';
 import { Button, Section, Skeleton, elapsedShort, useNow } from '@ccrc/ui';
 import { BOX_TOKEN_CARD, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, useResultLine } from '../../fleet/settingsText';
 import { isPlaceableInstant, type UpdatesPoll } from '../../fleet/useUpdatesView';
+import { armedMode } from '../../lib/auth';
 import { ApiError, api, apiErrorText, readBoxTokenView } from '../../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -20,10 +22,12 @@ import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 // `NodeItem` is their consumer — see that file's header.
 import { dayClock, elapsedWords } from '../updates';
 import '../../fleet/fleet.css';
-import type { AuthRead } from './SettingsDataProvider';
+import type { AuthRead, PasskeysRead } from './SettingsDataProvider';
 import type { LinearPoll } from '../../fleet/useLinearConnection';
 import { LinearSection } from '../LinearSection';
 import { SignInGateCard } from './SignInGateCard';
+import { ThisSessionCard } from './ThisSessionCard';
+import { YourSignInCard } from './YourSignInCard';
 
 // ── The box-token card (box-token lifecycle wave 1, Task B6; spec 4.7, D-4392) ──
 // A THIRD section, over the same one /api/updates poll: `view.boxToken`, read
@@ -288,13 +292,22 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 }
 
 /** The Security page's body (the heading is the frame's `<h2>`): the Sign-in gate card over the frame's one status
- *  read, then the Box token card over its one /api/updates poll, then the Linear card over the frame's one Linear
- *  read. */
-export function SecuritySection({ poll, auth, linear }: { poll: UpdatesPoll; auth: AuthRead; linear: LinearPoll }): ReactNode {
+ *  read; Your sign-in and This session while that read says the gate is armed (absent while it is off, unread or
+ *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll; then
+ *  the Linear card over the frame's one Linear read. */
+export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
+  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearPoll;
+}): ReactNode {
   const now = useNow(30_000);
   return (
     <>
       <SignInGateCard auth={auth} />
+      {auth.kind === 'read' && armedMode(auth.status.mode) && (
+        <>
+          <YourSignInCard status={auth.status} passkeys={passkeys} refreshAuth={refreshAuth} />
+          <ThisSessionCard />
+        </>
+      )}
       {poll.view !== null ? (
         <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />
       ) : poll.failure === null ? (

@@ -422,9 +422,19 @@ function SharedPre({ children, node }: { children?: ReactNode; node?: HastElemen
   return <CodeBlock highlight={refused ? false : undefined}>{children}</CodeBlock>;
 }
 
+/** A GFM task-list checkbox's accessible name, by its state. remark-gfm emits the box bare (no `<label>`), so without
+ *  a name a screen reader announces "checkbox, checked, dimmed" and nothing else; the item's own text follows the box.
+ *  `markdown-task-label.test.tsx` holds both renderers and the Prose story's mirror to these words. */
+export const TASK_CHECKBOX_NAME = { checked: 'done', unchecked: 'to do' } as const;
+
 /** The components chat and the Docs screen share: inline code (kbd chips), fenced code (under the Docs page's highlight
- *  budget when one is provided), tables. */
+ *  budget when one is provided), tables, and task-list checkboxes named by their state (the markup is otherwise
+ *  remark-gfm's: still disabled, still the item's or its first paragraph's first child, which prose.css relies on). */
 export const SHARED_COMPONENTS: Components = {
+  input({ node: _node, ...props }) {
+    if (props.type !== 'checkbox') return <input {...props} />;
+    return <input {...props} aria-label={props.checked ? TASK_CHECKBOX_NAME.checked : TASK_CHECKBOX_NAME.unchecked} />;
+  },
   code({ className, children }) {
     const text = String(children ?? '');
     if (/language-/.test(className ?? '') || text.includes('\n')) {
