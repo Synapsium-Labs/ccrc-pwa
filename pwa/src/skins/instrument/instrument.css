@@ -19,11 +19,15 @@
     grid-row: 1;
     padding: 0 var(--sp-2) 0 0;
   }
+  /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
+     drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip
+     draws over the list. */
   .ins-frame .shell-rail {
     grid-column: 1;
     grid-row: 2;
     min-height: 0;
-    overflow-y: auto;
+    position: relative;
+    z-index: 2;
     border-right: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
@@ -151,7 +155,8 @@
 .ins-rail-item {
   position: relative;
   justify-content: center;
-  width: 52px;
+  /* The track's width: the rail's border leaves 51px of it, and a 52px item would cut its own ring. */
+  width: 100%;
   min-height: var(--tap-min);
 }
 /* The active item: a 2px accent rail on its leading edge, beside `aria-current="page"`. */

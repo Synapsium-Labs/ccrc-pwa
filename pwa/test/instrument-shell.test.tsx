@@ -118,14 +118,28 @@ describe('the rail', () => {
     // Every door is the tap floor tall: `Door`'s own floor, and the rail's rule restates it.
     for (const b of railDoors()) expect(b.className).toContain('min-h-tap');
     expect(declsOf('.ins-rail-item')).toMatch(/min-height:\s*var\(--tap-min\)/);
-    expect(declsOf('.ins-rail-item')).toMatch(/width:\s*52px/);
   });
 
-  it('the active rail item carries aria-current=page, and only one does', () => {
-    for (const [at, word] of [['/', 'Fleet'], ['/runs', 'Runs'], ['/settings/updates', 'Settings'], ['/docs', 'Docs'], [`/s/${S.id}`, null]] as const) {
+  it('the rail never clips its tooltips: it is no scroll container, and each item fits its track', () => {
+    // A rail with any `overflow` other than visible is a clip box in BOTH axes (overflow-y: auto computes overflow-x
+    // to auto), so a tooltip drawn beside it is cut away and the hidden tips widen it into a sideways scroller.
+    for (const media of [null, '(min-width: 900px)', '(min-width: 1600px)'] as const) {
+      expect(declsOf('.ins-frame .shell-rail', media), String(media)).not.toMatch(/overflow/);
+      expect(declsOf('.ins-rail', media), String(media)).not.toMatch(/overflow/);
+    }
+    // It stacks above the list column, so the tooltip draws over the list, not under it.
+    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/position:\s*relative/);
+    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/z-index:/);
+    // The item is the track's width, never a fixed 52px inside a track its border makes 51px: no cut ring.
+    expect(declsOf('.ins-rail-item')).toMatch(/width:\s*100%/);
+    expect(declsOf('.ins-rail-item')).not.toMatch(/width:\s*\d+px/);
+  });
+
+  it('the active rail item carries aria-current=page, and only one does; a session sits under Fleet, as its breadcrumb says', () => {
+    for (const [at, word] of [['/', 'Fleet'], ['/runs', 'Runs'], ['/settings/updates', 'Settings'], ['/docs', 'Docs'], [`/s/${S.id}`, 'Fleet']] as const) {
       mount(at);
       const current = railDoors().filter((b) => b.getAttribute('aria-current') === 'page');
-      expect(current.map((b) => b.getAttribute('aria-label')), at).toEqual(word === null ? [] : [word]);
+      expect(current.map((b) => b.getAttribute('aria-label')), at).toEqual([word]);
       cleanup();
     }
   });
