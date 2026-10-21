@@ -109,12 +109,15 @@ describe('the generated palettes are what the seeds produce', () => {
 // `--check` does not look, so this row reads every palette block, both kinds. Instrument replaces it with the one
 // recipe its elevation rule allows: a hairline on `--edge-strong`.
 describe('every palette declares --elev-pop (D-5933)', () => {
-  /** Each palette block's body, by selector: `:root` (the first, the dark default) and every `[data-theme='…']`. */
+  /** Each palette's body, by selector: `:root` (the dark default) and every `[data-theme='…']`. The dark default is
+   *  split over two `:root` blocks since the Appearance preview grid (#1080): the colour block, aliased to
+   *  `[data-theme='phosphor']`, and the page's own block (type, density, motion, elevation), so a selector's bodies are
+   *  joined. */
   const palettes = (): Map<string, string> => {
     const css = readFileSync(TOKENS, 'utf8');
     const out = new Map<string, string>();
     for (const m of css.matchAll(/^(:root|\[data-theme='[a-z0-9-]+'\])\s*\{([\s\S]*?)^\}/gm)) {
-      if (!out.has(m[1] as string)) out.set(m[1] as string, m[2] as string);
+      out.set(m[1] as string, (out.get(m[1] as string) ?? '') + (m[2] as string));
     }
     return out;
   };
