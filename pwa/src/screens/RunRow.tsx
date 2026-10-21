@@ -18,7 +18,7 @@ import {
 import {
   DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, childReclaimChip, childReclaimGone,
   childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
-  resumeNote, runKindChip, runWarnings, runItems, runState,
+  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
@@ -136,7 +136,9 @@ export function RunRow({
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
       <span className="run-state">{RUN_WORD[state]}</span>
-      <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
+      {/* D-6170: the name is the programme's title and wave in words, never a
+          workspace, a branch or a run number — those ride the row's `title`. */}
+      <span className="run-name">{runRowName(run)}</span>
       <span className="run-project">{run.project}</span>
       {crossing !== null && (
         <span className="run-crossing" data-home={crossing.home} title={crossing.title}>
@@ -333,10 +335,14 @@ export function RunRow({
   // "stops offering to open its session"). It gets the same inert row, for the
   // same reason. `resumeButton` and `abandonButton` keep their place: neither
   // is about the worker's session.
+  // D-6170 keeps D-5589's id rule: the run number and the workspace (else the
+  // branch) live in the row's title and the controls' accessible names only.
+  const where = run.workspace ?? run.branch;
+  const rowTitle = where === null ? `run ${run.id}` : `run ${run.id} · ${where}`;
   return run.sessionId === null || childReclaimGone(reclaim)
-    ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
+    ? <li className="run-row" data-inert="true" title={rowTitle}>{body}{resumeButton}{abandonButton}</li>
     : (
-      <li className="run-row">
+      <li className="run-row" title={rowTitle}>
         <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
           {body}
         </button>

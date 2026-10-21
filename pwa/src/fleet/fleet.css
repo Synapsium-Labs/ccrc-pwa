@@ -2452,7 +2452,9 @@ button.proj-card-pool::before {
 }
 .run-row .run-glyph { color: var(--ink-tertiary); }
 .run-row .run-state { font-size: var(--fs-meta); color: var(--ink-secondary); }
-.run-ws { font-size: var(--fs-sm); }
+/* D-6170: the row's name is the programme's title and wave in words; it wraps
+   and never ellipsizes, so a long title stays whole at every width. */
+.run-name { font-size: var(--fs-sm); overflow-wrap: anywhere; }
 /* F4 (cross-repo): which repo this run is in, and whether that is its
    programme's home. Scoped under `.run-row` — self-grounded above, background
    and colour both set — so these inherit the same recovered ground

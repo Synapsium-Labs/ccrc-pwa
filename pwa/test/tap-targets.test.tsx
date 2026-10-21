@@ -524,7 +524,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     // rather than the "no answer yet" loading state (review finding 19).
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
+    expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toHaveClass('run-open');
   });
 });
 

@@ -37,7 +37,7 @@ import type { ReactNode } from 'react';
 import { type CoordCapsView, type RunSummary } from '../../../shared/api';
 import {
   anyDispatchPending, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
-  runsByProgram, waveLabel,
+  programmeTitle, runsByProgram, waveLabel,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -341,13 +341,15 @@ export function RunsScreen({
             // stuck in review while a newer wave is already dispatched
             // beneath it (finding 4).
             const { wave, waveOf } = programWave(list);
+            // D-6170: the head prints the programme's title, the slug only when empty.
+            const title = programmeTitle(program, list);
             // `role="group"`, NOT `<section aria-label>`: seven named regions
             // holding nothing turn the landmark rotor into dead ends
             // (FleetScreen.tsx:288-294). The same reasoning, one screen over.
             return (
-              <div key={program} className="runs-group" role="group" aria-label={`program ${program}`}>
+              <div key={program} className="runs-group" role="group" aria-label={`program ${title}`}>
                 <p className="runs-group-head">
-                  <span className="runs-program">{program}</span>
+                  <span className="runs-program">{title}</span>
                   <span className="runs-wave">{waveLabel({ wave, waveOf })}</span>
                 </p>
                 <ul className="runs-list">

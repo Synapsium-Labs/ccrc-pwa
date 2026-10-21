@@ -47,7 +47,7 @@ async function board(active: RunSummary[], finished: RunSummary[] = [], sessions
 }
 
 const rows = (c: HTMLElement): HTMLElement[] => [...c.querySelectorAll<HTMLElement>('li.run-row')];
-const nameOf = (row: HTMLElement): string => row.querySelector('.run-ws')?.textContent ?? '';
+const nameOf = (row: HTMLElement): string => row.querySelector('.run-name')?.textContent ?? '';
 
 describe('kept: across D-6170', () => {
   it('kept: an open planned run with no session renders Abandon (the wedge door, D-282)', async () => {
@@ -83,19 +83,48 @@ describe('today: before D-6170', () => {
     expect(rows(c)).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
   });
+});
 
-  it('today: a run with no workspace and no branch renders its run number as its name', async () => {
-    const c = await board([run({ workspace: null, branch: null })]);
-    expect(nameOf(rows(c)[0]!)).toBe('7');
+describe('the runs ledger at a glance (D-6170)', () => {
+  it("no row's visible name equals its run id, its workspace or its branch", async () => {
+    const c = await board([
+      run({ id: 1 }),
+      run({ id: 2, workspace: null }),
+      run({ id: 3, workspace: null, branch: null, sessionId: null, state: 'planned' }),
+    ]);
+    expect(rows(c)).toHaveLength(3);
+    for (const row of rows(c)) {
+      const name = nameOf(row);
+      expect(name).not.toBe('');
+      for (const leak of ['1', '2', '3', 's-aaaa', 'ws/s-aaaa']) expect(name).not.toBe(leak);
+      expect(name).not.toContain('s-aaaa');
+    }
   });
 
-  it('today: a run with a workspace renders the workspace as its name', async () => {
-    const c = await board([run()]);
-    expect(nameOf(rows(c)[0]!)).toBe('s-aaaa');
+  it("a row is named by its programme's title and wave", async () => {
+    const c = await board([
+      run({ id: 1 }),
+      run({ id: 2, program: 'programme-b', programTitle: '', wave: 2, waveOf: null }),
+    ]);
+    const names = rows(c).map(nameOf).sort();
+    expect(names).toEqual(['Programme A · wave 3 of 5', 'programme-b · wave 2']);
   });
 
-  it('today: the group head of programme-a titled "Programme A" prints programme-a', async () => {
-    const c = await board([run()]);
-    expect(c.querySelector('.runs-group .runs-program')?.textContent).toBe('programme-a');
+  it('a review run reads <title> · review of wave N, once', async () => {
+    const c = await board([run({ kind: 'review', wave: 5, reviews: 6 })]);
+    const name = nameOf(rows(c)[0]!);
+    expect(name).toBe('Programme A · review of wave 5');
+    expect(name.match(/review/g)).toHaveLength(1);
+  });
+
+  it('the group head prints the title, and the slug only when the title is empty', async () => {
+    const c = await board([
+      run({ id: 1 }),
+      run({ id: 2, program: 'programme-b', programTitle: '' }),
+    ]);
+    const heads = [...c.querySelectorAll('.runs-group[aria-label^="program"] .runs-program')].map((n) => n.textContent).sort();
+    expect(heads).toEqual(['Programme A', 'programme-b']);
+    expect(screen.getByRole('group', { name: 'program Programme A' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'program programme-a' })).toBeNull();
   });
 });
