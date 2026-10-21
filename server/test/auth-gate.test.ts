@@ -95,7 +95,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** FIVE files register routes since the native Docs reader's W3 (design
+/** SIX files register routes since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
  *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
  *  plugin's own instance, whose parameter is named `app` so this literal scan
  *  reads them like any other. FOUR since the box-token lifecycle (spec 4.6):
@@ -108,6 +108,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('update/routes.ts'),
   ...scanRoutes('token/routes.ts'),
   ...scanRoutes('docs/routes.ts'),
+  ...scanRoutes('linear/routes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -220,7 +221,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all five files, and EXACTLY the route count the surface has', () => {
+  it('found all six files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -235,7 +236,9 @@ describe('the scanner is looking at something', () => {
     // when armed, NOT EXEMPT, no box token.
     // 59 since step-up's three (D-5512, accounts plan Task A5): `POST /api/auth/step-up/start|finish|passphrase`,
     // session-gated when armed, NOT EXEMPT, no box token, `auth-off` dark (so in `FLAG_AWARE`).
-    expect(scanRoutes('server.ts').length).toBe(59);
+    // 60 since named workspaces S9's `POST /api/sessions/:id/title` (the workspace rename): session-gated when armed,
+    // NOT EXEMPT, no box token — a rename is as human-driven as a typed prompt.
+    expect(scanRoutes('server.ts').length).toBe(60);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -292,6 +295,11 @@ describe('the scanner is looking at something', () => {
     // compares every other route, and the armed no-cookie sweep sees the gate's 401
     // first.
     expect(scanRoutes('docs/routes.ts').length).toBe(4);
+    // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
+    // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
+    // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
+    // session-gated and NOT EXEMPT, no box token; the PUT and DELETE also take the account gate with a step-up.
+    expect(scanRoutes('linear/routes.ts').length).toBe(5);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -389,7 +397,13 @@ describe('the scanner is looking at something', () => {
     // 56 + 42 + 7 + 2 + 4 = 111, the HTTP half 108, the gated count 66 -> 68, the exempt-HTTP count stays 40.
     // 114 since step-up's three (D-5512, accounts plan Task A5), session-gated and NOT EXEMPT:
     // 59 + 42 + 7 + 2 + 4 = 114, the HTTP half 111, the gated count 68 -> 71, the exempt-HTTP count stays 40.
-    expect(ROUTES.length).toBe(114);
+    // 115 since named workspaces S4's `GET /api/linear/resolve` (session-gated, NOT EXEMPT, no box token):
+    // 59 + 42 + 7 + 2 + 4 + 1 = 115, the HTTP half 112, the gated count 71 -> 72, the exempt-HTTP count stays 40.
+    // 119 since named workspaces S4b's four connection routes (session-gated, NOT EXEMPT, no box token):
+    // 59 + 42 + 7 + 2 + 4 + 5 = 119, the HTTP half 116, the gated count 72 -> 76, the exempt-HTTP count stays 40.
+    // 120 since named workspaces S9's `POST /api/sessions/:id/title` (session-gated, NOT EXEMPT, no box token):
+    // 60 + 42 + 7 + 2 + 4 + 5 = 120, the HTTP half 117, the gated count 76 -> 77, the exempt-HTTP count stays 40.
+    expect(ROUTES.length).toBe(120);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -438,6 +452,8 @@ describe('the scanner is looking at something', () => {
       // reading `docs/routes.ts` would lose all of them at once, the refresh POST too.
       'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
       'POST /api/docs/:project/refresh',
+      // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
+      'GET /api/linear/resolve',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -535,7 +551,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 114 scanned + the static wildcard when the bundle is built.
+    // 120 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1053,9 +1069,13 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // Step-up's three (D-5512, accounts plan Task A5): with no session gate there is
     // no session to step up, so all three answer `501 auth-off` dark.
     'POST /api/auth/step-up/start', 'POST /api/auth/step-up/finish', 'POST /api/auth/step-up/passphrase',
+    // The Linear connection's two credential writes (named workspaces S4b): they take the account gate, whose first
+    // refusal is `auth-off` (501) dark and whose step-up refusal is `step-up-required` (403) armed with a session
+    // that has not stepped up, so dark and authenticated differ BY DESIGN, as they do for the step-up routes.
+    'PUT /api/linear/connection', 'DELETE /api/linear/connection',
   ]);
 
-  it('FLAG_AWARE is exactly those eleven — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirteen — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1071,6 +1091,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // prevent, arrived at by automation.
     expect([...FLAG_AWARE].sort()).toEqual([
       'DELETE /api/auth/passkey/:id',
+      'DELETE /api/linear/connection',
       'GET /api/auth/passkeys',
       'POST /api/auth/login',
       'POST /api/auth/logout',
@@ -1081,6 +1102,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/step-up/finish',
       'POST /api/auth/step-up/passphrase',
       'POST /api/auth/step-up/start',
+      'PUT /api/linear/connection',
     ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
     // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
@@ -1089,7 +1111,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 111 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 117 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1153,7 +1175,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 111 HTTP routes, not the 40 exempt.
+          //    is not itself flag-aware — the assertion that covers all 117 HTTP routes, not the 40 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

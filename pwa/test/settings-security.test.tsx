@@ -68,12 +68,12 @@ const security = async (answer: Parameters<typeof authStatus>[0], hostname = 'cc
 };
 
 describe('the Sign-in gate card, per state (spec §5.5)', () => {
-  it('is the first card on Security, scoped to This box, before Box token', async () => {
+  it('is the first card on Security, scoped to This box, before Box token (and the Linear card, which follows it)', async () => {
     await security({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
     await screen.findByRole('region', { name: 'Box token' });
     const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     expect(titles[0]).toBe('Sign-in gate');
-    expect(titles.at(-1)).toBe('Box token');
+    expect(titles.slice(-2)).toEqual(['Box token', 'Linear']);
     expect(within(gateCard()).getByText('This box')).toBeInTheDocument();
   });
 
@@ -275,10 +275,10 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     await settle();
   };
 
-  it('Security renders four cards in order when the gate is armed', async () => {
+  it('Security renders five cards in order when the gate is armed', async () => {
     await armed();
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token']);
+      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token', 'Linear']);
     expect(within(signInCard()).getByText('You')).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'This session' })).getByText('This browser')).toBeInTheDocument();
     expect(within(signInCard()).getByRole('heading', { level: 4, name: 'Passkeys' })).toBeInTheDocument();

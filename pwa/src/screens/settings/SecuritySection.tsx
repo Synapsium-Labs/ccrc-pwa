@@ -1,7 +1,8 @@
 // Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then Your
 // sign-in and This session (`YourSignInCard.tsx`, `ThisSessionCard.tsx`; from Accounts, R2d, D-5508), then the Box
-// token card, each a `Section` with its scope. The slot before Box token is reserved for "Recent account changes".
-// The auth status and the passkey list the cards show are the frame's reads.
+// token card, then the Linear card (named workspaces S4b), each a `Section` with its scope. The slot before Box token
+// is reserved for "Recent account changes".
+// The auth status, the passkey list and the Linear connection the cards show are the frame's reads.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UpdatesView } from '../../../../shared/api';
@@ -22,6 +23,8 @@ import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 import { dayClock, elapsedWords } from '../updates';
 import '../../fleet/fleet.css';
 import type { AuthRead, PasskeysRead } from './SettingsDataProvider';
+import type { LinearPoll } from '../../fleet/useLinearConnection';
+import { LinearSection } from '../LinearSection';
 import { SignInGateCard } from './SignInGateCard';
 import { ThisSessionCard } from './ThisSessionCard';
 import { YourSignInCard } from './YourSignInCard';
@@ -290,9 +293,10 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 
 /** The Security page's body (the heading is the frame's `<h2>`): the Sign-in gate card over the frame's one status
  *  read; Your sign-in and This session while that read says the gate is armed (absent while it is off, unread or
- *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll. */
-export function SecuritySection({ poll, auth, passkeys, refreshAuth }: {
-  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void;
+ *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll; then
+ *  the Linear card over the frame's one Linear read. */
+export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
+  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearPoll;
 }): ReactNode {
   const now = useNow(30_000);
   return (
@@ -311,6 +315,10 @@ export function SecuritySection({ poll, auth, passkeys, refreshAuth }: {
         // today's page drew none then.
         <Skeleton lines={3} />
       ) : null}
+      {/* The Linear key is a credential the box holds, like the box token, so its card follows it: last, after the
+          reserved "Recent account changes" slot and Box token (spec §3.3), which adding it reshuffles nothing of. It
+          reads its own endpoint, so it does not wait on /api/updates. */}
+      <LinearSection poll={linear} />
     </>
   );
 }

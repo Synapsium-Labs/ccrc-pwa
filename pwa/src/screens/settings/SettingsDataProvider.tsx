@@ -24,6 +24,7 @@ import type { ReactNode } from 'react';
 import type { AuthStatus, MarkerState, PasskeyListResponse } from '../../../../shared/api';
 import { childReclaimMarker } from '../../fleet/childReclaimWords';
 import { useCollectLaneView, type CollectLanePoll } from '../../fleet/useCollectLaneView';
+import { useLinearConnection, type LinearPoll } from '../../fleet/useLinearConnection';
 import { useStallWatchView, type StallWatchPoll } from '../../fleet/useStallWatchView';
 import { useUpdatesView, type UpdatesPoll } from '../../fleet/useUpdatesView';
 import { api } from '../../lib/api';
@@ -51,6 +52,8 @@ export interface SettingsView {
   readonly updates: UpdatesPoll;
   readonly stall: StallWatchPoll;
   readonly collect: CollectLanePoll;
+  /** The Linear connection (named workspaces S4b), shown on the Security page; read when the page becomes visible, not polled. */
+  readonly linear: LinearPoll;
   readonly pause: PauseRead;
   readonly auth: AuthRead;
   readonly push: PushState;
@@ -96,6 +99,9 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const collect = useMemo<CollectLanePoll>(
     () => ({ view: c.view, failure: c.failure, reload: c.reload, settle: c.settle }),
     [c.view, c.failure, c.reload, c.settle]);
+  const l = useLinearConnection();
+  const linear = useMemo<LinearPoll>(
+    () => ({ view: l.view, failure: l.failure, reload: l.reload, settle: l.settle }), [l.view, l.failure, l.reload, l.settle]);
   const coord = useFleetStore((s) => s.coord);
   const coordFrameSeen = useFleetStore((s) => s.coordFrameSeen);
   const marker = coordFrameSeen ? childReclaimMarker(coord) : null;
@@ -140,8 +146,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const rereadPush = useCallback(() => setPushAsk((n) => n + 1), []);
 
   const view = useMemo<SettingsView>(
-    () => ({ updates, stall, collect, pause, auth, push, rereadPush }),
-    [updates, stall, collect, pause, auth, push, rereadPush],
+    () => ({ updates, stall, collect, linear, pause, auth, push, rereadPush }),
+    [updates, stall, collect, linear, pause, auth, push, rereadPush],
   );
   const pageView = useMemo<SettingsPageView>(() => ({ ...view, passkeys, refreshAuth }), [view, passkeys, refreshAuth]);
   // A layout effect, so the frame's first paint on Settings already has the view.

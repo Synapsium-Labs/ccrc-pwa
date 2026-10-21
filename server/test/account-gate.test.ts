@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest, type LightMyRequestResponse } from 'fastify';
 import { ACCOUNT_GATE_REFUSALS } from '../../shared/api.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { createAccountGate, accountOriginClass, type AccountGateDeps } from '../src/accounts/gate.js';
@@ -71,6 +71,13 @@ const rig = async (o: RigOpts = {}): Promise<Rig> => {
     if (!ans.pass) return reply;
     return { ok: true };
   });
+  app.post('/api/accounts/no-cap', async (req, reply) => {
+    const body: unknown = req.body;
+    const wantsStepUp = typeof body === 'object' && body !== null && (body as { stepUp?: unknown }).stepUp === true;
+    const ans = gate(req, reply, { cap: null, stepUp: wantsStepUp });
+    if (!ans.pass) return reply;
+    return { ok: true };
+  });
   await app.ready();
   return {
     app,
@@ -78,6 +85,10 @@ const rig = async (o: RigOpts = {}): Promise<Rig> => {
     stamp: async () => { expect(await store.stampAsserted(sessionIdHash(token), Date.now())).toBe(true); },
   };
 };
+
+/** A route that runs no ccd verb (the Linear connection's writes) asks `cap: null`. */
+const postNoCap = (r: Rig, stepUp: boolean): Promise<LightMyRequestResponse> =>
+  r.app.inject({ method: 'POST', url: '/api/accounts/no-cap', headers: { cookie: r.cookie }, payload: { stepUp } });
 
 const post = (r: Rig, headers: Record<string, string> = { cookie: r.cookie }) =>
   r.app.inject({ method: 'POST', url: '/api/accounts/under-test', headers, payload: {} });
@@ -176,6 +187,27 @@ describe('the account gate (D-5511)', () => {
     const r = await rig({ ccdVerbs: ['account-v1', CAP] });
     expect((await post(r)).statusCode).toBe(200);
     await r.app.close();
+  });
+
+  it('cap: null skips the cap rung and ONLY that rung: an unmeasured fleet passes, every other refusal still holds', async () => {
+    const unmeasured = await rig({ ccdVerbs: null });
+    expect((await postNoCap(unmeasured, false)).statusCode).toBe(200);
+    const stale = await postNoCap(unmeasured, true);
+    expect(stale.statusCode).toBe(403);
+    expect(errorOf(stale)).toBe('step-up-required');
+    await unmeasured.stamp();
+    expect((await postNoCap(unmeasured, true)).statusCode).toBe(200);
+    await unmeasured.app.close();
+    const dark = await rig({ enabled: false, ccdVerbs: null });
+    expect(errorOf(await postNoCap(dark, false))).toBe('auth-off');
+    await dark.app.close();
+    const insecure = await rig({ origin: 'http://box.example.invalid', ccdVerbs: null });
+    expect(errorOf(await postNoCap(insecure, false))).toBe('insecure-origin');
+    await insecure.app.close();
+    const anon = await rig({ ccdVerbs: null });
+    const res = await anon.app.inject({ method: 'POST', url: '/api/accounts/no-cap', payload: { stepUp: false } });
+    expect(res.statusCode).toBe(401);
+    await anon.app.close();
   });
 
   it('asked for a step-up, a session that has none refuses step-up-required; a fresh one passes', async () => {

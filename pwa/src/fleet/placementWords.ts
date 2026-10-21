@@ -83,6 +83,37 @@ export function addWorkspaceLabel(
   if (forecast) {
     return `New workspace on ${project} — ${accountLabel(roster, forecast.wrapper)}, ${100 - forecast.score}% free`;
   }
+  const clause = unplacedClause(read, projected, roster);
+  return clause === null ? `New workspace on ${project}` : `New workspace on ${project} — ${clause}`;
+}
+
+/**
+ * The line a sheet shows above its confirm, where `addWorkspaceLabel` is the control's name: the SAME read, said
+ * as a sentence. A forecast names the account and its headroom; every state that has no forecast says what
+ * `addWorkspaceLabel` says of it, as a sentence of its own; `null` is the control saying nothing (a pending read,
+ * or a legacy one nobody asked a projection of), and the sheet then says nothing either.
+ */
+export function landsOnLine(
+  read: ProjectPlacementRead,
+  projected: ProjectedHome | null | undefined,
+  roster: readonly RosterWire[],
+): string | null {
+  const forecast = placementForecast(read, projected);
+  if (forecast) return `Lands on ${accountLabel(roster, forecast.wrapper)} — ${100 - forecast.score}% free.`;
+  const clause = unplacedClause(read, projected, roster);
+  return clause === null ? null : `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
+}
+
+/**
+ * What a read with NO forecast says, as the clause that follows the control's "New workspace on <project> — ":
+ * `null` is the control's bare name. The ladder is the control's, unchanged; `landsOnLine` shares it so the sheet
+ * and the control can never tell two stories about one read.
+ */
+function unplacedClause(
+  read: ProjectPlacementRead,
+  projected: ProjectedHome | null | undefined,
+  roster: readonly RosterWire[],
+): string | null {
   // The THIRD meaning of `none` (D-2854): the row was fetched with a class and
   // every eligible lane measured unservable for it. Only a `?class=` fetch can
   // ever carry this. The fleet screen's class chooser (routing slice 5, Task 6)
@@ -94,7 +125,7 @@ export function addWorkspaceLabel(
     ? read.placement.class
     : undefined;
   if (measuredNoneClass !== undefined) {
-    return `New workspace on ${project} — no lane can serve ${measuredNoneClass}`;
+    return `no lane can serve ${measuredNoneClass}`;
   }
 
   const pool = poolOfPlacement(read);
@@ -109,21 +140,21 @@ export function addWorkspaceLabel(
     const placeableNames = poolLabelList(roster, pool);
     return poolName === null
       ? placeableNames === ''
-        ? `New workspace on ${project} — all disabled`
-        : `New workspace on ${project} — ${placeableNames} all disabled`
+        ? 'all disabled'
+        : `${placeableNames} all disabled`
       : placeableNames === ''
-        ? `New workspace on ${project} — nothing is in pool ${poolName}`
-        : `New workspace on ${project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`;
+        ? `nothing is in pool ${poolName}`
+        : `nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`;
   }
 
   // The two ways a read can have no answer and say so. They are not folded:
   // "reopen ccrc to retry" and "reload ccrc" are different acts, and a project
   // absent from the last check is not a check that failed.
   if (read.kind === 'failed') {
-    return `New workspace on ${project} — placement check failed; reopen ccrc to retry`;
+    return 'placement check failed; reopen ccrc to retry';
   }
   if (read.kind === 'missing') {
-    return `New workspace on ${project} — project absent from the latest placement check; reload ccrc`;
+    return 'project absent from the latest placement check; reload ccrc';
   }
-  return `New workspace on ${project}`;
+  return null;
 }
