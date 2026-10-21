@@ -55,7 +55,8 @@ describe('the Theme preview grid', () => {
   it('arrow keys move the choice and write it once', () => {
     render(<AppearanceSection />);
     const set = vi.spyOn(localStorage, 'setItem');
-    fireEvent.keyDown(radios()[0]!, { key: 'ArrowRight' });
+    // `false` is a cancelled event: the browser's own radio arrowing must not move the choice a second time.
+    expect(fireEvent.keyDown(radios()[0]!, { key: 'ArrowRight' })).toBe(false);
     expect(document.documentElement.getAttribute('data-theme')).toBeNull(); // Phosphor & Ink is :root
     expect(set.mock.calls.filter(([k]) => k === KEY)).toEqual([[KEY, PHOSPHOR]]);
     expect(checked().map((r) => r.value)).toEqual([PHOSPHOR]);
@@ -71,6 +72,9 @@ describe('the Theme preview grid', () => {
     expect(checked().map((r) => r.value)).toEqual([THEMES[THEMES.length - 1]!.id]);
     fireEvent.keyDown(radios()[12]!, { key: 'ArrowRight' });
     expect(checked().map((r) => r.value)).toEqual([SYSTEM]);
+    expect(set.mock.calls.filter(([k]) => k === KEY)).toHaveLength(6);
+    // Any other key is the browser's: Tab and Space are not taken.
+    expect(fireEvent.keyDown(radios()[0]!, { key: 'Tab' })).toBe(true);
     expect(set.mock.calls.filter(([k]) => k === KEY)).toHaveLength(6);
   });
 
