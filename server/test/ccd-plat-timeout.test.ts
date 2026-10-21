@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
@@ -203,16 +203,29 @@ describe('D-2764', () => {
 const PLATFORM_COPIES = COPIES.filter(([, , name]) => name === '_plat_timeout');
 const NEIGHBOURS = ['_plat_timeout_capability', '_plat_timeout_strict'];
 
+/** The first executable file named `n` on this process's PATH, as `type -P` finds it, or null. Never `command -v`'s
+ *  answer: a builtin (`printf`, `true`) answers its bare name there, and a link to a bare name is a dangling one. The
+ *  programs a probe or a case execs must be files. Walked here rather than asked of a shell, so this helper spawns no
+ *  bash outside the harness's containment (`ccd-workspaces.test.ts`'s scan of every bash call site). */
+function onPath(n: string): string | null {
+  for (const d of (process.env['PATH'] ?? '').split(':')) {
+    if (d === '') continue;
+    const p = path.join(d, n);
+    try {
+      accessSync(p, constants.X_OK);
+      if (statSync(p).isFile()) return p;
+    } catch { /* not in this directory */ }
+  }
+  return null;
+}
+
 /** A directory holding ONLY the named programs, each a symlink to the system's own. A PATH made of it (and the
  *  harness's gh poison) has exactly those tools: `timeout`, `gtimeout` or `sleep` absent is a fact about it. */
 function toolDir(names: string[]): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'ccd-tm11-tools-'));
   for (const n of names) {
-    // `type -P`, never `command -v`: a builtin (`printf`, `true`) answers its bare name there, and a link to a
-    // bare name is a dangling one. The programs a probe or a case execs must be files.
-    const r = spawnSync('bash', ['-c', `type -P ${n}`], { encoding: 'utf8' });
-    const p = r.stdout.trim();
-    if (r.status === 0 && p !== '') symlinkSync(p, path.join(dir, n));
+    const p = onPath(n);
+    if (p !== null) symlinkSync(p, path.join(dir, n));
   }
   return dir;
 }
