@@ -2385,6 +2385,21 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
     expect(dirs, 'the rename is made durable').toContain(w21Dir(box));
     expect(fs.readFileSync(path.join(w21Dir(box), ID), 'utf8')).toBe(`${G1}\n`);
   });
+
+  // D-6241: the stale-temp loop leaves a non-file at ~tmp.<name>, so one at the writer's OWN temp name makes its open fail with EEXIST;
+  // the failure path then unlinks the temp only when this pass created it, or it would remove the FIFO the loop chose to keep.
+  it('in-process: a FIFO at the writer\'s own temp name makes the write fail (the open answers EEXIST, which runOpPass answers rc 1), and the FIFO stays, with nothing written at recall-off/<id>', async () => {
+    const box = w21Box('ccrc-hist-w21-ownfifo-');
+    const sweep = await import('../../ccd/history/sweep.mjs');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    const own = path.join(dir, `~tmp.${process.pid}`);
+    expect(spawnSync('mkfifo', [own]).status, 'CONTROL: the FIFO was made').toBe(0);
+    const args = { op: 'recall-off', mode: 'write', id: ID, generation: null } as const;
+    expect(() => sweep.recallOffPass(box.home, args, () => {})).toThrow(/EEXIST/);
+    expect(fs.lstatSync(own).isFIFO(), 'the entry the stale loop kept is not removed by the failure path').toBe(true);
+    expect(fs.existsSync(path.join(dir, ID)), 'nothing was written at recall-off/<id>').toBe(false);
+  });
 });
 
 // ── W2-1 Task 3, fix round 1: the writer names every entry it leaves, and an absent root is refused ─────────────────────

@@ -6351,15 +6351,20 @@ export function writeOpMarker(P, verb, nowMs) {
 //   2. the root and recall-off/, by lstat. A root that is not a directory, or a recall-off/ that is a link or not a
 //      directory, answers rc 1 with one line, before any write. The executor follows no link;
 //   3. recall-off/ is made 0700 when absent, by the write form only: a clear of a directory that does not exist is rc 0;
-//   4. every `~tmp.*` entry is removed. Under the lock any such entry is stale, since no other writer is mid-write;
+//   4. every stale `~tmp.*` entry that is a regular file or a link is unlinked (D-6241). Under the lock any such entry is stale,
+//      since no other writer is mid-write. A directory, FIFO, socket or device of that name is not the writer's (it only makes
+//      regular temps), so it stays for `--clear-all` to name, and the write's failure path unlinks its own temp only when this
+//      pass created it;
 //   5. the form:
 //      - the write goes through `recall-off/~tmp.<pid>` (`~` is outside ID_RE, so no reader takes it for an id), opened
 //        O_CREAT|O_EXCL|O_NOFOLLOW at 0600, written whole and fsynced, renamed over recall-off/<id>, and the directory
 //        fsynced;
 //      - `--clear` unlinks the one entry when it is a file or a link, never following it, and a missing one is rc 0;
-//      - `--clear-all` lstats every entry, whatever its name, unlinks files and links, and skips directories, FIFOs, sockets
-//        and devices. It prints `{rc, reason, cleared, skipped}` on its own line before the result line (lib decideRelay
-//        reads a result of rc and reason only), so the operator can check at close that `skipped` is empty.
+//      - `--clear-all` lstats every entry, whatever its name, unlinks files and links, and names in `skipped` a directory, a
+//        FIFO, a socket or a device, an entry it could not measure, and an entry the listing returned that lstat then finds
+//        absent (a name that is not valid UTF-8). It prints `{rc, reason, cleared, skipped}` on its own line before the result
+//        line (lib decideRelay reads a result of rc and reason only), so the operator can check at close that `skipped` is
+//        empty.
 
 /** What lstat says a recall-off path is: 'absent', 'dir', 'link', 'file', 'special' (a FIFO, a socket, a device) or
  *  'unmeasured' (any other failure). It never follows a link. */
@@ -6412,9 +6417,11 @@ export function recallOffPass(home, args, out) {
   }
   if (args.mode === 'write') {
     let renamed = false;
+    let created = false;
     try {
       const fd = openSync(`${P.recallOffDir}/~tmp.${process.pid}`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {
+        created = true;
         fchmodSync(fd, 0o600);
         const buf = Buffer.from(content, 'utf8');
         for (let off = 0; off < buf.length;) {
@@ -6429,7 +6436,7 @@ export function recallOffPass(home, args, out) {
       renameSync(`${P.recallOffDir}/~tmp.${process.pid}`, recallOffPath(home, args.id));
       renamed = true;
     } finally {
-      if (!renamed) { try { unlinkSync(`${P.recallOffDir}/~tmp.${process.pid}`); } catch { /* the next recall-off pass removes it */ } }
+      if (created && !renamed) { try { unlinkSync(`${P.recallOffDir}/~tmp.${process.pid}`); } catch { /* the next recall-off pass removes it */ } }
     }
     fsyncDir(P.recallOffDir);
     out(`history-sweep: recall-off/${args.id} written`);
