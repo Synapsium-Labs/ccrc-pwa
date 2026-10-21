@@ -50,3 +50,39 @@ export const walkSpy =
   + ' _t_k+=" ${_t_q%%"$_t_tab"*}${_t_r%%"$_t_tab"*}"; done;'
   + ' printf \'walk%s\\n\' "$_t_k" >> "$HOME/walk-calls";'
   + ' _t_walk_real "$@" < <(for _t_q in ${_t_qs[@]+"${_t_qs[@]}"}; do printf \'%s\\0\' "$_t_q"; done); };';
+
+/** path-identity W3, Task 5 (P18): a bash `tmux()` stub that EXECUTES the pane, for a snippet that runs the real
+ *  `_spawn_start`. No tmux server is started or attached. Every call is recorded to `$HOME/ccd-calls` as the existing
+ *  stubs record it (`tmux $*`), and the width query answers from `$HOME/pane-up` (`WIDE_PANE_IF_UP`'s shape). On
+ *  `new-session` it counts the pane in `PANE_N`; then, in a subshell started in `$HOME`, it evals `$PANE_PRE` when that
+ *  is set and execs `<shell> -c "<last argument>"`, the pane's output going to `$HOME/pane-out`; then it evals
+ *  `$PANE_POST` when that is set, in a subshell too. Both hooks run in subshells, so a PATH a hook exports reaches the
+ *  pane alone and never `_spawn_start`. The pane stands up (`$HOME/pane-up`, which `has-session` reads) when its argv
+ *  matches the glob `PANE_UP`, every pane by default: `PANE_UP='*--session-id*'` is `RESUME_DIES`' substrate, where the
+ *  `--resume` pane runs and dies and the `--session-id` retry stands. `sleep` is a no-op, so a resume's settle is free. */
+export const PANE_EXEC = (shell: string): string => `sleep() { :; };
+  tmux() {
+    echo "tmux $*" >> "$HOME/ccd-calls"
+    case "$*" in *pane_active*) [[ -e "$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac
+    case "$1" in
+      new-session)
+        PANE_N=$(( \${PANE_N:-0} + 1 ))
+        ( cd "$HOME" || exit 1; if [[ -n "\${PANE_PRE:-}" ]]; then eval "$PANE_PRE"; fi; exec ${shell} -c "\${@: -1}" ) >> "$HOME/pane-out" 2>&1 < /dev/null
+        if [[ -n "\${PANE_POST:-}" ]]; then ( eval "$PANE_POST" ); fi
+        case "$*" in \${PANE_UP:-*}) : > "$HOME/pane-up" ;; esac
+        ;;
+      kill-session) rm -f "$HOME/pane-up" ;;
+      has-session) [[ -e "$HOME/pane-up" ]] ;;
+      list-sessions) return 0 ;;
+    esac
+  };`;
+
+/** path-identity W3, Task 5 (R8): the pane's entry-identity writer exactly as `_spawn_start` splices it between a
+ *  command string's first `cd '<workdir>' && ` and its `true; cd '<workdir>' && exec env` (R60), read from ccd's
+ *  own `_plat_workdirid_pane` (one definition, read twice) and never typed. It ends in a space, which the harness's trim would cut, so it is read
+ *  bracketed. `os` composes it as a snippet that sets `CCD_OS=<os>` does (a forced arm); without it, the host's arm.
+ *  It is '' when the composer will not quote the input, as the spawn then splices nothing. */
+export const paneFragment = (h: { sh(snippet: string): string }, id: string, workdir: string,
+  os?: 'linux' | 'darwin'): string =>
+  h.sh(`${os === undefined ? '' : `CCD_OS=${os}; `}printf '[%s]' "$(_plat_workdirid_pane "$REG" '${id}' '${workdir}')"`)
+    .slice(1, -1);

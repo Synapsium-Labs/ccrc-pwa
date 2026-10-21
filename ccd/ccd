@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=92f61321bd4233a2e4e30c7b7ffda6518f55a6b99fa3fb0d5aa9e8225541bc3a
+# ccrc:generated 1 sha256=ce96054c1085f470bdff692602b8f33b2353f9a489d0403c9b4d82e05b47f89c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23543,8 +23543,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # `_tmux_new_session`, not a bare `tmux new-session`: this is the call that
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
+  _spawn_workdirid_pending "$id" "$workdir" || :
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -23604,8 +23605,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
         fi
         _compact_lock_release "$rgenfd"; rgenfd=""
       fi
+      _spawn_workdirid_pending "$id" "$workdir" || :
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick
@@ -23729,6 +23731,74 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
   # spawn that never happened.
   _spawn_start "$1" "$2" || return $?
   _spawn_settle "$1" "$SPAWN_FROMSWAP"
+}
+
+# EVERY SPAWN RECORDS WHERE ITS PANE ENTERED (path-identity spec §4.3, §4.4).
+# The entry field `$REG/<id>.workdirid`, whose grammar has one reader
+# (`_ws_workdirid_read`), is arranged at `_spawn_start`'s two launch
+# statements, the primary and the `--session-id` retry, each by two things:
+#   1. this helper, on the line directly above the statement's
+#      `_tmux_new_session`, marks the field `pending`. It runs after the
+#      generation lock is released and after everything that can `die`, so a
+#      spawn that aborts leaves no pending mark of its own;
+#   2. the pane's writer, the fragment `_plat_workdirid_pane` composes,
+#      spliced between the command string's first `cd '$workdir' &&`
+#      and its `true; cd '$workdir' && exec env`. The pane replaces
+#      `pending` with the identity and the physical spelling of the
+#      directory it reached, after its first `cd` succeeded and before its
+#      `exec`. It enters the logical workdir, so, for an absolute workdir,
+#      the transcript path does not move.
+# So a pane that cannot record its entry (its writer could not start or was
+# killed, or its `stat`, `date` or rename failed) leaves `pending`, which the
+# reader answers as a hold, and never the field an earlier pane of the row
+# wrote: that field describes another process's entry. The composer carries
+# every workdir `.workdir` accepts, a backslash included, so a restart
+# clears that hold, save under a fish pane shell, whose `cd` reads a doubled
+# or a trailing backslash inside single quotes as an escape and so never
+# enters such a workdir (`fish-spawn-cd-reads-backslash-escapes`). THE
+# WRITER NEVER GATES THE EXEC: each command string is
+# `cd '<wd>' && <fragment>true; cd '<wd>' && exec env …`, with no braces, so
+# a writer that fails still leaves the second `cd` and the `exec` to run,
+# and for an absolute workdir (the only form `cmd_start` and ws-add store)
+# that `cd` enters the same directory, so the transcript path does not
+# move. A relative one resolves against the first `cd`, so its pane execs
+# nothing, or execs elsewhere (`relative-workdir-second-cd-does-not-enter`).
+# A `cd` that fails execs nothing, as before.
+# THE LINE is the grammar's pending form, the body alone with no trailing
+# newline: `v1<TAB>pending<TAB><at_ms><TAB>-<TAB><logical>`, where `<logical>`
+# is the workdir `_spawn_start` read, byte for byte.
+# THREE ANSWERS, and it prints nothing (each redirection sends its own error
+# to /dev/null before it is tried):
+#   0 the pending line stands: written to a dot-leading temp, then renamed
+#     over the field by `_plat_mv_notdir`, so a link at the name is replaced
+#     and never followed;
+#   1 it could not be written, and the field was unlinked: the row reads
+#     `legacy-absent`, today's rule, until a later spawn's writes succeed
+#     (`failed-pending-write-reads-legacy`), and never a stale valid field;
+#   2 neither, and what stood there stands: a directory at the name reads
+#     unmeasured, and a `$REG` that refuses both the write and the unlink
+#     keeps the old field
+#     (`workdirid-pending-unwritable-keeps-the-old-field`).
+# Its callers ignore the answer (`|| :`): every answer leaves the row held or
+# read by today's rule, and `_spawn_start` keeps no `return` of its own.
+# C2, CALLING ONLY K (`_plat_epoch_ms`, `_plat_mv_notdir`): `_reg_set` is
+# C1, and calling it from here would add a cross-context pair. The temp is
+# named as `_reg_set`'s is, dot-leading with the writer's pid, and leaks the
+# same way on a SIGKILL (`workdirid-temp-leaks-on-sigkill`); `_reg_purge`
+# unlinks the field with every other field of the id.
+_spawn_workdirid_pending() {   # id logical -> 0 the pending line stands at $REG/<id>.workdirid; 1 it could not be
+  #                               written, and the field was unlinked (it reads legacy now); 2 neither (what stood there
+  #                               stands: a directory reads unmeasured, and a regular earlier field kept by a registry
+  #                               that refuses both the write and the unlink is the stated residual
+  #                               `workdirid-pending-unwritable-keeps-the-old-field`). Prints nothing, never dies, calls only K
+  local id="${1-}" logical="${2-}" temp field
+  temp="$REG/.$id.workdirid.$BASHPID.tmp"; field="$REG/$id.workdirid"
+  if printf 'v1\tpending\t%s\t-\t%s' "$(_plat_epoch_ms)" "$logical" 2>/dev/null >"$temp" && _plat_mv_notdir "$temp" "$field" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$temp" 2>/dev/null
+  rm -f -- "$field" 2>/dev/null && return 1
+  return 2
 }
 
 _inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, once the TUI is up.

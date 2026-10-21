@@ -33,7 +33,7 @@ const REAL = { stat: onPath('stat'), mv: onPath('mv'), date: onPath('date') };
 const DEVINO = process.platform === 'darwin' ? '-f %d:%i' : '-c %d:%i';
 
 /** The functions whose CODE may spell `.workdirid` (the next task adds the spawn's pending writer here). */
-const WORKDIRID_SPELLERS: readonly string[] = ['_plat_workdirid_pane', '_ws_workdirid_read'];
+const WORKDIRID_SPELLERS: readonly string[] = ['_plat_workdirid_pane', '_spawn_workdirid_pending', '_ws_workdirid_read'];
 /** The grammar's one definition, as the reader spells it. */
 const GRAMMAR = String.raw`local re=$'^v1\t(([0-9]+):([0-9]+):([1-9][0-9]*|-)|pending)\t([0-9]{13})\t([^[:cntrl:]]+)\t(/[^[:cntrl:]]*)$'`;
 
