@@ -513,6 +513,27 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     expect(changes(w.s, w.prior, next).mode, 'with foreign keys on it is a delta').toBe('delta');
     expectParity(w.s, next);
   });
+
+  // A next the diff declines is the full path's to answer whole, its own foreign-keys check included, so the delta's check (which
+  // guards its own writes) must not answer first. Each case's full path says something other than foreign-keys-off.
+  it.each(cases.filter(([label]) => /repeated|that leaves/.test(label)))('R15 (iii): foreign keys off, %s (not a delta): the full path’s code and message, not foreign-keys-off', (_label, make, code) => {
+    const w = openWorld();
+    const next = make(w.prior);
+    expect(diffOf(w.prior, next).applicable, 'the pure diff declines').toBe(false);
+    const before = dumpAll(w.raw);
+    w.raw.exec('PRAGMA foreign_keys = OFF');
+    try {
+      const full = fullPathRefusal(next, true);
+      expect(full.code, 'the full path decides before its own foreign-keys check').toBe(code);
+      let thrown: unknown;
+      try { changes(w.s, w.prior, next); } catch (e) { thrown = e; }
+      sameRefusal(thrown, full);
+      expect(dumpAll(w.raw)).toEqual(before);
+      expect(beginsOf(w.t)).toEqual([]);
+    } finally {
+      w.raw.exec('PRAGMA foreign_keys = ON');
+    }
+  });
 });
 
 // ── R16: one generated case per codec column ─────────────────────────────────────────────────────────────────────────────
