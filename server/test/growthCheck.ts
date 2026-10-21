@@ -170,11 +170,18 @@ export function codeLines(file: string, src: string): number {
 /** `atBoth`: the file exists at both shas, so a negative delta is a real shrink. */
 export interface GrowthRow { file: string; base: number; head: number; delta: number; atBoth: boolean }
 
+/** One git read, with replace objects off: a `refs/replace/` ref written in the
+ *  checkout (a `git replace` of origin/main's list blob, say) never changes
+ *  what the check reads (D-6211). Every git read below goes through it. */
+export function gitRead(args: readonly string[], cwd: string): string {
+  return execFileSync('git', ['--no-replace-objects', ...args],
+    { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+}
+
 /** `file`'s blob at `sha`, or null when the file does not exist there. */
 export function fileAt(file: string, sha: string, cwd: string): string | null {
   try {
-    return execFileSync('git', ['show', `${sha}:${file}`],
-      { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+    return gitRead(['show', `${sha}:${file}`], cwd);
   } catch {
     return null;
   }
@@ -196,16 +203,12 @@ export function netGrowth(file: string, baseSha: string, headSha: string, cwd: s
 /** Paths the diff `baseSha..headSha` touches: added, modified and deleted, and
  *  both sides of a rename. */
 export function changedFiles(baseSha: string, headSha: string, cwd: string): string[] {
-  const out = execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', baseSha, headSha],
-    { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
-  return out.split('\0').filter((p) => p !== '');
+  return gitRead(['diff', '--name-only', '--no-renames', '-z', baseSha, headSha], cwd).split('\0').filter((p) => p !== '');
 }
 
 /** Paths the diff `baseSha..headSha` adds. */
 export function addedFiles(baseSha: string, headSha: string, cwd: string): string[] {
-  const out = execFileSync('git', ['diff', '--name-only', '--diff-filter=A', '-z', baseSha, headSha],
-    { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
-  return out.split('\0').filter((p) => p !== '');
+  return gitRead(['diff', '--name-only', '--diff-filter=A', '-z', baseSha, headSha], cwd).split('\0').filter((p) => p !== '');
 }
 
 /** The listed files that grew by more than GROWTH_LIMIT, minus the waived: the
@@ -379,7 +382,7 @@ export function armedGrowth(files: readonly string[], root: string, base: string
 
 /** `GROWTH_OVER`'s list: every file that grew over the limit, an exempted one
  *  annotated with its PR, cap and ruling, and one whose entry does not apply
- *  said why: past its cap, or the PR edits the growth check itself. */
+ *  said why: past its cap, or the measured diff edits the growth check's own files. */
 export function overLine(over: readonly string[], exemptions: readonly ExemptionMatch[] = [],
   quote: (f: string) => string = (f) => f): string {
   if (!over.length) return '(none)';

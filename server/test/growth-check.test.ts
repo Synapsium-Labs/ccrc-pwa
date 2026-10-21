@@ -24,7 +24,7 @@
 // files. The HEAD copy's shape is checked on every run, CI or not.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,10 +33,11 @@ import {
   GROWTH_LIMIT, L1_L2_NEW_FILE_DIRS,
   classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
-  GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, type GrowthRow, type GrowthExemption,
+  GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
+import ts from 'typescript-api';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -396,12 +397,14 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
     expect([...GROWTH_MACHINERY]).toEqual(MACHINERY);
   });
 
-  it('every module growthCheck.ts imports is one of the growth check\'s own files', () => {
-    const src = path.join(ROOT, 'server/test/growthCheck.ts');
-    const relative = parseFile(src).imports.map((i) => i.specifier).filter((s) => s.startsWith('.'));
-    const repoPaths = relative.map((s) => path.relative(ROOT, path.resolve(path.dirname(src), s)).replace(/\.js$/, '.ts'));
-    expect(repoPaths.length, 'growthCheck.ts imports no relative module: the row has nothing to check').toBeGreaterThan(0);
-    expect(repoPaths.filter((p) => !GROWTH_MACHINERY.includes(p)), 'an import outside GROWTH_MACHINERY: add it there').toEqual([]);
+  it('every module the growth check loads is one of its own files, and every load in them can be followed', () => {
+    const roots = ['server/test/growthCheck.ts', 'server/test/scan/parse.ts', 'server/test/rings/exemptions.ts',
+      'server/test/growth-check.test.ts'];
+    const { modules, unfollowable } = importClosure(roots);
+    expect(modules, 'the closure walk lost a root').toEqual(expect.arrayContaining(roots));
+    expect(modules.filter((p) => !GROWTH_MACHINERY.includes(p) && !(p in DECIDES_NOTHING)),
+      'a module the growth check loads is outside GROWTH_MACHINERY: add it there').toEqual([]);
+    expect(unfollowable, 'a load the closure walk cannot follow: write it as a literal relative import').toEqual([]);
   });
 
   it('the decision: a row fails when its file is over and no entry applies to it', () => {
@@ -416,7 +419,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
         'ccd/ccd: delta +401 (GROWTH_OVER, over its exemption cap of 400 for PR #1100)'],
       ['over, another PR\'s entry', row(400), ['ccd/ccd'], e, 1101, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
       ['over, no PR number', row(400), ['ccd/ccd'], e, null, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
-      ['over, the PR edits the growth check', row(400), ['ccd/ccd'], e, 1100, ['server/test/growth-exemptions.json'], true,
+      ['over, the measured diff edits the growth check\'s own files', row(400), ['ccd/ccd'], e, 1100, ['server/test/growth-exemptions.json'], true,
         'ccd/ccd: delta +400 (GROWTH_OVER, not exempt: the diff for PR #1100 edits the growth check\'s own server/test/growth-exemptions.json)'],
     ];
     for (const [what, r, over, entries, pr, touched, fails, title] of table) {
@@ -493,6 +496,13 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       git('commit', '-q', '-am', 'a stale branch grows ccd/ccd');
       const stale = ccd(git('rev-parse', 'HEAD'));
       expect({ fails: stale.fails, exemption: stale.exemption }).toEqual({ fails: true, exemption: undefined });
+      // A replace ref that swaps origin/main's list blob for one naming the PR changes nothing the check reads.
+      const forged = execFileSync('git', ['hash-object', '-w', '--stdin'],
+        { cwd: dir, encoding: 'utf8', stdio: 'pipe', input: list(entry({ cap: 100 })) }).trim();
+      git('replace', '-f', git('rev-parse', `origin/main:${GROWTH_EXEMPTIONS_FILE}`), forged);
+      expect(git('show', `origin/main:${GROWTH_EXEMPTIONS_FILE}`), 'the replace ref is live for a plain read').toContain('1100');
+      const replaced = ccd(git('rev-parse', 'HEAD'));
+      expect({ fails: replaced.fails, exemption: replaced.exemption }).toEqual({ fails: true, exemption: undefined });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -530,22 +540,61 @@ function resolveBase(): { base: string } | { skip: string } {
     return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
   }
   try {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], { cwd: ROOT, stdio: 'pipe' });
+    gitRead(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], ROOT);
   } catch {
     return { skip: 'no origin/main in this checkout' };
   }
   try {
-    const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const base = gitRead(['merge-base', 'origin/main', 'HEAD'], ROOT).trim();
     return { base };
   } catch {
     return { skip: 'no merge-base between origin/main and HEAD' };
   }
 }
 
+/** Modules the growth check may load that decide nothing, each with why; empty today. */
+const DECIDES_NOTHING: Readonly<Record<string, string>> = {};
+
+/** The relative-import closure of `roots` (repo paths), and every load in it the walk cannot follow: a `require(…)` or
+ *  `createRequire` call, an import of `node:module`, or an `import(…)` whose argument is not a literal. */
+function importClosure(roots: readonly string[]): { modules: string[]; unfollowable: string[] } {
+  const seen = new Set<string>();
+  const unfollowable: string[] = [];
+  const queue = [...roots];
+  while (queue.length) {
+    const rel = queue.shift()!;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = path.join(ROOT, rel);
+    for (const spec of parseFile(abs).imports.map((i) => i.specifier)) {
+      if (spec === 'module' || spec === 'node:module') unfollowable.push(`${rel}: imports ${spec}`);
+      if (!spec.startsWith('.')) continue;
+      const target = path.resolve(path.dirname(abs), spec);
+      const asTs = target.replace(/\.js$/, '.ts');
+      queue.push(path.relative(ROOT, target !== asTs && existsSync(asTs) ? asTs : target));
+    }
+    const sf = ts.createSourceFile(abs, readFileSync(abs, 'utf8'), ts.ScriptTarget.Latest, true);
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n)) {
+        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+        const callee = n.expression;
+        const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : '';
+        if (callee.kind === ts.SyntaxKind.ImportKeyword && !(n.arguments[0] && ts.isStringLiteralLike(n.arguments[0]))) {
+          unfollowable.push(`${rel}:${line}: import() of a computed specifier`);
+        }
+        if (name === 'require' || name === 'createRequire') unfollowable.push(`${rel}:${line}: ${name}(…)`);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return { modules: [...seen].sort(), unfollowable };
+}
+
 const resolved = resolveBase();
 const measured = 'base' in resolved
   ? (() => {
-      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+      const head = gitRead(['rev-parse', 'HEAD'], ROOT).trim();
       // D-6211: one helper reads and decides; the exemption list is origin/main's copy, never this checkout's.
       const armed = armedGrowth(GROWTH_FILES, ROOT, resolved.base, head, process.env);
       // D-6119: absolute numbers go to the job summary only, never an assertion.
