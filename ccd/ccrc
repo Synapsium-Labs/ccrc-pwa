@@ -6990,7 +6990,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # charset refusal trades it away.
   #
   # THE ONLY IN-TREE CONSUMER OF `.cc-secrets/*.env` IS A BASH SOURCE, which is
-  # what makes `%q` safe rather than merely stricter: `deploy/notify.sh:29`
+  # what makes `%q` safe rather than merely stricter: `deploy/notify.sh`
   # reads `ccrc-mail.token` raw and never sources it, and that is a different
   # file. Any future non-bash reader of THIS file would have to unquote, and
   # would be the caller that has to say so.
@@ -11253,12 +11253,12 @@ _models_canary_reserve_secs() {   # (C + 15 + 8) + T + J + 2H
 # hook - `$_SVC_REG/notify.sh`, the path `_inst_files` installs it at, spelled through `$_SVC_REG` and never a second
 # `$HOME/.cc-sessions` - with its `--push` flag, so the server sends it to the phone as well as the banner
 # (`/api/notify`, which pushes only a line `modelsPushOf` reads). Best-effort by the hook's own contract: its output is
-# dropped and its status never ends the refresh. DELIVERY IS NOT PROMISED: a line over `modelsPushOf`'s cap (a long
-# model id makes a failed-canary line long) is still sent and the server may refuse to push it. IN THE AUTOMATIC
-# CONTEXT the COMPLETE hook (not only its curl) is a strict deadline, admitted first (a hook with no time to run is
-# skipped, never run late); a hand caller's call is a best-effort deadline with today's fallbacks. ONE RESIDUAL: the hook
-# itself is the strict call's direct child, so a TERM-ignoring HELPER the hook starts can outlive the hook's deadline,
-# with its output on /dev/null; it holds nothing the step waits for, and the unit's stop ends it.
+# dropped and its status never ends the refresh. DELIVERY IS NOT PROMISED: the server refuses to push a line over
+# `modelsPushOf`'s cap (long model ids make a failed-canary line long) or of a lane not codex-kind in ITS roster. IN THE
+# AUTOMATIC CONTEXT the COMPLETE hook (not only its curl) is a strict deadline, admitted first (a hook with no time to
+# run is skipped, never run late); a hand caller's call is a best-effort deadline with today's fallbacks. ONE RESIDUAL:
+# the hook itself is the strict call's direct child, so a TERM-ignoring HELPER the hook starts can outlive the hook's
+# deadline, with its output on /dev/null; it holds nothing the step waits for, and the unit's stop ends it.
 _models_push() {   # <message> -> rc 0
   local hook="$_SVC_REG/notify.sh"
   [ -x "$hook" ] || return 0

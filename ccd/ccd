@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=10e5ecfd07bcf2c1d6626f5aa2119d918ec709648443832b652ca3810239bbce
+# ccrc:generated 1 sha256=606573910a8994f0c0b7440abe7c57a6a1f9d0a93bdf81713a6b007805b03d28
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28552,8 +28552,8 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
   _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
-  # Drop an executable ~/.cc-sessions/notify.sh taking the message as $1 (curl to a Discord
-  # webhook / ntfy topic / anything); absent hook = silent.
+  # Drop an executable ~/.cc-sessions/notify.sh taking the message as its LAST argument (the models
+  # step passes a leading --push; curl to a Discord webhook / ntfy topic / anything); absent hook = silent.
   [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
   echo "swapped $id: $cur -> $target (discover on claude.ai under the $target account)"
 }
