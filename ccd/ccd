@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=56f277bbff1002ac62ba654e8ab2261e5aa5dcac60c98b98699238ae8e2b222c
+# ccrc:generated 1 sha256=2f255fb8bce8106056661123cb014a58dc5687dcb484484dcce984d859996ccf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33534,13 +33534,30 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   #   read in one walk compare dev:ino alone: one inode is one directory at one instant.
   # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled exception, as the expiry probe always
   # required. Vanished: its cwd link or its stat file answers ENOENT/ESRCH; a cwd link that read but whose open
-  # then answers ENOENT is gone only when its stat file answers so too. The exception: a cwd link that answers
+  # then answers ENOENT is gone when its stat file answers so too (no task bears that pid any more: a process gone
+  # so is skipped), or released when the link, read a second time, answers ENOENT; any other answer to that second
+  # read, EACCES or a path included, is unmeasured. A task whose cwd link answers ENOENT has run exit_fs, which
+  # do_exit runs after exit_files, so it has no cwd and no fd-table entry left and never gets either back (what a
+  # cwd link cannot show is not seen here, as on main: a mapping, a deferred __fput, a kernel-held reference such
+  # as an io_uring fixed file). But the link is looked up by pid, and a thread's execve (de_thread) lets the
+  # leader exit and only then hands it that pid (exchange_tids, which runs before release_task and is never
+  # undone). So a process whose own cwd link vanished at its first read, or was released, is asked through its
+  # threads: `task/<tid>`, its own tid kept, each by both arms, and `task/` listed again until a listing names no
+  # tid this walk has not asked (bounded by WS_CWD_USERS_SCAN_S, as the table's listing is; a `task/` that cannot
+  # be listed is unmeasured). A thread whose link vanished, or was gone or released, is skipped only because the
+  # process's own link is then read ONCE MORE: ENOENT/ESRCH accepts the walk; a link that reads is a pid that
+  # changed hands, judged afresh by both arms, where any further vanish or failure is unmeasured. Those kernel
+  # orderings were read in the 6.8 and master sources. The exception: a cwd link that answers
   # EACCES (another uid's process, or a SAME-user NON-DUMPABLE one: ssh-agent, a setuid or setgid exec) is NOT
   # SEEN, the stated limit, because refusing on every unreadable link would refuse every removal for ever. Every
   # OTHER failure is UNMEASURED, never a skip: a `..` that cannot be walked (a directory on the chain with no
   # search permission), an open that answers anything but ENOENT, a stat file that does not parse. So one
   # same-uid process sitting in a directory that cannot be searched holds every answer at unmeasured until it
   # moves. There is no skip on a link count of zero: that is a property of a directory, not proof a process left.
+  # TWO LIMITS, both on main too and neither a regression against it: a thread with its own fs_struct
+  # (unshare(CLONE_FS), or cloned without CLONE_FS) is not asked while its leader's cwd link reads
+  # (cwd-probe-per-thread-cwd-unasked); and a pid is read once a walk (its `done` set is keyed by pid number), so
+  # a process that takes a reused pid after that read is not asked.
   # THE WALK IS `_ws_path_users`' DISCIPLINE (Linux): a fixed point, never one snapshot (the table is listed again
   # until a listing names no pid this walk has not read; the pass that finds a user ends it); a thread-group
   # leader whose own cwd reads as vanished is asked through `task/<tid>`, and a thread entry unreadable for any
@@ -33582,6 +33599,7 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
 import json, os, re, subprocess, sys
 mode, wt, label, me, sub, root = sys.argv[1:7]
 VANISHED = (FileNotFoundError, ProcessLookupError)
+RELEASED = "released"   # placed: the task let go of that cwd since its link was read
 PID = re.compile("[0-9]+")
 def inside(p):
     return p == wt or p.startswith(wt + "/")
@@ -33652,43 +33670,85 @@ def gone(statf):
     return False
 def entries(pid):
     # what to compare for process <pid>, as (cwd, its link, its stat file): its
-    # own cwd link; or, for a leader whose own cwd link reads as VANISHED, the
-    # cwd link of each of its live threads (a leader that exited before its
-    # threads shows a vanished cwd while they still run where it ran)
+    # own cwd link; [] for the ruled exception; or None when that link reads as
+    # VANISHED, so that again() asks the pid through its threads (a leader that
+    # exited before its threads shows a vanished cwd while they still run where
+    # it ran)
     base = "%s/%s" % (root, pid)
     try:
         return [(os.readlink(base + "/cwd"), base + "/cwd", base + "/stat")]
     except PermissionError:
         return []   # the ruled exception: NOT SEEN, never a refusal
     except VANISHED:
-        pass
-    try:
-        tids = [t for t in os.listdir(base + "/task") if t != pid]
-    except VANISHED:
-        return []
-    except PermissionError:
-        sys.exit(3)
-    found = []
-    for t in tids:
-        tb = "%s/task/%s" % (base, t)
+        return None
+def judged(p, link, statf, child):
+    # one entry, by its string and then by its identity: (p, False) inside by
+    # its string, (p, True) inside by device and inode, else what placed()
+    # answered (False, None or RELEASED)
+    if inside(p):
+        return (p, False)
+    r = placed(link, statf, child)
+    return (p, True) if r is True else r
+def again(pid, child):
+    # process <pid>, whose own cwd link was proven vanished (its first read
+    # answered ENOENT/ESRCH, or placed() answered RELEASED), as (p, byid) when
+    # it works inside the tree, else None. The link is looked up by pid, and a
+    # thread that runs execve lets the leader exit and only then takes its pid
+    # (de_thread: exchange_tids, before release_task), so each thread is asked,
+    # the leader tid KEPT, by both arms; task/ is listed again until a listing
+    # names no tid not yet asked (the table discipline, bounded as the walk is
+    # by WS_CWD_USERS_SCAN_S); and a thread whose link vanished is skipped only
+    # because the link of <pid> is then read ONCE MORE
+    base = "%s/%s" % (root, pid)
+    asked = set()
+    while True:   # task/ listed again until it settles
         try:
-            found.append((os.readlink(tb + "/cwd"), tb + "/cwd", tb + "/stat"))
+            tids = [t for t in os.listdir(base + "/task") if t not in asked]
         except VANISHED:
-            continue
+            break   # the process is gone: its own link is read once more below
         except PermissionError:
-            if exiting(tb):
+            sys.exit(3)   # a task/ that cannot be listed: unmeasured, never no threads
+        if not tids:
+            break
+        for t in tids:
+            asked.add(t)
+            tb = "%s/task/%s" % (base, t)
+            try:
+                p = os.readlink(tb + "/cwd")
+            except VANISHED:
                 continue
-            sys.exit(3)
-    return found
+            except PermissionError:
+                if exiting(tb):
+                    continue
+                sys.exit(3)
+            r = judged(p, tb + "/cwd", tb + "/stat", child)
+            if isinstance(r, tuple):
+                return r
+            # False, None or RELEASED: not this thread, and the walk goes on
+    try:   # the link of <pid> ONCE MORE, after the walk
+        p = os.readlink(base + "/cwd")
+    except VANISHED:
+        return None   # still vanished: exchange_tids is one way, so no thread took the pid before this read
+    r = judged(p, base + "/cwd", base + "/stat", child)
+    if isinstance(r, tuple):
+        return r
+    if r is False:
+        return None
+    sys.exit(3)   # it read, then vanished again: unmeasured, never a skip
 def placed(link, statf, child):
     # True when the directory the link names has the tree (child: its st_dev and
     # st_ino) on its chain of "..", False when it has not, None ONLY on proof the
-    # process is gone; anything else is unmeasured (exit 3)
+    # process is gone, RELEASED ONLY on proof the task let go of that cwd since
+    # the link was read; anything else is unmeasured (exit 3)
     try:
         fd = os.open(link, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
     except FileNotFoundError:
         if gone(statf):
             return None
+        try:
+            os.readlink(link)
+        except FileNotFoundError:
+            return RELEASED   # read again, the link answers ENOENT; any other errno, EACCES included, is unmeasured
         sys.exit(3)   # the link named nothing, yet the process was not proven gone
     try:
         for _ in range(4096):
@@ -33731,15 +33791,13 @@ def scan():
                 done.add(pid)
                 if pid in mine:
                     continue
-                hit = None
-                for p, link, statf in entries(pid):
-                    if inside(p):
-                        hit = (p, False)
-                        break
-                    if placed(link, statf, child):
-                        hit = (p, True)
-                        break
-                if hit is None:
+                own = entries(pid)
+                hit = again(pid, child) if own is None else None   # its own cwd read as vanished
+                for p, link, statf in own or []:
+                    hit = judged(p, link, statf, child)
+                    if hit == RELEASED:
+                        hit = again(pid, child)   # it released its cwd since that read
+                if not isinstance(hit, tuple):
                     continue
                 pp = ppid_of(pid)
                 if pp is None or pp in mine:

@@ -427,3 +427,213 @@ describe('the source: one probe, its seams by name, one bounded Linux walk; the 
     expect(end, 'inside the RECLAIM region').toBeGreaterThan(removal);
   });
 });
+
+describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, its pid asked through its threads until they settle, then read once more', () => {
+  /** A RACE, TIMED TO THE PROBE'S OWN CALLS (test-local: no seam in ccd, and never the real /proc). A fake table cannot
+   *  change between two reads the probe makes microseconds apart, and no blocking read lies between a cwd link's read,
+   *  its open and its second read (the only reads a FIFO could hold are a stat file's, after a hit). So `python3` on
+   *  PATH is a shim, as A15's is: it runs the real python3 on the probe's own text, after a prelude that wraps
+   *  `os.readlink`, `os.open` and `os.listdir`. The wrapper counts each call by its path and, just before the call a
+   *  case names, changes the fake table as the kernel would have changed it at that instant; then it makes the real
+   *  call, so every answer the probe reads is the file system's. `timed-fired` logs each change made, and
+   *  `timed-error` a change that failed. */
+  const PRELUDE = [
+    'import os as _t_os, shutil as _t_sh',
+    '_t_home = _t_os.environ["HOME"]',
+    '_t_F = _t_home + "/fp"',
+    '_t_seen = {}',
+    'def _t_fired(what):',
+    '    with open(_t_home + "/timed-fired", "a") as fh:',
+    '        fh.write(what + "\\n")',
+    'def _t_wrap(name):',
+    '    real = getattr(_t_os, name)',
+    '    def call(path, *a, **k):',
+    '        key = (name, str(path))',
+    '        n = _t_seen[key] = _t_seen.get(key, 0) + 1',
+    '        try:',
+    '            _t_step(name, key[1], n)',
+    '        except Exception as e:',
+    '            with open(_t_home + "/timed-error", "a") as fh:',
+    '                fh.write("%s %s %d: %r\\n" % (name, key[1], n, e))',
+    '        return real(path, *a, **k)',
+    '    setattr(_t_os, name, call)',
+    'for _t_n in ("readlink", "open", "listdir"):',
+    '    _t_wrap(_t_n)',
+  ].join('\n');
+  /** Writes the shim and the case's step (the body of `_t_step(op, path, n)`, `n` the call's count for that path),
+   *  and answers the snippet that puts the shim first on PATH. Any other python3 call runs the real one untouched. */
+  const timed = (step: readonly string[]): string => {
+    fs.mkdirSync(path.join(h.home, 'shim'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, 'shim', 'python3'), '#!/bin/sh\n'
+      + 'if [ "$1" = -I ] && [ "$2" = -c ] && [ "$4" = proc ]; then p=$3; shift 3; exec "$R77_PY" -I -c "$(cat "$HOME/timed.py")\n$p" "$@"; fi\n'
+      + 'exec "$R77_PY" "$@"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(h.home, 'timed.py'), `${PRELUDE}\ndef _t_step(op, path, n):\n${step.map((l) => `    ${l}`).join('\n')}\n    return\n`);
+    return ' R77_PY=$(command -v python3); export R77_PY; PATH="$HOME/shim:$PATH";';
+  };
+  const logOf = (name: string): string[] => (exists(name) ? fs.readFileSync(path.join(h.home, name), 'utf8').split('\n').filter(Boolean) : []);
+  const fired = (): string[] => logOf('timed-fired');
+  /** A python string literal for a path (JSON's escapes are python's). */
+  const lit = (p: string): string => JSON.stringify(p);
+  /** 4242 a leader whose own cwd link reads as vanished (a zombie's does), its own tid listed under `task/` with no
+   *  cwd; `thread(tid, cwd)` plants one of its threads. */
+  const lead = `${FAKE} fakep 4242 / 1; rm -f "$HOME/fp/4242/cwd"; mkdir -p "$HOME/fp/4242/task/4242";`
+    + ' printf "4242 (a b) Z 1 1 1 0\\n" > "$HOME/fp/4242/task/4242/stat";';
+  const thread = (tid: string, cwd: string): string => ` mkdir -p "$HOME/fp/4242/task/${tid}"; ln -sfn "${cwd}" "$HOME/fp/4242/task/${tid}/cwd";`
+    + ` printf "%s (a b) S 1 1 1 0\\n" ${tid} > "$HOME/fp/4242/task/${tid}/stat";`;
+  /** The tree, and `$HOME/alias`, a link to it: `$HOME/alias/sub` is inside it by device and inode only. */
+  const aliased = (): string => {
+    const d = tree();
+    fs.symlinkSync(d, path.join(h.home, 'alias'));
+    return d;
+  };
+
+  it('V1: a process that released its cwd between the probe’s read and its open, its stat file standing (a zombie’s does), is confirmed gone by a second read of the link: nobody, never unmeasured', () => {
+    const d = aliased();
+    const a = ask(d, `${FAKE} fakep 4242 "$HOME/alias/sub" 1; mkdir -p "$HOME/fp/4242/task/4242";` + timed([
+      'if op == "open" and path == _t_F + "/4242/cwd" and n == 1:',
+      '    _t_os.unlink(path)',
+      '    _t_fired("4242 released its cwd")',
+    ]));
+    expect(a.rc, a.why).toBe('0');
+    expect(fired(), 'the CONTROL: the link vanished at the open (unvanished, it is in use by device and inode)').toEqual(['4242 released its cwd']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('V2: the same process, confirmed by its second read, is asked through its threads: a live thread in the tree is in use', () => {
+    const d = aliased();
+    const a = ask(d, `${FAKE} fakep 4242 "$HOME/alias/sub" 1; mkdir -p "$HOME/fp/4242/task/4242";${thread('4243', `${real(d)}/sub`)}` + timed([
+      'if op == "open" and path == _t_F + "/4242/cwd" and n == 1:',
+      '    _t_os.unlink(path)',
+      '    _t_fired("4242 released its cwd")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+    expect(fired()).toEqual(['4242 released its cwd']);
+  }, 60_000);
+
+  it('V3: a thread created after the first listing of `task/` (its creator, in the tree, exited before it was asked) is found by listing `task/` again: in use', () => {
+    const d = tree();
+    const a = ask(d, `${lead}${thread('4243', `${real(d)}/sub`)}` + timed([
+      'if op == "readlink" and path == _t_F + "/4242/task/4243/cwd" and n == 1:',
+      '    _t_os.mkdir(_t_F + "/4242/task/4244")',
+      `    _t_os.symlink(${lit(`${real(d)}/sub`)}, _t_F + "/4242/task/4244/cwd")`,
+      '    _t_os.unlink(path)',
+      '    _t_fired("4243 cloned 4244 and exited")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+    expect(fired()).toEqual(['4243 cloned 4244 and exited']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('V4: the pid changes hands after the walk (its thread, asked outside the tree, moved in by another mount and ran execve, so the leader’s pid names it): the last read of the leader’s link finds it, by device and inode', () => {
+    const d = aliased();
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    const a = ask(d, `${lead}${thread('4243', '$HOME/elsewhere')}` + timed([
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+      '    _t_sh.rmtree(_t_F + "/4242/task/4243")',
+      '    _t_os.symlink(_t_home + "/alias/sub", path)',
+      '    _t_os.symlink(_t_home + "/alias/sub", _t_F + "/4242/task/4242/cwd")',
+      '    _t_fired("4243 took pid 4242")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${h.home}/alias/sub, inside ${d} by device and inode`);
+    expect(fired()).toEqual(['4243 took pid 4242']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it('V5: a leader’s link that reads at the last read and then vanishes again at its open is UNMEASURED — no second confirmation there', () => {
+    const d = aliased();
+    const a = ask(d, lead + timed([
+      'if op == "readlink" and path == _t_F + "/4242/cwd" and n == 2:',
+      '    _t_os.symlink(_t_home + "/alias/sub", path)',
+      '    _t_fired("4242 reads again")',
+      'if op == "open" and path == _t_F + "/4242/cwd" and n == 1:',
+      '    _t_os.unlink(path)',
+      '    _t_fired("4242 vanished again")',
+    ]));
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toBe(`the processes of this box could not be measured (${h.home}/fp, exit 3), so whether one works inside ${d} was never asked`);
+    expect(fired()).toEqual(['4242 reads again', '4242 vanished again']);
+  }, 60_000);
+
+  it('V6: a thread link that still reads after its open answered ENOENT, its stat file standing, is UNMEASURED — a link that reads is never a confirmation', () => {
+    const d = tree();
+    const a = ask(d, `${lead}${thread('4243', '$HOME/nowhere/x')}`);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('could not be measured');
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('V7: a thread link whose second read answers EACCES is UNMEASURED — ENOENT alone confirms, and the ruled EACCES exception is never reused there', () => {
+    const d = tree();
+    const t = path.join(h.home, 'fp', '4242', 'task', '4243');
+    try {
+      const a = ask(d, `${lead}${thread('4243', '$HOME/nowhere/x')}` + timed([
+        'if op == "readlink" and path == _t_F + "/4242/task/4243/cwd" and n == 2:',
+        '    _t_os.chmod(_t_F + "/4242/task/4243", 0)',
+        '    _t_fired("task/4243 cannot be searched")',
+      ]));
+      expect(a.rc, a.why).toBe('2');
+      expect(a.why).toContain('could not be measured');
+      expect(fired()).toEqual(['task/4243 cannot be searched']);
+    } finally { if (fs.existsSync(t)) fs.chmodSync(t, 0o755); }
+  }, 60_000);
+
+  it('V8: a ZOMBIE leader whose live thread works in the tree by device and inode is in use — each thread is judged by both arms', () => {
+    const d = aliased();
+    const a = ask(d, `${lead} printf "4242 (a b) Z 1 1 1 0\\n" > "$HOME/fp/4242/stat";${thread('4243', '$HOME/alias/sub')}`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${h.home}/alias/sub, inside ${d} by device and inode`);
+  }, 60_000);
+
+  it('V9: the leader’s own tid is asked: a pid that changed hands before `task/` was listed names the thread that ran execve there', () => {
+    const d = tree();
+    const a = ask(d, `${lead} ln -sfn "${real(d)}/sub" "$HOME/fp/4242/task/4242/cwd";`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+  }, 60_000);
+
+  it('V10: a thread confirmed gone by its second read does not end the walk: the next listing’s thread is still asked', () => {
+    const d = aliased();
+    const a = ask(d, `${lead}${thread('4243', '$HOME/alias/sub')}` + timed([
+      'if op == "open" and path == _t_F + "/4242/task/4243/cwd" and n == 1:',
+      '    _t_os.mkdir(_t_F + "/4242/task/4244")',
+      `    _t_os.symlink(${lit(`${real(d)}/sub`)}, _t_F + "/4242/task/4244/cwd")`,
+      '    _t_os.unlink(path)',
+      '    _t_fired("4243 cloned 4244 and released its cwd")',
+    ]));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why).toBe(`process 4242 has its working directory at ${real(d)}/sub`);
+    expect(fired()).toEqual(['4243 cloned 4244 and released its cwd']);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('V11: a `task/` that cannot be listed is UNMEASURED — never "no threads"', () => {
+    const d = tree();
+    const t = path.join(h.home, 'fp', '4242', 'task');
+    try {
+      const a = ask(d, `${lead} chmod 000 "$HOME/fp/4242/task";`);
+      expect(a.rc, a.why).toBe('2');
+      expect(a.why).toContain('could not be measured');
+    } finally { if (fs.existsSync(t)) fs.chmodSync(t, 0o755); }
+  }, 60_000);
+
+  it('V12: a `task/` that never settles (each listing names a tid the walk has not asked) is UNMEASURED, at the walk’s own bound', () => {
+    const d = tree();
+    const a = ask(d, `WS_CWD_USERS_SCAN_S=1; ${lead}` + timed([
+      'if op == "listdir" and path == _t_F + "/4242/task":',
+      '    if n > 1:',
+      '        _t_os.rmdir(path + "/%d" % (9000 + n - 1))',
+      '    _t_os.mkdir(path + "/%d" % (9000 + n))',
+    ]));
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toBe(`the walk of ${h.home}/fp did not finish within 1s, so whether a process works inside ${d} was never asked`);
+    expect(logOf('timed-error')).toEqual([]);
+  }, 60_000);
+});
