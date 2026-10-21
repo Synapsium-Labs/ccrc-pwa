@@ -211,7 +211,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history delegation-hooks update-sweep docs-sw   # seven entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6); _check_delegation-hooks and then _check_update-sweep are at the END of this file
+  models codex docs history secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # ten entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -9512,4 +9512,152 @@ _check_approval-digest-mismatch() {
     return 2
   fi
   _dr_pass approval-digest-mismatch "no approval request was refused digest-mismatch in the last 7 days"
+}
+
+# ── BACKUPS: where the lane secrets could be copied (accounts plan Task A11b; D-5513's backups row; G33) ──────────
+# Any backup or snapshot image taken while a lane secret existed holds that secret (spec §3.3), so doctor reports the
+# box's posture. Three checks, each with one platform: `secrets-backup-excluded` and `filevault` on darwin, where the
+# account verbs `tmutil addexclusion` the secret directories (D-5755 (8), D-5756), and `snapshot-posture` on Linux,
+# where whether the provider keeps backups or snapshots of the box is the operator's answer, stated, never guessed. The
+# other platform's checks SKIP and say so. All three measure only paths and posture: no check here opens a secret.
+#
+# The subject of `secrets-backup-excluded` and `snapshot-posture` is a box that holds lane secrets: `~/.cc-secrets`
+# or `~/.ccrc/auth-scratch` exists. A box with neither (a server-role box: the server never holds a lane secret)
+# has nothing to back up by mistake and SKIPs.
+_dr_secret_dirs() {   # -> the secret directories that exist on this box, one `~/`-relative name per line
+  local d
+  for d in .cc-secrets .ccrc/auth-scratch; do
+    [ -d "$HOME/$d" ] && printf '%s\n' "~/$d"
+  done
+  return 0
+}
+
+# `secrets-backup-excluded` (darwin): `tmutil isexcluded` answers `[Excluded]` or `[Included]` before the path. An
+# included secret directory FAILs (the verbs exclude it, so an inclusion is a gap they left: `ccd-account-auth` and
+# `ccrc-token-sync` also create `~/.cc-secrets`, D-5755 (13b)); an answer this check cannot read WARNs as not measured,
+# and so does a box whose PATH has no `tmutil`. Neither is ever a PASS.
+_check_secrets-backup-excluded() {
+  if [ "${CCD_OS:-linux}" != darwin ]; then
+    _dr_skip secrets-backup-excluded "Time Machine is macOS's; this box is ${CCD_OS:-linux}, whose provider-level backups snapshot-posture states"
+    return 3
+  fi
+  local d out word dirs=() excluded=() included=() unread=()
+  while IFS= read -r d; do [ -n "$d" ] && dirs+=("$d"); done < <(_dr_secret_dirs)
+  if [ "${#dirs[@]}" -eq 0 ]; then
+    _dr_skip secrets-backup-excluded "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here to keep out of Time Machine"
+    return 3
+  fi
+  if ! command -v tmutil >/dev/null 2>&1; then
+    _dr_warn secrets-backup-excluded "tmutil is not on PATH, so whether $(_dr_join "${dirs[@]}") are excluded from Time Machine was not measured" \
+      "run 'tmutil isexcluded' on each of them with /usr/bin on PATH"
+    return 2
+  fi
+  for d in "${dirs[@]}"; do
+    out="$(tmutil isexcluded "$HOME/${d#\~/}" 2>&1)"
+    word="$(_dr_first_line "$out")"; word="${word%%]*}]"
+    case "$word" in
+      '[Excluded]') excluded+=("$d") ;;
+      '[Included]') included+=("$d") ;;
+      *) unread+=("$d") ;;
+    esac
+  done
+  if [ "${#included[@]}" -gt 0 ]; then
+    _dr_fail secrets-backup-excluded "$(_dr_join "${included[@]}") included in Time Machine backups, so every backup taken holds the lane secrets in them" \
+      "run 'tmutil addexclusion $(_dr_join "${included[@]}")' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it"
+    return 1
+  fi
+  if [ "${#unread[@]}" -gt 0 ]; then
+    _dr_warn secrets-backup-excluded "tmutil isexcluded gave no [Excluded] or [Included] answer for $(_dr_join "${unread[@]}"), so its backup posture was not measured" \
+      "run 'tmutil isexcluded' on it by hand and read why it did not answer"
+    return 2
+  fi
+  _dr_pass secrets-backup-excluded "$(_dr_join "${excluded[@]}") excluded from Time Machine (tmutil isexcluded)"
+}
+
+# `filevault` (darwin): `fdesetup status` answers `FileVault is On.` or `FileVault is Off.`, with a progress line
+# while it converts. Off, or turning off, WARNs rather than FAILs: disk encryption is the machine's policy, which
+# ccrc does not own and an operator may have chosen, and a FAIL would fail every install on such a Mac. An answer
+# this check cannot read WARNs as not measured.
+_check_filevault() {
+  if [ "${CCD_OS:-linux}" != darwin ]; then
+    _dr_skip filevault "FileVault is macOS's disk encryption; this box is ${CCD_OS:-linux}"
+    return 3
+  fi
+  local out first
+  if ! command -v fdesetup >/dev/null 2>&1; then
+    _dr_warn filevault "fdesetup is not on PATH, so whether FileVault is on was not measured" \
+      "run 'fdesetup status' with /usr/bin on PATH"
+    return 2
+  fi
+  out="$(fdesetup status 2>&1)"; first="$(_dr_first_line "$out")"
+  case "$out" in
+    *'Decryption in progress'*)
+      _dr_warn filevault "FileVault is turning off (fdesetup status: Decryption in progress), so lane secrets on this disk will sit unencrypted" \
+        "turn FileVault back on in System Settings, Privacy & Security, FileVault (or 'sudo fdesetup enable')"
+      return 2 ;;
+  esac
+  case "$first" in
+    'FileVault is On.'*) _dr_pass filevault "FileVault is On (fdesetup status)" ;;
+    'FileVault is Off.'*)
+      _dr_warn filevault "FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them" \
+        "turn FileVault on in System Settings, Privacy & Security, FileVault (or 'sudo fdesetup enable')"
+      return 2 ;;
+    *)
+      _dr_warn filevault "fdesetup status answered '${first:-nothing}', so whether FileVault is on was not measured" \
+        "run 'fdesetup status' by hand and read why it did not answer On or Off"
+      return 2 ;;
+  esac
+}
+
+# `snapshot-posture` (Linux): whether the provider keeps server backups, server snapshots or volume snapshots of this
+# box is not something doctor can see from inside it, so it is the operator's answer, stated in one line of
+# `~/.ccrc/snapshot-posture`: `none`, or one or more of `server-backups server-snapshots volume-snapshots`. Doctor
+# states it and never guesses. Absent, on a box that holds lane secrets, it WARNs "not stated"; a line it cannot read
+# FAILs, because a mistyped answer must not read as stated. A stated provider image PASSes, naming what it holds:
+# keeping backups is a choice, and the remedy for a leaked or restored image is the compromise steps, not doctor.
+SNAPSHOT_POSTURE_WORDS="server-backups server-snapshots volume-snapshots"
+_check_snapshot-posture() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip snapshot-posture "provider-level snapshots are a Linux box's question; this box is darwin, whose backups secrets-backup-excluded measures"
+    return 3
+  fi
+  local f="$HOME/.ccrc/snapshot-posture" line="" l w words=() dirs=()
+  local how="write one line to ~/.ccrc/snapshot-posture: none, or the ones that apply of $SNAPSHOT_POSTURE_WORDS"
+  while IFS= read -r l; do [ -n "$l" ] && dirs+=("$l"); done < <(_dr_secret_dirs)
+  if [ "${#dirs[@]}" -eq 0 ]; then
+    _dr_skip snapshot-posture "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here for a provider image to hold"
+    return 3
+  fi
+  if [ ! -e "$f" ]; then
+    _dr_warn snapshot-posture "not stated: whether the provider keeps backups or snapshots of this box, which would hold $(_dr_join "${dirs[@]}"), is the operator's answer, and doctor does not guess it" \
+      "$how"
+    return 2
+  fi
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    _dr_fail snapshot-posture "~/.ccrc/snapshot-posture is not a readable file, so the stated answer cannot be read" "$how"
+    return 1
+  fi
+  while IFS= read -r l || [ -n "$l" ]; do
+    l="$(_dr_trim "$l")"
+    [ -z "$l" ] || [ "${l:0:1}" = '#' ] && continue
+    line="$l"; break
+  done < "$f"
+  read -r -a words <<< "$line"
+  if [ "${#words[@]}" -eq 1 ] && [ "${words[0]}" = none ]; then
+    _dr_pass snapshot-posture "stated: the provider keeps no backups or snapshots of this box"
+    return 0
+  fi
+  local seen=" " bad=()
+  for w in "${words[@]}"; do
+    case " $SNAPSHOT_POSTURE_WORDS " in
+      *" $w "*) [[ "$seen" == *" $w "* ]] || seen+="$w " ;;
+      *) bad+=("$w") ;;
+    esac
+  done
+  if [ "${#words[@]}" -eq 0 ] || [ "${#bad[@]}" -gt 0 ]; then
+    _dr_fail snapshot-posture "~/.ccrc/snapshot-posture states '${line}', which is not none or a list of $SNAPSHOT_POSTURE_WORDS" "$how"
+    return 1
+  fi
+  seen="$(_dr_trim "$seen")"
+  _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one"
 }

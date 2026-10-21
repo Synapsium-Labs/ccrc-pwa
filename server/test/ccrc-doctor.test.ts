@@ -1237,7 +1237,7 @@ function healthy(prefix: string): string {
   // roster declares one telemetry:'anthropic' account, so there is one file it
   // must have. Contents are never read by the check (or by this fixture) —
   // existence and non-emptiness are the whole question.
-  mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+  mkdirSync(join(home, '.cc-secrets'), { recursive: true }); writeFileSync(join(home, '.ccrc', 'snapshot-posture'), 'none\n');   // A11b: the stated answer
   writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
     'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-real-token\n', { mode: 0o600 });
   // …and it knows where its server is, and that server says the two boxes
@@ -1679,7 +1679,7 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  (`~/.ccrc/approval-signing.key`), which only a server that started with
  *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
  *  refusals journal), so it moves no count. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 10;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry); +1 approval-key-colocated (no server key)
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 12;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry); +1 approval-key-colocated (no server key); +2 the backups checks of the other platform (A11b): Linux SKIPs filevault and secrets-backup-excluded, macOS snapshot-posture
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -16616,5 +16616,221 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
       expect(r.stdout).toMatch(/^WARN update-sweep: the last update's supervisor sweep was REFUSED \(killmode\)/m);
       expect(r.code, r.stdout).toBe(0);
     });
+  });
+});
+
+// ── accounts plan Task A11b: the backups checks (D-5513's backups row; G33) ──────────────────────────────────────
+// `secrets-backup-excluded` and `filevault` measure a darwin box, `snapshot-posture` states a Linux box's answer, and
+// each SKIPs on the other platform. Driven sourced, with `CCD_OS` set AFTER sourcing (ccrc recomputes it, so the
+// whole-run cases measure the host's own arm), and with `tmutil` and `fdesetup` as stubs on a PATH of stubs only, so
+// both platforms' arms run on any host. `HEALTHY_SKIPS` counts the other platform's two SKIPs; `healthy()` states
+// `none` in `~/.ccrc/snapshot-posture`, so a healthy Linux box PASSes `snapshot-posture`.
+describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
+  const BACKUP_CHECKS = ['secrets-backup-excluded', 'filevault', 'snapshot-posture'] as const;
+  type BackupCheck = typeof BACKUP_CHECKS[number];
+
+  /** A home with the given secret directories, and a stub bin holding only the named tools. */
+  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch'>; stubs?: Record<string, string>; posture?: string | 'dir' } = {}): string => {
+    const home = mkTmp('ccrc-doctor-a11b-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    for (const d of o.secrets ?? []) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
+    const bin = join(home, 'stub-bin');
+    mkdirSync(bin, { recursive: true });
+    for (const [name, body] of Object.entries(o.stubs ?? {})) {
+      writeFileSync(join(bin, name), `#!${BASH}\n${body}\n`, { mode: 0o755 });
+    }
+    if (o.posture === 'dir') mkdirSync(join(home, '.ccrc', 'snapshot-posture'));
+    else if (o.posture !== undefined) writeFileSync(join(home, '.ccrc', 'snapshot-posture'), o.posture);
+    return home;
+  };
+  const run = (home: string, check: BackupCheck, os: 'linux' | 'darwin'): Result => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; CCD_OS=${os}; _check_${check}`],
+      { env: { HOME: home, PATH: join(home, 'stub-bin'), LC_ALL: 'C' }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** `tmutil isexcluded <path>` in the real tool's shape: `[Excluded]` or `[Included]`, padding, then the path. */
+  const tmutil = (answer: (p: string) => string): string =>
+    `[ "$1" = isexcluded ] || exit 64\ncase "$2" in\n${['.cc-secrets', '.ccrc/auth-scratch']
+      .map((d) => `  */${d}) printf '%s    %s\\n' '${answer(d)}' "$2" ;;`).join('\n')}\n  *) exit 65 ;;\nesac`;
+  const fdesetup = (out: string): string => `[ "$1" = status ] || exit 64\nprintf '%s\\n' ${shq(out)}`;
+  const lines = (s: string): string[] => s.split('\n').filter(Boolean);
+
+  it('the three are in the check table once each, before the pinned delegation-hooks, and each is declared', () => {
+    const names = tableNames();
+    for (const n of BACKUP_CHECKS) expect(names.filter((x) => x === n), n).toHaveLength(1);
+    expect(names.slice(names.indexOf('secrets-backup-excluded'), names.indexOf('secrets-backup-excluded') + 4))
+      .toEqual([...BACKUP_CHECKS, 'delegation-hooks']);
+  });
+
+  describe('each SKIPs where its platform does not apply', () => {
+    it('filevault SKIPs on Linux, even with an fdesetup on PATH that would answer Off', () => {
+      const home = box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is Off.') } });
+      const r = run(home, 'filevault', 'linux');
+      expect(lines(r.stdout)).toEqual(['SKIP filevault: FileVault is macOS\'s disk encryption; this box is linux']);
+      expect(r.code).toBe(3);
+    });
+
+    it('secrets-backup-excluded SKIPs on Linux, even with a tmutil on PATH that would answer [Included]', () => {
+      const home = box({ secrets: ['.cc-secrets'], stubs: { tmutil: tmutil(() => '[Included]') } });
+      const r = run(home, 'secrets-backup-excluded', 'linux');
+      expect(lines(r.stdout)).toEqual([
+        'SKIP secrets-backup-excluded: Time Machine is macOS\'s; this box is linux, whose provider-level backups snapshot-posture states']);
+      expect(r.code).toBe(3);
+    });
+
+    it('snapshot-posture SKIPs on darwin, even with secrets and no stated answer', () => {
+      const home = box({ secrets: ['.cc-secrets'] });
+      const r = run(home, 'snapshot-posture', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'SKIP snapshot-posture: provider-level snapshots are a Linux box\'s question; this box is darwin, whose backups secrets-backup-excluded measures']);
+      expect(r.code).toBe(3);
+    });
+  });
+
+  describe('secrets-backup-excluded (darwin)', () => {
+    it('fails when tmutil isexcluded (stubbed) says no: FAIL naming the included directory, its remedy next, rc 1', () => {
+      const home = box({ secrets: ['.cc-secrets', '.ccrc/auth-scratch'],
+        stubs: { tmutil: tmutil((d) => (d === '.cc-secrets' ? '[Included]' : '[Excluded]')) } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'FAIL secrets-backup-excluded: ~/.cc-secrets included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        '  remedy: run \'tmutil addexclusion ~/.cc-secrets\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
+      ]);
+      expect(r.code).toBe(1);
+      expect(r.stdout.includes(home), 'the verdict names ~/ paths, never the home').toBe(false);
+    });
+
+    it('PASSes when tmutil says every secret directory is excluded, naming each', () => {
+      const home = box({ secrets: ['.cc-secrets', '.ccrc/auth-scratch'], stubs: { tmutil: tmutil(() => '[Excluded]') } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'PASS secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch excluded from Time Machine (tmutil isexcluded)']);
+      expect(r.code).toBe(0);
+    });
+
+    it('measures only the directories that exist: ~/.cc-secrets alone, excluded, PASSes naming it alone', () => {
+      const home = box({ secrets: ['.cc-secrets'], stubs: { tmutil: tmutil(() => '[Excluded]') } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual(['PASS secrets-backup-excluded: ~/.cc-secrets excluded from Time Machine (tmutil isexcluded)']);
+    });
+
+    it('SKIPs a darwin box with neither secret directory', () => {
+      const home = box({ stubs: { tmutil: tmutil(() => '[Included]') } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'SKIP secrets-backup-excluded: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here to keep out of Time Machine']);
+      expect(r.code).toBe(3);
+    });
+
+    it('WARNs not measured, never PASSes, when tmutil is not on PATH', () => {
+      const home = box({ secrets: ['.cc-secrets'] });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'WARN secrets-backup-excluded: tmutil is not on PATH, so whether ~/.cc-secrets are excluded from Time Machine was not measured',
+        '  remedy: run \'tmutil isexcluded\' on each of them with /usr/bin on PATH',
+      ]);
+      expect(r.code).toBe(2);
+    });
+
+    it('WARNs not measured, never PASSes, when tmutil answers neither word', () => {
+      const home = box({ secrets: ['.cc-secrets'], stubs: { tmutil: 'echo "tmutil: isexcluded requires Full Disk Access" >&2; exit 80' } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(r.stdout).toMatch(/^WARN secrets-backup-excluded: tmutil isexcluded gave no \[Excluded\] or \[Included\] answer for ~\/\.cc-secrets, so its backup posture was not measured$/m);
+      expect(r.stdout).toMatch(/^ {2}remedy: /m);
+      expect(r.code).toBe(2);
+    });
+  });
+
+  describe('filevault (darwin)', () => {
+    it('PASSes FileVault is On.', () => {
+      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
+      expect(lines(r.stdout)).toEqual(['PASS filevault: FileVault is On (fdesetup status)']);
+      expect(r.code).toBe(0);
+    });
+
+    it('WARNs FileVault is Off. with its remedy: the machine\'s policy, never a FAIL that fails an install', () => {
+      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'WARN filevault: FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them',
+        '  remedy: turn FileVault on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
+      ]);
+      expect(r.code).toBe(2);
+    });
+
+    it('WARNs a disk that is turning off, though its first line still says On', () => {
+      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is On.\nDecryption in progress: Percent completed = 12') } }), 'filevault', 'darwin');
+      expect(r.stdout).toMatch(/^WARN filevault: FileVault is turning off \(fdesetup status: Decryption in progress\)/m);
+      expect(r.code).toBe(2);
+    });
+
+    it('WARNs not measured when fdesetup is not on PATH, and when it answers neither On nor Off', () => {
+      const absent = run(box(), 'filevault', 'darwin');
+      expect(absent.stdout).toMatch(/^WARN filevault: fdesetup is not on PATH, so whether FileVault is on was not measured$/m);
+      expect(absent.code).toBe(2);
+      const odd = run(box({ stubs: { fdesetup: fdesetup('Error: unexpected answer') } }), 'filevault', 'darwin');
+      expect(odd.stdout).toMatch(/^WARN filevault: fdesetup status answered 'Error: unexpected answer', so whether FileVault is on was not measured$/m);
+      expect(odd.code).toBe(2);
+    });
+  });
+
+  describe('snapshot-posture (Linux): the operator\'s answer, stated, never guessed', () => {
+    it('SKIPs a box with no lane secret (a server-role box holds none)', () => {
+      const r = run(box(), 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)).toEqual([
+        'SKIP snapshot-posture: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here for a provider image to hold']);
+      expect(r.code).toBe(3);
+    });
+
+    it('WARNs "not stated" when a box holding secrets has no answer, and says how to state it', () => {
+      const r = run(box({ secrets: ['.cc-secrets'] }), 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)).toEqual([
+        'WARN snapshot-posture: not stated: whether the provider keeps backups or snapshots of this box, which would hold ~/.cc-secrets, is the operator\'s answer, and doctor does not guess it',
+        '  remedy: write one line to ~/.ccrc/snapshot-posture: none, or the ones that apply of server-backups server-snapshots volume-snapshots',
+      ]);
+      expect(r.code).toBe(2);
+    });
+
+    it('PASSes a stated none', () => {
+      const r = run(box({ secrets: ['.cc-secrets'], posture: '# asked at install\n\nnone\n' }), 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)).toEqual(['PASS snapshot-posture: stated: the provider keeps no backups or snapshots of this box']);
+      expect(r.code).toBe(0);
+    });
+
+    it('PASSes a stated provider image, naming it once each and that the image holds the secrets', () => {
+      const r = run(box({ secrets: ['.ccrc/auth-scratch'], posture: 'volume-snapshots server-backups volume-snapshots' }), 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)).toEqual([
+        'PASS snapshot-posture: stated: volume-snapshots, server-backups; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one']);
+      expect(r.code).toBe(0);
+    });
+
+    for (const [why, posture] of [['an unknown word', 'nightly'], ['none beside a provider image', 'none server-backups'], ['only comments', '# not answered yet\n']] as const) {
+      it(`FAILs ${why}: a mistyped answer never reads as stated`, () => {
+        const r = run(box({ secrets: ['.cc-secrets'], posture }), 'snapshot-posture', 'linux');
+        expect(r.stdout).toMatch(/^FAIL snapshot-posture: ~\/\.ccrc\/snapshot-posture states '.*', which is not none or a list of server-backups server-snapshots volume-snapshots$/m);
+        expect(r.stdout).toMatch(/^ {2}remedy: write one line to ~\/\.ccrc\/snapshot-posture: /m);
+        expect(r.code).toBe(1);
+      });
+    }
+
+    it('FAILs an answer path that is not a readable file', () => {
+      const r = run(box({ secrets: ['.cc-secrets'], posture: 'dir' }), 'snapshot-posture', 'linux');
+      expect(r.stdout).toMatch(/^FAIL snapshot-posture: ~\/\.ccrc\/snapshot-posture is not a readable file, so the stated answer cannot be read$/m);
+      expect(r.code).toBe(1);
+    });
+  });
+
+  itLinux('a healthy Linux box, through the whole run: the two darwin checks SKIP and the stated none PASSes', () => {
+    const r = runDoctor(healthy('ccrc-doctor-a11b-whole-'));
+    expect(anyVerdictFor(r.stdout, 'filevault')).toMatch(/^SKIP filevault: /);
+    expect(anyVerdictFor(r.stdout, 'secrets-backup-excluded')).toMatch(/^SKIP secrets-backup-excluded: /);
+    expect(anyVerdictFor(r.stdout, 'snapshot-posture')).toBe('PASS snapshot-posture: stated: the provider keeps no backups or snapshots of this box');
+    expect(r.code, r.stdout).toBe(0);
+  });
+
+  itDarwin('a healthy macOS box, through the whole run: snapshot-posture SKIPs, and the two darwin checks answer a verdict', () => {
+    const r = runDoctor(healthy('ccrc-doctor-a11b-whole-mac-'));
+    expect(anyVerdictFor(r.stdout, 'snapshot-posture')).toMatch(/^SKIP snapshot-posture: /);
+    expect(lineFor(r.stdout, 'filevault')).toMatch(/^(PASS|WARN|FAIL) filevault: /);
+    expect(lineFor(r.stdout, 'secrets-backup-excluded')).toMatch(/^(PASS|WARN|FAIL) secrets-backup-excluded: /);
   });
 });
