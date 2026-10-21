@@ -2629,6 +2629,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           So the loss is unattributed. Read-only; nothing deleted. The 13:05 mail to the evidence owner is still queued.
         - STATUS: fleet and server v0.0.536, newest v0.0.537, stable v0.0.502, intent dev/auto=off, backups fleet
           207M/server 14050M, disk free fleet 100G/work volume 10G (8.65G at 17:02)/server 18G.
+      - 17:55: the work volume ANOMALY, recovering: 11.8G free, so `ws-add` admits again. No tap this hour. STATUS:
+        fleet and server v0.0.536, newest v0.0.539, stable v0.0.502, intent dev/auto=off, backups fleet 207M/server
+        14050M, disk free fleet 104G/work volume 12G/server 18G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
