@@ -2646,6 +2646,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         coordinator. The work volume is steady at 10.2G (its ANOMALY stands). STATUS: fleet and server v0.0.536,
         newest v0.0.541, stable v0.0.502, intent dev/auto=off, backups fleet 207M/server 14050M, disk free fleet
         118G/work volume 10G/server 18G.
+      - 20:55: an operator tap moved both boxes to v0.0.541, the broker's delta projection: the fleet box 20:31:45 to
+        20:32:53, then the server 20:33:47 to 20:36:01. Both gates passed, doctor reported 0 failed on each, and the
+        server's watchdog found the move in flight twice and left it. The newest server backup is 1742M, so backups
+        total 14778M (+728M) and 17G is free, about 2G above the 15G line. On the first 18 passes of the new build,
+        `projectFull` is 0 on every one and no `projection-delta-mismatch` line was logged. After the boot pass,
+        ordinary passes block for 6.2 to 8.5 s (15.8 s on the last one before the move). Attempt-filing passes block
+        for 29.0 to 31.2 s (43 to 45 s before), and their `stallMid` is unchanged at 20.9 to 22.8 s, which is the
+        broker's next fix. Sent to the broker's coordinator. The work volume fell to 7.5G, so `ws-add` refuses again;
+        the growth is unattributed (a bounded scan timed out). Read-only; nothing deleted. STATUS: fleet and server
+        v0.0.541, newest v0.0.541, stable v0.0.502, intent dev/auto=off, backups fleet 228M/server 14778M, disk free
+        fleet 124G/work volume 8G/server 17G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
