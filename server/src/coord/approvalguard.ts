@@ -222,7 +222,7 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
       why: `ccrc account ${v}`, re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*account\\s+(?:-\\S+\\s+)*${reEsc(v)}(?![\\w-])`),
     })),
     { why: 'ccd account-pane', re: new RegExp(`${CCD_HEAD}account-pane(?![\\w-])`) },
-    { why: 'ccd-account-auth', re: /(?:(?:^|[\s;&|()\x60'"=])|\/\.local\/bin\/)ccd-account-auth(?![\w.-])/ },
+    { why: 'the ccd-account-auth helper', re: /(?:(?:^|[\s;&|()\x60'"=])|\/\.local\/bin\/)ccd-account-auth(?![\w.-])/ },
     { why: 'the approval surface', re: /(?:ccrc-api|\$\{?API\}?)['"]?\s+(?:-\S+\s+)*approvals(?![\w-])|\/api\/approvals(?![\w-])|approval-signing|approval-verify\.mjs/ },
     // D-5936: the workflow control verb is the operator's. Each segment tolerates one quote either side, as the row
     // above does, so a quote-split `".../workflows/$RUN"/control` still matches; no segment may hold a `/`, so the

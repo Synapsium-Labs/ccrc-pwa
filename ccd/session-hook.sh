@@ -4644,8 +4644,7 @@ def pathwhy($t):
 # The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
 # first, as `norm` does in the program: `c''cd ws-rm` and `c\cd ws-rm` name `ccd` only once bash has removed them.
 # A bare `env` word in the payload (D-6202's prefilter): `env` not inside a longer name (`.env`, `venv`, `ENV_X=`).
-APF_ENV_RE='(^|[^A-Za-z0-9_.-])env([^A-Za-z0-9_.=-]|$)'
-APF_ACCT_STRIP_MAX=8192
+APF_ENV_RE='(^|[^A-Za-z0-9_.-])env([^A-Za-z0-9_.=-]|$)' APF_ACCT_STRIP_MAX=8192
 apf="" amode=""
 if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   apf=$payload
@@ -4704,9 +4703,7 @@ if [[ -n "$apf" ]]; then
           areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
-          areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202)."
-          areason+=" Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell."
-          areason+=" Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+          areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
         build$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
           areason+=" Report what you need to your coordinator instead." ;;
