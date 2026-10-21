@@ -249,6 +249,7 @@ describe('every reason under unknown carries its own sentence', () => {
     ['no-remote', /no `origin` remote/i],
     ['unsupported', /does not have this verb yet/i],
     ['agent-down', /could not reach the sessions box/i],
+    ['cut-short', /could not finish reading the PRs/i],
     ['error', /could not be read/i],
     ['merge-unproven', /named no usable merge commit/i],
     // The two that split off `error`. Their whole purpose is to say something

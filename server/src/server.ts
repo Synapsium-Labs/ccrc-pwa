@@ -33,7 +33,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
-import { parsePrLines, prView, unknownView } from './prstate.js';
+import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
@@ -3580,7 +3580,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // than "we could not look".
     if (!verbSupported(deps.fleetState, argv)) return unknownView('unsupported');
     const res = await deps.runCcd(argv);
-    if (!res.ok) return unknownView('agent-down');
+    if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
     return prView(first ?? null, await prTasks(id), null);
   });
@@ -3926,6 +3926,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
   }
 
-  if (watcher) app.addHook('onClose', async () => { watcher.stop(); });
+  // Stop the beat, then let a server-caps write a tick already started land (landing-order wave 3c): it writes under
+  // `<ccrcDir>`, and a caller that removes that directory after close (a test's teardown) raced it (`ENOTEMPTY`).
+  // `serverCapsNow` never rejects, so this never fails a close.
+  if (watcher) app.addHook('onClose', async () => { watcher.stop(); await watcher.serverCapsSettled(); });
   return app;
 }

@@ -147,23 +147,70 @@ describe('_transcript_limit_banner (D-2362)', () => {
     seed(); const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
     expect(detectTimed('_transcript_limit_banner', f)).toBe('rc=2');
   });
-  it('the timed harness kills its child\'s WHOLE process group on timeout: a grandchild blocked on a FIFO does not outlive it', () => {
-    // A stand-in for a detector whose FIFO guard is gone: it forks `tail`, which blocks opening the FIFO for ever.
-    seed(); const f = path.join(h.home, `leak-${process.pid}.fifo`); execFileSync('mkfifo', [f]);
-    const holders = (): string[] => execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(f) && !l.includes('ps -eo'));
+  it.each(['normal', 'delayed-child'] as const)('the timed harness kills the whole group with %s fork scheduling', (schedule) => {
+    seed();
+    const f = path.join(h.home, `leak-${process.pid}.fifo`);
+    const pidFile = path.join(h.home, 'race-child.pid');
+    execFileSync('mkfifo', [f]);
+    const processes = (): { pid: number; args: string }[] =>
+      execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n')
+        .flatMap((l) => {
+          const m = /^\s*(\d+)\s+(.*)$/.exec(l);
+          return m ? [{ pid: Number(m[1]), args: m[2]! }] : [];
+        });
+    const child = (): number | undefined => {
+      if (!fs.existsSync(pidFile)) return undefined;
+      const text = fs.readFileSync(pidFile, 'utf8').trim();
+      if (!/^[1-9][0-9]*$/.test(text)) throw new Error('invalid fixture child pid');
+      return Number(text);
+    };
+    const owned = (): number[] => processes()
+      .filter((p) => p.args.includes(f) && !p.args.startsWith('ps -eo'))
+      .map((p) => p.pid);
+    fs.writeFileSync(path.join(h.home, 'BoundedRace.pm'), `package BoundedRace;
+BEGIN {
+  *CORE::GLOBAL::fork = sub {
+    pipe(my $r, my $w) or die "fixture pipe: $!";
+    my $p = CORE::fork();
+    die "fixture fork: $!" unless defined $p;
+    if (!$p) {
+      close $r;
+      print {$w} "ready\\n" or die "fixture ready: $!";
+      close $w;
+      sleep 30;
+      return $p;
+    }
+    close $w;
+    my $ready = <$r>;
+    close $r;
+    die "fixture handshake" unless defined($ready) && $ready eq "ready\\n";
+    open my $fh, '>', $ENV{BOUNDED_RACE_PID} or die "fixture pid: $!";
+    print {$fh} "$p\\n" or die "fixture pid write: $!";
+    close $fh or die "fixture pid close: $!";
+    return $p;
+  };
+}
+1;
+`);
     try {
-      // Bounded from OUTSIDE too (10 s, no ccd sourced: the case needs none), so a harness that cannot kill
-      // its group fails this case instead of hanging the file — and the `finally` below still runs.
       const r = spawnSync('bash', ['-c', `_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`],
         { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
-          env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home }, { systemd: true, tmux: true }) });
-      expect(r.error, 'the bounded run did not return within 10 s: the group was not killed').toBeUndefined();
+          env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home,
+            BOUNDED_RACE_PID: pidFile,
+            PERL5OPT: schedule === 'delayed-child' ? `-Mlib=${h.home} -MBoundedRace` : '' }, { systemd: true, tmux: true }) });
+      if (schedule === 'delayed-child') {
+        expect(child(), 'the delayed branch was actually entered').toBeDefined();
+        expect(processes().some((p) => p.pid === child()), 'the recorded pre-exec child was reaped').toBe(false);
+      }
+      expect(r.error, 'the harness exceeded its outer bound').toBeUndefined();
       expect(r.stdout.trim()).toBe('rc=142');
-      expect(holders(), 'a process still holds the FIFO after the harness timed out').toEqual([]);
+      expect(owned()).toEqual([]);
     } finally {
-      // Release any leftover reader (a writer opening the FIFO ends its `tail`), then kill what is left.
-      try { fs.closeSync(fs.openSync(f, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch { /* no reader: nothing to release */ }
-      for (const l of holders()) { try { process.kill(Number(l.trim().split(/\s+/)[0]), 'SIGKILL'); } catch { /* gone */ } }
+      try { fs.closeSync(fs.openSync(f, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch { /* no reader */ }
+      // Re-measure the unique fixture argv before killing: never act on a recycled PID.
+      for (const pid of owned()) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+      }
     }
   });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one bash copy, one TS copy, pinned", () => {

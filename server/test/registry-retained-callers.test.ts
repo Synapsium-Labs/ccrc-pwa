@@ -1,15 +1,18 @@
-// Path identity W1a, Task 8 (spec §2.3): the eight callers that keep the
-// `readRegistry` wrapper, each pinned on a PLANTED refused row. A refused row is
-// a `.uuid` whose basename is not a registry id. `readRegistryMeasured` names it
-// in `refused` and never builds it, so `readRegistry` never returns it. Each
-// caller keeps the wrapper for its own reason, and each reason is pinned here:
+// Path identity W1a, Task 8 (spec §2.3): the eight callers that kept the
+// `readRegistry` wrapper at W1a (five still do), each pinned on a PLANTED
+// refused row. A refused row is a `.uuid` whose basename is not a registry id.
+// `readRegistryMeasured` names it in `refused` and never builds it, so
+// `readRegistry` never returns it. Each caller had its own reason, and each
+// reason is pinned here:
 //   - knownId: `/commands` and `/pr` sit behind `knownId`, which refuses a
 //     non-registry id before its listing;
 //   - omits: `sweepNames`, `sweepPr` and the dialog detector act only on
 //     `records`, so a refused row is never renamed, swept or captured;
-//   - raw-name: attribution, mail creation and mail acknowledgement keep a raw
-//     listing, so a listed-but-omitted row reads as registry-unmeasurable,
-//     never as an unknown sender or recipient.
+//   - raw-name: attribution, mail creation and mail acknowledgement no longer
+//     keep the wrapper. Since D-5863 each reads `readRegistryMeasured` once,
+//     and its `names` still lists the refused row, so a listed-but-omitted row
+//     reads as registry-unmeasurable, never as an unknown sender or recipient.
+//     Their cases stay here as the behaviour pin.
 // These cases are green at once, because Tasks 2 and 5 built the behaviour.
 // Their proof is the plan's mutation table, each row measured red against this file.
 import { describe, it, expect, afterEach, vi } from 'vitest';

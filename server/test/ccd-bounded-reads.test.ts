@@ -498,7 +498,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
 
   /** `demo-quiet-basin`, zero-commit — the identical fixture
    *  `ccd-prhistory.test.ts`'s own `workspace()` builds, for the identical
-   *  reason: `is_ours` accepts a `headRefOid` equal to the branch's own tip,
+   *  reason: `ours_of` accepts a `headRefOid` equal to the branch's own tip,
    *  so no extra commit is needed to bind gh's row to this workspace. */
   const workspace = (): { id: string; tip: string } => {
     const main = hp.makeGhRepo('demo');

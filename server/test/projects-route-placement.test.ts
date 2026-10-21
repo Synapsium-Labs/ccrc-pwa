@@ -59,6 +59,7 @@ const withRepos = (repos: Record<string, ProjectRepoWire>): FleetWatcher =>
     currentReadiness: () => undefined,
     currentProjectRepos: () => new Map(Object.entries(repos)),
     stop: () => {},
+    serverCapsSettled: async () => {},
   } as unknown as FleetWatcher);
 
 const rows = async (a: FastifyInstance): Promise<Record<string, { pool: ProjectPoolWire; placement: ProjectPlacement }>> => {

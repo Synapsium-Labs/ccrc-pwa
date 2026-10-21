@@ -26,7 +26,8 @@ import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
-import { SessionHeader } from '../session/SessionHeader';
+import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
+import { useFrameSet } from '../skins/frame';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
@@ -479,6 +480,24 @@ export function SessionScreen({
     onInterrupt: () => void interrupt('escape-key'),
   });
 
+  // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
+  // none (Instrument until S12) and outside a frame, as most suites render this screen. A part takes no props, so the
+  // header's inputs reach it through `SessionChromeInputs`.
+  const SkinChrome = useFrameSet()?.SessionChrome ?? null;
+  const chromeInputs: SessionHeaderProps = {
+    session: live,
+    status,
+    statusUpdatedAt,
+    roster,
+    repo,
+    coordination,
+    facts,
+    onInterrupt: (source) => void interrupt(source),
+    onBack: () => navigate('/'),
+    queuedField,
+    fallback: { title: project, wrapper },
+  };
+
   return (
     <SessionFlows key="session-flows" session={live} title={live?.project ?? project} actions={actions}>
     <div
@@ -487,19 +506,11 @@ export function SessionScreen({
       data-kb={kbInset > 0 ? 'true' : undefined}
       style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
     >
-      <SessionHeader
-        session={live}
-        status={status}
-        statusUpdatedAt={statusUpdatedAt}
-        roster={roster}
-        repo={repo}
-        coordination={coordination}
-        facts={facts}
-        onInterrupt={(source) => void interrupt(source)}
-        onBack={() => navigate('/')}
-        queuedField={queuedField}
-        fallback={{ title: project, wrapper }}
-      />
+      {/* THE COMPOSER NEVER MOVES (D-5466): the chrome, the transcript, the strips and the composer are keyed children
+          in one fixed order, so a switch replaces the chrome alone and the composer keeps its node and its text. */}
+      <SessionChromeInputs key="chrome" value={chromeInputs}>
+        {SkinChrome !== null ? <SkinChrome /> : <SessionHeader {...chromeInputs} />}
+      </SessionChromeInputs>
 
       {conn === 'down' && (
         <div className={`chat-banner chat-banner--offline ${ATTENTION_DOT}`} role="status">
@@ -576,7 +587,7 @@ export function SessionScreen({
         </div>
       )}
 
-      <div className="chat-body">
+      <div key="body" className="chat-body">
         {loading ? (
           <div className="chat-skel">
             <Skeleton lines={1} className="skel--user" />
@@ -610,21 +621,25 @@ export function SessionScreen({
         )}
       </div>
 
-      {/* Above the plan, which stays the composer's neighbour. */}
-      <MailStrip mail={mail} />
+      {/* The strips in ONE container under the transcript, in both skins (W2 Task S7c), until S8 and S12 place them
+          by width. */}
+      <div key="strips" className="chat-strips">
+        {/* Above the plan, which stays the composer's neighbour. */}
+        <MailStrip mail={mail} />
 
-      {/* D-5560: the workflows this session is running, between the mail and the
-          plan — one line each, the facts Claude Code's own row prints; the head
-          opens their phases and agents. Read-only. */}
-      <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+        {/* D-5560: the workflows this session is running, between the mail and the
+            plan — one line each, the facts Claude Code's own row prints; the head
+            opens their phases and agents. Read-only. */}
+        <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
 
-      {/* Sits between the conversation and the composer — where the TUI puts it,
-          directly above the prompt you're about to type into. */}
-      <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
+        {/* Sits between the conversation and the composer — where the TUI puts it,
+            directly above the prompt you're about to type into. */}
+        <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
+      </div>
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something
           to observe — Composer.tsx itself carries no ref to forward. */}
-      <div ref={composerRef} className="composer-measure">
+      <div key="composer" ref={composerRef} className="composer-measure">
         <Composer
           // send/resolve take the same opts shape the store does, so both cross
           // straight through — attachments included.

@@ -436,7 +436,8 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
   });
 
   it('the stop-done lane declares `sweep:stop-done`', async () => {
-    expect(src('stopDoneSweep.ts')).toMatch(/CCD_ARGV\.hibernate\(row\.id, sweepDec\(deps\.fleetState, STOP_DONE_ACTOR\)\)/);
+    // D-6091: a third argument, the programme hold the verdict passed (`--hold-ok`), or null.
+    expect(src('stopDoneSweep.ts')).toMatch(/CCD_ARGV\.hibernate\(row\.id, sweepDec\(deps\.fleetState, STOP_DONE_ACTOR\), v\.holdOk \?\? null\)/);
     const { STOP_DONE_ACTOR } = await import('../src/stopDone.js');
     expect(STOP_DONE_ACTOR).toBe('sweep:stop-done');
   });

@@ -10,10 +10,11 @@
 // screen's `useEscapeInterrupt`, never this header's (W2 Task S2d, D-5466).
 // The ⋯ menu and the PR sheet are `SessionFlows`', opened through
 // `useSessionFlows()`, so a skin switch that replaces this chrome keeps them.
+import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, RosterWire, RouteField, SessionStatus } from '../../../shared/api';
 import {
-  BackButton, Chip, Keycap, StatusDot, TypedLabel, cn, useNow,
+  BackButton, Chip, Icon, Keycap, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -29,7 +30,7 @@ import type { SessionFactSet } from '../fleet/sessionFacts';
 // W2 Task S7a (D-5471): every word, chip and state below is the view's (`sessionHeaderView`), the one derivation both
 // skins' session chrome render from. This part holds the hooks (the clock, the pointer query, the flows' doors) and
 // the markup, nothing else.
-import { headerTickMs, sessionHeaderView, type HeaderChip } from './sessionHeaderView';
+import { headerTickMs, sessionHeaderView, type HeaderChip, type SessionHeaderView } from './sessionHeaderView';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -69,22 +70,26 @@ export interface SessionHeaderProps {
   facts?: SessionFactSet | null;
 }
 
-export function SessionHeader({
-  session,
-  status,
-  statusUpdatedAt,
-  onInterrupt,
-  onBack,
-  fallback,
-  roster = [],
-  queuedField = null,
-  repo = null,
-  coordination = null,
+/** The chrome's inputs, handed to a skin's `SessionChrome` part (W2 Task S7c, D-5471): a part takes no props (D-5678),
+ *  so `SessionScreen` provides the header's props here and the part reads them. */
+const SessionChromeInputsContext = createContext<SessionHeaderProps | null>(null);
+
+export function SessionChromeInputs({ value, children }: { value: SessionHeaderProps; children?: ReactNode }): ReactNode {
+  return <SessionChromeInputsContext.Provider value={value}>{children}</SessionChromeInputsContext.Provider>;
+}
+
+/** The header's inputs, for a skin's chrome. Throws outside `SessionScreen`, rather than inventing a session. */
+export function useSessionChromeInputs(): SessionHeaderProps {
+  const inputs = useContext(SessionChromeInputsContext);
+  if (inputs === null) throw new Error('SessionChromeInputs is not mounted: the session screen provides it');
+  return inputs;
+}
+
+/** The header's view with the part's hooks (the clock, the pointer query): what every session chrome renders from. */
+export function useSessionHeaderView({
+  session, status, statusUpdatedAt, fallback, roster = [], queuedField = null, repo = null, coordination = null,
   facts = null,
-}: SessionHeaderProps): ReactNode {
-  const { openMenu } = useSessionFlows();
-  // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
-  const prDoor = commandDoor('session-pr');
+}: SessionHeaderProps): SessionHeaderView {
   // The clock ticks every second while `working` (the live elapsed clock), else every 30s.
   const now = useNow(headerTickMs(status, session));
   // The keycap exists because phone keyboards have no Escape key. Where one
@@ -92,109 +97,137 @@ export function SessionHeader({
   // is the session screen's `useEscapeInterrupt` (W2 Task S2d), which reads the
   // same query, so the cap hides exactly where the key takes over.
   const finePointer = useMediaQuery('(pointer: fine)');
-  const view = sessionHeaderView({
+  return sessionHeaderView({
     session, status, statusUpdatedAt, queuedField, fallback, roster, repo, coordination, facts, now, finePointer,
   });
-  const chip = <K extends HeaderChip['kind']>(kind: K): Extract<HeaderChip, { kind: K }> | undefined =>
-    view.chips.find((c): c is Extract<HeaderChip, { kind: K }> => c.kind === kind);
-  const coord = chip('coordination');
-  const statusChip = chip('status');
-  const lane = chip('lane');
-  const restart = chip('restart');
-  const repoChip = chip('repo');
-  const archived = chip('archived');
-  const model = chip('model');
-  const effort = chip('effort');
-  const branch = chip('branch');
-  const details = chip('details');
-  const pr = chip('pr');
+}
 
+function chipOf<K extends HeaderChip['kind']>(view: SessionHeaderView, kind: K): Extract<HeaderChip, { kind: K }> | undefined {
+  return view.chips.find((c): c is Extract<HeaderChip, { kind: K }> => c.kind === kind);
+}
+
+/** Back to the fleet: a phone's way out (the desk hides every `.back-btn` in the detail pane). */
+export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
   return (
-    <header className="chat-head">
-      <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack}>
-        ‹
-      </BackButton>
-      <div className="chat-title-wrap">
-        <h1 className="chat-title">
-          {view.title}
-          {view.crumb !== null && (
-            <>
-              <span className="chat-crumb-sep" aria-hidden="true">
-                ›
-              </span>
-              <TypedLabel className="chat-crumb" text={view.crumb} />
-            </>
-          )}
-        </h1>
-        {/* D-5527: under the name, because it says what this session IS for —
-            whose code, whose programme — before the meta row says how it is. */}
-        {coord !== undefined && <SessionCoordination facts={coord.facts} coordination={coord.coordination} />}
-        <div className="chat-meta">
-          {statusChip !== undefined && (
-            <>
-              <StatusDot status={statusChip.bucket} asleep={statusChip.asleep} />
-              <span
-                className={cn('status-line', `status-line--${statusChip.variant}`, statusChip.coordinator !== null && 'status-line--coordinator')}
-                title={statusChip.title}
-              >
-                {statusChip.coordinator !== null ? (
-                  // D-5390: the phrase yields width before the parent's name does.
-                  <>
-                    <span className="status-line-lead">with coordinator</span>
-                    {' '}<span className="status-line-name">{`· ${statusChip.coordinator.short}`}</span>
-                  </>
-                ) : statusChip.word}
-              </span>
-            </>
-          )}
-          {lane !== undefined && (
-            <Chip dot className={chipTone('active')} title={lane.title}>
-              {lane.text}
-            </Chip>
-          )}
-          {restart !== undefined && (
-            <Chip className={chipTone('restart')} title={restart.title} data-restart={restart.cause}>
-              {restart.text}
-            </Chip>
-          )}
-          {repoChip !== undefined && (
-            <Chip className={chipTone('repo')} title="repository">
-              {repoChip.text}
-            </Chip>
-          )}
-          {archived !== undefined && <Chip className={chipTone('archived')}>{archived.parts}</Chip>}
-          {/* Status, account, model, effort and branch share ONE wrapping row —
-              two fixed rows cost a line of chat height on every screen to say
-              what fits comfortably on one. Tapping the model or effort chip opens its chooser. */}
-          {model !== undefined && (model.text !== null ? (
-            <button type="button" className={metaChipTone('model')} {...commandDoor('session-model')}>
-              <span className="metachip-glyph" aria-hidden="true">🤖</span>
-              <span className="metachip-text">{model.text}</span>
-              {model.queued && <span className="route-queued">queued</span>}
-            </button>
-          ) : (
-            <span className="route-queued">queued</span>
-          ))}
-          {effort !== undefined && (
-            <button
-              type="button"
-              className={metaChipTone(effort.ultra ? 'ultra' : 'plain')}
-              {...commandDoor('session-effort')}
-            >
-              <span className="metachip-text">{effort.text}</span>
-              {effort.queued && <span className="route-queued">queued</span>}
-            </button>
-          )}
-          {branch !== undefined && (
-            <span className={metaChipTone('branch')} title={branch.text}>
-              <span className="metachip-glyph" aria-hidden="true">⎇</span>
-              <span className="metachip-text">{branch.text}</span>
-            </span>
-          )}
-          {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
-          {details !== undefined && <SessionDetails facts={details.facts} coordination={details.coordination} />}
-        </div>
-      </div>
+    <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack}>
+      ‹
+    </BackButton>
+  );
+}
+
+/** The title and its crumb. */
+export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
+  return (
+    <h1 className="chat-title">
+      {view.title}
+      {view.crumb !== null && (
+        <>
+          <span className="chat-crumb-sep" aria-hidden="true">
+            ›
+          </span>
+          <TypedLabel className="chat-crumb" text={view.crumb} />
+        </>
+      )}
+    </h1>
+  );
+}
+
+/** D-5527: who this session works for. */
+export function HeaderCoordination({ view }: { view: SessionHeaderView }): ReactNode {
+  const coord = chipOf(view, 'coordination');
+  return coord === undefined ? null : <SessionCoordination facts={coord.facts} coordination={coord.coordination} />;
+}
+
+/** The meta chips, status first, in the view's order. `afterStatus` is a skin's slot beside the status (Refined's rail
+ *  places the coordination line there). */
+export function HeaderChips({ view, afterStatus = null }: { view: SessionHeaderView; afterStatus?: ReactNode }): ReactNode {
+  const statusChip = chipOf(view, 'status');
+  const lane = chipOf(view, 'lane');
+  const restart = chipOf(view, 'restart');
+  const repoChip = chipOf(view, 'repo');
+  const archived = chipOf(view, 'archived');
+  const model = chipOf(view, 'model');
+  const effort = chipOf(view, 'effort');
+  const branch = chipOf(view, 'branch');
+  const details = chipOf(view, 'details');
+  return (
+    <>
+      {statusChip !== undefined && (
+        <>
+          <StatusDot status={statusChip.bucket} asleep={statusChip.asleep} />
+          <span
+            className={cn('status-line', `status-line--${statusChip.variant}`, statusChip.coordinator !== null && 'status-line--coordinator')}
+            title={statusChip.title}
+          >
+            {statusChip.coordinator !== null ? (
+              // D-5390: the phrase yields width before the parent's name does.
+              <>
+                <span className="status-line-lead">with coordinator</span>
+                {' '}<span className="status-line-name">{`· ${statusChip.coordinator.short}`}</span>
+              </>
+            ) : statusChip.word}
+          </span>
+        </>
+      )}
+      {afterStatus}
+      {lane !== undefined && (
+        <Chip dot className={chipTone('active')} title={lane.title}>
+          {lane.text}
+        </Chip>
+      )}
+      {restart !== undefined && (
+        <Chip className={chipTone('restart')} title={restart.title} data-restart={restart.cause}>
+          {restart.text}
+        </Chip>
+      )}
+      {repoChip !== undefined && (
+        <Chip className={chipTone('repo')} title="repository">
+          {repoChip.text}
+        </Chip>
+      )}
+      {archived !== undefined && <Chip className={chipTone('archived')}>{archived.parts}</Chip>}
+      {/* Status, account, model, effort and branch share ONE row — two fixed
+          rows cost a line of chat height on every screen to say what fits
+          comfortably on one. Tapping the model or effort chip opens its chooser. */}
+      {model !== undefined && (model.text !== null ? (
+        <button type="button" className={metaChipTone('model')} {...commandDoor('session-model')}>
+          {/* D-5100's 🤖, drawn as the icon (W2 Task S7c). */}
+          <span className="metachip-glyph" aria-hidden="true"><Icon name="bot" /></span>
+          <span className="metachip-text">{model.text}</span>
+          {model.queued && <span className="route-queued">queued</span>}
+        </button>
+      ) : (
+        <span className="route-queued">queued</span>
+      ))}
+      {effort !== undefined && (
+        <button
+          type="button"
+          className={metaChipTone(effort.ultra ? 'ultra' : 'plain')}
+          {...commandDoor('session-effort')}
+        >
+          <span className="metachip-text">{effort.text}</span>
+          {effort.queued && <span className="route-queued">queued</span>}
+        </button>
+      )}
+      {branch !== undefined && (
+        <span className={metaChipTone('branch')} title={branch.text}>
+          <span className="metachip-glyph" aria-hidden="true">⎇</span>
+          <span className="metachip-text">{branch.text}</span>
+        </span>
+      )}
+      {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
+      {details !== undefined && <SessionDetails facts={details.facts} coordination={details.coordination} />}
+    </>
+  );
+}
+
+/** The doors on the header's edge: the terminal, ⋯ and the PR cap. `esc` is the shared header's alone. */
+export function HeaderDoors({ view, openMenu }: { view: SessionHeaderView; openMenu: () => void }): ReactNode {
+  // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
+  const prDoor = commandDoor('session-pr');
+  const pr = chipOf(view, 'pr');
+  return (
+    <>
       <Keycap className="keycap--term" aria-label="Terminal" {...commandDoor('open-terminal')}>
         <span aria-hidden="true">&gt;_</span>
       </Keycap>
@@ -207,8 +240,28 @@ export function SessionHeader({
       {pr !== undefined && (
         <PrKeycap pr={pr.pr} onOpen={prDoor.onClick} data-command={prDoor['data-command']} />
       )}
+    </>
+  );
+}
+
+export function SessionHeader(props: SessionHeaderProps): ReactNode {
+  const { openMenu } = useSessionFlows();
+  const view = useSessionHeaderView(props);
+  return (
+    <header className="chat-head">
+      <HeaderBack onBack={props.onBack} />
+      <div className="chat-title-wrap">
+        <HeaderTitle view={view} />
+        {/* D-5527: under the name, because it says what this session IS for —
+            whose code, whose programme — before the meta row says how it is. */}
+        <HeaderCoordination view={view} />
+        <div className="chat-meta">
+          <HeaderChips view={view} />
+        </div>
+      </div>
+      <HeaderDoors view={view} openMenu={openMenu} />
       {view.stop.shown && (
-        <Keycap className="keycap--esc" aria-label="Stop" disabled={!view.stop.enabled} onClick={() => onInterrupt('keycap')}>
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!view.stop.enabled} onClick={() => props.onInterrupt('keycap')}>
           esc
         </Keycap>
       )}

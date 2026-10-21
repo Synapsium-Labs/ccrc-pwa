@@ -41,6 +41,7 @@ import {
   DelegationModelError,
   DELEGATION_JOURNAL_ENTRY_KINDS,
   DELEGATION_PRUNING_HOLD_REASONS,
+  allocateDelegationActivityIdInto,
   assertDelegationCheckpointIdentity,
   assertWave3Leases,
   canonicalDelegationJson,
@@ -53,7 +54,6 @@ import {
   leaseSourceKindOfActivity,
   parseDelegationInstant,
   planDelegationCursorRetention,
-  restoreOrAllocateActivityId,
   sortedProjectionRows,
   WAVE3_LEASE_SOURCE_KINDS,
   type DeepReadonly,
@@ -776,17 +776,17 @@ export class DelegationCheckpointBuilder {
 
   /** `c` carries no `sequence`: opening never reads it, and a worker opened from its run's row has no candidate record to take one from. */
   private openFromCandidate(c: Omit<DelegationActivityCandidate, 'sequence'>, encoded: string): string {
-    // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function.
-    const allocated = restoreOrAllocateActivityId(c.key, c.journalId, { ...emptyDelegationCheckpoint(), activityIdsByNaturalKey: this.mapping });
-    this.mapping = { ...allocated.checkpoint.activityIdsByNaturalKey };
+    // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function, written
+    // INTO this builder's own mapping (D-5833): the mapping is private to the builder, so there is no wrapper and no copy.
+    const activityId = allocateDelegationActivityIdInto(this.mapping, c.key, c.journalId);
     const ended = c.endedAt !== null;
-    this.activities.set(allocated.activityId, {
-      activityId: allocated.activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: c.key.sourceKind,
+    this.activities.set(activityId, {
+      activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: c.key.sourceKind,
       upstreamId: c.key.upstreamId, identityJournalId: c.journalId, displayName: null, executionState: ended ? 'ended' : 'active',
       openedAt: c.observedAt, endedAt: ended && c.endedAt !== null ? maxInstant(c.endedAt, c.observedAt) : null, lastEventAt: c.lastObservedAt,
     });
     this.candidates.delete(encoded);
-    return allocated.activityId;
+    return activityId;
   }
 
   /**
@@ -984,6 +984,8 @@ export interface DelegationEvidenceCounts {
 export class DelegationEvidenceIndex implements DelegationEvidenceCounts {
   private readonly sequences: number[] = [];
   get total(): number { return this.sequences.length; }
+  /** The highest sequence held, or null when none: what SQLite's `MAX(journalSequence)` must equal for the two to agree (D-5836). */
+  get last(): number | null { return this.sequences[this.sequences.length - 1] ?? null; }
   /** Sequences arrive strictly increasing (the chain has already proved it); anything else is a bug and is refused. */
   add(sequence: number): void {
     this.assertExtendedBy([sequence]);
@@ -1256,7 +1258,15 @@ export interface DelegationProjectionRepairReport {
   wipedAll: boolean;
   /** How many times the repair read the journal from its start. 0 when SQLite's (count, max) already matched recovery's counts. */
   journalPasses: number;
+  /** D-5836: true only for the lane's per-pass repair that found the projection known current and did nothing (no `project()`, no replay;
+   *  every count is then 0, and `resumedAfter` is SQLite's max). Every full repair carries false: a reader tells the two apart by this,
+   *  never by the zeros. */
+  skipped: boolean;
 }
+
+/** D-5836: a full repair runs at least this often (one hour) even when the per-pass repair finds the projection known current, so
+ *  out-of-band damage to the five non-event tables heals within about an hour. Measured on `monotonicMs`, else on `now`. */
+export const DELEGATION_REPAIR_FULL_MS = 60 * 60_000;
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve); });
 
@@ -1284,8 +1294,9 @@ function checkpointWithoutSessions(cp: DelegationCheckpointV1, drifted: readonly
  *      the repair never reports success with a conflict outstanding. The cost of deleting is the sessions' events (about 70 to 85 µs
  *      each), paid only on drift.
  * With `evidence` (recovery's per-sequence count) the repair knows BEFORE reading whether the journal has anything to tell SQLite: a
- * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees goes straight to the one full pass
- * instead of a counting pass followed by a full one. Without it, the repair counts as it reads (two passes when counts disagree).
+ * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees, or a max the journal holds no evidence
+ * at (D-5836, review 705 F1), goes straight to the one full pass instead of a counting pass followed by a full one. Without it, the
+ * repair counts as it reads (two passes when the counts disagree, or when the counting pass meets no evidence record at SQLite's max).
  * The journal is read as a stream through `journal()`, a fresh async iterable per pass.
  */
 export async function repairDelegationProjection(input: {
@@ -1304,17 +1315,18 @@ export async function repairDelegationProjection(input: {
   const stats = projection.eventStats();
   const resume = stats.maxSequence ?? 0;
   const report: DelegationProjectionRepairReport = {
-    resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,
+    resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: false,
   };
   const conflicted = new Map<string, { sessionId: string; incarnation: string }>();
   for (const k of input.heal ?? []) conflicted.set(sessionKeyOf(k.sessionId, k.incarnation), k);
 
   /** One pass over the journal. `from`: rows at or below it are only counted. `only`: just these sessions' events. */
-  const replay = async (from: number, only: ReadonlySet<string> | null): Promise<{ evidenceBelow: number; total: number }> => {
+  const replay = async (from: number, only: ReadonlySet<string> | null): Promise<{ evidenceBelow: number; total: number; heldAt: boolean }> => {
     report.journalPasses++;
     let chunk: DelegationEventRow[] = [];
     let evidenceBelow = 0;
     let total = 0;
+    let heldAt = false;
     const flush = async (): Promise<void> => {
       if (chunk.length === 0) return;
       const r = projection.insertEvents(chunk);
@@ -1329,12 +1341,12 @@ export async function repairDelegationProjection(input: {
       const e = record.entry.event;
       if (only !== null && !only.has(sessionKeyOf(e.sessionId, e.parentIncarnation))) continue;
       total++;
-      if (record.sequence <= from) { evidenceBelow++; continue; }
+      if (record.sequence <= from) { evidenceBelow++; if (only === null && record.sequence === from) heldAt = true; continue; }
       chunk.push(delegationEventRowOfRecord(record));
       if (chunk.length >= chunkSize) await flush();
     }
     await flush();
-    return { evidenceBelow, total };
+    return { evidenceBelow, total, heldAt };
   };
 
   let total: number;
@@ -1342,13 +1354,15 @@ export async function repairDelegationProjection(input: {
   if (known !== undefined) {
     total = known.total;
     const below = known.countAtOrBelow(resume);
-    const behind = below !== stats.count;
+    // sequences are integers that only increase, so equal counts up to `max - 1` and up to `max` mean no evidence AT `max` (D-5836, review 705 F1)
+    const foreign = stats.maxSequence !== null && known.countAtOrBelow(stats.maxSequence - 1) === below;
+    const behind = below !== stats.count || foreign;
     if (behind) report.fullReplay = true;
     if (behind || total > below) await replay(behind ? 0 : resume, null);
   } else {
     const first = await replay(resume, null);
     total = first.total;
-    if (first.evidenceBelow !== stats.count) {
+    if (first.evidenceBelow !== stats.count || (stats.maxSequence !== null && !first.heldAt)) {     // the max is a sequence the journal holds no evidence at (D-5836)
       report.fullReplay = true;
       await replay(0, null);
     }
@@ -1392,8 +1406,12 @@ export interface DelegationDurabilityDeps {
   dir: string;
   /** SQLite, or null when only the authoritative files are wanted. */
   projection: DelegationProjectionPort | null;
-  /** INJECTED clock: epoch milliseconds. Only `acceptedAt` of a record without one is read from it. */
+  /** INJECTED clock: epoch milliseconds. `acceptedAt` of a record without one is read from it, and, when `monotonicMs` is absent, the
+   *  forced full repair's interval (`DELEGATION_REPAIR_FULL_MS`, D-5836) is measured on it. */
   now: () => number;
+  /** D-5836: the FORCED-FULL clock only (the lane's monotonic clock), so a wall-clock step cannot hold back or hurry the hourly full
+   *  repair. Absent: that interval is measured on `now`. This module reads no clock of its own. */
+  monotonicMs?: () => number;
   /** INJECTED randomness: called ONLY by `createLease`, exactly once, after deduplication. */
   randomUUID: () => string;
   port?: DelegationFilePort;
@@ -1472,6 +1490,13 @@ export class DelegationDurability {
   private current: DelegationRecoveryState = { checkpoint: emptyDelegationCheckpoint(), phase: 'reconstructing' };
   private failureNow: DelegationDurabilityFailure | null = { phase: 'checkpoint-decode', code: 'not-recovered' satisfies DelegationOwnFailureCode, detail: 'recovery has not run' };
   private projectionStale = false;
+  /** D-5836: the checkpoint revision the projection was last made to say (a successful `projectLocked` or full `repairLocked`), or null
+   *  when that is unknown. Cleared wherever `projectionStale` is set and at the start of every `recover()`. */
+  private projectedRevision: number | null = null;
+  /** D-5836: true once the lane's per-pass repair has been called since the last `recover()` (`open` included); the first one is always full. It is set before the try, so a failed call sets it too, which is safe because a failure marks the projection stale. */
+  private perPassSeen = false;
+  /** D-5836: the forced-full clock's reading at the last successful full repair, or at the last `recover()`. */
+  private lastFullAt = 0;
   /** Sessions whose SQLite events an application found in conflict with the journal's: healed by the next repair. */
   private drifted = new Map<string, { sessionId: string; incarnation: string }>();
   /** The last torn tail this process cut off and kept (D-4655), or the newest one the quarantine holds that no report of this process
@@ -1535,6 +1560,9 @@ export class DelegationDurability {
       // Pruning is disabled FROM ENTRY: the state is `reconstructing` before the first byte is read.
       this.current = { checkpoint: this.current.checkpoint, phase: 'reconstructing' };
       this.failureNow = { phase: 'checkpoint-decode', code: 'recovering' satisfies DelegationOwnFailureCode, detail: 'recovery is running' };
+      this.projectedRevision = null;                       // D-5836: recovery's own repair is full and sets it again; a failed recovery leaves it unknown
+      this.perPassSeen = false;
+      this.lastFullAt = this.fullClock();
       await this.writer.close().catch(() => undefined);
       this.writer = new DelegationJournalWriter(this.port, this.journalPath, this.deps.dir);
       const report = await recoverDelegationFromFiles(this.port, this.deps.dir);
@@ -1692,23 +1720,46 @@ export class DelegationDurability {
     }
   }
 
-  /** Repairs `coord.db` from the checkpoint and the journal now (a lost or rolled-back file, or after a failed projection). */
-  repairProjection(): Promise<DelegationProjectionRepairReport | null> {
-    return this.enqueue(async () => { this.requireReady(); return this.repairLocked(); });
+  /**
+   * Repairs `coord.db` from the checkpoint and the journal now (a lost or rolled-back file, or after a failed projection). A bare call is
+   * always the FULL repair. The lane's per-pass call (`perPass: true`, D-5836) is a no-op report (`skipped: true`) when the projection is
+   * KNOWN current: the lane has repaired once since the last `recover()`, nothing is stale or drifted, the last projection was of this
+   * checkpoint revision, SQLite's `(count, max)` equal the evidence index's, and the hourly forced full (`DELEGATION_REPAIR_FULL_MS`) is
+   * not due; any one failing makes it the full repair. The residual: damage to the five non-event tables made out of band heals at the
+   * next projecting application or the forced full, not at the next pass.
+   */
+  repairProjection(opts?: { perPass?: boolean }): Promise<DelegationProjectionRepairReport | null> {
+    const perPass = opts?.perPass === true;
+    return this.enqueue(async () => { this.requireReady(); return this.repairLocked(perPass); });
   }
 
-  private async repairLocked(): Promise<DelegationProjectionRepairReport | null> {
+  /** The forced-full clock: the lane's monotonic clock when it gave one, else `now`. */
+  private fullClock(): number { return this.deps.monotonicMs?.() ?? this.deps.now(); }
+
+  private async repairLocked(perPass = false): Promise<DelegationProjectionRepairReport | null> {
     const projection = this.deps.projection;
     if (projection === null) return null;
+    const first = perPass && !this.perPassSeen;
+    if (perPass) this.perPassSeen = true;
     try {
+      if (perPass && !first && !this.projectionStale && this.drifted.size === 0 && this.projectedRevision === this.current.checkpoint.revision
+        && this.fullClock() - this.lastFullAt < DELEGATION_REPAIR_FULL_MS) {
+        const stats = projection.eventStats();
+        if (stats.count === this.evidence.total && stats.maxSequence === this.evidence.last) {
+          return { resumedAfter: stats.maxSequence ?? 0, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: true };
+        }
+      }
       const report = await repairDelegationProjection({
         projection, checkpoint: this.current.checkpoint, journal: () => readDelegationJournalRecords(this.port, this.journalPath), heal: [...this.drifted.values()], evidence: this.evidence,
       });
       this.projectionStale = false;
       this.drifted.clear();
+      this.projectedRevision = this.current.checkpoint.revision;
+      this.lastFullAt = this.fullClock();
       return report;
     } catch (err) {
       this.projectionStale = true;
+      this.projectedRevision = null;
       this.deps.warn?.(`ccrc-server: delegation projection repair failed: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
@@ -2085,12 +2136,15 @@ export class DelegationDurability {
         if (r.conflicts.length > 0) {
           for (const c of r.conflicts) this.drifted.set(JSON.stringify([c.sessionId, c.parentIncarnation]), { sessionId: c.sessionId, incarnation: c.parentIncarnation });
           this.projectionStale = true;
+          this.projectedRevision = null;
           throw new Error(`${r.conflicts.length} event(s) conflict with SQLite's rows`);
         }
+        this.projectedRevision = checkpoint.revision;
       });
       return { status: 'projected' };
     } catch (err) {
       this.projectionStale = true;
+      this.projectedRevision = null;
       const error = err instanceof Error ? err.message : String(err);
       this.deps.warn?.(`ccrc-server: delegation projection stale: ${error}`);
       return { status: 'failed', error };

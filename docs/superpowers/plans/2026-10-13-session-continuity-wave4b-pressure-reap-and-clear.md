@@ -14,7 +14,7 @@
 
 Run 308 is the existing planned work run: programme wave 4b, run wave 5. Baseline B was measured independently with the reap still enabled over `2026-10-06 23:16:00 UTC` inclusive through `2026-10-13 23:17:00 UTC` exclusive: **0 reap-class OOM stops among 34 pane-scope OOM stops**, with 5 unmapped and 4 unmeasured. The scope record was shadowed, with 9 dead scopes and 2 inert scopes; both inert scopes were at least one day old. This unblocks planning, not arming the scope sweep or restarting the fleet by hand.
 
-This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. It is not a replay-verified prototype: the source map is verified, but the new test blocks and mutations still require red-first execution by the worker. Content anchors, not historical line numbers, locate each edit. Later main changes are measured before dispatch and on a required landing merge.
+The original source map was checked against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. The pre-dispatch revision is anchored at `c7776b08037dadaeee832e906f99e4221afdf8d2`: the intervening continuation work materially expanded `_sync_uuid`, so Task 3 now integrates with its existing pane-admission guards and retains both follow paths. The other changed target files keep their seam contracts, with content anchors remeasured. This is not a replay-verified prototype: new test blocks and mutations still require red-first execution by the worker. Later main changes are measured before dispatch and on a required landing merge; source integration is not permission to rebase dispatched work.
 
 ## Global Constraints
 
@@ -64,7 +64,10 @@ This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc66
 | `server/test/ccd-route-spawn.test.ts` | Resume/route/subagent environment composition | 2 |
 | `server/test/ccd-route-degrade.test.ts` | Degraded-route command compatibility | 2 |
 | `server/test/ccd-lifecycle-purge.test.ts` | Existing spawn spelling guard | 2 |
-| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle and shared promotion behavior | 3 |
+| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle, admitted/refused pane controls and shared promotion behavior | 3 |
+| `server/test/ccd-sync-uuid.test.ts` | Existing real pane-admission, background-worker and continuation-follow regression gate | 3 |
+| `server/test/continued-in-parity.test.ts` | Existing three-reader continuation-marker parity gate | 3 |
+| `server/test/continued-in-successor-parity.test.ts` | Existing continuation-successor parity gate | 3 |
 | `server/test/session-hook.test.ts` | S6-R11 census only if measured movement requires it | 1-3 |
 | `README.md` | Shipped behavior and named costs in the existing continuity section | 4 |
 | `docs/superpowers/specs/2026-09-23-session-continuity-design.md` | As-built annotations for the deferred clear fix and carried record representation | 4 |
@@ -171,7 +174,7 @@ This task is deliberately one acceptance unit: the sweep's new record cannot shi
 - New optional instrument argument `--reap-baseline <count>` supplies an already-frozen baseline, not a file or live baseline re-read. It requires stage 6 alone and an explicit seven-day `--since`/`--until` window. It adds a read-only `pressure_reap_comparison` section: baseline, exclusive withdrawal threshold B + 2, observed class and `decision: 'withdraw'|'not-triggered'|'unmeasured'`. `not-triggered` is not a health verdict: raw unknown counts stay beside it. It never changes spawning or removes a key.
 - `BOUNDED` retains its synchronous shell-prefix API `<seconds> <argv...>`, timeout exit 142 and whole-child-group kill. Parent and child establish the same child-owned process group before the parent arms its alarm.
 
-- [ ] **Step 1: Add sweep failure pins and migrate the carried-row assertions.**
+- [x] **Step 1: Add sweep failure pins and migrate the carried-row assertions.**
 
 In `scope-sweep.test.ts`, extend the existing `proc` options with `state?: string`, replace the hard-coded `S` in its stat line, and widen `rows` to `carry`. These are fixture helpers, not product readers:
 
@@ -319,7 +322,7 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
 });
 ```
 
-- [ ] **Step 2: Add doctor state/remedy tests using the real suite's HOME seam.**
+- [x] **Step 2: Add doctor state/remedy tests using the real suite's HOME seam.**
 
 Inside `describeLinux('ccrc doctor: scope-sweep', ...)`, use `healthy`, `record(home, lines, ago)`, `runDoctor(home).stdout`, `lineFor`, `DEAD`, `LIVE` and `DEADLINE`. Do not introduce a process-global environment seam or call `runDoctor('scope-sweep')`.
 
@@ -392,7 +395,7 @@ it('mixed measured and carried rows keep measured advice explicitly scoped', () 
 
 Keep existing bounded-number, stale-knob, oldest=-1, Darwin/server/paused/absent and timer cases. The malformed-body wording retains `N line(s) it cannot read`, so those existing pins need no relaxation.
 
-- [ ] **Step 3: Add instrument freshness and non-zero comparison pins in the first commit.**
+- [x] **Step 3: Add instrument freshness and non-zero comparison pins in the first commit.**
 
 In the stage-6 metric describe, replace the old `tick=1` helper with a current timestamp and optional explicit tick:
 
@@ -481,7 +484,7 @@ describe('the pressure comparison is B-relative and read-only', () => {
 
 The journal's fresh-record metric is a NOW reading, not a historical-week reconstruction. This distinction is retained in the documentation and evidence.
 
-- [ ] **Step 4: Pin the parent/child process-group race with a delayed child.**
+- [x] **Step 4: Pin the parent/child process-group race with a delayed child.**
 
 Replace the existing whole-group timeout case in `ccd-limit-banner.test.ts` with this two-input version. `PERL5OPT` loads a test module before compilation of the Perl prefix. The module's pipe handshake proves the child reached the delayed branch before the parent returns from fork, and the parent records its own child's PID before the alarm can be armed. The delay is before the child's `setpgid(0, 0)` and longer than the outer bound: without parent-side group creation, the group kill misses and the outer timeout fails the case. The PID pin detects that child before it execs the FIFO command. No production timeout or suite duration is shortened.
 
@@ -556,7 +559,7 @@ BEGIN {
 
 The normal case still proves a grandchild blocked on a FIFO is killed; the delayed case independently proves the recorded direct child is reaped before it ever execs. Cleanup only targets processes whose measured argv still contains this test's unique FIFO path; no pattern kill, blocking FIFO writer or invented `boundedShell` API. Save the actual delayed-child red before changing `BOUNDED`.
 
-- [ ] **Step 5: Run every new residue owner red before product edits.**
+- [x] **Step 5: Run every new residue owner red before product edits.**
 
 From `server/`, foreground, sequentially, tool timeout at least 600000 ms:
 
@@ -569,7 +572,7 @@ From `server/`, foreground, sequentially, tool timeout at least 600000 ms:
 
 Expected reds: copied dead rows instead of carries; paused stdout; unchecked write; malformed-body stop advice; future-record PASS; missing strict/fresh/comparison instrument behavior; delayed-child timeout containment. Existing bounded-arithmetic and ordinary group-kill controls may already pass. Record actual results; do not infer one guard's red from another case failing.
 
-- [ ] **Step 6: Change sweep representation, without widening stop authority.**
+- [x] **Step 6: Change sweep representation, without widening stop authority.**
 
 Replace its previous-record declaration/parser with this bounded-clock reader. The capture snapshot precedes every helper `=~`, because those regexes overwrite `BASH_REMATCH`:
 
@@ -666,7 +669,7 @@ Retain the SAID output and final rc. Complete record replacement is not transact
 
 Update the sweep's header in its current paragraph: a carry records reason/liveness and bounded prior clocks, never a fresh dead verdict; first-ever uncertainty gets none/none; known-live hop-cap is qualified; child-cgroup liveness remains unknown because that check stays before liveness. Keep the accepted child-cgroup cost and the two-clock fail-safe explanation.
 
-- [ ] **Step 7: Make the doctor validate the whole record before choosing a remedy.**
+- [x] **Step 7: Make the doctor validate the whole record before choosing a remedy.**
 
 Within `_check_scope-sweep`, add counters `nc_dead=0 nc_live=0 nc_unknown=0`, arrays `carry_detail=()` and `found=()`, and these regex fragments beside N/M/O:
 
@@ -746,7 +749,7 @@ Replace the entire block AFTER `done < "$rec"` through the final `return 2` with
 
 Nothing in doctor stops a unit. Update its local header to describe three row kinds and the state-specific remedies; retain WARN-not-FAIL and absent/paused/server/Darwin SKIPs.
 
-- [ ] **Step 8: Make the instrument strict, fresh and baseline-relative.**
+- [x] **Step 8: Make the instrument strict, fresh and baseline-relative.**
 
 Replace S6_HDR/S6_DEAD and add the following constants beside the retained S6_IDLE/S6_DAY/S6_INERT definitions:
 
@@ -866,7 +869,7 @@ Inside `main`, add `ap.add_argument('--reap-baseline', type=reap_baseline, help=
 
 Add `'reap_baseline': a.reap_baseline` to ctx. Preserve every old CLI argument and stage registration. This is the entire new comparison interface; no undocumented `--baseline`, removal script, restart or manager action. Add the argument and read-only distinction to the instrument's own header.
 
-- [ ] **Step 9: Close the alarm race in the existing Perl prefix.**
+- [x] **Step 9: Close the alarm race in the existing Perl prefix.**
 
 Replace only the BOUNDED literal with:
 
@@ -876,7 +879,7 @@ export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRC
 
 The parent establishes the child's group while the child may still be unscheduled. POSIX `setpgid` returns an undefined value on failure and a defined value numerically equal to zero on success; do NOT test `!= 0`. Save errno immediately after the call, before a kill/wait can change it. Both arms use the same POSIX return contract. EACCES means that child already exec'd (after its own successful group setup); ESRCH means it is already gone. Any other setup failure kills/reaps only that child and refuses 125 rather than installing an alarm against an unknown group. Retain the comment's whole-group rationale and add the parent-race explanation. No new exported helper or dependency.
 
-- [ ] **Step 10: Verify already-landed text, then run residue gates green.**
+- [x] **Step 10: Verify already-landed text, then run residue gates green.**
 
 Compare the predecessor's final source, not review-305's old line numbers. Keep its landed bounded-arithmetic checks, invalid stale-knob fallback, child-cgroup/hop-cap containment, clock comment, graph-doctor fixture seam, corrected census prose and restamp instructions. Do not revive the stray blank line or the superseded source changes. Apply the shared citation-tax procedure to genuinely moved doctor/helper/test anchors.
 
@@ -900,7 +903,7 @@ Then from `server/`, sequentially:
 
 A valid empty write is required to be green; merely checking a failed nonempty write misses the empty-record regression. Restore any permission-mutated fixture in its own cleanup; never widen a permission case to read a real proc root.
 
-- [ ] **Step 11: Measure each residue mutation, restore, and review the first commit.**
+- [x] **Step 11: Measure each residue mutation, restore, and review the first commit.**
 
 | Mutation | Must-red owner |
 |---|---|
@@ -923,6 +926,60 @@ A valid empty write is required to be green; merely checking a failed nonempty w
 
 Each mutation runs against the source it owns in fixture-contained suites, produces an observed RED, then restores ONLY the task's bytes. Restore green and run the shared citation/mode guards again. A fresh Opus/high per-task reviewer must clear this entire residue unit before Task 2 starts. Commit subject: `fix(continuity): distinguish carried scope evidence and close wave-4 residue`. Define any justified issued departure alongside this commit; report unused numbers bare.
 
+#### Execution evidence (Task 1)
+
+Measured on the dispatched workspace branch at base `a3cebde1b`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only. Steps 1-10 are done. Step 11's mutation table is measured and restored below; its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red, before any product edit (Step 5).**
+
+| Owner | Red | What reddened |
+|---|---|---|
+| `scope-sweep.test.ts` | 32 failed, 44 passed (76) | 24 migrated carried-row cases (copied dead rows, no carry row), the no-procs `w` carry, the silent pause, the retained-clock and first-ever carries, the Z outside child, and all four record-write failures (the failed header case exited 0; the failed open and rename cases exited 1 with the old `cannot write` message). Green controls: the four malformed-clock cases, the S outside child and the valid empty record, which the old code already satisfied. |
+| `ccrc-doctor.test.ts -t scope-sweep` | 12 failed, 16 passed (28) | both unreadable-body cases, live carry PASS, the dead and unknown carry cases, all five malformed or contradictory rows, the future record and the mixed record |
+| `measure-continuity-stage6.test.ts` | 16 failed, 11 passed (27) | the widened all-counts case, carries, stale, future, five bad bodies, two invalid ticks, four baseline cases and the unreadable-journal comparison. The no-baseline control and the five argument-refusal cases were green already (argparse refuses an unknown option). |
+| `ccd-limit-banner.test.ts -t 'timed harness'` | 1 failed, 1 passed (2) | only `delayed-child`: `the recorded pre-exec child was reaped: expected true to be false`. The `normal` control passed. |
+
+**Green (Step 10).** `bash -n` on both shell files, the `ast.parse` of the instrument and `git diff --check` are clean. `scope-sweep.test.ts` 76 passed; `ccrc-doctor.test.ts -t scope-sweep` 28 passed (934 skipped); `measure-continuity-stage6.test.ts` 27 passed; `ccd-limit-banner.test.ts` + `ccd-auto-compact.test.ts` 190 passed; `single-definition.test.ts` + `ccrc-doctor-graphify.test.ts` 601 passed. Neighbours run green as well: `ownership`, `ccd-reg-get-census`, `ccd-die-containment`, `macos-platform`, `measure-continuity` (stage 1, 4, 7) and `ccd-bounded-reads`, 198 passed. Modes of the three shell and Python files are unchanged (775). `ccd/ccd` is untouched, so no restamp and no `_reg_get` census movement.
+
+**Mutations (Step 11): mutation -> observed red owner case, then restored byte for byte (sha256 of all four mutated files verified identical before and after).**
+
+| Mutation | Observed red owner |
+|---|---|
+| Copy a prior dead line instead of writing a carry | 26 of 76: every migrated carried-row case, including the live-loop case |
+| Drop first-ever uncertainty entirely | first-ever carry; no-procs-file `w` (2) |
+| Stop parsing retained carry clocks | `a retained carry clock is read back only after all predicates are measurable` (1) |
+| Accept half-pair or over-wide carry clocks (`CARRY_RE` fields widened to `[^ ]+` and the bound check removed) | `08 cpu0=7` and `none cpu0=7` (2). `99999999999999999 cpu0=7` and `123 cpu0=none` stay green: the arithmetic range check (`first > UP`, `first < born`) restarts the clock anyway, so those two rows pin nothing on their own. |
+| Lose the capture snapshot before the regex helper (snapshot taken after `_ss_prev_clock`) | 59 of 76: every case that reads a prior clock |
+| Treat a zombie as a live child | `outside child in state Z` (1) |
+| Ignore every outside child | `outside child in state S` and the `parent of a process in another cgroup` predicate case (2) |
+| Restore paused stdout | the paused case (1) |
+| Move the pause after the manager read | the paused case (1) |
+| Ignore header failure / body failure / rename failure | each only its own `a failed <header|body|rename>` case (1 each) |
+| Ignore redirection-open failure (write guard only) | the open case, ONLY with the tightened message assertion (see candidate departure 1); with the plan's original assertion this mutation measured green, 76 of 76 |
+| Ignore open failure AND rename failure | the open and rename cases (2) |
+| Return failure for the empty record | 6: `a valid empty replacement` and five cases whose scope leaves an empty record |
+| Restore malformed-body ordinary stop remedy | 7: both `unreadable body` cases and all five malformed or contradictory row cases |
+| Restore unqualified carried-live PASS | `a measured-live carry qualifies PASS` (1) |
+| Doctor ignores future tick | `a future record is neither fresh PASS nor destructive advice` (1) |
+| Instrument ignores future tick / stale tick | `a future record publishes no current counts` / `a stale record publishes no current counts` (1 each) |
+| Instrument skips malformed body rows (`continue`) | 5: the `a nonempty bad body` table (garbage, both bad carries, trailing text, leading-zero CPU) |
+| `B + 2` replaced by literal 2 | `baseline 5 with observed 7` (1) |
+| `>` replaced by `>=` | `baseline 0 with observed 2` and `baseline 5 with observed 7` (2) |
+| Unreadable journal maps to observed 0 | `an unreadable journal gives an unmeasured comparison` (1) |
+| Remove the parent-side `setpgid` | `delayed-child` only (1) |
+| Kill only the direct child | `normal` only (1): the delayed case still reaps its pre-exec child by a direct kill |
+
+**Citation tax and census (S6-R11).** `ccd/ccd` and `README.md` are untouched. Instrument from the child-reclamation predecessor plan, base `a3cebde1b`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55, entered [] left []; site array stated 35, base 35, tree 35, entered [] left []. The base is consistent with every stated literal, so no census literal or README anchor moved. `session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS FACTS|whole corpus'` 7 passed; the two frozen documents are unchanged from `origin/main`.
+
+**Candidate departures (to be numbered by the controller, none assigned here).**
+
+1. Open-failure pin tightened (ruled by the coordinator a test strengthening with no contract change; not numbered). The plan's `failed open` case asserted only `previous record retained`, but an open failure also fails the later `mv`, whose own message carries the same phrase, so deleting the write guard left that case green (measured: 76 of 76). The case now also asserts `cannot write verdict record` (and `cannot replace verdict record` for the rename case). Contract unchanged; cost: one assertion line pair in `scope-sweep.test.ts`.
+2. Found in review and fixed in fix round 1: the plan's reader `why` class `[a-z-]` rejected the sweep's own `dead-under-6h` and `process-started-under-6h`; now D-4316 (see `## Deviations found`). The figures above for the sweep, doctor and instrument suites were measured before that fix; after it `scope-sweep.test.ts` is 78 of 78 (two round-trip pins added), the doctor scope-sweep subset 28 and the stage-6 file 27, all green.
+
+**Concerns.** (a) `_ss_stat` now refuses a state letter outside `[A-Z]`; Linux also prints lowercase `t` (tracing stop). Such a process reads as unreadable, so a box with a traced process carries `box-stat` rather than judging: fail-safe, not unsafe, and the plan's own fixture rule. (b) The malformed-clock rows `99999999999999999 cpu0=7` and `123 cpu0=none` are not independently red under the clock-bound mutation (see table). (c) The refused-argument stage-6 cases print argparse usage to the test's stderr; the cases pass.
+
+Independent Opus/high task review: one Critical (plan-mandated reader why-class) fixed in fix round 1 as D-4316; scoped re-review: all findings addressed.
+
 ### Task 2: Compose the pressure variable for every supported Claude Code spawn
 
 **Files:**
@@ -936,7 +993,7 @@ Each mutation runs against the source it owns in fixture-contained suites, produ
 - Produces: the same line with exactly one `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` assignment before the wrapper executable. No new argument, return shape, setting or roster field.
 - Applicability: every currently supported launcher is Claude Code: upstream, generated wrappers, the `exec.kind=codex` wrapper through `ccrc-codex`, and approved external Claude Code shims. Provider/telemetry is not the execution target. A future native executable must use its own composition or discard this Claude Code key; introducing that target is not this wave.
 
-- [ ] **Step 1: Add independent composer and branch-presence tests.**
+- [x] **Step 1: Add independent composer and branch-presence tests.**
 
 In `ccd-resume-flag.test.ts`, use its existing `seed`, `TMUX`, `RESUME_DIES` and `newSessions` helpers. These assertions do not derive the expected variable from `_resume_env`, so a disconnected or emptied composer cannot self-confirm:
 
@@ -1029,7 +1086,7 @@ it('plain tmux placement forwards the same pressure-bearing command', () => {
 });
 ```
 
-- [ ] **Step 2: Pin generated-wrapper inheritance without changing the launcher.**
+- [x] **Step 2: Pin generated-wrapper inheritance without changing the launcher.**
 
 In `ccrc-codex-launcher.test.ts`, extend the existing `STUB_CLAUDE` recorder's `for v in ...` line to include `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP`; record only this non-secret value, never all environment values. Keep the existing wrapper/materialiser/reverse-map integration test and add `env` to its `run` call:
 
@@ -1050,7 +1107,7 @@ expect(recText(b, 'claude.pid').trim()).toBe(String(r.pid));
 
 This exercises the REAL generated wrapper and REAL launcher through their final upstream `exec`, with a stubbed upstream executable and fixture-only tier startup. No shipped edit to `shared/wrapper.mjs` or `ccd/ccrc-codex` is needed. The existing `wrapper-generate` codex-target case remains the independent grammar pin.
 
-- [ ] **Step 3: Run the new cases red before editing the composer.**
+- [x] **Step 3: Run the new cases red before editing the composer.**
 
 From `server/`, foreground and sequentially:
 
@@ -1063,7 +1120,7 @@ From `server/`, foreground and sequentially:
 
 Expected: presence cases fail because the composer has no key; wrapper inheritance is an already-green control. Record actual results, not this forecast. The inherited-key test is not proof that ccd supplied it; only the command/composer cases prove that.
 
-- [ ] **Step 4: Change the shared composition once.**
+- [x] **Step 4: Change the shared composition once.**
 
 Replace `_resume_env`'s existing `local out` line, in place:
 
@@ -1073,7 +1130,7 @@ Replace `_resume_env`'s existing `local out` line, in place:
 
 Keep optional max-age composition and `printf` unchanged. Amend its one-line function comment in place to say it composes Claude Code resume and pressure-reap assignments. Do not edit either `exec env` call, `_tmux_new_session`, generation locking, route flags, Remote Control gating or generated wrappers. This preserves `genenv` before `COLORTERM`, the resume/route environment before the wrapper, and all argv order. It adds no `_reg_get` call.
 
-- [ ] **Step 5: Stamp and run owning/neighbor gates green.**
+- [x] **Step 5: Stamp and run owning/neighbor gates green.**
 
 Run the shared generated/mode/census/citation procedures, then from `server/`, one process at a time:
 
@@ -1085,7 +1142,7 @@ Run the shared generated/mode/census/citation procedures, then from `server/`, o
 
 The neighboring byte-exact expectations that read `_resume_env` need no copied prompt/key literal. Any unexpectedly hard-coded expected command is widened by its exact new assignment only, never by loosening `toBe` to a substring. The generation-environment spelling stays contiguous before `COLORTERM`, so the lifecycle purge guard must not be relaxed.
 
-- [ ] **Step 6: Measure these mutations and restore green.**
+- [x] **Step 6: Measure these mutations and restore green.**
 
 | Mutation | Must-red owner |
 |---|---|
@@ -1098,9 +1155,47 @@ The neighboring byte-exact expectations that read `_resume_env` need no copied p
 
 Mutations are fixture-only edits of this task's exact bytes; each must produce an observed RED. Restore the launcher after its mutation even though it is not a shipped task edit. Restamp ccd and rerun all affected cases green.
 
-- [ ] **Step 7: Commit Task 2 alone after the fresh reviewer gate.**
+- [x] **Step 7: Commit Task 2 alone after the fresh reviewer gate.**
 
 Commit subject: `fix(ccd): disable background-shell pressure reap in child spawns`. Include only composer/tests and genuinely measured citation movement, plus the in-plan evidence. Keep the first-commit residue in Task 1's commit. Do not restart sessions to make this assignment take effect.
+
+#### Execution evidence (Task 2)
+
+Measured on the dispatched workspace branch at base `5d2a8c8ba`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only. Steps 1-6 are done; Step 7 is ticked for the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red, before the composer edit (Step 3).**
+
+| Owner | Red | What reddened |
+|---|---|---|
+| `ccd-resume-flag.test.ts -t pressure-reap` | 5 failed, 1 passed (12) | both composer cases (max-age empty and 3600000), the `new` and `resume` primary cases and the retry case (`Target cannot be null or undefined`: no assignment to match). The child-scope no-export control passed, as it should before any export exists. |
+| `ccd-route-spawn.test.ts -t 'external Claude Code shim'` | 1 failed (20) | the external shim case (same null match) |
+| `ccd-spawn-split.test.ts -t 'plain tmux placement'` | 1 failed (54) | `expected 'tmux new-session -d -s cc-myid -x 220...' to contain 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE...'` |
+| `ccrc-codex-launcher.test.ts -t 'REAL wrapper'` | 1 passed (30) | already green, as forecast: the control proves only inheritance, not that ccd supplied the key |
+
+**Edit (Step 4).** `_resume_env`'s `local out` line and its one-line comment, in place, no line added or removed; no `exec env` call, `_tmux_new_session`, route flag or wrapper touched. `shared/wrapper.mjs` and `ccd/ccrc-codex` are unchanged (sha256 verified).
+
+**Green (Step 5).** Restamped with the shared node command; `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified` (exit 0), `bash -n ccd/ccd` clean, mode 775 before and after. `ccd-resume-flag` + `ccd-spawn-split` 66 passed; `ccd-route-spawn` + `ccd-route-degrade` + `ccd-lifecycle-purge` 95 passed; `ccrc-codex-launcher` + `wrapper-generate` 41 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed. Neighbor byte-exact expectations read `_resume_env`, so none needed widening.
+
+**Mutations (Step 6): mutation -> observed red owner case, then restored byte for byte (sha256 of `ccd/ccd`, `ccd/ccrc-codex` and `shared/wrapper.mjs` verified identical to the pre-mutation copies; ccd restamped for each ccd mutation).**
+
+| Mutation | Observed red owner |
+|---|---|
+| Remove the assignment from `_resume_env` | 7: both composer cases, `new`/`resume` primary, the retry case, the external shim case, plain tmux placement. The whole-command cases stayed green by design: their expected line is read from `_resume_env` itself. |
+| `_is_anthropic_backend` gate (assignment moved out of `_resume_env` into a gated append after `resenv=$(_resume_env)`) | the external shim case (both commands); the composer cases, because the assignment left `_resume_env`; and the byte-exact whole-command, remote-control and flag-file cases that read `_resume_env` (9 in all) |
+| Drop `$resenv` from the PRIMARY only | primary presence (`new`, `resume`, plain tmux placement), the retry case's primary line, the shim case, and the whole-command shape cases (17) |
+| Drop `$resenv` from the RETRY only | `the --session-id fallback line carries it as well`, the retry presence case, the shim case, and the retry-line whole-command cases (8) |
+| Export the key globally as well as composing it (`export` inside `_resume_env`) | `composing a child command does not export the key into ccd itself` only (1) |
+| Strip the inherited key before the launcher's final `exec` (`exec env -u ... "$cx_upbin"`, fixture-only in `ccd/ccrc-codex`) | `composes with the REAL wrapper, the REAL materialiser and the REAL reverse map` (1) |
+
+**Census.** `_reg_get` before: 209 calls on 178 lines; after: 209 on 178 (no mover, existing header sentence untouched).
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `5d2a8c8ba` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). The edit changes no line count in `ccd/ccd`, so no cited line moved. README carries no `ccd/ccd:<line>` anchor at all, so the historical re-pointer (which insists on exactly two) was not applicable and README is untouched. The frozen documents are unchanged against `origin/main`. The citation cases are green (7 passed).
+
+**Candidate departures (to be numbered by the controller, none assigned here).** None. Two plan-snippet adjustments, neither changing a contract: the external-shim case reads `[primary, retry]` with non-null assertions (`primary!`, `retry!`) for the strict compiler, and each new group sits in its own top-level `describe` at the end of its file.
+
+**Concerns.** The `remove` and `_is_anthropic_backend` mutations also redden byte-exact cases that derive their expectation from `_resume_env`, so those cases are secondary owners; the independent presence cases are the primary ones.
+
+**Task review (controller ledger, recorded when the review returned).** Source: the controller's ledger, which was written as each review returned; the reviewer's full returned text was not saved as a file, so this paragraph carries the ledger's entries and adds only the cross-references marked as such. It was committed in fix round 1 (2026-10-19), after the commit it describes. Review of `5d2a8c8ba..2afc1cc00` by an Opus/high reviewer: spec verdict pass, quality verdict Approved, 0 Critical and 0 Important findings; no fix round and no re-review were needed. Controller rulings on this task: none recorded. Deferred minors: (1) the caller comment above `resenv=$(_resume_env)` still said the composed variables are inert on a non-home-able lane, while the pressure key is now deliberately live there (outside this task's allowed edits; the final review raised it as its Important 2, and F2 below fixed it, a cross-reference to the final-review evidence); (2) the plain-tmux presence case uses `toContain` only (plan-verbatim); (3) `typecheck-tests` was unrun at this commit because the PWA dependencies were absent, as in Task 1 (cross-reference, not from the ledger: the final gates' full pass ran it at the tip, 12 passed, per `part-s14.json`).
 
 ### Task 3: Keep outgoing operator choice before a live UUID rotation
 
@@ -1115,20 +1210,21 @@ This is D-3925's deferred code fix, not a new parser or a change to non-Anthropi
 - Consumes: `_transcript_path <id>` resolves the transcript at the CURRENT registry UUID; `_operator_choice_read <transcript> <typed-journal>` returns the existing model/effort/drift lines; `cmd_route --session <id> --set <field=value> ...` is the only route writer.
 - Produces: `_operator_choice_promote <id> [reason]`, always rc 0, reads/promotes without creating or removing `choicekept`; the optional reason defaults to `kept across a restart`.
 - Preserves: `_operator_choice_keep <id>`, always rc 0, writes its existing marker before calling the promotion; `_operator_choice_unmark`, stop ordering, spawn journal opening and marker clearing are unchanged.
-- `_sync_uuid <id>` calls promotion only when it has a non-empty live UUID DIFFERENT from the registry UUID, and BEFORE `_reg_set <id> uuid <new-uuid>`.
+- `_sync_uuid <id>` calls promotion only when it has a non-empty pane UUID DIFFERENT from the registry UUID AND the existing `_ci_pane_parked` / `_ci_pane_refused` guards admit that rotation, BEFORE `_reg_set <id> uuid <new-uuid>`. Retain the following worker-memory clearing, `_ci_bg_follow` and `_follow_continued_in` calls. Refused or unchanged pane UUIDs do not promote; background-worker and continuation-chain writes remain outside this task's promotion seam.
 
-- [ ] **Step 1: Append failing fixture-contained live-rotation cases.**
+- [x] **Step 1: Append failing fixture-contained live-rotation cases.**
 
-Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; only tmux is a fixture shell function, never the live binary:
+Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; tmux is always a fixture shell function, never the live binary. The refusal and follow-order controls below additionally substitute only the named admission verdicts and follow observers:
 
 ```ts
 const NEXT = 'deadbeef-0000-4000-8000-000000000001';
 const THIRD = 'deadbeef-0000-4000-8000-000000000002';
-const sync = (sid: string): string => {
+const sync = (sid: string, controls = ''): string => {
   const dir = path.join(h.home, '.claude', 'sessions');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: sid }));
-  return h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
+  return h.sh(`${controls}
+    tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
     _sync_uuid ${ID}; printf 'rc=%s' "$?"`);
 };
 
@@ -1262,9 +1358,51 @@ it('non-Anthropic choice stays not applicable, without freezing its live UUID', 
 });
 ```
 
-Add these controls to the same describe. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
+Add these controls to the same describe. The refusal cases substitute only the two admission verdicts and follow-call observers; the existing UUID and parity suites below exercise the real guards and readers. A proposed UUID that the current guard refuses is not a live rotation, even when the outgoing transcript contains an eligible choice. The accepted case also observes that the existing worker-follow memory is cleared before either follow path. These controls preserve main's behavior rather than widening this task into fork/background UUID promotion. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
 
 ```ts
+it.each(['parked', 'superseded'] as const)(
+  '%s pane does not promote, and both follow paths still run', (kind) => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    const controls = `
+      _ci_pane_parked() { return ${kind === 'parked' ? 0 : 1}; };
+      _ci_pane_refused() { return ${kind === 'superseded' ? 0 : 1}; };
+      _ci_bg_follow() { printf '%s\\n' background >> "$HOME/uuid-follow"; };
+      _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+    expect(sync(NEXT, controls)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(false);
+    expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+      .toEqual(['background', 'chain']);
+  },
+);
+
+it('accepted pane rotation clears old worker memory before both follow paths', () => {
+  seed(); record({ class: 'fable' });
+  const t = now() - 600;
+  writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+  const controls = `
+    _CI_BG[${ID}]=worker; _CI_BGMISS[${ID}]=1;
+    _CI_BGSID[${ID}]=old; _CI_BGADDRS[${ID}]=old;
+    _ci_pane_parked() { return 1; }; _ci_pane_refused() { return 1; };
+    _ci_bg_follow() {
+      [[ -z "\${_CI_BG[$1]+set}" && -z "\${_CI_BGMISS[$1]+set}"
+         && -z "\${_CI_BGSID[$1]+set}" && -z "\${_CI_BGADDRS[$1]+set}" ]] &&
+        printf '%s\\n' background-cleared >> "$HOME/uuid-follow";
+    };
+    _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+  expect(sync(NEXT, controls)).toBe('rc=0');
+  expect(h.reg(ID, 'uuid')).toBe(NEXT);
+  expect(h.reg(ID, 'class')).toBe('opus');
+  expect(routeLines()).toHaveLength(1);
+  expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+    .toEqual(['background-cleared', 'chain']);
+});
+
 it('missing live session JSON neither reads choice nor changes uuid', () => {
   seed(); record({ class: 'fable' });
   const t = now() - 600;
@@ -1354,7 +1492,7 @@ it.each(['_operator_choice_promote', '_operator_choice_keep'] as const)(
 );
 ```
 
-- [ ] **Step 2: Run the live-rotation describe red, before changing ccd.**
+- [x] **Step 2: Run the live-rotation describe red, before changing ccd.**
 
 From `server/`:
 
@@ -1364,7 +1502,7 @@ From `server/`:
 
 Expected red: UUID changes, but the outgoing class/effort are not promoted. Existing failure/skip controls may already be green. Save the actual failing case names and output; no forecast case count is an execution result.
 
-- [ ] **Step 3: Extract the promotion body once; keep marker ownership at the existing keep.**
+- [x] **Step 3: Extract the promotion body once; keep marker ownership at the existing keep.**
 
 Replace the current `_operator_choice_keep` header/initial lines with this wrapper, then rename the existing remainder to `_operator_choice_promote`. Keep the existing promotion body and its authoritative history comments verbatim, except the route reason's suffix:
 
@@ -1392,27 +1530,37 @@ The existing statements from `typed=$(_reg_get "$id" typed)` through the final `
 
 No second transcript parser, no per-field route calls, no new class vocabulary and no direct route-file writes. Retain the existing comment explaining why the non-Anthropic choice is skipped and the comments on the mtime-before-drift and merged-pair checks.
 
-Replace `_sync_uuid`'s final conditional line with this length-neutral call-site edit:
+Current main has expanded `_sync_uuid`; its old baseline-sized conditional is no longer an edit target. Within the EXISTING pane-session-file block, retain the admission condition and add promotion to its UUID-write line, before that write. The resulting excerpt is:
 
 ```bash
-  if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]]; then _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"; fi
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
+       && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
+       && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
+      _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"
+      unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
+    fi
+  fi
+  _ci_bg_follow "$id" "$cfg"
+  _follow_continued_in "$id" "$cfg"
+  return 0
 ```
 
-This is below the proof that a live session JSON exists and above the final `return 0`. Do not move promotion after the registry write. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
+The outer pane-file check and sessionId read stay unchanged; this is an excerpt, not a replacement of the whole function. Promotion runs only after both current admission guards permit a genuine pane rotation. Do not move it above those guards or after the registry write. Keep worker-memory clearing and both follow calls exactly where they are; continuation/background-driven writes acquire no new promotion side effect. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
 
-- [ ] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
+- [x] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
 
 Run the shared generated-byte and citation procedures on the task's actual parent/tree. Then from `server/`:
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-swap.test.ts test/ccd-archive.test.ts test/ccd-spawn-split.test.ts --maxWorkers=1
 ```
 
 If any named neighboring file has been renamed on current main, locate its source owner and update this plan with the concrete replacement before dispatch; do not silently skip the gate.
 
-- [ ] **Step 5: Measure the mutations, restore only this task's bytes, and rerun green.**
+- [x] **Step 5: Measure the mutations, restore only this task's bytes, and rerun green.**
 
 | Mutation | Owning case that must turn red |
 |---|---|
@@ -1424,12 +1572,53 @@ If any named neighboring file has been renamed on current main, locate its sourc
 | Remove journal matching from shared promotion | ccd-typed commands excluded during rotation |
 | Remove route-field mtime precedence | Newer route fields win during rotation |
 | Return the reader's failure rather than always 0 | Failed-reader synchronization and direct promotion rc |
+| Move promotion above the pane-admission guards | Parked/superseded pane leaves route unchanged |
+| Remove each of `_ci_pane_parked` and `_ci_pane_refused` from admission in separate trials | Matching refusal case; existing real-guard UUID suite |
+| Drop worker-follow memory clearing after accepted pane rotation | Accepted-pane case observes cleared memory before follow |
+| Drop each of `_ci_bg_follow` and `_follow_continued_in` in separate trials | Both follow-call observations; existing UUID/parity gates |
 
 Each row requires an observed RED, not a comment that a test would fail. Keep the old stop/spawn marker census and its behavior cases intact. Restore the task's original mutation bytes, restamp, and rerun the affected cases green before committing.
 
-- [ ] **Step 6: Commit Task 3 alone after its fresh reviewer gate.**
+- [x] **Step 6: Commit Task 3 alone after its fresh reviewer gate.**
 
 Stage only this task's source, tests, genuinely moved census/README anchors and its measured plan evidence. Commit subject: `fix(ccd): preserve outgoing operator choice before UUID rotation`. End the commit with the mandated attribution. Do not claim the unchanged UUID or failed-reader controls prove outgoing-choice success; name the pair and two-rotation cases that actually exercise it.
+
+#### Execution evidence (Task 3)
+
+Measured on the dispatched workspace branch at base `2afc1cc00`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only (tmux is always a shell function; `BOUNDED` is Task 1's parent-side `setpgid` form, consumed as-is). Steps 1-5 are done; Step 6 is ticked for the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here. The real `_sync_uuid` already had the brief's admitted-branch shape (condition, `_reg_set`, `unset`, then the two follow calls), so the insertion is the one line.
+
+**Red, before the ccd edit (Step 2).** `ccd-operator-choice.test.ts -t 'live UUID rotation'` against the base `ccd/ccd`: 12 failed, 13 passed (73 skipped). Failing cases: `reads the old transcript before changing uuid and promotes the pair once`; `two rotations then a restart read the newest transcript, not an old marker`; `a rotation does not remove or replace an existing dead-session marker`; `accepted pane rotation clears old worker memory before both follow paths`; `outgoing directory`, `outgoing drift`, `outgoing reader-failed` and `outgoing unknown-model` `does not block UUID synchronization or write a marker` (each reddens on the absent `operator-choice` swap.log line the promotion writes); and the four `_operator_choice_promote ...` direct cases (shared refusal/floor, whole incompatible pair, FIFO transcript, missing Python and failed reader), which fail because the function does not exist. The refusal controls, unchanged-UUID, missing-JSON, absent/malformed outgoing, non-Anthropic and both `_operator_choice_keep` direct cases were already green, as forecast. (An earlier red run, before two fixture corrections below, showed 13 failures.)
+
+**Edit (Step 3).** `_operator_choice_keep` is now the marker writer plus a call to the new `_operator_choice_promote "$id" "kept across a restart"`; `_operator_choice_promote <id> [reason]` carries the keep's previous body verbatim (reason suffix only changed), reading the CURRENT registry uuid's transcript and never touching `choicekept`. `_sync_uuid`'s admitted pane branch calls `_operator_choice_promote "$id" "kept before a uuid rotation"` on the line before `_reg_set "$id" uuid "$sid"`; the `unset` and both follow calls are untouched. Comments corrected in place without changing a line count: `_sync_uuid`'s `(/clear, compaction)` now names `/clear` with compaction keeping its transcript, and the parser's `ONE READER, TWO CALLERS` comment names the shared promotion.
+
+**Fixture corrections to the brief's test text (candidate departures, none numbered here).** (1) A promotion writes one swap.log `route` line PER FIELD from its single `cmd_route` call, so the brief's `routeLines()` length for a class-plus-effort pair is 2, not 1: the pair case asserts 2 (and 2 after the idempotent second sync) and the two-rotations case asserts 5 (1 class at the first rotation, 2 for the pair at the second, 2 at the restart). (2) The non-Anthropic lane's config directory is `.claude-gpt`, not `.claude`, so the `sync` helper takes an optional config directory and that case passes `.claude-gpt`; with `.claude` the case returned early at `_cfg_dir` and could not reach the promotion. (3) `ccd-die-containment.test.ts`, which the brief runs but does not list as a file to modify, pins the exact set of `die`-reaching functions: `_operator_choice_promote` and `_sync_uuid` now join `_operator_choice_keep` in that scanner's output for the reason the existing comment gives for the keep (it calls `cmd_route` in a plain `( ... )` subshell, which the scanner does not model), so the expected list and its comment gain those two names. The demotion scan and the property cases show neither can die.
+
+**Green (Step 4).** Restamped with the shared node command; `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified` (exit 0), `bash -n` clean, mode 775 before and after. `ccd-operator-choice` 98 passed; `ccd-sync-uuid` + `continued-in-parity` + `continued-in-successor-parity` 187 passed; `ccd-route-apply` + `ccd-route-settle` 133 passed; `ccd-swap` + `ccd-archive` + `ccd-spawn-split` 148 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed. Every named neighbouring file exists under its brief name.
+
+**Mutations (Step 5): mutation -> observed red owner case(s), each restored byte for byte (`cmp` against the stamped tree, `mark --check` clean) and the affected cases rerun green.** All trials ran the live-rotation describe; the guard and follow rows also ran the existing `ccd-sync-uuid` + parity gates.
+
+| Mutation | Observed red |
+|---|---|
+| Delete the promotion from `_sync_uuid` | 8: pair promoted before UUID change, two rotations then restart, existing-marker case, accepted-pane case, outgoing directory/drift/reader-failed/unknown-model |
+| Promotion after `_reg_set ... uuid` | the same 8 |
+| `_operator_choice_keep` instead of promotion | 9: the above plus absent/malformed outgoing (a marker is written) |
+| Remove `choicekept` during rotation | 1: existing marker's bytes/mtime unchanged |
+| One `cmd_route` per field | 3: pair promoted once, and the two whole-incompatible-pair cases (keep and promote) |
+| Journal matching removed (`0 since` floor) | 1: ccd-typed commands stay excluded during rotation |
+| Route-field mtime precedence removed | 1: newer route fields win during rotation |
+| Reader failure returned as rc 1 | 1: direct promotion's `returns zero and reports missing Python and a failed reader` (the synchronisation case stays green: `_sync_uuid` does not read the promotion's rc) |
+| Promotion above the admission guards | 2: parked and superseded pane do not promote |
+| Remove `_ci_pane_parked` alone | live describe: parked case; `ccd-sync-uuid`: 4 (parked-before-read, restart-names-job, gone-job cap, gone-transcript A) |
+| Remove `_ci_pane_refused` alone | live describe: superseded case; `ccd-sync-uuid`: 12 |
+| Drop the worker-memory `unset` | live describe: accepted-pane case; `ccd-sync-uuid`: `a pane that takes the conversation back ... no flap` |
+| Drop `_ci_bg_follow` alone | live describe: accepted-pane, parked and superseded cases (3); `ccd-sync-uuid`: 6 |
+| Drop `_follow_continued_in` alone | live describe: the same 3; sync/parity gates: 33 |
+
+**Census.** `_reg_get` before: 209 calls on 178 lines; after: 209 on 178. The extraction moved the keep's two `_reg_get` calls into `_operator_choice_promote` with no change to either count, so the existing header sentence is untouched.
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `2afc1cc00` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). README carries no `ccd/ccd:<line>` anchor (the historical re-pointer insists on exactly two), so it is untouched, and `session-hook.test.ts` needs no S6-R11 annotation. The frozen documents are unchanged against `origin/main`. The citation cases are green (7 passed).
+
+**Task review (controller ledger, recorded when the review returned).** Source: the controller's ledger, which was written as each review returned; the reviewer's full returned text was not saved as a file, so this paragraph carries the ledger's entries and adds only the cross-references marked as such. It was committed in fix round 1 (2026-10-19), after the commit it describes. Review of `2afc1cc00..8b6a01b3a` by an Opus/high reviewer, dispatched with four candidate deviations (the ledger's words): (a) the `routeLines` counts, (b) the `sync` config-directory parameter, (c) the `ccd-die-containment` pinned set, (d) the reader-rc mutation owner. Spec verdict pass, quality verdict Approved, 0 Critical and 0 Important findings; no fix round and no re-review were needed. Controller rulings on this task: the `routeLines` count correction (pair 2, chain 5) and the `sync` config-directory parameter are test-text corrections against the real `cmd_route` logging and `_cfg_dir` behaviour and take no D-number, because the one-combined-`cmd_route` and non-Anthropic-skip contract is unchanged and the split mutation still reds through the haiku-with-level check; the `ccd-die-containment.test.ts` edit is ratified (it adds `_operator_choice_promote` and `_sync_uuid` to the pinned die-reaching set, the census mechanically demands it, and the no-die claim for the subsidiary subshell was verified). The ledger records no separate ruling on (d). Deferred minors: no test pinned the rotation route reason `kept before a uuid rotation` (dropping `"$reason"` stayed green; cross-reference, not from the ledger: the final-review evidence below adds a reason pin and its mutation row); Step 6 was ticked before the reviewer gate, which this review then satisfied.
 
 ### Task 4: Count direct pressure kills and document the shipped measurement contract
 
@@ -1451,7 +1640,7 @@ This task completes spec section 9's FIRST stage-6 metric, carried explicitly fr
 
 **Evidence behind the fixture.** Static inspection of Claude Code 2.1.296 on 2026-10-14 traced the pressure-reap caller to its notification formatter: internal `status: killed`, `stopCause: memory_pressure`; final `<status>killed</status>`; summary `Background command "<description>" was stopped because the system is running low on memory`; optional tool-use/output-file fields; explanatory `<note>`, not a reason element. The formatter escapes ampersands and angle brackets in summary/body, not double quotes. This proves the constructed notification string, not live eventual transcript rendering. The historical `reaper/classify_kills.py` evidence pointer is not a shipped parser and was not located in this checkout; do not pretend its historical count is replay-verified by this task.
 
-- [ ] **Step 1: Add the complete fixture-contained scanner contract.**
+- [x] **Step 1: Add the complete fixture-contained scanner contract.**
 
 Create this test file. Its factory places main transcripts under the fixture HOME, never the live registry. It asks stage 6 for a fixture journal, so even these scanner-only cases never run live journalctl. Every process has a bound and inherits a Git-clean environment.
 
@@ -1589,7 +1778,7 @@ describe('direct background-shell pressure kills, not pane-scope OOM stops', () 
 
 The ordinary notification fixture has optional fields, escaped description text, and a note deliberately different from the real explanatory wording. Only the verified status/summary contract decides a pressure kill. A hand-typed user message that EXACTLY imitates a complete runtime envelope is indistinguishable here; this is a read-only observational counter, not authenticated proof that a process died. Do not add an unverified `isMeta` requirement to hide that limitation.
 
-- [ ] **Step 2: Run the new suite red before adding the scanner.**
+- [x] **Step 2: Run the new suite red before adding the scanner.**
 
 From `server/`, foreground:
 
@@ -1599,7 +1788,7 @@ From `server/`, foreground:
 
 Expected: the direct metric is absent from stage 6. Capture the actual failures. No installed Claude Code process is spawned by this suite, and no pressure condition is induced on the box.
 
-- [ ] **Step 3: Add the direct scanner without changing earlier discovery semantics.**
+- [x] **Step 3: Add the direct scanner without changing earlier discovery semantics.**
 
 Place these constants/functions beside stage 6. No XML dependency is needed: match the complete envelope and its required field cardinalities after JSON decoding. The summary is matched as escaped text; its quoted description may contain escaped markup, quotes or newlines. The low-memory suffix must be the reason, not merely text somewhere inside it.
 
@@ -1709,7 +1898,7 @@ In Task 1's `stage6`, widen the existing `out` literal only:
 
 Keep the optional `pressure_reap_comparison` block as it is; it consumes `reading` from `s6_reap`, never `killed_background_tasks`. Keep STAGES, earlier CLI options, issue #317's copy counters and existing stage outputs unchanged. No marker, environment assignment or process action is written by the scanner.
 
-- [ ] **Step 4: Document the new behavior in its existing README sections.**
+- [x] **Step 4: Document the new behavior in its existing README sections.**
 
 Make these focused edits by content, after re-reading the task-parent README:
 
@@ -1784,7 +1973,7 @@ forced fleet restart is part of this change. An aggregate slice `MemoryHigh` mus
 
 Use generic examples only. Existing live line citations are repaired by the shared citation procedure, not by padding the new prose.
 
-- [ ] **Step 5: Add labelled as-built spec annotations, preserving the approved decisions.**
+- [x] **Step 5: Add labelled as-built spec annotations, preserving the approved decisions.**
 
 Append a dated wave-4b annotation to section 5.6 after its existing named trade, with these facts: child-scoped primary/retry assignment; all currently supported spawn targets exec Claude Code; report/shadow remains; carry grammar and freshness distinctions; direct notification metric separate from kernel OOM; exclusive B + 2 comparison; next-start deployment/removal effect; discovery limits. Do not amend the historical 186/44 measurement into a claim that this scanner reproduced it.
 
@@ -1792,7 +1981,7 @@ In section 5.7, replace ONLY the `/clear` deferred-cost clause with `D-3925 is c
 
 In the instrument's stage-6 comments, state each of its three sections, their time bases, known discovery limits and the fact that comparison makes no mutation. In stage-7's comment, replace its stops-only claim with the same live-promotion overcount explanation. Do not rename old output keys or rewrite the stage-7 scanner in this task.
 
-- [ ] **Step 6: Run owning and earlier-stage compatibility gates green.**
+- [x] **Step 6: Run owning and earlier-stage compatibility gates green.**
 
 From `server/`, one foreground process at a time:
 
@@ -1803,7 +1992,7 @@ From `server/`, one foreground process at a time:
 
 Run the existing stage-1 suite, `./node_modules/.bin/vitest run test/measure-continuity.test.ts --maxWorkers=1`, too before committing. All previous keys, issue #317 counters and window semantics remain. Parse the Python with `python3 -I -c "import ast; from pathlib import Path; ast.parse(Path('deploy/measure-continuity.py').read_text())"` from the workspace root. Run `git diff --check`.
 
-- [ ] **Step 7: Mutate the direct scanner's guards, restore green, and commit after the fresh reviewer.**
+- [x] **Step 7: Mutate the direct scanner's guards, restore green, and commit after the fresh reviewer.**
 
 | Mutation | Required red fixture |
 |---|---|
@@ -1819,6 +2008,176 @@ Run the existing stage-1 suite, `./node_modules/.bin/vitest run test/measure-con
 | Silently drop malformed JSON/missing time/duplicate status | Partial-reading case |
 
 Record each actual red and restored green. No runtime kill is needed or permitted for these mutations. Commit subject: `feat(continuity): count direct pressure-kill notifications and document wave 4b`. Include only the scanner/test/docs and measured evidence; no copied runtime bundle, private evidence path or historical script enters the PR.
+
+#### Execution evidence (Task 4)
+
+Measured on the dispatched workspace branch at base `8b6a01b3a`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only; no runtime kill was induced and no installed Claude Code was spawned. Steps 1-6 are done; Step 7 is ticked for the mutations and the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red (Step 2).** `measure-continuity-pressure-kills.test.ts` against the unmodified instrument: 11 failed (11), every case on `the direct metric is composed into stage 6: expected undefined to be defined`.
+
+**Green (Steps 3 and 6).** After the scanner and the one-line widening of `stage6`'s `out` literal: the new file 11 passed. `measure-continuity-pressure-kills` + `-stage6` 38 passed; `-stage7` + `-stage4` 14 passed; `measure-continuity` 7 passed. `python3 -I` `ast.parse` of the instrument exits 0 and `git diff --check` exits 0. After `git add` of the new test: `topology-clean` 55 passed (exit 0), `single-definition` 571 passed (exit 0), `deviation-refs` 31 passed (exit 0); `readme-holds`, `docs-parity`, `oss-metadata`, `dead-coordinator-prose` and `box-token-census` 162 passed.
+
+**Candidate departures from the brief's text.** None needed: the test and scanner were used verbatim, and every helper the brief names (`transcripts`, `iso_epoch`, `in_window`, `--home`, `--journal`, `--all-copies`, `makeCcdHarness`, `inheritedEnv`) exists with the shape the brief assumes. Two README anchor differences: the `revival reads.` sentence ends the first bullet of a list, so the new operator-choice paragraph is an indented continuation of that bullet; and the stage-6 paragraph's old text sat inside the paragraph after the doctor description, so the doctor paragraph (item 5) precedes the new stage-6 paragraph.
+
+**Mutations (Step 7): mutation -> observed red owner case(s), each restored byte for byte (`cmp` against the green instrument) and the file rerun 11 passed.**
+
+| Mutation | Observed red |
+|---|---|
+| Remove the direct metric from the stage-6 composition | all 11 (the direct section assertion in the shared reader) |
+| Drop the UUID from the dedupe pair | 2: the UUID/task dedupe cases (all=false, all=true) |
+| Count rows/copies, not unique pairs | 9, among them the repeated-notification and all-copies cases |
+| Remove the `status=killed` requirement | 1: the note/description/completed-notification control |
+| Search the phrase anywhere, not as the summary's whole reason | 1: the same control |
+| Parse raw JSON bytes, not decoded user content | 9, among them the escaped-JSON and the assistant/tool-result controls |
+| Require `isMeta` on every notification | 9, among them the verified-shaped row without metadata (escaped-JSON case) |
+| Make until inclusive | 1: the exact-endpoint case |
+| Make since exclusive | 1: the exact-endpoint case |
+| Fold an absent roster into a measured zero | 1: the absent case |
+| Fold a read failure into a measured read | 1: the EISDIR case |
+| Silently drop malformed JSON | 1: the partial-reading case |
+| Silently drop a duplicate-status envelope | 1: the partial-reading case |
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `8b6a01b3a` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). This task edits no `ccd/ccd` line and README carries no `ccd/ccd:<line>` anchor at all (`grep -cE 'ccd/ccd:[0-9]' README.md` is 0 at `d693ff171` and at `990c70cbb`; the entry first written here said README carried two anchors that stay valid, which was wrong, and Tasks 2 and 3 above had it right), so there was no anchor to re-point and `session-hook.test.ts` needs no S6-R11 annotation or literal change. The citation cases `CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS FACTS|whole corpus` are green (7 passed). The two frozen documents are unchanged against `origin/main` (exit 0). `CLAUDE.md`'s "~6200 lines" README figure still reads true and no check reds on it; it is untouched. The entry first written here gave README as 6240 lines. Measured in fix round 1 (`git show <commit>:README.md | wc -l`): 6241 lines at `d693ff171` (this task's commit) and 6243 at `990c70cbb`; 6240 was the count at this task's commit as first made, before fix round 1 below amended it into `d693ff171` and its README edits added one line.
+
+**Fix round 1 (D-4317, D-4318, two doc fixes).** D-4317: `stopped` added to the known non-killed statuses. Red before the change: the new `stopped` workflow case failed (`reading: "partial"`, `unmeasured_notifications: 1`); green after: `measure-continuity-pressure-kills` 13 passed (11 original, the `stopped` case, and the unknown-status control). D-4318 narrows the README and spec 5.7 sentences. Doc fixes: the spec 5.6 annotation no longer describes a native-executable gate (the key is added unconditionally; a future native target must compose its own environment or drop it), and the README doctor paragraph says the sweep writes nothing while paused and doctor reports SKIP (the spec's matching clause likewise). The instrument's stage-6 comment names the known non-pressure statuses. Citation instrument re-run at base `8b6a01b3a`: `byFile['ccd/ccd']` 147/147/147, total 202/202/202, no other key moved, composition and row/site arrays (55, 35) unchanged with nothing entered or left, so `session-hook.test.ts` is untouched.
+
+**Task review (controller ledger, recorded when the review returned).** Source: the controller's ledger, which was written as each review returned; the reviewer's full returned text was not saved as a file, so this paragraph carries the ledger's entries and adds only the cross-references marked as such. It was committed in fix round 1 (2026-10-19), after the commits it describes. Review 1 of `8b6a01b3a..1664d7ce9` (the implementer's commit, which fix round 1 above then amended into `d693ff171`; the ledger names the task's base and that commit but not the range, so the range is taken from those two names) by an Opus/high reviewer: spec verdict fail with 2 Important findings, both mandated by the plan's own text; the ledger records no Critical count and no separate quality verdict for this review. The reviewer read one real transcript read-only to check the notification shape, and no content from it entered the repository. (1) The status vocabulary lacked `stopped`, which real workflow-cutoff notifications carry, so the fleet reading would be routinely `partial`. (2) The README and spec 5.7 sentences saying "before a live UUID change" overstated the shipped contract: only `_sync_uuid`'s admitted pane branch promotes, and the `_ci_bg_follow` and `_follow_continued_in` UUID writes do not. Controller rulings: add `stopped` to the known non-killed statuses, keep any other status unmeasured and pin it with a `stopped` fixture row, defined as D-4317; narrow the README and spec 5.7 prose to pane-observed rotations (a `/clear`), defined as D-4318; and, with no number, correct the spec 5.6 sentence that said a native executable would receive no key (no native target exists today, and a future one must compose its own environment) and the README sentence "A paused sweep is silent" (the sweep writes nothing while paused and the doctor reports SKIP). One fix round (the amend above); its scoped re-review, by a Sonnet/high reviewer, found the 2 Important findings and the 2 doc fixes addressed with 0 open, and the task closed clean after that round. Deferred minors: any malformed or torn JSON line makes the reading partial (the brief's design); the case named "a task started earlier can be killed in the window" has no task-start fixture, and there are no failed-status or multi-summary fixtures. **Historical gate UNPROVEN.** The original quality verdict of review 1 was never recorded (the ledger's entry for it carries the spec verdict only, and the reviewer's text was not saved), and the scoped re-review above confirmed only that the two Important findings and the two doc fixes were addressed; so the per-task review gate this task was committed under is UNPROVEN, and nothing in this paragraph claims it. The remedial review below is explicitly remedial and is the first recorded quality verdict on this task.
+
+**Remedial Task 4 review (controller ledger; fix round 1, 2026-10-19).** Source: the controller's ledger, whose entry is the record; the reviewer's full returned text was not saved as a file. Opus/high, read-only, no tests, over `8b6a01b3a..d693ff171`, run after Task 4's commit `d693ff171`, so remedial and not the historical gate. Spec verdict: compliant (every brief requirement, D-4317 and D-4318 within the issued block, public text clean). Quality verdict: Needs fixes. Important: well-formed notifications that are not pressure kills (an event-style envelope with no status, the same with trailing `<system-reminder>` blocks, batched multi-task `stopped` envelopes) kept the reading `partial`, so D-4317's purpose, a measured zero for Task 5, was unmet; it fails safe. Minors: an undeclared coverage limit (queued-command attachment rows), two crash shapes, three unpinned branches and a stage-7 comment not narrowed (all fixed in the D-4322 commit), and the per-line parse cost undocumented (parked). Outcome: the Important finding conflicted with Task 4's approved envelope strictness (exactly one task id, one status), so the controller put one structured ask; the coordinator selected neither option and released the ask to the operator; the answer it returned, "Widen now as D-4322", came from the operator's own surface (fix round 2, review 685 F6: a release is terminal to the parent; the grounds are in D-4322's Ruling line), so the operator ruled it as D-4322 on 2026-10-19. It was fixed in its own commits, `335a6fc1e` and then `66703cb25`. D-4322's own task review (Opus/high) returned spec mostly compliant and quality Needs fixes, with one Important finding and minors; its scoped re-review found all six addressed and carried N1, N2 and O1 to the commit that carries this paragraph, which holds the O1 follow-up, while O2 and O3 stay parked. See "Execution evidence (fix round 1)" for D-4322's review and re-review and "Execution evidence (fix round 1: D-4322)" for the measurements. Process note: the remedial reviewer also ran the committed scanner read-only over the live transcripts of the box it ran on (counts only, no content printed), outside its brief, which forbade tests but did not name live data; the controller disclosed it to the coordinator, and no live figure enters this repository.
+
+#### Execution evidence (final-review fixes)
+
+Measured on the dispatched workspace branch at base `d693ff171`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only (tmux is a recording shell function; nothing touched a live pane, registry or unit). One commit carries F1-F3.
+
+**F1 (D-4319).** Red before the ccd edit, `ccd-operator-choice.test.ts -t 'live UUID rotation'`: 8 failed, 26 passed — the pair case's new reason pin (the per-field lines name `its own /effort and /model, kept before a uuid rotation`, effort first, because the reader prints kinds sorted), the three newer-in-the-incoming-transcript cases (`/model sonnet` after the `/clear`: class `opus` instead of `fable`; `/effort medium`: effort `high` instead of `low`; an unacknowledged incoming `/model`: `opus` instead of `fable`), the three no-keystroke cases (model: `send-keys -l /model`, `Enter`, `Escape`; effort: 13 slider keystrokes; pair) and the pending-field control (effort not recorded applied). The keystroke was therefore reproduced, through the real `_route_apply_check` after the real `_sync_uuid`, with the real idle predicate over a fixture session file. Green after: the file 108 passed (98 before, 10 new cases).
+
+**F2.** Comment only, five lines for five, so line-neutral: the `_spawn_start` hunk of `git show 5033cfb55 -- ccd/ccd` removes five comment lines and adds five (the entry first written here said six for six). No test names it. The merge `4634e2981` (fix round 1) later replaced that comment with main's text plus this branch's pressure-key sentence.
+
+**F3 (D-4320).** Red before the sweep edit, `scope-sweep.test.ts -t 'TAB'`: 2 failed (the record held `comm=bash<TAB>job_x`). With the two writer assertions removed in a scratch probe (restored, `cmp` clean), the readers themselves reddened: the doctor's WARN was the record's `line(s) it cannot read` verdict rather than the long-lived-process count, the instrument published `{record: 'unreadable'}`. Green after: `scope-sweep` 80 passed.
+
+**Mutations: mutation -> observed red, each restored byte for byte (`cmp` against the stamped tree, `mark --check` clean).** All ran the live-rotation describe.
+
+| Mutation | Observed red |
+|---|---|
+| Remove the incoming-transcript skip | 3: the `/model` race, the `/effort` race, the unacknowledged incoming `/model` |
+| Remove the applied-marking (body replaced by `:`) | 4: the three no-keystroke cases and the pending-field control |
+| Drop `$reason` from the route reason | 1: the pair case's reason pin |
+| `_sync_uuid` passes no incoming sid | 7: the three race cases, the three no-keystroke cases, the pending-field control |
+| Mark every route field applied, not the promoted ones | 1: the pending-field control |
+| Mark applied on the dead-session keep too (sid gate removed) | 1: the dead-session-keep control (before that control was added, the whole file stayed green, so the control was added) |
+
+**Gates.** Restamped; `node shared/mark.mjs --check ccd/ccd` `ccrc-unmodified` rc 0; `bash -n` clean on `ccd/ccd` and `ccd/ccd-scope-sweep`; both mode 775 before and after; `git diff --check` clean. `ccd-operator-choice` 108 passed; `ccd-sync-uuid` + `continued-in-parity` + `continued-in-successor-parity` 187 passed; `ccd-route-apply` + `ccd-route-settle` 133 passed; `ccd-swap` + `ccd-archive` + `ccd-spawn-split` 148 passed; `scope-sweep` 80 passed; `ccrc-doctor -t scope-sweep` 28 passed; `measure-continuity-stage6` 27 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed; the session-hook citation subset 7 passed. `_reg_get` census 209 calls on 178 lines before and after (the promotion's wrapper read moved from inside `_is_anthropic_backend`'s argument to a variable on the same line), so the header sentence is untouched.
+
+**Citation tax (S6-R11).** Instrument extracted to private scratch, run with base `d693ff171` and `--maxWorkers=1`, before and after the edits: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array 55/55/55 and site array 35/35/35, nothing entered or left. `session-hook.test.ts` needs no annotation. The two frozen documents are unchanged against `origin/main`.
+
+**Final review (controller ledger, recorded when the review returned).** Source: the controller's ledger, which was written as each review returned; the reviewers' full returned texts were not saved as files, so this paragraph carries the ledger's entries and adds only the cross-references marked as such. It was committed in fix round 1 (2026-10-19), after the commits it describes. Whole-branch review of `a3cebde1b..d693ff171` by an Opus/high reviewer, with `origin/main` unmoved and the merge-tree check exiting 0: verdict yes-with-fixes, 2 Important findings (the ledger lists no Critical finding and records no Critical count) and the Minor items below. Important 1: a live promotion after a `/clear` could overwrite a newer `/model` the operator had typed into the new transcript before the tick, and the pending fields `cmd_route` wrote could make the route applier type `/model` or `/effort` into the live pane (`/effort` has no readback). Important 2: the stale caller comment above `_resume_env` (Task 2's first deferred minor). Minor items: a tab or other whitespace in `comm` made a whole sweep record unreadable; the plan's "Where Things Stand" was stale (left to the coordinator). Controller rulings: the promotion skips each kind (`/model`, `/effort`) that the incoming transcript already holds an operator command for, acknowledged or drifted (D-4319); a live promotion must not make ccd type into the live pane, the fixer first reproducing the applier keystroke as a red and then applying the narrowest change (the ledger's example: mark the promoted fields applied); the sweep folds all whitespace in `comm` (D-4320); the fixes land as ONE separate commit rather than being amended into Task 3 or Task 1; "Where Things Stand" stays with the coordinator. One fix dispatch (Opus/high) at `d693ff171` produced `5033cfb55`. Its scoped re-review (Opus/high) of `d693ff171..5033cfb55` (the ledger names the fix dispatch's base and the fix commit, not the range, so the range is taken from those two names) found F1 (both parts), F2 and F3 addressed, with four Minor residuals, and the ledger then records the final review clean (all Important findings addressed). The four residuals and their rulings: (1) the skip ignores timestamps, so an admitted in-pane `/resume` into an OLDER conversation that holds an old `/model` or `/effort` drops the outgoing newer choice; parked for the acceptance review and the coordinator, with no second fix wave, at the cost of one lost choice on a rare path that the operator's re-typing heals, and the suggested follow-up of skipping only when the incoming command's epoch is at or after the outgoing one's; (2) D-4319's wording "as any acknowledged apply would" is inaccurate on a hand-made inconsistent `degraded` stamp (effectively unreachable), a wording nit to report in wave-done; (3) the promotion's `routeapplied` mark assumes no ccd keystroke after the operator's acknowledged command, accepted as the cost of D-4319's premise and healed by the next spawn; (4) the `routeapplied` writer-list comments in `ccd/ccd` do not name the promotion, and the pending-field control's `not.toContain('/effort')` is weak, ruled cosmetic and covered by the `routeapplied` assertion. Cross-reference, not from the ledger: review 630 later measured the first residual as its own finding R1 (which asks the coordinator for a ruling) and the writer-list prose as its R3 (a declared Minor); neither is settled by this paragraph.
+
+#### Execution evidence (fix round 1: Task 3 contract, D-4321)
+
+Measured on the dispatched workspace branch at base `e6790f39a` (the task parent), from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only (tmux is a recording shell function; nothing touched a live pane, registry or unit). One commit carries the contract, its tests, the writer-list and prose corrections and this evidence.
+
+**Red, before the ccd edit.** `ccd-operator-choice.test.ts -t 'live UUID rotation'` against the unedited `ccd/ccd`: 16 failed, 34 passed (73 skipped). Failing cases, each on its asserted end state: the `/clear` race with `/model sonnet` (class `fable`, not `sonnet`) and with `/effort medium` (effort `low`, not `medium`); R1 (class `fable`, not `opus`); both F1 cases (class `haiku`, not `sonnet`: the skip dropped the class and the lone `/effort high` was refused against the haiku record); F7's refused `/effort` (effort `low`, not `high`) and its unrecognised `/model` (`fable`, not `opus`); the same-second-tie case, the same-second-drift case and the older-drift case; and six same-tick cases through the real `_route_apply_check` (the race with each kind, R1, F1, and both F7 shapes). The incoming-FIFO and failed-incoming-read controls passed on the unedited code, as controls do: `_ci_transcript_path` already answers only a regular file, so the brief's `[[ -r "$fin" ]]` needs no `-f`.
+
+**Edit.** In `_operator_choice_promote` only: the incoming read keeps its guard but, on a failed read, now holds `inc=""` (partial output discarded); the `newer` skip and its D-4319 comment are replaced by an epoch merge into `merged` (per kind, `<=` so the incoming lines, read last, win a tie; a drift is emitted only when not older than its kind's winner, `>=` so a same-second drift is logged and never suppresses), which feeds the existing loop unchanged (and with no incoming lines the loop reads the reader's own lines, `merged=$out`, see the follow-up below); the header comment and the "types nothing" comment state the approved rule. Stored epochs are normalised with `10#`. `_sync_uuid` already passed the incoming sid and is untouched. R3: the comment above `_route_applied_set` now lists the six real writers (the settle, the seed, `cmd_route --apply`'s settle-applied fields, the applier, the class read-back and the live promotion), `_route_readback`'s stamp comment names the promotion, and README's read-back sentence names the seed and the promotion, each verified against the callers of `_route_applied_set` and the direct `_reg_set ... routeapplied` writes. Consent-gated prose, with the consent record present: README's operator-choice paragraph and the spec's section 5.7 wave-4b annotation now state the approved rule in place of D-4319's skip, touching no other sentence.
+
+**Green.** `ccd-operator-choice` 123 passed (108 before: three cases rewritten in place, fifteen added: R1, F1 twice, F7 for a refused `/effort` and for a same-second drift, the older drift, the tie, the two controls, and the six-row same-tick table).
+
+**Mutations: mutation -> observed red, each restored byte for byte (`cmp` against the stamped tree, restamped, `mark --check` clean) and the describe rerun green (50 passed).**
+
+| Mutation | Observed red |
+|---|---|
+| Restore D-4319's existence skip | 16: R1, F1 (both), F7 (all three), the race (both kinds), tie, older drift, six same-tick cases |
+| Invert the epoch comparison (oldest wins) | 8: the race (both kinds), R1, the first F1 case, and the four same-tick rows for the race, R1 and F1 |
+| Drop the incoming read | 11: the race (both kinds), F1 (both), F7 (all three), tie, and the same-tick rows |
+| Remove the post-route `_route_applied_set` loop | 12: the three no-keystroke cases, the pending-field control, the F1 and the other five same-tick rows, F7 (two) |
+| Stamp every route field applied | 1: the pending-field control |
+| One `cmd_route` per field | 6: F1 (both), the F1 same-tick row, the pair-once case, and both whole-incompatible-pair cases |
+| A newer drift suppresses its kind's winner | 4: F7 (refused `/effort`, unrecognised `/model`) and their same-tick rows |
+| Drop the drift line from the merged lines | 4: F7's unmeasured-line assertions (three, including the same-second drift) and the outgoing-drift case |
+| `_sync_uuid` passes no incoming sid | 18: the race, F1, F7, tie, the three no-keystroke cases, the pending-field control and the same-tick rows |
+| A tie goes to the outgoing (`<=` to `<`) | 1: the tie case |
+| A same-second drift is dropped (`>=` to `>`) | 1: the same-second drift case |
+| A drift older than its winner is still logged | 1: the older-drift case |
+| A failed incoming read keeps its partial lines | 1: the partial-read control |
+| Mark applied on the dead-session keep too (sid gate removed) | 1: the dead-session-keep control |
+
+**Census.** `_reg_get` before: 209 calls on 178 lines; after: 209 on 178. The header sentence is untouched.
+
+**Citation tax (S6-R11).** Instrument extracted to private scratch and run with base `e6790f39a` and `--maxWorkers=1`, on the edited tree: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array 55/55/55 and site array 35/35/35, nothing entered or left. `ccd/ccd` grew by 20 lines in this change, all in comment text and the promotion, and README's operator-choice paragraph grew by two lines (the follow-up below re-measures after undoing a re-wrap of the neighbouring read-back paragraph); no frozen literal moved and `session-hook.test.ts` needs no annotation. The two frozen documents are unchanged against `origin/main`.
+
+**Gates.** Restamped; `node shared/mark.mjs --check ccd/ccd` `ccrc-unmodified` rc 0; `bash -n` clean; mode 775 before and after; `git diff --check` clean. `ccd-operator-choice` 123 passed; `ccd-sync-uuid` + `continued-in-parity` + `continued-in-successor-parity` 187 passed; `ccd-route-apply` + `ccd-route-settle` 133 passed; `ccd-swap` + `ccd-archive` + `ccd-spawn-split` 148 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed; the session-hook citation subset 7 passed; `docs-parity` + `readme-holds` 71 passed; `topology-clean` + `deviation-refs` + `single-definition` 657 passed (`deviation-refs` against the local `origin/main` ref, not fetched). `typecheck-tests` 12 passed.
+
+**Follow-up to the task review (fix round 1, D-4321).** Measured at base `9b16456bf`, same rules. (1) The keep path: when the incoming lines are empty, `merged=$out` hands the loop the reader's own lines instead of the merge's rebuild, so the dead-session keep (and a rotation with nothing incoming) is exactly the base behaviour; the rebuild's drift-age filter otherwise dropped, on a transcript whose timestamps run backwards in file order, a drift line the base logged. New pin, two rows (the keep, and a rotation with no incoming transcript): an acknowledged `/effort high` at `t-60` followed in the file by a refused `/effort` at `t-600` logs one `unmeasured` line. Red before the guard at `9b16456bf` (2 failed), while the same two rows pass on `e6790f39a`'s ccd, the code before the epoch merge, so the pin is that earlier keep behaviour; green after (125 passed); mutation M15 (guard removed, the merge always rebuilds) red on both rows, restored byte for byte, green. (2) Prose accuracy for the retained cost: README's operator-choice paragraph, the spec 5.7 annotation, `_route_readback`'s stamp comment and the "types nothing" block now say the promotion never types a field it wrote but that its stamp lets the applier type an already-pending class's `/model` once, and a drift is "treated as changing nothing"; the "wrong only if" list names the failed-incoming-read case; D-4321's Cost says the same. (3) README's neighbouring read-back paragraph is back at its original wrapping, only the stamp sentence's lines changed (one line longer). Gates: restamped, `mark --check` `ccrc-unmodified` rc 0, `bash -n` clean, mode 775 before and after, `_reg_get` census 209 calls on 178 lines before and after, `git diff --check` clean; `ccd-operator-choice` 125 passed; `ccd-sync-uuid` + the two parity files 187; `ccd-route-apply` + `ccd-route-settle` 133; `ccd-swap` + `ccd-archive` + `ccd-spawn-split` 148; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29; `docs-parity` + `readme-holds` 71; `topology-clean` + `deviation-refs` + `single-definition` + `typecheck-tests` 669; the session-hook citation subset 7. Citation instrument at base `9b16456bf` (`--maxWorkers=1`): `byFile['ccd/ccd']` 147/147/147, `total` 202/202/202, other keys none, composition entered [] left [], rows 55/55/55 and sites 35/35/35 with nothing entered or left; the frozen documents unchanged against `origin/main`.
+
+#### Execution evidence (fix round 1)
+
+The coordinator's fix round 1 on review 630, acknowledged and run on 2026-10-19. Source: the controller's ledger for every dispatch, review, re-review and ruling (the reviewers' full returned texts were not saved as files; the ledger is their record), the implementers' reports (`fr1-evidence-report.md`, `fr1-sweep-report.md`, `fr1-t3-report.md`, `fr1-merge-report.md` and `fr1-d4322-report.md`, kept outside the repository) and review 630's own report. Routing: Sonnet/high implementers, Opus/high task reviewers, sequential. This entry carries no gate result: the owning groups, the full suite, the agent and PWA legs and the builds run after the commit that carries it and get their own entry.
+
+**The receipt: findings and rulings.** F1 (a split haiku pair), R1 (an older incoming `/resume`) and F7 (a drifted incoming command): fix. R2 (D-4319 was not authority to widen Task 3's contract): upheld, with the instruction that if no within-seam fix could satisfy every intent and no-keystroke control, Task 3 stops for one structured ask with a concrete contract. R3 (the `routeapplied` writer enumerations): fix, per resolved set. F2 (pin `t` as a carry; the header's rc 1 wording) and F3 (a half-pair first inside `[born, UP]`): fix. F4: partly overruled (wording and pins: would-stop, carry, would-stop and held, carry, held as a qualified re-announcement). F5 (commit the task reviews 2-4 and the final), F6 (evidence and checklist corrections), F8 (`tmpwhy`), F9 (README holds no `ccd/ccd` anchor; 6241 and 6243 lines) and F10 (five lines for five): fix.
+
+**Evidence item (`fd5146d0b`, `e6790f39a`).** F5, F6, F8, F9 and F10 were corrected in this plan alone: the Task 2, 3 and 4 task reviews and the final review entered committed evidence from the ledger; the owning-set and full-suite boxes were unticked with "Not run as the literal command" notes; the shard evidence was corrected (completed coverage was repeated, 89 files have no worker JSON result, the first-pass red list is twelve files, the load-flake group was split per file, the group-exit record); `ccd-review-335-pins`'s base-red set, README's anchors and line counts, and "five for five" were corrected. Task review (Opus/high, `990c70cbb..fd5146d0b`): spec compliant, quality Approved, no Critical or Important finding, nine Minor ones (a false "adds nothing" provenance claim in four paragraphs; a deleted sourced cause for three timed-out shards; an uncaveated agent-leg group exit; builds with no recorded exit code; a green first attempt not mentioned; overwritten first-attempt logs; wording drift; a missing blank line; an unnoted ticked box). The controller ruled all nine into one fix round (the resumed implementer), `e6790f39a`. Scoped re-review (Opus/high, `510ba3271..e6790f39a`): all nine addressed, and its two departures (shard timings of 259 to 457 s, and the PWA build caveat) confirmed by their sources. Four minors were deferred to the final evidence commit and are fixed in the commit that carries this entry: "could not be seen", the overstatement of what the final review lacked, the PWA build "exits 0" and the "four lines" count.
+
+**Scope sweep (`510ba3271`, `9b16456bf`).** The first commit changed comments, the fixture's `proc()` (it accepts state `t`) and added six pins (`scope-sweep` 80 to 86 passed); the follow-up made it 87. The F2 pins (a traced process, state `t`, on the box and as a tmux server: at `510ba3271` a foreign server, which `9b16456bf` replaced with ccd's own, carries a `box-stat` or `server-stat` row and never a stop) and the F4 pins were green before any sweep edit, because the behaviour was already the approved one and only wording and pins were missing; each was shown non-vacuous by a mutation instead: `[A-Z]` widened to `[A-Za-z]` reds 2 (the box and the server `t` case), and a carry that silences the next announcement reds 2 (would-stop, carry, would-stop and held, carry, held). F3: the new half-pair case (`first` inside `[born, UP]`, `cpu0=none`) reds only under the deleted half-pair line in `_ss_prev_clock`: 2 red, the new case, whose clock was then trusted, and the existing `none cpu0=7` row, which reds by aborting the tick (`none` inside `(( ))` under `set -u` is an unbound variable, exit 1) rather than by a trusted clock. Task review (Opus/high, `fd5146d0b..510ba3271`): spec compliant, quality Approved, no Critical or Important finding, five Minor ones (the F4 pins could not tell a re-announcement caused by the carry from one announced every tick, since with the verdict half of the announce test deleted the old pins stayed green; a comment claiming the old verdict is read back; the server-stat variant modelled a foreign server; the `_ss_stat` header named only two callers; the OUTPUT contract's stop wording was loose). The controller ruled all five into one fix round, `9b16456bf`: a control tick per pin (an unchanged verdict is silent), which reds 2 under the announce-every-tick mutation (the verdict half of the announce test deleted), with which the old pins had stayed green; the comments corrected; the pin moved onto ccd's own traced server. No README edit followed from F4: the sweep section held no first-reach or verbatim-carry sentence to correct. Scoped re-review (Opus/high, `fa3f6f3c9..9b16456bf`): all five addressed; one new Minor, fixed in the commit that carries this entry (the `_ss_stat` header called the parent walk's rc 1 "skip" although the walk ends there), and one out-of-scope residual parked, that the traced foreign-server carry path is unpinned (it fails safe).
+
+**Task 3 contract (`fa3f6f3c9`, `7ac3a9016`).** The within-seam measurement that stopped Task 3: `cmd_route` seeds `routeapplied` from the last settle before it writes, so any field a live `cmd_route` writes is pending by design, and `_route_readback` reads back the class only, so a promoted `/effort` is always typed and a class is typed unless the read-back confirms it; ordering a `/clear` race needs the incoming transcript, a time comparison no skip inside the seam can make. Task 3 therefore stopped for one structured ask with two options: P1, an epoch-merged live promotion (each kind takes the newest acknowledged command of the two transcripts, a tie going to the incoming one, a newer drift logged and never suppressing) with an applied stamp for exactly the fields written (recommended); P2, record the outgoing uuid and promote at the keep only. The answer was P1, "Epoch merge", which `fa3f6f3c9` implements as D-4321 (`ccd-operator-choice` 16 failed first, 123 passed, fourteen mutations red and restored). Task review (Opus/high, `e6790f39a..fa3f6f3c9`): spec compliant, quality Approved, no Critical or Important finding; one warning, the sidecar-freshness keystroke (a promotion's `routeapplied` rewrite moves the read-back's freshness floor, so a class already pending that the pane runs can be typed once instead of read back), outside the approved COSTS block; and five Minor ones (prose saying the promotion never types; two comment overclaims; a keep not byte-identical on a transcript whose timestamps run backwards; a re-wrap of twelve README lines in a neighbouring paragraph; the trailer convention). Rulings: the controller accepted the keystroke as a reported retained cost under the coordinator's R3 ("report any retained cost"), because it re-types only a class already pending before the rotation (the approved control "a field pending before the rotation is still typed"), never a promoted field and never against a newer operator choice, and it is surfaced for the coordinator's acceptance or ruling (the coordinator declined to accept it by status receipt; a structured ask on 2026-10-20 was answered "Accept the cost (Recommended)", see D-4321's Cost); minors 1-4 and D-4321's "only widens which fields" sentence went to one fix round, `7ac3a9016` (125 passed: the keep guard `merged=$out` with its backwards-timestamp pins, and mutation M15 red on both rows); the trailer stands as the plan's own convention. Scoped re-review (Opus/high, `9b16456bf..7ac3a9016`): all five addressed; the residual (the merge's `>=` drops a same-transcript backwards-timestamp drift's log line when incoming lines exist) is real, log-only and not overclaimed. Minors fixed in the commit that carries this entry: D-4321's Why, Evidence and Cost (the "had changed nothing" wording, the 123 and fourteen figures, the residual, the "accepted" wording), this plan's follow-up paragraph naming `e6790f39a` and `9b16456bf`, and the stale `ccd/ccd` operator-choice header that still listed a `/clear` among the choices lost without a line. Not in that commit's fix list and still open from the same deferred list: a loose test comment, three test titles that say "changes nothing", and a drift parenthetical in README outside the consent fence.
+
+**Absorption (`4634e2981`).** Clause 16: one fetch; `origin/HEAD` was `d7a4c9408`, 154 commits past the base `a3cebde1b`; `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exited 1 and named `ccd/ccd` and `server/test/ccd-route-spawn.test.ts`, so one absorption was licensed, after the Task 3 fix round settled. `git merge --no-ff --no-edit origin/HEAD` (parents `7ac3a9016` and `d7a4c9408`) conflicted in three `ccd/ccd` hunks and one test hunk. Resolutions: the generated line 2 took main's side and was restamped; `_resume_env` kept main's whole side (the restart-causes block, the per-row prompt, the optional id) plus the branch's two additions (the pressure-reap key and its header words); the comment above `resenv=` in `_spawn_start` kept main's sentences and call with the branch's pressure-key sentence folded in; in `ccd-route-spawn.test.ts` both new top-level describes were kept, each closed. No auto-merged file was touched, and the same probe exits 0 after the commit. Restamp `ccrc-unmodified`, rc 0; `bash -n` clean on `ccd/ccd`, `ccd/ccd-scope-sweep` and `ccd/ccrc-doctor-checks`; modes 775. `_reg_get` census (the plan's filter): `origin/HEAD` 204 calls on 173 lines, merge base 209 on 178, branch parent `7ac3a9016` 209 on 178, merged tree 204 on 173, and the header's "204 invocations across 173 non-comment lines" agrees, so no sentence moved. Citation tax (S6-R11), base `origin/HEAD`: `byFile['ccd/ccd']` 147/147/147, `total` 202/202/202, other keys moved none, composition entered [] left [], rows 55/55/55 and sites 35/35/35 with nothing entered or left; the citation subset 7 passed; the frozen documents unchanged. Tests (from `server/`, `--maxWorkers=1`): `ccd-route-spawn` 24; `ccd-resume-flag` + `ccd-spawn-split` 68; `ccd-operator-choice` 125; `ccd-sync-uuid` + the two parity files 187; `ccd-route-apply` + `ccd-route-settle` 133; `scope-sweep` 87; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29; `docs-parity` 54; `deviation-refs` 31 after the commit (30 passed and 1 failed before it, "sees MORE than the subject-based scan": an artefact of the uncommitted merge, whose loose scan read the pre-merge head).
+
+**D-4322 (`335a6fc1e`, `66703cb25`, and the O1 follow-up in the commit that carries this entry).** The remedial Task 4 review's Important finding conflicted with the approved envelope strictness, so the controller put one structured ask, before the gates. The coordinator selected neither option, released the ask to the operator and recorded that it authorized no parser widening; the answer, the operator's ruling (fix round 2, review 685 F6: it came from the operator's own surface; the grounds are in D-4322's Ruling line), was to widen now as D-4322: three shapes as known non-events (a single-task event envelope with no status, whole trailing `<system-reminder>` blocks, a known non-killed status read before the task-id count), red-first neutral fixtures and a mutation each, four minors alongside, every other shape unmeasured and the kill rule unchanged. The controller ruled that D-4322 proceeds as the operator's ruling within exactly the chosen option's text, and that its record says so. Task review (Opus/high, `4634e2981..335a6fc1e`, judged against the chosen option's text): spec mostly compliant, nothing Extra; quality Needs fixes. Important 1: the known-non-event arms counted only regex-readable status and task-id values, so an unreadable `<status ...>` or an extra unreadable `<task-id>` read as a measured zero (four fixture shapes read `partial` at the base and `measured` at `335a6fc1e`), contradicting D-4322's own Cost. Minor: "every other shape is unmeasured" was wrong for a single-task `killed` envelope with a non-pressure summary; `\s*` allowed no whitespace between reminder blocks; pathological backtracking on unterminated reminder pairs (a pre-existing class); the gates line gave the pre-edit run; a misplaced test comment; a known-status envelope with no task id unpinned. Rulings: Important 1 into the fix round by counting element openers in every arm, the pre-existing single-id `stopped` arm included, since tightening only toward unmeasured is the fail-safe direction the coordinator asked for ("preserve partial/unmeasured") and needs no new authority; the other minors with it, the backtracking parked. Fix round `66703cb25` (51 passed, 7 red first; the opener-count mutation reds 6). Scoped re-review (Opus/high): all six addressed, the kill rule unchanged, the fences held; new Minor N1 (the "every other shape is unmeasured" wording still overclaimed: a `killed` envelope with one readable non-pressure summary and one unreadable summary read measured) and N2 (the Cost overstated its conditions and had dropped the residual that a future kill in a ruled non-event shape reads as a non-event); and, outside its scope, O1 (the killed arm counted no `<summary>` openers, the same failure as Important 1), O2 and O3 (both recorded in D-4322's Cost). Rulings: O1 closed under the same principle (count openers, tighten only toward unmeasured), carried with N1 and N2 into the commit that carries this entry; O2 and O3 parked for the coordinator. That commit: the killed arm counts `<summary\b` openers (two controls red, 2 of 53, green 53, a mutation red 2), the stage-6 comment and the spec's one consented sentence say exactly what is unmeasured, and D-4322's Cost is corrected.
+
+**Final review (Opus/high over `d7a4c9408..4634e2981`, with the fix-round and merge-resolution views).** Verdict: ready with fixes. Important 1: the README-size ratchet in `pools-prose.test.ts` is red at `4634e2981` (`CLAUDE.md` states 6574 lines against README's 6709), green at `d7a4c9408` and, per the reviewer's measurement, green on the pull request's merge ref with current main. Ruling: no second absorption (clause 16 allows at most one absorption from its first two triggers before landing, and the second does not hold, the merge ref measuring green) and no `CLAUDE.md` edit (main had already moved that line, so an edit here would conflict); reported as a branch-tip red that this branch's README lines cause over main's then-stale figure, and that clears when landing merges main. Important 2: fix round 1's own evidence was uncommitted and the new-tip gates were unrun, and the gates need `npm ci` in `server/`, `agent/`, `ui/` and `pwa/` first (main added `yaml` and `playwright-core`; `typecheck-tests` was red only for those missing modules). Important 3: Task 4's quality verdict was never evidenced; ruled: mark the historical verdict UNPROVEN in committed evidence and run a remedial Task 4 review at the current tip, dated 2026-10-19 and remedial (F5's own rule for an unrecoverable verdict), recorded under Task 4's review paragraph above. Eight Minor findings and the triage of the deferred minors made up the rest of the fix list (the ledger records their count, not their text). The commit that carries this entry carries the fixes above.
+
+**F9 re-measure.** At the tree that carries this entry, `wc -l README.md` reads 6710 and `grep -cE 'ccd/ccd:[0-9]' README.md` reads 0 (README was 6709 lines at `4634e2981` and gained one line in the D-4322 commit).
+
+**Checks run for the commit that carries this entry** (from `server/`, foreground, `--maxWorkers=1`, one process at a time, fixture HOMEs only; they are that commit's own checks, not the final gates). `measure-continuity-pressure-kills` 53 passed (red first: 2 failed, 51 passed); `measure-continuity-stage6` 27 passed; `docs-parity` 54 passed; `deviation-refs` 31 passed; `scope-sweep` 87 passed; `ownership` + `ccd-reg-get-census` 17 passed; the session-hook citation subset 7 passed (702 skipped); `python3 -I` `ast.parse` of the instrument exits 0. The two source-comment edits (the operator-choice header in `ccd/ccd`, now saying a pane-observed `/clear` promotes while a background-follow or continuation-chain uuid write does not; the `_ss_stat` header in `ccd/ccd-scope-sweep`, now saying the parent walk ends at a traced process) are line-neutral (`ccd/ccd` 40746 lines and `ccd/ccd-scope-sweep` 433 lines before and after): `ccd/ccd` restamped with the plan's node command, `node shared/mark.mjs --check ccd/ccd` `ccrc-unmodified` rc 0, `bash -n` clean on both files, modes 775 before and after, the `_reg_get` census 204 calls on 173 lines before and after. Citation tax (S6-R11), the instrument as the plan says (extracted to private scratch, `--maxWorkers=1` added), base `4634e2981`, on the edited tree: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` 202/202/202; other keys moved: none; composition entered [] left []; rows 55/55/55 and sites 35/35/35, nothing entered or left; every file the instrument touched restored byte for byte. The frozen documents are unchanged against `origin/main`.
+
+#### Execution evidence (fix round 1: D-4322)
+
+Measured on the dispatched workspace branch at base `4634e2981`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only: the instrument was never run against the live HOME, journal or transcripts, and no real transcript was read. One commit carries the contract, its tests, the prose and this evidence.
+
+**Red, before the instrument edit.** `measure-continuity-pressure-kills.test.ts` (13 existing cases, 28 added) against the unedited instrument: 10 failed, 31 passed. Failing: shape (a) (`reading: 'partial'`, `unmeasured_notifications: 3` for its three rows), shape (b) (3), shape (c) (2), the verified killed envelope with trailing reminders (`killed_background_tasks: 0`, unmeasured 1 instead of one kill), the object-stamp case and the two-notification-texts case (the instrument raised `KeyError: slice(None, 19, None)` under Python 3.12.3: slicing a dict by `[:19]` is now a hashable-key lookup, not a `TypeError`, which `iso_epoch` catches), the number, array and boolean stamp cases (`malformed_rows: 0` and unmeasured 1: these never crashed, `iso_epoch` catches their `TypeError`), and the deep-nesting case (`RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string`). The other 31 passed on the unedited scanner, as controls and pins of existing behaviour do: the batched-`killed` control, seven unmeasured controls, four trailing-text controls, the window-before-envelope pin, three summary-count pins and the torn-read pin and its whole-read control; the table below shows each of them red under its mutation.
+
+**Edit.** In `s6_pressure_kills` only, plus three comments and two regexes: `S6_NOTIFICATION` takes `(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*` after the closing tag (still `fullmatch`); `S6_EVENT_TAGS` (`</?event>`) makes the event arm "the body's only event tags are one `<event>` then one `</event>`"; the status is read before the id count, a known non-killed status ends the row, and only the killed arm requires one id; `RecursionError` joins the malformed-JSON handler; a stamp that is neither `None` nor a string is one malformed row (the row's remaining texts are not read). The window check still runs first. README: the one sentence beginning "Discovery can miss" (the paragraph gains one line). Spec: one sentence in the section 9 wave-4b annotation, after the `…outside its pattern.` sentence; the spec's later lines move down three lines and none is touched.
+
+**Mid-file read failure (how the pin is built, no new machinery).** A fixture HOME cannot make a real file fail after some lines (EISDIR and a permission failure both fail at open, and the loop reads bytes, so it has no decode failure). The instrument opens a transcript with the builtin `open` looked up in its own module, so the case runs a small `python3 -I -c` harness that imports the module, shadows that one name with a reader that yields the first lines of the real fixture file and then raises `OSError(EIO)`, and calls `s6_pressure_kills` on a fixture HOME with a second, healthy transcript beside it. Expected: the torn file's kills admitted none (the other file's one kill counts), `unreadable_transcripts: 1`, `partial`. The whole-read control runs the same harness without tearing and reads every row.
+
+**Green.** The file 41 passed.
+
+**Mutations: mutation -> observed red, each restored byte for byte (`cmp` against the green instrument) and the file rerun 41 passed.**
+
+| Mutation | Observed red |
+|---|---|
+| Drop the event-envelope arm | 2: shape (a) and shape (b) |
+| Stop stripping trailing system-reminder blocks | 2: shape (b), the killed-with-reminders control |
+| Check the task-id count before the status again | 1: shape (c) |
+| Accept any trailing text after the closing tag | 4: the four not-a-reminder controls |
+| Let a batched `killed` count as a kill | 1: the batched-killed control |
+| Remove the malformed-row handling of the two crash shapes | 6: the object, number, array and boolean stamp cases, the two-texts case and the deep-nesting case; alone, the `RecursionError` handler is the deep-nesting case only (1) and the stamp rule is the other 5 |
+| Envelope check before the window check | 1: the out-of-window malformed pin |
+| Take the first summary of a two-summary killed envelope | 2: the two-summary pins; with the whole summary-count guard removed, 3 (the zero-summary case raises `IndexError` too) |
+| Admit a file's hits before its read completes | 1: the mid-file failure pin |
+| A row's stamp counted per text, not per row | 1: the two-texts case |
+| The event arm accepts any `<event>` text, not exactly one element | 2: the two-events control and the never-closed-event control |
+
+**Gates.** `measure-continuity-pressure-kills` 41 passed; `measure-continuity-stage6` 27 passed; `measure-continuity` + `-stage4` + `-stage7` 21 passed; `topology-clean` + `deviation-refs` 86 passed (55 + 31) and `single-definition` 756 passed, 842 in all, on the first run before this entry was written; the rerun of the three together after the plan edit passed `topology-clean` and `deviation-refs` but timed out one `single-definition` case (`the wire vocabulary and the node-id grammar are declared once`, 20000 ms, under a box load average of 80; 841 passed, 1 failed), and `single-definition` alone then passed 756 of 756 (`deviation-refs` against the local `origin/main` ref, not fetched; the follow-up below re-measures all three on the final tree); the session-hook citation subset (`CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS FACTS|whole corpus`) 7 passed; `docs-parity` + `readme-holds` 71 passed; `typecheck-tests` 12 passed. `python3 -I` `ast.parse` of the instrument exits 0 and `git diff --check` exits 0. **Citation tax (S6-R11):** this change edits no `ccd/ccd` line and README carries no `ccd/ccd:<line>` anchor (`grep -cE 'ccd/ccd:[0-9]' README.md` is 0), so no frozen number could move and the citation subset above is the measure; the extracted instrument was not re-run.
+
+**Follow-up to the task review (fix round 1, D-4322).** Measured at base `335a6fc1e`, same rules. (1) The Important finding: a status or task-id element the scanner could not read was not counted, so four shapes read as a measured zero (one id, one event element and `<status kind="bg">killed</status>`; the same with `<status>killed <b></status>` under the verified summary; a batched `stopped` envelope and a second, unreadable status; an event element and a second `<task-id>e.4</task-id>`). Every arm now counts the element's opener (`<status\b`, `<task-id\b`) beside its readable value: the event arm needs no status opener and exactly one task-id opener with a readable value, the known-non-killed arm exactly one status opener (readable, known non-killed), the killed arm exactly one of each, readable; the event arm's tags also count an attribute (`</?event\b[^<>]*>?`, compared with exactly `<event>` then `</event>`). Eight controls are added (the four shapes above, a single-task `stopped` envelope with a second unreadable status, a single-task `killed` envelope with a second unreadable task id, one plain event element with an unclosed attribute-bearing event opener, and a `killed` status carrying an attribute). Red before the edit: 7 failed, 44 passed (51): the status-attribute event case, the markup-in-value killed case, the batched `stopped` and the single-task `stopped` cases with a second unreadable status, the second-unreadable-task-id event case, the attribute-opener event case (each `reading: "measured"`, `unmeasured_notifications: 0` instead of `partial` and 1) and the single-task `killed` envelope with a second unreadable task id (`killed_background_tasks: 2`, `measured`); the killed-status-with-an-attribute control already read unmeasured. Green after: 51 passed. (2) The stage-6 comment and the spec sentence no longer say "every other shape is unmeasured" without setting apart the kill rule's own non-pressure case, a single-task `killed` envelope whose one summary is not the pressure reason (read as not this event, pinned since Task 4). (3) "optional whitespace" between trailing reminder blocks, in the comment and in this entry (the code is unchanged). (4) The gates line above states the post-edit measurement. (5) The test's "Batched envelope" comment sits above `batched`. (6) Two pins, a `stopped` and a `completed` envelope with no task id at all, read as known non-events (as ruled; they passed on the base scanner, as pins of existing behaviour do, and the mutation below reds them). Parked, not done: the pathological backtracking on unterminated reminder pairs (a pre-existing regex class). The README is unchanged.
+
+**Mutations (fix round 1 follow-up): each observed red, restored byte for byte (`cmp` against the green instrument), the file rerun 51 passed. The nine rows of the first table were re-run on the final scanner and read the same, with the new rows below.**
+
+| Mutation | Observed red |
+|---|---|
+| Drop the opener count (readable values only) | 6: the status-attribute event case, the markup-in-value killed case, the batched and single-task `stopped` cases with a second unreadable status, the second-unreadable-task-id event case, the single-task `killed` case with a second unreadable task id |
+| Drop only the status opener count | 4: the first four of those |
+| Drop only the task-id opener count | 2: the second-unreadable-task-id event case, the single-task `killed` case with a second unreadable task id |
+| Event tags without attribute openers (`</?event>`) | 1: the plain event element with an unclosed attribute-bearing opener |
+| A non-killed status needs a task id | 2: the `stopped` and `completed` no-task-id pins |
+
+Re-run table notes: the "check the task-id count before the status" mutation now reds shape (c) and the two no-task-id pins (3); "let a batched `killed` count as a kill" now reds the batched-`killed` control and the second-unreadable-task-id killed case (2); every other row reads as in the first table.
+
+**Gates (final tree).** `measure-continuity-pressure-kills` 51 passed; `measure-continuity-stage6` 27 passed; `measure-continuity` + `-stage4` + `-stage7` 21 passed; `topology-clean` + `deviation-refs` 86 passed; `single-definition` 756 passed (run alone, one process at a time, under a box load average of about 34); `python3 -I` `ast.parse` of the instrument exits 0; `git diff --check` exits 0; README unchanged.
+
+**Follow-up from the final fix dispatch (O1, N1, N2).** Measured at base `66703cb25`, same rules; the reviews that led here are under "Execution evidence (fix round 1)". (1) O1: the killed arm counts `<summary\b` openers beside the readable summary values, so a killed envelope is a pressure kill only with exactly one summary opener whose value is readable and is the verified reason, and is read as not this event only with exactly one summary opener, readable and not that reason; one readable non-pressure summary plus a second summary the scanner cannot read (the pressure text with raw markup inside it, in either order) is unmeasured, the reading `partial`, never a measured zero. Two controls were added to the unmeasured table. Red against `66703cb25`: 2 failed, 51 passed (53), each reading `measured` with `unmeasured_notifications: 0` instead of `partial` and 1. Green after: 53 passed. Mutation, the summary-opener count dropped (readable values only): 2 red, the two new controls (51 passed); restored byte for byte (`cmp` against the green instrument) and the file rerun 53 passed. The existing kill controls stayed green throughout. (2) N1: the stage-6 comment and the spec's one consented sentence now say that a single-task `killed` envelope with exactly one summary element, readable and not the pressure reason, reads as not this event, and that every other shape is unmeasured; the spec edit stays inside that sentence and is line-neutral. (3) N2: D-4322's Cost drops the two overstated conditions ("only when every status and task-id element is readable", "one event element holding any text"), restores the residual that a future kill delivered in a ruled non-event shape would read as a non-event, and records O2 and O3 as known, pre-existing and parked; D-4322's Ruling line now names the operator's ruling through the structured ask, the coordinator having selected neither option. Gates: `measure-continuity-pressure-kills` 53 passed; `measure-continuity-stage6` 27 passed; `python3 -I` `ast.parse` of the instrument exits 0; README unchanged. Fix round 2 notes (review 685): F6, D-4322's Ruling line now also states the grounds of that attribution (the coordinator released the ask, a release is terminal to the parent, so the answer came from the operator's own surface; the worker relies on the coordinator's record); R3, `5a71ccf91`, the commit that carries this follow-up, is typed `docs` but changes the scanner: the killed arm's summary-opener count (O1 above).
 
 ### Task 5: Coordinator acceptance, updater observation and the post-variable week
 
@@ -1923,7 +2282,7 @@ On `not-triggered`, retain the key and record the qualified reading. Keep an own
 
 These belong to the worker after Tasks 1-4, before its final PR and wave-done. They are planned gates, not results from this documentation branch.
 
-- [ ] Re-measure current main and the owned claims before the final gate. Absorb main only for a conflict, a branch-red/main-passes failure, or a NAMED landing condition under clause 16, not merely because main advanced. A required merge is ordinary `git merge`, never a rebase of dispatched work; resolve generated stamps by regeneration and pay the census/citation tax again.
+- [x] Re-measure current main and the owned claims before the final gate. Absorb main only for a conflict, a branch-red/main-passes failure, or a NAMED landing condition under clause 16, not merely because main advanced. A required merge is ordinary `git merge`, never a rebase of dispatched work; resolve generated stamps by regeneration and pay the census/citation tax again.
 - [ ] Run the complete owning set from `server/`, foreground with timeout at least 600000 ms and one process at a time:
 
 ```bash
@@ -1931,6 +2290,7 @@ These belong to the worker after Tasks 1-4, before its final PR and wave-done. T
 ./node_modules/.bin/vitest run test/ccd-limit-banner.test.ts test/ccd-auto-compact.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-resume-flag.test.ts test/ccd-spawn-split.test.ts test/ccd-route-spawn.test.ts test/ccd-route-degrade.test.ts test/ccd-lifecycle-purge.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts test/ccd-swap.test.ts test/ccd-archive.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccrc-codex-launcher.test.ts test/wrapper-generate.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/measure-continuity.test.ts test/measure-continuity-stage4.test.ts test/measure-continuity-stage7.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ownership.test.ts test/ccd-reg-get-census.test.ts test/ccd-die-containment.test.ts test/single-definition.test.ts test/ccrc-doctor-graphify.test.ts --maxWorkers=1
@@ -1938,16 +2298,289 @@ These belong to the worker after Tasks 1-4, before its final PR and wave-done. T
 npm run build
 ```
 
+  Not run as the literal command at 5033cfb55: none of the nine grouped commands above was run as such. Their 32 files ran inside the bounded serial full pass (each part under `timeout`, its exit recorded in `summary.txt`), with `ccrc-doctor` in five describe partitions, and the server `npm run build` ran without error output (its exit code is not recorded in the log); see the Owning set entry under "Execution evidence (final branch and handoff gates)". The literal grouped commands remain required.
+
+
+  Run at `5a71ccf91` (fix round 1): groups 2-9 as the literal commands above, group 9 three times (cut, then timed out at load 149-166, then green alone at load about 30); group 1 as its three files plus `ccrc-doctor` in six top-level-describe partitions, the doctor partition fix round 1 permits, with full distinct-name coverage; and the server `npm run build`. Results under "Execution evidence (fix round 1: final gates at `5a71ccf91`)".
+
+  Run at `fea5bc246` (fix round 2, the first land-sync's merged tree): groups 2-9 as the literal commands above; group 1 as its three files plus `ccrc-doctor` in six top-level-describe partitions re-derived on the merged file; group 1's three files and group 7 again at `3a949785b`. Group 4 exited 1 on a leaked fixture process and group 8 on a 20 s timeout, both main-red on this box; group 9 green after `npm ci`. Details under "Execution evidence (fix round 2)".
+
+  Fix round 3, at `90c37de9b` (land-sync 2's merged tree) and at this round's tip after land-sync 3: not run as the literal grouped commands. The files main's merges and this round's edits touch ran one at a time, as the coordinator's fix rounds direct. Details under "Execution evidence (fix round 3)".
+
 - [ ] Run the complete server suite ONCE, foreground: `./node_modules/.bin/vitest run --maxWorkers=1`. Report actual red files and distinguish reproduced base-red, load flakes and new regressions with isolated reruns only when evidence warrants it; never call an unrun file green. A timed-out process is still owned until its exit is proved; no overlapping retry and no pattern kill.
-- [ ] Run the package-local agent and PWA suites, foreground, sequentially; `agent/node_modules/.bin/vitest run --maxWorkers=1` from `agent/` and `pwa/node_modules/.bin/vitest run --maxWorkers=1` from `pwa/`, each actually invoked as `./node_modules/.bin/vitest` in that package. Run PWA's existing `npm run build`. No root runner or bare npx. If dependencies are unavailable, report the unrun leg rather than resolving a global runner.
-- [ ] Parse all edited shells with `bash -n`, Python with `python3 -I`/`ast.parse`, regenerate/check `ccd/ccd`, compare executable modes, repair live README anchors and measure the frozen citation composition. Prove the two frozen documents unchanged. Run `git diff --check`.
-- [ ] Scan EVERY changed file and every introduced commit for private material. Stage a new file before the tracked-corpus privacy guard so it is not invisible. Measure the real guard exit code separately before committing or pushing. Preserve issue #317's shipped copy/source behavior; no historical count is a substitute for today's measured census.
-- [ ] Include each task's red-first result, restored green, independent task review and actual mutation table in committed evidence. Do not invent completed ticks, sample counts, helper signatures or a live notification fixture. Explain every used issued deviation; leave unused numbers unused.
+
+  Not run as the literal command at 5033cfb55: the suite ran as 40 manifest shards and their splits, bounded serial foreground parts each under `timeout` (exit codes in `summary.txt`), not as one `vitest run`; 89 of the 686 manifest files have no worker JSON result, and the first complete pass was RED in 12 files, so no single green literal run exists at this tip. See the Complete server suite entry under "Execution evidence (final branch and handoff gates)".
+
+  Not run as the literal command at `5a71ccf91` either: the suite ran as bounded foreground serial parts (the owning groups, describe partitions of four large files and 39 packed parts), each under `timeout` with its exit and an empty-group proof recorded, covering all 805 manifest files; one describe of one file could not complete inside any foreground bound and is reported unrun in full. The first complete pass at this tip is RED. Results under "Execution evidence (fix round 1: final gates at `5a71ccf91`)".
+
+  Fix round 2: not run; the fix round did not require a full local pass (review 685's full pass stands for the code the round leaves unchanged). Its owning gates are under "Execution evidence (fix round 2)".
+
+- [x] Run the package-local agent and PWA suites, foreground, sequentially; `agent/node_modules/.bin/vitest run --maxWorkers=1` from `agent/` and `pwa/node_modules/.bin/vitest run --maxWorkers=1` from `pwa/`, each actually invoked as `./node_modules/.bin/vitest` in that package. Run PWA's existing `npm run build`. No root runner or bare npx. If dependencies are unavailable, report the unrun leg rather than resolving a global runner.
+- [x] Parse all edited shells with `bash -n`, Python with `python3 -I`/`ast.parse`, regenerate/check `ccd/ccd`, compare executable modes, repair live README anchors and measure the frozen citation composition. Prove the two frozen documents unchanged. Run `git diff --check`.
+- [x] Scan EVERY changed file and every introduced commit for private material. Stage a new file before the tracked-corpus privacy guard so it is not invisible. Measure the real guard exit code separately before committing or pushing. Preserve issue #317's shipped copy/source behavior; no historical count is a substitute for today's measured census.
+- [x] Include each task's red-first result, restored green, independent task review and actual mutation table in committed evidence. Do not invent completed ticks, sample counts, helper signatures or a live notification fixture. Explain every used issued deviation; leave unused numbers unused.
+
+  Note: this item was not yet true at `990c70cbb`, which carried the per-task review only for Task 1 (the reviews of Tasks 2-4 were not in committed evidence, and of the final review only its findings were, F1-F3 under "Execution evidence (final-review fixes)" and in the D-4319 and D-4320 entries; its reviewer, verdict, re-review and parked residuals were not); it became true at `fd5146d0b` (fix round 1), which committed them from the controller's ledger.
 - [ ] Open the worker PR with durable GitHub links to the spec/plan and explicit verification gaps, including protected updater observation and next-start exposure. End its description with the mandated attribution. List mail before sending one wave-done at the exact final tip; report Tasks 1-4 done and Task 5 pending/coordinator-owned. Include the unchanged fingerprint, `suite:` and `failure:` signals and evidence paths. Do not wait indefinitely for CI instead of handing off: the coordinator reads its actual checks.
+
+#### Execution evidence (final branch and handoff gates)
+
+Measured at tip `5033cfb55` (Tasks 1-4 plus the final-review fix commit), base `a3cebde1b`; when this entry was written at `990c70cbb`, it was the only later commit (fix round 1 has since added commits above it, recorded in its own evidence entries).
+
+- **Main and claims.** One `git fetch origin` before handoff: `origin/HEAD` had moved to `0b3ff2f62` (five merges). `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 0, so no conflict; no required check is known red; no landing mail names this PR. No clause-16 trigger holds, so main was NOT absorbed. Claims re-read; the wave's own claims stayed live, and the co-edit licences in the brief covered the two files other runs hold.
+- **Owning set.** The nine grouped commands above were NOT run as such at `5033cfb55`; their files ran as a bounded serial substitution inside the full pass below. All 32 files the commands name are in the 686-file manifest and ran at this tip: 31 of them have a worker JSON report, and `wrapper-generate` (shard 4, one of the log-only shards described below) is recorded by its shard log alone (`Test Files  18 passed (18)`). `ccrc-doctor` ran in five describe partitions (`cd-g1` to `cd-g5`). One owning file is in the first-pass red list below: `ccd-route-settle`, one test in the timed-out first attempt of shard 35, green (16 of 16) when the split re-run ran the whole file (`s35c`). No owning group has been run literally at this tip, and that stays owed. `npm run build` (server) is recorded as OK in the controller's ledger ("server+pwa build ok"); `server-build.log` holds only four lines, two of them blank and the others `> build` and `> tsc`, and no exit code or error output, so the exit-0 claim rests on the ledger and on the absence of errors, not on a recorded exit code. Review 630 later ran the nine groups at `990c70cb`, a plan-only commit above this tip, as separate provenance and not worker evidence: groups 2-9 as their literal commands, and group 1 as three files plus `ccrc-doctor` in five partitions (all green, 947 of 962 `ccrc-doctor` tests passed by name, the other 15 skipped-only).
+- **Complete server suite, once.** It was run as a bounded serial foreground pass, not as the single literal command (so its step above is unticked). The 600000 ms tool bound cannot hold a 686-file run at `--maxWorkers=1`, and one file alone ran 766845 ms. Method:
+  - The collected manifest is 686 files, partitioned in vitest's own `--shard` order (sha1 of the root-relative path, the same range arithmetic), 40 shards of 18/17 files.
+  - Shards 1-5 ran as `--shard=i/40`. Their mapping was reconstructed afterwards and cross-checked: the sizes match, and shard 1 contains the one file its log named. Every later shard ran its explicit file list.
+  - Shards 1-5 and the first shard-6 attempt left logs only (`shard-<i>-of-40.log`, no JSON report). Measured from `manifest.txt`, `mapping.json` and the `part-*.json` reports: `mapping.json` lists 90 files in shards 1-5, and the only JSON that names any of them is the isolated `boot` re-run, so 89 of the 686 manifest files have no worker JSON result; their only worker record is their shard log's file and test counts. The other 597 files are named by a JSON report. All 18 files of the first shard-6 attempt were covered again by JSON (`s6a` and the `ccrc-update` partitions), so none of the 89 comes from shard 6.
+  - Each part ran under `timeout` inside its own process group, and `summary.txt` records every part's exit code and a `group-exited` flag; the flag reads `yes` on every `PART` line except shards 7 and 11 (see the leaked-`sleep` entry below; the `SHARD` lines of shards 1-6 carry none).
+  - Timed-out attempts are explicit in `summary.txt` (`rc=124`, or `rc=137` once, each marked `TIMED-OUT`; shard 6's first attempt is marked `BUDGET-CUT`, `rc=124`), and no timed-out attempt is green. Completed coverage WAS repeated: shards 13, 21 and 25 were cut short by a batch budget (the cause stated in this evidence as first committed; `summary.txt` itself marks each first attempt only `rc=124 TIMED-OUT`, and the controller's ledger calls the first shard-13 attempt the budget-cut run) and were then re-run WHOLE, and the repeat completed. The timings fit that cause without proving it: the first attempts ran 319, 216 and 214 s and the completing repeats 457, 302 and 259 s, which a shortened batch bound would produce; shard 27 had a second whole attempt that ended `rc=137` and shard 34 a second whole attempt that timed out again (`rc=124`), each before being split. Timed out, then split: shards 6, 22, 27, 34, 35 and 37, and the sub-parts `s22d` (split into `s22d1` and `ccrc-install` alone), `s34a` (split into `s34a1` and `ccd-tick-diet-equivalence` alone), `td-E5` and `td-E7` (both split by locale).
+  - First-attempt logs were overwritten for the five shards that were repeated whole. `part-s13.log`, `part-s21.log`, `part-s25.log`, `part-s27.log` and `part-s34.log` hold only the later attempt (in `part-s13.log` the `clipswhy` failure is the 5026 ms run, not the 6662 ms one; each file's last-write time falls inside the later attempt's window in `summary.txt`). The first attempts of those five shards therefore survive only as their `summary.txt` lines, and those carry a failure line only for shard 13 (`clipswhy`, 6662 ms). The twelve-file red list rests on `summary.txt` for those first attempts, so a failure that only a first attempt reached could be seen only if `summary.txt` copied it; every other timed-out attempt's own log survives and was read.
+  - Three files exceeded a single bound on their own and ran in top-level-describe partitions: `ccrc-update`, `ccrc-install` and `ccrc-doctor`. `ccd-tick-diet-equivalence` ran in describe and locale partitions. The JSON reports show every non-macOS test in each partitioned file ran (macOS-gated cases skip on Linux in every run). Counts are taken by full test name across the partitions' JSON, never by summing partitions, whose patterns overlap:
+    - `ccrc-doctor`: 962 tests, 947 distinct passed, 15 skipped-only (macOS or no-linger-platform cases). The five partitions' passed counts sum to 960 only because 13 tests passed in two of them; that sum is arithmetic over overlaps and proves nothing, and the coverage claim rests on the by-name count.
+    - `ccrc-update`: 514 tests, 502 distinct passed, 12 skipped-only (macOS, launchd and Darwin cases).
+    - `ccrc-install`: 319 tests, 299 distinct passed (counting the isolated single-case re-run of the one case `ci-g1` failed), 20 skipped-only (launchd and macOS cases).
+    - `ccd-tick-diet-equivalence`: 69 of 69 passed at least once; its E5-UTF-8 and E7-UTF-8 partitions each still ended as a file-level failure (a hook timeout, below).
+  - Leaked test-fixture `sleep` processes (shards 7 and 11, and the agent leg) were killed by exact PID; no pattern kill was used. For shards 7 and 11, `summary.txt` records `group-exited=no`, followed by a note that the kill came after a process-group re-check and ending "group then empty"; that note is the only record that the group was then empty, with no independent proof of it. The agent leg's record is only two `reaped leaked fixture sleep ... in agent pgid` lines in `summary.txt`: no `group-exited` flag and no "group then empty" note, so nothing records that its group was empty afterwards.
+  - An earlier background launch of the whole suite was a departure from the foreground rule. A session restart killed it partway through. It recorded `ccrc-update` 514 tests with 1 failed (`_ver_kept: 'a clean version, not pointed at'`, 47261 ms); that test passed in the partitioned run.
+  - Result: all 686 files covered, 89 of them (shards 1-5) by shard logs only. The FIRST complete pass was RED in 12 files: `boot`, `session-hook`, `ccd-review-335-pins`, `ccrc-install`, `tmp-sweep`, `ccd-tick-diet-equivalence`, `update-inventory`, `ccd-route-settle`, `update-catalogue`, `ci-trace-run`, `history-lib` and `update-store-nodes`. The box's load average was roughly 27-94 on 16 cores throughout. `ci-trace-run` is red only in shard 35's split re-run `s35c`: it passed (15 tests, 52375 ms) in shard 35's timed-out first attempt (`part-s35.log`).
+  - Two of those twelve were missing from the red list first written here. Shard 35's timed-out first attempt (`rc=124`, no JSON) failed `ccd-route-settle.test.ts` "a record with no effort field at all (only class): SPAWN_EFFORT, as today" (55518 ms) and `update-catalogue.test.ts` "a throw, then a healthy read that finds a move-away whose tag check FAILS …" (55938 ms). The split re-run ran both whole files green (`s35c`: `ccd-route-settle` 16 of 16; `s35a`: `update-catalogue` 114 of 114), so neither reproduced, and neither was re-run in isolation as a single case.
+  - Reproduced in isolation AND failing identically on a clean extract of the base tree `a3cebde1b`, so base-red on this box and not caused by this wave:
+    - `boot` (a hung ccd does not delay listen)
+    - `ccd-review-335-pins`: in this worker's own pass only `clipswhy` failed. `part-s13.json`, the isolated re-run and the base extract each show `clipswhy` red and `tmpwhy` green (4 of 5 passed). Review 630 later measured BOTH `clipswhy` and `tmpwhy` failing, in isolation, at the base and at the tip (2 of 5 failed each) and in its own full pass at the tip, so this file's base-red set is two cases, not one; the worker's pass did not show `tmpwhy` red.
+    - `tmp-sweep` (FAILS CLOSED with claude running)
+    - `update-store-nodes` (heir guard `isHalting`)
+  - Green when re-run in isolation, read by the worker as load flakes. Four of the five re-runs were a single-case `-t` re-run of the failed case, not a whole-file re-run, so only that one case is shown green; the fifth was a whole-file re-run:
+    - `ci-trace-run` (SKIPS_UNDER_TRACE, 20679 ms, in the split re-run `s35c`; the file had passed, 15 tests in 52375 ms, in shard 35's timed-out first attempt): re-run as the WHOLE file, 15 of 15 passed (`part-iso-ci-trace-run.json`).
+    - `session-hook` (the ordinary publishing run's fork count): single case, 1 passed and 515 skipped.
+    - `history-lib` (window match beyond the margin): single case, 1 passed and 1012 skipped.
+    - `update-inventory` (symlinked build.json, 33331 ms): single case, 1 passed and 89 skipped.
+    - `ccrc-install` (repairs a changed mode, 43173 ms): single case, 1 passed and 318 skipped.
+  - `ccd-tick-diet-equivalence` is NOT in that group. Its E5-UTF-8, E7-C and E7-UTF-8 partitions each passed all 6 of their tests but ended in a 20000 ms hook timeout (a file-level failure in `td-E5U`, `td-E7C`, `td-E7U`). The worker re-ran only the E7-C partition, green (6 passed, `iso-td-E7C`). The E5-UTF-8 and E7-UTF-8 partitions were NOT re-run, so their hook timeouts stand as first-pass reds with no worker green, and nothing here is worker green or load-flake proof for them. Review 630 later ran E5 and E7 green in both locales at `990c70cb` (`-t E5` and `-t E7`, 12 passed each, and 6 each in its full-pass partitions with no hook timeout): separate provenance, not the worker's.
+- **Agent and PWA.**
+  - `agent`: 26 files, 494 tests, green.
+  - `pwa`: 168 files, 4990 tests, green.
+  - PWA `npm run build` is recorded OK in the controller's ledger ("server+pwa build ok"); `pwa-build.log` shows `✓ built in 2.44s` and ends at the generated service-worker files but, like `server-build.log`, holds no exit code, so no exit code is recorded for it.
+  - Each ran foreground and serially (`agent.log`, `pwa.log`, a `.pgid` file per leg). Nothing in `summary.txt` or the logs records either leg's process group as empty afterwards; for the agent leg the record is only the two `reaped leaked fixture sleep` lines described above.
+- **Shells, Python, generated file, modes, docs.**
+  - `bash -n` passes on `ccd/ccd`, `ccd/ccd-scope-sweep` and `ccd/ccrc-doctor-checks`.
+  - `python3 -I` `ast.parse` passes on `deploy/measure-continuity.py`.
+  - `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified`, rc 0.
+  - Modes are unchanged at 775.
+  - The frozen two documents show no diff against `origin/main`.
+  - `git diff --check` is clean.
+  - Citation and census composition was re-measured in every task and in the fix commit; it did not move (147/202, 55/35).
+- **Privacy.** Every added line of the branch diff and every commit message was scanned for private hosts, paths, accounts, lanes, other projects, tracker links and people. The only hit was a false positive, a case-insensitive substring inside "claiming". `topology-clean` passes in the full pass, and again after this evidence commit.
+- **Task evidence and deviations.** Each task's red-first result, restored green and mutation table are in its own Execution evidence section above. Task 1's independent review is recorded in its own entry. The task reviews of Tasks 2-4 and the final review are recorded in their entries' "Task review" and "Final review" paragraphs, which carry the controller ledger's entries and were committed in fix round 1 (not in the original task commits); the reviewers' full returned texts were not saved as files. Used deviations are D-4316 through D-4323, each defined below (this entry first counted D-4316 through D-4320; D-4321 and D-4322 were defined in fix round 1, and D-4323 in fix round 3). 4324 and 4325 stay unused.
+
+
+#### Execution evidence (fix round 1: final gates at `5a71ccf91`)
+
+Measured at the code tip `5a71ccf91` (this evidence commit changes only this plan) from 2026-10-19 21:54Z to 2026-10-20 07:16Z. Classification base: the absorbed main `d7a4c9408`. `npm ci` ran first in `server/`, `agent/`, `ui/` and `pwa/`, because main added dependencies. Records are kept in the controller's scratch, not committed: `summary.txt` (every part's start, end, exit and empty-group proof), `coverage.txt`, `postguards.txt`, `gates.json` (the part list), `manifest.txt`, and each part's JSON report and log.
+
+**How each part ran.**
+- Each ran as `./node_modules/.bin/vitest run --maxWorkers=1`, with a JSON reporter added. It ran as the leader of its own session, under `timeout`, foreground, one at a time.
+- Before the next part started, `pgrep -g <pgid>` returned nothing, and that check's time is logged.
+- Leaked fixture `sleep`s were killed by exact PID, after a group and name re-check: one in owning group 4, one in `ccrc-update` partition 4, four in part p20, three in part p24, and two in the agent run.
+- The manifest is 805 server test files, from `git ls-tree` at the tip.
+
+**Owning set.** Groups 2-8 ran as the literal commands: 190, 173, 353, 187, 41, 21 and 815 passed.
+- **Group 1** ran as its three files (167 passed), plus `ccrc-doctor` in six top-level-describe partitions. That file has 1126 distinct tests: 1107 passed and 19 are skipped by their own platform conditions. Summing the partitions double-counts names that repeat inside the file, so only the distinct count is reported.
+- **Group 9** ran three times:
+  - first inside a budget the batch runner had shortened, exit 124, with slow failures in `topology-clean` and `deviation-refs`;
+  - then alone, exit 1: 6 failed and 92 passed, and every failure was vitest's `Test timed out` (20000 or 120000 ms), at load 149-166 from other sessions on the box;
+  - then alone at load about 30: 98 passed, exit 0.
+
+  Both earlier attempts stay in the record. The same three files passing at the lower load supports load as the cause.
+- **Server build:** `npm run build` exited 0.
+
+**Full server suite.** It ran as bounded parts, not as the single literal command:
+- the owning-group runs above, whose JSON covers their 32 files;
+- `ccrc-update` in four describe partitions and `ccrc-install` in three;
+- `ccd-tick-diet-equivalence` in describe and locale partitions;
+- 39 packed parts for the other 770 files.
+
+Twenty-two tick-diet locale parts (`td-*`, then `td2-E7` to `td2-E10`) matched no test, so each reported all of its tests skipped. Their patterns lacked the quotes vitest prints around a `describe.each` name, and E7-E10 use a different title shape. They are recorded as non-coverage, and the corrected `td2-`/`td3-` parts replaced them.
+
+Coverage, by JSON, by distinct full name:
+- all 805 manifest files have a result;
+- 42778 tests, of which 42663 ran at least once;
+- 115 never ran:
+  - 77 are platform-named skips;
+  - 32 are skipped by their own environment gates (a real litellm, a graphify venv, user namespaces, server-only cases, macOS job tests);
+  - 6 are E9, below.
+
+Per partitioned file: `ccrc-update` 547 of 559 passed (12 skipped), `ccrc-install` 297 of 317 (20 skipped), `ccd-tick-diet-equivalence` 94 of 100 (the 6 E9 cases).
+
+**The first complete pass at this tip is RED.** Six tests failed and never passed. Each file was re-run whole and alone at the tip, and on a `git archive` extract of `d7a4c9408`. The extract shares `server/node_modules`, and the server lockfile is unchanged.
+
+- **Main-red** (fails the same way on the main extract):
+  - `ccd-review-335-pins`, `clipswhy` (`tmpwhy` passed this time);
+  - `tmp-sweep`, "FAILS CLOSED: claude is running and no sessions dir is readable";
+  - `boot`, a hung ccd does not delay listen: 3850 and 3936 ms at the tip, 5153 ms on main, against its 3000 ms limit;
+  - `update-store-nodes`, the heir guard: 32019 and 27643 ms at the tip, 20375 ms on main, against 20000 ms. Main's first attempt was cut by its bound at load about 100.
+- **Environmental:** `docs-routes`, "refinement (d)", returns 404 where 414 is expected.
+  - It is green on the main extract.
+  - It is red on the same extract once a copy of this worktree's `server/dist-pwa/` is added. That directory is the gitignored PWA build output, present here since 2026-10-15; when it exists, the server registers its static SPA routes.
+  - This branch changes nothing under `server/src`, `shared` or that test.
+- **Branch-tip red:** the `pools-prose` README-size ratchet. `CLAUDE.md` states 6574 lines against README's 6710; it is green on the main extract. On the merge of this tip with current main `aff78cb32`, measured from an extract of the merge-tree probe's tree `b6f10d333`, it passed 27/27. That main's `CLAUDE.md` states no README line count.
+- **Mechanical blocker, unrun in full:** `ccd-tick-diet-equivalence`'s E9, in both locales.
+  - The describe is one `beforeAll` batch, bounded at 900 s with a 1,000,000 ms hook timeout (main's test), so `-t` cannot split it.
+  - E9 under C ran 470 s and then 545 s; under UTF-8 it ran 545 s. Each was cut by its bound (exit 124), and each group was proved empty.
+  - It cannot complete inside a foreground tool call on this box, and it was not backgrounded.
+  - The rest of the file is green: E0-E2, E4, E8d, E8g and E10d (32), plus E3, E5, E6, E7, E8 and E10 in both locales.
+
+**Agent, PWA, builds.**
+- agent: 28 files, 592 passed.
+- pwa: 242 files, 8769 passed.
+- Server `npm run build`: exit 0.
+- PWA `npm run build`: exit 0 (`✓ built in 3.14s`).
+
+**Post-guards.**
+- `bash -n` exits 0 on `ccd/ccd`, `ccd/ccd-scope-sweep` and `ccd/ccrc-doctor-checks`, and `python3 -I` `ast.parse` passes on the instrument.
+- `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified`, rc 0.
+- Modes are 100755, as on main.
+- The two frozen documents are unchanged against `d7a4c9408`, and `git diff --check d7a4c9408 HEAD` is clean.
+- A privacy scan of every added line and every commit message since `d7a4c9408` is clean.
+- The final fix commit left the census and citations unmoved: 147/202 and 55/35; `_reg_get` is 204 calls on 173 lines, matching its header.
+
+**Main before handoff (clause 16).**
+- One `git fetch origin` at 07:15Z: `origin/HEAD` is `aff78cb32`.
+- `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with tree `b6f10d333` and names `ccd/ccd`. Its only conflicting hunk is line 2's generated stamp: at landing, take either side and restamp.
+- The one absorption (`4634e2981`) has not landed, so clause 16 gives no second license, and main was not absorbed again.
+
+**Signal.** `suite: red`. The wave's first full run was red, and fix round 1's first complete pass at this tip is red too.
+
+#### Execution evidence (fix round 2)
+
+**Receipt.** 2026-10-20: the coordinator's fix round 2 on an independent review of tip `2f6caa48e` (review 685; its report was accepted, not the implementation). Rulings: F1 fix (the instrument reads the ASCII whitespace the sweep folds); F2 fix (a `Z` outside process is exempt from predicate 5 only with at most one thread); F3 ruled (the window stays 7 × 86400 elapsed seconds; say that the endpoints are local-zone and pin both sides); F4 fix (unused numbers bare); F5 ruled (no `CLAUDE.md` edit: the README-size ratchet clears on the merge with main); F6 ruled (ask 2's attribution stands, with its grounds stated); F7 ruled accepted (the opener counts' tightening of the single-task `stopped` arm); F8 fix (the `resenv` comment); R1 ruled (a killed envelope followed by trailing text stays unmeasured); R2 fix (gate the deep-nesting pin on what the interpreter does); R3 ruled (one evidence line, no history rewrite); then a land-sync merge of main. The deviation block stayed 4316 through 4325; 4323, 4324 and 4325 were unused at the end of this round (fix round 3 defines D-4323 for F2's contract change; 4324 and 4325 stay unused). Routing as in fix round 1: Sonnet/high implementers one at a time; Opus/high task reviews; Sonnet scoped re-reviews of fix rounds; an Opus/high whole-round review; one final fix dispatch. The reviewers' texts are recorded in the controller ledger, not saved as files.
+
+**Sweep and record reader (F2, F1; `44e38161b`, `c3eae1c79`).**
+- F2: `_ss_stat` also records `num_threads` (stat field 20); predicate 5 exempts a `Z` outside process only when that count reads as a decimal of at most 1 (`^0*[01]$`, text, so no digit string overflows arithmetic); a missing or non-numeric count is not exempt. The header rationale and the loop comment say so. Red first: an outside `Z` child with two threads stopped the scope (1 failed of 88). Mutation, every `Z` exempt again: 1 red, the two-thread row; restored (`cmp`). Task review (spec ✅, quality Approved) found the `$` anchor unpinned, so its fix round made the row `it.each([2, 11])`; mutation, the anchor dropped: 1 red, the 11-thread row; restored. Re-review: both addressed.
+- F1: `S6_DEAD`, `S6_OLD` and `S6_CARRY` compile with `re.ASCII`; no other record pattern uses a Unicode class. Round-trip pins for `\x1c`, `\u0085` and `\xa0` run the writer, the doctor and the instrument. Red first: the three instrument cases read `unreadable` (3 failed; the doctor and TAB cases were green before). Mutation, `re.ASCII` dropped from `S6_OLD`: the same 3 red; restored. The sweep's fold and the doctor's class are ASCII-only in the `C` locale; under another locale the fold may replace more (U+2003 under `C.UTF-8`, measured), and the ASCII reader reads either record (the final fix qualified the three sentences that said otherwise). `scope-sweep` 95 passed.
+
+**Instrument (F3, R1, R2; `f13d8baa0`, `5f69286af`).**
+- F3: the stage-6 header says the window is 7 × 86400 elapsed seconds, that `--since`/`--until` are read in the local zone (a local calendar week across a DST change, an hour longer or shorter, is refused) and that Task 5's invocation sets `TZ=UTC`. Pins: `--since 2026-10-20 --until 2026-10-27 --reap-baseline 0` is refused under `TZ=Europe/Berlin` (608400 s apart, measured) and accepted under `TZ=UTC`; both pass with the guard unchanged; mutation, a one-hour tolerance: the Berlin pin red; restored. A precondition checks that the zone loaded, so a box without it fails naming the missing zone, never as a guard regression and never by skipping.
+- R1: `S6_NOTIFICATION` names its trailing reminder blocks, and the killed arm reads an envelope that had any as unmeasured; the three ruled non-event shapes keep the tolerance (pinned, a batched non-killed row included). The pin that read such an envelope as one kill is retitled and asserts unmeasured, with a sibling for a non-pressure summary. Red first: 2 failed of 54 (one counted a kill). Mutation, the tolerance given back to the killed arm: 2 red; restored.
+- R2: an in-test probe runs the instrument's own interpreter and environment (one shared env builder) on the 100,000-deep row; the case runs only when it raises `RecursionError`, else it is skipped with a note naming the interpreter's result; a probe that fails for another reason fails the case. On this box (python 3.12.3) it runs; mutation, `RecursionError` dropped from the scanner's `except`: 1 red; restored; the skip path, forced, reported skipped with its note; restored. A non-dict row is still not malformed.
+- Reviews: task review spec ✅, quality Approved (named risks checked: the check sits after the non-event exits; the trailing group is empty without a whole reminder; a probe failure reds; the Berlin pin cannot pass vacuously). Its fix round took six minors, one of them a killed-body check for a stray second closing tag (the controller's ruling then); re-review all addressed. The whole-round review then found that check a new tightening of the kill rule (see the final fix below).
+
+**Prose and the `resenv` comment (F4, F6, R3, F8, README; `e03fecb59`, `f0e0f5236`).**
+- F4: "4323 through 4325 stay unused"; no prefixed unused number is left in the plan. (Fix round 3 makes that sentence "4324 and 4325 stay unused", defining D-4323.)
+- F6: D-4322's *Ruling* line states the grounds once (the coordinator selected neither option and released the ask; a release moves the ask to `declined`, terminal to the parent, and the answer route then refuses the parent, per the release route's own comment in `server/src/coord/routes.ts`, D-5289; so the answer the tool returned came from the operator's own surface; the worker cannot see who answered and relies on the coordinator's record); the remedial-review paragraph, the D-4322 evidence paragraph and the final-fix follow-up point to it, labelled fix round 2. No commit message was rewritten, `5a71ccf91`'s included.
+- R3: the final-fix follow-up's closing note says `5a71ccf91` is typed `docs` but changes the killed arm's summary-opener count.
+- F8: the nine comment lines above `resenv=` were replaced by `5033cfb55`'s six, byte for byte, keeping main's `resenv=$(_resume_env "$id")` line; comment-only, line-neutral against main; restamped, `ccrc-unmodified`.
+- README: the `--reap-baseline` sentence says seven elapsed days (7 × 86400 s), local-zone endpoints and Task 5's `TZ=UTC`; the zombie sentence says a zombie outside child with at most one thread does not block and any other outside child does (naming the `Z` leader would have cost a third README line; the budget was two). README 6712 lines.
+- Task review: Needs fixes (Important: the fix-round-1 follow-up paragraph credited `5a71ccf91` with grounds only this round added); its fix round restored that clause and the fix-round-1 ruling sentence byte for byte and moved the pointers into labelled fix round 2 notes; re-review all addressed.
+- Extensions ruled by the controller: R1's into the spec's one §9 sentence (a single-task `killed` envelope is "not this event" only with nothing after its closing tag; spec line count unchanged) and F2's into the README zombie sentence.
+
+**Land-sync (`fea5bc246`).** One `git fetch origin` at 14:56Z: `origin/HEAD` `3b5de0c10`. `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exited 1 with tree `aa1075d34`, naming only `ccd/ccd`, whose only conflicting hunk was line 2. `git merge --no-ff`; main's side of line 2 taken, `ccrc restamp ccd/ccd`, `node shared/mark.mjs --check ccd/ccd` `ccrc-unmodified`; `--remerge-diff` shows that hunk alone. Main had moved 910 files since `d7a4c9408`, its server, ui and pwa lockfiles among them, so `npm ci` ran in `server/`, `ui/` and `pwa/` before the gates. F5: `CLAUDE.md` is main's and states no README line count; `pools-prose` passed in the gates below.
+
+**Whole-round review and the final fix (`3a949785b`).** The Opus/high review over `2f6caa48e..fea5bc246` returned "Ready with fixes": every ruling landed as ruled, the merge and the two prose extensions faithful, hygiene clean. Important: the killed-body check (`5f69286af`) read as unmeasured a shape the base and fix round 1 counted as a kill, while the prose called it the base's rule; R1 keeps the base's kill rule, so the controller withdrew it, leaving the killed arm's code as at `f13d8baa0`, and recorded the shape as O4 in D-4322's Cost. Minors: the `C`-locale qualification (above); "when frozen B was measured" replaced by the accurate base reference, since frozen B is the journal's pane-OOM count, measured before this scanner existed (the coordinator's R1 text named it). The final fix: `pressure-kills` 55 passed; the withdrawn pins against the withdrawn scanner 3 failed of 58 (two counted a kill, the third read measured); the R1 mutation 2 red, restored. Its re-review: all addressed; two wording minors (that count, and O4's mechanics: the lazy body runs past the first closing tag to a stray later one) are corrected in this commit, comment and prose only.
+
+**Gates.** Bounded foreground serial parts (`timeout`, own session, `pgrep -g` empty before the next), `--maxWorkers=1`; no full local pass (the fix round did not require one).
+- At `fea5bc246` (the first land-sync's merged tree; land-sync 2 and its gates are under fix round 3): owning groups 2-8 as their literal commands, group 1 as its three files plus `ccrc-doctor` in six top-level-describe partitions re-derived on the merged file (73 describes; 1134 distinct tests, 1115 passed, 19 platform-skipped). Group 2 190, 3 173, 5 187, 6 41, 7 21 passed. Group 4: 353 of 353 passed, exit 1, because main's new leaked-child check (D-5894, D-5895) named a fixture `sleep 20` from `ccd-swap.test.ts`; that file alone exits 1 the same way at the tip and on a `git archive` extract of `3b5de0c10` (two leaked there): main-red on this box, the file untouched by this branch. Group 8: 859 of 860 passed; `single-definition`'s "literal source pins over W1a's files may only shrink" timed out at 20000 ms (21147 and 21904 ms alone at load about 18) and times out the same way on the main extract (22981 ms; a scratch-only git index made its `git ls-files` work): main-red on this box, wall-clock. Group 9 first exited 1 on `typecheck-tests`' PWA case (a ui dependency main added was not yet installed), then 103 of 103 after `npm ci`.
+- At `3a949785b`: group 1's three files 179 passed; group 7 21; the README, prose, skill and citation guards (`docs-parity`, `docs-grammar`, `readme-holds`, `oss-metadata`, `pools-prose`, `collect-lane-prose`, `box-token-census`, `workflow-control-census`, `readme-roster-mirror`, the twelve `*-prose`/`license`/`docs-shared` files, the three role-skill pins and `session-hook` whole) all passed except `citations.test.ts`' exact ratchet: 1585 citations against its 1587, the same on the main extract (the absorbed main lowered the count without the baseline; main fixed it, BASELINE 1585, by `b37cc30f0`, with which this branch merges cleanly), so main-red at the absorbed main, and this branch adds or removes none.
+- Post-guards, at `3a949785b` plus this commit's comment wording: `bash -n` on `ccd/ccd` and `ccd/ccd-scope-sweep`; `ast.parse` of the instrument; `node shared/mark.mjs --check ccd/ccd` `ccrc-unmodified`; modes 100755 for the four executables; the two frozen documents unchanged against `origin/main`; frozen B untouched (no line reads its interval); `git diff --check 3b5de0c10 HEAD` clean; `_reg_get` 204 calls on 173 lines, as its header says; the S6-R11 instrument against base `3b5de0c10`: `byFile['ccd/ccd']` 147/147/147, total 200/200/200, rows 55/55/55, sites 35/35/35, nothing entering or leaving, every probed file restored; the privacy scan of the round's added lines, this evidence and its commit messages clean.
+- This commit changes only comments (the instrument, the pressure-kills test) and this plan; the files it touches are re-gated at the new tip and reported with the wave-done.
+
+**PR checks at `5d8b242a3`, and the census fix (`60d13a151`, `17b254342`).** The pull request's run (its merge ref with `origin/HEAD` `b37cc30f0`) was red in two server shards. (1) `ccd-contexts.test.ts`, main's ccd function-to-context census (D-6054), which came into this tree with the land-sync merge and is in none of this plan's owning groups, so the gates above never ran it: D-4321's `_operator_choice_promote` had no row, and with its row the cross-context count was 522 against a ceiling of 521 that may only fall; the one new edge was promote's call into `_cfg_dir` (C3 to C1) for the incoming read. One structured ask put three options; the coordinator ruled the first, with conditions: `_sync_uuid` passes the config dir it already resolved as promote's fourth argument, used only for the incoming read (an empty one with a sid gives no incoming lines, as an unreadable incoming transcript does); `_operator_choice_keep` is unchanged; promote calls `_cfg_dir` nowhere; promote's row (C3) joins the census with its holder's consent; no new deviation number, D-4321's contract being unchanged (one Evidence line). Measured: the census red first (3 failed of 10 without the row), green with it (10 of 10, exactly 521, BASELINE unchanged); mutation, promote calling `_cfg_dir` again: 522, red; restored. `_sync_uuid` passing an empty config dir reds 11 existing D-4321 incoming-read cases; restored. `ccd-operator-choice` and `ccd-sync-uuid` 238 passed; `ccd/ccd` line-neutral, `ccrc-unmodified`, `_reg_get` 204 on 173, no numeric citation added or removed. Task review: spec ✅, quality Approved (a static port of the census read 521 at the head and 522 with the old read). (2) `citations.test.ts`: 1584 against BASELINE 1585, the same on a `git archive` extract of `b37cc30f0` itself, so main-red; by the coordinator's ruling the baseline is not lowered here (another pull request rewrites those lines), and this branch's edits add or remove no numeric citation. Groups 2-7 re-run at `17b254342`: 190, 173, 187, 41, 21 passed, and group 4 again 353 of 353 with exit 1 on the same main-red leaked fixture process.
+
+**Signal.** `suite: red` stays: the wave's first full run was red.
+
+#### Execution evidence (fix round 3)
+
+**Receipt.** 2026-10-21: the coordinator's fix round 3 on review 714 of tip `90c37de9b`. The review found every fix-round-2 mechanism met and reproduced every claimed red first and mutation red. Rulings:
+- land-sync 3, stamp-only, under the `ccd/ccd` claim holder's consent to one such merge;
+- F1: record fix round 2's predicate-5 change as D-4323;
+- F4: correct D-4321's Contract signature in place, with no new number;
+- F6: write `\xa0` for the raw character in the fix-round-2 evidence;
+- F7: record land-sync 2 and land-sync 3 here;
+- F3: README's "Known silent costs" list and spec §5.7's remaining costs name the UUID moves that do not promote;
+- F2: reword the "inert" clause of the comment above `resenv=`, only with the `ccd/ccd` claim holder's consent this round, else skip it;
+- F5: no change (the base's killed-arm rule, O4 included, is R1's intent);
+- the controller's fix-round-2 wording "as Task 4 shipped it / as at the base" is accepted in place of R1's frozen-B phrase.
+
+4324 and 4325 stay unused.
+
+**Land-sync 2 (`90c37de9b`, recorded here for F7).** After the PR checks at `a137e36d5`, the coordinator's mail said main had moved and touched `ccd/ccd`.
+- One `git fetch origin` at 18:42Z on 2026-10-20: `origin/HEAD` `ea04a31c9`.
+- `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exited 1 with tree `126be8819`, naming only `ccd/ccd`, whose only conflicting hunk was line 2.
+- `git merge --no-ff`, taking main's side of line 2, then `ccrc restamp ccd/ccd` (rc 0): `node shared/mark.mjs --check ccd/ccd` answers `ccrc-unmodified`, `bash -n` is clean and the mode is unchanged.
+- `--remerge-diff` shows that hunk alone. `ccd/contexts.tsv` and README merged without conflict, and no lockfile changed.
+- Gates on that tree, one part at a time:
+  - `ccd-contexts`: 10 of 10, exactly 521.
+  - The README, prose, citation and skill guards: 356 of 356, including `citations` (green after main's #988), `docs-parity`, `pools-prose`, `readme-holds` and `oss-metadata`.
+  - The prose part 393, the role-skill part 241, and `session-hook` 709 of 709.
+  - `deviation-refs` and `topology-clean`: 91 of 91 against `ea04a31c9`.
+- The S6-R11 scratch instrument refused to parse `session-hook.test.ts`. That file is byte-identical to main, whose #980 put comment lines inside the array the instrument reads. The census it re-measures is held by `session-hook`'s own citation cases, which passed.
+- PR #435's run 39478002991 at `90c37de9b` (pull_request, attempt 1) passed all four required checks: `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa`.
+- Review 714 then read both land-syncs' `--remerge-diff` and found each stamp-only, with nothing lost on any path both sides changed.
+
+**Land-sync 3 (`2afc4308b`).**
+- One `git fetch origin main` at 01:36Z on 2026-10-21: `origin/main` `f88ac459f`.
+- `git merge-tree --write-tree --name-only --no-messages HEAD origin/main` exited 1 with tree `c32ea046a`, naming only `ccd/ccd`, whose only conflicting hunk was line 2.
+- `git merge --no-ff`, taking main's side of line 2, then `ccrc restamp ccd/ccd` (rc 0): `ccrc-unmodified`, `bash -n` clean, mode unchanged.
+- `--remerge-diff` shows that hunk alone: `ccd/ccd`, 1 insertion and 5 deletions, the conflict and its two stamps replaced by the regenerated one.
+- Main changed 151 files, among them `ccd/contexts.tsv` and README, which merged without conflict. No lockfile, vitest config or tsconfig changed.
+- This is the one stamp-only land-sync the `ccd/ccd` claim holder consented to.
+- `ccd-contexts` on the merged tree: 10 of 10, exactly 521, with main's BASELINE unchanged.
+
+**The records (F1, F4, F6, F7).**
+- D-4323 is defined below, after D-4322.
+- D-4321's Contract now gives the shipped signature, `_operator_choice_promote <id> [reason] [incoming-sid incoming-cfg]`, with the incoming read made only when both are given. Its Evidence says so.
+- The fix-round-2 F1 bullet's third code span is now the text `\xa0`. A byte check of every line this branch adds against `origin/main` `f88ac459f` (3126 lines at `a6d25c1f1`) finds no control, format, separator, private-use or unassigned character other than a tab, no non-breaking or other non-ASCII space, and no U+FFFD. The non-ASCII characters added are all visible: §, ·, ×, —, …, ∅, ─, ✅, ✓ and ❯.
+- The gate notes now call `fea5bc246` the first land-sync's merged tree, and the two land-syncs above are recorded.
+
+**README and spec (F3).** README's "Known silent costs" list gains one item, the third, matching the order in which the `ccd/ccd` comment above `_operator_choice_promote` names them. It covers a UUID that the background follow or a continuation chain moves: neither promotes, so later keeps read only the new UUID's transcript, and a choice held only by the old one and not yet kept is lost. README is now 6792 lines. The new item cites no source line. Outside `docs/`, the tree cites README by line three times, all above the new item; older plans' README anchors are snapshots. Spec §5.7's remaining costs gain the same clause, inside an existing line, so the spec stays at 905 lines.
+
+**The `resenv` comment (F2).** The `ccd/ccd` claim holder consented to this one comment-only, line-neutral edit, beside its claim. The coordinator lifted fix round 2's byte-for-byte rule (F8) for these lines only. The six comment lines above `resenv=$(_resume_env "$id")` in `_spawn_start` no longer call the RESUME variables inert on a non-home-able lane. They now say that every supported wrapper, an external-provider shim included, execs Claude Code, so those variables reach it there too, and that `_redrive_after_spawn` measures that lane's transcript as it does any other's. That last clause departs from the ruling's own text, which said the measurement "fails closed" there. The round's review found that clause untrue, and the controller re-read the code: `_redrive_after_spawn` reads no home-ability, `_transcript_path` resolves through `_cfg_dir`, which every rostered account has, and `--resume` writes the resume pair whether or not the flag is set (D-2227's header). So on such a lane the measurement runs, and can type the resume prompt, as on any other. The controller ruled to make the comment true, the ruling's stated aim, and the claim holder consented to the changed wording too; the coordinator can restore its clause. `ccd/ccd` keeps its 41485 lines; no code line moves; restamped, `ccrc-unmodified`, `bash -n` clean. Main's sibling comment beside `_redrive_after_spawn`'s call ("a non-home-able lane never has `_resume_env`'s flag set") is main's text and is left as it is.
+
+**Review of the round.** An Opus/high review, read-only and running no suites, read `90c37de9b..a6d25c1f1` against the rulings and review 714. It returned "Ready with fixes": 0 Critical, 0 Important, 5 Minor.
+- M1, the F2 clause above, is fixed in `29f86edeb`.
+- M2: the byte check's line count now names its base and tip.
+- M3: land-sync 3's PR checks cannot exist before the push. They are reported with the wave-done, and the tip's gates are below.
+- M4: D-4323 now gives its green-after counts.
+- M5: PR #435's description is corrected at the push.
+
+It confirmed every other claim it could check from git: the merge parents and the tree ids of both land-syncs, D-4323 against the sweep's code and against the immutable plan's Step 6, D-4321's signature, the byte check's character set, and the README item's truth and position. A pre-existing mismatch is parked: the comment's "unlike `rcflag` above" contrasts a backend gate, while the comment reasons about home-ability.
+
+**Gates (fix round 3).** Each file ran as its own bounded foreground part, at `--maxWorkers=1`, with its process group proved empty before the next part; load was 14-22. No full local pass was run, as the fix round did not require one.
+- At `a6d25c1f1`:
+  - `node shared/mark.mjs --check ccd/ccd`: `ccrc-unmodified`.
+  - `ccd-contexts` 10 of 10 (exactly 521); `citations` 4 of 4, its added-lines rule run.
+  - `docs-grammar` 158, `docs-policy` 624, `docs-parity` 54.
+  - `scope-sweep` 95, `measure-continuity-pressure-kills` 55, `ccd-spawn-split` 55, `ccd-route-spawn` 24, `ccd-operator-choice` 125.
+  - `session-hook`: the compaction card's cases (`-t 'the compaction card'`) 175, then its README and citation audit cases 7.
+  - `readme-holds` 17, `pools-prose` 27, `oss-metadata` 29, `topology-clean` 60.
+- `deviation-refs`: 31 of 31, after one `git fetch origin main` at 02:01Z. `origin/main` was `69aac52f5`, and the merge probe against it exits 0 (clean), so there was no absorption. D-4323 is defined once in this plan and nowhere on main.
+- At `29f86edeb` (after the clause fix): `docs-parity` 54, `ccd-spawn-split` 55, `ccd-route-spawn` 24, `citations` 4, `ccd-contexts` 10; `ccrc-unmodified`.
+- Post-guards:
+  - `bash -n` on `ccd/ccd` and `ccd/ccd-scope-sweep`;
+  - `git diff --check` against the merge and against `origin/main`, both clean;
+  - no mode change;
+  - a privacy scan of the round's added lines and commit messages, clean.
+- This commit changes only this plan. `deviation-refs`, `docs-grammar`, `docs-policy` and `citations` are re-run on it. PR #435's checks on the pushed tip are reported with the wave-done.
 
 ## Deviations found
 
-No new numbered deviation is defined by this planning commit. The issued block is 4316 through 4325; it is not an instruction to consume all ten. Task 1 discharges the carried review/worker residue and Task 3 closes the already-defined D-3925 without redefining it. During implementation, define any genuine departure here with the issued number, exact changed contract, why it was necessary, named cost and measured red/green evidence IN THE SAME COMMIT as its implementation. A plan adjustment that changes an operator ruling is not a worker's deviation to self-authorize; stop and report it for a ruling.
+The planning commit itself defined no numbered deviation; D-4316 below was defined during Task 1's implementation. The issued block is 4316 through 4325; it is not an instruction to consume all ten. Task 1 discharges the carried review/worker residue and Task 3 closes the already-defined D-3925 without redefining it. During implementation, define any genuine departure here with the issued number, exact changed contract, why it was necessary, named cost and measured red/green evidence IN THE SAME COMMIT as its implementation. A plan adjustment that changes an operator ruling is not a worker's deviation to self-authorize; stop and report it for a ruling.
+
+**D-4316 (Task 1, fix round 1).** *Contract changed:* the reason class of the sweep's `dead` row, in both readers, is widened from `[a-z-]` to `[a-z0-9-]`: the doctor's `why=([a-z0-9-]+(,[a-z0-9-]+)*)` inside `_check_scope-sweep` (capture numbering unchanged) and the instrument's `why=[a-z0-9-]+(?:,[a-z0-9-]+)*` in `S6_DEAD`; nothing else in either regex moves. Two round-trip pins are added to `scope-sweep.test.ts`: each feeds one reader the record the REAL sweep wrote in its fixture, with the reasons `dead-under-6h` and `cpu-moved,process-started-under-6h`. *Why:* the plan's literal regex rejects the sweep's own most common reasons, `dead-under-6h` and `process-started-under-6h`, which contain a digit, so every scope seen dead in its first six hours made the doctor call the whole record unsafe to read and made the instrument publish `{record: 'unreadable'}`; the spec requires the readers to interpret the sweep's record. Every earlier reader fixture used `why=none`, which is why no case caught it. *Cost:* none known; it accepts digits in reason tokens, which only the sweep writes, and no reader does arithmetic on them. *Evidence:* both new pins red under the old class (doctor: `has 2 line(s) it cannot read`; instrument: `{record: 'unreadable'}` instead of `dead: 2` counts), green after (`scope-sweep.test.ts` 78/78, `ccrc-doctor.test.ts -t scope-sweep` 28 passed, `measure-continuity-stage6.test.ts` 27/27).
+
+**D-4317 (Task 4, fix round 1).** *Contract changed:* the scanner's set of known non-killed notification statuses, `s6_pressure_kills` in `deploy/measure-continuity.py`, is widened from `completed`/`failed`/`killed` to include `stopped`: a well-formed envelope with `<status>stopped</status>` is read as not this event and adds no unmeasured count. Any other unknown status stays `unmeasured_notifications`. Two fixture cases are added to `measure-continuity-pressure-kills.test.ts`: a `stopped` envelope with a workflow-style summary (`Background workflow "..." (run wf_...) didn't finish before the previous session ended`) leaves the reading `measured`, and an unrelated unknown status (`exploded`) still makes it `partial` with one unmeasured notification. *Why:* real Claude Code transcripts (seen in 2.1.289 and 2.1.295) carry well-formed `stopped` notifications, so the plan's three-status set made the fleet reading routinely `partial` and Task 5's target of 0 could never be a measured zero. *Cost:* a future status word that Claude Code adds is unmeasured until named, which is the intended fail-open-to-partial direction; a `stopped` notification is never searched for a pressure reason. *Evidence:* the `stopped` case red before the change (`reading: 'partial'`, `unmeasured_notifications: 1` instead of `measured`/0), green after; the file 13 of 13.
+
+**D-4318 (Task 4, fix round 1).** *Contract changed:* two prose sentences, not code. The README operator-choice paragraph and the spec 5.7 wave-4b annotation said the promotion happens "before a live UUID change"; they now say "before a pane-observed UUID rotation (a `/clear`)", and add that background-follow and continuation-chain UUID writes do not promote. *Why:* only the admitted pane branch of `_sync_uuid` calls `_operator_choice_promote` (Task 3's contract); `_ci_bg_follow` and `_follow_continued_in` write the UUID without it, so the plan's wider sentence overstated what shipped. *Cost:* none; the code is unchanged and the described costs for those two paths were already out of scope. *Evidence:* reading `_sync_uuid`: the single promotion call sits in the admitted pane branch; no test change (documentation only), and the README/spec citation instrument measured no movement.
+
+**D-4319 (final review F1).** *Contract changed:* `_operator_choice_promote <id> [reason] [incoming-sid]` takes the incoming sid as an optional third argument, which only `_sync_uuid`'s admitted pane branch passes (`_operator_choice_keep` passes none and is unchanged). Given it, the promotion (1) reads the incoming transcript (`_ci_transcript_path` for that sid under the session's config dir, a readable regular file) with the same `_operator_choice_read` over the same journal, and does not promote from the outgoing transcript any kind (`/model` -> class, `/effort` -> effort) for which the incoming one holds an operator command, acknowledged or drifted; the remaining kinds still go in one `cmd_route`; an incoming transcript that is absent, not a readable regular file, or that the reader fails on holds nothing back; and (2) after that `cmd_route` succeeds, records exactly the fields it wrote as applied in `routeapplied` (`_route_applied_set`, as an acknowledged apply records them). The dead-session keep records nothing applied; a field the promotion did not write stays pending and is typed as before. *Why:* the 5-second tick that sees a `/clear` can run after the operator has typed a `/model` or `/effort` into the new conversation; the outgoing command, promoted, stamped its field at wall time, later than the new command, so the next keep's "record wins when newer" dropped the operator's newest choice; and the same tick's applier saw the promoted field pending against `routeapplied` and typed it into the live pane (always for `/effort`, which never reads back), the first pane keystroke caused by an operator-choice read. *Cost:* an incoming transcript that already exists costs one more bounded read on a rotation tick only; a kind the operator set in the new conversation is taken by the next keep rather than at the rotation; a recorded-applied class on a lane whose `degraded` stamp still serves a lower class leaves that served class pending, as any acknowledged apply would. *Evidence:* the race, no-keystroke and pending-field cases red before the change (8 failed in the describe, the keystroke reproduced as `send-keys -l /model` and the effort slider), green after (`ccd-operator-choice` 108 passed); the mutation table under the final-review evidence. Under fix round 1 this entry is not authority for the contract widening: its incoming read and applied stamp continue only under D-4321, and its existence skip is withdrawn.
+
+**D-4320 (final review F3).** *Contract changed:* the sweep's `old` row writes its comm with every whitespace character folded to `_` (`${c//[[:space:]]/_}` in `ccd/ccd-scope-sweep`), not only a space. *Why:* both readers take that field as one run of non-whitespace characters (`comm=[^[:space:]]*` in the doctor, `comm=\S*` in the instrument, whose patterns are compiled `re.ASCII` since fix round 2 (review 685 F1), so a comm holding `\x1c`, `\x85` or `\xa0` reads in both, the doctor under the `C` locale), so a long-lived process whose name carries a tab made the doctor call the whole record unsafe to read and the instrument publish `{record: 'unreadable'}`. That whitespace is ASCII whitespace in the `C` locale only: neither the sweep's fold nor the doctor's class sets `LC_ALL`, so under another locale (`C.UTF-8`, say) both also take in non-ASCII space characters (U+2003, measured for each), while the instrument's `re.ASCII` reader reads a record folded under either locale. *Cost:* a tab and a space in a process name now read alike in the doctor's listing; the field is a label, never matched. *Evidence:* the two new round-trip cases red under the old expansion (the record held a raw tab; with the writer assertions probed out, the doctor reported a line it cannot read and the instrument `unreadable`), green after (`scope-sweep` 80 passed).
+
+**D-4321 (fix round 1, Task 3 contract).** *Contract changed:* `_operator_choice_promote <id> [reason] [incoming-sid incoming-cfg]` keeps D-4319's optional third argument, with the incoming config directory beside it as a fourth since fix round 2 (only `_sync_uuid`'s admitted pane branch passes them, the fourth being the `$cfg` it already resolved), its read of the incoming transcript (`_ci_transcript_path` for that sid under that config directory, made only when both are given, a readable regular file; absent, unreadable or reader-failed contributes no lines) and its applied stamp, but D-4319's existence skip (a kind is skipped whenever the incoming transcript merely holds a command of it) is withdrawn and replaced by a per-kind merge. Outgoing lines come from `_transcript_path` at the current registry uuid and incoming lines from that file, both through the one parser over the one journal and floor and the one typed-command filter. For each kind (`/model` to class, `/effort` to effort) the winner is the newest ACKNOWLEDGED command in either transcript by epoch, a tie going to the incoming one, with no skip by mere existence. A newer drift in either transcript never suppresses the winner; it is logged once with the existing `unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)` line, and a drift older than its kind's winner is superseded and says nothing. The record-wins-when-newer rule, the class/effort vocabulary and the peek-equality check are unchanged. The surviving pair is written by ONE `cmd_route`, checked once, and only on a live rotation (after `cmd_route` returns 0) `_route_applied_set` records exactly the fields it wrote; the promotion never touches `choicekept`, and with no incoming lines (the dead-session keep, or a rotation whose incoming transcript yields none) the loop reads the reader's own lines unchanged, `merged=$out`, so the keep is exactly the keep it was (follow-up below) and stamps nothing. *Why:* a live `cmd_route` write is pending by `cmd_route`'s own design, `/effort` has no read-back and so is typed every time, and a class is typed unless the read-back confirms it, so a promotion that wrote a field must stamp it or the same tick's applier types it into the live pane; and ordering a `/model` typed after the `/clear` but before the tick needs the incoming read, which is a time comparison that cannot be made from inside the seam by skipping. Measured, D-4319's skip lost the operator's choice in three shapes: (R1) an in-pane `/resume` into an OLDER conversation made the incoming transcript hold an old `/model`, which suppressed a newer outgoing one and left the older command to win at the next keep; (F1) the skip dropped the class from a split pair, so a haiku record received the outgoing `/effort high` alone and `cmd_route` refused it ("class haiku takes no effort level"), losing both; (F7) a newer incoming command that was refused or acknowledged in an unrecognised wording suppressed the outgoing ACKNOWLEDGED one although it is only treated as having changed nothing, not proven to have (the Cost below says what that costs if it did). The coordinator ruled that D-4319 was not authority to widen Task 3's contract. *Ruling:* the contract above was proposed and approved through the fix round's structured ask, 2026-10-19. *Cost:* the stamp asserts the pane runs the newest acknowledged command, which is wrong only if a drifted command really changed the setting, if ccd typed after it with no record write, or if an incoming read failed while the incoming transcript held a newer command, and the next spawn heals (a drift is treated as changing nothing, not proven to); one bounded extra transcript read per admitted rotation; `routeapplied` gains a sanctioned writer, so the writer enumerations in `ccd/ccd` (two comments) and README now name it. Measured citation cost: none (the S6-R11 instrument below moves nothing). Residual, log-only: when the incoming transcript yields any lines, an outgoing drift whose timestamp runs backwards behind its own acknowledgement in the file is dropped by the merge's `>=` filter, so its `unmeasured` line (and one stage-7 count) is lost; it never writes or suppresses. Retained cost, reported: the promotion never types a field it wrote, but because its stamp rewrites `routeapplied`, a class already pending that the pane runs can no longer be confirmed by a sidecar reading from before the rotation, so the applier may type that pending `/model` once (until the next render). Measured: a promotion that writes a field re-stamps `routeapplied` at the rotation, and the read-back accepts only a sidecar reading strictly later than the stamp: in a fixture with the record asking for `sonnet`, the pane already running it and a 30-second-old sidecar naming it, the tick with no promotion recorded the class applied from that sidecar and typed nothing, while the same tick with an `/effort` promotion typed `/model` (one avoidable attempt) until a later render answers. D-4319's stamp already carried this, but D-4321 widens it: compared with D-4319, an `/effort` typed into the new conversation after a `/clear` is now written and stamped, so more rotations stamp at all, and the fields each covers widen too. The controller reported this as a retained cost under the coordinator's R3 ("report any retained cost"); the coordinator did not accept it by status receipt and required a structured ask, which was answered "Accept the cost (Recommended)" on 2026-10-20 (the question stated this exact behaviour, its necessity, its controls and the alternative of restoring `routeapplied`'s previous mtime; the worker cannot see who answered it). *Evidence:* the new and changed cases red before the change (16 failed in the describe), green after (`ccd-operator-choice` 123 passed; 125 after the follow-up's keep-path pin, two rows), and the mutation table under the fix round 1 evidence (fourteen rows, and M15, the keep-path guard, added by the follow-up), each observed red and restored byte for byte. Fix round 2: the incoming read takes the caller's cfg (`_sync_uuid` passes its own `$cfg` as promote's fourth argument), so main's ccd context census holds at 521. Fix round 3 (review 714 F4) states that signature in the Contract above, in place and with no new number: a correction to the shipped interface, not a departure.
+
+**D-4322 (fix round 1, Task 4 envelope).** *Contract changed:* the stage-6 scanner, `s6_pressure_kills` in `deploy/measure-continuity.py`, reads three more well-formed shapes as known non-events, each adding no unmeasured count: (a) a single-task event envelope, exactly one `<task-id>`, exactly one `<event>` element and no `<status>`; (b) an envelope followed, after `</task-notification>`, by whole `<system-reminder>…</system-reminder>` blocks, where an envelope is the whole `<task-notification>…</task-notification>` text once trailing whitespace and whole trailing reminder blocks (each complete, optional whitespace between them, nothing else) are removed, and any other text after the closing tag still leaves it no envelope, a tolerance that applies to the ruled non-event shapes only (the event-style envelope of (a), and an envelope under one known non-killed status, whatever its task-id count, none included, which takes in the batched envelope of (c)) while a `killed` envelope keeps the strict envelope: a killed envelope followed by trailing reminder blocks is unmeasured, as at the base (fix round 2, review 685 R1, ruled by the coordinator as conformance to the chosen option's text); (c) a batched envelope, several `<task-id>` elements and exactly one known non-killed status (`completed`, `failed`, `stopped`), because that status is now read BEFORE the task-id count. Every other shape stays unmeasured, apart from the kill rule's own non-pressure case (a single-task `killed` envelope with exactly one summary element, readable and not the verified pressure reason, and nothing after its closing tag, is read as not this event, as before), and the kill rule is unchanged: a pressure kill is exactly one task id, exactly one status `killed` and exactly one summary element whose whole readable value matches the verified prefix and suffix, so a batched `killed` envelope is unmeasured and never a kill. Unreadable status, task-id and summary elements read unmeasured, never as missing ones: every arm counts the element by its opener (`<status\b`, `<task-id\b` and, in the killed arm, `<summary\b`, which also count an attribute and a longer name) beside its readable value, and the event arm counts event tags with their attributes. The event arm needs no status opener, exactly one task-id opener whose value is readable and exactly one plain `<event>` element; the known-non-killed arm needs exactly one status opener, readable and known non-killed; the killed arm needs exactly one status opener, exactly one task-id opener and exactly one summary opener (the last added by the final fix dispatch, O1), each readable. That tightens the pre-existing single-id `stopped` arm too, toward unmeasured only; the coordinator accepted it in fix round 2 (review 685 F7) as within the chosen option, since it only moves readings to unmeasured. Four minors ride along. The instrument's declared discovery limits name that a notification delivered mid-turn as a queued-command attachment row is never a user row and is not read (the scanner does not start reading them). A notification row whose timestamp is not a string (an object raised `KeyError` under Python 3.12) and a JSON line nested deeply enough to raise `RecursionError` are read as malformed rows, the reading `partial`, never a crash of the instrument; the stamp rule is local to the scanner, once per row (`iso_epoch` is shared and unchanged), and a missing or `null` stamp stays `unmeasured` as before. Three branches that no test reddened are pinned: the window check runs before the envelope check, a `killed` envelope with zero or two summaries is unmeasured, and a file's hits are admitted only after it reads to its end. The stage-7 comment says "before a pane-observed uuid rotation (a `/clear`)", as D-4318 narrowed the README and the spec. Prose: the README's stage-6 sentence beginning "Discovery can miss" names the queued-command limit, and the spec's section 9 wave-4b annotation gains one sentence naming the known non-event shapes and that limit (the annotation's consent record was present); nothing else in either moves. *Why:* a remedial review of Task 4 reported, from a read-only scan of this box's live transcripts that was outside its brief and that the coordinator recorded as unverified, that the direct pressure-kill reading was always `partial`: well-formed notifications that are not pressure kills failed the strict envelope and counted as `unmeasured_notifications`, in the three shapes above, so D-4317's purpose, a measured zero for Task 5, was unmet. It failed safe. *Ruling:* the operator ruled the widening as stated above, through the fix round's structured ask of 2026-10-19; the coordinator selected neither option and released the ask to the operator, so the ruling is the operator's, not the coordinator's. Fix round 2 (review 685 F6) adds the grounds: a release moves the ask to `declined`, which is terminal to the parent, and the answer route then refuses the parent (`server/src/coord/routes.ts`, the release route's comment, D-5289: a parent that handed the question over may not answer it later, `/answer` refuses `409 declined`), so the answer the tool returned, "Widen now as D-4322", came from the operator's own surface, not from the coordinator. The worker cannot see who answered and relies on the coordinator's record of the release. *Cost:* three more shapes are trusted as not a kill, and a future kill delivered in one of the ruled non-event shapes (statusless and event-style, or under a known non-killed status whatever its task-id count) would read as a non-event, not as a kill: the residual cost of the operator's ruling, which the kill rule's strict shape does not remove. One shape the fix round 1 code counted as a kill, a verified `killed` envelope with trailing reminder blocks, reads unmeasured again (fix round 2, R1), so such a real kill keeps the reading `partial` instead of being counted; counting it would be a new operator decision. What still keeps the reading `partial` rather than hiding a kill as a measured zero is the opener count: a status, task-id, summary or event element the scanner cannot read where its arm counts it (an attribute on a status, markup in a value, a second unreadable element) reads unmeasured, never as a missing one; an event body is read only for its tags and the status and task-id openers it holds, so event text holding an unreadable `<status`, a second `<task-id` or an unknown status word reads unmeasured (O2 below is the readable `killed` exception), and a body holding a second event tag stays unmeasured. A known non-killed status with a task-id count other than one, an unreadable extra task id included, is still a non-event, as ruled, and a future status word is unmeasured until named; a real batched `killed` envelope keeps the reading `partial` rather than counting; a kill announced as a queued-command attachment row is outside the count, declared and not read; the known non-event arms still need a readable stamp (an unreadable one stays unmeasured, as before). Known, pre-existing and parked for the coordinator, not fixed here: O2, a readable `<status>killed</status>` inside an `<event>` body under the pressure summary counts a kill (an over-count, never a hidden kill); O3, element names are case-sensitive, so `<Status>` reads as statusless (as at the base; Claude Code writes lowercase), while longer hyphenated names (`<status-x>`, `<task-id-x>`) now tighten to unmeasured; O4, the lazy envelope match lets a killed body extend past its first closing tag to a stray later `</task-notification>`, taking in whatever lies between (a reminder included), so such text can still count a kill, as at the base, whose rule the kill count keeps (R1); and the pathological backtracking on unterminated reminder pairs, a pre-existing regex class. *Evidence:* the three shape cases and the kill-with-trailing-reminders control, and the non-string-stamp and deep-nesting cases, red before the change (10 failed of 41), green after (41 of 41); after the task review the unreadable-element controls red (7 failed of 51) and green (51 of 51); after the final review the two summary-opener controls red (2 failed of 53) and green (53 of 53); and the mutation tables under the fix round 1 evidence, each observed red and restored byte for byte. The kill-with-trailing-reminders control named above is history: fix round 2 (R1) reversed it, and its pin is now retitled and asserts the unmeasured reading. Fix round 2: for R1 the retitled pin, two cases (a verified single-task `killed` envelope, and one whose one summary is readable and not the pressure reason, each followed by two reminder blocks), was red against the unchanged scanner (2 failed of 54; the first counts one kill) and green after the change (54 of 54); with the new check skipped, the killed arm tolerating reminders again, it was red (2 failed of 54, one kill and one measured reading) and restored byte for byte. For F3 the two zone pins (`--since 2026-10-20 --until 2026-10-27` refused under `TZ=Europe/Berlin`, 608400 s apart, and accepted under `TZ=UTC`) passed before any change, because the guard already behaves so (29 of 29 in the stage-6 file), and with the guard made to tolerate a one-hour difference the Berlin case was red (1 failed of 29, the UTC case green) and restored byte for byte. For R2 the deep-JSON pin now asks the interpreter that runs the instrument whether it raises `RecursionError` on that row: on Python 3.12.3 it does, the case runs and is green (54 of 54), with the scanner's `RecursionError` arm removed it is red (1 failed of 54, the instrument crashes), and with the probe forced to a parse the case is skipped with its reason (53 passed, 1 skipped); each restored byte for byte. Fix round 2 follow-up: a body check (a killed envelope whose body holds a second `</task-notification>` read as unmeasured) was added in `5f69286af` and is withdrawn in the final fix commit (fix round 2 final review: a tightening of the kill rule beyond R1, whose premise keeps the base's rule); with the clause removed and its three pins deleted the file is green (55 of 55), the three withdrawn pins run against the withdrawn scanner are red (3 failed of 58: two counted a kill, the third, a stray tag under a non-pressure summary, read measured), and the R1 mutation, the killed arm tolerating reminders again, is still red (2 failed of 55, the retitled pin and its sibling) and restored byte for byte; the Berlin pin's zone precondition passes here (29 of 29) and, with the zone name made unknown, fails red naming the missing zone (expected 604800 to be 608400).
+
+**D-4323 (fix round 2, review 685 F2; recorded in fix round 3).** *Contract changed:* predicate 5 of the scope sweep (`ccd/ccd-scope-sweep`), which Task 1 Step 6 wrote as `[[ "${PSTATE[$q]:-}" == Z ]] && continue`, exempts an outside `Z` process only when its thread count reads as a decimal of at most one: `[[ "${PSTATE[$q]:-}" == Z && "${NTHR[$q]:-}" =~ ^0*[01]$ ]] && continue`. `NTHR` is filled by `_ss_stat` from `/proc/<pid>/stat` field 20 (`num_threads`, compared as text, so no digit string overflows arithmetic). A `Z` thread-group leader with more than one thread now blocks a stop like every other outside child, and so does a `Z` process whose count is missing or not numeric. The sweep's header rationale and README's zombie sentence say so. *Why:* review 685 F2 found that a `Z` leader whose other threads still run is alive, so exempting every `Z` let a stop proceed past a live outside process. The coordinator ruled the fix in fix round 2. Review 714 F1 then found that the changed contract was recorded only as an evidence bullet, and the coordinator directed this entry in fix round 3: a coordinator-directed fix that changes a planned contract takes a number, as D-4320 did. *Cost:* a `Z` process whose thread count cannot be read now blocks a stop it did not block before, which fails safe (the scope is not stopped); one more stat field is kept per process. *Evidence:* the F2 bullet under "Execution evidence (fix round 2)" above. Red first, an outside `Z` child with two threads stopped the scope (1 failed of 88); green after, `scope-sweep` 94 of 94 at `44e38161b` and 95 of 95 at `c3eae1c79`, once the 11-thread row was added. Two mutations, each restored byte for byte: every `Z` exempt again reds the two-thread row (and the 11-thread row once it was added), and the `$` anchor dropped reds the 11-thread row only. Review 714 reproduced both in its own extract (2 red and 1 red). 4324 and 4325 stay unused.
 
 ## Where Things Stand
 

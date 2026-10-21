@@ -12,7 +12,8 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
-  CHILD_RUN_ID, COLLECT_BOX_LABELS, LC_LINE_MAX, isTmpRootId, leafKeptWord,
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, LC_LINE_MAX, isCollectLeafEndWord, isTmpRootId, leafKeptWord,
+  type CollectLeafEndWord,
   type ChildReclaimCollectAttention, type ChildReclaimCollectMany,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
   type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
@@ -1574,13 +1575,47 @@ export interface ChildReclaimLeafSourceRow {
   readonly detail: string | null;
 }
 
-/** A row that may END a kept-leaf item (`CoordStore.lifecycleLeafEndsFor`): a `done` `create` or `collect`
- *  of the id, with the mirror's id and ccd's nullable clock. */
-export interface ChildReclaimLeafEndRow {
-  readonly id: number;
-  readonly act: Extract<LifecycleAct, 'create' | 'collect'>;
-  readonly at: number | null;
+/** What one later `collect` `done` line says of the temp-root leaf (path-identity spec §3.4), read off the line as
+ *  the mirror holds it. FOUR answers, never folded:
+ *  - `word`: ccd's `meas.leaf`, a word of L0's `COLLECT_LEAF_END_WORDS` (`removed`: this collection removed the leaf;
+ *    `absent`: no leaf stood at the witness's path);
+ *  - `keyless`: an UNCUT line with no `leaf`, which only an older ccd writes, or the store's own `"leaf":null` (its
+ *    revived `meas` spells every key, so a line that carried none is stored with a null one);
+ *  - `truncated-keyless`: a line cut to fit with no `leaf`, so what it said of the leaf is not known;
+ *  - `malformed`: `leaf` present and no word of ccd's, or a `meas` text that is not a JSON object. */
+export type ChildReclaimLeafEndRead =
+  | { readonly kind: 'word'; readonly word: CollectLeafEndWord }
+  | { readonly kind: 'keyless' }
+  | { readonly kind: 'truncated-keyless' }
+  | { readonly kind: 'malformed' };
+
+/** THE ONE READER of a `collect` `done`'s leaf (path-identity spec §3.4). It reads the stored `measJson` and the cut
+ *  flag RAW, because a revived null cannot say whether the line was cut. A null text, or a JSON `null`, is no `meas`
+ *  at all. A present `leaf` that is no word of ccd's is never read as absent. Pure and total. */
+export function childReclaimLeafEndRead(measJson: string | null, truncated: boolean): ChildReclaimLeafEndRead {
+  const keyless: ChildReclaimLeafEndRead = truncated ? { kind: 'truncated-keyless' } : { kind: 'keyless' };
+  if (measJson === null) return keyless;
+  let meas: unknown;
+  try { meas = JSON.parse(measJson); } catch { return { kind: 'malformed' }; }
+  if (meas === null) return keyless;
+  if (typeof meas !== 'object' || Array.isArray(meas)) return { kind: 'malformed' };
+  const leaf: unknown = (meas as Record<string, unknown>)['leaf'];
+  if (leaf === undefined || leaf === null) return keyless;
+  return isCollectLeafEndWord(leaf) ? { kind: 'word', word: leaf } : { kind: 'malformed' };
 }
+
+/** The two acts whose `done` may END a kept-leaf item, spelled ONCE: this file's decision and the store's read both
+ *  take them from here. */
+export const CHILD_RECLAIM_LEAF_END_ACTS = { create: 'create', collect: 'collect' } as const satisfies
+  Readonly<Record<'create' | 'collect', Extract<LifecycleAct, 'create' | 'collect'>>>;
+
+/** A row that may END a kept-leaf item (`CoordStore.lifecycleLeafEndsFor`): a `done` `create` or `collect` of the id,
+ *  with the mirror's id and ccd's nullable clock. A `collect` row carries what its line says of the leaf as a
+ *  REQUIRED field, so TypeScript asks it of every `collect` row built anywhere (path-identity spec §3.4). */
+export type ChildReclaimLeafEndRow =
+  | { readonly id: number; readonly act: Extract<LifecycleAct, 'create'>; readonly at: number | null }
+  | { readonly id: number; readonly act: Extract<LifecycleAct, 'collect'>; readonly at: number | null;
+      readonly leaf: ChildReclaimLeafEndRead };
 
 /** What the MIRROR says of one leaf. There are three answers, never folded:
  *  - `kept`, with ccd's word;
@@ -1607,8 +1642,8 @@ export function childReclaimMirrorLeaf(
 }
 
 const LEAF_DONE: LifecycleOutcome = 'done';
-const LEAF_END_CREATE: ChildReclaimLeafEndRow['act'] = 'create';
-const LEAF_END_COLLECT: ChildReclaimLeafEndRow['act'] = 'collect';
+const LEAF_END_CREATE = CHILD_RECLAIM_LEAF_END_ACTS.create;
+const LEAF_END_COLLECT = CHILD_RECLAIM_LEAF_END_ACTS.collect;
 
 /** Does this row carry the kept-leaf keys: a `done`, or a failure whose act completed? */
 export const childReclaimLeafSource = (r: Pick<ChildReclaimLeafSourceRow, 'outcome' | 'refusal'>): boolean =>
@@ -1633,6 +1668,11 @@ const LEAF_TMP_COLLECTOR = 'ccrc’s temp-root collector removes the temp root o
   + 'the collector is switched on, the fleet box’s ccd can collect and cleanup is not paused, and only if ccrc recorded '
   + 'handing that directory out; until then, or if the collector lists it for you, a person removes it once nothing '
   + 'still uses it. The temp root leaves this line once it is collected.';
+/** What a temp-root half adds when a later `collect` found nothing at its leaf (`meas.leaf` `absent`; path-identity
+ *  spec §3.4): the collector removed nothing and dropped the witness, so the line stays to the horizon, and the place
+ *  a missing mount would hide the leaf is named. */
+export const childReclaimLeafFoundNothing = (sessionId: string): string =>
+  `The collector found nothing at ~/.cc-tmp/${sessionId} and dropped its witness; if ~/.cc-tmp is a mount, check that it is mounted.`;
 /** The clips half's own clause: the sentence below quotes it, and so does a winning item's second clause. */
 const leafClipsPart = (sessionId: string, word: LeafKeptWord): string =>
   `its clips directory ~/.cc-clips/${sessionId} (${word}: ${LEAF_PHRASE[word]})`;
@@ -1640,11 +1680,13 @@ const leafClipsPart = (sessionId: string, word: LeafKeptWord): string =>
 /** The kept-leaf item's sentence (spec §5.9): what stands, why, and what ends the line. A cut line says it
  *  was cut. It points to the feed row only when the row carries ccd's `detail`: ccd's last-resort line keeps
  *  neither `meas` nor `detail`, and then the sentence names where to look instead. A temp root that a later
- *  `collect` took is never named as kept, nor as a place to look. */
+ *  `collect` took is never named as kept, nor as a place to look. When a later `collect` found nothing at the
+ *  temp root (`tmpFoundNothing`), its clause comes before the horizon, in either arm (path-identity spec §3.4). */
 export function childReclaimLeafKeptSentence(
   sessionId: string, clips: ChildReclaimMirrorLeaf, tmp: ChildReclaimMirrorLeaf | 'collected',
-  detail: string | null,
+  detail: string | null, tmpFoundNothing: boolean,
 ): string {
+  const foundNothing = tmpFoundNothing ? ` ${childReclaimLeafFoundNothing(sessionId)}` : '';
   if (clips.kind === 'truncated') {
     const where = tmp === 'collected'
       ? `~/.cc-clips/${sessionId}` : `~/.cc-clips/${sessionId} and ~/.cc-tmp/${sessionId}`;
@@ -1653,7 +1695,7 @@ export function childReclaimLeafKeptSentence(
       + (detail !== null && childReclaimDetailText(detail) !== ''
         ? 'the feed row for it carries what ccd said.'
         : `ccd's line kept no detail either, so the feed cannot name it; look for ${where} on the fleet box.`)
-      + (tmp === 'collected' ? ' Its temp root has since been collected.' : '') + ` ${LEAF_HORIZON}`;
+      + (tmp === 'collected' ? ' Its temp root has since been collected.' : '') + foundNothing + ` ${LEAF_HORIZON}`;
   }
   const tmpWord = tmp !== 'collected' && tmp.kind === 'kept' ? tmp.word : null;
   const parts = [
@@ -1662,7 +1704,7 @@ export function childReclaimLeafKeptSentence(
   ];
   return `The reclaim of this child completed, but ccd kept ${parts.join(' and ')}. What was kept stays on disk.`
     + (clips.kind === 'kept' ? ` ${LEAF_CLIPS_STAYS}` : '')
-    + (tmpWord === null ? '' : ` ${LEAF_TMP_COLLECTOR}`) + ` ${LEAF_HORIZON}`;
+    + (tmpWord === null ? '' : ` ${LEAF_TMP_COLLECTOR}`) + foundNothing + ` ${LEAF_HORIZON}`;
 }
 
 /** One derived item, with what the lane's feed row needs: the mirror row it came from (the feed's
@@ -1674,6 +1716,10 @@ export interface ChildReclaimLeafKept {
   /** The clips half's clause, which a winning item carries as its second clause (spec §5.10): the kept clips part,
    *  the unknown clause for a line cut to fit, or null when clips was `none-or-unreported`. */
   readonly clipsClause: string | null;
+  /** The temp-root half's later `collect` found nothing (`meas.leaf` `absent`) and no row ended the half: the sentence
+   *  carries `childReclaimLeafFoundNothing`'s clause, and the item never joins the `kept-many` collapse
+   *  (path-identity spec §3.4). The marker lives here, on L1's type, never on the wire. */
+  readonly foundNothing: boolean;
 }
 
 const leafRunOf = (childOf: string | null): number | null =>
@@ -1686,15 +1732,20 @@ const leafRunOf = (childOf: string | null): number | null =>
  *  An end must FOLLOW the row: a higher mirror id, and not a time ccd's own clock puts before the row's.
  *  - A later PLACED `create` (dated, and not ahead of the server's clock) ends both halves: the id is a
  *    new workspace now.
- *  - A later `collect` `done` ends the temp-root half only. The collector never takes a clips directory.
+ *  - A later `collect` `done` ends the temp-root half only, and only when its line says the collection removed the
+ *    leaf (`meas.leaf` `removed`), or is an uncut line with no `leaf`, which an older ccd writes (path-identity
+ *    spec §3.4). The collector never takes a clips directory. Any such row ends the half, whatever its place.
+ *  - Otherwise a later line that says no leaf stood there (`absent`) keeps the half to the horizon with
+ *    `childReclaimLeafFoundNothing`'s clause, and marks the item `foundNothing`. A line cut to fit with no `leaf`,
+ *    and a `leaf` that is no word of ccd's, neither end the half nor add a clause.
  *
  *  A row whose id fails the temp-root id rule lists nothing, so no feed row is written for it. Any session can
  *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
  *  to remove. The rule is L0's `isTmpRootId` (spec §5.10):
- *  - ccd's `_ws_tmproot_id_ok`, a session id's shape and no leading `.`. Without the dot clause, `.` would name
- *    `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
- *  - no leading `-`, and at most 255 characters. These two clauses are the collector's, and here they change only
- *    what is listed: an id the collector never audits is not listed either.
+ *  - ccd's `_ws_tmproot_id_ok`, a session id's shape with no leading `.` or `-`. Without the dot clause, `.` would
+ *    name `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
+ *  - at most 255 characters. That clause is the collector's, and here it changes only what is listed: an id the
+ *    collector never audits is not listed either.
  *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's
@@ -1715,17 +1766,24 @@ export function childReclaimLeafKept(i: {
   for (const r of latest.values()) {
     const after = (i.ends.get(r.sessionId) ?? []).filter((e) => e.id > r.id && !(e.at !== null && e.at < r.at));
     if (after.some((e) => e.act === LEAF_END_CREATE && e.at !== null && e.at <= i.nowMs)) continue;
-    const collected = after.some((e) => e.act === LEAF_END_COLLECT);
+    // MONOTONE (path-identity spec §3.4): any later row that ends the temp-root half ends it, whatever its place among
+    // the others; otherwise any `absent` adds the clause. Never "the latest wins": a later unread row cannot re-open
+    // an ended line, and an earlier end still ends.
+    const reads = after.flatMap((e) => (e.act === LEAF_END_COLLECT ? [e.leaf] : []));
+    const ends = (x: ChildReclaimLeafEndRead): boolean => (x.kind === 'word' && x.word === 'removed') || x.kind === 'keyless';
+    const collected = reads.some(ends);
     const clips = childReclaimMirrorLeaf(r, 'clipsKept');
     const tmpRead = childReclaimMirrorLeaf(r, 'tmpRootKept');
     const tmp = collected && tmpRead.kind !== 'none-or-unreported' ? 'collected' as const : tmpRead;
+    const foundNothing = !collected && tmpRead.kind !== 'none-or-unreported'
+      && reads.some((x) => x.kind === 'word' && x.word === 'absent');
     if (clips.kind === 'none-or-unreported' && (tmp === 'collected' || tmp.kind === 'none-or-unreported')) continue;
     const clipsClause = clips.kind === 'kept' ? leafClipsPart(r.sessionId, clips.word)
       : clips.kind === 'truncated' ? `whether its clips directory ~/.cc-clips/${r.sessionId} was kept is not known` : null;
     out.push({
       item: { kind: 'leaf-kept', sessionId: r.sessionId, runId: leafRunOf(r.meas?.childOf ?? null),
-        sentence: childReclaimLeafKeptSentence(r.sessionId, clips, tmp, r.detail), at: r.at },
-      source: r.id, detail: r.detail, clipsClause,
+        sentence: childReclaimLeafKeptSentence(r.sessionId, clips, tmp, r.detail, foundNothing), at: r.at },
+      source: r.id, detail: r.detail, clipsClause, foundNothing,
     });
   }
   return out.sort((a, b) => childReclaimBySession(a.item, b.item));
@@ -1746,13 +1804,18 @@ export function childReclaimLeafKeptManySentence(n: number): string {
 
 /** What the kept-leaf items list as (spec §5.9). More than `CHILD_RECLAIM_KEPT_MANY_OVER` items WITH a run
  *  become ONE `kept-many` line. An item with no run always stays single, because the PWA drops a member
- *  whose run is not a number. The singles come first, ordered by session id, then the line. */
-export function childReclaimLeafKeptList(items: readonly ChildReclaimLeafKeptAttention[]): ChildReclaimAttention[] {
+ *  whose run is not a number. So does an item whose id is in `alone`: a found-nothing item, of which the collapsed
+ *  sentence's "until ccrc’s temp-root collector removes it" is not true (path-identity spec §3.4). Neither counts
+ *  toward the collapse. The singles come first, ordered by session id, then the line. */
+export function childReclaimLeafKeptList(
+  items: readonly ChildReclaimLeafKeptAttention[], alone: ReadonlySet<string>,
+): ChildReclaimAttention[] {
   const sorted = [...items].sort(childReclaimBySession);
-  const withRun = sorted.flatMap((a) => (a.runId === null ? [] : [{ sessionId: a.sessionId, runId: a.runId }]));
+  const withRun = sorted.flatMap((a) =>
+    (a.runId === null || alone.has(a.sessionId) ? [] : [{ sessionId: a.sessionId, runId: a.runId }]));
   if (withRun.length <= CHILD_RECLAIM_KEPT_MANY_OVER) return sorted;
   return [
-    ...sorted.filter((a) => a.runId === null),
+    ...sorted.filter((a) => a.runId === null || alone.has(a.sessionId)),
     { kind: 'kept-many', word: CHILD_RECLAIM_LEAF_KEPT_MANY_WORD, members: withRun,
       sentence: childReclaimLeafKeptManySentence(withRun.length) },
   ];
@@ -1883,6 +1946,6 @@ export function childReclaimAttentionWithLeaves(
   const leftLeaves = leaves.map((l) => l.item).filter((l) => !taken.has(l.sessionId));
   return [
     ...reclaim, ...[...singles].sort(childReclaimBySession), ...groups, ...countLine, ...collect.box,
-    ...childReclaimLeafKeptList(leftLeaves),
+    ...childReclaimLeafKeptList(leftLeaves, new Set(leaves.filter((l) => l.foundNothing).map((l) => l.item.sessionId))),
   ];
 }
