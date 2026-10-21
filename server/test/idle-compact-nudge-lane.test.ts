@@ -370,13 +370,13 @@ describe('sweepIdleCompactNudge: a real-shaped compaction uuid survives the feed
   });
 });
 
-// D-5860 (Task C1f, Step 1): the characterization of `alreadyNudged`'s body-match read AS IT STANDS, before any key.
-// Rows (a), (b) and (e) of the plan's table are the "happy path" and "at most once per compaction" blocks above
-// (first nudge, the same compaction again, ACROSS A RESTART); the landing gate's row (the record throws, nothing typed)
-// is "HOLD: the notify log is present but the coord.db row throws" above and C0c's feed-writers-pin row. The rows
-// below are the ones a key read can answer differently; OA-C3 rules which of them change. Nudge rows are
-// `recordOnly`: they are never pushed, before or after.
-describe('C1f characterization: the nudge\'s "already nudged" read matches the archived body (D-5860, OA-C3)', () => {
+// D-5860 (Task C1f): `alreadyNudged` reads the compaction's KEY (`hasNotice`), no longer the archived body. Step 1
+// pinned these rows on the body read; Step 3 changed only the rows OA-C3 ruled (operator, 2026-10-21: "A: the label
+// decides"), each marked RULED with what it did before. Rows (a), (b) and (e) of the plan's table are the "happy path"
+// and "at most once per compaction" blocks above (first nudge, the same compaction again, ACROSS A RESTART); the
+// landing gate's row (the record throws, nothing typed) is "HOLD: the notify log is present but the coord.db row
+// throws" above and C0c's feed-writers-pin row. Nudge rows are `recordOnly`: they are never pushed, before or after.
+describe('C1f: the nudge\'s "already nudged" read is the compaction\'s key (D-5860, OA-C3 ruled A)', () => {
   const REWORDED = 'Nudging with a "continue" prompt (an earlier wording) (compaction b1)';
   it('(c) the row\'s body changed (a reworded deploy), same process: held by this process\'s own set', async () => {
     const { h, coord, w } = await rig();
@@ -387,15 +387,27 @@ describe('C1f characterization: the nudge\'s "already nudged" read matches the a
     expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
     expect(nudgeRows(coord)).toHaveLength(1);
   });
-  it('(c) the row\'s body changed, then a restart: TODAY the same compaction is typed AGAIN (the body read misses)', async () => {
+  // RULED (OA-C3, A). Before: typed AGAIN, a second row (the body read missed the reworded row).
+  it('(c) the row\'s body changed, then a restart: the key matches, so the same compaction is NOT typed again', async () => {
     const first = await rig();
     await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     first.coord.db.prepare("UPDATE feed_events SET body = ? WHERE kind = 'nudge'").run(REWORDED);
     const second = await rig({ home: first.h, coord: first.coord });
     await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
-    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT, IDLE_COMPACT_NUDGE_PROMPT]);
-    expect(nudgeRows(first.coord).map((r) => r.body)).toEqual([REWORDED, idleNudgeFeedBody('b1')]);
-    expect(warned(`idle-compact-nudge ${ID} compaction b1: typed`)).toBe(2);
+    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(first.coord).map((r) => r.body)).toEqual([REWORDED]);
+    expect(warned(`idle-compact-nudge ${ID} compaction b1: typed`)).toBe(1);
+  });
+  // Departure `dedupe-key-legacy-text`: a row archived BEFORE the key (NULL) is still matched by its body, so the
+  // deploy itself types nothing a second time.
+  it('a row archived before the key existed is matched by its body: a restart onto the new build types nothing', async () => {
+    const first = await rig();
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    first.coord.db.prepare("UPDATE feed_events SET dedupe_key = NULL WHERE kind = 'nudge'").run();
+    const second = await rig({ home: first.h, coord: first.coord });
+    await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(first.coord)).toHaveLength(1);
   });
   it('(d) a ring restart (a new epoch), same process: held by this process\'s own set', async () => {
     const { h, coord, w, deps, log } = await rig();
@@ -428,11 +440,12 @@ describe('C1f characterization: the nudge\'s "already nudged" read matches the a
   const later = 4 * 3_600_000;
   const shift = (r: object, uuid: string): object =>
     ({ ...r, uuid, timestamp: new Date(Date.parse((r as { timestamp: string }).timestamp) + later).toISOString() });
-  const twoCompactions = async (k1: string, k2: string): Promise<Rig> => {
+  const twoCompactions = async (k1: string, k2: string, between: (r: Rig) => void = () => {}): Promise<Rig> => {
     const r = await rig();
     const first = IDLE_TAIL.map((x) => (x === ROW.boundary ? { ...ROW.boundary, uuid: k1 } : x));
     seedTranscript(r.h.home, first);
     await r.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    between(r);
     seedTranscript(r.h.home, [...first, ROW.nudge, shift(ROW.endTurn, 'a9'), shift(ROW.stopHook, 'h9'),
       shift(ROW.boundary, k2), shift(ROW.summary, 's2'), shift(ROW.notice, 'n2')]);
     seedLive(r.h.home, { statusUpdatedAt: T_NOTICE + later });
@@ -445,11 +458,23 @@ describe('C1f characterization: the nudge\'s "already nudged" read matches the a
     const r = await twoCompactions('b1', 'b2');
     expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT, IDLE_COMPACT_NUDGE_PROMPT]);
   });
-  it('TODAY: a second compaction with a REAL-SHAPED uuid reads as already nudged (the redacted bodies collide) — nothing typed', async () => {
+  // RULED (OA-C3; fixed under A and B alike). Before: the second compaction read as already nudged, nothing typed.
+  it('a second compaction with a REAL-SHAPED uuid is nudged once more, though the redacted bodies collide', async () => {
     expect(redactCommand(idleNudgeFeedBody(U1))).toBe(redactCommand(idleNudgeFeedBody(U2)));
     const r = await twoCompactions(U1, U2);
+    expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT, IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(nudgeRows(r.coord)).toHaveLength(2);
+    expect(warned(`idle-compact-nudge ${ID} compaction ${U2}: typed`)).toBe(1);
+  });
+  // Departure `landing-gate-by-key`: once a later compaction can be nudged, a body re-read after its record would match
+  // the EARLIER compaction's masked row and type over a row that did not land. The gate re-reads the key.
+  it('the landing gate: a second compaction whose own row did not land types nothing, though the earlier row\'s body matches', async () => {
+    const r = await twoCompactions(U1, U2, (x) => {
+      vi.spyOn(x.coord, 'recordFeedEvent').mockImplementation(() => { throw new Error('database is locked'); });
+    });
     expect(literalSends(r.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
-    expect(nudgeRows(r.coord)).toHaveLength(1);
-    expect(warned(`compaction ${U2}`)).toBe(0);
+    expect(nudgeRows(r.coord).map((x) => x.body), 'the premise: a body read would say landed')
+      .toEqual([redactCommand(idleNudgeFeedBody(U2))]);
+    expect(warned(`compaction ${U2}: the feed record did not land — nothing typed`)).toBe(1);
   });
 });

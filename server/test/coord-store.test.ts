@@ -26,6 +26,7 @@ import {
   RUN_ID_MAX_DECIMAL,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { redactCommand } from '../src/coord/redact.js';
 import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
 import type { DatabaseSync } from 'node:sqlite';
 import {
@@ -2434,15 +2435,15 @@ describe('CoordStore: feed (Task 10)', () => {
   });
 
   // D-5298: the writer archives every body redacted, so a body holding a token-shaped run (a commit SHA, a compaction
-  // uuid) is stored masked. `hasFeedEvent` is asked with the RAW body (sweepLanding, the idle nudge), so it must
-  // compare in the stored form, or an already-told record reads as never told and is announced again.
-  it('hasFeedEvent finds a record whose body the writer stored redacted, asked with the raw body', () => {
+  // uuid) is stored masked. `hasNotice`'s pre-key body read is asked with the RAW body (sweepLanding, the idle nudge),
+  // so it must compare in the stored form, or an already-told record reads as never told and is announced again.
+  it('hasNotice\'s pre-key body read finds a record whose body the writer stored redacted, asked with the raw body', () => {
     const s = store();
     const body = 'removed from the queue at 12:00 (head 0123456789abcdef0123456789abcdef01234567)';
     s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'queue', sessionId: 'cc-a', title: 't', body, runId: null });
     expect(s.feedEvents(10)[0]!.body).not.toContain('0123456789abcdef0123456789abcdef01234567');
-    expect(s.hasFeedEvent('queue', 'cc-a', body)).toBe(true);
-    expect(s.hasFeedEvent('queue', 'cc-a', 'another body')).toBe(false);
+    expect(s.hasNotice('queue', 'cc-a', 'k', body)).toBe(true);
+    expect(s.hasNotice('queue', 'cc-a', 'k', 'another body')).toBe(false);
   });
 
   // D-5860 (Task C1f): `hasNotice`, the once-only key read. Two compaction uuids mask to ONE body (D-5298), so a body
@@ -2454,7 +2455,7 @@ describe('CoordStore: feed (Task 10)', () => {
   it('hasNotice tells two token-shaped keys apart where their masked bodies collide, and stores neither in the clear', () => {
     const s = store();
     s.recordFeedEvent('epoch-1', row(1, `compaction ${U1}`), U1);
-    expect(s.hasFeedEvent('nudge', 'cc-a', `compaction ${U2}`), 'the premise: the masked bodies collide').toBe(true);
+    expect(redactCommand(`compaction ${U1}`), 'the premise: the masked bodies collide').toBe(redactCommand(`compaction ${U2}`));
     expect(s.hasNotice('nudge', 'cc-a', U1)).toBe(true);
     expect(s.hasNotice('nudge', 'cc-a', U2)).toBe(false);
     const stored = (s.db.prepare('SELECT dedupe_key AS k FROM feed_events').get() as { k: string }).k;

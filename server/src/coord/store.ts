@@ -5986,29 +5986,17 @@ export class CoordStore {
     }));
   }
 
-  /** Whether the feed archive holds a record of this kind, about this session,
-   *  with exactly this body — `sweepLanding`'s durable "already told" read for
-   *  a removal no open run names (landing-order wave 2), whose body carries the
-   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
-   *  pruned out of the archive reads as never recorded, and is announced again.
-   *  The body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped
-   *  run (a compaction uuid, a commit SHA) is archived masked, and a raw comparison would never match it. */
-  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
-    const row = this.db.prepare(
-      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
-    ).get(kind, sessionId, redactCommand(body));
-    return row !== undefined;
-  }
-
   /**
    * D-5860 `notice-dedupe-key` (W1a plan, Task C1f; ARCH-55 #790): whether the feed archive holds a notice of this kind,
    * about this session, carrying this once-only key — the read-before-write "already sent" answer for a notice whose
    * wording may change while its event does not (OA-C3, ruled A: the label decides). The key is compared hashed, as
    * `recordFeedEvent` stored it, never through the body's redactor (departure `dedupe-key-unmasked`).
    *
-   * `legacyBody`, when given, also matches a row written BEFORE the key existed (`dedupe_key IS NULL`) by its body,
-   * exactly as `hasFeedEvent` does (departure `dedupe-key-legacy-text`), so the deploy itself re-sends nothing. A keyed
-   * row is never matched by its body. Bounded by `FEED_RETENTION` like every feed read.
+   * `legacyBody`, when given, also matches a row written BEFORE the key existed (`dedupe_key IS NULL`) by its body, as
+   * the body read this replaced did (departure `dedupe-key-legacy-text`), so the deploy itself re-sends nothing. The
+   * body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped run is
+   * archived masked, and a raw comparison would never match it. A keyed row is never matched by its body. Bounded by
+   * `FEED_RETENTION` like every feed read: a row pruned out of the archive reads as never recorded.
    */
   hasNotice(kind: string, sessionId: string, dedupeKey: string, legacyBody?: string): boolean {
     const byKey = this.db.prepare(
