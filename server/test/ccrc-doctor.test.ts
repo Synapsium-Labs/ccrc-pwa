@@ -16742,14 +16742,21 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   });
 
   describe('filevault (darwin)', () => {
+    it('SKIPs a Mac with no lane secret, even with an fdesetup that would answer Off: a fresh install stays green', () => {
+      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'SKIP filevault: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret sits on its disk']);
+      expect(r.code).toBe(3);
+    });
+
     it('PASSes FileVault is On.', () => {
-      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
+      const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual(['PASS filevault: FileVault is On (fdesetup status)']);
       expect(r.code).toBe(0);
     });
 
     it('WARNs FileVault is Off. with its remedy: the machine\'s policy, never a FAIL that fails an install', () => {
-      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
+      const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual([
         'WARN filevault: FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them',
         '  remedy: turn FileVault on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
@@ -16758,16 +16765,16 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     });
 
     it('WARNs a disk that is turning off, though its first line still says On', () => {
-      const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is On.\nDecryption in progress: Percent completed = 12') } }), 'filevault', 'darwin');
+      const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.\nDecryption in progress: Percent completed = 12') } }), 'filevault', 'darwin');
       expect(r.stdout).toMatch(/^WARN filevault: FileVault is turning off \(fdesetup status: Decryption in progress\)/m);
       expect(r.code).toBe(2);
     });
 
     it('WARNs not measured when fdesetup is not on PATH, and when it answers neither On nor Off', () => {
-      const absent = run(box(), 'filevault', 'darwin');
+      const absent = run(box({ secrets: ['.cc-secrets'] }), 'filevault', 'darwin');
       expect(absent.stdout).toMatch(/^WARN filevault: fdesetup is not on PATH, so whether FileVault is on was not measured$/m);
       expect(absent.code).toBe(2);
-      const odd = run(box({ stubs: { fdesetup: fdesetup('Error: unexpected answer') } }), 'filevault', 'darwin');
+      const odd = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('Error: unexpected answer') } }), 'filevault', 'darwin');
       expect(odd.stdout).toMatch(/^WARN filevault: fdesetup status answered 'Error: unexpected answer', so whether FileVault is on was not measured$/m);
       expect(odd.code).toBe(2);
     });

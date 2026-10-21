@@ -9575,15 +9575,21 @@ _check_secrets-backup-excluded() {
 }
 
 # `filevault` (darwin): `fdesetup status` answers `FileVault is On.` or `FileVault is Off.`, with a progress line
-# while it converts. Off, or turning off, WARNs rather than FAILs: disk encryption is the machine's policy, which
-# ccrc does not own and an operator may have chosen, and a FAIL would fail every install on such a Mac. An answer
-# this check cannot read WARNs as not measured.
+# while it converts. Its subject is the same as `secrets-backup-excluded`'s, a Mac that holds lane secrets, so a fresh
+# install SKIPs it. Off, or turning off, WARNs rather than FAILs: disk encryption is the machine's policy, which ccrc
+# does not own and an operator may have chosen, and a FAIL would fail every install on such a Mac. An answer this
+# check cannot read WARNs as not measured.
 _check_filevault() {
   if [ "${CCD_OS:-linux}" != darwin ]; then
     _dr_skip filevault "FileVault is macOS's disk encryption; this box is ${CCD_OS:-linux}"
     return 3
   fi
-  local out first
+  local out first d dirs=()
+  while IFS= read -r d; do [ -n "$d" ] && dirs+=("$d"); done < <(_dr_secret_dirs)
+  if [ "${#dirs[@]}" -eq 0 ]; then
+    _dr_skip filevault "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret sits on its disk"
+    return 3
+  fi
   if ! command -v fdesetup >/dev/null 2>&1; then
     _dr_warn filevault "fdesetup is not on PATH, so whether FileVault is on was not measured" \
       "run 'fdesetup status' with /usr/bin on PATH"
