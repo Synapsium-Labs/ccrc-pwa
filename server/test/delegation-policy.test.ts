@@ -479,7 +479,7 @@ describe('an attempt is a decision, not its witnesses (D-6190, C-P1, C-P3..C-P7)
     const e = effects[0]!;
     if (e.kind !== 'request-linked-lease-identity') throw new Error('unreachable');
     expect(e.attempt.rung).toBe(3);
-    expect(e.attempt.attemptId).not.toBe('legacy-linked');
+    expect(e.attempt.attemptId).not.toBe(hex('legacy-linked'));
     expect(e.attempt.attemptId).not.toBe(onFile.attemptId);
   });
 

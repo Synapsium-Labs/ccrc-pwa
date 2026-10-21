@@ -1581,7 +1581,7 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
           const keys = new Set(cp.attempts.map((a) => JSON.stringify([a.parentId, a.parentIncarnation, a.project, a.adminRecord, a.canonicalPath, a.rung, a.verdict, a.detail])));
           return {
             calls: change.mock.calls.length, revision: cp.revision, attempts: cp.attempts.length, keys: keys.size,
-            intervalsHaveNothingToDo: model.upkeepDelegationIntervals(cp.observationIntervals, Date.now()).changed === false,
+            intervalsHaveNothingToDo: model.upkeepDelegationIntervals(cp.observationIntervals, at(2)).changed === false,
           };
         };
         r.also('upkeep', () => { atUpkeep = read(); });

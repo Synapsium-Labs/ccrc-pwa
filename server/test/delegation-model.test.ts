@@ -996,11 +996,12 @@ describe('D-6190, D-6191: an attempt is a decision; rows that repeat one decisio
     // Out of ID order: the smallest ID (…01) is the LATEST row; …02 and …03 share the earliest instant, so …02 (the smaller ID) is kept.
     const r1 = row(5, T1), r2 = row(3, T0), r3 = row(1, T2), r4 = row(2, T0), r5 = row(4, T1);
     const u1 = row(9, T1, { adminRecord: 'wt-before' }), u2 = row(8, T1, { detail: 'rungs-disagree' }), u3 = row(7, T0, { verdict: 'conflicting' });
-    const input = [u1, r1, r2, u2, r3, r4, u3, r5];
+    const u4 = row(6, T2, { project: 'project-c' });
+    const input = [u1, r1, r2, u2, r3, r4, u3, r5, u4];
     const out = collapse()(input);
     expect(out.removed).toBe(4);
-    expect(out.attempts).toEqual([u1, u2, r4, u3]);
-    expect(input).toHaveLength(8);                                                    // the input is not edited
+    expect(out.attempts).toEqual([u1, u2, r4, u3, u4]);
+    expect(input).toHaveLength(9);                                                    // the input is not edited
   });
 
   const FIELDS: { field: string; over: Partial<DelegationAttemptRow> }[] = [
