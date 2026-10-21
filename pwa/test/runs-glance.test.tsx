@@ -86,6 +86,18 @@ describe('the runs ledger at a glance (D-6170)', () => {
     expect(screen.queryByRole('button', { name: 'Abandon run 3' })).toBeNull();
   });
 
+  it('a done or failed row with no closedAt still renders no Abandon (closed is the state, not the stamp)', async () => {
+    const c = await board([run({ id: 1 })], [
+      run({ id: 4, state: 'done', closedAt: null }),
+      run({ id: 5, state: 'failed', closedAt: null }),
+    ]);
+    await screen.findByTitle(/run 4/);
+    expect(rows(c)).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Abandon run 4' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Abandon run 5' })).toBeNull();
+  });
+
   it("no row's visible name equals its run id, its workspace or its branch", async () => {
     const c = await board([
       run({ id: 1 }),

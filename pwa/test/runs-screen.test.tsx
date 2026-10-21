@@ -543,7 +543,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
 // stays green because nothing else renders `RunsScreen` with a run and looks
 // for it. This pins the row control on a REAL row, in the file that already
 // owns every other row-level assertion (`.run-open`, the tally, the glyph).
-describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-287 (was D-B4-14))', () => {
+describe('the abandon control mounts on every open run row (Task 12, spec §4.3, D-287 (was D-B4-14))', () => {
   it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
