@@ -95,10 +95,12 @@ describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions und
       ['server/src/coord/rundefs.ts', 'server/src/lane.ts', 'server/src/watch.ts']);
   });
 
-  it("REAL: it finds childReclaim's read, and fewer files parse the marker than name it", () => {
+  // D-5856: the real-tree anchor is the stop-done lane's read, the one parse W1a's C1b leaves (W4 moves it); C1b folds
+  // childReclaim's, the anchor until then, onto `readSwitches`.
+  it("REAL: it finds stopDoneSweep's read, and fewer files parse the marker than name it", () => {
     const sites = reclaimPauseParseSites();
     show('reclaimPauseParseSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/coord/childReclaim.ts'), "childReclaim's read is not found").toBe(true);
+    expect(sites.some((s) => s.file === 'server/src/stopDoneSweep.ts'), "stopDoneSweep's read is not found").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
     const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
     console.log(`census files naming reclaim-paused: ${naming.length}\n  ${naming.join('\n  ')}`);

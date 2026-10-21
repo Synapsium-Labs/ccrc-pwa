@@ -5,10 +5,11 @@
 // quiescence: the job is finished, and nothing but the record's own inode was removed. A kill before the move leaves
 // the leaf at its id, so a pass there is a fresh collection, which a forged slot of the id that no record names holds
 // at `quarantine-kept` until the operator clears it (fresh-collect-refuses-beside-a-standing-slot). Then the witness is rewritten,
-// dropped and deleted under a standing record: the record is found whatever the witness says. And the record itself is
-// lost out of band while its slot stands: the slot is the operator's, listed on every audit, never dropped in silence
-// by the COLLECTOR's own arms (the reclaim tail's witness drop still ignores a recordless slot, a stated residual:
-// `tail-drop-ignores-a-recordless-slot`). Last, one stated residual is pinned as it stands, widened
+// kept by a later tail's drop, and deleted under a standing record: the record is found whatever the witness says. And
+// the record itself is lost out of band while its slot stands: the slot is the operator's, listed on every audit, never
+// dropped in silence by the COLLECTOR's own arms, nor, since path-identity W2 (TR4 A), by the reclaim tail's witness
+// drop, which keeps the witness while a slot of the id stands (`tail-drop-ignores-a-recordless-slot`, closed). Last,
+// one stated residual is pinned as it stands, widened
 // (`crash-at-moved-residual-widened`): a crash after the move once a recycled spawn adopted the leaf.
 // FIXTURE HOME ONLY (`collectRaceFixture.ts`). Linux only (`/proc/<pid>/stat`), and only where `mv --no-copy` exists.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -112,7 +113,7 @@ describe.skipIf(!LINUX || !NO_COPY)('the record is found WHATEVER THE WITNESS SA
     return { o, rec: recs[0]!, kept };
   };
 
-  it('REWRITTEN by a recycled spawn: nothing moves while that child lives; once its own tail has DROPPED the witness, the record is resumed and only its inode goes', () => {
+  it('REWRITTEN by a recycled spawn: nothing moves while that child lives; once it departs, its tail’s drop KEEPS the witness beside the record’s slot, the record is resumed, and only its inode goes', () => {
     const c = killedInSlot();
     h.sh(`${g2Row()} && ${g2Spawn()}`);
     const g2 = devinoOf(c.o.leaf);
@@ -128,22 +129,34 @@ describe.skipIf(!LINUX || !NO_COPY)('the record is found WHATEVER THE WITNESS SA
     expect(fs.readFileSync(path.join(c.o.leaf, 'g2.txt'), 'utf8')).toBe('g2 scratch\n');
     expect(recordsOf(h)).toEqual([c.rec]);
     g2Departs(h);
-    expect(fs.existsSync(witnessOf(h)), 'the CONTROL: the later tail dropped the witness').toBe(false);
+    expect(witnessField(h, 'run'), 'the CONTROL: witness kept beside the record’s slot (path-identity W2, TR4 A)').toBe(G2_RUN);
     const rounds = settle(h);
-    expect(verdictOf(rounds[0]), 'found with no witness at all').not.toBe('not-witnessed');
+    expect(verdictOf(rounds[0]), 'the record is found: never "nothing to collect"').not.toBe('not-witnessed');
     expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
     expect(devinoOf(c.kept)).toBeNull();
     expect(slotsOf(h)).toEqual([]);
     expect(recordsOf(h)).toEqual([]);
   }, 240_000);
 
-  it.each([
-    ['DROPPED by a later tail (`_ws_tmproot_witness_drop`)', `_ws_tmproot_witness_drop ${COL_ID} >/dev/null 2>&1; :`],
-    ['ABSENT (deleted by hand)', `rm -f -- "$REG/tmproots/${COL_ID}"`],
-  ])('%s: the record alone licenses the resume', (_how, drop) => {
+  it('ABSENT (deleted by hand): the record alone licenses the resume', () => {
     const c = killedInSlot();
-    h.sh(drop);
+    h.sh(`rm -f -- "$REG/tmproots/${COL_ID}"`);
     expect(fs.existsSync(witnessOf(h)), 'the CONTROL: no witness').toBe(false);
+    const rounds = settle(h);
+    expect(verdictOf(rounds[0]), 'a standing record is never "nothing to collect"').not.toBe('not-witnessed');
+    expect(String(rounds[0]?.doc['token'] ?? ''), 'a resume token, minted from the record').toMatch(TOKEN);
+    expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
+    expect(devinoOf(c.kept)).toBeNull();
+    expect(slotsOf(h)).toEqual([]);
+    expect(recordsOf(h)).toEqual([]);
+  }, 240_000);
+
+  it('KEPT by a later tail’s drop beside the standing slot (`_ws_tmproot_witness_drop`): the record licenses the resume, and its compare-and-drop takes the witness', () => {
+    const c = killedInSlot();
+    const before = fs.readFileSync(witnessOf(h), 'utf8');
+    h.sh(`_ws_tmproot_witness_drop ${COL_ID} >/dev/null 2>&1; :`);
+    expect(fs.existsSync(witnessOf(h)), 'the CONTROL: the drop kept the witness beside the record’s slot').toBe(true);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'byte for byte').toBe(before);
     const rounds = settle(h);
     expect(verdictOf(rounds[0]), 'a standing record is never "nothing to collect"').not.toBe('not-witnessed');
     expect(String(rounds[0]?.doc['token'] ?? ''), 'a resume token, minted from the record').toMatch(TOKEN);
@@ -158,9 +171,10 @@ describe.skipIf(!LINUX || !NO_COPY)('the RECORD lost out of band while its slot 
   // A crash that leaves a slot and a witness, and then something that does not take the reap lock deletes the record:
   // the witness now names a leaf that is gone from the id, which alone is the witness-only arm (a compare-and-drop,
   // nothing moved). A slot of the id standing beside it, with no record naming it, is the operator's — `quarantine-kept`
-  // on every audit, the witness kept beside it — never dropped as "nothing left to collect". This is the COLLECTOR's
-  // promise only: the reclaim tail's own witness drop (`_ws_tmproot_remove`) still drops the witness of an id whose
-  // recordless slot stands, a stated residual (`tail-drop-ignores-a-recordless-slot`) carried to wave 9.
+  // on every audit, the witness kept beside it — never dropped as "nothing left to collect". This is the collector's
+  // promise, and since path-identity W2 (TR4 A) the tail's too: the reclaim tail's witness drop
+  // (`_ws_tmproot_witness_drop`, through `_ws_tmproot_remove` or alone) keeps the witness of an id while any slot of it
+  // stands (`tail-drop-ignores-a-recordless-slot`, closed).
   it.each(['moved', 'removed'] as const)('killed at `%s`, then the record deleted by hand: `quarantine-kept`, nothing taken', (point) => {
     const o = orphanLeaf(h);
     collectVerb(h, tokenOf(h), COL_ID, crashAt(point));
@@ -236,8 +250,9 @@ describe.skipIf(!LINUX || !NO_COPY)('a stated residual: a crash after the move o
     expect(fs.readFileSync(path.join(kept, 'scratch', 'a.txt'), 'utf8'), 'and the old scratch').toBe('old work\n');
     expect(devinoOf(o.leaf), 'nothing was handed back to the id').toBeNull();
     expect(recordsOf(h)).toEqual([rec]);
-    // The child leaves as its own reclaim leaves it: its tail finds no leaf at the id and drops the witness, and its
-    // row goes. The record then resumes, and the verb collects what the slot holds.
+    // The child leaves as its own reclaim leaves it: its tail finds no leaf at the id, and its drop KEEPS the witness
+    // while the record's slot stands (path-identity W2, TR4 A); its row goes. The record then resumes and the verb
+    // collects what the slot holds; a witness-only pass then drops the witness it left.
     g2Departs(h);
     const rounds = settle(h);
     expect(verdictOf(rounds[0]), shownRounds(rounds)).toBe('collectable');

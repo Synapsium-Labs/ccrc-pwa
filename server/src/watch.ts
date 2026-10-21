@@ -48,7 +48,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // form is invisible to it.
 import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
-import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
+import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
 // `single-definition.test.ts` pins that this file holds no copy.
 import {
@@ -2312,7 +2312,6 @@ export class FleetWatcher {
         mark: (rec) => turnMarkFor(reads, rec),
         rowAtAct: (rec) => this.rowAtAct(rec),
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
-        readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         startedAt: this.stopDoneStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2987,7 +2986,7 @@ export class FleetWatcher {
           deadCoordinatorAttention: this.deadCoordinatorAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
-          reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
+          reclaim: readSwitches(names)[RECLAIM_PAUSE_MARKER],
           childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
           deadCoordinatorAttention: this.deadCoordinatorAttentionList };
     // Wave 6 (spec §5.9): the mirror's newest committed reclaim end, on BOTH
@@ -4334,7 +4333,7 @@ export class FleetWatcher {
     // conjunct, so a child needs two FRESH passes once a switch is lowered
     // (or the box gains the missing capability).
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
-        || names.includes(RECLAIM_PAUSE_MARKER)) {
+        || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       this.childReclaimPublishAttention(mirrorArms, live);
       this.childReclaimSweepState.clear();
@@ -5055,6 +5054,7 @@ export class FleetWatcher {
       runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState, lane: this.collectPortFor(coord, id),
     }, id))
       .then((answer) => {
+        if (answer.kind === 'id-refused') return;
         if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }
         this.collectFoldAudit(coord, id, pass, answer.audit.value, answer.audit.arrived, answer.audit.composed);
       }, (err: unknown) => {
@@ -5517,7 +5517,7 @@ export class FleetWatcher {
     // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
     // The ranked held bytes are still composed (D-6027): they need neither the store nor the capability, and the
     // operator needs them exactly while the lane is not acting — a block left from the last acting pass would freeze.
-    if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
+    if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
       forgetSightings();
       this.archivedHeldBlock = rankArchivedHeld(archived, this.archivedExpiryState);
       return;
@@ -5732,7 +5732,7 @@ export class FleetWatcher {
     // ONE — the switch. `reclaim-paused` stops the lane entirely, shadow included: nothing is measured, recorded or
     // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
     // stand (the next crashed pass continues them, or the gap restarts them).
-    if (names.includes(RECLAIM_PAUSE_MARKER)) { forget(); return; }
+    if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') { forget(); return; }
     // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
     // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
     const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());
