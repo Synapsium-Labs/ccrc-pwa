@@ -44,10 +44,12 @@ const openRow = (over: Record<string, unknown> = {}): Record<string, unknown> =>
   mergedRow({ state: 'OPEN', mergedAt: null, mergeCommit: null, ...over });
 
 type Act = 'AddedToMergeQueueEvent' | 'RemovedFromMergeQueueEvent' | null;
+/** One PR node of the queue answer. `why`, when given, is the last act's `reason` (wave 3d); given as `null`, the
+ *  key is present and null; not given, the key is absent, which is every fixture written before wave 3d. */
 const node = (number: number, state: 'OPEN' | 'MERGED', entry: boolean, act: Act,
-  at = '2026-09-23T10:00:00Z'): Record<string, unknown> => ({
+  at = '2026-09-23T10:00:00Z', ...why: [reason?: unknown]): Record<string, unknown> => ({
   number, state, mergeQueueEntry: entry ? { state: 'QUEUED' } : null,
-  timelineItems: { nodes: act === null ? [] : [{ __typename: act, createdAt: at }] },
+  timelineItems: { nodes: act === null ? [] : [{ __typename: act, createdAt: at, ...(why.length > 0 ? { reason: why[0] } : {}) }] },
 });
 const answer = (open: unknown[], merged: unknown[] = []): string =>
   JSON.stringify({ data: { repository: { open: { nodes: open }, merged: { nodes: merged } } } });
@@ -96,6 +98,9 @@ describe('pr-state --project reads the merge queue once per sweep', () => {
     expect(q).toContain('mergeQueueEntry');
     expect(q).toContain('REMOVED_FROM_MERGE_QUEUE_EVENT');
     expect(q).toContain('ADDED_TO_MERGE_QUEUE_EVENT');
+    // The removal's reason is asked for (wave 3d): the stub answers the same document whatever the query says, so
+    // only this text tells a query that stopped asking.
+    expect(q).toContain('... on RemovedFromMergeQueueEvent { createdAt reason }');
     // The NEWEST hundred open PRs, in `gh pr list`'s own order: unordered,
     // GitHub answers the OLDEST hundred and a busy repository's live PRs fall out.
     expect(q).toContain('open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC})');
@@ -142,16 +147,19 @@ describe('the five answers', () => {
     expect(sweep().queue).toBe('landed');
   });
 
-  it('none — a MERGED PR whose last queue act is a removal was merged BY HAND after the dequeue', () => {
-    // The case the spec's "last REMOVED event" alone cannot tell from a
-    // re-enqueued-then-landed PR: the last act of EITHER kind decides.
-    const tip = workspaceWithCommit('demo', 'quiet-basin');
-    h.ghRows([mergedRow({ headRefOid: tip })]);
-    setQueue(answer([], [node(42, 'MERGED', false, 'RemovedFromMergeQueueEvent')]));
-    const o = sweep();
-    expect(o.queue).toBe('none');
-    expect('queueAt' in o).toBe(false);
-  });
+  // Wave 3d: a removal whose reason is `merged` is the queue's own landing (below). Any other reason, or none, on a
+  // MERGED PR is a removal the PR outlived: it was merged by hand after it.
+  it.each([['absent'], ['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED']])(
+    'none — a MERGED PR whose last queue act is a removal for any reason but merged (reason %j)', (why) => {
+      const tip = workspaceWithCommit('demo', 'quiet-basin');
+      h.ghRows([mergedRow({ headRefOid: tip })]);
+      setQueue(answer([], [why === 'absent'
+        ? node(42, 'MERGED', false, 'RemovedFromMergeQueueEvent')
+        : node(42, 'MERGED', false, 'RemovedFromMergeQueueEvent', '2026-09-23T10:00:00Z', why)]));
+      const o = sweep();
+      expect(o.queue).toBe('none');
+      expect('queueAt' in o).toBe(false);
+    });
 
   it('none — an OPEN PR that never met the queue, and a workspace with no bound PR', () => {
     const tip = workspaceWithCommit('demo', 'quiet-basin');
@@ -189,6 +197,57 @@ describe('the five answers', () => {
     expect(o.queue).toBe('dequeued');
     expect('queueAt' in o).toBe(false);
   });
+});
+
+// Landing-order wave 3d. GitHub records a removal with reason `merged` at every successful queue merge, at or one
+// second before the PR reads MERGED (16 of 16 queue merges, measured 2026-10-21). That removal is the landing, never
+// a dequeue. The reason only chooses the word: it never reaches the line.
+describe('the removal\'s reason (landing-order wave 3d)', () => {
+  const T = '2026-10-21T07:24:15Z';
+
+  it('landed — MERGED, last act a removal whose reason is merged, stamped with the removal', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    setQueue(answer([], [node(42, 'MERGED', false, 'RemovedFromMergeQueueEvent', T, 'merged')]));
+    const o = sweep();
+    expect(o.queue).toBe('landed');
+    expect(o.queueAt).toBe(T);
+  });
+
+  it('landed, never dequeued — still OPEN, no entry, last act a removal whose reason is merged (the merge\'s second)', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    setQueue(answer([node(42, 'OPEN', false, 'RemovedFromMergeQueueEvent', T, 'merged')]));
+    const out = h.sh(`${queueGh(ANSWERS)} cmd_pr_state --project demo`);
+    const o = lines(out)[0]!;
+    expect(o.phase).toBe('open');
+    expect(o.queue).toBe('landed');
+    expect(o.queueAt).toBe(T);
+    // The reason chose the word and went nowhere else. The line's phase is `open`, so no field of it is the
+    // string "merged" unless the reason leaked.
+    expect(out).not.toContain('"merged"');
+  });
+
+  it('queued — an entry present wins, whatever the last act\'s reason', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    setQueue(answer([node(42, 'OPEN', true, 'RemovedFromMergeQueueEvent', T, 'merged')]));
+    expect(sweep().queue).toBe('queued');
+  });
+
+  it.each([['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED'], [7], [['merged']]])(
+    'dequeued — OPEN, no entry, last act a removal for any other reason, announced on its first read (reason %j)', (why) => {
+      const tip = workspaceWithCommit('demo', 'quiet-basin');
+      h.ghRows([openRow({ headRefOid: tip })]);
+      setQueue(answer([node(42, 'OPEN', false, 'RemovedFromMergeQueueEvent', T, why)]));
+      const out = h.sh(`${queueGh(ANSWERS)} cmd_pr_state --project demo`);
+      const o = lines(out)[0]!;
+      expect(o.queue).toBe('dequeued');
+      expect(o.queueAt).toBe(T);
+      // The reason chooses the word and goes nowhere else: no GitHub text reaches the line. Only a string reason
+      // has a JSON form no honest line carries (`null` and `7` are ordinary JSON tokens).
+      if (typeof why === 'string') expect(out).not.toContain(JSON.stringify(why));
+    });
 });
 
 describe('the queue read may not cost the rows', () => {
