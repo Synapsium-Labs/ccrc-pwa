@@ -194,7 +194,7 @@ The decisions document was written at `bd363a76b`; the base is `02d75ae5f`. Each
 | W2-D32: "py raw rows → `buildWindows` → count" | The count is the gate's `windowTotals` (about :311); `windowOf` (about :273) is exported | RP8 counts with `windowTotals` and builds the unfiltered CONTROL with `windowOf` | 5 |
 | W2-D32: the analysis "does not count the G2 line" | The filter is `measure-history.py`'s `family_report` calls query (about :230); `buildWindows` counts whatever calls the report carries | The CONTROL is mutant M1 on the script plus an in-test recomputation; the gate is not touched | 5 |
 | W2-D32: "the hook serves the card line" | No shared helper runs `ccd/session-hook.sh` in a `makeHistoryBox` HOME; `_hook_history_card` serves only after a fresh PreCompact scope marker and a prediction written on a pass that read the transcript to its end | A module-private `rpCompactStart` plants the marker; one Stop-hinted pass precedes each prediction read | 5 |
-| W2-D32 lists the hook before the drain | The SessionStart(compact) arm spools its own line | The drain runs first; no asserted value changes | 5 |
+| W2-D32 lists the hook before the drain | Running the drain first keeps the counted state exactly W2-D32's, whatever the hook later spools (SessionStart(compact) is not in `SPOOL_SOURCES`, so the hook spools no line of its own for it) | The drain runs first; no asserted value changes | 5 |
 | §2: "C66, C67, C68 (re-run)" with no holders named | C66 is held in `history-recall`, `history-lib`, `history-drain` and `history-card`; C67 in `history-recover`, `history-lib` and `history-recall`; C68 in `history-recall` and `session-hook` | Every holder re-runs unedited; the W2 halves go in `history-recall` only | 5 |
 | Spec §10.7: "a hand-planted file is pinned before W2 writes any" (C68) | The existing C68 cases plant `G1` with no LF; the verb writes `<G>\n` | Task 5 uses only verb-written files; mutant M5 (the hook's trim removed) reds only there | 5 |
 | §6: rev 3.6 spec anchors (E1 :1670, E3 :1741, E4 :1798-1799, E6 :2169, E12 :2620-2624 and :2734-2737, E13 :2624 and O32 :2439, E14 :2459, E15 :3051, E16 :2727 and :2732, E17 :2638, E18 :2697) | E1 :1671, E5 :1737, E3 :1742, E4 :1799-1800, E6 :2170, E12 :2634, :2746 and :2749, E13 :2636 and O32 :2446, E14 :2466 and §10.7 :2907, E15 :3063, E16 :2739 and :2744, E17 :2650, E18 :2709, E26 :2684 | Each replacement is anchored by quoted content and asserted unique | 3, 6 |
@@ -5502,9 +5502,9 @@ This task writes tests only. Its guards are Tasks 2 to 4's and W2-3's (`measure-
 
 **Choices this task makes:**
 - **The window spans the G2 call by its end, not by a clock seam (R5).** The CLI stamps its recall line with the wall clock, and `cli.mjs` has no test clock. G1's transcript ends with an assistant row stamped `Date.now() + RP_LATE_MS`. Its copy then has two turns after the summary (fewer than K) and no next boundary, so `windowOf` ends the window INCLUSIVE at the copy's last timed row (W2-D14, the gate's own rule). The window `[boundary ts, late]` spans every call the case makes while the case runs for less than a day. The case asserts that the window spans `rpTsOf(box, ID, G2)`, so a slow box cannot pass vacuously.
-- **The CONTROL is a recomputation, and the mutant is the filter.** RP8's CONTROL feeds `windowOf` the same boundary with every arm-NULL call of the id (`rpCallsOf`: no generation filter) and expects 2 calls, G1's exit 8 and the G2 read. So the fixture is sensitive, and only the filter keeps the G2 line out. Mutant M1 removes the filter from `measure-history.py` and reds the case's `windowTotals` assertion.
+- **The CONTROL is a recomputation, and the mutant is the filter.** RP8's CONTROL feeds `windowOf` the same boundary with every arm-NULL call of the id (`rpCallsOf`: no generation filter) and expects 2 calls, G1's exit 8 and the G2 read. So the fixture is sensitive, and only the filter keeps the G2 line out. Mutant M1 removes the filter from `measure-history.py` and reds the case's earlier assertion "the family's calls are G1's exit 8 alone" (`[8, 0]` vs `[8]`, measured), before `windowTotals` is reached.
 - **G1's own exit-8 read is in the window**, so the count asserted is 1, never a vacuous 0. The G2 line is the one that must not be counted.
-- **The drain runs before the hook.** The SessionStart(compact) arm spools its own line, and a later drain of that line would declare a compact epoch for TB in the middle of the case. Draining first keeps the counted state exactly what W2-D32 lists. The hook neither reads nor writes `recall_calls` or the counter, so this order changes no assertion of W2-D32's.
+- **The drain runs before the hook.** Draining first keeps the counted state exactly what W2-D32 lists, whatever the hook later spools. (The reason is not that the SessionStart(compact) arm spools its own line: lib's `SPOOL_SOURCES` is `startup`, `resume`, `clear` and `fork`, and the hook's spool case leaves `compact` out.) The hook neither reads nor writes `recall_calls` or the counter, so this order changes no assertion of W2-D32's.
 - **The scope marker is planted, not written by a driven PreCompact.** The card arm serves only after a fresh `main <psid> <ms>` marker (check 5). PreCompact's marker is S16's, pinned in `session-hook.test.ts`. `rpCompactStart` plants the same three fields, as that file's card describe does (`mark()`, about :12290).
 - **A Stop line and one pass before each prediction is read** (`rpPredicted`), the `pokeC` pattern of `history-card.test.ts` (about :563). The pass reads the transcript to its end, which is when the sweep writes `card/<id>/<uuid>.txt`. The case asserts that the file exists and matches `CARD_LINE_RE` before it relies on it.
 - **The purge is `_reg_purge`'s effect, done by hand in the fixture.** `rpPurge` removes every `$REG/<id>.*`. `recall-off/` lives under `~/.ccrc/history`, outside `$REG` (§9.7), so the case asserts that it survives. No `ccd` verb runs.
@@ -5702,7 +5702,9 @@ describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP1
     expect(scopeOf(read).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G2]]);
 
     // 4. The drain counts recall_off_stale +1. The first tick renames the line, the second drains it while the file still
-    //    names G1. The drain runs before the hook, whose own SessionStart(compact) line is then never drained here.
+    //    names G1. The drain runs before the hook, so the hook's own SessionStart(compact) line is never drained here.
+    //    (SessionStart(compact) is not a spool source, `SPOOL_SOURCES`, so the hook spools no line of its own for it.
+    //    Running the drain first still keeps the counted state exactly what W2-D32 lists, whatever the hook later spools.)
     for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
     expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8], [G2, 0]]);
     expect(counters(box)['recall_off_stale'], 'RP8: the drain counts the stale read once').toBe(1);
@@ -5813,7 +5815,7 @@ Expected GREEN (predicted): `4 passed`, with the rest of the file skipped. The c
 Each case alone, so that a later step's filter is known to select it:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)')
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP10 the W2 close step')
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'C66 W2 half')
 (cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'C67 W2 half')
@@ -5866,25 +5868,25 @@ cp ccd/session-hook.sh "$SCRATCH/hook.orig"
 # M1 (RP8's analysis): the script's generation filter dropped, so every arm-NULL call of the id is the family's.
 mut deploy/measure-history.py "WHERE ccrc_id = ? AND generation IN ({marks(len(gens))}) '" "WHERE ccrc_id = ? '"
 mut deploy/measure-history.py "(ccrc_id, *gens, start_ms)).fetchall()]" "(ccrc_id, start_ms)).fetchall()]"
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)')
 cp "$SCRATCH/measure.orig" deploy/measure-history.py
 # Expected RED (predicted): "the family's calls are G1's exit 8 alone": expected [ 8, 0 ] to deeply equal [ 8 ].
 
 # M2 (RP8's drain, and C68's CLI half): the drain-time stale check never counts.
 mut ccd/history/sweep.mjs "=== 'stale') bump(db, 'recall_off_stale');" "=== 'never-stale') bump(db, 'recall_off_stale');"
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end|C68 \(CLI half\)')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)|C68 \(CLI half\)')
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
 # Expected RED (predicted): 2 failed. RP8 "the drain counts the stale read once" and C68 (CLI half): expected undefined to be 1.
 
 # M3 (RP8's read verb): every recall-off file that reads is off, stale folded into off.
 mut ccd/history/lib.mjs "  return file.value.trim() === generation ? 'off' : 'stale';" "  return 'off';"
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end|C68 \(CLI half\)')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)|C68 \(CLI half\)')
 cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
 # Expected RED (predicted): 2 failed. RP8 "the new family gets recall": expected 8 to be 0; C68 (CLI half) the same at its stale step.
 
 # M4 (RP8's card line): the hook withholds whenever recall-off/<id> exists, so a stale file withholds too.
 mut ccd/session-hook.sh '[[ "$o" == "$gen" ]] && return 0' 'return 0'
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end|RP10 the W2 close step')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)|RP10 the W2 close step')
 cp "$SCRATCH/hook.orig" ccd/session-hook.sh
 # Expected RED (predicted): 1 failed | 1 passed. RP8 "the new family gets its card line": expected '…' to contain 'History: node …'.
 # RP10 stays green: its CONTROL expects a withheld line, and after --clear-all no file exists.
@@ -5892,13 +5894,13 @@ cp "$SCRATCH/hook.orig" ccd/session-hook.sh
 # M5 (RP8's card line, over the verb's bytes): the hook's ASCII trim of recall-off/<id> removed, so the verb's LF
 # reaches the grammar test and every verb-written file withholds. B2's hand-planted C68 file had no LF.
 mut ccd/session-hook.sh 'o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"' ':'
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP8 end to end \(W2-D32\)')
 cp "$SCRATCH/hook.orig" ccd/session-hook.sh
 # Expected RED (predicted): "RP8: the new family gets its card line": expected '…' to contain 'History: node …'.
 
 # M6 (RP10's CONTROL, C68's card half over the verb's bytes): the hook ignores the control arm.
 mut ccd/session-hook.sh '[[ "$o" == "$gen" ]] && return 0' '[[ "$o" == "never" ]] && return 0'
-(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP10 the W2 close step|RP8 end to end')
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'RP10 the W2 close step|RP8 end to end \(W2-D32\)')
 cp "$SCRATCH/hook.orig" ccd/session-hook.sh
 # Expected RED (predicted): 1 failed | 1 passed. RP10: "claude-a-demo: no card line while its file names its generation":
 # expected '…History: node …' not to contain 'History: node '. RP8 stays green (its file is stale).

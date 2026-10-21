@@ -5603,3 +5603,251 @@ describe('W2-1 recall-off: one reader, and RP10\'s verb half', () => {
     for (const [id] of FAMS) expect(treeJson(box, id).code, `${id} reads again`).toBe(0);
   }, 1.5 * HEAVY);
 });
+
+// ── W2-1 Task 5: RP8 end to end, RP10, and C66, C67 and C68 re-run over the shipped recall-off verb ───────────────
+// Spec 2026-10-05 §10.2 (RP8, RP10), §10.7 (C66, C67, C68), §8.4 (recall-off), §8.6 (the card line), §9.7.
+// W2-D32: RP8 is ONE `it`, in a fixture HOME whose gh (and tmux, ssh, curl and the managers) is poisoned
+// (makeHistoryBox). Each part runs as shipped: the verb through the CLI and the placed shim, the read verb in a pane,
+// the drain as the timer's pass, ccd/session-hook.sh as Claude Code runs it, and the analysis through W2-3's merged
+// pipeline: measure-history.py's raw rows, then history-gate.mjs's buildWindows, then windowTotals.
+// No recall-off file here is written by hand. B2 pinned hand-planted files before W2 wrote any (§10.7); these re-runs
+// hold the verb's own bytes, `<generation>\n` (W2-D28), which the CLI and the drain trim in JS and the hook trims of
+// ASCII whitespace. The hook and the measure are spawned and the gate is imported dynamically: no import line is added.
+const RP_HOOK = path.join(REPO, 'ccd', 'session-hook.sh');
+const RP_MEASURE = path.join(REPO, 'deploy', 'measure-history.py');
+/** How far past the case's start G1's last row is stamped, so G1's window spans every call the case makes. */
+const RP_LATE_MS = 86_400_000;
+type RpCall = [ts_ms: number, rc: number, verb: string];
+interface RpBoundary { boundary_uuid: string; ts_ms: number; copies: unknown[] }
+interface RpFamily {
+  ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: RpCall[]; boundaries: RpBoundary[];
+}
+interface RpWindow {
+  state: 'measured' | 'unmeasured'; start_ms: number; end_ms: number | null; end_inclusive: boolean; turns: number; calls: number; with_call: boolean;
+}
+/** The names of W2-3's merged gate module this describe reads. */
+interface RpGate {
+  ROW_CAP: number;
+  buildWindows(family: RpFamily, k?: number): RpWindow[];
+  windowOf(boundary: RpBoundary, calls: RpCall[], k?: number): RpWindow;
+  windowTotals(windows: RpWindow[]): { windows: number; with_call: number; calls: number; turns: number; unmeasured: number };
+}
+const rpGate = async (): Promise<RpGate> => (await import('../../deploy/history-gate.mjs')) as unknown as RpGate;
+
+/** G1's transcript: one manual compaction (`cycles`: the main boundary the analysis windows, at iso(8), its summary at
+ *  iso(9)), then two assistant turns, the second stamped `late`. Two turns is fewer than K and no boundary follows, so
+ *  the window ends INCLUSIVE at the copy's last timed row, `late` (W2-D14). */
+function rpRowsG1(late: number): Row[] {
+  const cwd = '/home/u/worktrees/p/quiet-basin';
+  return [
+    ...cycles(TA, 1),
+    assistantRow({ uuid: rid(TA, 6), ts: iso(10), sessionId: TA, cwd, text: 'Fixture answer after the summary.', requestId: 'req_rp8_1', msgId: 'msg_rp8_1' }),
+    assistantRow({ uuid: rid(TA, 7), ts: new Date(late).toISOString(), sessionId: TA, cwd, text: 'Fixture answer, stamped late.', requestId: 'req_rp8_2', msgId: 'msg_rp8_2' }),
+  ];
+}
+
+/** ccd's `_reg_purge` as this fixture's registry holds it: every `$REG/<id>.<field>` removed. recall-off/ lives
+ *  under ~/.ccrc/history, outside $REG, so a purge leaves it (§9.7). */
+function rpPurge(box: HistoryBox, id: string): void {
+  for (const n of fs.readdirSync(box.reg)) if (n.startsWith(`${id}.`)) fs.rmSync(path.join(box.reg, n), { recursive: true, force: true });
+}
+
+/** The prediction the sweep writes for `sid`, `card/<id>/<sid>.txt`, as its one line without the LF. A Stop line and
+ *  one pass come first, so that pass reads the transcript to its end (history-card.test.ts's pokeC). */
+function rpPredicted(box: HistoryBox, id: string, sid: string): string {
+  spoolLine(box, id, { v: 1, ev: 'Stop', id });
+  const r = runSweep(box);
+  expect(r.code, r.stderr).toBe(0);
+  const p = hist(box, 'card', id, `${sid}.txt`);
+  expect(fs.existsSync(p), `CONTROL: the sweep predicted ${id}'s card line`).toBe(true);
+  const line = fs.readFileSync(p, 'utf8').replace(/\n$/, '');
+  expect(libRead.CARD_LINE_RE.test(line), line).toBe(true);
+  return line;
+}
+
+/** SessionStart(compact) for `id`'s transcript `sid`, run as Claude Code runs the hook in that pane: the payload on
+ *  stdin, the pane's identity through withPane's tmux, the session generation in the env. PreCompact's scope marker
+ *  (`main <sid> <ms>`, S16's grammar) is planted first: no PreCompact is driven here. `context` is the
+ *  additionalContext the hook printed, or null when it printed nothing. */
+function rpCompactStart(box: HistoryBox, id: string, sid: string, gen: string, transcript: string): { code: number | null; stderr: string; context: string | null } {
+  fs.mkdirSync(hist(box, 'scope'), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(hist(box, 'scope', id), `main ${sid} ${Date.now()}\n`);
+  const r = spawnSync('bash', [RP_HOOK], {
+    input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact', cwd: box.home, transcript_path: transcript,
+      session_id: sid, prompt_id: 'p1', model: 'claude-fixture-4' }),
+    encoding: 'utf8', cwd: box.home, timeout: 60_000, killSignal: 'SIGTERM',
+    env: { ...box.env, ...withPane(box, id), CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_JOB_DIR: '' },
+  });
+  const out = (r.stdout ?? '').trim();
+  if (out === '') return { code: r.status, stderr: r.stderr ?? '', context: null };
+  const j = JSON.parse(out.split('\n').at(-1)!) as { hookSpecificOutput?: { additionalContext?: unknown } };
+  return { code: r.status, stderr: r.stderr ?? '', context: String(j.hookSpecificOutput?.additionalContext ?? '') };
+}
+
+/** measure-history.py's W2 raw rows for the listed families, isolated (-I) and bytecode-free (-B). */
+function rpMeasure(box: HistoryBox, families: string, start: number, end: number, rowCap: number): RpFamily[] {
+  const r = spawnSync('python3', ['-I', '-B', RP_MEASURE, '--db', hist(box, 'db', 'history.db'), '--families', families,
+    '--window-start', String(start), '--window-end', String(end), '--row-cap', String(rowCap)],
+  { encoding: 'utf8', env: { ...box.env, PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+  expect(r.status, r.stderr).toBe(0);
+  return (JSON.parse(r.stdout) as { w2: { families: RpFamily[] } }).w2.families;
+}
+
+/** Every arm-NULL recall_calls row of `id`, of any generation, in the script's order: the calls with the generation
+ *  filter dropped. */
+function rpCallsOf(box: HistoryBox, id: string): RpCall[] {
+  const db = openStoreRO(box);
+  try {
+    return (db.prepare('SELECT ts_ms, rc, verb FROM recall_calls WHERE ccrc_id = ? AND arm IS NULL ORDER BY ts_ms, event_key')
+      .all(id) as Array<{ ts_ms: number; rc: number; verb: string }>).map((c): RpCall => [Number(c.ts_ms), Number(c.rc), c.verb]);
+  } finally {
+    db.close();
+  }
+}
+
+/** The ts_ms of the one recall_calls row of (id, gen). */
+function rpTsOf(box: HistoryBox, id: string, gen: string): number {
+  const db = openStoreRO(box);
+  try {
+    const rows = db.prepare('SELECT ts_ms FROM recall_calls WHERE ccrc_id = ? AND generation = ?').all(id, gen) as Array<{ ts_ms: number }>;
+    expect(rows, `one recall_calls row of (${id}, ${gen})`).toHaveLength(1);
+    return Number(rows[0]!.ts_ms);
+  } finally {
+    db.close();
+  }
+}
+
+describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP10, and C66, C67 and C68 over the shipped recall-off verb (spec 10.2, 10.7)', () => {
+  it('RP8 end to end (W2-D32): the verb writes G1; a purge and a reuse give G2; the new family reads (exit 0) and gets its card line, the drain counts recall_off_stale once, and the analysis counts no G2 line in G1\'s window', async () => {
+    const gate = await rpGate();
+    const box = makeHistoryBox('ccrc-hist-rcl-rp8-');
+    const late = Date.now() + RP_LATE_MS;
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: rpRowsG1(late) });
+    const ro = openStoreRO(box);
+    try {
+      const b = ro.prepare("SELECT count(*) AS n FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.cc_session_uuid = ? AND t.agent_id = ''")
+        .get(TA) as { n: number };
+      expect(Number(b.n), 'CONTROL: G1\'s one main boundary is ingested').toBe(1);
+    } finally {
+      ro.close();
+    }
+
+    // 1. The verb writes G1: as invoked, no dry run (W2-D26); the registry's generation equals --generation (W2-D27).
+    const off = hist(box, 'recall-off', ID);
+    const wrote = runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(wrote.code, `${wrote.stderr}${wrote.stdout}`).toBe(0);
+    expect(fs.readFileSync(off, 'utf8'), 'the verb\'s bytes: the generation and one LF (W2-D28)').toBe(`${G1}\n`);
+    // C68 over the verb's bytes: G1's read answers 8, counted, and its drain counts no stale read.
+    expect(answer(treeJson(box)), 'C68: the file names this generation').toEqual([8, undefined]);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8]]);
+    expect(counters(box)['recall_off_stale'] ?? 0, 'CONTROL: a read the file names is not stale').toBe(0);
+
+    // 2. A purge and a reuse of the id with G2: seedFamily drives the reuse's ticks, and rpPredicted's pass reads TB to
+    //    its end, so the sweep predicts the new family's card line.
+    rpPurge(box, ID);
+    const { transcript: tB } = seedFamily(box, { id: ID, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    expect(fs.readFileSync(off, 'utf8'), 'the purge leaves recall-off/<id>').toBe(`${G1}\n`);
+    const line = rpPredicted(box, ID, TB);
+
+    // 3. The read verb exits 0: the file names G1 and the resolved generation is G2, so the file is stale (§9.7).
+    const read = treeJson(box);
+    expect(read.code, `RP8: the new family gets recall. ${read.stderr}${read.stdout}`).toBe(0);
+    expect(scopeOf(read).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G2]]);
+
+    // 4. The drain counts recall_off_stale +1. The first tick renames the line, the second drains it while the file still
+    //    names G1. The drain runs before the hook, so the hook's own SessionStart(compact) line is never drained here.
+    //    (SessionStart(compact) is not a spool source, `SPOOL_SOURCES`, so the hook spools no line of its own for it.
+    //    Running the drain first still keeps the counted state exactly what W2-D32 lists, whatever the hook later spools.)
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8], [G2, 0]]);
+    expect(counters(box)['recall_off_stale'], 'RP8: the drain counts the stale read once').toBe(1);
+
+    // 5. The hook serves the new family's card line.
+    const h = rpCompactStart(box, ID, TB, G2, tB);
+    expect(h.code, h.stderr).toBe(0);
+    expect(h.stderr, 'the hook is silent on stderr').toBe('');
+    expect(h.context ?? '', 'RP8: the new family gets its card line').toContain(line);
+
+    // 6. The analysis, through W2-3's merged pipeline, over the pre-registered list (ID, G1) only: the G2 family is a
+    //    new family, off the list (§10.2 "What the analysis counts").
+    const families = path.join(box.home, 'rp8-families.json');
+    fs.writeFileSync(families, JSON.stringify([{ store_id: storeIdOf(box), ccrc_id: ID, generation: G1 }]));
+    const fams = rpMeasure(box, families, T0, late + 1, gate.ROW_CAP);
+    expect(fams.map((f) => [f.ccrc_id, f.generation, f.found])).toEqual([[ID, G1, true]]);
+    const g2Ts = rpTsOf(box, ID, G2);
+    const windows = gate.buildWindows(fams[0]!);
+    expect(windows.map((w) => [w.state, w.end_inclusive, w.end_ms]), 'one measured window, inclusive at the late row').toEqual([['measured', true, late]]);
+    expect(windows[0]!.start_ms <= g2Ts && g2Ts <= late, 'the G1 boundary\'s window spans the G2 call\'s ts').toBe(true);
+    expect(fams[0]!.calls.map((c) => c[1]), 'the family\'s calls are G1\'s exit 8 alone').toEqual([8]);
+    expect(gate.windowTotals(windows), 'RP8: the analysis does not count the G2 line')
+      .toEqual({ windows: 1, with_call: 1, calls: 1, turns: 2, unmeasured: 0 });
+    // CONTROL: the same window over the id's calls with the generation filter dropped counts the G2 line as well, so
+    // only the filter keeps it out.
+    expect(gate.windowOf(fams[0]!.boundaries[0]!, rpCallsOf(box, ID)).calls, 'CONTROL: no generation filter').toBe(2);
+  }, 2 * HEAVY);
+
+  it('RP10 the W2 close step: recall-off --clear-all on a node with three verb-written files leaves none, and the next card line serves for each family', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-rp10-');
+    const fams = [{ id: ID, sid: TA, gen: G1 }, { id: ID_B, sid: TB, gen: G2 }, { id: ID_D11, sid: TD11, gen: G4_11 }]
+      .map((f) => ({ ...f, transcript: seedFamily(box, { id: f.id, project: PROJECT, uuid: f.sid, generation: f.gen, rows: turns(f.sid, 2) }).transcript }));
+    const lines = fams.map((f) => rpPredicted(box, f.id, f.sid));
+    for (const f of fams) {
+      const w = runCli(box, ['recall-off', f.id, '--generation', f.gen, '--json']);
+      expect(w.code, `${f.id}: ${w.stderr}${w.stdout}`).toBe(0);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')).sort(), 'three assigned files').toEqual([ID, ID_B, ID_D11].sort());
+    // CONTROL, and C68's card and CLI halves over the verb's bytes: each file names its family's generation, so the
+    // hook withholds that family's line and its read verb answers 8.
+    for (const f of fams) {
+      const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
+      expect(h.code, h.stderr).toBe(0);
+      expect(h.context ?? '', `${f.id}: no card line while its file names its generation`).not.toContain('History: node ');
+      expect(answer(treeJson(box, f.id)), `${f.id}: exit 8 while recall is off`).toEqual([8, undefined]);
+    }
+    const clear = runCli(box, ['recall-off', '--clear-all', '--json']);
+    expect(clear.code, `${clear.stderr}${clear.stdout}`).toBe(0);
+    // The pass prints its summary on its own line before the result line, and under --json the CLI relays it on stderr;
+    // stdout's last line is the CLI's envelope (W2-D28).
+    const summary = clear.stderr.split('\n').find((l) => l.startsWith('{"rc"') && l.includes('"cleared"'));
+    expect(summary, `the --clear-all summary is relayed on stderr\n${clear.stderr}`).toBeDefined();
+    const sum = JSON.parse(summary!) as { cleared: unknown; skipped: unknown };
+    expect([sum.cleared, sum.skipped], 'W2-D28: three cleared, none skipped').toEqual([3, []]);
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'RP10: none left').toEqual([]);
+    fams.forEach((f, k) => {
+      const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
+      expect(h.code, h.stderr).toBe(0);
+      expect(h.context ?? '', `RP10: ${f.id}'s next card line serves`).toContain(lines[k]!);
+      expect(treeJson(box, f.id).code, `${f.id}: its read verb reads again`).toBe(0);
+    });
+  }, 3 * HEAVY);
+
+  it('C66 W2 half: every recall-off form whose id is off ccd\'s grammar answers 2 bad-id through the shipped verb, and no path is formed', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c66w-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    // CONTROL: the verb writes in this box. recall-off/ then exists, so `recall-off/../x` WOULD resolve to the victim
+    // below: a refusal that rested on a missing directory would not show here.
+    const w = runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(w.code, `${w.stderr}${w.stdout}`).toBe(0);
+    const victim = hist(box, 'x');   // where recall-off/../x lands
+    fs.writeFileSync(victim, 'keep');
+    for (const args of [['../x', '--clear'], ['../x', '--generation', G1], ['../x'], ['..', '--clear'], ['a/b', '--generation', G1]]) {
+      expect(answer(runCli(box, ['recall-off', ...args, '--json'])), args.join(' ')).toEqual([2, 'bad-id']);
+    }
+    expect(fs.readFileSync(victim, 'utf8'), 'nothing unlinked, nothing written').toBe('keep');
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'no entry but the CONTROL\'s').toEqual([ID]);
+  }, HEAVY);
+
+  it('C67 W2 half: an unreadable $REG/<id>.generation refuses the write form with and without --generation, 2 generation-unreadable, and nothing is written', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c67w-');
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    // CONTROL: the same verb writes for an id whose .generation reads.
+    const w = runCli(box, ['recall-off', ID_B, '--generation', G2, '--json']);
+    expect(w.code, `${w.stderr}${w.stdout}`).toBe(0);
+    plantSession(box, ID, { generation: 'unreadable' });   // present, and no read of it succeeds
+    for (const args of [[ID], [ID, '--generation', G1]]) {
+      expect(answer(runCli(box, ['recall-off', ...args, '--json'])), args.join(' ')).toEqual([2, 'generation-unreadable']);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'nothing written for the unreadable id').toEqual([ID_B]);
+  }, HEAVY);
+});
