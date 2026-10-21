@@ -71,3 +71,96 @@
   font-size: var(--fs-meta);
 }
 .settings-passkey-add { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+
+/* Appearance's Theme preview grid (settings Task R2e; spec §5.2; D-5503). Each palette card carries `data-theme`, so
+   every token below resolves to THAT palette inside its card: the card is drawn in the palette it names, and its
+   name and note are the palette's own primary and secondary inks on its own surface (or, checked, its own accent
+   tint), the pairs design/contrast-check.mjs gates in every palette. The card sets its own `color` because an
+   inherited colour is the parent's computed value, not a re-read of the card's tokens.
+   Phone (the column under 480): 3 columns of compact cards, the chips and the name, the note in the card's `title` and
+   under the grid for the checked card. From 480: 150px-minimum cards (about 160 wide), 100px tall, with every card's
+   note, 4 to 5 per row in the 688 to 960 reading column. A container query, so the pane width decides, not the window.
+   Selected is tint plus rail plus a check glyph (F9's idiom), never colour alone. */
+.settings-palettes-wrap {
+  container-type: inline-size;
+  display: grid;
+  gap: calc(var(--pad-card) / 2);
+  min-width: 0;
+}
+.settings-palettes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--pad-card) / 2);
+  min-width: 0;
+}
+.settings-palette {
+  display: block;
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+}
+.settings-palette[data-active='true'] {
+  background: var(--accent-tint);
+  box-shadow: inset 3px 0 0 var(--accent);
+  color: var(--ink-primary);
+}
+/* The keyboard's ring, inside the card so it is drawn in the card's own primary ink on the card's own ground: the
+   input is hidden, so its own ring has nothing to draw on. */
+.settings-palette:has(input:focus-visible) {
+  outline: 2px solid var(--ink-primary);
+  outline-offset: -4px;
+}
+/* The label is the target: at least 64px tall on a phone, which is over the 44px floor at every pointer. */
+.settings-palette-hit {
+  display: grid;
+  align-content: space-between;
+  gap: calc(var(--pad-card) / 4);
+  min-width: 0;
+  min-height: 64px;
+  padding: calc(var(--pad-card) / 2);
+}
+.settings-palette-hit input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+.settings-palette-chips { display: flex; gap: 4px; min-width: 0; }
+.settings-palette-chips i { display: block; width: 14px; height: 14px; border-radius: var(--r-sm); }
+.settings-palette-chip-accent { background: var(--accent); }
+.settings-palette-chip-attention { background: var(--status-attention); }
+.settings-palette-chip-dead { background: var(--status-dead); }
+.settings-palette-text { display: grid; gap: 2px; min-width: 0; }
+/* A name is never cut: on a phone a long one ("Catppuccin Mocha") takes a second line and its row grows with it. */
+.settings-palette-name {
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+}
+.settings-palette[data-active='true'] .settings-palette-name { font-weight: var(--weight-semibold); }
+/* The note and the check name the card in their selectors, so the gate measures each on the card's two grounds. */
+.settings-palette-note { display: none; font-size: var(--fs-meta); line-height: var(--lh-normal); }
+.settings-palette .settings-palette-note,
+.settings-palette[data-active='true'] .settings-palette-note { color: var(--ink-secondary); }
+.settings-palette-check {
+  position: absolute;
+  top: calc(var(--pad-card) / 2);
+  right: calc(var(--pad-card) / 2);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+.settings-palette[data-active='true'] .settings-palette-check { color: var(--ink-primary); }
+.settings-palette-current { margin: 0; overflow-wrap: anywhere; }
+@container (min-width: 480px) {
+  .settings-palettes { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .settings-palette-hit { min-height: 100px; }
+  .settings-palette-name { font-size: var(--fs-ui); }
+  .settings-palette-note { display: block; overflow-wrap: anywhere; }
+  .settings-palette-current { display: none; }
+}

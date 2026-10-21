@@ -55,7 +55,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  PHOSPHOR, REFINED, SKINS, SKIN_TOKENS, THEMES, type SkinToken, type SkinTokenClass,
+  REFINED, SKINS, SKIN_TOKENS, THEMES, type SkinToken, type SkinTokenClass,
 } from '@ccrc/ui';
 import { stylesheets } from '../design/audit.mjs';
 import {
@@ -156,7 +156,8 @@ const FINE_POINTER = '(pointer:fine)';
 function rootValues(tree: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const d of sheet(tree, TOKENS_CSS).decls) {
-    if (d.chain.length === 1 && (d.chain[0] ?? '').toLowerCase() === ':root') out.set(d.prop, d.value);
+    // `[data-theme='phosphor'], :root` is :root's colour block (D-5503): a selector list naming :root counts.
+    if (d.chain.length === 1 && (d.chain[0] ?? '').split(',').some((s) => s.trim().toLowerCase() === ':root')) out.set(d.prop, d.value);
   }
   return out;
 }
@@ -843,9 +844,9 @@ describe('(f2) no tap-bearing density token below --tap-min outside (pointer: fi
 describe('(g) no palette block declares a type, density, radius, meter or motion skin token', () => {
   it('holds on the tree, reading every palette block', () => {
     expect(paletteBlocks(REPO, REAL)).toEqual([]);
-    // Phosphor & Ink is :root; every other palette is one [data-theme] block.
+    // Every palette is one [data-theme] block; Phosphor & Ink's is the colour half of :root (D-5503).
     const seen = new Set(sheet(REPO, TOKENS_CSS).chains.flat().filter((p) => /\[data-theme\b/i.test(p)));
-    expect(seen.size).toBe(THEMES.filter((t) => t.id !== PHOSPHOR).length);
+    expect(seen.size).toBe(THEMES.length);
   });
 
   it("reds a radius in the first palette block (Phosphor Daylight's), the first generated one (Nord's) and the last (Catppuccin Latte's)", () => {
