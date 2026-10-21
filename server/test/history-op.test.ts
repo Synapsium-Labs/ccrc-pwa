@@ -2323,7 +2323,12 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
     const dir = w21Dir(box);
     const none = w21Op(box, [ID, '--clear']);
     expect([none.code, none.reason], none.raw).toEqual([0, undefined]);
+    expect(none.stdout, 'no recall-off/ answers the same line as a missing entry').toContain(`history-sweep: recall-off/${ID} was already absent`);
     expect(fs.existsSync(dir), 'a clear never makes recall-off/').toBe(false);
+    fs.mkdirSync(dir);
+    const gone = w21Op(box, [ID, '--clear']);
+    expect([gone.code, gone.reason], gone.raw).toEqual([0, undefined]);
+    expect(gone.stdout).toContain(`history-sweep: recall-off/${ID} was already absent`);
     fs.mkdirSync(path.join(dir, ID), { recursive: true });
     const d = w21Op(box, [ID, '--clear']);
     expect([d.code, d.reason], d.raw).toEqual([1, undefined]);
@@ -2380,4 +2385,60 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
     expect(dirs, 'the rename is made durable').toContain(w21Dir(box));
     expect(fs.readFileSync(path.join(w21Dir(box), ID), 'utf8')).toBe(`${G1}\n`);
   });
+});
+
+// ── W2-1 Task 3, fix round 1: the writer names every entry it leaves, and an absent root is refused ─────────────────────
+describe('W2-1 recall-off: every entry the writer leaves is named, and an unusable path is refused (fix round 1)', () => {
+  it.skipIf(process.platform !== 'linux')('--clear-all names an entry whose name is not UTF-8: the listing decodes it lossily, lstat of the decoded name is absent, so it is skipped, never dropped', () => {
+    const box = w21Box('ccrc-hist-w21-utf8-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.writeFileSync(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0x63, 0xff, 0xfe])]), '');
+    fs.writeFileSync(path.join(dir, ID), `${G1}\n`);
+    const r = w21Op(box, ['--clear-all']);
+    expect([r.code, r.reason], r.raw).toEqual([0, undefined]);
+    const sum = w21Summary(r.stdout) as { cleared: number; skipped: string[] };
+    expect(sum.cleared, 'the valid entry is unlinked').toBe(1);
+    expect(sum.skipped, 'the entry whose name does not round-trip is named, not dropped').toHaveLength(1);
+  }, 60_000);
+
+  it('a FIFO named ~tmp.x survives a write, and --clear-all names it in skipped', () => {
+    const box = w21Box('ccrc-hist-w21-tmpfifo-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    expect(spawnSync('mkfifo', [path.join(dir, '~tmp.x')]).status, 'CONTROL: the FIFO was made').toBe(0);
+    const w = w21Op(box, [ID]);
+    expect([w.code, w.reason], w.raw).toEqual([0, undefined]);
+    expect(names(dir), 'the stale-temp loop unlinks files and links only').toEqual([ID, '~tmp.x'].sort());
+    expect(fs.lstatSync(path.join(dir, '~tmp.x')).isFIFO()).toBe(true);
+    const all = w21Op(box, ['--clear-all']);
+    expect([all.code, all.reason], all.raw).toEqual([0, undefined]);
+    expect(w21Summary(all.stdout)).toEqual({ rc: 0, reason: null, cleared: 1, skipped: ['~tmp.x'] });
+    expect(names(dir)).toEqual(['~tmp.x']);
+  }, 60_000);
+
+  it('an absent history root: all three forms answer rc 1 with the arm\'s line and write nothing', () => {
+    const box = makeHistoryBox('ccrc-hist-w21-noroot-');
+    expect(fs.existsSync(paths(box).root), 'CONTROL: this box has no history root').toBe(false);
+    for (const args of [[ID], [ID, '--clear'], ['--clear-all']]) {
+      const before = snapshot(box);
+      const r = w21Op(box, args);
+      expect([r.code, r.reason], `${JSON.stringify(args)}\n${r.raw}`).toEqual([1, undefined]);
+      expect(r.stdout, JSON.stringify(args)).toContain('history-sweep: recall-off: ~/.ccrc/history is absent, not a directory this pass writes in; nothing written');
+      expect(snapshot(box), `${JSON.stringify(args)}: nothing written`).toEqual(before);
+      expect(fs.existsSync(paths(box).root), `${JSON.stringify(args)}: no root made`).toBe(false);
+    }
+  }, 60_000);
+
+  it('a write over a directory at recall-off/<id>: rc 1, the directory is untouched, and no ~tmp.* is left behind', () => {
+    const box = w21Box('ccrc-hist-w21-overdir-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(path.join(dir, ID), { recursive: true });
+    fs.writeFileSync(path.join(dir, ID, 'keep'), 'k');
+    const r = w21Op(box, [ID]);
+    expect([r.code, r.reason], r.raw).toEqual([1, undefined]);
+    expect(fs.lstatSync(path.join(dir, ID)).isDirectory(), 'the directory is untouched').toBe(true);
+    expect(names(path.join(dir, ID))).toEqual(['keep']);
+    expect(names(dir), 'the temp is removed on the failure path').toEqual([ID]);
+  }, 60_000);
 });

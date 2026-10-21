@@ -6399,13 +6399,16 @@ export function recallOffPass(home, args, out) {
   }
   if (dirKind === 'absent') {
     if (args.mode === 'clear-all') out(JSON.stringify({ rc: EXIT.OK, reason: null, cleared: 0, skipped: [] }));
+    if (args.mode === 'clear') out(`history-sweep: recall-off/${args.id} was already absent`);
     if (args.mode !== 'write') return { rc: EXIT.OK };
     mkdirSync(P.recallOffDir, { mode: 0o700 });
     fsyncDir(P.root);
   }
   for (const n of readdirSync(P.recallOffDir).sort()) {
     if (!n.startsWith('~tmp.')) continue;
-    try { unlinkSync(`${P.recallOffDir}/${n}`); } catch { /* a directory there stays, and --clear-all names it */ }
+    const tk = recallOffKind(`${P.recallOffDir}/${n}`);
+    if (tk !== 'file' && tk !== 'link') continue;   // a directory, a FIFO, a socket or a device stays, and --clear-all names it
+    try { unlinkSync(`${P.recallOffDir}/${n}`); } catch { /* the next recall-off pass tries again */ }
   }
   if (args.mode === 'write') {
     let renamed = false;
@@ -6451,7 +6454,8 @@ export function recallOffPass(home, args, out) {
   let cleared = 0;
   for (const n of readdirSync(P.recallOffDir).sort()) {
     const kind = recallOffKind(`${P.recallOffDir}/${n}`);
-    if (kind === 'absent') continue;
+    // An entry the listing returned and lstat then finds absent is named, never dropped: a name that is not UTF-8 is decoded lossily
+    // by the listing, and lstat of the decoded string answers ENOENT.
     if (kind !== 'file' && kind !== 'link') { skipped.push(n); continue; }
     try {
       unlinkSync(`${P.recallOffDir}/${n}`);
@@ -6826,7 +6830,8 @@ async function opPass(parsed, deps, out) {
     // W2-1 (W2-D26, W2-D27, W2-D28): recall-off's own pass. It runs after THE GATE (`apply-in-session`, and `history-off`,
     // which refuses both its forms, neither binding a store) and the role check, and BEFORE the lock-take journal half: it
     // opens no store, writes no op marker and journals nothing (D-6239 (history-recall-off-touches-no-store)). A
-    // registered recovery step never refuses it (RB12, lib recoveryExempt), so the RB6 half below would add nothing.
+    // registered recovery step never refuses it (RB12): at this door the exemption comes from the arm's position, since it returns
+    // before the RB6 half below; lib's recoveryExempt case for `recall-off` is the CLI half's.
     const r = recallOffPass(home, args, out);
     return result(r.rc, r.reason);
   }

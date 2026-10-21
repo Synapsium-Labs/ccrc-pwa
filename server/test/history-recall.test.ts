@@ -5572,11 +5572,13 @@ describe.skipIf(process.platform === 'darwin')('W2-D33: the exports the deploy l
 describe('W2-1 recall-off: one reader, and RP10\'s verb half', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
 
-  it('W2-D29, one reader: G1, 200 spaces and a word is stale for the CLI and for the drain alike', () => {
+  it('W2-D29, one reader: G1, 5,000 spaces and a word (over the base CLI\'s 4,096-byte window, under CONTROL_FILE_MAX) is stale for the CLI and for the drain alike', () => {
     const box = makeHistoryBox('ccrc-hist-rcl-w21one-');
     seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
     fs.mkdirSync(hist(box, 'recall-off'), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(hist(box, 'recall-off', ID), `${G1}${' '.repeat(200)}word\n`);
+    // 5,000 spaces: the base CLI's own reader (4,096 bytes) and the drain's (128) both saw only G1 and answered off; the one reader reads the
+    // whole file, which is not G1, so stale. The size is the CLI half's distinction: a fixture inside 4,096 bytes could not tell that reader back.
+    fs.writeFileSync(hist(box, 'recall-off', ID), `${G1}${' '.repeat(5000)}word\n`);
     const r = treeJson(box);
     expect(r.code, `the CLI reads the whole file: not G1, so stale, and recall proceeds. ${r.stderr}`).toBe(0);
     for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);

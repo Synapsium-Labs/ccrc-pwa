@@ -1627,7 +1627,7 @@ function guardClosedStdio() {
   }
 }
 
-/** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
+/** main's arm for `import`, `prune`, `reparse`, `recall-off` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
  *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed text arrives here
  *  already redacted (runOpVerb's relayIndexOf, through its stream's look-behind, D-5747). */
 export async function operatorMain(home, argv) {

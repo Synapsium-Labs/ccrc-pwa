@@ -5288,6 +5288,11 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     for (const l of [...reader, ...driver]) expect(writesOff(l, 'mjs'), l.trim()).toBe(false);
     const writers = CORPUS.filter((f) => code(f).some((l) => writesOff(l, langOf(f)))).map(rel).sort();
     expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13)').toEqual([WRITER]);
+    // W2-D29's CLI half: cli.mjs reaches recall-off/<id> only through the imported recallOffPresence, so it names no recallOffPath( at all
+    // (a read of its own there would be a second reader, which the needle scan above cannot see).
+    const cliNames = code(path.join(HISTORY_DIR, 'cli.mjs')).filter((l) => l.includes('recallOffPath('));
+    expect(cliNames.map((l) => l.trim()), 'cli.mjs names recallOffPath( : its one reader is sweep.mjs recallOffPresence (W2-D29)').toEqual([]);
+    expect(code(path.join(HISTORY_DIR, 'cli.mjs')).some((l) => l.includes('recallOffPresence(')), 'CONTROL: cli.mjs does call the one reader').toBe(true);
     // The bash half: the hook reads recall-off/<id> and is the one bash file naming it; none of its lines writes it.
     const bashNaming = BASH.filter((f) => code(f).some((l) => l.includes('/recall-off')));
     expect(bashNaming.map(rel).sort()).toEqual(['ccd/session-hook.sh']);
