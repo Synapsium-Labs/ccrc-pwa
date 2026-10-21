@@ -63,7 +63,10 @@ const sitesOf = (key: string): CallSite[] => SERVER.flatMap((f) => {
   return [...text.matchAll(new RegExp(`\\bCCD_ARGV\\s*\\.\\s*${key}\\s*\\(`, 'g'))]
     .map((m) => ({ file: rel(f), text, at: m.index!, open: m.index! + m[0].length }));
 });
-const collectGate = (): RegExp => /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)/g;
+/** The collector's capability question in either form (D-5866, Task C1k): `capSupported(…, COLLECT_CAP)`, or
+ *  `ccdCan(<state>, 'wsCollect')`. No other token and no other row. */
+const collectGate = (): RegExp =>
+  /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)|ccdCan\s*\(\s*[\w.]+\s*,\s*'wsCollect'\s*\)/g;
 /** The identifier whose `.token` the one ws-collect site spends, or null. */
 const spentObservation = (): string | null => {
   const [c] = sitesOf('wsCollect');
@@ -116,6 +119,14 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     expect(asks[0]!.index!, 'the alias names an answer the function had not yet asked for').toBeLessThanOrEqual(via!.index!);
     expect(via!.index!, `${obs} reads an answer bound after it`).toBeLessThan(binds[0]!.index!);
     expect(binds[0]!.index!, 'the act composed before its observation').toBeLessThan(site);
+  });
+
+  it('CONTROL: the gate pattern sees either form of the collector\'s question, and not another token or row', () => {
+    const n = (t: string): number => [...t.matchAll(collectGate())].length;
+    expect(n('if (!capSupported(deps.fleetState, COLLECT_CAP)) return x;')).toBe(1);
+    expect(n("if (!ccdCan(deps.fleetState, 'wsCollect')) return x;")).toBe(1);
+    expect(n('if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) return x;')).toBe(0);
+    expect(n("if (!ccdCan(deps.fleetState, 'wsReclaim') || !ccdCan(deps.fleetState, 'wsCollectAudit')) return x;")).toBe(0);
   });
 
   it('the act asks COLLECT_CAP again after the job’s last await, before the statement that composes the argv', () => {

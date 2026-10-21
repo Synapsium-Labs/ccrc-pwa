@@ -1,0 +1,254 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workbench account row — the sidebar foot: an eyebrow head that    *
+   *  folds, the 5h/7d column heads, one dense row per account.         *
+   * ------------------------------------------------------------------ */
+  /* Self-grounded: every coloured descendant names `.wb-acct`, the head or the
+     row in its own selector, so the contrast gate measures it on a known ground. */
+  /* `overflow-x: clip` is the net under the container tiers below: whatever a
+     column narrower than the last tier asks for is cut at the column's edge,
+     never drawn past it. `clip`, not `hidden`: no scroll container, and the
+     focus rings sit inside the 6px padding. */
+  .wb-acct {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    overflow-x: clip;
+    padding: 6px 6px var(--sp-2);
+    color: var(--ink-secondary);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--edge-subtle);
+  }
+
+  /* The fold head. The tap floor by default; 28px only under a fine pointer,
+     so a coarse pointer, or one reporting `pointer: none`, keeps the floor. */
+  .wb-acct-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    min-height: var(--tap-min);
+    padding: 0 6px;
+    border-radius: var(--r-sm);
+    text-align: left;
+    color: var(--ink-tertiary);
+    background: var(--bg-surface);
+  }
+  /* One character either way, so the eyebrow never shifts. */
+  .wb-acct-head .wb-acct-fold {
+    flex: none;
+    width: 1ch;
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    color: var(--ink-tertiary);
+  }
+  .wb-acct-head .wb-acct-eyebrow {
+    flex: none;
+    color: var(--ink-secondary);
+  }
+  .wb-acct-head .wb-acct-legend,
+  .wb-acct-head .wb-acct-sum {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  /* The folded line yields its lead first: the hot windows (or the calm word)
+     ellipsize to nothing before the tail gives anything. The tail never grows
+     past the line (`max-width: 100%`); inside it a long off name ellipsizes
+     down to a 4ch floor, and the separator and the word ` off` never shrink —
+     the state is never the part of the line that goes. A name of 4ch or less
+     (and a count) is `data-short` and never shrinks, so it is never padded. */
+  .wb-acct-head .wb-acct-sum {
+    display: flex;
+  }
+  .wb-acct-head .wb-acct-lead {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-acct-head .wb-acct-off {
+    flex: none;
+    display: flex;
+    max-width: 100%;
+    white-space: pre;
+  }
+  .wb-acct-head .wb-acct-sep,
+  .wb-acct-head .wb-acct-word {
+    flex: none;
+  }
+  .wb-acct-head .wb-acct-who {
+    flex: 0 1 auto;
+    min-width: 4ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Its own width, never the floor: `3` is one character wide, not four. */
+  .wb-acct-head .wb-acct-who[data-short='true'] {
+    flex: none;
+    min-width: 0;
+  }
+  /* A hot window in the folded line takes its band's TEXT colour; its words
+     ("lane-a 5h 82%") are the second cue. */
+  .wb-acct-head .wb-acct-hot[data-band='warn'] {
+    color: var(--status-attention-text);
+  }
+  .wb-acct-head .wb-acct-hot[data-band='crit'] {
+    color: var(--status-dead-text);
+  }
+
+  /* The rows' size container. It carries the rows' own mono `fs-meta`, so the
+     `ch` in the tiers below is the grid's `ch`. */
+  .wb-acct-list {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    container: wb-acct / inline-size;
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+  }
+
+  /* The row and the column heads share one grid, so the columns line up row to
+     row and under `5h` / `7d`. Wide: 108px + 32ch with the row's padding,
+     about 338px at 12px. */
+  .wb-acct-row,
+  .wb-acct-colh {
+    display: grid;
+    grid-template-columns: 6px 6ch minmax(24px, 1fr) 5ch 8ch minmax(24px, 1fr) 5ch 8ch;
+    column-gap: 6px;
+    align-items: center;
+    padding: 0 6px;
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+  }
+  .wb-acct .wb-acct-colh {
+    color: var(--ink-tertiary);
+    line-height: var(--lh-tight);
+  }
+  .wb-acct-colh > :first-child {
+    grid-column: 3 / 6;
+  }
+  .wb-acct-colh > :last-child {
+    grid-column: 6 / 9;
+  }
+
+  /* THE GRID FITS ITS COLUMN (a 336 or 260px sidebar). Each tier drops what
+     the column cannot hold rather than drawing past its edge, and each reset
+     it drops is still in the row's name ("resets in 3d 4h"). The bounds are the
+     next-wider tier's own width, so a tier starts exactly where the one above
+     stops fitting. */
+  /* Under 108px + 32ch: the 7d reset goes. 102px + 24ch, about 275px. */
+  @container wb-acct (width < calc(108px + 32ch)) {
+    .wb-acct-row,
+    .wb-acct-colh {
+      grid-template-columns: 6px 6ch minmax(24px, 1fr) 5ch 8ch minmax(24px, 1fr) 5ch;
+    }
+    .wb-acct-colh > :last-child {
+      grid-column: 6 / 8;
+    }
+    .wb-acct-row .wb-acct-reset[data-win='7d'] {
+      display: none;
+    }
+  }
+  /* Under 102px + 24ch: the 5h reset goes too. 96px + 16ch, about 211px. */
+  @container wb-acct (width < calc(102px + 24ch)) {
+    .wb-acct-row,
+    .wb-acct-colh {
+      grid-template-columns: 6px 6ch minmax(24px, 1fr) 5ch minmax(24px, 1fr) 5ch;
+    }
+    .wb-acct-colh > :first-child {
+      grid-column: 3 / 5;
+    }
+    .wb-acct-colh > :last-child {
+      grid-column: 5 / 7;
+    }
+    .wb-acct-row .wb-acct-reset {
+      display: none;
+    }
+  }
+  /* Under 96px + 16ch (an unfolded foot on a phone-width column): the name
+     ellipsizes down to 3ch and the meters to 12px. 72px + 13ch, about 166px. */
+  @container wb-acct (width < calc(96px + 16ch)) {
+    .wb-acct-row,
+    .wb-acct-colh {
+      grid-template-columns: 6px minmax(3ch, 6ch) minmax(12px, 1fr) 5ch minmax(12px, 1fr) 5ch;
+    }
+  }
+
+  /* One button per account: it opens the Accounts screen. */
+  .wb-acct-row {
+    row-gap: 3px;
+    width: 100%;
+    min-height: var(--tap-min);
+    padding-block: 4px;
+    border-radius: var(--r-sm);
+    text-align: left;
+    line-height: var(--lh-tight);
+    color: var(--ink-secondary);
+    background: var(--bg-surface);
+  }
+
+  @media (pointer: fine) {
+    .wb-acct-head,
+    .wb-acct-row {
+      min-height: 28px;
+    }
+  }
+
+  @media (hover: hover) {
+    .wb-acct-head:hover,
+    .wb-acct-row:hover {
+      background: var(--bg-hover);
+    }
+  }
+
+  /* The account's hue, matte. It never glows: an account is not alive, its
+     sessions are. Off, it is a hollow ring of the same hue — a shape cue beside
+     the greyed fills and the reason line, never colour alone. */
+  .wb-acct-row .wb-acct-hue {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-full);
+    background: var(--acct-active);
+  }
+  .wb-acct-row .wb-acct-hue[data-off='true'] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--acct-active);
+  }
+  .wb-acct-row .wb-acct-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink-primary);
+  }
+  /* The meter carries the band; the number carries the fact. Never banded. */
+  .wb-acct-row .wb-acct-pct {
+    text-align: right;
+    color: var(--ink-secondary);
+  }
+  .wb-acct-row .wb-acct-reset {
+    white-space: nowrap;
+    color: var(--ink-tertiary);
+  }
+  /* The reason line, in words: sans, because it is prose, not a reading. */
+  .wb-acct-row .wb-acct-note {
+    grid-column: 3 / -1;
+    font-family: var(--family-ui);
+    line-height: var(--lh-normal);
+    color: var(--ink-tertiary);
+  }
+  .wb-acct-row .wb-acct-note[data-tone='dead'] {
+    color: var(--status-dead-text);
+  }
+}

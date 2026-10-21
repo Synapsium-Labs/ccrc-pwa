@@ -28,6 +28,7 @@ import type { CollectLaneJournal } from './collectLane.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { AccountOps } from './accounts/ops.js';
+import type { FetchLike } from './linear/client.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -169,4 +170,8 @@ export interface Deps {
   /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
    *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
   accountOps?: AccountOps;
+  /** The Linear lookup's test seams (named workspaces S4/S5): the network call and its deadline, read by the preview
+   *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
+   *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */
+  linear?: { fetch?: FetchLike; timeoutMs?: number };
 }

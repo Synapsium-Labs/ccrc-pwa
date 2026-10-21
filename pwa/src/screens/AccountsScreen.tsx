@@ -24,7 +24,6 @@ import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, ros
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore } from '../stores/fleet';
-import { AuthSection } from './AuthSection';
 import '../fleet/fleet.css';
 import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
 
@@ -411,8 +410,6 @@ export function AccountsScreen(): ReactNode {
           );
         })}
       </div>
-
-      <AuthSection />
 
       <AccountPoolSheet
         account={poolSheetAccount}

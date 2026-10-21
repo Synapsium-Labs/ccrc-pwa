@@ -1034,14 +1034,149 @@ describe('account pools', () => {
     expect(new Headers(init.headers).get('content-type')).toBeNull();
   });
 
-  it('workspaceAdd(project, route) posts { route } exactly (routing slice 5, Task 6)', async () => {
+  it('workspaceAdd(project, { route }) posts { route } exactly (routing slice 5, Task 6)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
-    await api.workspaceAdd('p', { class: 'fable' });
+    await api.workspaceAdd('p', { route: { class: 'fable' } });
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/projects/p/workspaces');
     expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
+  // NAMED WORKSPACES (S7). A blank name is today's create, byte for byte: nothing about a name reaches the wire, a
+  // wrapper beside it included (the server ignores it, and an old server has no use for it).
+  it.each([undefined, '', '   '])('workspaceAdd with a blank name (%j) is today\'s request, wrapper dropped', async (name) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { name, wrapper: 'lane-a' });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect('body' in init).toBe(false);
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+
+    await api.workspaceAdd('p', { name, wrapper: 'lane-a', route: { class: 'fable' } });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
+  it('workspaceAdd with a name posts name (trimmed), wrapper and route, and reads the named answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceAdd('p q', { name: '  ENG-1234 ', wrapper: 'lane-a', route: { class: 'opus' } });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p%20q/workspaces');
+    expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'opus' }, name: 'ENG-1234', wrapper: 'lane-a' });
+    expect(answer).toEqual({ named: true, id: 'p-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' });
+  });
+
+  it('workspaceAdd without a wrapper sends no wrapper key (the + door has no account to name)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { name: 'Login cleanup' });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ name: 'Login cleanup' });
+  });
+
+  it('workspaceAdd answers {named:false} for today\'s {ok:true}, and for a 2xx it cannot read', async () => {
+    const plain = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await plain.workspaceAdd('p')).toEqual({ named: false });
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.workspaceAdd('p', { name: 'ENG-1234' })).toEqual({ named: false });
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', slug: 'x' })) as unknown as typeof fetch);
+    expect(await partial.workspaceAdd('p', { name: 'x-1' })).toEqual({ named: false });
+  });
+
+  it('workspaceAdd rejects a refusal with its ApiError body intact', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'slug-taken' })) as unknown as typeof fetch);
+    await expect(api.workspaceAdd('p', { name: 'ENG-1234' })).rejects.toMatchObject({ status: 409, body: { error: 'slug-taken' } });
+  });
+
+  // NAMED WORKSPACES (S9): the rename. A title is sent trimmed, a clear is its own body, and the id rides the path
+  // percent-encoded. The 2xx is read: the title the box holds, `null` after a clear, `'unreadable'` for an answer this
+  // build cannot read (the exchange completed, so the rename landed).
+  it('workspaceTitle posts { title } (trimmed) to /api/sessions/:id/title and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: 'ENG-1301 - Fix it' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p x', { title: '  ENG-1301 ' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/p%20x/title');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'ENG-1301' });
+    expect(answer).toEqual({ title: 'ENG-1301 - Fix it' });
+  });
+
+  it('workspaceTitle with { clear: true } posts exactly that, and reads the null title', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: null }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p-x', { clear: true });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ clear: true });
+    expect(answer).toEqual({ title: null });
+  });
+
+  it("workspaceTitle answers 'unreadable' for a 2xx it cannot read, and rejects a refusal with its ApiError body intact", async () => {
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await partial.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'not-a-workspace' })) as unknown as typeof fetch);
+    await expect(refused.workspaceTitle('p-x', { clear: true })).rejects.toMatchObject({ status: 409, body: { error: 'not-a-workspace' } });
+  });
+
+  it('linearResolve asks GET /api/linear/resolve with the text percent-encoded, and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {
+      kind: 'named', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow', source: 'linear', extra: 'ignored',
+    }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.linearResolve('user-a/ENG-1234 fix?&x');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/api/linear/resolve?ref=${encodeURIComponent('user-a/ENG-1234 fix?&x')}`);
+    expect(init.method ?? 'GET').toBe('GET');
+    expect(answer).toEqual({ title: 'ENG-1234 - Fix the login flow', source: 'linear', note: null });
+  });
+
+  it.each([
+    ['a known word', 'not-configured', 'not-configured'],
+    ['another known word', 'unreachable', 'unreachable'],
+    ['the 403 word', 'forbidden', 'forbidden'],
+    ['a word this build lacks', 'from-the-future', 'unrecognised'],
+    ['a client-side note smuggled in as a word', 'call-failed', 'unrecognised'],
+    ['a reason that is not a string', 7, 'unrecognised'],
+  ])('linearResolve reads an offline answer\'s reason: %s', async (_name, reason, note) => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, {
+      kind: 'named', slug: 'eng-1234', title: 'ENG-1234', source: 'offline', reason,
+    })) as unknown as typeof fetch);
+    expect(await api.linearResolve('ENG-1234')).toEqual({ title: 'ENG-1234', source: 'offline', note });
+  });
+
+  it('linearResolve reads a Linear answer as having failed at nothing, whatever reason rides with it', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { kind: 'named', slug: 'eng-1', title: 'ENG-1 - X', source: 'linear', reason: 'timeout' })) as unknown as typeof fetch);
+    expect(await api.linearResolve('ENG-1')).toEqual({ title: 'ENG-1 - X', source: 'linear', note: null });
+  });
+
+  it('linearResolve reads an offline answer with no reason as having failed at nothing', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { kind: 'named', slug: 'login-cleanup', title: 'Login cleanup', source: 'offline' })) as unknown as typeof fetch);
+    expect(await api.linearResolve('Login cleanup')).toEqual({ title: 'Login cleanup', source: 'offline', note: null });
+  });
+
+  it.each([
+    ['an auto answer', { kind: 'auto', slug: null, title: null, source: 'offline' }],
+    ['a refused answer', { kind: 'refused', slug: null, title: null, source: 'offline', reason: 'too-short' }],
+    ['a refused answer that carries a title', { kind: 'refused', slug: null, title: 'X', source: 'offline', reason: 'too-short' }],
+    ['no title', { kind: 'named', slug: 'x', title: '', source: 'linear' }],
+    ['an unknown source', { kind: 'named', slug: 'x', title: 'X', source: 'cache' }],
+    ['a body that is not an object', ['named']],
+  ])('linearResolve answers unreadable for %s, never a guessed title', async (_name, body) => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, body)) as unknown as typeof fetch);
+    expect(await api.linearResolve('x')).toBe('unreadable');
+  });
+
+  it('linearResolve rejects a refusal with its ApiError', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(400, { ok: false, error: 'ref-too-long' })) as unknown as typeof fetch);
+    await expect(api.linearResolve('x')).rejects.toMatchObject({ status: 400, body: { error: 'ref-too-long' } });
   });
 
   it('names both pools in a measured mismatch without promising a control', () => {

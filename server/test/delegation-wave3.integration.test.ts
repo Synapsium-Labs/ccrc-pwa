@@ -1054,7 +1054,10 @@ describe('8. the closed scope census', () => {
     // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
       ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts']],
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
+      // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
+      // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
+      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
@@ -1217,7 +1220,12 @@ describe('8. the closed scope census', () => {
     try {
       const routes = app.printRoutes({ commonPrefix: false });
       expect(routes, 'the route table was printed').toContain('/api/runs');
-      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l)), 'no later wave\'s route').toEqual([]);
+      // The one route in another sense of the word: the named-workspace wave's `GET /api/linear/resolve` previews what a pasted
+      // ticket reference would become as a workspace name. It resolves a name, no lease or run, and it is listed by its exact printed line, so a second
+      // `resolve` route, or this one under another verb, is still red.
+      const OTHER_SENSE = ['├── /api/linear/resolve (GET, HEAD)'];
+      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)), 'no later wave\'s route').toEqual([]);
+      expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
       expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l))).toEqual([]);
     } finally { await app.close(); }

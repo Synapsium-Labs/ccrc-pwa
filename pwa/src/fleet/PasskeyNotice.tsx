@@ -18,49 +18,13 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthStatus } from '../../../shared/api';
-import { onAuthPostureChanged, readAuthStatus } from '../lib/auth';
+import { armedMode, onAuthPostureChanged, readAuthStatus } from '../lib/auth';
 import { passkeyEnrollSupported } from '../lib/passkey';
 import { navigate } from '../lib/router';
 import './fleet.css';
 
-/**
- * The modes that mean THERE IS A GATE ON THIS BOX to add a passkey to — the
- * POSITIVE list, and written as a `Record` over the union rather than as
- * literals in an `if` so that a fourth `mode` cannot be added to `AuthStatus`
- * without an author deciding here whether it nags. Measured, not assumed: with
- * `| 'device-bound'` added to the union, `tsc --noEmit` fails on the object
- * below with `TS2741: Property '"device-bound"' is missing in type
- * '{ passphrase: true; 'locked-out': true; }'`. `AUTH_VERDICT_MAP`'s
- * idiom (shared/api.ts) for its reason: a hand-written list of literals goes
- * stale in silence, and the silence in this particular spot means "armed".
- *
- *   - `'passphrase'` — armed, a secret exists. The box this line is for.
- *   - `'locked-out'` — armed, and the login rate-limiter's window is closed.
- *     It nags too, deliberately: the gate has just refused somebody, we are
- *     already in (the `authed` refusal below), and enrolment rides the session
- *     cookie rather than the rate-limited login route — so the advice is both
- *     true and actionable, and it is the box that most wants a second way in.
- *   - `'off'` is the member of the union deliberately NOT here, and it is the
- *     whole reason the list exists: `CCRC_AUTH` is off by default for every OSS
- *     install, and on a dark box there is no lock for the advice to be about.
- */
-const ARMED_MODES: Record<Exclude<AuthStatus['mode'], 'off'>, true> = {
-  passphrase: true,
-  'locked-out': true,
-};
-
-/** Is what the box said about its gate one of {@link ARMED_MODES}?
- *
- *  `unknown`, not `AuthStatus['mode']`, because the parameter's real domain is
- *  "whatever came back from a `fetch`": `undefined` from an older server that
- *  never had the field, `null` or a string this build has never heard of from
- *  anything between us and it. The type says three values; the wire does not
- *  promise three. `isAuthVerdict` (shared/api.ts) takes `unknown` for exactly
- *  this reason, and for the same one it tests the CONSTANT for membership
- *  rather than asserting the input is already a member. */
-function armedMode(mode: unknown): boolean {
-  return typeof mode === 'string' && Object.hasOwn(ARMED_MODES, mode);
-}
+// The armed-mode roster and its predicate live in `lib/auth.ts` since settings Task R2d (D-5508): Settings › Security's
+// provider asks the same question before it reads the passkey list, and one roster cannot drift from itself.
 
 /**
  * Exactly the condition the brief names, plus the one the destination screen
@@ -116,9 +80,19 @@ function nagWorthy(status: Partial<AuthStatus> | null, canEnrol: boolean): boole
   return canEnrol;
 }
 
-export function PasskeyNotice(): ReactNode {
+/** Does the notice show for this posture? {@link nagWorthy}, with this browser's ability to enrol read now. The
+ *  banner stack asks it (W2 Task S2c, BannerStack.tsx) with the status the fleet screen read and handed down. */
+export function passkeyNoticeShows(status: Partial<AuthStatus> | null): boolean {
+  return nagWorthy(status, passkeyEnrollSupported());
+}
+
+/** The box's auth posture, read once and again on every posture change; null until a read lands. `enabled: false`
+ *  reads nothing, for a notice whose status was handed down (the fleet screen reads it once, for the stack's
+ *  predicate and the notice alike, so the two cannot disagree and no second read is made). */
+export function usePasskeyStatus(enabled = true): Partial<AuthStatus> | null {
   const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
   useEffect(() => {
+    if (!enabled) return undefined;
     let live = true;
     // THE NEWEST READ WINS, not the last one to land. Two posture changes
     // inside one round-trip invert otherwise: revoke key A (read A sees 1 left)
@@ -143,21 +117,30 @@ export function PasskeyNotice(): ReactNode {
     };
     read();
     // No poll. The one event that retires this line — a passkey being enrolled
-    // — happens in AccountsScreen, which announces it (lib/auth.ts's
+    // — happens on Settings › Security (R2d), which announces it (lib/auth.ts's
     // `authPostureChanged`); a minute-by-minute GET would be paying forever to
     // notice something that happens once.
     const off = onAuthPostureChanged(read);
     return () => { live = false; off(); };
-  }, []);
+  }, [enabled]);
+  return status;
+}
+
+export function PasskeyNotice({ status: injected }: {
+  /** The posture, when the caller read it (the fleet screen); omitted, the notice reads its own. */
+  status?: Partial<AuthStatus> | null;
+} = {}): ReactNode {
+  const own = usePasskeyStatus(injected === undefined);
+  const status = injected === undefined ? own : injected;
 
   // Read at render, not captured in state: it is a property of the BROWSER, so
   // there is nothing to keep in sync and nothing to invalidate.
-  if (!nagWorthy(status, passkeyEnrollSupported())) return null;
+  if (!passkeyNoticeShows(status)) return null;
   return (
     <button
       type="button"
       className="passkey-notice"
-      onClick={() => navigate('/accounts')}
+      onClick={() => navigate('/settings/security')}
     >
       Passphrase only &mdash; add a passkey
     </button>

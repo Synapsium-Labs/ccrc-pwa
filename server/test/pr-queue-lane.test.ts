@@ -127,7 +127,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   const stop = (): void => { w.stop(); };
   const queueFeed = () => coord.feedEvents(200).filter((e) => e.kind === 'queue');
   const mail = () => coord.mailForRecipient(COORDINATOR);
-  return { coord, sweep, restart, stop, sent, queueFeed, mail, runId, firstRunId: opened.id };
+  return { coord, deps, sweep, restart, stop, sent, queueFeed, mail, runId, firstRunId: opened.id };
 }
 
 describe('queueFor — the one reader of the queue fields', () => {
@@ -370,6 +370,81 @@ describe('the landing lane latches only what it told', () => {
     f.restart();
     await f.sweep();
     expect(f.mail()).toHaveLength(1);
+    f.stop();
+  });
+});
+
+// D-5860 (Task C1f): the landing step's feed-only "already told" read (`toldFeed`) is `hasNotice('queue', id, key)`
+// on the removal's key, which every dequeue row carries, mailed or not. Step 1 pinned these rows on the body read;
+// Step 3 changed only the rows OA-C3 ruled (operator, 2026-10-21: "A: the label decides"), each marked RULED with what
+// it did before. Rows (a), (b) and (e) of the plan's table are "with no open run, records the feed event and mails
+// nobody", the same block's second sweep, and "a restart re-records no feed-only dequeue either" above. The mailed
+// path's read (`hasMailWithSubject`) is not a feed read and is not C1f's.
+describe('C1f: the landing step\'s feed-only "already told" is the removal\'s key (D-5860, OA-C3 ruled A)', () => {
+  const TAG = `queue-${ID}#42:dequeued@${T1}`;
+  // RULED (OA-C3, A). Before: a second row and push, "No open run names a coordinator to tell."
+  it('(c) told WITH a coordinator, then the run fails, then a restart: the same removal is NOT recorded or pushed again', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    await f.sweep();
+    expect(f.queueFeed().map((e) => e.body)).toEqual([expect.stringContaining(`Mailed coordinator ${COORDINATOR}.`)]);
+    expect(f.coord.advance(f.runId!, 'failed', 'test').ok).toBe(true);
+    // Same process: the in-memory latch holds, whatever the run did.
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    f.restart();
+    await f.sweep();
+    // The second read asks the feed (no open run names a coordinator now): the mailed row carries the same key.
+    expect(f.queueFeed().map((e) => e.body)).toEqual([expect.stringContaining(`Mailed coordinator ${COORDINATOR}.`)]);
+    expect(f.mail()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    f.stop();
+  });
+  // RULED (OA-C3, A). Before: a second row and push.
+  it('(c) the feed-only row\'s body changed (a reworded deploy), then a restart: NOT recorded or pushed again', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    f.coord.db.prepare("UPDATE feed_events SET body = ? WHERE kind = 'queue'").run(`PR #42 was dequeued (an earlier wording) (removed ${T1})`);
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    expect(f.mail()).toEqual([]);
+    f.stop();
+  });
+  // Departure `dedupe-key-legacy-text`: a row archived BEFORE the key (NULL) is still matched by its body, so the
+  // deploy itself re-sends nothing.
+  it('a row archived before the key is matched by its body: a restart onto the new build re-sends nothing', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    f.coord.db.prepare("UPDATE feed_events SET dedupe_key = NULL WHERE kind = 'queue'").run();
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    f.stop();
+  });
+  it('a SECOND removal of the same PR, after a restart, is a new key: recorded and pushed (unchanged)', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    f.restart();
+    await f.sweep(openLine({ queue: 'dequeued', queueAt: T2 }));
+    expect(f.queueFeed().map((e) => e.body)).toEqual([
+      expect.stringContaining(`(removed ${T1})`), expect.stringContaining(`(removed ${T2})`)]);
+    expect(f.mail()).toEqual([]);
+    f.stop();
+  });
+  it('(d)+(e) a ring restart (a new epoch) and a restart: the archived row is matched whatever epoch wrote it', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    const before = (f.deps as unknown as { notifyLog: NotifyLog }).notifyLog;
+    const fresh = new NotifyLog(path.join(mkTmp('ccrc-queue-ring-'), 'notify.json'));
+    await fresh.load();
+    expect(fresh.epoch).not.toBe(before.epoch);
+    (f.deps as unknown as { notifyLog: NotifyLog }).notifyLog = fresh;
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
     f.stop();
   });
 });

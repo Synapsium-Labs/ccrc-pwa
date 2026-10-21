@@ -529,7 +529,7 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e f',
 ];
 // EVERY NAME IN `CCD_BLOCKS` BELOW THAT CONTRIBUTES NO ENTRY TO `CCD_SITES` is
-// pools-relevant and holds no existence test of its own: `cmd_ws_add` never
+// pools-relevant and holds no existence test of its own: `_ws_pool_read` never
 // tests a pools path, `cmd_project_pool` decides from `_project_pool_state`
 // instead, and the rest only interpolate `$POOLS_DIR` into an undecidable-tag
 // MESSAGE, with nothing to pair. Naming the SET rather than a cardinal is the
@@ -580,10 +580,16 @@ const DOCTOR_SITES: string[] = [
 // `_undecidable_cause` moved one again, and this round moved a path BETWEEN
 // blocks — the one shape a cardinal could not have described at all, since
 // the count fell.
+// AND THE NAMED-WORKSPACE WAVE IS THE MOVE SHAPE AGAIN. `cmd_ws_add` spelled the
+// `$POOLS_DIR/<project>` path in its undecidable-tag message; that read now lives
+// in ONE helper, `_ws_pool_read`, which `cmd_ws_add` and `_ws_wrapper_why`
+// share, so the interpolation left one block and arrived in another. Like
+// the renderer above it holds no existence test (`CCD_SITES` is byte-identical),
+// and the net is one name in, one out.
 const CCD_BLOCKS: string[] = [
   '_pool_untaggable',
   '_project_pool_state', '_pool_undecidable_why',
-  'cmd_ws_add', 'cmd_project_pool', '_undecidable_cause',
+  '_ws_pool_read', 'cmd_project_pool', '_undecidable_cause',
   '_auto_swap_check', '_strand_why',
 ];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`

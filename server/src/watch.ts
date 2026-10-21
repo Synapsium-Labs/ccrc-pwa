@@ -1720,6 +1720,19 @@ export class FleetWatcher {
     if (this.serverCapsRun !== null) await this.serverCapsRun;
   }
 
+  /** Resolves once none of the writers `tick()` fires without awaiting is in flight: the server-caps beat, the
+   *  inventory run and the dispatch run it ends in (D-6179). Each writes under `<ccrcDir>`, so a caller that removes
+   *  that directory (a test's teardown) awaits this after `stop()`. It loops because a run that settles can start the
+   *  next (the dispatch run's follow-up). It does not cover an inventory rerun queued by `triggerInventory()`, which
+   *  starts a few microtasks after `inventoryRun` clears. Never rejects: each lane warns on its own. */
+  async settled(): Promise<void> {
+    for (;;) {
+      const inFlight = [this.serverCapsRun, this.inventoryRun, this.dispatchRun].filter((p) => p !== null);
+      if (inFlight.length === 0) return;
+      await Promise.allSettled(inFlight);
+    }
+  }
+
   /**
    * The inventory lane's ONE run (design 2026-09-20 §8). The minute gate in
    * `tick()`, the `ready` trigger in `index.ts` and `GET /api/updates`
@@ -3440,6 +3453,8 @@ export class FleetWatcher {
     /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
      *  push's deep link to its day's screen (D-5300). */
     url?: string;
+    /** D-5860: the notice's once-only key, archived beside its row for `CoordStore.hasNotice`. It decides nothing here. */
+    dedupeKey?: string;
   } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
@@ -3456,6 +3471,7 @@ export class FleetWatcher {
         ...(e.tag !== undefined ? { tag: e.tag } : {}),
         ...(e.actions ? { actions: e.actions } : {}),
         ...(e.url !== undefined ? { url: e.url } : {}),
+        ...(e.dedupeKey !== undefined ? { dedupeKey: e.dedupeKey } : {}),
       });
   }
 
@@ -3750,6 +3766,20 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // A HUMAN'S NAME IS FINAL (named workspaces S2, D-6163). A workspace a human
+      // named — `ccd ws-add --title`, `ccd ws-title` — keeps its name. Its
+      // branch is still the birth branch `ws/<slug>`, so nothing above tells it
+      // from an auto-named one, and `sessionLabel` reads `branch` before
+      // `workspace`: without this clause the operator's `eng-1234` is rewritten
+      // to the model's title within one sweep of the first ai-title, with no
+      // verb able to put it back. Doubt reads as NAMED (`namedByOperator`'s
+      // ladder: a listed-but-unreadable or empty marker is true) — the same
+      // ruling as `held` below, for the same asymmetry: renaming over a human's
+      // choice is unrecoverable, skipping an auto row leaves it where it was.
+      // A field on the row this loop already read, so it sits before the
+      // `openRunsForSession` query and costs nothing; `--clear` removes the file
+      // and returns the row to the sweep.
+      if (r.namedByOperator) continue;
       // TWELFTH CONDITION (Wave 3 §3.1). A claimed workspace is not renamed —
       // `sessionLabel` reads `branch` before `workspace`, so a rename mid-wave
       // changes what every surface calls a worker the coordinator's ledger
@@ -6880,8 +6910,10 @@ export class FleetWatcher {
    * The reads are staged cheapest first and each stops at the first hold: the fleet row (no read), then the live
    * status, the turn marker, the task list, and last the transcript tail (a stat, and a read only when the file
    * changed). At most once per compaction: the `<id>#<key>` pair is added to `idleNudged` and the `nudge` feed row is
-   * recorded BEFORE `sendPrompt` runs, and that row (`hasFeedEvent`, exact body) is what a restarted server reads. A
-   * row that did not land types nothing. The send is `sendPrompt` with its echo proofs, never over a draft, a menu,
+   * recorded BEFORE `sendPrompt` runs, carrying the compaction as its once-only key, and that key (`hasNotice`,
+   * D-5860; OA-C3, ruled A: the label decides, whatever the row's wording) is what a restarted server reads. A row
+   * archived before the key existed is still matched by its body. A row that did not land types nothing: the gate
+   * re-reads this compaction's KEY, never the body, which a masked earlier compaction's row would match. The send is `sendPrompt` with its echo proofs, never over a draft, a menu,
    * an armed limit recovery or a pane that shows a turn running. The nudge then reads as the `idle-compact-nudge` pill
    * in the chat (`transcript/parse.ts`), and its user row is itself a hold for this compaction.
    */
@@ -6935,16 +6967,20 @@ export class FleetWatcher {
     v = decideIdleCompactNudge({ ...base, mark, tasks });
     if (v.act === 'hold' && v.reason !== 'no-compaction') return;
     const compaction = await this.idleNudgeTail(s.id, cfgDir, ident);
+    // D-5860: the compaction is the key. The body read could not tell two compactions apart: the archive masks the
+    // uuid (D-5298), so every nudge row of a session reads alike. `legacyBody` matches a row archived before the key.
     const alreadyNudged = (key: string): boolean =>
-      this.idleNudged.has(`${s.id}#${key}`) || coord.hasFeedEvent('nudge', s.id, idleNudgeFeedBody(key));
+      this.idleNudged.has(`${s.id}#${key}`) || coord.hasNotice('nudge', s.id, key, idleNudgeFeedBody(key));
     v = decideIdleCompactNudge({ ...base, now: Date.now(), mark, tasks, compaction, alreadyNudged });
     if (v.act !== 'nudge') return;
     // Once, BEFORE the send: this process's set, then the durable row. A row that did not land types nothing.
     this.idleNudged.add(`${s.id}#${v.key}`);
     const body = idleNudgeFeedBody(v.key);
     this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudging after idle compaction', body,
-      recordAlways: true, recordOnly: true }, this.activeProjects);
-    if (!coord.hasFeedEvent('nudge', s.id, body)) {
+      recordAlways: true, recordOnly: true, dedupeKey: v.key }, this.activeProjects);
+    // D-5860 (departure `landing-gate-by-key`): the gate re-reads THIS compaction's key, never the masked body, which
+    // an earlier compaction's row would answer.
+    if (!coord.hasNotice('nudge', s.id, v.key)) {
       console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
       return;
     }
@@ -8474,8 +8510,11 @@ export class FleetWatcher {
    * this notice was ALREADY told: a mail through `hasMailWithSubject` — every
    * delivery state, because `queueSystemMail`'s own dedupe sees OUTSTANDING
    * rows only and an acked notice would otherwise be mailed again after every
-   * rollout — and the feed-only dequeue through `hasFeedEvent` on the exact
-   * body, which carries the removal time. A hit latches and says nothing.
+   * rollout — and the feed-only dequeue through `hasNotice` on the removal's
+   * key (D-5860; OA-C3, ruled A: the same removal is already told, whatever
+   * its wording), which every dequeue row carries, mailed or not; a row
+   * archived before the key is matched by its body. A hit latches and says
+   * nothing.
    *
    * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
    * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
@@ -8538,7 +8577,7 @@ export class FleetWatcher {
               facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
               break;
             case 'toldFeed':
-              facts.told = coord.hasFeedEvent('queue', r.id, s.body);
+              facts.told = coord.hasNotice('queue', r.id, s.key, s.body);
               break;
             case 'defer':
               console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);

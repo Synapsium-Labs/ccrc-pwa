@@ -1762,6 +1762,23 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (laneId, gen, fp)
   );
   `,
+  // ── 29: user_version 28 -> 29 ─────────────────────────────────────────────
+  // D-5860 (consolidation W1a plan, Task C1f; ARCH-55 #790): `feed_events.dedupe_key`, the label a notice that must
+  // happen once carries (which compaction a nudge is about; which PR removal a dequeue is about). Its ONE writer is
+  // `CoordStore.recordFeedEvent` and its one reader `CoordStore.hasNotice`; the key is stored as its SHA-256 hex,
+  // never through the body's redactor (departure `dedupe-key-unmasked`: a masked key collides exactly as a masked body
+  // does). NULL is a row written before this migration, or a notice with no once-only rule; `hasNotice` matches such a
+  // row by its body (departure `dedupe-key-legacy-text`). The index serves `hasNotice`'s three-column read.
+  //
+  // ONE NULLABLE COLUMN (no NOT NULL, no CHECK, no default) AND ONE INDEX, nothing else: an older build opening a file at
+  // `user_version 29` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its
+  // inserts store NULL. Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;
+  CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

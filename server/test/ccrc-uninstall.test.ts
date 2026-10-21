@@ -367,6 +367,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // The children's deny file (coordinator-first Task 15, D-5299): written by
   // install-session-hooks.sh, removed ONLY here (D-5392), never by its --remove.
   writeFileSync(join(reg, 'child-deny.settings.json'), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n', { mode: 0o644 });
+  // The account deny file (D-6202): written by install-session-hooks.sh beside it, removed here with it.
+  writeFileSync(join(reg, 'account-deny.settings.json'), '{"permissions":{"deny":["Bash(ccrc account:*)"]}}\n', { mode: 0o644 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
@@ -739,7 +741,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
-      'install-graphify-skill.sh', 'install-history-skill.sh', 'child-deny.settings.json',
+      'install-graphify-skill.sh', 'install-history-skill.sh', 'child-deny.settings.json', 'account-deny.settings.json',
       'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
@@ -756,6 +758,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.cc-sessions', 'child-deny.settings.json'))).toBe(false);
+    expect(existsSync(join(home, '.cc-sessions', 'account-deny.settings.json'))).toBe(false);
   });
 
   it('graphify skills: skills/graphify is removed from every rostered home, while OTHER skills there survive', () => {

@@ -95,19 +95,21 @@ describe('landingVerdict — a dequeue', () => {
       mail: { fromId: 'operator', toId: COORD, runId: 7, kind: 'status',
         subject: dequeuedSubject(42, T1), body: renderDequeueBrief(ID, 42) },
       record: { title: '⤺ dequeued › quiet-basin', runId: 7, tag: `queue-${ID}#42:dequeued@${T1}`,
-        recordAlways: true,
+        recordAlways: true, dedupeKey: `${ID}#42:dequeued@${T1}`,
         body: `PR #42 left the merge queue without landing (removed ${T1}); GitHub does not re-enqueue it. Mailed coordinator ${COORD}.` },
     });
   });
 
-  it('no open run: the proof of "already told" is the FEED body, and the delivery is the record alone', () => {
+  it('no open run: the proof of "already told" is the FEED notice\'s key, and the delivery is the record alone', () => {
     const a = ask();
     const runs: LandingFacts['runs'] = { ok: true, run: null };
     const body = `PR #42 left the merge queue without landing (removed ${T1}); GitHub does not re-enqueue it. `
       + 'No open run names a coordinator to tell.';
-    expect(step(a, { runs })).toEqual({ step: 'toldFeed', body });
+    // D-5860: the feed proof reads the removal's key first; the body matches only a row archived before the key.
+    expect(step(a, { runs })).toEqual({ step: 'toldFeed', key: a.key, body });
     const v = step(a, { runs, told: false });
-    expect(v).toMatchObject({ step: 'deliver', mail: null, record: { body, runId: null, recordAlways: true } });
+    expect(v).toMatchObject({ step: 'deliver', mail: null,
+      record: { body, runId: null, recordAlways: true, dedupeKey: a.key } });
   });
 
   it('an open run whose coordinator does not resolve is the feed-only path too — never a guess', () => {

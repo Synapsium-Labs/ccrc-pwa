@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CollectLaneConfirmRequired, CollectLaneView, CoordStatus } from '../../shared/api';
 import type { ComponentProps, ReactNode } from 'react';
-import { CollectLaneSection } from '../src/fleet/CollectLaneSection';
+import { CollectLaneSection, PauseAllCleanup } from '../src/fleet/CollectLaneSection';
 import { useCollectLaneView } from '../src/fleet/useCollectLaneView';
 import {
   COLLECT_OFF_NOTE_TEXT, COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, COLLECT_STATE_TEXT,
@@ -20,14 +20,18 @@ import {
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../src/lib/api';
-import { ToastHost } from '@ccrc/ui';
+import { ToastHost, buttonVariants } from '@ccrc/ui';
 import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 
 /** The section over its own read, as the Settings frame hands it one (`SettingsDataProvider`, D-5504). */
-function Polled(props: Omit<ComponentProps<typeof CollectLaneSection>, 'poll'>): ReactNode {
-  return <CollectLaneSection {...props} poll={useCollectLaneView()} />;
+function Polled(): ReactNode {
+  return <CollectLaneSection poll={useCollectLaneView()} />;
+}
+/** The Cleanup pause card's body, as Automation mounts it (settings Task R2b2), in a region of its own. */
+function Pause(props: ComponentProps<typeof PauseAllCleanup>): ReactNode {
+  return <section aria-label={COLLECT_PAUSE_TEXT.title}><PauseAllCleanup {...props} /></section>;
 }
 
 afterEach(() => {
@@ -117,8 +121,11 @@ const confirm409 = (error: 'confirm-required' | 'confirm-stale', confirmKey: str
   new ApiError(409, { ok: false, error, confirmKey, facts } satisfies CollectLaneConfirmRequired);
 
 // `hidden: true`: an open sheet marks the page behind it aria-hidden, and these cases read the radios under it.
+/** The collector card's body: the `Section`'s card, after its head and purpose line. */
 const section = (): HTMLElement =>
-  screen.getByRole('heading', { name: COLLECT_SECTION_TEXT.title, hidden: true }).closest('section')!;
+  screen.getByRole('heading', { name: COLLECT_SECTION_TEXT.title, hidden: true }).closest('section')!.lastElementChild as HTMLElement;
+/** The Cleanup pause card (its own card since settings Task R2b2). */
+const pauseCard = (): HTMLElement => screen.getByRole('region', { name: COLLECT_PAUSE_TEXT.title, hidden: true });
 const choiceGroup = (): Promise<HTMLElement> =>
   within(section()).findByRole('group', { name: COLLECT_SECTION_TEXT.legend, hidden: true });
 const radio = (c: 'off' | 'live'): HTMLElement =>
@@ -131,7 +138,7 @@ const mount = async (first: CollectLaneView,
   pause: (state: 'on' | 'off') => Promise<void> = vi.fn(() => new Promise<void>(() => {}))) => {
   const store = makeStore();
   const read = vi.spyOn(api, 'collectLane').mockResolvedValue(first);
-  render(<><ToastHost /><Polled store={store} childReclaimPause={pause} /></>);
+  render(<><ToastHost /><Polled /><Pause store={store} childReclaimPause={pause} /></>);
   await choiceGroup();
   return { read, store };
 };
@@ -156,7 +163,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     const { read, store } = await mount(LIVE_HERE);
     seen(store, coord());
     expect(radio('live')).toBeChecked();
-    expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
+    expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
     const onlyTheLine = (): void => {
       expect(within(section()).queryByRole('radio', { hidden: true })).toBeNull();
       expect(within(section()).queryByRole('button', { hidden: true })).toBeNull();
@@ -428,7 +435,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     let answer!: (v: 'unreadable') => void;
     vi.spyOn(api, 'collectLane').mockResolvedValue(OFF_LATCHED);
     render(<ToastHost />);
-    const section1 = render(<Polled store={makeStore()} childReclaimPause={vi.fn(() => new Promise<void>(() => {}))} />);
+    const section1 = render(<Polled />);
     await choiceGroup();
     vi.spyOn(api, 'setCollectLane').mockReturnValueOnce(new Promise((r) => { answer = r as (v: 'unreadable') => void; }));
     fireEvent.click(radio('live'));
@@ -457,16 +464,18 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(document.querySelector('.toast'), 'not a toast').toBeNull();
     expect(COLLECT_SECTION_TEXT.reconfirmWhen).toBe("When the collector's node changed and you still want Live.");
     expect(line.nextElementSibling, 'the when-line follows the button and its line').toHaveTextContent(COLLECT_SECTION_TEXT.reconfirmWhen);
-    expect(line.nextElementSibling).toHaveClass('settings-note');
+    expect(line.nextElementSibling).toHaveClass('settings-when');
   });
 
-  it('the section opens with its purpose, and each choice carries its note; the when-line follows the choice', async () => {
+  it('the card opens with its purpose, and each choice carries its note; the when-line follows the choice', async () => {
     await mount(OFF_LATCHED);
     const s = section();
-    expect(within(s).getByText(COLLECT_SECTION_TEXT.purpose)).toHaveClass('settings-note');
+    const card = screen.getByRole('region', { name: COLLECT_SECTION_TEXT.title });
+    expect(within(card).getByText(COLLECT_SECTION_TEXT.purpose), 'the purpose line is the card head\'s').toBeInTheDocument();
+    expect(within(s).queryByText(COLLECT_SECTION_TEXT.purpose), 'not repeated in the body').toBeNull();
     expect(radio('live')).toHaveAccessibleDescription(COLLECT_SECTION_TEXT.liveNote);
     expect(radio('off')).toHaveAccessibleDescription(COLLECT_SECTION_TEXT.offNote);
-    expect(within(s).getByText(COLLECT_SECTION_TEXT.when)).toHaveClass('settings-note');
+    expect(within(s).getByText(COLLECT_SECTION_TEXT.when)).toHaveClass('settings-when');
   });
 
   it('the counts line, and the not-measured line', async () => {
@@ -559,32 +568,53 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(write).toHaveBeenCalledTimes(1);
   });
 
-  describe('Pause all cleanup: nothing before a coord frame; a tap calls \'on\' once; "pausing…" until a frame reads set; unconfirmed after COORD_CONFIRM_MS; 501 inline; no Resume control', () => {
-    it('renders nothing before a coord frame, and the button with its four-lane text once a clear frame lands', async () => {
+  describe('Pause all cleanup: a skeleton before a coord frame; a tap calls \'on\' once; "pausing…" until a frame reads set; unconfirmed after COORD_CONFIRM_MS; 501 inline; no Resume control', () => {
+    it("Cleanup pause's status is a skeleton before the first coord frame, never runs normally", async () => {
       const { store } = await mount(LIVE_HERE);
-      expect(within(section()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeNull();
-      expect(within(section()).queryByText(COLLECT_PAUSE_TEXT.stops)).toBeNull();
+      expect(within(pauseCard()).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+      expect(within(pauseCard()).queryByText(COLLECT_PAUSE_TEXT.running)).toBeNull();
+      expect(within(pauseCard()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeNull();
       seen(store, coord());
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
-      expect(within(section()).getByText(COLLECT_PAUSE_TEXT.stops)).toBeInTheDocument();
+      expect(within(pauseCard()).getByText(COLLECT_PAUSE_TEXT.running)).toHaveAttribute('role', 'status');
+      expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
+      expect(within(pauseCard()).queryByRole('status', { name: 'Loading' })).toBeNull();
+    });
+
+    it('a server older than the switch says the switch is not available, and offers nothing', async () => {
+      const { store } = await mount(LIVE_HERE);
+      seen(store, { pause: 'clear', mail: 'clear', childReclaimAttention: [] } as unknown as CoordStatus);
+      expect(within(pauseCard()).getByText(COLLECT_SECTION_TEXT.notAvailable)).toBeInTheDocument();
+      expect(within(pauseCard()).queryByRole('button')).toBeNull();
+      expect(within(pauseCard()).queryByText(COLLECT_PAUSE_TEXT.running)).toBeNull();
+    });
+
+    it('the collector card holds no Pause control', async () => {
+      const { store } = await mount(LIVE_HERE);
+      seen(store, coord());
+      expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
+      const collector = screen.getByRole('region', { name: COLLECT_SECTION_TEXT.title });
+      expect(within(collector).queryByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeNull();
+      expect(within(collector).queryByText(COLLECT_PAUSE_TEXT.running)).toBeNull();
+      const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'CollectLaneSection.tsx'), 'utf8');
+      expect(src.match(/<PauseAllCleanup\b/g), 'nothing in the collector mounts it').toBeNull();
     });
 
     it("a tap calls 'on' exactly once and reads pausing… until a later frame reads set; then no Resume control", async () => {
       const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockResolvedValue(undefined);
       const { store } = await mount(LIVE_HERE, pause);
       seen(store, coord());
-      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
-      const pending = await within(section()).findByRole('button', { name: COLLECT_PAUSE_TEXT.pausing });
+      fireEvent.click(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      const pending = await within(pauseCard()).findByRole('button', { name: COLLECT_PAUSE_TEXT.pausing });
       expect(pending).toBeDisabled();
       fireEvent.click(pending);
       expect(pause).toHaveBeenCalledTimes(1);
       expect(pause).toHaveBeenCalledWith('on');
       seen(store, coord({ reclaim: 'clear', childReclaimAttention: [] }));   // a frame, still disagreeing
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeInTheDocument();
+      expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeInTheDocument();
       seen(store, coord({ reclaim: 'set' }));
-      expect(await within(section()).findByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
-      expect(within(section()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeNull();
-      expect(within(section()).queryByRole('button', { name: /resume/i })).toBeNull();
+      expect(await within(pauseCard()).findByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
+      expect(within(pauseCard()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeNull();
+      expect(within(pauseCard()).queryByRole('button', { name: /resume/i })).toBeNull();
       expect(pause).not.toHaveBeenCalledWith('off');
     });
 
@@ -595,14 +625,14 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
         const store = makeStore();
         vi.spyOn(api, 'collectLane').mockResolvedValue(LIVE_HERE);
         const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockResolvedValue(undefined);
-        render(<Polled store={store} childReclaimPause={pause} />);
+        render(<><Polled /><Pause store={store} childReclaimPause={pause} /></>);
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
         seen(store, coord());
-        fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+        fireEvent.click(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-        expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeDisabled();
+        expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeDisabled();
         await act(async () => { await vi.advanceTimersByTimeAsync(COORD_CONFIRM_MS); });
-        expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.unconfirmed })).toBeEnabled();
+        expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.unconfirmed })).toBeEnabled();
         expect(pause).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
@@ -614,9 +644,9 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
         .mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
       const { store } = await mount(LIVE_HERE, pause);
       seen(store, coord());
-      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
-      expect(await within(section()).findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
+      fireEvent.click(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      expect(await within(pauseCard()).findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
+      expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
       expect(document.querySelector('.toast')).toBeNull();
     });
 
@@ -625,9 +655,9 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockRejectedValue(refusal);
       const { store } = await mount(LIVE_HERE, pause);
       seen(store, coord());
-      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      fireEvent.click(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
       const line = await waitFor(() => {
-        const next = within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }).nextElementSibling as HTMLElement | null;
+        const next = within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }).nextElementSibling as HTMLElement | null;
         expect(next, 'the line sits directly under Pause all cleanup').toHaveTextContent(apiErrorText(refusal));
         return next as HTMLElement;
       });
@@ -640,13 +670,38 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     it('offers Pause only: an unreadable switch still offers Pause, a paused one offers no Resume, and the file never asks off', async () => {
       const { store } = await mount(LIVE_HERE);
       seen(store, { ...coord(), reclaim: 'quarantined' } as unknown as CoordStatus);
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
+      expect(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
+      expect(within(pauseCard()).getByText(COLLECT_PAUSE_TEXT.unmeasurable)).toHaveClass('settings-catalogue--amber');
       seen(store, coord({ reclaim: 'set' }));
-      expect(within(section()).getByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
-      expect(within(section()).queryByRole('button', { name: /resume/i })).toBeNull();
+      expect(within(pauseCard()).getByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
+      expect(within(pauseCard()).queryByRole('button')).toBeNull();
       const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'CollectLaneSection.tsx'), 'utf8');
       expect(src).not.toMatch(/childReclaimPause\(\s*'off'/);
       expect(src).not.toMatch(/UpdateMoveSheet/);
+    });
+
+    it('Cleanup pause offers Pause only, one tap, and links to Runs for Resume', async () => {
+      const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockResolvedValue(undefined);
+      const { store } = await mount(LIVE_HERE, pause);
+      seen(store, coord());
+      // One tap: the request goes out with no dialog.
+      fireEvent.click(within(pauseCard()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      expect(pause).toHaveBeenCalledTimes(1);
+      expect(pause).toHaveBeenCalledWith('on');
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(within(pauseCard()).getAllByRole('button').map((b) => b.textContent)).toEqual([COLLECT_PAUSE_TEXT.pausing]);
+      // Paused: no control at all, and the one resume door is the link to Runs.
+      seen(store, coord({ reclaim: 'set' }));
+      expect(within(pauseCard()).queryByRole('button')).toBeNull();
+      const link = within(pauseCard()).getByRole('link', { name: COLLECT_PAUSE_TEXT.resume });
+      expect(link).toHaveAttribute('href', '/runs');
+      // The resume door stands alone, so it is a control with the tap floor, not prose: the design system's ghost
+      // button on an anchor in the card's foot (TextLink's contract keeps a bare link for words inside a sentence).
+      for (const c of buttonVariants({ variant: 'ghost' }).split(/\s+/).filter(Boolean)) expect(link).toHaveClass(c);
+      expect(link.closest('.settings-card-foot')).not.toBeNull();
+      expect(link).not.toHaveAttribute('target');
+      expect(within(pauseCard()).getByText(COLLECT_PAUSE_TEXT.paused).closest('p')).toHaveClass('settings-catalogue--amber');
+      expect(pause).not.toHaveBeenCalledWith('off');
     });
   });
 

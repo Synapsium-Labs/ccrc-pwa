@@ -5,6 +5,7 @@
 //
 // `useFleetFlows()` is how a part opens one. It never holds state of its own; the state is the chrome's.
 import type { ReactNode } from 'react';
+import { AddWorkspaceSheet } from './AddWorkspaceSheet';
 import { NewSessionSheet } from './NewSessionSheet';
 import { PoolSheet } from './PoolSheet';
 import { SessionActionsSheet } from './SessionActionsSheet';
@@ -14,6 +15,8 @@ import { useFleetChrome } from './FleetChrome';
 
 export interface FleetFlowDoors {
   openNewSession: () => void;
+  /** The `+` sheet for a project (named workspaces S7): the tap no longer creates, it asks. */
+  openAddWorkspace: (project: string) => void;
   /** The ··· sheet for a session in the live list; an id the list does not hold opens nothing. */
   openActions: (id: string) => void;
   /** The pool sheet for a project. The project alone (D-5677): the pool is read from that project's `/api/projects` row, as today. */
@@ -27,6 +30,7 @@ export function useFleetFlows(): FleetFlowDoors {
   const sessions = chrome.store((s) => s.sessions);
   return {
     openNewSession: () => chrome.setNewOpen(true),
+    openAddWorkspace: (project) => chrome.setAddWorkspaceFor(project),
     openActions: (id) => {
       const session = sessions.find((s) => s.id === id);
       if (session !== undefined) chrome.actions.openFor(session);
@@ -38,12 +42,24 @@ export function useFleetFlows(): FleetFlowDoors {
 }
 
 export function FleetFlows(): ReactNode {
-  const { store, projects, actions, archiveAll, archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, reapId, setReapId } =
-    useFleetChrome();
+  const {
+    store, projects, actions, archiveAll, archiveAllFor, setArchiveAllFor, newOpen, setNewOpen,
+    addWorkspaceFor, setAddWorkspaceFor, reapId, setReapId,
+  } = useFleetChrome();
   const sessions = store((s) => s.sessions);
+  const roster = store((s) => s.roster);
   return (
     <>
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+
+      <AddWorkspaceSheet
+        project={addWorkspaceFor}
+        onClose={() => setAddWorkspaceFor(null)}
+        add={projects.addWorkspace}
+        adding={addWorkspaceFor !== null && projects.adding.has(addWorkspaceFor)}
+        placement={projects.placementFor(addWorkspaceFor ?? '')}
+        roster={roster}
+      />
 
       <PoolSheet
         project={projects.poolSelection?.project ?? null}

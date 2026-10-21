@@ -24,6 +24,7 @@ import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
+import { rootBody } from './cssRule';
 
 const PWA_SRC = path.join(import.meta.dirname, '..', 'src');
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
@@ -172,7 +173,7 @@ describe('the meter has a shape, and the shape is a skin token', () => {
     expect(css).toContain('var(--meter-segments)');
     expect(css).toContain('var(--meter-gap)');
     const tokens = stripCssComments(read(path.join(STYLES, 'tokens.css')));
-    const root = tokens.slice(tokens.indexOf(':root {'), tokens.indexOf('}', tokens.indexOf(':root {')));
+    const root = rootBody(tokens);
     expect(root).toMatch(/--meter-h:\s*5px;/);
     expect(root).toMatch(/--meter-segments:\s*1;/);
     expect(root).toMatch(/--meter-gap:\s*0px;/);

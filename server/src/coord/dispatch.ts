@@ -10,7 +10,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { fieldMeasured, measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
-  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec, type ActorFlags,
+  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
 } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
@@ -326,7 +326,10 @@ async function refuseSpentChild(
   const argv = handoff !== null && handoff.ok
     ? CCD_ARGV.wsHold(run.sessionId, handoff.reason, dispatchDec)
     : CCD_ARGV.wsRelease(run.sessionId, dispatchDec);
-  if (!verbSupported(deps.fleetState, argv)) return keep(`this box's ccd does not support ${argv[0]}`);
+  // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
+  if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
+    return keep(`this box's ccd does not support ${argv[0]}`);
+  }
   const res = await deps.runCcd(argv);
   if (!res.ok) return keep(`${argv[0]} failed: ${res.stderr.trim()}`);
   const cleared = deps.coord.clearSession(run.id, pr);
@@ -584,7 +587,7 @@ export async function dispatchRun(
   // `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would
   // have omitted them, at the cost `capSupported`'s no-evidence-FALSE default
   // is argued for in `ccdargv.ts`. Nothing below catches it, and the asymmetry
-  // is three lines from the spend: `verbSupported(deps.fleetState, holdArgv)`
+  // is three lines from the spend: `ccdCan(deps.fleetState, 'wsHold')`
   // re-reads the SAME field FRESH there, and by its own opposite default
   // answers TRUE on `null`. Accepted deliberately — one actor across the two
   // rows of one act outweighs a flag pair a regressed box refuses, and the
@@ -1029,7 +1032,7 @@ export async function dispatchRun(
     }
   }
 
-  // 5: hold, behind `verbSupported` — the standing convention reason string,
+  // 5: hold, behind `ccdCan(state, 'wsHold')` — the standing convention reason string,
   // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
   // `sweepDec` call: see its declaration above, where the one measurement this
   // function takes is explained.
@@ -1046,7 +1049,7 @@ export async function dispatchRun(
   // comment used to claim "the ordering costs nothing". The `worker-busy` /
   // `hookstate-unmeasurable` gate above exists to refuse a `/clear` into an
   // observably mid-turn pane, and that measurement is now separated from the
-  // `/clear` it guards by `verbSupported` PLUS a full `runCcd(wsHold)` round
+  // `/clear` it guards by `ccdCan` PLUS a full `runCcd(wsHold)` round
   // trip over the agent WebSocket. So the evidence the gate acted on is staler
   // by exactly that much when the `/clear` finally lands, and a pane that
   // started a turn inside that window is cleared on a reading taken before it.
@@ -1065,7 +1068,7 @@ export async function dispatchRun(
   // `/clear` relocating to meet this hold, not a second hold meeting the
   // `/clear`.
   const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
-  if (!verbSupported(deps.fleetState, holdArgv)) {
+  if (!ccdCan(deps.fleetState, 'wsHold')) {
     return { ok: false, kind: 'unsupported' };
   }
   const holdRes = await deps.runCcd(holdArgv);
@@ -1103,7 +1106,7 @@ export async function dispatchRun(
   // `/clear` never fires, and the record is exactly what it was before this
   // dispatch — nothing for this function to unwind.
   if (resumed && routeFields !== null) {
-    if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+    if (!ccdCan(deps.fleetState, 'routeSet')) {
       coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-v1-cap');
     } else {
       // `routeFields !== null` is exactly `routeFieldsOrNull`'s own guarantee
@@ -1127,7 +1130,7 @@ export async function dispatchRun(
   // gating on it here reproduces that arm's scope precisely, just on the far
   // side of the hold.
   if (resumed) {
-    // D-5238, at the act: the hold, `verbSupported` and the route write sit between the gate above and this
+    // D-5238, at the act: the hold, its `ccdCan` and the route write sit between the gate above and this
     // keystroke (the window the hold's own comment names), so the verdict is read AGAIN here, immediately before the
     // `/clear`, and refuses the same way. `liveGate` is set on every path that reaches here with `resumed`.
     if (liveGate !== null) {
