@@ -32,7 +32,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_TITLE_VERB, WS_WRAPPER_CAP,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
          capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
@@ -3916,7 +3916,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
     if (!(await knownId(id))) return refuseRoute(reply, 'unknown-session');
     const body = (req.body ?? {}) as { title?: unknown; clear?: unknown };
-    const plan = planRetitle(body, { verb: capSupported(deps.fleetState, WS_TITLE_VERB) });
+    const plan = planRetitle(body, { verb: ccdCan(deps.fleetState, 'wsTitle') });
     if (plan.kind === 'refuse') return refuseRoute(reply, plan.refusal.error, plan.refusal.extra);
 
     // The title is resolved HERE, as the create does: Linear's when the text is a ticket and Linear answers, the offline

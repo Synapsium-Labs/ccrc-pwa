@@ -213,11 +213,12 @@ describe('a box that does not list the verb ws-title (M7)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('a box that advertised no caps at all refuses: no evidence is no', async () => {
+  it('a box that advertised no caps at all is asked anyway: a verb row permits on no evidence (D-5866, ccdCan)', async () => {
+    // `wsTitle` is a `verbRow` in `CCD_CAN`, so no caps list answers its default, `permit`, as every verb row does; an
+    // old ccd then refuses the verb itself and the route answers 502 with its words.
     const { app, calls } = await boot({ verbs: null });
-    expect((await post(app, { title: 'Login cleanup' })).statusCode).toBe(501);
-    expect((await post(app, { clear: true })).statusCode).toBe(501);
-    expect(calls).toEqual([]);
+    expect((await post(app, { clear: true })).statusCode).not.toBe(501);
+    expect(calls.length).toBe(1);
   });
 
   it('a 501 asks Linear nothing: the cap is checked before the lookup', async () => {

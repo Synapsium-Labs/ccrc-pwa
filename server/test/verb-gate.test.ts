@@ -110,9 +110,6 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
   'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
-  // Named workspaces S9: the rename route asks `capSupported(WS_TITLE_VERB)`, which REFUSES on no evidence (M7); `verbSupported`
-  // would offer a Rename on a box nobody has heard from.
-  'ws-title',
 ]);
 
 /**

@@ -601,8 +601,8 @@ export const CCD_ARGV = {
    *  all three. NO `dec`: ccd's verb takes no `--surface`/`--actor` (it moves no workspace and journals nothing), and would
    *  refuse the flags with its usage line.
    *
-   *  Sent only behind `capSupported(state, WS_TITLE_VERB)`, never `verbSupported`: an unlisted verb is a 502 from a ccd that
-   *  has never heard of it, and "no evidence" must not offer a Rename the box cannot do (M7). */
+   *  Sent only behind `ccdCan(state, 'wsTitle')` (D-5866's one verb question): a box whose caps list lacks the verb is
+   *  refused with 501 `unsupported`; no evidence at all permits, the verb rows' polarity, and an old ccd then answers 502. */
   wsTitle:   (id: string, change: WsTitleChange) =>
                argv([WS_TITLE_VERB, '--session', id, ...('clear' in change ? ['--clear'] : ['--title', change.title])]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
@@ -1165,6 +1165,9 @@ export const CCD_CAN = {
   hibernate: verbRow('hibernate'),
   swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
   wsAdd: 'none', wsAddWorker: 'none',
+  // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
+  // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
+  wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
