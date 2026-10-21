@@ -54,7 +54,7 @@ import {
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
-  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
+  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatOpMarker, decideOpLive, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
@@ -6312,34 +6312,41 @@ export function paneNameFor(form) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-/** Whether a pid names a live process (EPERM: alive, another user's). */
-function pidAlive(pid) {
+/** D-5748 (history-op-marker-identity): what lib's decideOpLive reads about an op marker's pid, measured now. Its identity is
+ *  procIdentityOf's (D-5016: both fields, or both null when either cannot be measured), and `kill` is the answer of
+ *  `kill(pid, 0)` as a word: 'ok', 'eperm' (another user's process), or 'esrch' for no such process and for any other refusal
+ *  (a pid the kernel will not take). This replaces the two `pidAlive` copies, which read EPERM as alive. */
+export function measureOpProcess(pid) {
+  const identity = procIdentityOf(pid);
+  let kill = 'ok';
   try {
     process.kill(pid, 0);
-    return true;
   } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'EPERM';
+    kill = e !== null && typeof e === 'object' && e.code === 'EPERM' ? 'eperm' : 'esrch';
   }
+  return { procStart: identity === null ? null : identity.procStart, bootId: identity === null ? null : identity.bootId, kill };
 }
 
-/** ~/.ccrc/history/op (§9.6 op-running), parsed by lib's one grammar; null when absent or malformed. */
-export function readOpMarker(P) {
-  const text = readTrimmed(P.op);
-  return text === null ? null : parseOpMarker(text);
-}
-
-/** A marker whose pid is dead, or which names none, is stale: the next pass removes it (§9.6). */
+/** A marker that names no operator pass running now is stale: the next pass removes it (§9.6). Since D-5748 "running now" is
+ *  lib's decideOpLive, the rule status reads too: a marker that names its process is live only when the identity measured now
+ *  equals it, so a reused pid or another boot is stale; a legacy three-field marker is live only when kill(pid, 0) answers ok. */
 export function removeStaleOpMarker(P) {
   const r = readBounded(P.op, CONTROL_FILE_MAX, false);
   if (r.state === 'absent') return;
   // An unreadable marker (a FIFO, a link, a directory, over the cap) names no live pid, so it is stale (D-4347 (history-planted-entries-never-wedge)).
   const m = r.state === 'value' ? parseOpMarker(r.value.trim()) : null;
-  if (m === null || !pidAlive(m.pid)) removeEntry(P.op);
+  if (m === null || !decideOpLive(m, measureOpProcess(m.pid))) removeEntry(P.op);
 }
 
-/** Written under the lock when an --op pass starts; removed when it ends (§9.6). */
+/** Written under the lock when an --op pass starts; removed when it ends (§9.6). Since D-5748 it names its process: the pid's
+ *  identity (procIdentityOf, D-5016) follows the start, and a box that cannot measure it (no /proc) writes the legacy three
+ *  fields. A failed write still throws, as H-101 needs. */
 export function writeOpMarker(P, verb, nowMs) {
-  writeFileAtomic(P.op, `${verb} ${process.pid} ${nowMs}\n`, 0o600);
+  const identity = procIdentityOf(process.pid);
+  writeFileAtomic(P.op, formatOpMarker({
+    verb, pid: process.pid, startMs: nowMs,
+    procStart: identity === null ? null : identity.procStart, bootId: identity === null ? null : identity.bootId,
+  }), 0o600);
 }
 
 /** One rostered home's projects/ tree, spelled and resolved: an unmade projects/ resolves to its spelling and holds nothing. */

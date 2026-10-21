@@ -80,9 +80,19 @@ function nagWorthy(status: Partial<AuthStatus> | null, canEnrol: boolean): boole
   return canEnrol;
 }
 
-export function PasskeyNotice(): ReactNode {
+/** Does the notice show for this posture? {@link nagWorthy}, with this browser's ability to enrol read now. The
+ *  banner stack asks it (W2 Task S2c, BannerStack.tsx) with the status the fleet screen read and handed down. */
+export function passkeyNoticeShows(status: Partial<AuthStatus> | null): boolean {
+  return nagWorthy(status, passkeyEnrollSupported());
+}
+
+/** The box's auth posture, read once and again on every posture change; null until a read lands. `enabled: false`
+ *  reads nothing, for a notice whose status was handed down (the fleet screen reads it once, for the stack's
+ *  predicate and the notice alike, so the two cannot disagree and no second read is made). */
+export function usePasskeyStatus(enabled = true): Partial<AuthStatus> | null {
   const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
   useEffect(() => {
+    if (!enabled) return undefined;
     let live = true;
     // THE NEWEST READ WINS, not the last one to land. Two posture changes
     // inside one round-trip invert otherwise: revoke key A (read A sees 1 left)
@@ -112,11 +122,20 @@ export function PasskeyNotice(): ReactNode {
     // notice something that happens once.
     const off = onAuthPostureChanged(read);
     return () => { live = false; off(); };
-  }, []);
+  }, [enabled]);
+  return status;
+}
+
+export function PasskeyNotice({ status: injected }: {
+  /** The posture, when the caller read it (the fleet screen); omitted, the notice reads its own. */
+  status?: Partial<AuthStatus> | null;
+} = {}): ReactNode {
+  const own = usePasskeyStatus(injected === undefined);
+  const status = injected === undefined ? own : injected;
 
   // Read at render, not captured in state: it is a property of the BROWSER, so
   // there is nothing to keep in sync and nothing to invalidate.
-  if (!nagWorthy(status, passkeyEnrollSupported())) return null;
+  if (!passkeyNoticeShows(status)) return null;
   return (
     <button
       type="button"
