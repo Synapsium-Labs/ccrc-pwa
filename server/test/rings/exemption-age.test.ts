@@ -5,7 +5,7 @@
 // 2026-08-24). Each set has a stamp in `exemption-age.data.ts`: its size, held exactly so a change to the set edits
 // the stamp, and a reason with the day it was last re-dated. An empty set is never stale.
 import { describe, expect, it } from 'vitest';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseFile } from '../scan/parse.js';
 import { EXEMPTION_SET_STAMPS, type SetStamp } from './exemption-age.data.js';
@@ -35,14 +35,18 @@ function staleSets(stamps: Readonly<Record<string, SetStamp>>, sizes: ReadonlyMa
   return out;
 }
 
-/** The size of a set: an exported `EntrySet` of a `*.data.ts` module, or the elements of a `new Set([...])` (or an
- *  array) bound to that name in any other file. */
+/** The size of a set: an exported `EntrySet` of a `*.data.ts` module, the array under that key of a `.json` file, or
+ *  the elements of a `new Set([...])` (or an array) bound to that name in any other file. */
 async function sizeOf(id: string): Promise<number | undefined> {
   const [file, name] = id.split('#') as [string, string];
   const abs = path.join(REPO, file);
   if (file.endsWith('.data.ts')) {
     const mod = (await import(abs)) as Record<string, EntrySet | undefined>;
     return mod[name] === undefined ? undefined : Object.keys(mod[name]).length;
+  }
+  if (file.endsWith('.json')) {
+    const v = (JSON.parse(readFileSync(abs, 'utf8')) as Record<string, unknown>)[name];
+    return Array.isArray(v) ? v.length : undefined;
   }
   const init = parseFile(abs).bindings.find((b) => b.name === name)?.init;
   const list = init === undefined ? undefined : /\[([\s\S]*)\]/.exec(init)?.[1];
@@ -78,6 +82,9 @@ describe('an exemption set unchanged for more than 60 days needs a re-dated reas
     expect(await sizeOf('server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#GRANDFATHERED')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#NO_SUCH_SET')).toBeUndefined();
+    // A `.json` list (the growth check's, D-6211) is measured by its named array.
+    expect(await sizeOf('server/test/growth-exemptions.json#exemptions')).toBe(0);
+    expect(await sizeOf('server/test/growth-exemptions.json#no_such_key')).toBeUndefined();
     expect(exemptionSetsOnDisk()).toContain('server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS');
   });
 

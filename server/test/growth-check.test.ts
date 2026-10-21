@@ -15,6 +15,11 @@
 // D-6119 (ARCH-01 acceptance 3): when the rows measure, the absolute code lines
 // of every listed file and FleetWatcher's method count go to the CI job summary
 // (`$GITHUB_STEP_SUMMARY`), never into an assertion.
+//
+// D-6211: a PR the operator names in `growth-exemptions.json` may grow one
+// listed file up to the entry's cap. The armed rows read `origin/main`'s copy
+// of that list, never this checkout's, and take the PR number from
+// `GITHUB_REF` alone; the HEAD copy's shape is checked on every run, CI or not.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,7 +30,10 @@ import {
   stripTs, measureBash, codeLines, netGrowth, growthOver, addedFiles,
   GROWTH_LIMIT, L1_L2_NEW_FILE_DIRS,
   classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
+  prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
+  GROWTH_EXEMPTIONS_STAMP, overLine,
 } from './growthCheck.js';
+import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -223,6 +231,159 @@ describe('growthCheck: the CI job summary (D-6119)', () => {
   });
 });
 
+describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
+  const SHA = 'a'.repeat(40);
+  const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    pr: 1100, file: 'ccd/ccd', cap: 400, reason: 'the wave grows ccd/ccd by design',
+    ruling: 'operator, 2026-10-21: named exempt for ccd/ccd only', since: '2026-10-21', ...over,
+  });
+  const list = (...entries: unknown[]): string => JSON.stringify({ exemptions: entries });
+  const today = new Date('2026-10-21T12:00:00Z');
+
+  it('the PR number comes from GITHUB_REF alone: a pull request\'s merge ref or a merge-queue branch', () => {
+    const table: [string, NodeJS.ProcessEnv, number | null][] = [
+      ['pull request', { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/1100/merge' }, 1100],
+      ['merge queue', { GITHUB_EVENT_NAME: 'merge_group', GITHUB_REF: `refs/heads/gh-readonly-queue/main/pr-1100-${SHA}` }, 1100],
+      ['merge queue, a base with a slash', { GITHUB_REF: `refs/heads/gh-readonly-queue/release/x/pr-7-${SHA}` }, 7],
+      ['push to main', { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' }, null],
+      ['schedule', { GITHUB_EVENT_NAME: 'schedule', GITHUB_REF: 'refs/heads/main' }, null],
+      ['workflow_dispatch on a branch', { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/ws/lane-a' }, null],
+      ['a tag', { GITHUB_REF: 'refs/tags/v1.2.3' }, null],
+      ['no env', {}, null],
+      ['an empty ref', { GITHUB_REF: '' }, null],
+      ['a pull request\'s head ref, not its merge ref', { GITHUB_REF: 'refs/pull/1100/head' }, null],
+      ['PR 0', { GITHUB_REF: 'refs/pull/0/merge' }, null],
+      ['a leading zero', { GITHUB_REF: 'refs/pull/01/merge' }, null],
+      ['not a number', { GITHUB_REF: 'refs/pull/abc/merge' }, null],
+      ['a padded ref', { GITHUB_REF: ' refs/pull/1100/merge' }, null],
+      ['a queue branch with no sha', { GITHUB_REF: 'refs/heads/gh-readonly-queue/main/pr-1100' }, null],
+      ['a branch merely named like a queue entry', { GITHUB_REF: `refs/heads/ws/gh-readonly-queue/main/pr-1100-${SHA}` }, null],
+    ];
+    for (const [what, env, want] of table) expect(prNumberFromEnv(env), what).toBe(want);
+  });
+
+  it('a well-formed list parses; two entries of one PR for two files are allowed', () => {
+    expect(parseExemptions(list(), GROWTH_FILES, today)).toEqual({ entries: [], problems: [] });
+    const two = parseExemptions(list(entry(), entry({ file: 'ccd/ccrc', cap: 41 })), GROWTH_FILES, today);
+    expect(two.problems).toEqual([]);
+    expect(two.entries.map((e) => `${e.pr} ${e.file} ${e.cap}`)).toEqual(['1100 ccd/ccd 400', '1100 ccd/ccrc 41']);
+  });
+
+  it('every malformed shape is a problem, and a list with one exempts nothing', () => {
+    const noPr = entry();
+    delete noPr['pr'];
+    const shapes: [string, string, string][] = [
+      ['not JSON', '{"exemptions": [', 'not JSON'],
+      ['a top-level array', '[]', 'one key, `exemptions`'],
+      ['no exemptions key', '{}', 'one key, `exemptions`'],
+      ['exemptions not an array', '{"exemptions": {}}', 'one key, `exemptions`'],
+      ['an unknown top-level key', '{"exemptions": [], "extra": 1}', 'one key, `exemptions`'],
+      ['an entry that is not an object', list('ccd/ccd'), '#0: not an object'],
+      ['a null entry', list(null), '#0: not an object'],
+      ['a missing key', list(noPr), '#0: missing `pr`'],
+      ['an unknown key', list(entry({ caps: 400 })), '#0: unknown key `caps`'],
+      ['pr 0', list(entry({ pr: 0 })), '#0: pr must be a positive integer'],
+      ['a negative pr', list(entry({ pr: -3 })), '#0: pr must be a positive integer'],
+      ['a fractional pr', list(entry({ pr: 1.5 })), '#0: pr must be a positive integer'],
+      ['a string pr', list(entry({ pr: '1100' })), '#0: pr must be a positive integer'],
+      ['a file that is not listed', list(entry({ file: 'server/src/index.ts' })), '#0: file must be one of the listed files'],
+      ['a cap at the limit', list(entry({ cap: GROWTH_LIMIT })), '#0: cap must be an integer above 40'],
+      ['a cap under the limit', list(entry({ cap: 10 })), '#0: cap must be an integer above 40'],
+      ['a fractional cap', list(entry({ cap: 100.5 })), '#0: cap must be an integer above 40'],
+      ['a string cap', list(entry({ cap: '400' })), '#0: cap must be an integer above 40'],
+      ['an empty reason', list(entry({ reason: '' })), '#0: the reason must be one non-empty line'],
+      ['a blank reason', list(entry({ reason: '   ' })), '#0: the reason must be one non-empty line'],
+      ['a two-line reason', list(entry({ reason: 'a\nb' })), '#0: the reason must be one non-empty line'],
+      ['a reason that is not a string', list(entry({ reason: 7 })), '#0: reason and since must be strings'],
+      ['an empty ruling', list(entry({ ruling: '' })), '#0: the ruling must be one non-empty line'],
+      ['a two-line ruling', list(entry({ ruling: 'a\nb' })), '#0: the ruling must be one non-empty line'],
+      ['a since that is not a day', list(entry({ since: '2026-02-30' })), "#0: since '2026-02-30' is not a YYYY-MM-DD day"],
+      ['a since in another format', list(entry({ since: '21-10-2026' })), "#0: since '21-10-2026' is not a YYYY-MM-DD day"],
+      ['a since in the future', list(entry({ since: '2026-10-22' })), "#0: since '2026-10-22' is in the future"],
+      ['two entries for one PR and one file', list(entry(), entry({ cap: 500 })), '#1: a second entry for PR 1100 and ccd/ccd'],
+    ];
+    for (const [what, text, problem] of shapes) {
+      const got = parseExemptions(text, GROWTH_FILES, today);
+      expect(got.problems.some((p) => p.includes(problem)), `${what}: ${JSON.stringify(got.problems)}`).toBe(true);
+      expect(got.entries, what).toEqual([]);
+    }
+  });
+
+  it('an entry waives only its own file, only for its own PR, and only at or under its cap', () => {
+    const e = parseExemptions(list(entry({ cap: 400 })), GROWTH_FILES, today).entries;
+    const row = (file: string, delta: number) => ({ file, base: 1000, head: 1000 + delta, delta, atBoth: true });
+    const atCap = [row('ccd/ccd', 400)];
+    expect(matchExemptions(['ccd/ccd'], atCap, e, 1100)).toEqual([{ file: 'ccd/ccd', entry: e[0], applies: true }]);
+    const overCap = [row('ccd/ccd', 401)];
+    expect(matchExemptions(['ccd/ccd'], overCap, e, 1100)).toEqual([{ file: 'ccd/ccd', entry: e[0], applies: false }]);
+    expect(matchExemptions(['ccd/ccd'], atCap, e, 1101)).toEqual([]);
+    expect(matchExemptions(['ccd/ccd'], atCap, e, null)).toEqual([]);
+    const other = [row('ccd/ccd', 100), row('ccd/ccrc', 100)];
+    expect(matchExemptions(['ccd/ccrc'], other, e, 1100)).toEqual([]);
+    // A file that did not grow over the limit needs no entry, and is not reported as exempt.
+    expect(matchExemptions([], atCap, e, 1100)).toEqual([]);
+  });
+
+  it('the list is read from origin/main, never from HEAD: a PR\'s own entry exempts nothing until it lands', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-exempt-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('commit', '-q', '--allow-empty', '-m', 'no list');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      // Absent on origin/main: no entries, and nothing wrong.
+      expect(exemptionsOnMain(GROWTH_FILES, dir, 'origin/main', today)).toEqual({ entries: [], problems: [] });
+      const file = path.join(dir, GROWTH_EXEMPTIONS_FILE);
+      execFileSync('mkdir', ['-p', path.dirname(file)]);
+      writeFileSync(file, list());
+      git('add', '-A');
+      git('commit', '-q', '-m', 'empty list');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      writeFileSync(file, list(entry()));
+      git('commit', '-q', '-am', 'the PR adds its own entry');
+      // The entry is on HEAD only: it is not read.
+      expect(exemptionsOnMain(GROWTH_FILES, dir, 'origin/main', today)).toEqual({ entries: [], problems: [] });
+      // Once origin/main carries it (the entry landed; CI re-ran), it is.
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      expect(exemptionsOnMain(GROWTH_FILES, dir, 'origin/main', today).entries.map((x) => x.pr)).toEqual([1100]);
+      // A malformed copy on origin/main exempts nothing, and says why.
+      writeFileSync(file, list(entry({ cap: 1 })));
+      git('commit', '-q', '-am', 'malformed');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const bad = exemptionsOnMain(GROWTH_FILES, dir, 'origin/main', today);
+      expect(bad.entries).toEqual([]);
+      expect(bad.problems.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the summary names an exempted file as exempt, with the PR number, the cap and the ruling', () => {
+    const e = parseExemptions(list(entry({ cap: 400 }), entry({ file: 'ccd/ccrc', cap: 50 })), GROWTH_FILES, today).entries;
+    const rows = [
+      { file: 'ccd/ccd', base: 1000, head: 1350, delta: 350, atBoth: true },
+      { file: 'ccd/ccrc', base: 100, head: 160, delta: 60, atBoth: true },
+    ];
+    const over = ['ccd/ccd', 'ccd/ccrc'];
+    const md = growthSummary({ base: 'abcdef1234567', rows, over, methods: { base: 1, head: 1 }, armed: true,
+      exemptions: matchExemptions(over, rows, e, 1100) });
+    // GROWTH_OVER still lists what grew; the annotation says which is exempt and which passed its cap.
+    expect(md).toContain('GROWTH_OVER: `ccd/ccd` (exempt: PR #1100, cap 400, ruling: operator, 2026-10-21: named exempt for ccd/ccd only), '
+      + '`ccd/ccrc` (over its exemption cap of 50 for PR #1100)');
+    const plain = growthSummary({ base: 'abcdef1234567', rows, over, methods: { base: 1, head: 1 }, armed: true });
+    expect(plain).toContain('GROWTH_OVER: `ccd/ccd`, `ccd/ccrc`');
+  });
+
+  it(`the HEAD copy of ${GROWTH_EXEMPTIONS_FILE} is well formed, and stamped under the 60-day rule`, () => {
+    const text = readFileSync(path.join(ROOT, GROWTH_EXEMPTIONS_FILE), 'utf8');
+    expect(parseExemptions(text, GROWTH_FILES).problems).toEqual([]);
+    expect(GROWTH_EXEMPTIONS_STAMP).toBe(`${GROWTH_EXEMPTIONS_FILE}#exemptions`);
+    expect(EXEMPTION_SET_STAMPS[GROWTH_EXEMPTIONS_STAMP], 'stamp the list in exemption-age.data.ts').toBeDefined();
+  });
+});
+
 /** The base, or why the growth rows cannot measure. */
 function resolveBase(): { base: string } | { skip: string } {
   if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
@@ -247,11 +408,15 @@ const measured = 'base' in resolved
       const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
       const rows = GROWTH_FILES.map((f) => netGrowth(f, resolved.base, head, ROOT));
       const over = growthOver(rows, addedFiles(resolved.base, head, ROOT));
+      // D-6211: the exemption list is origin/main's copy, never this checkout's, so a PR cannot exempt itself.
+      const pr = prNumberFromEnv(process.env);
+      const onMain = exemptionsOnMain(GROWTH_FILES, ROOT);
+      const exemptions = matchExemptions(over, rows, onMain.entries, pr);
       // D-6119: absolute numbers go to the job summary only, never an assertion.
       const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows, over,
-        methods, armed: GROWTH_ARMED }));
-      return { rows, over, summaryWritten };
+        methods, armed: GROWTH_ARMED, exemptions }));
+      return { rows, over, pr, onMain, exemptions, summaryWritten };
     })()
   : null;
 
@@ -260,7 +425,12 @@ if (measured === null) {
 } else {
   console.log(['growth-check: net code lines against the merge-base',
     ...measured.rows.map((r) => `  ${r.file.padEnd(28)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
-    `GROWTH_OVER: ${measured.over.length ? measured.over.join(', ') : '(none)'}`].join('\n'));
+    `GROWTH_OVER: ${overLine(measured.over, measured.exemptions)}`,
+    `PR: ${measured.pr === null ? '(none: no entry applies)' : `#${measured.pr}`}; `
+      + `exemption entries on origin/main: ${measured.onMain.entries.length}`].join('\n'));
+  for (const p of measured.onMain.problems) {
+    console.warn(`growth-check: origin/main's ${GROWTH_EXEMPTIONS_FILE} is malformed, so it exempts nothing: ${p}`);
+  }
   for (const f of measured.over) {
     if (!GROWTH_ARMED) console.warn(`growth-check: ${f} grew by more than ${GROWTH_LIMIT} net code lines (reporting only until OA-C2)`);
   }
@@ -272,9 +442,14 @@ describe.skipIf(measured === null)('growth-check: the listed files against the m
   });
   for (const r of measured?.rows ?? []) {
     const over = measured!.over.includes(r.file);
-    it(`${r.file}: delta ${r.delta >= 0 ? '+' : ''}${r.delta}${over ? ' (GROWTH_OVER)' : ''}`, () => {
+    const m = measured!.exemptions.find((x) => x.file === r.file);
+    const note = m === undefined ? '' : m.applies ? `, exempt: PR #${m.entry.pr}, cap ${m.entry.cap}` : `, over its exemption cap of ${m.entry.cap}`;
+    it(`${r.file}: delta ${r.delta >= 0 ? '+' : ''}${r.delta}${over ? ` (GROWTH_OVER${note})` : ''}`, () => {
       if (GROWTH_ARMED) {
-        expect(over, `${r.file} grew by ${r.delta} net code lines, over the limit of ${GROWTH_LIMIT}`).toBe(false);
+        const why = m === undefined
+          ? `${r.file} grew by ${r.delta} net code lines, over the limit of ${GROWTH_LIMIT}`
+          : `${r.file} grew by ${r.delta} net code lines, over its exemption cap of ${m.entry.cap} for PR #${m.entry.pr}`;
+        expect(over && m?.applies !== true, why).toBe(false);
       }
     });
   }
