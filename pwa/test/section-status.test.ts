@@ -19,6 +19,8 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   auth: { kind: 'read', status: { authed: true, passkeysEnrolled: 2, mode: 'passphrase' } },
   push: 'on',
   rereadPush: noop,
+  passkeys: { kind: 'unasked' },
+  refreshAuth: noop,
   ...over,
 });
 const FACTS: { skin: string; theme: string | null; hostname: string; now: number } = {

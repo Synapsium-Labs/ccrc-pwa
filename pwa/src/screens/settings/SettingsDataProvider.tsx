@@ -15,22 +15,30 @@
 // so the shell below never moves.
 //
 // The cadences are today's (§4.4's table): the updates and stall watch polls, the collector read, the coord frame's
-// cleanup pause (a WebSocket frame, not a request), the auth status once per mount, and the push state when Settings
+// cleanup pause (a WebSocket frame, not a request), the auth status once per mount (then the passkey list, only while
+// that status says the gate is armed; settings Task R2d, D-5508), and the push state when Settings
 // opens and again whenever the index mounts (`rereadPush`), so a toggle on the Notifications page shows on the index
 // after Back.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AuthStatus, MarkerState } from '../../../../shared/api';
+import type { AuthStatus, MarkerState, PasskeyListResponse } from '../../../../shared/api';
 import { childReclaimMarker } from '../../fleet/childReclaimWords';
 import { useCollectLaneView, type CollectLanePoll } from '../../fleet/useCollectLaneView';
 import { useStallWatchView, type StallWatchPoll } from '../../fleet/useStallWatchView';
 import { useUpdatesView, type UpdatesPoll } from '../../fleet/useUpdatesView';
-import { readAuthStatus } from '../../lib/auth';
+import { api } from '../../lib/api';
+import { armedMode, readAuthStatus } from '../../lib/auth';
 import { pushEnabled, pushSupported } from '../../lib/push';
 import { useFleetStore } from '../../stores/fleet';
 
 /** The auth status read: not landed, failed (an older server, a proxy's 404, no network), or its answer. */
 export type AuthRead = { kind: 'pending' } | { kind: 'failed' } | { kind: 'read'; status: Partial<AuthStatus> };
+
+/** The passkey list (settings Task R2d, D-5508): read only after a status read says the gate is armed
+ *  (`armedMode`). `pending` until that read lands; `unasked` when it says off, or fails, or names no mode this build
+ *  knows, so no card can hold a list the box was never asked for. */
+export type PasskeysRead =
+  | { kind: 'unasked' } | { kind: 'pending' } | { kind: 'failed' } | { kind: 'read'; list: PasskeyListResponse };
 
 /** This browser's push state: the Bell's own reads, plus the permission for "blocked". `unsupported` is never `off`. */
 export type PushState = 'pending' | 'unsupported' | 'blocked' | 'on' | 'off' | 'failed';
@@ -48,6 +56,11 @@ export interface SettingsView {
   readonly push: PushState;
   /** Read the push state again (the index calls it when it mounts). */
   readonly rereadPush: () => void;
+  /** The passkey list, behind the status read's armed guard (R2d, D-5508). */
+  readonly passkeys: PasskeysRead;
+  /** Read the status again, then the passkey list under the same guard: the one way the list is re-read (Your
+   *  sign-in calls it after a successful Add or Revoke). */
+  readonly refreshAuth: () => void;
 }
 
 const SettingsViewContext = createContext<SettingsView | null>(null);
@@ -84,15 +97,29 @@ function SettingsReads({ onView }: { onView: (view: SettingsView | null) => void
   const pause = useMemo<PauseRead>(
     () => (coordFrameSeen ? { kind: 'read', marker } : { kind: 'pending' }), [coordFrameSeen, marker]);
 
+  // The status, then the passkey list only while that status says the gate is armed (D-5508). `AuthSection` asked
+  // for the list unconditionally and let the 401 or 501 leave it empty; a box whose gate is off is not asked at all
+  // now. `refreshAuth` re-runs both under the same guard, and the newest run wins (an older one stops writing).
   const [auth, setAuth] = useState<AuthRead>({ kind: 'pending' });
+  const [passkeys, setPasskeys] = useState<PasskeysRead>({ kind: 'pending' });
+  const [authAsk, setAuthAsk] = useState(0);
   useEffect(() => {
     let live = true;
     void readAuthStatus().then(
-      (status) => { if (live) setAuth({ kind: 'read', status }); },
-      () => { if (live) setAuth({ kind: 'failed' }); },
+      (status) => {
+        if (!live) return;
+        setAuth({ kind: 'read', status });
+        if (!armedMode(status.mode)) { setPasskeys({ kind: 'unasked' }); return; }
+        void api.passkeys().then(
+          (list) => { if (live) setPasskeys({ kind: 'read', list }); },
+          () => { if (live) setPasskeys({ kind: 'failed' }); },
+        );
+      },
+      () => { if (live) { setAuth({ kind: 'failed' }); setPasskeys({ kind: 'unasked' }); } },
     );
     return () => { live = false; };
-  }, []);
+  }, [authAsk]);
+  const refreshAuth = useCallback(() => setAuthAsk((n) => n + 1), []);
 
   // Unsupported is known at once (no await), so a page never draws the Bell's row for a browser that has none.
   const [push, setPush] = useState<PushState>(() => (pushSupported() ? 'pending' : 'unsupported'));
@@ -108,8 +135,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsView | null) => void
   const rereadPush = useCallback(() => setPushAsk((n) => n + 1), []);
 
   const view = useMemo<SettingsView>(
-    () => ({ updates, stall, collect, pause, auth, push, rereadPush }),
-    [updates, stall, collect, pause, auth, push, rereadPush],
+    () => ({ updates, stall, collect, pause, auth, push, rereadPush, passkeys, refreshAuth }),
+    [updates, stall, collect, pause, auth, push, rereadPush, passkeys, refreshAuth],
   );
   // A layout effect, so the frame's first paint on Settings already has the view.
   useLayoutEffect(() => { onView(view); }, [view, onView]);

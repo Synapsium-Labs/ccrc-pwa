@@ -15,12 +15,19 @@
 //      three fail CLOSED.
 //   4. THE THREE FAILURE KINDS — cancelled / refused / unreachable get three
 //      different sentences, because they are three different situations.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
 import { LoginScreen, UNREACHABLE_TEXT, VERDICT_TEXT } from '../src/components/LoginScreen';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { ApiError } from '../src/lib/api';
+import { ApiError, api } from '../src/lib/api';
+import { navigate } from '../src/lib/router';
+import { renderSettings } from './settingsHost';
+import { declValue, ruleIn } from './cssRule';
+import { STORE_UNREADABLE_TEXT } from '../src/screens/settings/YourSignInCard';
+import { PASSWD_SENTENCE, SESSION_TEXT } from '../src/screens/settings/ThisSessionCard';
 import { authLost, clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
 import {
   PasskeyCeremonyError, assertPasskey, enrollPasskey, fromB64url, passkeyEnrollSupported,
@@ -65,10 +72,19 @@ const level1Browser = (): void => {
 
 afterEach(() => {
   cleanup();
+  navigate('/');
   clearAuthLost();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** Settings › Security, where sign-in lives since settings Task R2d (D-5508), with the frame's other reads quiet. */
+const renderSecurity = (): void => {
+  vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+  vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+  vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+  renderSettings('security');
+};
 
 // ── 1. base64url, both directions ───────────────────────────────────────────
 
@@ -522,7 +538,7 @@ describe('PasskeySection', () => {
   it('lists each key with the label the revoke DECISION needs', async () => {
     supportBrowser();
     vi.stubGlobal('fetch', screenFetch({ list: listBody({ credentials: [CRED] }) }));
-    render(<AccountsScreen />);
+    renderSecurity();
     expect(await screen.findByText(/Pixel 8 \/ Chrome/)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /revoke passkey/i })).toBeInTheDocument();
   });
@@ -541,7 +557,7 @@ describe('PasskeySection', () => {
         credentials: [{ ...CRED, enrolledAt: T - 5 * 60_000, lastUsedAt: T - 30_000 }],
       }),
     }));
-    render(<AccountsScreen />);
+    renderSecurity();
     const dates = await screen.findByText(/^\s*added /);
     expect(dates.textContent?.trim()).toBe('added 5m ago, last used just now');
   });
@@ -550,9 +566,11 @@ describe('PasskeySection', () => {
     supportBrowser();
     const fetchImpl = screenFetch({ list: listBody({ credentials: [CRED] }) });
     vi.stubGlobal('fetch', fetchImpl);
-    render(<AccountsScreen />);
+    renderSecurity();
     const btn = await screen.findByRole('button', { name: /revoke passkey/i });
     await act(async () => { fireEvent.click(btn); });
+    const sheet = await screen.findByRole('dialog');
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Revoke' })); });
 
     const del = fetchImpl.mock.calls.find(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE');
     expect(del, 'no DELETE was sent').toBeTruthy();
@@ -569,7 +587,7 @@ describe('PasskeySection', () => {
       status: { authed: true, passkeysEnrolled: 0, mode: 'passphrase' },
       list: listBody({ storeUnreadable: true }),
     }));
-    render(<AccountsScreen />);
+    renderSecurity();
     const said = await screen.findByText(/cannot be read/i);
     expect(said).toBeInTheDocument();
     expect(screen.queryByText(/No passkey is enrolled/i)).not.toBeInTheDocument();
@@ -589,7 +607,7 @@ describe('PasskeySection', () => {
   it('renders NOTHING on a dark box', async () => {
     supportBrowser();
     vi.stubGlobal('fetch', screenFetch({ status: { authed: true, passkeysEnrolled: 0, mode: 'off' } }));
-    render(<AccountsScreen />);
+    renderSecurity();
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByText(/^Passkeys$/)).not.toBeInTheDocument();
@@ -600,9 +618,106 @@ describe('PasskeySection', () => {
     // enrolled on a phone still gets to SEE and REVOKE its keys.
     level1Browser();
     vi.stubGlobal('fetch', screenFetch({ list: listBody({ credentials: [CRED] }) }));
-    render(<AccountsScreen />);
+    renderSecurity();
     expect(await screen.findByText(/Pixel 8 \/ Chrome/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Revoke asks first, and sign-in has left Accounts (settings Task R2d; D-5508)', () => {
+  const routes = (list: unknown[], deletes: string[]) => vi.fn(async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.startsWith('/api/auth/status')) return json(200, { authed: true, passkeysEnrolled: list.length, mode: 'passphrase' });
+    if (u === '/api/auth/passkeys') return json(200, { credentials: list, storeUnreadable: false });
+    if (u.startsWith('/api/auth/passkey/') && init?.method === 'DELETE') { deletes.push(u); return json(204); }
+    return json(404, { error: 'not-found' });
+  });
+  const KEY = (id: string, label: string) => ({
+    credentialIdB64url: id, label, enrolledAt: Date.now() - 86_400_000, lastUsedAt: 0, uvAtEnrollment: true,
+  });
+
+  it('Revoke opens a danger confirm whose Cancel posts nothing and whose commit sends one DELETE', async () => {
+    supportBrowser();
+    const deletes: string[] = [];
+    vi.stubGlobal('fetch', routes([KEY('AQEB', 'Device A'), KEY('AgIC', 'Device B')], deletes));
+    renderSecurity();
+    const revoke = await screen.findByRole('button', { name: 'Revoke passkey Device A' });
+    expect(revoke).toHaveClass('btn-danger-ghost');
+    await act(async () => { fireEvent.click(revoke); });
+    let sheet = await screen.findByRole('dialog');
+    expect(sheet.textContent).toContain('Revoke the passkey Device A?');
+    expect(sheet.textContent).toContain('It will not sign in again.');
+    expect(sheet.textContent).not.toContain('This is your last passkey');
+    expect(within(sheet).getByRole('button', { name: 'Revoke' })).toHaveClass('btn-danger');
+    // Cancel holds the focus (D-5507): an Enter by habit answers no.
+    expect(document.activeElement).toBe(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' })); });
+    expect(deletes).toEqual([]);
+    await act(async () => { fireEvent.click(revoke); });
+    sheet = await screen.findByRole('dialog');
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Revoke' })); });
+    // The DELETE names the row's id exactly as AuthSection sent it.
+    await waitFor(() => expect(deletes).toEqual(['/api/auth/passkey/AQEB']));
+  });
+
+  it('revoking the last passkey adds the passphrase line', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', routes([KEY('AQEB', 'Device A')], []));
+    renderSecurity();
+    const revoke = await screen.findByRole('button', { name: 'Revoke passkey Device A' });
+    await act(async () => { fireEvent.click(revoke); });
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet.textContent).toContain('It will not sign in again.');
+    expect(sheet.textContent).toContain('This is your last passkey. After it, only the passphrase signs in.');
+  });
+
+  it('a long label is one ellipsised line with the whole label as its title', async () => {
+    supportBrowser();
+    const long = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+    vi.stubGlobal('fetch', routes([KEY('AQEB', long)], []));
+    renderSecurity();
+    const label = await screen.findByText(long);
+    expect(label).toHaveAttribute('title', long);
+    expect(label).toHaveClass('settings-passkey-label');
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'settings.css'), 'utf8');
+    const rule = ruleIn(css, '.settings-passkey-label');
+    expect(declValue(rule, 'white-space')).toBe('nowrap');
+    expect(declValue(rule, 'overflow')).toBe('hidden');
+    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+  });
+
+  it('Accounts renders no sign-in, passkey or sign-out control', async () => {
+    supportBrowser();
+    const f = routes([KEY('AQEB', 'Device A')], []);
+    vi.stubGlobal('fetch', f);
+    render(<AccountsScreen />);
+    await waitFor(() => expect(f).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(screen.queryByText('Your sign-in')).toBeNull();
+    expect(screen.queryByText('This session')).toBeNull();
+    expect(screen.queryByText(/^Passkeys$/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /sign out|revoke passkey|add a passkey/i })).toBeNull();
+    expect(f.mock.calls.some(([u]) => String(u) === '/api/auth/passkeys')).toBe(false);
+  });
+
+  it('the unreadable-store sentence (D-153) and the ccrc passwd sentence are kept verbatim', async () => {
+    expect(STORE_UNREADABLE_TEXT).toBe(
+      'This box\u2019s passkey file exists but cannot be read, so no passkey can sign in and enrolling is refused '
+      + '\u2014 adding one would overwrite the keys that are already there. Fix the permissions on '
+      + '~/.ccrc/passkeys.json (or wherever CCRC_PASSKEYS_PATH points on this box) and restart the server.');
+    expect(PASSWD_SENTENCE).toBe('To end every session at once, rotate the passphrase with ccrc passwd on the box.');
+    supportBrowser();
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u.startsWith('/api/auth/status')) return json(200, { authed: true, passkeysEnrolled: 0, mode: 'passphrase' });
+      if (u === '/api/auth/passkeys') return json(200, { credentials: [], storeUnreadable: true });
+      return json(404, { error: 'not-found' });
+    }));
+    renderSecurity();
+    const said = await screen.findByText(/cannot be read, so no passkey/);
+    expect(said.textContent).toBe(STORE_UNREADABLE_TEXT);
+    expect(screen.getByText((_, el) => el?.tagName === 'P' && el.textContent === PASSWD_SENTENCE)).toBeInTheDocument();
+    expect(screen.getByText(SESSION_TEXT.note)).toBeInTheDocument();
   });
 });
 
@@ -648,7 +763,7 @@ describe('the sign-out control', () => {
     supportBrowser();
     const fetchImpl = screenFetch();
     vi.stubGlobal('fetch', fetchImpl);
-    render(<AccountsScreen />);
+    renderSecurity();
     const btn = await screen.findByRole('button', { name: SIGN_OUT });
     expect(isAuthLost(), 'the fixture starts signed in').toBe(false);
 
@@ -670,7 +785,7 @@ describe('the sign-out control', () => {
     // — the same distinction `AuthVerdict` carries two members for.
     supportBrowser();
     vi.stubGlobal('fetch', screenFetch());
-    render(<AccountsScreen />);
+    renderSecurity();
     const btn = await screen.findByRole('button', { name: SIGN_OUT });
     await act(async () => { fireEvent.click(btn); });
     // NOT VACUOUS, and it was on the first draft: `LoginScreen` reads its
@@ -689,7 +804,7 @@ describe('the sign-out control', () => {
   it('renders NOTHING on a dark box — there is no session to end', async () => {
     supportBrowser();
     vi.stubGlobal('fetch', screenFetch({ status: { authed: true, passkeysEnrolled: 0, mode: 'off' } }));
-    render(<AccountsScreen />);
+    renderSecurity();
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByRole('button', { name: SIGN_OUT })).not.toBeInTheDocument();
@@ -706,7 +821,7 @@ describe('the sign-out control', () => {
     vi.stubGlobal('fetch', screenFetch({
       list: JSON.stringify({ credentials: [], storeUnreadable: true }),
     }));
-    render(<AccountsScreen />);
+    renderSecurity();
     expect(await screen.findByText(/cannot be read/i)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: SIGN_OUT })).toBeInTheDocument();
   });
@@ -720,7 +835,7 @@ describe('the sign-out control', () => {
     vi.stubGlobal('fetch', screenFetch({
       onLogout: () => json(401, { ok: false, error: 'unauthenticated', verdict: 'expired' }),
     }));
-    render(<AccountsScreen />);
+    renderSecurity();
     const btn = await screen.findByRole('button', { name: SIGN_OUT });
     await act(async () => { fireEvent.click(btn); });
     expect(authLost()).toEqual({ lost: true, verdict: 'expired' });

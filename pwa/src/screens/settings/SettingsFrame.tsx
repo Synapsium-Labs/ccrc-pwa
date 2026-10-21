@@ -47,7 +47,8 @@ function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsView }
     case 'notifications':
       return <NotificationsSection view={view.updates.view} reload={view.updates.reload} supported={view.push !== 'unsupported'} />;
     case 'automation': return <AutomationSection view={view} />;
-    case 'security': return <SecuritySection poll={view.updates} auth={view.auth} />;
+    case 'security':
+      return <SecuritySection poll={view.updates} auth={view.auth} passkeys={view.passkeys} refreshAuth={view.refreshAuth} />;
   }
 }
 
