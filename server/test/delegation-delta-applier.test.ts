@@ -406,7 +406,10 @@ describe('R8 / R9 / R10: out-of-band damage the delta refuses: the application r
     expect(changedCalls(r), 'the application went through the delta').toEqual(['projectChanged:threw']);
     expectMismatch(out, 'R8');
     expect(dumpAll(r.store.db), 'R8: the refused delta rolled back: SQLite is as the damage left it').toEqual(dumped);
-    expect((out.projection as { error: string }).error, 'the refusal names the compare-and-swap miss on the table, not a count').toContain('delegation_activities');
+    const refusal = (out.projection as { error: string }).error;
+    expect(refusal, 'the refusal names the compare-and-swap miss on the table').toContain('delegation_activities');
+    expect(refusal, 'and the key of the row that did not match').toContain(x.activityId);
+    expect(refusal, 'a compare-and-swap miss, not a count').not.toMatch(/\bcounts?\b/i);
     await expectHealsOnNextPass(r, 'R8', 2);
     expect(r.store.db.prepare('SELECT displayName FROM delegation_activities WHERE activityId = ?').get(x.activityId)?.['displayName'], 'X is back, with the update').toBe('reviewer');
   });
@@ -500,7 +503,7 @@ describe('R12 / R13: the heal, the wipe and a bare repairProjection() take the F
   const idsOf = (r: Rig): Record<number, number> =>
     Object.fromEntries((r.store.db.prepare('SELECT id, journalSequence AS s FROM delegation_events').all() as Array<{ id: number; s: number }>).map((x) => [x.s, x.id]));
 
-  it('R12: the heal of a drifted session projects in full, never projectChanged, and the session\'s events are deleted and replayed', async () => {
+  it('R12 (green by design; MD11 reds it): the heal of a drifted session projects in full, never projectChanged, and the session\'s events are deleted and replayed', async () => {
     const r = await withTwoSessions();
     const before = idsOf(r);
     // seq 1 is gone (the count disagrees, so the replay covers everything) and seq 3 holds another kind: the conflict heals PARENT only
@@ -519,7 +522,7 @@ describe('R12 / R13: the heal, the wipe and a bare repairProjection() take the F
     parity(r, 'after the heal');
   });
 
-  it('R12: the wipe (stray rows the journal does not hold) projects in full, never projectChanged, and the events end up exactly the journal\'s', async () => {
+  it('R12 (green by design; MD11 reds it): the wipe (stray rows the journal does not hold) projects in full, never projectChanged, and the events end up exactly the journal\'s', async () => {
     const r = await withTwoSessions();
     stray(r);
     r.calls.length = 0;
@@ -532,7 +535,7 @@ describe('R12 / R13: the heal, the wipe and a bare repairProjection() take the F
     parity(r, 'after the wipe');
   });
 
-  it('R13: a bare repairProjection() after a delta takes the full path: project called, projectChanged not', async () => {
+  it('R13 (green by design; MD22 reds it): a bare repairProjection() after a delta takes the full path: project called, projectChanged not', async () => {
     const r = await lane();
     await settle(r);
     await r.dur.applyAccepted(batch([sessionStart(3)]));                       // the witness holds: a delta would be available
@@ -649,6 +652,7 @@ function planStep(kind: StepKind, n: number, rand: () => number, cp: DelegationC
           activityId: a.activityId, parentId: a.parentId, parentIncarnation: a.parentIncarnation, project: 'project-a', adminRecord: `wt-${n}`,
           canonicalPath: `/work/project-a/wt-${n}`, creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(n),
         });
+        expect(out.kind, `step ${n}: a lease on an activity that holds none is created`).toBe('created');
         return out.kind === 'created' ? [out.applied] : [];
       };
     }
@@ -685,7 +689,8 @@ function planStep(kind: StepKind, n: number, rand: () => number, cp: DelegationC
         const hi = Number((db.prepare('SELECT MAX(journalSequence) AS s FROM delegation_events').get() as { s: number }).s);
         db.prepare('DELETE FROM delegation_events WHERE journalSequence = ?').run(lo);            // the count disagrees, so the replay covers everything
         db.prepare("UPDATE delegation_events SET eventKind = 'SessionEnd' WHERE journalSequence = ?").run(hi);       // a conflict: that session leaves and re-enters
-        await r.dur.repairProjection();
+        const report = await r.dur.repairProjection();
+        expect(report?.healedSessions, `step ${n}: the drifted session was healed`).toBeGreaterThan(0);
         return [];
       };
     }
@@ -713,13 +718,14 @@ function tablesOf(raw: DatabaseSync): Record<string, unknown[]> {
   return out;
 }
 
-describe('R20: twin appliers and stores, one ALWAYS FULL and one through the real delta, stay equal after every step of a seeded run (6 seeds, 40 steps each)', () => {
-  const SEEDS = [11, 23, 37, 41, 59, 73] as const;
-  const STEPS = 40;
+const SEEDS = [11, 23, 37, 41, 59, 73] as const;
+const STEPS = 100;
+describe(`R20: twin appliers and stores, one ALWAYS FULL and one through the real delta, stay equal after every step of a seeded run (${SEEDS.length} seeds, ${STEPS} steps each)`, () => {
   it.each(SEEDS)(`R20: seed %i: ${STEPS} steps from the fixed generator; five tables by primary key and events without id match after every step; the delta twin deltas`, async (seed) => {
     const full = await rig({ kind: 'always-full' });
     const delta = await rig({ kind: 'real' });
     const rand = prng(seed);
+    const ran = new Map<StepKind, number>();
     for (let i = 0; i < STEPS; i++) {
       const n = 10 + i * 3;
       let kind: StepKind = i === 0 ? 'new-session' : pickOf(STEP_KINDS, rand);
@@ -727,6 +733,7 @@ describe('R20: twin appliers and stores, one ALWAYS FULL and one through the rea
       let step = planStep(kind, n, rand, cpOf(delta), events);
       if (step === null) { kind = 'new-session'; step = planStep(kind, n, rand, cpOf(delta), events)!; }
       const label = `seed ${seed} step ${i} (${kind})`;
+      ran.set(kind, (ran.get(kind) ?? 0) + 1);
       for (const r of [full, delta]) r.clock.ms = NOW0 + i * 1000;
       const outs = [...await step(full), ...await step(delta)];
       for (const o of outs) expect(o.projection.status, `${label}: no application's projection failed`).not.toBe('failed');
@@ -737,6 +744,7 @@ describe('R20: twin appliers and stores, one ALWAYS FULL and one through the rea
       parity(delta, `${label} (delta twin)`);
       parity(full, `${label} (full twin)`);
     }
+    expect(STEP_KINDS.filter((k) => (ran.get(k) ?? 0) === 0), `seed ${seed}: every kind of step ran at least once in its ${STEPS} steps (a kind with no target yet falls back to a new session)`).toEqual([]);
     expect(delta.modes.includes('delta'), `seed ${seed}: the delta twin's projectChanged returned mode 'delta' at least once (the applier calls it)`).toBe(true);
     expect(full.modes.includes('delta'), `seed ${seed}: the always-full twin never deltas`).toBe(false);
   }, 180_000);
@@ -810,6 +818,14 @@ describe('R23: the only server code that writes the five delegation tables is th
     ]);
     const rest = delta.filter((l) => !/\bUPDATE\b/.test(l) && !SQL_CALL.test(l));
     expect(rest, 'no other write of the five tables in the delta method').toEqual([]);
+  });
+
+  it('R23 (3): the only code line under server/src that builds an INSERT or a DELETE by interpolating its table is the codec-built INSERT of delegationInsertSql', () => {
+    // a statement that names its table through a template has no `delegation_*` spelling for the census above to find, so every such line is listed
+    const interpolated = FILES.flatMap((f) => linesWithMethod(f).filter(({ line }) => /(INSERT INTO|DELETE FROM)\s+\$\{/.test(line)).map(({ method, line }) => `${f} ${method}: ${line}`));
+    expect(interpolated, 'every code line that interpolates the table into an INSERT or a DELETE').toEqual([
+      "server/src/coord/store.ts delegationInsertSql: return `INSERT INTO ${codec.table} (${codec.columns.join(', ')}) VALUES (${codec.columns.map(() => '?').join(', ')})`;",
+    ]);
   });
 
   it('R23 (2): the callers of the two methods are the watcher\'s adapters and the delta\'s own fallback, nothing else', () => {

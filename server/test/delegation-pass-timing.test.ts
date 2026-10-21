@@ -539,8 +539,9 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const cp = checkpointOf(w.home);
     const report = w.watcher.delegationReport();
     const windows = lastInput.listingWindows;
-    // What the store's delta method answered during the pass, read from the spy's returned values (not from the lane's counters).
-    const answers = deltaCalls.mock.results.slice(base.deltaCalls).map((x) => x.value as ReturnType<typeof w.coord.projectDelegationCheckpointChanges>);
+    // What the store's delta method answered during the pass, read from the spy's returned values (not from the lane's counters). A call
+    // that threw answered nothing, so it counts neither as a delta nor as a full answer: the lane's own rule.
+    const answers = deltaCalls.mock.results.slice(base.deltaCalls).filter((x) => x.type === 'return').map((x) => x.value as ReturnType<typeof w.coord.projectDelegationCheckpointChanges>);
     const deltaAnswers = answers.filter((a): a is { mode: 'delta'; rows: number } => a.mode === 'delta');
     const expected: Record<string, number> = {
       // from the fixture's construction: thirteen sessions have a census incarnation, none is dead, none is pending
@@ -610,6 +611,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     for (const [key, value] of Object.entries(expected)) expect(m.get(key), `${key}`).toBe(value);
 
     expect(expected['projectFull'], 'the pass\'s createLease commits fall back to the full projection').toBeGreaterThan(0);
+    expect(expected['projectDelta'], 'the armed pass\'s flush is a delta').toBeGreaterThan(0);
     expect(expected['encodes'], 'the pass encoded the whole checkpoint').toBeGreaterThan(0);
 
     // the key set is exactly what ran: the derived keys, the phases (no `recover`, `intervals`, `absence` or `repair`: they did not run),
@@ -1372,7 +1374,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
   const productionPass = (setup?: ScenarioX['setup']) =>
     scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
 
-  it('D-5832 R6 (i) (MCPUlie, MCPUsrc red it):with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
+  it('D-5832 R6 (i) (MCPUlie, MCPUsrc red it): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
     const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
     const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
     let calls = 0;
@@ -1397,7 +1399,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
     if (hasThread) expect(calls, 'process.threadCpuUsage is the source of the thread clock: the pass read it at least twice (one read to open a phase and one to close it)').toBeGreaterThanOrEqual(2);
   });
 
-  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it; MCPUsrc reds R6 (i) too, since its thread-clock spy):with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
+  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it; MCPUsrc reds R6 (i) too, since its thread-clock spy then counts no call): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
     const holder = process as unknown as { threadCpuUsage?: unknown };
     const had = Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage');
     const desc = Object.getOwnPropertyDescriptor(process, 'threadCpuUsage');
@@ -1430,7 +1432,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
 });
 
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
-  it('D-5832: at realistic values (7 digits each) the whole line is 1,817 bytes and drops nothing; at the largest values (2,039 bytes, 77 of the 107 input keys kept, dropped=30) the keys that drop are a suffix of the list; the first four new keys and the delta projection\'s five stay', () => {
+  it('D-5832: at realistic values (7 digits each) the whole line is 1,908 bytes and drops nothing; at the largest values (2,039 bytes, 77 of the 107 input keys kept, dropped=30) the keys that drop are a suffix of the list; the first four new keys and the delta projection\'s five stay', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
     expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
     const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
@@ -1460,6 +1462,7 @@ describe('D-5832 (the bound): the new keys sit where the line\'s bound drops the
     // `cpCursors`), so none of them drops at the largest value, and the dropped names are exactly the list's last 30.
     for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes']) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
     // (The five new keys take 91 bytes of the bound, so at the largest values five older keys, `vUnresolved` to `eRunChild`, now drop that were kept before; none of the five new keys does.)
+    for (const k of ['vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the delta projection's five now push out) drops at the largest values`).toBe(false);
     expect(keys.filter((k) => !bp.has(k)), 'the dropped keys, by name').toEqual(keys.slice(77));
   });
 });
@@ -1777,6 +1780,7 @@ function watchDelta(w: World): { results: unknown[]; onCall: { fn: (() => void) 
   const coord = w.coord as unknown as { projectDelegationCheckpointChanges?: (...a: unknown[]) => unknown };
   const real = coord.projectDelegationCheckpointChanges?.bind(w.coord);
   const seen = { results: [] as unknown[], onCall: { fn: null as (() => void) | null } };
+  // The instance wrapper is never restored: every row builds its own `world()`, so no later row sees this store.
   coord.projectDelegationCheckpointChanges = (...a: unknown[]): unknown => {
     seen.onCall.fn?.();
     const v = real?.(...a);
@@ -1815,6 +1819,8 @@ describe('D-5836 R1, R1 (d): after one ready pass, a pass that appends a spool l
     // The delta keys: counted by the mode the store RETURNED (the last result is the armed pass's: one call a pass), rows summed.
     const returned = delta.results.at(-1) as { mode?: string; rows?: number } | undefined;
     expect(returned?.mode, 'the store answered the armed pass\'s flush with a delta').toBe('delta');
+    expect(typeof returned?.rows, 'and returned a number of rows').toBe('number');
+    expect(returned!.rows!, 'the armed pass\'s flush wrote at least one row, so deltaRows below is not compared at 0 against an absent figure').toBeGreaterThan(0);
     expect(m.get('projectDelta'), 'the line counts that one delta').toBe(1);
     expect(m.get('projectFull'), 'and no full answer (the key is present, at 0)').toBe(0);
     expect(m.get('deltaRows'), 'deltaRows is the rows the store returned on that pass').toBe(returned?.rows);
@@ -1838,8 +1844,9 @@ describe('R19 (d): the store\'s delta method is timed as `rewrite` through the p
     appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:02:00.000Z'));
     await censusPass(w, at(0), { demo: [] });
     expect(delta.results, 'the lane called the delta method once, in the pass').toHaveLength(1);
-    theLine(slowLines(warn));                                         // one line was written (the delta's 1,500 ms alone is over the threshold)
-    const m = expectTimings(slowLines(warn)[0]!, { flush: 1500, rewrite: 1500 });
+    const lines = slowLines(warn);
+    theLine(lines);                                                   // one line was written (the delta's 1,500 ms alone is over the threshold)
+    const m = expectTimings(lines[0]!, { flush: 1500, rewrite: 1500 });
     expect(m.get('projectDelta'), 'the line counts the delta call').toBeGreaterThan(0);
     expect(m.get('rewrite'), 'rewrite holds the 1,500 ms the call took, by the virtual clock').toBe(1500);
     expect(m.get('rewrites'), 'rewrites counts the call').toBe(1);

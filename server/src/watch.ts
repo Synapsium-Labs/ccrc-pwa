@@ -9968,7 +9968,9 @@ interface LanePassTiming {
   rewrites: number; rewriteEvents: number; step: (() => void) | null;
   /** The delta projection's calls by their returned mode, and the rows the deltas wrote (`project()` counts in neither). */
   projectDelta: number; projectFull: number; deltaRows: number;
-  /** The applier's cumulative `commitMeasures()` when the pass began (null: no applier yet, so the pass's encodes count from 0). */
+  /** The applier's cumulative `commitMeasures()` when the pass began (null: no applier yet, so the pass's encodes count from 0). `encodes` and
+   *  `cpBytes` cover the pass's WINDOW, from `startTiming` to the line, so under an overlap a late commit of a cut pass counts in both passes'
+   *  lines; `projectDelta`, `projectFull` and `deltaRows` follow `passTiming` like `rewrites`, and do not. */
   measures: ReturnType<DelegationDurability['commitMeasures']> | null;
   /** D-5832: CPU microseconds per phase or part (summed), and whether the last CPU read was a thread's (null: none yet). */
   cpu: Map<DelegationPassSlowKey, number>; cpuThread: boolean | null;

@@ -180,35 +180,38 @@ const fixture = (runIds: readonly [number, number], variant: 0 | 1): DelegationC
 // ── The traced handle ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 type Write = { kind: 'delete' | 'insert' | 'update'; table: string; sql: string };
-const WRITE_RE = /^\s*(DELETE FROM|INSERT INTO|UPDATE)\s+(delegation_[a-z]+)/;
+/** The task's regex for a write of a delegation table, unanchored, so a statement that reaches one inside a longer text is seen too. */
+const WRITE_RE = /(DELETE FROM|INSERT INTO|UPDATE)\s+(delegation_[a-z]+)/g;
 const KIND: Readonly<Record<string, Write['kind']>> = { 'DELETE FROM': 'delete', 'INSERT INTO': 'insert', 'UPDATE': 'update' };
 
 /** A proxy over the real handle that records (and optionally faults) every DELETE, INSERT and UPDATE on a delegation table before it
- *  runs, and every `exec` (so a BEGIN is visible). The UPDATE arm is what coord-store.test.ts's own `traced()` does not carry. */
+ *  runs, by whichever path it takes (`exec`, or a prepared statement's `run`, `get`, `all` or `iterate`), and every `exec` (so a BEGIN
+ *  is visible). Only a statement whose text matches the write regex is recorded. The UPDATE arm is what coord-store.test.ts's own
+ *  `traced()` does not carry. */
 const traced = (real: DatabaseSync) => {
   const log: Write[] = [];
   const execs: string[] = [];
   let failAt: number | null = null;
+  const note = (sql: string): void => {
+    for (const m of sql.matchAll(WRITE_RE)) {
+      const idx = log.length;
+      log.push({ kind: KIND[m[1]!]!, table: m[2]!, sql });
+      if (failAt === idx) throw new Error('injected fault');
+    }
+  };
   const db = new Proxy(real, {
     get(target, prop) {
-      if (prop === 'exec') return (sql: string) => { execs.push(sql); target.exec(sql); };
+      if (prop === 'exec') return (sql: string) => { execs.push(sql); note(sql); target.exec(sql); };
       if (prop === 'prepare') {
         return (sql: string) => {
           const stmt = target.prepare(sql);
-          const m = WRITE_RE.exec(sql);
-          if (m === null) return stmt;
+          if (!new RegExp(WRITE_RE.source).test(sql)) return stmt;
           return new Proxy(stmt, {
             get(st, p) {
-              if (p === 'run') {
-                return (...args: never[]) => {
-                  const idx = log.length;
-                  log.push({ kind: KIND[m[1]!]!, table: m[2]!, sql });
-                  if (failAt === idx) throw new Error('injected fault');
-                  return st.run(...args);
-                };
-              }
               const v = Reflect.get(st, p, st) as unknown;
-              return typeof v === 'function' ? v.bind(st) : v;
+              if (typeof v !== 'function') return v;
+              if (p === 'run' || p === 'get' || p === 'all' || p === 'iterate') return (...args: never[]) => { note(sql); return (v as (...a: never[]) => unknown).apply(st, args); };
+              return v.bind(st);
             },
           });
         };
@@ -456,7 +459,7 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     expect((delta as DelegationModelError).code, 'the same code as the full path').toBe(full.code);
     expect((delta as DelegationModelError).message, 'the same message as the full path').toBe(full.message);
   };
-  it.each(cases)('R15: %s is refused with the full path’s code', (_label, make, code) => {
+  it.each(cases)('R15: %s is refused with the full path’s code and message', (_label, make, code) => {
     const w = openWorld();
     const before = dumpAll(w.raw);
     const next = make(w.prior);
@@ -534,11 +537,11 @@ const UNCHANGEABLE: Readonly<Record<string, string>> = {
 
 type Outcome = { kind: 'ok' } | { kind: 'refused'; code: string } | { kind: 'invalid' };
 let twinWorld: World | null = null;
+const twin = (): World => (twinWorld ??= openWorld());
 /** What the FULL projection does with `next`, measured on a twin store (reset to `prior` after a success). `invalid` is an SQLite
  *  refusal (a CHECK, a unique index, a foreign key): the candidate is not a value the table can hold. */
 const probe = (next: DelegationCheckpointV1): Outcome => {
-  twinWorld ??= openWorld();
-  const tw = twinWorld;
+  const tw = twin();
   try {
     tw.s.projectDelegationCheckpoint(next);
     tw.s.projectDelegationCheckpoint(tw.prior);
@@ -582,6 +585,7 @@ const findChange = (
   prior: DelegationCheckpointV1, spec: TableSpec, rows: readonly number[], col: string, accept: (o: Outcome) => boolean,
   fixup?: (next: DelegationCheckpointV1, oldRow: unknown, newRow: unknown) => DelegationCheckpointV1,
 ): Found | null => {
+  expect(prior, 'the twin store the full path is probed on mints the same run ids as this world, so its fixture is this world\'s').toEqual(twin().prior);
   const pool = poolOf(prior);
   for (const idx of rows) {
     const row = rowsOf(prior, spec.field)[idx];
@@ -677,8 +681,11 @@ describe('R16: one generated case per codec column', () => {
 
   for (const [name, reason] of Object.entries(UNCHANGEABLE)) {
     it(`R16 (e): ${name} cannot be changed validly (${reason}); a forced value falls back and the schema refuses it`, () => {
+      expect(DELEGATION_CLEANUP_POPULATIONS.length, 'a larger vocabulary makes this column changeable: remove it from UNCHANGEABLE and the generated cases take it').toBe(1);
+      const [table, col] = name.split('.') as [string, string];
+      const spec = TABLES.find((t) => t.codec.table === table)!;
       const w = openWorld();
-      const forced = { ...w.prior, leases: w.prior.leases.map((l, i) => (i === 0 ? { ...l, cleanupPopulation: 'other-population' as unknown as DelegationLeaseRow['cleanupPopulation'] } : l)) };
+      const forced = replaceRow(w.prior, spec.field, 0, { ...(rowsOf(w.prior, spec.field)[0] as object), [col]: 'other-population' });
       expect(probe(forced), 'the full path itself refuses it, in SQLite').toEqual({ kind: 'invalid' });
       const before = dumpAll(w.raw);
       expect(() => changes(w.s, w.prior, forced), 'the fallback reaches the full path, and the schema’s CHECK refuses').toThrow(/CHECK/);
@@ -759,7 +766,6 @@ describe('R18: a new session and its first activity in one delta insert the sess
 
 // ── R21: rows written do not scale with the table ────────────────────────────────────────────────────────────────────────
 
-const WRITE_COUNT_RE = /(DELETE FROM|INSERT INTO|UPDATE)\s+(delegation_[a-z]+)/;
 describe('R21: the rows a delta writes do not scale with the table', () => {
   /** `n` activities spread over 20 sessions, a few attempts and activity-owned lineage rows, projected by the FULL path. */
   const synthetic = (n: number): DelegationCheckpointV1 => {
@@ -788,7 +794,7 @@ describe('R21: the rows a delta writes do not scale with the table', () => {
     const next = clone ? structuredClone(bump(prior)) : bump(prior);
     const result = changes(o.s, prior, next);
     expect(canon(o.s.readDelegationProjection()), `parity at ${n}${clone ? ' (every reference new)' : ''}`).toBe(canon(model.projectionViewOfDelegationCheckpoint(next)));
-    return { writes: o.t.log.filter((w) => WRITE_COUNT_RE.test(w.sql)).length, result };
+    return { writes: o.t.log.length, result };
   };
   it('R21: the same fixed touched-and-new rows write the same number of statements at 1k and at 20k activities, shared references or all new', () => {
     const seen = [[1_000, false], [20_000, false], [1_000, true], [20_000, true]].map(([n, clone]) => ({ n, clone, ...writesAt(n as number, clone as boolean) }));
