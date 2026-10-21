@@ -297,6 +297,15 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['ws-release', '--session', 'x'])).toBe(true);
   });
 
+  // NAMED WORKSPACES S9: rename is reachable only by naming a session, never as a bare verb or behind another leading flag.
+  it('grants ws-title ONLY with --session, in both directions', () => {
+    expect(isExecAllowed('ccd', ['ws-title', '--session', 'demo-x', '--title', 'ENG-1234 - Fix the login flow'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-title', '--session', 'demo-x', '--clear'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-title'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-title', '--title', 'X', '--session', 'demo-x'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-title', '--clear'])).toBe(false);
+  });
+
   it('grants project-pool ONLY with --project, in both directions', () => {
     // The flag is not a confirmation token here, it is the verb's whole
     // argument surface — and prefix matching leaves everything after it

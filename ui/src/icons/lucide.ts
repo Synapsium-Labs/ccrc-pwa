@@ -30,6 +30,9 @@ export const ICONS = {
     ['path', { d: 'M15 13v2' }],
     ['path', { d: 'M9 13v2' }],
   ],
+  'chevron-down': [
+    ['path', { d: 'm6 9 6 6 6-6' }],
+  ],
   'chevron-right': [
     ['path', { d: 'm9 18 6-6-6-6' }],
   ],

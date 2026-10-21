@@ -15230,8 +15230,20 @@ _inst_enable_darwin() {
   # edited plist, which `systemctl restart` does on the other platform.
   _svc_launchctl bootout "$(_svc_domain)/$label" 2>/dev/null
   _svc_launchctl enable "$(_svc_domain)/$label" 2>/dev/null
-  _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist" \
-    || _ccrc_die "launchctl bootstrap failed for $label, so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
+  # A BOOTOUT THAT RETURNED IS NOT A JOB THAT LEFT. launchd answers `bootout`
+  # while the old process is still in its graceful shutdown (the server's
+  # takes seconds), and `bootstrap` on a label it still holds fails with 5.
+  # Measured on a macOS box: every update after one build died here and was
+  # reverted, while the revert's own bootstrap (nothing left running) passed.
+  # So a refused bootstrap waits, bounded, for the label to leave and tries once more.
+  if ! _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist"; then
+    local waited=0
+    while _svc_is_loaded "$main" && [ "$waited" -lt "${CCRC_BOOTOUT_WAIT_S:-60}" ]; do
+      sleep 1 & wait $!; waited=$((waited + 1))
+    done
+    _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist" \
+      || _ccrc_die "launchctl bootstrap failed for $label (again after ${waited}s waiting for the old job to leave), so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
+  fi
   # ── AND THEN THE STAY-UP GATE, WHOSE FAILURE IS FATAL ────────────────────
   # `bootstrap` returns as soon as launchd accepts the job — the same fork-
   # time success `systemctl enable --now` reports, and the same gap the Linux
@@ -24260,15 +24272,17 @@ _uninst_cc_sessions() {
   fi
   # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
+  # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
+    "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's deny file, the four skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

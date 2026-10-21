@@ -5,7 +5,7 @@ import type { CcdResult, RunCcd } from './ports.js';
 import type { CcdArgv } from '../ccdargv.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
-import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, EXPIRE_CAP, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
@@ -24,8 +24,8 @@ import { notify } from '../notice.js';
  * `sweepArchivedExpiry`, on the session's `KeyedQueue`.
  *
  * It re-reads everything it acts on, in this order, and every doubt is "not this time":
- *   1. the box must PROVE it has the verb — `capSupported(state, EXPIRE_CAP)`, which refuses on no evidence; never
- *      `verbSupported`, which permits on an absent list;
+ *   1. the box must PROVE it has the verb — `ccdCan(state, 'wsExpire')` (`EXPIRE_CAP`, D-5866), which refuses on no
+ *      evidence; never `verbSupported`, which permits on an absent list;
  *   2. ONE registry listing: `reclaim-paused` — the fleet's one cleanup switch — stops it, and so does a listing that
  *      could not be taken;
  *   3. the STORE, re-read for this row (`readExpiryStore`, the destructive-grade reads child reclamation's executor
@@ -79,7 +79,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   //     stands ahead of the capability; `composition` is the answer the lane never asks again.
   if (!isRegistryId(sessionId)) return answer({ kind: 'composition', detail: EXPIRE_ID_REFUSED });
   // 1 — the capability, refusing on no evidence.
-  if (!capSupported(deps.fleetState, EXPIRE_CAP)) {
+  if (!ccdCan(deps.fleetState, 'wsExpire')) {
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
   }
   // 2 — the switch, from ONE listing. Unlistable is a pause this server cannot rule out.
@@ -203,7 +203,7 @@ export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead 
 export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
   // The id first, as the act's step 0 (spec §2.3): the learning audit is the other `wsExpireAudit` builder.
   if (!isRegistryId(sessionId)) return { kind: 'unreadable', detail: EXPIRE_ID_REFUSED };
-  if (!capSupported(deps.fleetState, EXPIRE_CAP)) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CAP}` };
+  if (!ccdCan(deps.fleetState, 'wsExpire')) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CAP}` };
   return expireAudit(deps, sessionId);
 }
 
@@ -211,7 +211,7 @@ export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fle
  *  exit 1 is `unreadable` (`parseExpireAudit` reads the exit before a byte of the document). */
 async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
   const argv = CCD_ARGV.wsExpireAudit(sessionId);
-  if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
+  if (!ccdCan(deps.fleetState, 'wsExpireAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   // D-6034: a call that never ran (or may not have) is read FIRST, before a byte of a document: unreadable, so the
   // executor answers `audit-failed` (retried on the failure backoff), never a refusal.
@@ -222,7 +222,7 @@ async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState
 /** The act — its own function, and the capability asked AGAIN inside it: this is the scope `verb-gate.test.ts` reads
  *  for `ws-expire`'s gate, and the one line that must never run without it. */
 async function expireAct(deps: ExpireArchivedDeps, sessionId: string, token: string) {
-  if (!capSupported(deps.fleetState, EXPIRE_CAP)) return 'unsupported' as const;
+  if (!ccdCan(deps.fleetState, 'wsExpire')) return 'unsupported' as const;
   const argv = CCD_ARGV.wsExpire(token, sessionId, sweepDec(deps.fleetState, 'expire sweep'));
   const res = await deps.runCcd(argv);
   // D-6034: read FIRST, before the box words and the composition dies are read off the runner's stderr. The verb may

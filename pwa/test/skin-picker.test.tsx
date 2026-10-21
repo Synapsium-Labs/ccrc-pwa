@@ -28,7 +28,7 @@ describe('the Layout picker', () => {
     const names = within(group).getAllByRole('radio').map((r) => (r as HTMLInputElement).value);
     expect(names).toEqual([AUTO, ...SKINS.map((s) => s.id)]);
     // A layout is not a palette: no row previews one (data-theme="refined" is no palette).
-    expect(group.querySelector('.settings-theme-swatch')).toBeNull();
+    expect(group.querySelector('[data-theme]')).toBeNull();
     for (const s of SKINS) {
       const label = s.preview ? `${s.label} (preview)` : s.label;
       expect(within(group).getByText(label)).toBeInTheDocument();

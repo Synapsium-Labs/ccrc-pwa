@@ -75,6 +75,14 @@
   font-display: swap;
 }
 
+/* PHOSPHOR & INK BY NAME (D-5503). The default palette's colours answer to
+   [data-theme='phosphor'] as well as to :root, so an element can be drawn in
+   them inside a page painted in another palette — Appearance's preview card
+   for Phosphor & Ink is the reader. Only the COLOUR section is aliased: type,
+   density and motion (the :root block after this one) belong to the page and
+   its skin, and re-declaring them on a card would reset Instrument's
+   :root[data-skin] values inside it. */
+[data-theme='phosphor'],
 :root {
   /* ------------------------------------------------------------------ *
    *  COLOR — dark theme (default)                                       *
@@ -288,7 +296,9 @@
      4.5 floor for 11px text. Wells are dark in both themes, so the well accent
      is the dark one in both themes — same rule as the syntax palette above. */
   --accent-on-well: #45D67E;  /* 10.67:1 on the well, 9.91:1 on the well bar */
+}
 
+:root {
   /* ------------------------------------------------------------------ *
    *  TYPE                                                               *
    * ------------------------------------------------------------------ */

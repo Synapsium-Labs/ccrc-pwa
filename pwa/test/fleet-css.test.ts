@@ -36,7 +36,7 @@ function expectControlRowIsATarget(): void {
 }
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
-  atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
+  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, selectorsOf, stripComments,
 } from './cssRule';
 
 const css = readFileSync(
@@ -1162,7 +1162,7 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     const tokens = readFileSync(
       path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
     const viewportWidth = 320;
-    const spacingFour = declValue(ruleIn(tokens, ':root'), '--sp-4');
+    const spacingFour = declValue(rootBody(tokens), '--sp-4');
     const rule = ruleFor('.acct-pool');
 
     expect(spacingFour).toBe('16px');

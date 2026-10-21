@@ -5,7 +5,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
-import { CCD_ARGV, RECLAIM_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, RECLAIM_CAP, ccdCan, sweepDec } from '../ccdargv.js';
 import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
@@ -1175,9 +1175,9 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
   }
-  // 4 — the box must PROVE it has the verb: `capSupported` refuses on no
+  // 4 — the box must PROVE it has the verb: `ccdCan(state, 'wsReclaim')` refuses on no
   // evidence, which is the only safe default for a verb that never existed.
-  if (!capSupported(deps.fleetState, RECLAIM_CAP)) {
+  if (!ccdCan(deps.fleetState, 'wsReclaim')) {
     return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
   }
   // 5 — the token, minted by the ladder on the box.
@@ -1316,7 +1316,7 @@ async function childReclaimAudit(
   deps: ChildReclaimDeps, req: ChildReclaimRequest,
 ): Promise<ChildReclaimAuditRead | ChildReclaimAuditUnmeasured> {
   const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired);
-  if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
+  if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
   return parseChildReclaimAudit(req.sessionId, res.stdout);
@@ -1328,7 +1328,7 @@ async function childReclaimAudit(
 async function childReclaimAct(
   deps: ChildReclaimDeps, req: ChildReclaimRequest, token: string,
 ): Promise<ChildReclaimVerbRead | 'unsupported'> {
-  if (!capSupported(deps.fleetState, RECLAIM_CAP)) return 'unsupported';
+  if (!ccdCan(deps.fleetState, 'wsReclaim')) return 'unsupported';
   const argv = CCD_ARGV.wsReclaim(token, req.runId, req.sessionId, req.deferExpired,
     sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`));
   const res = await deps.runCcd(argv);
@@ -1424,7 +1424,7 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  * A throw or an `ok:false` from any of these answers `failed` and composes no
  * argv — never a guess standing in for a read this process could not finish.
  * Only once every one of them agrees does it compose `ws-release`, gated by
- * `verbSupported` exactly as the close route gates the same verb.
+ * `ccdCan(state, 'wsRelease')` exactly as the close route gates the same verb.
  *
  * THE RESIDUAL, ACCEPTED: a hold written between this job's last re-read and
  * ccd's own unlink is removed anyway — that window is under a second (one
@@ -1575,7 +1575,7 @@ export async function releaseRetiredChildHold(
   // Only now: the one write this job may ever compose. It deletes nothing
   // but the hold file (`cmd_ws_release`'s own docstring).
   const argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, childReclaimReleaseActor(runId, program)));
-  if (!verbSupported(deps.fleetState, argv)) return 'failed';
+  if (!ccdCan(deps.fleetState, 'wsRelease')) return 'failed';
   const res = await deps.runCcd(argv);
   if (!res.ok) return 'failed';
   const out = res.stdout.trim();

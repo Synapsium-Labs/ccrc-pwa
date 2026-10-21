@@ -24,7 +24,10 @@ import { actorOf, type AccountActor } from './audit.js';
  *     never from `Host`, `cfg.host` or `X-Forwarded-*`, all of which a request (or a proxy's config) chooses.
  *  3. Any verdict but `session` → 401 `unauthenticated`. A box token is never one: this file does not read it.
  *  4. The route's cap word absent from the fleet's measured `ccd caps` → `501 unsupported`, with the refusing
- *     no-evidence polarity (`capSupported`: an unmeasured fleet state refuses).
+ *     no-evidence polarity (`capSupported`: an unmeasured fleet state refuses). A route that involves no ccd verb
+ *     (the Linear connection's writes, named workspaces S4b) asks `cap: null`, which skips this rung and ONLY this
+ *     rung: the other four still run, in the same order. The null is spelled at the call, never defaulted, so a
+ *     route cannot lose the check by forgetting the field.
  *  5. When the route asks, no step-up from the last five minutes on this session → `step-up-required` (D-5512,
  *     A5's `requireRecentAssertion`).
  *
@@ -50,8 +53,8 @@ export interface AccountGateDeps {
 
 /** What one route asks of the gate. */
 export interface AccountGateAsk {
-  /** The cap word the route's subs need (N4's `ACCOUNT_CAPS`, from A16). */
-  cap: string;
+  /** The cap word the route's subs need (N4's `ACCOUNT_CAPS`, from A16), or `null` for a route that runs no ccd verb. */
+  cap: string | null;
   /** True for the acts that put, replace or delete a credential (D-5512). */
   stepUp?: boolean;
 }
@@ -96,7 +99,7 @@ export function createAccountGate(deps: AccountGateDeps): AccountGate {
       void refuseRoute(reply, 'unauthenticated', { verdict: decision.allow ? 'no-session' : decision.verdict });
       return { pass: false };
     }
-    if (!capSupported(deps.fleetState(), ask.cap)) {
+    if (ask.cap !== null && !capSupported(deps.fleetState(), ask.cap)) {
       void refuseRoute(reply, 'unsupported');
       return { pass: false };
     }

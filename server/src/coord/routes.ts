@@ -16,7 +16,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, deviceActor, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
@@ -1369,7 +1369,7 @@ export function registerCoordRoutes(
       sessionId, opened.holdReason,
       sweepDec(deps.fleetState, `run:${opened.id} open`),
     );
-    if (!verbSupported(deps.fleetState, argv)) return refuseRoute(reply, 'unsupported');  // D-5384
+    if (!ccdCan(deps.fleetState, 'wsHold')) return refuseRoute(reply, 'unsupported');  // D-5384
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     tx(coord.db, () => {
@@ -2043,7 +2043,8 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
-      if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+      // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
+      if (!ccdCan(deps.fleetState, 'route')) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
 
@@ -2359,7 +2360,7 @@ export function registerCoordRoutes(
     const body = (req.body ?? {}) as { paused?: unknown };
     if (typeof body.paused !== 'boolean') return reply.code(400).send({ ok: false, error: 'bad-request' });
     const argv = CCD_ARGV.coordPause(body.paused ? 'on' : 'off');
-    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    if (!ccdCan(deps.fleetState, 'coordPause')) return reply.code(501).send({ ok: false, error: 'unsupported' });
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     // `requested`, never `paused`: this route ran a verb, it did not READ the
@@ -2385,8 +2386,9 @@ export function registerCoordRoutes(
    *  a coordinator told about this door would be told how to stop or restart
    *  the reclamation of its own children.
    *
-   *  THE SKEW GATE IS THE CAPABILITY TOKEN, read with `capSupported` — no
-   *  evidence REFUSES. `verbSupported` would permit on an absent verb list and
+   *  THE SKEW GATE IS THE CAPABILITY TOKEN (`RECLAIM_PAUSE_CAP`), asked as
+   *  `ccdCan(state, 'reclaimPause')` (D-5866), whose row REFUSES on no
+   *  evidence. `verbSupported` would permit on an absent verb list and
    *  send `ccd reclaim-pause` to a box whose ccd answers a usage error, which
    *  the phone would render as a broken switch rather than an older fleet host.
    *
@@ -2402,7 +2404,7 @@ export function registerCoordRoutes(
     if (body.state !== 'on' && body.state !== 'off') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
+    if (!ccdCan(deps.fleetState, 'reclaimPause')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));

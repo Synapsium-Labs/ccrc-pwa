@@ -43,13 +43,15 @@
 //      roster (`ARMED_MODES`), with the unreadable-mode fixtures and the
 //      `'locked-out'` control that keeps them from passing vacuously.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
 import { authPostureChanged } from '../src/lib/auth';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { navigate } from '../src/lib/router';
 import { resetAcks } from '../src/lib/seen';
-import { AccountsScreen } from '../src/screens/AccountsScreen';
+import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
+import { renderSettings } from './settingsHost';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
@@ -169,6 +171,9 @@ const makeStore = (): FleetStore =>
 /** Armed gate, signed in, no passkey — the one posture the notice is for. */
 const PASSPHRASE_ONLY = { authed: true, passkeysEnrolled: 0, mode: 'passphrase' };
 
+/** Settings › Security, where the sign-in cards live since settings Task R2d (D-5508). */
+const renderSecurity = (): void => { renderSettings('security'); };
+
 // ── 1. the door ─────────────────────────────────────────────────────────────
 
 describe('the durable door to /accounts (D-161)', () => {
@@ -239,9 +244,10 @@ describe('the passphrase-only notice (D-161)', () => {
     const line = await screen.findByRole('button', { name: NOTICE });
     // ONE line, not one per render path.
     expect(screen.getAllByRole('button', { name: NOTICE })).toHaveLength(1);
-    // Tappable, and it goes where the enrolment button actually is.
+    // Tappable, and it goes where the enrolment button actually is: Settings › Security since settings Task R2d
+    // (D-5508), not Accounts, which holds lanes only now.
     fireEvent.click(line);
-    expect(location.pathname).toBe('/accounts');
+    expect(location.pathname).toBe('/settings/security');
   });
 
   it('retires itself the instant a passkey exists — there is no dismiss to persist', async () => {
@@ -353,7 +359,7 @@ describe('an UNREADABLE mode never buys the nag (D-161 honesty pass)', () => {
 describe('the notice does not nag when enrolling is IMPOSSIBLE (D-161 fix round)', () => {
   it('stays silent on a browser that cannot CREATE a passkey', async () => {
     // The destination gates its Add button on `passkeyEnrollSupported()`
-    // (AccountsScreen; auth-passkey.test.tsx pins that half — "hides only the
+    // (Settings › Security since R2d; auth-passkey.test.tsx pins that half — "hides only the
     // ADD button on a Level 1 browser"). A notice that cannot be dismissed,
     // pointing at a button that is not on the screen it opens, is a trap: the
     // operator's only move is to stop trusting the line.
@@ -435,12 +441,12 @@ describe('the notice retires and returns with the box\'s posture (D-161 fix roun
 
 // ── 2e. the writer half: /accounts announces, the sidebar hears it ──────────
 
-describe('enrolling on /accounts retires the notice in the same document (D-161 fix round)', () => {
+describe('enrolling on Settings › Security retires the notice in the same document (D-161 fix round)', () => {
   // THE REAL DESKTOP ARRANGEMENT: the fleet sidebar and the detail pane are on
   // screen together (app.tsx), so the notice and the enrolment button are in one
   // document and the operator watches one change the other. Both halves of the
   // nudge are under test here — the `authPostureChanged()` call at the WRITER
-  // (AccountsScreen) and the subscription at the READER (PasskeyNotice) — which
+  // (Settings › Security's Your sign-in) and the subscription at the READER (PasskeyNotice) — which
   // is why this renders both rather than calling the announcement by hand.
   const bothPanes = (
     keysAtStart: number,
@@ -451,7 +457,8 @@ describe('enrolling on /accounts retires the notice in the same document (D-161 
       () => ({ credentials: keys > 0 ? [CRED] : [], storeUnreadable: false }),
       { onEnrolled: () => { keys = 1; }, onRevoked: () => { keys = 0; } },
     );
-    renderFleet(<><FleetScreen store={makeStore()} /><AccountsScreen /></>);
+    navigate('/settings/security');
+    renderFleet(<><FleetScreen store={makeStore()} /><SettingsDataProvider active><SettingsScreen /></SettingsDataProvider></>);
     return { keys: () => keys };
   };
 
@@ -476,16 +483,19 @@ describe('enrolling on /accounts retires the notice in the same document (D-161 
     const revoke = await screen.findByRole('button', { name: /revoke passkey/i });
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
     await act(async () => { fireEvent.click(revoke); });
+    // Revoke asks first since settings Task R2d; the answer is what writes.
+    const sheet = await screen.findByRole('dialog');
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Revoke' })); });
     expect(await screen.findByRole('button', { name: NOTICE })).toBeInTheDocument();
   });
 });
 
 // ── 3. the auth blocks are not account rows ─────────────────────────────────
 
-describe('the /accounts auth blocks say whose they are (D-161)', () => {
+describe('the sign-in cards say whose they are (D-161; on Settings › Security since R2d, D-5508)', () => {
   it('does not dress the sign-in block as a Claude account row', async () => {
     stubFetch(PASSPHRASE_ONLY);
-    render(<AccountsScreen />);
+    renderSecurity();
     const title = await screen.findByText('Your sign-in');
     const block = title.closest('section');
     expect(block).not.toBeNull();
@@ -500,7 +510,7 @@ describe('the /accounts auth blocks say whose they are (D-161)', () => {
 
   it('does not dress the session block as one either', async () => {
     stubFetch(PASSPHRASE_ONLY);
-    render(<AccountsScreen />);
+    renderSecurity();
     const title = await screen.findByText('This session');
     const block = title.closest('section');
     expect(block).not.toBeNull();

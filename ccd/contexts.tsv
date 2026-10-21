@@ -140,6 +140,9 @@ _ws_slug_residue	C4
 _ws_slug_new	C4
 _ws_least_loaded	C1
 _ws_disk_free_gb	C4
+_ws_pool_read	C1
+_ws_lane_why	C1
+_ws_wrapper_why	C1
 cmd_ws_add	C4
 _ws_realpath	C4
 _ws_common_dir	C4
@@ -275,6 +278,9 @@ _swap_pin_tick	C1
 _swap_pinned	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
+_swap_bg_hold	C1
+_swap_bg_note	C1
+_swap_bg_release	C1
 _pane_statusline_seg	C3
 _pane_ctx_pct	C3
 _route_word_in	C1
@@ -364,6 +370,7 @@ _tool_adj_env	C2
 _child_tmpdir	C4
 _delegation_spool_dir	C5
 _child_spawn_compose	C5
+_account_spawn_compose	C2
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
 _reg_id_ok	C1
@@ -662,3 +669,8 @@ cmd_docs_show	C9
 cmd_docs_fetch	C9
 _docs_py	C9
 _launchd_class	C2
+_ws_title	C1
+_ws_title_check	C1
+_ws_title_set	C1
+_ws_title_clear	C1
+cmd_ws_title	C1
