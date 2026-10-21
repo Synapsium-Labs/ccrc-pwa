@@ -248,6 +248,47 @@ export interface DelegationInsertEventsResult {
 }
 
 /**
+ * What `CoordStore.projectDelegationCheckpointChanges` answers: `delta` when it wrote only the rows that changed (`rows` = the
+ * UPDATEs plus the INSERTs it ran, zero for an application that changed no projected row), `full` when the change was not one a
+ * delta may carry and it ran the full projection instead. A refused delta throws; it never answers `full` for a failure. Declared
+ * here (L1) so the store and the applier's port both name it without either importing the other.
+ */
+export type DelegationProjectChangesResult = { mode: 'delta'; rows: number } | { mode: 'full' };
+
+/** One table row as its codec encodes it: every column of the codec, named. */
+export type DelegationProjectionValues = Readonly<Record<string, DelegationSqlValue>>;
+
+/** A row both checkpoints hold under one key and whose encoded columns differ. `table` is the codec's; `keyColumns` name the
+ *  primary key among the columns; `prior` and `next` hold EVERY column's encoded value, so a store can swap on all of them. */
+export interface DelegationProjectionUpdate {
+  table: string;
+  keyColumns: readonly string[];
+  prior: DelegationProjectionValues;
+  next: DelegationProjectionValues;
+}
+
+/** A row only the later checkpoint holds, encoded. `table` is the codec's. */
+export interface DelegationProjectionInsert {
+  table: string;
+  values: DelegationProjectionValues;
+}
+
+/**
+ * `diffDelegationProjection`'s answer. `applicable: false` carries a short `reason` and means "this is not an addition or an
+ * update of the kind a delta may carry": the caller projects in full. `applicable: true` lists the rows to update, the rows to
+ * insert (parents first: sessions, activities, attempts, lineage) and the later checkpoint's length for each of the five tables
+ * (`counts`, each with its codec's `table`), the numbers a drift check holds the stored tables to.
+ */
+export type DelegationProjectionDiff =
+  | { applicable: false; reason: string }
+  | {
+    applicable: true;
+    updates: readonly DelegationProjectionUpdate[];
+    inserts: readonly DelegationProjectionInsert[];
+    counts: readonly { table: string; count: number }[];
+  };
+
+/**
  * R27: a type that makes every property, array and map reachable from `T` read-only. The durable applier's `state()`, the outcomes
  * it returns and what a checkpoint change returns ARE (or become) its live rows, so a caller that edited one in place would corrupt
  * the applier. They are therefore typed with this, and an in-place edit through any of them is a compile error. (A read-only view
@@ -351,7 +392,8 @@ export type DelegationModelRefusal =
   | 'activity-id-mismatch'   // an activity row whose ID is not the derivation from its natural key and identity journalId
   | 'natural-key-map'        // activityIdsByNaturalKey and the activity rows disagree, in either direction
   | 'intent-map'             // coordinatorIntentByParent and the session rows' explicitIntentAt disagree
-  | 'lease-lineage';         // a lease's opening lineage row is missing, mis-owned or mis-derived
+  | 'lease-lineage'          // a lease's opening lineage row is missing, mis-owned or mis-derived
+  | 'projection-delta-mismatch'; // a delta projection's compare-and-swap or row-count check found SQLite other than the prior checkpoint
 
 export class DelegationModelError extends Error {
   constructor(readonly code: DelegationModelRefusal, detail: string) {
@@ -380,7 +422,7 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
   'foreign-keys-off': true, 'bad-natural-key': true, 'bad-identity-journal-id': true, 'identity-journal-id-required': true,
   'lease-generation': true, 'lease-sequences': true, 'lease-disposition': true, 'lease-cleanup-state': true,
   'lease-transition-field': true, 'lease-last-observed': true, 'lease-opening-lineage': true, 'lease-without-journal-entry': true,
-  'activity-id-mismatch': true, 'natural-key-map': true, 'intent-map': true, 'lease-lineage': true,
+  'activity-id-mismatch': true, 'natural-key-map': true, 'intent-map': true, 'lease-lineage': true, 'projection-delta-mismatch': true,
 };
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
@@ -1202,6 +1244,87 @@ export function delegationCheckpointOfProjection(rows: DelegationProjectionRows)
  *  rows in read order. A drift check compares this, canonically, with `readDelegationProjection()`. */
 export function projectionViewOfDelegationCheckpoint(checkpoint: DelegationCheckpointV1): DelegationCheckpointV1 {
   return delegationCheckpointOfProjection(sortedProjectionRows(checkpoint));
+}
+
+/**
+ * One table's part of `diffDelegationProjection`. Rows are matched by key; a key held twice in either checkpoint, or held by
+ * `prior` and not by `next`, is not a delta (`reason`). A row that is the same object in both is unchanged (a fast path only);
+ * otherwise both are encoded by the codec and compared column by column, over the codec's own column list, so an encode refusal
+ * (`bad-row`, `bad-instant`) fires here exactly as it does in the full projection. `frozen` names the rows this table may not
+ * change or add in a delta at all.
+ */
+function diffProjectionTable<Row, Col extends string>(
+  codec: DelegationRowCodec<Row, Col>, keyColumns: readonly Col[], keyOf: (row: Row) => string,
+  frozen: (prior: Row | undefined, next: Row) => boolean, prior: readonly Row[], next: readonly Row[],
+): { reason: string } | { updates: DelegationProjectionUpdate[]; inserts: DelegationProjectionInsert[] } {
+  const priorByKey = new Map<string, Row>();
+  for (const r of prior) {
+    const k = keyOf(r);
+    if (priorByKey.has(k)) return { reason: `${codec.table}: the prior checkpoint holds the key ${k} twice` };
+    priorByKey.set(k, r);
+  }
+  const nextKeys = new Set<string>();
+  for (const r of next) {
+    const k = keyOf(r);
+    if (nextKeys.has(k)) return { reason: `${codec.table}: the checkpoint holds the key ${k} twice` };
+    nextKeys.add(k);
+  }
+  for (const k of priorByKey.keys()) if (!nextKeys.has(k)) return { reason: `${codec.table}: the row ${k} leaves` };
+  const updates: DelegationProjectionUpdate[] = [];
+  const inserts: DelegationProjectionInsert[] = [];
+  for (const r of next) {
+    const p = priorByKey.get(keyOf(r));
+    if (p === r) continue;
+    if (p === undefined) {
+      if (frozen(undefined, r)) return { reason: `${codec.table}: a new row is not a delta here` };
+      inserts.push({ table: codec.table, values: codec.toDb(r) });
+      continue;
+    }
+    const after = codec.toDb(r);
+    const before = codec.toDb(p);
+    if (codec.columns.every((c) => before[c] === after[c])) continue;
+    if (frozen(p, r)) return { reason: `${codec.table}: a changed row is not a delta here` };
+    updates.push({ table: codec.table, keyColumns, prior: before, next: after });
+  }
+  return { updates, inserts };
+}
+
+/**
+ * What a store must write to move a projection of `prior` to a projection of `next`, when that is only additions and updates:
+ * a row both hold under one key whose encoded columns differ is an UPDATE, a row only `next` holds is an INSERT (parents first),
+ * and `counts` is `next`'s length for each of the five tables. Pure: it reads nothing but its two arguments.
+ *
+ * NOT APPLICABLE (the caller projects in full) when any key `prior` holds is missing from `next`, in any table; when any lease row
+ * differs or is new; when a lineage row owned by a lease, in `prior` or in `next`, differs, is new or leaves (a lease and its
+ * lineage move together); or when a key repeats inside either checkpoint (so the full path gives its own answer for a corrupt
+ * checkpoint). Keys: sessions (`sessionId`, `parentIncarnation`), activities `activityId`, attempts `attemptId`, leases `leaseId`,
+ * lineage `lineageId`. Throws `bad-row` or `bad-instant` from the codec for a changed or new row it cannot encode.
+ */
+export function diffDelegationProjection(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectionDiff {
+  const parts = [
+    diffProjectionTable(delegationSessionCodec, ['sessionId', 'parentIncarnation'], (r) => JSON.stringify([r.sessionId, r.parentIncarnation]),
+      () => false, prior.sessions, next.sessions),
+    diffProjectionTable(delegationActivityCodec, ['activityId'], (r) => r.activityId, () => false, prior.activities, next.activities),
+    diffProjectionTable(delegationAttemptCodec, ['attemptId'], (r) => r.attemptId, () => false, prior.attempts, next.attempts),
+    diffProjectionTable(delegationLeaseCodec, ['leaseId'], (r) => r.leaseId, () => true, prior.leases, next.leases),
+    diffProjectionTable(delegationLineageCodec, ['lineageId'], (r) => r.lineageId,
+      (p, n) => (p !== undefined && p.leaseId !== null) || n.leaseId !== null, prior.lineage, next.lineage),
+  ];
+  const updates: DelegationProjectionUpdate[] = [];
+  const inserts: DelegationProjectionInsert[] = [];
+  for (const part of parts) {
+    if ('reason' in part) return { applicable: false, reason: part.reason };
+    updates.push(...part.updates);
+    inserts.push(...part.inserts);
+  }
+  const counts = [
+    { table: delegationSessionCodec.table, count: next.sessions.length },
+    { table: delegationActivityCodec.table, count: next.activities.length },
+    { table: delegationAttemptCodec.table, count: next.attempts.length },
+    { table: delegationLeaseCodec.table, count: next.leases.length },
+    { table: delegationLineageCodec.table, count: next.lineage.length },
+  ];
+  return { applicable: true, updates, inserts, counts };
 }
 
 // ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────
