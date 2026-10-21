@@ -46,6 +46,12 @@ const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
   Object.entries(process.env).filter(([k]) => !/^(CCRC_|CCD_|MODELS_|_CCD_|BASH_ENV$|ENV$|HTTPS?_PROXY$|ALL_PROXY$)/i.test(k)));
 
 const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind lane';
+/** What a refused lane tells the operator to fix, per server mode (X1): the fleet box's row in remote mode, of which the
+ *  server box's accounts.json is a mirror; this box's accounts.json in local mode. */
+const REMOTE_FIX = "fix the lane's row on the fleet box, of which this server box's accounts.json is a copy: the server takes that row "
+  + 'from the next account verb it drives that answers with the roster, or at a restart once its copy holds it';
+const LOCAL_FIX = "fix the lane's row in this box's accounts.json: the server reads it at its next restart, or from the next account verb "
+  + 'it drives that answers with the roster';
 
 /** A recording `curl` stand-in: the argv it saw, one word to a line, in `$HOME/curl-argv`, and its stdin, byte for byte,
  *  in `$HOME/curl-stdin`; rc 0. */
@@ -316,7 +322,10 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     if (lane !== undefined) {
       expect(said[0]).toContain(`lane ${lane} must exist and carry exec.kind "codex"`);
       expect(said[0]).toContain("the server box's roster row");
-      expect(said[0]).toContain("is read at the server's next restart, or when an account verb the server drives answers with the roster");
+      expect(said[0]).toContain('(the server decides from the roster it holds)');
+      // lanesDeps() is a LOCAL-mode server: its clause, and not the remote one.
+      expect(said[0]).toContain(LOCAL_FIX);
+      expect(said[0]).not.toContain('on the fleet box');
     } else {
       expect(said[0]).not.toContain('exec.kind');
       expect(said[0]).not.toContain('next restart');
@@ -372,9 +381,35 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(said[0]).toContain('(unknown-lane)');
     expect(said[1]).toContain('lane lane-c must exist and carry exec.kind "codex"');
     expect(said[1]).toContain('(not-a-codex-lane)');
-    // How the change is picked up: the server re-reads its roster at a restart, or from an account verb's answer.
-    for (const l of said) expect(l).toContain("a hand edit of the server box's accounts.json is read at the server's next restart");
+    // What to fix and how the server picks it up, in this server's (local) mode.
+    for (const l of said) expect(l).toContain(LOCAL_FIX);
     for (const l of said) {
+      for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {
+        expect(l, `the warning echoes "${leaked}"`).not.toContain(leaked);
+      }
+    }
+    expect(p.notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['remote', REMOTE_FIX, LOCAL_FIX], ['local', LOCAL_FIX, REMOTE_FIX],
+  ] as [string, string, string][])('a %s server tells the operator what to fix in its own mode, and not the other mode\'s remedy', async (mode, own, other) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = fakePush();
+    const d = lanesDeps();
+    app = await buildServer({ ...d, cfg: { ...d.cfg, fleetMode: mode as 'local' | 'remote' }, mailToken: TOKEN, push: p.push });
+    const secret = 'Re-authenticate at https://example.invalid/login';
+    for (const lane of ['lane-z', 'lane-c']) {
+      const message = `${lane}: opus stays on none: model-6-alpha failed its canary (${secret})`;
+      expect((await post(app, { message, push: true })).statusCode).toBe(200);
+    }
+    const said = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
+    expect(said).toHaveLength(2);
+    for (const l of said) {
+      expect(l).toContain(own);
+      expect(l, 'the other mode\'s remedy').not.toContain(other);
+      expect(l).toContain('must exist and carry exec.kind "codex" (the server decides from the roster it holds)');
+      expect(l, 'the old, false phrase').not.toContain('alone does not make it pushable');
       for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {
         expect(l, `the warning echoes "${leaked}"`).not.toContain(leaked);
       }
@@ -416,11 +451,14 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     await app.ready();   // so that only the request sits inside the bound, not the server's own start-up
     let timer: NodeJS.Timeout | undefined;
     const bound = new Promise<'timed-out'>((resolve) => { timer = setTimeout(() => resolve('timed-out'), 3000); });
-    const res = await Promise.race([post(app, { message: MOVED, push: true }), bound]);
-    clearTimeout(timer);
-    expect(res, 'the route waited for a push that never resolves').not.toBe('timed-out');
-    expect((res as { statusCode: number }).statusCode).toBe(200);
-    expect(p.notify).toHaveBeenCalledTimes(1);
+    try {
+      const res = await Promise.race([post(app, { message: MOVED, push: true }), bound]);
+      expect(res, 'the route waited for a push that never resolves').not.toBe('timed-out');
+      expect((res as { statusCode: number }).statusCode).toBe(200);
+      expect(p.notify).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   it('with no VAPID keys there is no push service: push:true on a model line answers 200, throws nothing and warns nothing', async () => {
@@ -717,31 +755,35 @@ describe('the push patterns are built from their owners, every shape uses them, 
 });
 
 describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6)', () => {
-  // The notify funnel (notice.ts) is the one way a notice is raised, and it has no push-only mode: every mode that can
-  // push first records the notice to the ring and the archive. Two callers therefore still reach the push service
-  // directly: the watcher's release sender and /api/notify's models push, which D-5211 ships with no feed record. The
-  // design's K6 funnel (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will
-  // absorb them, and this list is what that wave finds them by.
+  // The notify funnel (notice.ts) is the one way a notice is raised. The composition root's bound sink records every notice
+  // it can push, and D-5211 rules a feed record out for the models push in W2. The raw `notify` with a push-only set of
+  // sinks would take a `NotifyEvent` kind, and none fits a model-class notice: a new kind widens shared/api.ts's union and
+  // the PWA's per-kind tables, and an existing kind misfiles it. Two callers therefore still reach the push service
+  // directly: the watcher's release sender and /api/notify's models push. The design's K6 funnel
+  // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will absorb them, and this list
+  // is what that wave finds them by.
   //
   // WHAT IT CATCHES: any non-comment line, in any JS or TS source file under server/src, that spells a call of a member
-  // named `notify` in one of NOTIFY_SPELLINGS' forms. A new direct caller written in one of them is red until it is
-  // argued here. WHAT IT DOES NOT SEE: a reference detached under another name and called later (`const { notify: n } =
-  // push`, `const n = push?.notify;`), and a call through a computed name. Today server/src holds `.ts` files only; the
-  // walk takes every JS/TS-family extension, so a `.js` or `.mts` file added later is read too.
+  // named `notify` in one of NOTIFY_SPELLINGS' forms. A new direct caller written in one of them is red until it is argued
+  // here. WHAT IT DOES NOT SEE: the census is lexical, so it sees only those spellings, on lines that do not begin with a
+  // comment marker. It does not see any other spelling (for example a parenthesised member, `Reflect.apply`, or a
+  // reference destructured or aliased and called later), or code on a line that begins with `*` or `*/`. The walk takes
+  // every JS/TS-family extension (SOURCE_EXT), so a `.js` or `.mts` file added later is read with no edit here, and the
+  // cases below pin the walk.
   //
-  // NON-CALL LINES THE SPELLINGS HAD TO LEAVE ALONE, measured at the tip: twelve lines that read or write the update intent's `notify`
-  // FIELD (`isNotifyMode(r.notify)`, `patch.notify === undefined`, `notify: row.notify,`,
+  // NON-CALL LINES THE SPELLINGS LEAVE ALONE: the reads and writes of the update intent's `notify` FIELD
+  // (`isNotifyMode(r.notify)`, `patch.notify === undefined`, `notify: row.notify,`,
   // `notifyChannel(input.fleetIntent.notify, …)`, in store.ts, updateintentlog.ts, update/notify.ts and update/routes.ts),
-  // and the bare funnel function (`notify(deps, …)`, not a member call). None of them is followed by a call, a `bind`, a
-  // `call`, an `apply` or the end of the line.
+  // and the bare funnel function (`notify(deps, …)`, not a member call). None of them is followed by a call, a non-null
+  // assertion and a call, a `bind`, a `call`, an `apply` or the end of the line.
   const SRC = path.join(REPO, 'server', 'src');
   const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/;
   const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(dir, e.name)) : SOURCE_EXT.test(e.name) ? [path.join(dir, e.name)] : []);
   const NOTIFY_SPELLINGS: RegExp[] = [
-    /\.notify\s*(?:\?\.\s*)?(?:<[^>()]*>\s*)?\(/,        // .notify(  ?.notify(  .notify?.(  .notify<T>(  .notify (
-    /\.notify\s*$/,                                         // .notify at the end of the line, the call on the next
-    /\.notify\s*\??\.\s*(?:bind|call|apply)\b/,            // .notify.bind(  ?.notify.call(  .notify.apply(
+    /\.notify\s*!?\s*(?:\?\.\s*)?(?:<[^>()]*>\s*)?\(/,   // .notify(  ?.notify(  .notify!(  .notify?.(  .notify<T>(  .notify (
+    /\.notify\s*!?\s*$/,                                    // .notify (or .notify!) at the end of the line, the call on the next
+    /\.notify\s*!?\s*\??\.\s*(?:bind|call|apply)\b/,      // .notify.bind(  ?.notify.call(  .notify!.apply(
     /\[\s*(['"`])notify\1\s*\]/,                          // ['notify']  ["notify"]
   ];
   /** The lines of `text` that are code (not a comment line) and spell a call of a `notify` member. */
@@ -763,17 +805,28 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     expect(callers()).toEqual({ 'notice.ts': 1, 'server.ts': 1, 'watch.ts': 1 });
   });
 
-  it('the walk reads every JS/TS-family file under server/src (today: .ts only), and finds the three callers\' files among them', () => {
+  it('the walk descends, reads only files its extension test admits, and finds the three callers\' files among them', () => {
     const files = walk(SRC);
     expect(files.length).toBeGreaterThan(100);
-    expect([...new Set(files.map((f) => path.extname(f)))]).toEqual(['.ts']);
+    for (const f of files) expect(SOURCE_EXT.test(f), `the walk returned ${f}`).toBe(true);
     for (const f of ['notice.ts', 'server.ts', 'watch.ts']) expect(files).toContain(path.join(SRC, f));
+    expect(files.some((f) => f.startsWith(path.join(SRC, 'coord') + path.sep)), 'the walk did not descend into a directory').toBe(true);
+  });
+
+  it.each(['a.ts', 'a.tsx', 'a.mts', 'a.cts', 'a.js', 'a.jsx', 'a.mjs', 'a.cjs', 'a.d.ts'])(
+    'the extension test reads %s, so a file of that kind added under server/src is walked with no edit here', (name) => {
+      expect(SOURCE_EXT.test(name)).toBe(true);
+    });
+
+  it.each(['a.json', 'a.md', 'a.py', 'a.sh', 'a.tsbuildinfo', 'a.txt'])('the extension test does not read %s', (name) => {
+    expect(SOURCE_EXT.test(name)).toBe(false);
   });
 
   it.each([
     'void deps.push?.notify({ title: 1 });', 'sender.notify(payload);', 'p?.notify?.(payload);', 'p.notify<never>(payload);',
     'p.notify (payload);', 'const send = p.notify.bind(p);', 'const send = p?.notify.call(p, x);', 'p.notify.apply(p, [x]);',
     "p['notify'](x);", 'p["notify"](x);', 'await deps.push?.["notify"](x);', 'await deps.push.notify', 'go(p.notify(x) /* c */);',
+    'void deps.push!.notify!({ title: 1 });', 'const send = p.notify!.bind(p);', 'p.notify!.call(p, x);', 'p.notify!.apply(p, [x]);',
   ])('a line that spells a member call of notify is counted: %s', (line) => {
     expect(notifyLines(line)).toEqual([line]);
   });
@@ -782,7 +835,7 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     '// p.notify(x)', ' * p.notify(x)', '/* p.notify(x) */', '/* a */ // p.notify(x)', 'notify(deps, event, mode);',
     'const { notify } = deps;', 'notify: NotifyMode;', 'if (patch.notify === undefined) return;', 'row.notify,',
     'const c = notifyChannel(input.fleetIntent.notify, x);', 'x = a.notify ?? b;', 'p.notified(x);', 'p.notifyAll(x);',
-    "import { notify } from '../notice.js';",
+    "import { notify } from '../notice.js';", 'if (a.notify !== undefined) return;', 'const ok = a.notify! ?? b;',
   ])('a line that is a comment, or no member call of notify, is not: %s', (line) => {
     expect(notifyLines(line)).toEqual([]);
   });

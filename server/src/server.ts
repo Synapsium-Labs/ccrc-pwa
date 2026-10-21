@@ -1659,23 +1659,32 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // answer. The box token proves "a process on the fleet box" and no more
     // (notify.sh's own header), so only a model-class line of a codex-kind lane
     // is pushable (D-5211). THE LANE MUST BE codex-kind IN THE SERVER BOX'S
-    // ROSTER, not only in the fleet box's: the advance step gates on the fleet
-    // box's `~/.ccrc/accounts.json`, this route on `deps.cfg.roster`, and the two
-    // rosters are compared by a digest of accounts.sh, which does not carry a
-    // lane's `exec.kind`, so they can differ here and still read as agreed. The
-    // refusal names the lane and says so. The roster is read at each request,
-    // never cached: `reloadRoster` (config.ts) reassigns `cfg.roster` in place,
-    // so a lane that an account verb's answer carries into the roster (index.ts
-    // hands it every roster-carrying answer, reconcile's `roster` sub included)
-    // is pushable from the next request. A HAND EDIT of the server box's
-    // accounts.json is different, in local and in remote mode alike:
-    // `loadRoster` reads the file once, in `loadConfig`, nothing watches it, and
-    // reconcile compares digests of accounts.sh, which do not carry `exec.kind`,
-    // so an exec-only difference never triggers it. Such an edit takes effect at
-    // the server's next restart, or when an account verb the server drives next
-    // answers with the roster (in remote mode `reloadRoster` then rewrites the
-    // mirror from the answer; in local mode the file is the box's own, written
-    // by the verb).
+    // ROSTER, not only in the fleet box's (in local mode the two are one file):
+    // the advance step gates on the fleet box's `~/.ccrc/accounts.json`, this
+    // route on `deps.cfg.roster`, and the two rosters are compared by a digest of
+    // accounts.sh, which does not carry a lane's `exec.kind`, so they can differ
+    // here and still read as agreed. The refusal names the lane and says what to
+    // fix in this server's own mode.
+    //
+    // WHAT TO FIX, BY MODE. The roster is read at each request, never cached.
+    // `cfg.roster` is read once, from the server box's own accounts.json, by
+    // `loadRoster` in `loadConfig` (config.ts); nothing watches the file. After
+    // that it changes only in `reloadRoster`, which index.ts hands the answer of
+    // every account verb the server drives (every mutating sub, and reconcile's
+    // `roster` sub). `reloadRoster` refuses an answer unless its fleet identity is
+    // the one the server knows; otherwise it compares the answer's roster with the
+    // roster IN MEMORY, not with the file, and replaces `cfg.roster` when they
+    // differ. In LOCAL mode the file is the box's own, written by the verb: an
+    // edit there is taken at the next restart, or from the next roster-carrying
+    // answer. In REMOTE mode the verb runs on the fleet box (accounts/ops.ts), so
+    // the answer is the FLEET box's roster and the server box's accounts.json is a
+    // mirror of it: the durable fix is the fleet box's row, which the server takes
+    // from the next roster-carrying answer (`reloadRoster` then also rewrites the
+    // mirror from it), or at a restart once its mirror holds it. A hand edit of
+    // the mirror is read only at a restart: no answer reads it, the next answer
+    // that differs from memory replaces it, and one equal to memory leaves it on
+    // disk, unread. Reconcile compares digests of accounts.sh, which do not carry
+    // `exec.kind`, so an exec-only difference never triggers it.
     //
     // What a pushable line can carry is stated in the policy's docstring: up to
     // 120 characters of printable ASCII in a failure line's reason slot, and
@@ -1687,28 +1696,34 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // is free text from a process we do not trust.
     //
     // THIS IS A DIRECT `PushService.notify`, OUTSIDE notice.ts's `notify()` FUNNEL,
-    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The funnel
-    // has no push-only mode. `NOTICE_MODES` is `push`, `record-always` and
-    // `record-only`, and in `raise` (notice.ts) every mode that can push first
-    // records the notice to the ring and the archive (`log.record`, then
-    // `recordFeedEvent`, and index.ts always wires a ring) before
-    // `deps.push?.notify`; the one path that records nothing, `push` for a
-    // session the operator is looking at, pushes nothing either. (A notice with
-    // no session is not the obstacle: the daily digest goes through the funnel
-    // with `sessionId: ''`.) (2) D-5211 ships this push
-    // with NO feed record in W2, so sending it through a recording mode, or
-    // adding a push-only mode with its own `NotifyEvent` kind and PWA catch-up
-    // handling, would widen W2 past it. (3) The owner that will absorb it is
-    // the consolidation design's K6 funnel, whose ARCH-59 item moves the
-    // notify.sh banner into the funnel
+    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The
+    // composition root's bound sink (`notice = noticeSink(deps)`, above) records
+    // every notice it can push: in `raise` (notice.ts) `push` and `record-always`
+    // run `log.record` and then `recordFeedEvent` before `deps.push?.notify`
+    // (`record-only` records and never pushes; index.ts passes the ring in
+    // `deps`), and the one path that records nothing, `push` for a session the
+    // operator is looking at, pushes nothing either. D-5211 rules a feed record out
+    // for this push in W2. (A notice with no session is not the obstacle: the
+    // daily digest goes through the funnel with `sessionId: ''`.) (2) The raw
+    // `notify` with a push-only set of sinks is reachable (`NoticeDeps`' sinks are
+    // each optional, and watch.ts already passes subsets), but its event is a
+    // `NoticeRecord`, which carries a `NotifyEvent` kind, and no kind in
+    // shared/api.ts's union fits a model-class notice: a new kind widens that union
+    // and the PWA's per-kind tables (`KIND_WORD` and `KIND_GLYPH` in
+    // MailScreen.tsx), and an existing kind misfiles it. (3) The owner that will
+    // absorb it is the consolidation design's K6 funnel, whose ARCH-59 item moves
+    // the notify.sh banner into the funnel
     // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
     // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
     // the direct callers of `PushService.notify` in server/src, so that wave
-    // finds this one mechanically: it counts any non-comment line that spells a
-    // call of a member named `notify` (a call, an optional call, a type
-    // argument, a `bind`/`call`/`apply`, a bracketed name, or a line ending in
-    // `.notify`), so a fourth caller written in any of those spellings is red.
-    // It does not see a reference detached under another name and called later.
+    // finds this one mechanically. It is lexical: it counts a non-comment line
+    // that spells a call of a member named `notify` as a call, an optional or
+    // non-null-asserted call, a type argument, a `bind`/`call`/`apply`, a
+    // bracketed name, or a line ending in `.notify`. It sees only those
+    // spellings, on lines that do not begin with a comment marker. It does not
+    // see any other spelling (a parenthesised member, `Reflect.apply`, a
+    // reference destructured or aliased and called later), or code on a line
+    // that begins with `*` or `*/`.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,
@@ -1722,8 +1737,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // Per reason, what to do or what to expect; never the message.
         const detail = 'lane' in decision
           ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
-            + '(the fleet box\'s row alone does not make it pushable); a hand edit of the server box\'s accounts.json '
-            + 'is read at the server\'s next restart, or when an account verb the server drives answers with the roster'
+            + '(the server decides from the roster it holds)'
+            + (deps.cfg.fleetMode === 'remote'
+              ? '; fix the lane\'s row on the fleet box, of which this server box\'s accounts.json is a copy: the server '
+                + 'takes that row from the next account verb it drives that answers with the roster, or at a restart '
+                + 'once its copy holds it'
+              : '; fix the lane\'s row in this box\'s accounts.json: the server reads it at its next restart, or from '
+                + 'the next account verb it drives that answers with the roster')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
