@@ -20,3 +20,11 @@ export function writeField(h: Pick<PrHarness, 'home'>, id: string, body: string)
   void h;
   throw new Error(`writeField(${id}, ${body.length} bytes): the entry field arrives in path-identity W3 Task 4`);
 }
+
+/** Forced Darwin on a LINUX host (path-identity W3). `_plat_devino`'s and `_plat_btime`'s Darwin arms run BSD
+ *  `stat -f`. GNU `stat` reads `-f` as "file-system status" and takes the format as a FILE name, so both exit 1 there
+ *  (measured). This shims both with GNU's spelling. On a Darwin host the real BSD spellings run, and it is empty. A
+ *  snippet puts it after `CCD_OS=darwin;`. `_ws_reclaim_idwalk` carries `_plat_btime` into its bounded child by
+ *  `declare -f`, so it carries this shim too. Tasks 8, 10 and 11 read it by name. */
+export const DARWIN_IDENT_SHIMS = process.platform === 'darwin' ? ''
+  : '_plat_devino() { stat -c \'%d:%i\' "$@"; }; _plat_btime() { stat -c %W "$@"; };';

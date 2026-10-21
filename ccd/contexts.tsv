@@ -488,6 +488,10 @@ _ws_reclaim_resolve	C4
 _ws_reclaim_resolvable	C4
 _ws_reclaim_plain_path	C4
 _ws_reclaim_absent	C4
+_ws_ident_compose	C4
+_ws_ident_eq	C4
+_ws_path_ident	C4
+_ws_reclaim_idwalk	C4
 _ws_reclaim_main_branch	C4
 _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5d7491ea75e502576382e04fb1c2e56e7f184a4a7420def8a6cae53017de4f86
+# ccrc:generated 1 sha256=e8b6c46dba5b14e9fc4b3cdd0ffc5b85781bab5b82d2ebd3c34cdf1c0f116baf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29956,6 +29956,377 @@ _ws_reclaim_absent() {   # path -> 0 when nothing stands at path and that is PRO
   return 0
 }
 
+# ── a directory's identity: one format, one rule, one measure (path-identity spec §4.5) ──
+# AN IDENTITY is `<dev>:<ino>:<btime>`, decimal, its birth time `-` where the
+# file system keeps none. It is the one spelling of every compare ccd makes of
+# a directory's identity ACROSS TIME: a session's recorded entry against the
+# directory its row names now, and a tree measured when the reclaim tail
+# proves it its own against the same tree re-measured before a forced
+# removal. The birth time is what tells a recycled inode from the directory it
+# once was, so two identities match only when their dev:ino are equal and,
+# where BOTH carry a birth time, their birth times are equal too; a `-` on
+# either side compares dev:ino alone. Identities read at ONE instant need no
+# birth time (one inode is one directory at one instant), and the walk below
+# answers those as bare dev:ino. A read that failed is NEVER `-`: `-` says the
+# file system keeps no birth time, a failure says nothing was read, and a
+# failure is unmeasured wherever it is read. `_ws_collect_ident` compares the
+# collector's raw birth times; it is not this rule, and nothing here calls it.
+_WS_IDENT=''; _WS_IDENT_KIND=''; _WS_IDENT_WHY=''
+_ws_ident_compose() {   # devino btime -> prints "<dev>:<ino>:<btime|->"; rc 2 (prints nothing) when devino is not
+  #                        ^[0-9]+:[0-9]+$ or btime is not ^-?[0-9]+$. A btime <= 0 is '-'. Never '-' for a failure
+  local di="${1-}" bt="${2-}"
+  [[ "$di" =~ ^[0-9]+:[0-9]+$ && "$bt" =~ ^-?[0-9]+$ ]] || return 2
+  if [[ "$bt" =~ ^0*([1-9][0-9]*)$ ]]; then bt="${BASH_REMATCH[1]}"; else bt=-; fi   # 0, -1 and below: none kept
+  printf '%s:%s' "$di" "$bt"
+}
+_ws_ident_eq() {        # a b -> 0 the dev:ino are equal and, where BOTH carry a btime, the btimes are equal; 1 they
+  #                        differ; 2 either is not ^[0-9]+:[0-9]+:([1-9][0-9]*|-)$ (path-identity spec §4.5)
+  local re='^([0-9]+):([0-9]+):([1-9][0-9]*|-)$' ad ai ab
+  [[ "${1-}" =~ $re ]] || return 2
+  ad="${BASH_REMATCH[1]}"; ai="${BASH_REMATCH[2]}"; ab="${BASH_REMATCH[3]}"
+  [[ "${2-}" =~ $re ]] || return 2
+  [[ "$ad" == "${BASH_REMATCH[1]}" && "$ai" == "${BASH_REMATCH[2]}" ]] || return 1
+  [[ "$ab" == - || "${BASH_REMATCH[3]}" == - || "$ab" == "${BASH_REMATCH[3]}" ]] || return 1
+  return 0
+}
+_ws_path_ident() {      # path [follow] -> 0 with _WS_IDENT, the identity of the DIRECTORY path names: by default its
+  #                        parent resolved physically (`_ws_dir_physical`) and its leaf never followed; with `follow`,
+  #                        the whole path resolved first (for $main, which `git -C` follows). 1 with _WS_IDENT_KIND
+  #                        `absent` (PROVEN by `_ws_reclaim_absent`), `link` or `notdir`. 2 with _WS_IDENT_WHY: a
+  #                        spelling that is not plain, a parent that cannot be resolved, an absence not proven, or a
+  #                        `_plat_devino`/`_plat_btime` that failed or answered malformed. Clears all three first.
+  #                        Prints nothing, never dies
+  # THE ONE MEASURE of a path for a ccd-side compare. The leaf is measured
+  # through its PHYSICAL parent by `_plat_devino` and `_plat_btime`, which
+  # answer for the name itself and never follow a link there (GNU and BSD stat
+  # alike), so a spelling re-measured later is measured the same way.
+  # `follow` is the main checkout's: `git -C` follows every link in it, so the
+  # measure does too. A link at the leaf (by default), or anything but a
+  # directory, is a DECIDED answer (1): no tree stands at that spelling.
+  # Absent is 1 only when `_ws_reclaim_absent` PROVES it. Everything else that
+  # was not read is 2, never a guess: an absence that cannot be proven, a name
+  # that stands but cannot be looked at (or whose link reaches nothing), a
+  # parent that cannot be resolved, and a read that failed or answered
+  # something that is not a number.
+  local p="${1-}" mode="${2-}" phys di bt rc
+  _WS_IDENT=''; _WS_IDENT_KIND=''; _WS_IDENT_WHY=''
+  _ws_reclaim_plain_path "$p" \
+    || { _WS_IDENT_WHY="$p is not one plain absolute path, so its identity was never read"; return 2; }
+  _ws_reclaim_absent "$p"; rc=$?
+  (( rc != 0 )) || { _WS_IDENT_KIND=absent; return 1; }
+  (( rc != 2 )) || { _WS_IDENT_WHY="whether $p stands could not be proven ($_WS_ABSENT_WHY), so its identity was never read"; return 2; }
+  if [[ "$mode" == follow ]]; then
+    if [[ ! -d "$p" ]]; then
+      [[ ! -e "$p" ]] || { _WS_IDENT_KIND=notdir; return 1; }
+      _WS_IDENT_WHY="$p stands, but what it names could not be reached, so its identity was never read"; return 2
+    fi
+    _ws_dir_physical "$p" \
+      || { _WS_IDENT_WHY="$p cannot be resolved ($_WS_PHYS_WHY), so its identity was never read"; return 2; }
+    phys="$_WS_PHYS"
+  else
+    phys="${p%/*}"; [[ -n "$phys" ]] || phys=/
+    _ws_dir_physical "$phys" \
+      || { _WS_IDENT_WHY="the directory $phys that holds $p cannot be resolved ($_WS_PHYS_WHY), so its identity was never read"; return 2; }
+    phys="${_WS_PHYS%/}/${p##*/}"
+  fi
+  [[ ! -L "$phys" ]] || { _WS_IDENT_KIND=link; return 1; }
+  if [[ ! -d "$phys" ]]; then
+    [[ ! -e "$phys" ]] || { _WS_IDENT_KIND=notdir; return 1; }
+    _WS_IDENT_WHY="$phys stands, but could not be looked at, so its identity was never read"; return 2
+  fi
+  di=$(_plat_devino "$phys" 2>/dev/null) || { _WS_IDENT_WHY="the device and inode of $phys could not be read, so its identity was never read"; return 2; }
+  bt=$(_plat_btime "$phys" 2>/dev/null) || { _WS_IDENT_WHY="the birth time of $phys could not be read, so its identity was never read"; return 2; }
+  _WS_IDENT=$(_ws_ident_compose "$di" "$bt") \
+    || { _WS_IDENT_WHY="$phys answered a device and inode, or a birth time, that is not a number, so its identity was never read"; return 2; }
+  return 0
+}
+
+# ── the ONE identity walk of a rows pass (path-identity spec §4.5, §4.8, §4.9) ──
+WS_RECLAIM_WALK_S=5   # the bound on the ONE identity walk a rows pass makes: every prefix's identity, every link on a
+#                       row's spelling, the mount table and the birth times (healthy: tens of ms; path-identity spec §4.9)
+_WS_IDWALK_OUT=''; _WS_IDWALK_WHY=''
+_ws_reclaim_idwalk() {   # mi [btpath...] ; NUL-separated requests on THIS function's stdin, read whole here (an empty
+  #                        record is no request) and handed to the bounded child as arguments, never as its stdin
+  #                        -> 0 with _WS_IDWALK_OUT: one reply line per request, in request order, then one `B <j> …`
+  #                        line per btpath, then `end <n>`; 2 with _WS_IDWALK_WHY: a request stream that ends any way
+  #                        but EOF "the identity walk's requests could not be read whole (read exit <rc>)"; a last
+  #                        record with no NUL after it, cut inside its path,
+  #                        "the identity walk's requests could not be read whole (a record without its end)"; rc 124/137
+  #                        "the identity walk did not finish within ${WS_RECLAIM_WALK_S}s"; any other non-zero "the
+  #                        identity walk could not be measured (exit <rc>)"; a reply that is not exactly one line per
+  #                        request (its kind and index, in request order), one `B` line per btpath, in order, then
+  #                        `end <n>`, "the identity walk's reply was not read whole". Never 0 with a partial reply.
+  #                        Prints nothing. mi '' asks no table
+  # THE ONE EXEC A ROWS PASS MAKES: every identity question the pass has, asked
+  # under ONE `_plat_timeout`. Each request is `<kind><TAB><index><TAB><path>`,
+  # NUL-terminated on stdin (an empty record is no request; a caller with none
+  # passes /dev/null). Each is answered by one line, in request order,
+  # carrying indices, numbers and fixed words only, never a path:
+  #   T k <physical>  a target (0 the child, 1 and 2 its standing leaves):
+  #       `T k ok <dev>:<ino> <maj>:<min>`, `T k gone` (ENOENT), or
+  #       `T k un eacces|enotdir|error`.
+  #   A i <resolved>  a row's ancestry. Every prefix from `/` down is stat'd,
+  #       FOLLOWING links: `A i ok <dev>:<ino> <hit>`. The hit is `eq:k` (the
+  #       path IS target k) or `in:k` (a proper prefix is), with target 0
+  #       asked before the leaves, else `-`. `A i gone` when any prefix is
+  #       gone (never `-`); `A i un eacces|enotdir|error` on any other error.
+  #   F i <recorded>  exactly as A, of a recorded entry's physical path.
+  #   P i <raw>       the m1 walk of a row's literal spelling. Its own `.` and
+  #       `x/..` are resolved as `cd -L` resolves them. Then each component
+  #       is lstat'd, and each link is read and followed: an absolute target
+  #       from `/`, a relative one from the link's directory, a `..` to the
+  #       physical parent. `P i proc` when a raw target matches ^/+proc(/|$),
+  #       or when a link-free position the walk forms does (tested as it is
+  #       formed, before its lstat). `P i clean` when an ENOENT ends the walk:
+  #       nothing beyond it can be a link. `P i un eacces|eloop|error`, eloop
+  #       past 40 links.
+  #   M 0 <table>     the mount table, which must be `mi`. T0 is ENCODED as
+  #       `_ws_collect_mounts_clear` encodes a path, and compared as text,
+  #       never decoded. `M 0 hold point` when a mount point is T0 or lies
+  #       under it. T0's containing line is the longest mount point that is
+  #       T0 or a component prefix of it, the last listed on a tie, and that
+  #       line's field 3 must be T0's major:minor (`M 0 un devmismatch`
+  #       otherwise). `M 0 hold root`, or `deleted`, when a line of that
+  #       device has a root, one trailing //deleted removed, at or under T0's
+  #       device-relative path. Else `M 0 clear <lines>`. And
+  #       `M 0 un empty|malformed|unreadable|nochild` when the table has no
+  #       line, has a line that is not a mount, cannot be read (or is not
+  #       `mi`), or T0 is not `ok`.
+  # Then one `B j <raw>` per btpath (absolute paths). `_plat_btime` is asked
+  # once of every path, and its answer is taken only whole (rc 0, one line per
+  # path); otherwise each path is asked alone. `B j un` for a path whose own
+  # answer failed or is no integer, never `-`. Then `end <n>`, n being the
+  # lines before it.
+  # NEVER "NO ROW". Each of these is rc 2: a walk that did not finish (rc 124
+  # or 137); a walk that could not be measured; a reply that is not one line
+  # per request (its kind and index, in order), one per path, and its `end`.
+  # The walk decides nothing: its caller places rows by its answers, and only
+  # ever adds.
+  # THE REQUESTS RIDE THE CHILD'S ARGUMENTS, NEVER ITS STDIN. This function
+  # reads its stdin whole first, then hands the requests to the bounded child,
+  # which pipes them to python. `_plat_timeout`'s pure-bash arm starts its
+  # command in the background, and bash gives a background command /dev/null
+  # for stdin (measured). A request stream left to the child would reach
+  # python empty there. The child's own stdin is /dev/null on both arms.
+  # ONE INTERPRETER: the child is `"$BASH" -c`, the bash this ccd runs under
+  # (>= 4.4), never a `bash` found on PATH, which a launchd PATH can make 3.2.
+  # `_plat_btime` rides into it by `declare -f`, so a stub of it is what runs
+  # there, as `_lc_obs` carries `tmux`. ccd's protected entry starts ccd with
+  # bash's startup variables removed, so the child imports none. python3 runs
+  # isolated (`-I`). Healthy, a walk costs tens of milliseconds
+  # (path-identity spec §4.9). One that outruns `WS_RECLAIM_WALK_S` is
+  # answered unmeasured at its bound.
+  local mi="${1-}" out rc r k kind at n py envelope
+  local -a req=() rep=()
+  _WS_IDWALK_OUT=''; _WS_IDWALK_WHY=''
+  (( $# == 0 )) || shift
+  while :; do
+    r=''; IFS= read -r -d '' r; rc=$?
+    (( rc == 0 )) || break
+    [[ -z "$r" ]] || req+=("$r")
+  done
+  (( rc == 1 )) || { _WS_IDWALK_WHY="the identity walk's requests could not be read whole (read exit $rc)"; return 2; }
+  [[ -z "$r" ]] || { _WS_IDWALK_WHY="the identity walk's requests could not be read whole (a record without its end)"; return 2; }
+  py='import os, re, stat, sys
+PROC = re.compile(rb"^/+proc(/|$)")
+def word(e):
+    if isinstance(e, PermissionError):
+        return b"eacces"
+    if isinstance(e, NotADirectoryError):
+        return b"enotdir"
+    return b"error"
+def chain(p, tgt):
+    if not p.startswith(b"/"):
+        return b"un error"
+    parts = [c for c in p.split(b"/") if c]
+    ids = []
+    for k in range(len(parts) + 1):
+        try:
+            s = os.stat(b"/" + b"/".join(parts[:k]))
+        except FileNotFoundError:
+            return b"gone"
+        except OSError as e:
+            return b"un " + word(e)
+        ids.append((s.st_dev, s.st_ino))
+    own = ids[-1]
+    for k, t in tgt:
+        if own == t:
+            return (b"ok %d:%d eq:" % own) + k
+        if t in ids[:-1]:
+            return (b"ok %d:%d in:" % own) + k
+    return b"ok %d:%d -" % own
+def m1(p):
+    if not p.startswith(b"/"):
+        return b"un error"
+    q = []
+    for c in p.split(b"/"):
+        if c == b"..":
+            if q:
+                q.pop()
+        elif c not in (b"", b"."):
+            q.append(c)
+    pos = b"/"
+    hops = 0
+    while q:
+        c = q.pop(0)
+        if c in (b"", b"."):
+            continue
+        if c == b"..":
+            pos = os.path.dirname(pos)
+            continue
+        nxt = pos.rstrip(b"/") + b"/" + c
+        if PROC.match(nxt): return b"proc"
+        try:
+            st = os.lstat(nxt)
+        except FileNotFoundError:
+            return b"clean"
+        except PermissionError:
+            return b"un eacces"
+        except OSError:
+            return b"un error"
+        if not stat.S_ISLNK(st.st_mode):
+            pos = nxt
+            continue
+        hops += 1
+        if hops > 40:
+            return b"un eloop"
+        try:
+            t = os.readlink(nxt)
+        except FileNotFoundError:
+            return b"clean"
+        except PermissionError:
+            return b"un eacces"
+        except OSError:
+            return b"un error"
+        if PROC.match(t): return b"proc"
+        if t.startswith(b"/"):
+            pos = b"/"
+        q = t.split(b"/") + q
+    return b"clean"
+def mounts(tab, child, s):
+    try:
+        with open(tab, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return b"un unreadable"
+    lines = raw.split(b"\n")
+    if lines[-1] == b"":
+        lines.pop()
+    if not lines:
+        return b"un empty"
+    rows = []
+    for ln in lines:
+        f = ln.split(b" ")
+        if b" - " not in ln or len(f) < 5 or not f[4].startswith(b"/"):
+            return b"un malformed"
+        rows.append((f[2], f[3], f[4]))
+    if child.endswith(b"/"):
+        child = child[:-1]
+    enc = child.replace(b"\\", b"\\134").replace(b" ", b"\\040").replace(b"\t", b"\\011").replace(b"\n", b"\\012")
+    if any(r[2] == enc or r[2].startswith(enc + b"/") for r in rows): return b"hold point"
+    best = None
+    for row in rows:
+        if row[2] == b"/" or enc == row[2] or enc.startswith(row[2] + b"/"):
+            if best is None or len(row[2]) >= len(best[2]):
+                best = row
+    if best is None or best[0] != b"%d:%d" % (os.major(s.st_dev), os.minor(s.st_dev)):
+        return b"un devmismatch"
+    rel = (best[1].rstrip(b"/") + (enc if best[2] == b"/" else enc[len(best[2]):])) or b"/"
+    for row in rows:
+        if row is best or row[0] != best[0]:
+            continue
+        root = row[1]
+        gone = root.endswith(b"//deleted")
+        if gone: root = root[:-9]
+        if root == rel or root.startswith(rel.rstrip(b"/") + b"/"):
+            return b"hold deleted" if gone else b"hold root"
+    return b"clear %d" % len(rows)
+def walk():
+    mi = os.fsencode(sys.argv[1])
+    reqs = []
+    for r in sys.stdin.buffer.read().split(b"\0"):
+        if r == b"":
+            continue
+        f = r.split(b"\t", 2)
+        if len(f) != 3 or f[0] not in (b"T", b"A", b"P", b"F", b"M") or not f[1].isdigit():
+            sys.exit(3)
+        reqs.append(f)
+    ans = [b""] * len(reqs)
+    tgt = []
+    seen = dict()
+    for i, (kind, idx, p) in enumerate(reqs):
+        if kind != b"T":
+            continue
+        if not p.startswith(b"/"):
+            ans[i] = b"un error"
+            continue
+        try:
+            s = os.stat(p)
+        except FileNotFoundError:
+            ans[i] = b"gone"
+            continue
+        except OSError as e:
+            ans[i] = b"un " + word(e)
+            continue
+        tgt.append((idx, (s.st_dev, s.st_ino)))
+        seen[idx] = (p, s)
+        ans[i] = b"ok %d:%d %d:%d" % (s.st_dev, s.st_ino, os.major(s.st_dev), os.minor(s.st_dev))
+    tgt.sort(key=lambda x: int(x[0]))
+    for i, (kind, idx, p) in enumerate(reqs):
+        if kind in (b"A", b"F"):
+            ans[i] = chain(p, tgt)
+        elif kind == b"P":
+            ans[i] = m1(p)
+        elif kind == b"M":
+            if b"0" not in seen:
+                ans[i] = b"un nochild"
+            elif p != mi:
+                ans[i] = b"un unreadable"
+            else:
+                ans[i] = mounts(mi, seen[b"0"][0], seen[b"0"][1])
+    sys.stdout.buffer.write(b"".join(r[0] + b" " + r[1] + b" " + a + b"\n" for r, a in zip(reqs, ans)))
+try:
+    walk()
+except Exception:
+    sys.exit(3)'
+  envelope='LC_ALL=C; CCD_OS=$1; mi=$2; py=$3; nb=$4; shift 4
+bt=("${@:1:nb}"); shift "$nb"; L=()
+if (( $# )); then
+  r=$(printf "%s\0" "$@" | env LC_ALL=C.UTF-8 python3 -I -c "$py" "$mi") || exit "$?"
+  [[ -z "$r" ]] || mapfile -t L <<< "$r"
+fi
+if (( nb )); then
+  b=$(_plat_btime "${bt[@]}" 2>/dev/null) && mapfile -t B <<< "$b" && (( ${#B[@]} == nb )) || B=()
+  for (( j = 0; j < nb; j++ )); do
+    if (( ${#B[@]} )); then v=${B[j]}; else v=$(_plat_btime "${bt[j]}" 2>/dev/null) || v=x; fi
+    [[ "$v" =~ ^-?[0-9]+$ ]] || v=un
+    L+=("B $j $v")
+  done
+fi
+(( ${#L[@]} == 0 )) || printf "%s\n" "${L[@]}"
+printf "end %s\n" "${#L[@]}"'
+  out=$(_plat_timeout "$WS_RECLAIM_WALK_S" "$BASH" -c "$(declare -f _plat_btime)"$'\n'"$envelope" _ \
+        "$CCD_OS" "$mi" "$py" "$#" "$@" "${req[@]}" </dev/null 2>/dev/null); rc=$?
+  if (( rc == 124 || rc == 137 )); then
+    _WS_IDWALK_WHY="the identity walk did not finish within ${WS_RECLAIM_WALK_S}s"; return 2
+  fi
+  (( rc == 0 )) || { _WS_IDWALK_WHY="the identity walk could not be measured (exit $rc)"; return 2; }
+  n=$(( ${#req[@]} + $# ))
+  mapfile -t rep <<< "$out"
+  (( ${#rep[@]} == n + 1 )) && [[ "${rep[n]}" == "end $n" ]] \
+    || { _WS_IDWALK_WHY="the identity walk's reply was not read whole"; return 2; }
+  for (( k = 0; k < n; k++ )); do
+    if (( k < ${#req[@]} )); then
+      kind="${req[k]%%$'\t'*}"; at="${req[k]#*$'\t'}"; at="${at%%$'\t'*}"
+    else
+      kind=B; at=$(( k - ${#req[@]} ))
+    fi
+    [[ "${rep[k]}" == "$kind $at "* ]] || { _WS_IDWALK_WHY="the identity walk's reply was not read whole"; return 2; }
+  done
+  _WS_IDWALK_OUT="$out"
+  return 0
+}
+
 _ws_reclaim_main_branch() {   # main branch -> 0 when branch is $main's OWN line: the branch its main checkout
   #                                is on, or the one origin/HEAD names; 1 when it is PROVEN neither; 2 when
   #                                that could not be told (`symbolic-ref --quiet` answers 1 for "not a
@@ -32212,7 +32583,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its nine callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its eleven callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -32224,13 +32595,17 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # ninth is the removal mount question, `_ws_removal_mounts_clear`, in its
   # `resolve` mode only (path-identity spec §3.5), for a removal whose path
   # may stand under a symbolic link: a caller that passes `resolve` reaches
-  # this function through it, never directly, so the census stays nine.
+  # this function through it, never directly, so it is counted once.
   # (`_ws_leaf_remove` asks it without `resolve`; its own call here is its
   # root's, one of the three newline sites.)
+  # The tenth and eleventh are the identity measure, `_ws_path_ident`
+  # (path-identity spec §4.5): one asks the parent of the path it measures,
+  # whose leaf it never follows, and the other, with `follow`, the whole
+  # path (the main checkout, which `git -C` follows).
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its nine callers only. Bare captures stand elsewhere, and the ones
+  # for its eleven callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
