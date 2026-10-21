@@ -666,6 +666,8 @@ export function planSpans(i: { rows: readonly SpanRow[]; boundaries: readonly Sp
 export function decideLeafId(i: { ccrcId: string; ccUuid: string; spanStartUuid: string; boundaryUuid: string; plainBoundOther: boolean }): { id: string; forked: boolean };
 export const RAW_LEAF_GRACE_MS: number;
 export function eofAfterBoundary(i: { eofMs: number | null; boundaryTsMs: number | null }): boolean;
+/** W2-D33: moved from derive.mjs. Null for an undefined index, or when no row up to it has a stamp. */
+export function stampAtOrBefore(rows: readonly { readonly ts_ms: number | bigint | null }[], index: number | undefined): number | null;
 export function leafReady(i: { summaryStored: boolean; fileAtEofAfterBoundary: boolean }): boolean;
 export const FAN_IN: Readonly<{ leaf: 8; condensed: 4 }>;
 export interface FanInSlot { readonly nodeId: string | null; readonly final: boolean; readonly parented: boolean }

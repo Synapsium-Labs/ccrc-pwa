@@ -8314,3 +8314,62 @@ describe('path identity W2: the collect leaf words are spelled once, in shared/a
     expect(holders).toEqual(['shared/api.ts']);
   });
 });
+
+// W2-1 Task 1 (W2-D33): the exports the deploy lane reads are each defined once. APPENDED after the last describe, for
+// the reason the CCRC HISTORY block above states; no import line is added. ALL_MJS, HISTORY_DIR, stallCode and rel are
+// that block's.
+describe('ccrc history: the deploy lane exports are each defined once (W2-D33; W2-1 Task 1)', () => {
+  const DEFINES = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\s*\\(`);
+  const definers = (name: string): string[] =>
+    ALL_MJS.filter((f) => stallCode(f).split('\n').some((l) => DEFINES(name).test(l))).map(rel).sort();
+  /** The body of the function whose head line `head` matches: from that line to the first line that is exactly `}`. */
+  const bodyOfFn = (src: string, head: RegExp): string => {
+    const lines = src.split('\n');
+    const at = lines.findIndex((l) => head.test(l));
+    if (at < 0) return '';
+    const end = lines.findIndex((l, i) => i > at && l === '}');
+    return lines.slice(at, end + 1).join('\n');
+  };
+  const DERIVE = path.join(HISTORY_DIR, 'derive.mjs');
+  const RECALL = path.join(HISTORY_DIR, 'recall.mjs');
+  const BLOB_SQL = ["'SELECT z FROM blobs WHERE blob_id = ?'", "'SELECT raw_len FROM blobs WHERE blob_id = ?'"] as const;
+
+  it('CONTROL: the definition pattern sees a declaration, exported or not, and never a call or an import', () => {
+    expect(DEFINES('stampAtOrBefore').test('export function stampAtOrBefore(rows, index) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('function stampAtOrBefore(copy, uuid) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('    fileAtEofAfterBoundary: eofAfterBoundary({ eofMs: holding.eof_ms, boundaryTsMs: stampAtOrBefore(copy.rows, copy.index.get(b.uuid)) }),')).toBe(false);
+    expect(DEFINES('stampAtOrBefore').test('  secretUnits, summaryParts, stampAtOrBefore,')).toBe(false);
+    expect(bodyOfFn('x\nfunction f(a) {\n  return a;\n}\ny', /^function f\(/)).toBe('function f(a) {\n  return a;\n}');
+    expect(bodyOfFn('x\n', /^function f\(/), 'an absent head reads as no body').toBe('');
+  });
+
+  it('stampAtOrBefore is defined in lib.mjs alone, and derive.mjs imports it from lib', () => {
+    expect(definers('stampAtOrBefore')).toEqual(['ccd/history/lib.mjs']);
+    const block = /^import \{\n([^}]*)\} from '\.\/lib\.mjs';$/m.exec(stallCode(DERIVE));
+    expect(block, 'derive.mjs has no multi-line named import from ./lib.mjs').not.toBeNull();
+    expect(block![1]!.split(',').map((s) => s.trim())).toContain('stampAtOrBefore');
+  });
+
+  it('each blob SELECT is spelled once in shipped code, inside blobReadStmts, and stmts takes both from it', () => {
+    for (const sql of BLOB_SQL) {
+      expect(ALL_MJS.filter((f) => stallCode(f).includes(sql)).map(rel), sql).toEqual(['ccd/history/derive.mjs']);
+      expect(stallCode(DERIVE).split(sql).length - 1, `${sql}: spelled more than once in derive.mjs`).toBe(1);
+    }
+    const reads = bodyOfFn(stallCode(DERIVE), /^export function blobReadStmts\(db\) \{$/);
+    for (const sql of BLOB_SQL) expect(reads, `${sql} is not in blobReadStmts`).toContain(sql);
+    expect((reads.match(/\.prepare\(/g) ?? []).length, 'blobReadStmts prepares exactly the two blob reads').toBe(2);
+    expect(bodyOfFn(stallCode(DERIVE), /^function stmts\(db\) \{$/)).toContain('...blobReadStmts(db),');
+  });
+
+  it('pickExpandBody is called once in shipped code, by expandEntryBody, and expandEntryText reads through expandEntryBody', () => {
+    const calls = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => /\bpickExpandBody\(/.test(l) && !DEFINES('pickExpandBody').test(l)).map(() => rel(f)));
+    expect(calls).toEqual(['ccd/history/recall.mjs']);
+    const src = stallCode(RECALL);
+    expect(bodyOfFn(src, /^export function expandEntryBody\(rc, e\) \{$/)).toMatch(/\bpickExpandBody\(/);
+    const text = bodyOfFn(src, /^function expandEntryText\(rc, e\) \{$/);
+    expect(text, 'expandEntryText is gone or its signature moved').not.toBe('');
+    expect(text).toContain('expandEntryBody(rc, e)');
+    expect(text, 'expandEntryText decodes no blob of its own').not.toMatch(/\bexpandBlob\(|\bexpandParse\(/);
+  });
+});

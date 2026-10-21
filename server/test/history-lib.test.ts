@@ -10498,3 +10498,33 @@ describe('lib: the op marker names its process (D-5748)', () => {
     expect(lib.decideOpLive(null, { procStart: '55555', bootId: BOOT, kill: 'ok' })).toBe(false);
   });
 });
+
+// ── W2-1 Task 1 (W2-D33): stampAtOrBefore, moved from derive.mjs into lib, over plain (rows, index) ────────────
+// Pure, so it runs on darwin too. derive.mjs's raw-leaf grace reads it unchanged; W2-2a's as-of cut reads it (W2-D34).
+describe('stampAtOrBefore: the newest stamped row at or before an index (W2-D33; W2-1 Task 1)', () => {
+  type Stamped = { ts_ms: number | bigint | null };
+  const R = (...ts: Array<number | bigint | null>): Stamped[] => ts.map((t) => ({ ts_ms: t }));
+  const lib = async () => await import('../../ccd/history/lib.mjs');
+
+  it('answers the stamp of the row at the index when it has one', async () => {
+    expect((await lib()).stampAtOrBefore(R(100, 200, 300), 1)).toBe(200);
+  });
+
+  it('answers the newest stamp before a row that has none', async () => {
+    expect((await lib()).stampAtOrBefore(R(100, null, null, 400), 2)).toBe(100);
+  });
+
+  it('never reads a row after the index, so no stamp at or before it is null', async () => {
+    expect((await lib()).stampAtOrBefore(R(null, null, 300), 1)).toBeNull();
+  });
+
+  it('a stamp of 0 is a time', async () => {
+    expect((await lib()).stampAtOrBefore(R(0, null), 1)).toBe(0);
+  });
+
+  it('an index the uuid map does not hold is null, and a bigint stamp reads as a number', async () => {
+    const l = await lib();
+    expect(l.stampAtOrBefore(R(100), undefined), 'derive.mjs passes copy.index.get(uuid), undefined for a uuid the copy does not hold').toBeNull();
+    expect(l.stampAtOrBefore(R(7n), 0)).toBe(7);
+  });
+});

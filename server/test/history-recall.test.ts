@@ -5398,3 +5398,170 @@ describe.skipIf(process.platform === 'darwin')('whole-branch fix 5: grep --json 
     expect(h.stdout).not.toContain('abcdef0123456789');
   }, HEAVY);
 });
+
+// ── W2-1 Task 1 (W2-D33): the exports the deploy lane reads ─────────────────────────────────────────────────
+// These are recall.mjs expandEntryBody (the body pick expand now reads through), derive.mjs blobReadStmts, bodyOf
+// and keptOf, lib.mjs stampAtOrBefore and cli.mjs pairIndexOf. Each is exported so that W2-5a's driver reads a body,
+// a kept list and the pair index the way the store's own readers do, with no second decode in deploy/. The cases run
+// in-process against one fixture store in the DM2b shape (a ccd-sanitize pair whose sanitised copy is ingested first),
+// except the import pin. That one runs in a child, because importing cli.mjs sets the process umask to 0o077 (its
+// top-level process.umask call), and a child can start from a known 0o022 and measure the import's effect alone.
+describe.skipIf(process.platform === 'darwin')('W2-D33: the exports the deploy lane reads (W2-1 Task 1)', () => {
+  const XID = 'claude-a-w2d33';
+  const XT = 'a1d33001';
+  const XU = t16uuid(XT, 0);
+  const x = (i: number): string => t16uuid(XT, i);
+  interface PickedBody {
+    state: string; body: unknown; primary: unknown; causes: string[];
+    blob: { state: string; prunedMs?: number | null; rawLen?: number; bound?: number; bytes?: Uint8Array };
+  }
+  type Rc = { db: RDatabaseSync; version: number; schema: unknown };
+  type Recall = { expandEntryBody(rc: Rc, e: { entry_id: number; blob_id: number }): PickedBody };
+  type Derive = {
+    blobReadStmts(db: RDatabaseSync): Record<string, unknown>;
+    bodyOf(s: Record<string, unknown>, blobId: number, budget: { bytes: number }): unknown;
+    keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+  };
+  let box: rH.HistoryBox;
+  const writer = (): RDatabaseSync => new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+  const rcOf = (db: RDatabaseSync): Rc => ({
+    db, version: Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version), schema: libRead.SCHEMA_ADDED,
+  });
+  const entryOf = (db: RDatabaseSync, uuid: string): { entry_id: number; blob_id: number } =>
+    db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number; blob_id: number };
+  /** expandEntryBody over a fresh read handle, closed after: expand's statements are cached per handle. */
+  const picked = async (uuid: string): Promise<PickedBody> => {
+    const recall = (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
+    const db = rH.openStoreRO(box);
+    try { return recall.expandEntryBody(rcOf(db), entryOf(db, uuid)); } finally { db.close(); }
+  };
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d33-');
+    const rows = (fill: string): object[] => {
+      const a = rFx.toolUseRow({ uuid: x(2), ts: t16ts(2), parentUuid: x(1), sessionId: XU, toolUseId: 'toolu_01W2D33', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md' } });
+      const m = a['message'] as { content: unknown[] };
+      m.content = [{ type: 'text', text: fill }, ...m.content];
+      return [
+        rFx.userRow({ uuid: x(1), ts: t16ts(1), sessionId: XU, text: 'zqw2d33 question' }),
+        a,
+        rFx.boundaryRow({ uuid: x(3), ts: t16ts(3), parentUuid: x(2), sessionId: XU, trigger: 'manual', headUuid: x(2), anchorUuid: x(4),
+          tailUuid: x(2), allUuids: [x(1), x(2)] }),
+        rFx.summaryRow({ uuid: x(4), ts: t16ts(4), parentUuid: x(3), sessionId: XU, text: t16summary('zqw2d33') }),
+      ];
+    };
+    // The sanitised copy is ingested FIRST, so the entry's primary body is the "..." one (the DM2b case's shape).
+    const t = t16seed(box, { id: XID, project: 'demo', generation: '0189abcd-1234-4678-9abc-000000002d33', uuid: XU, rows: rows('...') });
+    rH.plantTranscript(box, 'claude-b', path.basename(path.dirname(t)), XU, rows(''));
+    t16scan(box);
+  }, 3 * HEAVY);
+
+  it('expandEntryBody picks the unsanitised ccd-sanitize variant, and expand prints exactly its rendering', async () => {
+    const k = await picked(x(2));
+    expect(k.state).toBe('body');
+    expect((k.primary as Array<{ text?: string }>)[0]!.text, 'CONTROL: the primary is the sanitised copy, ingested first').toBe('...');
+    expect((k.body as Array<{ text?: string }>)[0]!.text, 'the body is the unsanitised side').toBe('');
+    expect(k.causes).toEqual(['ccd-sanitize']);
+    expect(k.blob.state).toBe('bytes');
+    const j = rH.runCli(box, ['expand', x(2), '--json'], { env: rH.withPane(box, XID) });
+    expect(j.code, j.stderr).toBe(0);
+    const item = t16items(j)[0]!;
+    expect(item.text).toBe('\n[tool_use Read] {"file_path":"/home/u/tree/demo/b.md"}');
+    expect(libRead.renderEntryText(k.body), 'expand prints the rendering of the body the helper picked').toBe(item.text);
+    expect(item.variants).toEqual(k.causes.map((cause) => ({ cause })));
+  }, HEAVY);
+
+  it('expandEntryBody tells five states apart and hands back the expandBlob answer', async () => {
+    const w = writer();
+    const e1 = entryOf(w, x(1));
+    const orig = w.prepare('SELECT z, raw_len, pruned_ms FROM blobs WHERE blob_id = ?').get(e1.blob_id) as { z: Uint8Array; raw_len: number; pruned_ms: number | null };
+    const putBack = (): void => { w.prepare('UPDATE blobs SET z = ?, raw_len = ?, pruned_ms = ? WHERE blob_id = ?').run(orig.z, orig.raw_len, orig.pruned_ms, e1.blob_id); };
+    const stored = (text: string): void => {
+      const bytes = Buffer.from(text, 'utf8');
+      w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(t16brotliCompress(bytes), bytes.length, e1.blob_id);
+    };
+    const shape = (k: PickedBody): object => ({ state: k.state, body: k.body, primary: k.primary, causes: k.causes, blob: k.blob.state === 'bytes' ? 'bytes' : k.blob });
+    const PRUNED = Date.UTC(2026, 0, 2);
+    try {
+      const live = await picked(x(1));
+      expect([live.state, live.causes, live.blob.state], 'CONTROL: over its live primary the body parses').toEqual(['body', [], 'bytes']);
+      const arms: Array<{ arm: string; set: () => void; want: object }> = [
+        { arm: 'pruned', set: () => { w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(PRUNED, e1.blob_id); },
+          want: { state: 'tombstone', body: null, primary: null, causes: [], blob: { state: 'pruned', prunedMs: PRUNED } } },
+        { arm: 'over the decode cap', set: () => { w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.BLOB_DECODE_MAX + 1, e1.blob_id); },
+          want: { state: 'over-cap', body: null, primary: null, causes: [], blob: { state: 'too-large', rawLen: libRead.BLOB_DECODE_MAX + 1, bound: libRead.BLOB_DECODE_MAX } } },
+        { arm: 'over the expand bound', set: () => { w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.SIDECAR_WHOLE_MAX + 1, e1.blob_id); },
+          want: { state: 'over-cap', body: null, primary: null, causes: [], blob: { state: 'too-large', rawLen: libRead.SIDECAR_WHOLE_MAX + 1 } } },
+        { arm: 'undecodable', set: () => { w.prepare('UPDATE blobs SET z = NULL WHERE blob_id = ?').run(e1.blob_id); },
+          want: { state: 'undecodable', body: null, primary: null, causes: [], blob: { state: 'undecodable', rawLen: Number(orig.raw_len) } } },
+        { arm: 'not JSON', set: () => { stored('zq not json {'); },
+          want: { state: 'unparseable', body: 'zq not json {', primary: 'zq not json {', causes: [], blob: 'bytes' } },
+        { arm: 'a JSON string', set: () => { stored('"zq a json string"'); },
+          want: { state: 'body', body: 'zq a json string', primary: 'zq a json string', causes: [], blob: 'bytes' } },
+      ];
+      for (const a of arms) {
+        putBack();
+        a.set();
+        expect(shape(await picked(x(1))), a.arm).toEqual(a.want);
+      }
+    } finally {
+      putBack();
+      w.close();
+    }
+  }, HEAVY);
+
+  it('blobReadStmts prepares the two blob reads, and bodyOf over them tells a tombstone from an empty kept list', async () => {
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as Derive;
+    const keptId = (db: RDatabaseSync): number | null => (db.prepare(`SELECT b.kept_blob_id AS k FROM boundaries b
+      JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(x(3)) as { k: number | null }).k;
+    const read = (): { body: unknown; kept: string[]; none: number; bytes: number } => {
+      const db = rH.openStoreRO(box);
+      try {
+        const s = D.blobReadStmts(db);
+        expect(Object.keys(s).sort(), 'exactly the two blob reads').toEqual(['blobLen', 'blobZ']);
+        const id = keptId(db);
+        expect(id, 'CONTROL: the boundary stored its kept list').not.toBeNull();
+        const budget = { bytes: 0 };
+        const body = D.bodyOf(s, id!, budget);
+        return { body, kept: [...D.keptOf(s, id, { bytes: 0 })], none: D.keptOf(s, null, { bytes: 0 }).size, bytes: budget.bytes };
+      } finally { db.close(); }
+    };
+    const live = read();
+    expect(live.body).toEqual([x(1), x(2)]);
+    expect(live.kept).toEqual([x(1), x(2)]);
+    expect(live.bytes, 'bodyOf charges the compressed bytes it read to the budget').toBeGreaterThan(0);
+    expect(live.none, 'CONTROL (W2-D68): keptOf answers an empty set for a NULL id').toBe(0);
+    const w = writer();
+    const id = keptId(w)!;
+    const orig = w.prepare('SELECT z, pruned_ms FROM blobs WHERE blob_id = ?').get(id) as { z: Uint8Array; pruned_ms: number | null };
+    try {
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(Date.UTC(2026, 0, 2), id);
+      const gone = read();
+      expect(gone.body, 'bodyOf answers null for a tombstoned kept list').toBeNull();
+      expect(gone.kept, 'keptOf folds it into the empty set a NULL id answers, which is why deploy/ never calls keptOf (W2-D68)').toEqual([]);
+    } finally {
+      w.prepare('UPDATE blobs SET z = ?, pruned_ms = ? WHERE blob_id = ?').run(orig.z, orig.pruned_ms, id);
+      w.close();
+    }
+  }, HEAVY);
+
+  it('the deploy lane imports each export by name, and importing cli.mjs sets umask 0o077 without running main', () => {
+    const url = (f: string): string => pathToFileURL(path.join(REPO, 'ccd', 'history', f)).href;
+    const code = [
+      'process.umask(0o022);',
+      `const lib = await import(${JSON.stringify(url('lib.mjs'))});`,
+      `const derive = await import(${JSON.stringify(url('derive.mjs'))});`,
+      `const recall = await import(${JSON.stringify(url('recall.mjs'))});`,
+      `const cli = await import(${JSON.stringify(url('cli.mjs'))});`,
+      'const umask = process.umask(0o022);',
+      'console.log(JSON.stringify({ umask, kinds: [typeof lib.stampAtOrBefore, typeof derive.blobReadStmts, typeof derive.bodyOf,',
+      '  typeof derive.keptOf, typeof recall.expandEntryBody, typeof cli.pairIndexOf] }));',
+    ].join('\n');
+    // No argument after the script, so process.argv[1] is undefined and cli.mjs's entry guard is false.
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code], { encoding: 'utf8', env: box.env, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines, 'main did not run: stdout is the child line alone').toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toEqual({ umask: 0o077, kinds: Array(6).fill('function') });
+  }, HEAVY);
+});

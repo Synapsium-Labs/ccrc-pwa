@@ -5800,6 +5800,20 @@ export function decideLeafId({ ccrcId, ccUuid, spanStartUuid, boundaryUuid, plai
  *  the leaf raw for good. *Chosen*. D-4690 (history-raw-leaf-grace) */
 export const RAW_LEAF_GRACE_MS = 5 * 60 * 1000;
 
+/** The newest stamped row's time at or before row `index` of `rows`, in the order `rows` holds (a copy's file
+ *  order): row `index`'s own time when it has one, and a stamp of 0 is a time. Null when no row up to it has one,
+ *  and when `index` is undefined (derive.mjs passes what a copy's uuid map answers). Otherwise `index` is at most
+ *  `rows.length - 1`. Moved from derive.mjs, where it was private (W2-D33), so that W2-2a's as-of cut (W2-D34) reads
+ *  the one definition: lib cannot import derive.mjs, which imports lib. lib's raw-leaf grace reads it through
+ *  derive.mjs (D-4690 (history-raw-leaf-grace)). */
+export function stampAtOrBefore(rows, index) {
+  for (let i = index; i >= 0; i -= 1) {
+    const t = rows[i].ts_ms;
+    if (t !== null) return Number(t);
+  }
+  return null;
+}
+
 /** Whether the file holding a boundary was read to its end late enough to say its summary row is missing. `eofMs`
  *  is the holding file's ingest_files.eof_ms: the start of the last tick that left its cursor at end-of-file.
  *  `boundaryTsMs` is the boundary's time; derive.mjs passes the newest stamped row before a boundary that has none

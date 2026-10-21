@@ -552,8 +552,11 @@ function refusalStoreId(reach, P) {
  *  values read now; the declared paths are those the last tick recorded in meta redact_sources (Task 7B), because this
  *  process sources no bash. The values live only in this process's memory, inside the belt (and, for --regex, the
  *  child's stdin, Task 14): never printed, persisted or journaled. loadSecrets is the W1-B2 block's static import
- *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index. */
-function pairIndexOf(db, home) {
+ *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index.
+ *  Exported for the deploy lane (W2-D33): W2-5a builds its run's index once through it (W2-D54, W2-D67). Importing
+ *  this module sets the process umask to 0o077 and loads sweep.mjs, recall.mjs and store.mjs; main runs only behind
+ *  the entry guard, this file's last statement. */
+export function pairIndexOf(db, home) {
   const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
     .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
   const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
