@@ -54,3 +54,20 @@
   padding-top: calc(var(--pad-card) / 2);
   border-top: 1px solid var(--edge-subtle);
 }
+
+/* Security's Your sign-in (settings Task R2d; spec §5.5; D-5508). Layout only: every word wears `.settings-note` or
+   inherits the card's ink, so no colour is set here. A passkey row is its label and dates, then Revoke at its end;
+   the label is the stored user-agent as it is, one ellipsised line (the whole label is the row's `title`), so at
+   360 a long one shortens instead of pushing Revoke off the row or under it. */
+.settings-passkeys-title { margin: 0; font-size: var(--fs-meta); font-weight: var(--weight-semibold); }
+.settings-passkeys { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.settings-passkey { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.settings-passkey-text { display: grid; flex: 1 1 auto; min-width: 0; }
+.settings-passkey-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+}
+.settings-passkey-add { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }

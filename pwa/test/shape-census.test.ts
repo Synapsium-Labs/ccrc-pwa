@@ -112,6 +112,11 @@ const SHEETS: [string, string][] = [
   ['ui/attach-tray.css', uiRead('components', 'attach-tray.css')],
   ['ui/build-line.css', uiRead('components', 'build-line.css')],
   ['ui/typed-label.css', uiRead('components', 'typed-label.css')],
+  ['ui/workbench-sidebar.css', uiRead('components', 'workbench-sidebar.css')],
+  ['ui/workbench-tabs.css', uiRead('components', 'workbench-tabs.css')],
+  ['ui/workbench-terminal.css', uiRead('components', 'workbench-terminal.css')],
+  ['ui/workbench-account-row.css', uiRead('components', 'workbench-account-row.css')],
+  ['ui/workbench-status-bar.css', uiRead('components', 'workbench-status-bar.css')],
   ['ui/option-row.css', uiRead('primitives', 'option-row.css')],
   ['ui/reset.css', uiRead('styles', 'reset.css')],
 ];
@@ -224,10 +229,30 @@ const REGISTERED: Record<string, string> = {
     + 'layout glue that means nothing beyond itself. A constant for every '
     + 'common quadruple of utilities is a second spelling of Tailwind, and '
     + 'the registry would stop being able to tell the two apart.',
-  'chat.css .compaction--sys .compaction-label + fleet.css .sess-subagent-name':
+  ['chat.css .compaction--sys .compaction-label + fleet.css .sess-subagent-name '
+    + '+ ui/workbench-account-row.css .wb-acct-row .wb-acct-name '
+    + '+ ui/workbench-sidebar.css .wb-side .wb-side-clip '
+    + '+ ui/workbench-sidebar.css .wb-side-agent .wb-side-name '
+    + '+ ui/workbench-tabs.css .wb-tabs-title']:
     'DIFFERENT THINGS. Four declarations that spell `truncate`: min-width 0, '
     + 'hidden, ellipsis, nowrap. A component here would be a `<span>` with a '
-    + 'utility on it.',
+    + 'utility on it. The workbench sheets joined it when they were enrolled '
+    + '(an account name, a chip\'s clipped text, an agent name, a tab title): '
+    + 'each sits on a ground of its own and carries the idiom because a long '
+    + 'id must ellipsize there, not because they are one component.',
+  'ui/workbench-account-row.css .wb-acct-head .wb-acct-lead + ui/workbench-sidebar.css .wb-side-row .wb-side-word':
+    'DIFFERENT THINGS. The same `truncate` idiom as a shrinking flex item '
+    + '(`flex: 0 1 auto` beside the four). One is the folded account line\'s '
+    + 'lead, which yields so the off accounts after it never do; the other is '
+    + 'a session row\'s state word, the last thing on its line to yield. Their '
+    + 'shared part is the yield, and each sheet\'s yield order is its own.',
+  'ui/tool-card.css .tool-dot + ui/workbench-status-bar.css .wb-status-dot + ui/workbench-terminal.css .wb-term-dot':
+    'DIFFERENT THINGS. A matte 6px point — width, height, a full radius, no '
+    + 'shrink — and nothing else in common: a tool call\'s outcome on the '
+    + 'card, the terminal\'s attach state on the dark well, the agent link on '
+    + 'the status bar. What makes each one mean something is its colour and '
+    + 'its ground, and those cannot move; the geometry left over is four '
+    + 'declarations, the same size of thing as `CHIP_DOT`\'s utility string.',
   // ONE IDIOM, TWO ENTRIES, because the clustering is greedy against a seed in
   // sheet/selector order: the terminal drawer's ^C confirm (D-5007) sorts first
   // and seeds the copies it is closest to, and the two it is not close enough
