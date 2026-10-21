@@ -2444,6 +2444,40 @@ describe('CoordStore: feed (Task 10)', () => {
     expect(s.hasFeedEvent('queue', 'cc-a', body)).toBe(true);
     expect(s.hasFeedEvent('queue', 'cc-a', 'another body')).toBe(false);
   });
+
+  // D-5860 (Task C1f): `hasNotice`, the once-only key read. Two compaction uuids mask to ONE body (D-5298), so a body
+  // read cannot tell two compactions apart; the key is stored hashed, never masked (departure `dedupe-key-unmasked`).
+  const U1 = '3f1c2a7e-9b4d-4e21-8c6a-1d2e3f4a5b6c';
+  const U2 = '9a8b7c6d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+  const row = (seq: number, body: string) =>
+    ({ seq, at: 1000 + seq, kind: 'nudge' as const, sessionId: 'cc-a', title: 't', body, runId: null });
+  it('hasNotice tells two token-shaped keys apart where their masked bodies collide, and stores neither in the clear', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, `compaction ${U1}`), U1);
+    expect(s.hasFeedEvent('nudge', 'cc-a', `compaction ${U2}`), 'the premise: the masked bodies collide').toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', U1)).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', U2)).toBe(false);
+    const stored = (s.db.prepare('SELECT dedupe_key AS k FROM feed_events').get() as { k: string }).k;
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored).not.toContain(U1);
+  });
+
+  it('hasNotice matches a keyed row by its key whatever its body now says, and never by its body', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, 'the first wording'), 'k1');
+    s.db.prepare('UPDATE feed_events SET body = ? WHERE seq = 1').run('a later wording');
+    expect(s.hasNotice('nudge', 'cc-a', 'k1', 'yet another wording')).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', 'k2', 'a later wording'), 'a keyed row is never matched by its body').toBe(false);
+  });
+
+  it('a row written before the key existed (NULL) is matched by its body only when the caller names one', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, `compaction ${U1}`));
+    expect(s.hasNotice('nudge', 'cc-a', U1)).toBe(false);
+    expect(s.hasNotice('nudge', 'cc-a', U1, `compaction ${U1}`)).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', U1, 'another body')).toBe(false);
+    expect(s.hasNotice('nudge', 'cc-b', U1, `compaction ${U1}`)).toBe(false);
+  });
 });
 
 // Fix round 1, findings 2/4: `mailForRecipient`'s LIMIT used to be applied
