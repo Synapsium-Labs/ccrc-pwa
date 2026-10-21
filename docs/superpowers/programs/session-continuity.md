@@ -893,6 +893,25 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - A NEW review run reads that tip with the held-out panel and the two wave-specific lenses (operator ruling,
     absorption). No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart,
     arming or settings act.
+- **2026-10-21 01:34 UTC - review 714 accepted as a report; fix round 3 sent.**
+  - Review 714 read `90c37de9b` with the held-out panel and both wave lenses: no finding unexamined, no lens
+    unverified. It found one important and six minor findings, none of them in behaviour.
+    - Every mechanism of fix round 2 was met, and every red-first and mutation red reproduced.
+    - The complete server pass was green, except six cases. Each is red on the merge base on this box, and CI's
+      full run passed each one.
+    - The required checks were green, and the full run was green on every Linux leg.
+  - **The rulings:**
+    - the predicate-5 change that fix round 2 directed gets its own deviation number, as fix round 1's contract
+      change did;
+    - the operator-choice promotion's Contract is corrected in place to the shipped signature;
+    - the plan records both landing merges, and one invisible character becomes its escape;
+    - README and the spec's §5.7 name the uuid moves that silently lose the operator's choice;
+    - the comment above the resume environment is made true for every lane, if the `ccd/ccd` holder agrees;
+    - the killed-envelope rule is confirmed as it reads at the base;
+    - the worker's wording about when baseline B was measured is accepted.
+  - A third stamp-only merge of `main` goes first, under the `ccd/ccd` holder's consent to one such merge.
+  - Tasks 1-4 remain unaccepted until a scoped review of this round. Task 5 remains gated. No merge, rollout,
+    restart, arming or settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
