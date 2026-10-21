@@ -82,9 +82,10 @@ describe('an exemption set unchanged for more than 60 days needs a re-dated reas
     expect(await sizeOf('server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#GRANDFATHERED')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#NO_SUCH_SET')).toBeUndefined();
-    // A `.json` list (the growth check's, D-6211) is measured by its named array.
-    expect(await sizeOf('server/test/growth-exemptions.json#exemptions')).toBe(0);
-    expect(await sizeOf('server/test/growth-exemptions.json#no_such_key')).toBeUndefined();
+    // A `.json` list (the growth check's, D-6211) is measured by its named array: a committed fixture with two
+    // entries, so the arm's count is pinned for a non-empty list; the live list stays under the stamp rule below.
+    expect(await sizeOf('server/test/fixtures/growth-exemptions/two-entries.json#exemptions')).toBe(2);
+    expect(await sizeOf('server/test/fixtures/growth-exemptions/two-entries.json#no_such_key')).toBeUndefined();
     expect(exemptionSetsOnDisk()).toContain('server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS');
   });
 
