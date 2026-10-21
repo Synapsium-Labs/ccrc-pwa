@@ -2961,8 +2961,9 @@ function redactFinalTextWith(text, idx, rs) {
  *  v2(base), so a NAME the cut removed still masks its value's tail (D-6071, review 711 F1). `whole`: (1) the cut stays the base
  *  door's; (2) v2 reads the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text, the
  *  very text the pre-round door read), the pre-round composition (review 725 F1); (3) the widened rules read the BASE READING of
- *  the margin-widened text (composedTokens), and the tokens of v2's output that this reading no longer prints are masked
- *  (maskUnprinted; an edge token keeps its whole-token decision only where v2 left the edge as the cut made it); (4) v2 then reads
+ *  the margin-widened text (composedTokens), and a token of v2's output is masked unless that reading prints it and the shown text
+ *  holds it as a token too (maskUnprinted: a token v2 joined or decoded is masked, availability only; a snippet also needs
+ *  preRoundTokens; an edge token keeps its whole-token decision only where v2 left the edge as the cut made it); (4) v2 then reads
  *  the result. So the door only replaces spans of the pre-round composition's output with marks. Only a window of the whole text
  *  through redactDisplayWindow is v2(base) (displayWindow's step 0); a whole-text snippet is not.
  *  `whole` answers `{ base, out }` from one read, so composeDoor's base is not computed twice.
@@ -2975,8 +2976,9 @@ const DOOR_READINGS = (() => {
   const shown = (out, idx, rs) => redactForDisplayWith(out, idx, rs);
   // A display window or snippet: its base is rev 3.6's door; its v2 is redactForDisplay's reading of that output (the (j10) CONTROL
   // reads it over the raw text); and `whole`, the door composeDoor returns: the base door's cut, v2 over the text it shows (a snippet's
-  // is the framed base snippet), the tokens of that output which the widened rules no longer print over the base reading of the
-  // margin-widened text masked (composedTokens, maskUnprinted, D-6071), then v2 over that, as before.
+  // is the framed base snippet), each token of that output masked unless the widened rules print it over the base reading of the
+  // margin-widened text AND the shown text holds it as a token (composedTokens, maskUnprinted, D-6071; a joined or decoded
+  // token is masked on purpose), then v2 over that, as before.
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
@@ -7742,29 +7744,33 @@ function displayWindowRead(text, from, to, idx, rs) {
   return { text: out, exact: true, read: d, at: ds };
 }
 
-/** D-6071 (review 711 F1; the scoped review's FR1-A and FR1-C; review 725 F1): a display window or snippet that composes the
- *  widened rules BEFORE its cut. The cut stays the base door's, byte for byte (the margins are read through BASE_RULES alone, so
- *  every alignment is the one rev 3.6 made, and a snippet's cut is snippetBounds' over the base window text). The door is
+/** D-6071 (review 711 F1; the scoped review's FR1-A and FR1-C; review 725 F1 and its amendment): a display window or snippet that
+ *  composes the widened rules BEFORE its cut. The cut stays the base door's, byte for byte (the margins are read through BASE_RULES
+ *  alone, so every alignment is the one rev 3.6 made, and a snippet's cut is snippetBounds' over the base window text). The door is
  *  v2(maskUnprinted(v2(shown))), `shown` being the base door's text. The pre-round composition is v2(shown), so v2 reads it FIRST,
  *  every pair of it intact, and the rest only replaces spans of that output by marks: whatever v2(shown) masked stays masked, by
  *  construction, with no position map. The widened rules are then read over the base reading of the margin-widened text, `read`,
- *  which holds the NAME a cut removed (composedTokens), and a token of v2(shown) that this reading no longer prints is replaced
- *  by the mark (maskUnprinted). relayUnion's pattern, over tokens: the output only replaces spans of the pre-round output with
- *  marks, so it is subtractive over it, over the base output, and the last v2 pass is subtractive too.
+ *  which holds the NAME a cut removed (composedTokens), and a token of v2(shown) is replaced by the mark unless it is KEPT
+ *  (maskUnprinted). relayUnion's pattern, over tokens: the output only replaces spans of the pre-round output with marks, so it is
+ *  subtractive over it, over the base output, and the last v2 pass is subtractive too.
  *  A token (UNION_TOKEN_RE) is a mark, or a maximal run of characters that are neither whitespace nor one of `"`, `'`, `` ` ``,
  *  `,`, `;` and `&` (TOKEN_BREAK_RE's sense) and hold no mark, so a word in any script, and the punctuation of a value, are
  *  masked with it. What can still print between tokens is whitespace and those six break characters: a value's separators,
- *  never its words. A token is kept when the widened reading prints the same characters anywhere (relayUnion's same-characters
- *  residual, at the level of the token). A token the cut itself split at an edge is decided by the WHOLE token of `read` around
+ *  never its words. A token of v2's output is kept when three memberships hold: (1) the widened reading prints the same characters
+ *  anywhere (relayUnion's same-characters residual, at the level of the token); (2) the shown text holds it as a token too, a
+ *  deliberate rule: a token v2 JOINED or DECODED (a value a colour sequence split, an escape) is not a token of the text the cut
+ *  shows, so it is masked, availability only, and the display doors never hand back a masking 8e2ff9040 had; (3) for a snippet, the
+ *  tokens v2 prints over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more; the window
+ *  door has none, as its tokens are v2's own). A token the cut itself split at an edge is decided by the WHOLE token of `read` around
  *  that edge, not by the fragment, and only where v2 left that edge as the cut made it: the edge token is the same token in v2's
- *  output as in `shown` (a split mark is kept as written when v2's output starts, or ends, with the cut part of it). Where v2
- *  rewrote the edge, or for an inexact window, whose text is not a slice of `read`, the edge token is decided as itself: masked
- *  unless the widened reading prints it as it stands (fail closed, availability only). Where v2 joined or decoded escape sequences,
- *  its output holds the joined text, and its tokens are judged as they stand: a value the base printed split by a sequence prints
- *  whole, as the pre-round composition printed it (composeDoor's residual), never a value that composition masked. Nothing changes
- *  when the widened reading changes nothing; a window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left
- *  alone. Residuals: a NAME more than ENTRY_REDACT_MARGIN before the window, and a closing quote more than ENTRY_REDACT_MARGIN
- *  past its end (the value reads unquoted in `read`), are not in the margin the widened reading reads. */
+ *  output as in `shown` (a split mark is kept as written when v2's output starts, or ends, with the cut part of it, and the fragment
+ *  of a split mark is no token of `shown`). Where v2 rewrote the edge, or for an inexact window, whose text is not a slice of `read`,
+ *  the edge token is decided as itself: masked unless the widened reading prints it as it stands (fail closed, availability only).
+ *  The one edge where the door takes v2's rewritten text is the right edge of a split mark in a snippet: v2 completes the mark and
+ *  swallows the closing `...`, and the edge v2 rewrote is a mark, which can only mask. Nothing changes when the widened reading
+ *  changes nothing; a window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left alone. Residuals: a NAME more
+ *  than ENTRY_REDACT_MARGIN before the window, and a closing quote more than ENTRY_REDACT_MARGIN past its end (the value reads
+ *  unquoted in `read`), are not in the margin the widened reading reads. */
 const UNION_TOKEN_RE = new RegExp(`${MARK_RE_SRC}|(?:(?!${MARK_RE_SRC})[^\\s"'\`,;&])+`, 'g');
 
 /** The first reading of the union (D-6071): the tokens the widened rules (CONTEXT_RULES) print over `read`, the base reading of the
@@ -7812,15 +7818,36 @@ function edgeTokens(s) {
   return { head: head === null ? null : head[0], last };
 }
 
-/** `piece`, v2 over `shown` (the base door's text), with each token the first reading (`printed`) does not print replaced by the
- *  mark. `shown` is `d.slice(p0, p0 + shown.length)` (`d` null for an inexact window, which is not a slice of its read: no edge
- *  leniency). A token the cut at either end splits is decided by its whole token in `d` (splitAt), and a mark it splits is kept as
- *  written, but only where v2 left that edge as the cut made it: the edge token is the same token in `piece` as in `shown`, or
- *  `piece` starts (ends) with the cut part of the edge mark. Otherwise the fragment is a token of its own, decided as itself. */
-function maskUnprinted(piece, shown, printed, d, p0) {
+/** The snippet door's second reading (D-6071, review 721 item 1; review 725 F1's amendment keeps it for the snippet only): the tokens
+ *  v2 prints over `slice`, the unframed cut slice of the base window text, as 8e2ff9040 defined it. The window door has none: its
+ *  tokens are the tokens of v2's own output, so the reading is redundant there (measured: 0 outputs change). Over the snippet it
+ *  changes a few outputs, and only by masking more, so it stays. null when v2 changes nothing: it then masks nothing. */
+function preRoundTokens(slice, idx) {
+  const v2 = redactForDisplayWith(slice, idx, CONTEXT_RULES);
+  if (v2 === slice) return null;
+  const pre = new Set();
+  for (const m of v2.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) pre.add(m[0]);
+  return pre;
+}
+
+/** `piece`, v2 over `shown` (the base door's text), with each token masked that is not kept. A token is kept when ALL of these hold:
+ *  (1) the first reading (`printed`) prints it; (2) it is also a token of `shown` (the third membership, a deliberate rule: a token
+ *  v2 joined or decoded, such as a value a colour sequence split, is not a token of the text the cut shows, so it is masked,
+ *  availability only); (3) `pre`, where there is one (the snippet's second reading, preRoundTokens), holds it. `shown` is tokenized
+ *  between its split-mark edges, as `piece` is (lo, hi): the fragment of a mark the cut splits is no token, so the NAME before a split
+ *  mark stays a token even where v2 completes that mark. `shown` is `d.slice(p0, p0 + shown.length)` (`d` null for an inexact window,
+ *  which is not a slice of its read: no edge leniency). A token the cut at either end splits is decided by its whole token in `d`
+ *  (splitAt), and a mark it splits is kept as written, but only where v2 left that edge as the cut made it: the edge token is the same
+ *  token in `piece` as in `shown`, or `piece` starts (ends) with the cut part of the edge mark. Otherwise the fragment is a token of
+ *  its own, decided as itself. The one edge where the door takes v2's rewritten text is the right edge of a split mark: v2 completes
+ *  the mark and swallows the closing `...` (the caller then adds no second one), and an edge v2 rewrote into a mark can only mask. */
+function maskUnprinted(piece, shown, printed, d, p0, pre = null) {
   const p1 = p0 + shown.length;
   let m0 = d === null ? null : splitAt(d, p0);
   let m1 = d === null ? null : splitAt(d, p1);
+  const from = m0 !== null && m0.mark !== undefined ? Math.min(shown.length, m0.mark + REDACTED_MARK.length - p0) : 0;
+  const to = m1 !== null && m1.mark !== undefined ? Math.max(from, shown.length - (p1 - m1.mark)) : shown.length;
+  const held = new Set(shown.slice(from, to).match(UNION_TOKEN_RE) ?? []);
   if (m0 !== null && m0.mark !== undefined && !piece.startsWith(shown.slice(0, m0.mark + REDACTED_MARK.length - p0))) m0 = null;
   if (m1 !== null && m1.mark !== undefined && !piece.endsWith(shown.slice(Math.max(0, shown.length - (p1 - m1.mark))))) m1 = null;
   let lo = 0;
@@ -7840,7 +7867,7 @@ function maskUnprinted(piece, shown, printed, d, p0) {
     let full = tok;
     if (leftFull !== null && m.index === 0 && tok === edge.head) full = leftFull;
     else if (rightFull !== null && at === mid.length && tok === edge.last) full = rightFull;
-    out += tok === REDACTED_MARK || printed.has(full) ? tok : REDACTED_MARK;
+    out += tok === REDACTED_MARK || (printed.has(full) && held.has(tok) && (pre === null || pre.has(tok))) ? tok : REDACTED_MARK;
   }
   return out + mid.slice(at) + piece.slice(hi);
 }
@@ -7855,10 +7882,11 @@ export function redactDisplayWindow(text, from, to, idx) {
 }
 
 /** A display window composed (D-6071; review 725 F1): v2 over the base window as the base door shows it (its text, with the inexact
- *  note ahead of an inexact one), the pre-round composition; then each token of that output which the widened reading of the
- *  window's margin-widened text no longer prints replaced by the mark (maskUnprinted; an edge token keeps its whole-token
- *  decision only where v2 left the edge as it was). v2 reads the result last, in DOOR_READINGS. If v2 rewrote the inexact note, the
- *  text is one mark. A window of the whole text is redactForDisplay's reading and is left to v2. */
+ *  note ahead of an inexact one), the pre-round composition; then each token of that output replaced by the mark unless the
+ *  widened reading of the window's margin-widened text prints it AND the window's own text holds it as a token (maskUnprinted;
+ *  an edge token keeps its whole-token decision only where v2 left the edge as it was). v2 reads the result last, in
+ *  DOOR_READINGS. If v2 rewrote the inexact note, the text is one mark. A window of the whole text is redactForDisplay's reading
+ *  and is left to v2. */
 function composedWindow(w, idx) {
   const printed = w.whole === true ? null : composedTokens(w.read, idx);
   if (printed === null) return w;
@@ -7895,8 +7923,10 @@ export function displaySnippet(text, terms, idx) {
  *  the framed snippet `H + core + T`, H being the inexact note, the `...` the read adds and snippetBounds' `...`, `core` the trimmed
  *  slice of the base window text that snippetBounds cuts, T the closing `...`s. The composed snippet is the pre-round composition's
  *  reading of that very text, v2 over the framed base snippet, with `core`'s part of it masked as a window's is (composedTokens,
- *  maskUnprinted: the edge tokens are the whole tokens of the reading around the cut, where v2 left them as the cut made them), in
- *  its frame. If v2 rewrote the frame (H or T), `core` is one mark. */
+ *  maskUnprinted: kept only where the widened reading prints the token, `core` holds it as a token, and v2 over the unframed
+ *  slice prints it, preRoundTokens; the edge tokens are the whole tokens of the reading around the cut, where v2 left them as the
+ *  cut made them), in its frame. If v2 rewrote H, `core` is one mark; where v2 took T into a mark it completed (a value or a split
+ *  mark the cut ended inside), its text is the output, with no second T. */
 function displaySnippetWith(text, terms, idx, rs, composed = false) {
   const content = String(text);
   const { at, len } = snippetSpan(content, terms);
@@ -7924,7 +7954,7 @@ function displaySnippetWith(text, terms, idx, rs, composed = false) {
   const keepsT = pre.length - T.length >= H.length && pre.endsWith(T);
   const piece = pre.slice(H.length, keepsT ? pre.length - T.length : pre.length);
   const p0 = (w.whole === true ? 0 : w.at ?? 0) + b.start + (slice.length - slice.trimStart().length);
-  const masked = maskUnprinted(piece, core, printed, w.whole === true ? w.text : w.at === undefined ? null : w.read, p0);
+  const masked = maskUnprinted(piece, core, printed, w.whole === true ? w.text : w.at === undefined ? null : w.read, p0, preRoundTokens(slice, idx));
   return { base: fmt(shown), out: `${H}${masked}${keepsT ? T : ''}` };
 }
 
