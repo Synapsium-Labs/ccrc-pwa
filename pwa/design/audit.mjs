@@ -888,6 +888,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
+  // ── prose list markers (@ccrc/ui prose.css) ─────────────────────────────
+  '.msg-assist li::marker': {
+    under: ['var(--bg-page)'],
+    why: "the bullet and the ordered list's NUMBER, which is text, in --ink-tertiary. It sat in the uncovered census while the preflight's `list-style: none` kept every prose marker from painting; prose.css now restores them, so the pair is real and is measured. .msg-assist paints nothing (the .msg-plain-note reasoning), so .chat's --bg-page is behind it — and in the Docs reader, .doc-body.msg-assist on .docs-screen, the same --bg-page. A list inside a callout sits on that callout's tint instead, and has a rule of its own for it — `.msg-assist .callout li::marker`, --ink-secondary — which needs no entry here: its selector names `.msg-assist .callout`, so the descendant route measures it on each of the five tints the stylesheet binds",
+  },
   // ── native Docs reader W4, Task 6: chat's plain-text note ─────────────
   '.msg-plain-note': {
     under: ['var(--bg-page)'],
