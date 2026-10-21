@@ -217,9 +217,9 @@ Files: `ccd/ccd` (`cmd_ws_title`, `cmd_caps` verb list), `agent/src/whitelist.ts
   exit 0 — on the least-loaded lane, if the dropped flag was the one choosing it. Callers therefore gate every new
   ws-add flag on a `ccd caps` entry and place it before the project. Refusing unknown `--` tokens in ccd itself is
   out of scope here.
-- **D-TBD-rename-caps-ui** — S9 step 2 says Rename is offered only when `ccd caps` lists `ws-title`. The server
+- **D-6214** — S9 step 2 says Rename is offered only when `ccd caps` lists `ws-title`. The server
   enforces that (`501 unsupported`, `needs: 'ws-title'`, before any argv), but the PWA offers Rename on every workspace
-  row and says the 501 in the sheet. No caps list reaches the PWA: `fleetState.ccdVerbs` is read on the server only, and
+  row, because it has no view of ccd caps, so an old fleet box answers a plain 501 that the sheet says. No caps list reaches the PWA: `fleetState.ccdVerbs` is read on the server only, and
   the one derived word on a wire, `/api/fleet/health`'s `projectPools`, is a three-state answer for the pools verb alone.
   Gating the menu item would mean a new additive health field with a local and a remote arm, a reader for it, and a prop
   carried from the fleet screen through `FleetFlows` into the actions sheet, to hide the item in the one state
