@@ -52,6 +52,11 @@ const REASON_ROWS = [
     // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
     // mapping names a uuid another family already holds confirmed. Plan-chosen words.
     'roster-unreadable', 'uuid-claimed',
+    // `generation-malformed` and `generation-mismatch` (W2-1, W2-D27): recall-off's two refusals of the id's generation,
+    // decided under the shim's lock before any write: $REG/<id>.generation holds neither nothing nor one generation, or
+    // `--generation` names another than the registry's (or the registry holds none).
+    // D-5764 (history-w2-recall-off-generation-checks)
+    'generation-malformed', 'generation-mismatch',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -5969,8 +5974,9 @@ function readOpFlags(args, spec) {
  *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
  *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
  *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
- *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. A verb B2 does not run
- *  (recall-off is W2's) is `bad-args`. */
+ *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. `recall-off` (W2-1, W2-D27;
+ *  D-5764 (history-w2-recall-off-generation-checks)) takes `<id> [--generation <uuid>]`, `<id> --clear`, or `--clear-all`
+ *  alone; `--generation` is a lowercase UUID on the write form only. Any other verb is `bad-args`. */
 export function parseOpVerbArgs(op, args) {
   const refuse = (reason) => ({ ok: false, reason });
   const ok = (a) => ({ ok: true, args: Object.freeze(a) });
@@ -6024,6 +6030,18 @@ export function parseOpVerbArgs(op, args) {
       const storeId = r.flags['--store-id'] ?? null;
       if (storeId !== null && !UUID_RE.test(storeId)) return refuse('bad-args');
       return ok({ op, storeId });
+    }
+    case 'recall-off': {
+      // Every shape error is bad-args, read before the id grammar, which is bad-id before any path is formed (C66).
+      if (args.length === 1 && args[0] === '--clear-all') return ok({ op, mode: 'clear-all', id: null, generation: null });
+      const r = readOpFlags(args, { '--generation': 'value', '--clear': 'bool' });
+      if (r === null || r.positional.length !== 1) return refuse('bad-args');
+      const generation = r.flags['--generation'] ?? null;
+      const clear = r.flags['--clear'] === true;
+      if (generation !== null && (clear || !UUID_RE.test(generation))) return refuse('bad-args');
+      const id = r.positional[0];
+      if (!idOk(id)) return refuse('bad-id');
+      return ok({ op, mode: clear ? 'clear' : 'write', id, generation });
     }
     default:
       return refuse('bad-args');
@@ -7185,7 +7203,7 @@ export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies })
   };
 }
 
-// ── recall: the read verbs' arguments, selects by store version, recall-off's B2 refusals (W1-B2 Task 10) ──
+// ── recall: the read verbs' arguments and selects by store version (W1-B2 Task 10); recall-off's write, decided (W2-1) ──
 //
 // THE ARGUMENT WHITELIST is one table per read verb: §8.2 builds the whitelist from that one list. These are
 // exit 2 bad-args before anything is measured:
@@ -7348,24 +7366,25 @@ export function selectColumns(version, table, cols, schema = SCHEMA_ADDED, alias
   }).join(', ');
 }
 
-/** `recall-off` in B2 (slug history-recall-off-preflight-b2, NEW): the verb that writes recall-off/<id> ships
- *  with W2 (§8.10), and B2 answers only its refusals, in this order:
- *   - an argv off `<id> [--clear]` or `--clear-all` is bad-args;
- *   - an id off ccd's grammar is bad-id, before any path is formed from it (C66);
- *   - then the caller reads $REG/<id>.generation (`generation` null asks it to): unreadable is
- *     generation-unreadable (C67);
- *   - anything else is bad-args, naming W2. */
-export function decideRecallOffPreflight(i) {
-  const a = i.args;
-  const done = (reason) => ({ done: true, exit: EXIT.REFUSED, reason });
-  if (a.length === 1 && a[0] === '--clear-all') return done('bad-args');
-  const shapeOk = a.length >= 1 && a.length <= 2 && typeof a[0] === 'string' && !a[0].startsWith('--')
-    && (a.length === 1 || a[1] === '--clear');
-  if (!shapeOk) return done('bad-args');
-  if (!idOk(a[0])) return done('bad-id');
-  if (i.generation === null) return { done: false, id: a[0] };
-  if (i.generation.state === 'unreadable') return done('generation-unreadable');
-  return done('bad-args');
+/** What `recall-off <id> [--generation G]` writes, decided under the shim's lock (W2-1, W2-D27; D-5764
+ *  (history-w2-recall-off-generation-checks)). `registry` is $REG/<id>.generation read raw now: absent, unreadable, or its
+ *  text (any other state, an over-cap read, is unreadable here too). `want` is the `--generation` argument, or null. One
+ *  trailing LF is trimmed and nothing else: ccd writes the field with no LF, and a padded value is not a generation.
+ *   - unreadable: generation-unreadable, with or without want (C67: a '' written then would put a pre-registered control
+ *     family in the treatment arm);
+ *   - absent, or empty after that trim: '' (the legacy family, §8.4; the hook's "absent or empty" reading), or
+ *     generation-mismatch when want names a generation;
+ *   - a UUID: it, when want is null or equals it; otherwise generation-mismatch;
+ *   - anything else: generation-malformed, with or without want.
+ *  A refusal is `{ ok: false, rc, reason }`, which the executor answers before any write. */
+export function decideRecallOffWrite({ registry, want }) {
+  const refuse = (reason) => ({ ok: false, rc: EXIT.REFUSED, reason });
+  if (registry.state !== 'absent' && registry.state !== 'value') return refuse('generation-unreadable');
+  const raw = registry.state === 'absent' ? '' : registry.value;
+  const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+  if (text === '') return want === null ? { ok: true, generation: '' } : refuse('generation-mismatch');
+  if (!UUID_RE.test(text)) return refuse('generation-malformed');
+  return want === null || want === text ? { ok: true, generation: text } : refuse('generation-mismatch');
 }
 
 

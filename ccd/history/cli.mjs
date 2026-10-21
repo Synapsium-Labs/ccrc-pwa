@@ -56,11 +56,11 @@ import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
-  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
-  decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
+  decideRecallOff, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
-import { loadSecrets, procIdentityOf, measureOpProcess } from './sweep.mjs';
+import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
@@ -439,8 +439,8 @@ export function render(env) {
 // ── W1-B2: the verb dispatcher and the read verbs' delivery (spec §8.1–§8.4, §8.8; W1-B2 Task 10) ──────────
 //
 // `ccrc history <verb>` answers two kinds of verb (§8.2):
-//   - BOX verbs derive no identity: `status`; `recall-off`, which in B2 answers only its refusals (the verb that
-//     writes ships with W2); and, from Task 19, the operator verbs.
+//   - BOX verbs derive no identity: `status`; and, from Task 19, the operator verbs, `recall-off` among them since
+//     W2-1 (THE OPERATOR DOOR, below).
 //   - READ verbs (READ_VERBS) need one, from tmux. They run in this order, each step a lib decision over what
 //     this file measured:
 //     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
@@ -468,7 +468,8 @@ const USAGE = [
   '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
-  '  operator verbs: import | prune | reparse | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
+  '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
+  '    | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
 
@@ -491,7 +492,7 @@ function thrownText(e) {
 }
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
-/** A registry field or a recall-off file is a few dozen bytes; a read stops here. */
+/** A registry field is a few dozen bytes; a read stops here. A recall-off file is read by sweep.mjs's recallOffPresence (W2-D29). */
 const FIELD_READ_MAX = 4096;
 
 /** A small file as a Presence (§8.2; IV5: unreadable is never absent):
@@ -690,7 +691,8 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
   let gen = generation.value;
   seen.id = id;
   seen.gen = gen;
-  const offFile = presenceOf(recallOffPath(home, id));
+  // W2-D29: the one reader of recall-off/<id>, the drain's too (store.mjs readBounded at CONTROL_FILE_MAX).
+  const offFile = recallOffPresence(home, id);
   const offNow = generation.value !== null || offFile.state !== 'value';
   if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
     return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
@@ -917,17 +919,6 @@ async function statusVerb(home, args) {
   return env.exit;
 }
 
-/** `recall-off` in B2: its refusals only (decideRecallOffPreflight). The verb writes nothing and spawns
- *  nothing. */
-function recallOffVerb(home, args) {
-  const json = args.includes('--json');
-  const a = args.filter((x) => x !== '--json');
-  let d = decideRecallOffPreflight({ args: a, generation: null });
-  if (!d.done) d = decideRecallOffPreflight({ args: a, generation: regPresence(historyPaths(home), d.id, 'generation') });
-  if (d.reason === 'bad-args') process.stderr.write('ccrc history: recall-off writes its file from W2 (the replay eval); this build answers only its refusals\n');
-  return emitRefusal({ exit: d.exit, reason: d.reason, storeId: null }, json, NO_PAIRS);
-}
-
 /** `ccrc history <verb> …` (§8.2): help, the box verbs, the read verbs; anything else is bad-args. */
 export async function main(argv) {
   const home = process.env.HOME ?? '';
@@ -938,7 +929,6 @@ export async function main(argv) {
     return EXIT.OK;
   }
   if (verb === 'status') return statusVerb(home, rest);
-  if (verb === 'recall-off') return recallOffVerb(home, rest);
   if (READ_VERBS.includes(verb)) return readVerb(home, verb, rest);
   if (verb === 'doctor' || (!verb.startsWith('--') && Object.hasOwn(OP_OF_VERB, verb))) return operatorMain(home, argv);
   return unknownVerb(home, argv.includes('--json'));
@@ -1350,7 +1340,7 @@ export function formatHealth(health) {
 }
 
 // ── THE OPERATOR DOOR (W1-B2 Task 19) ─────────────────────────────────────────────────────────────────────
-// `ccrc history import|prune|reparse …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
+// `ccrc history import|prune|reparse|recall-off …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
 // --restore <file>|--rebuild [--store-id <uuid>]` (spec §8.4 "Operator verbs" and "Speed bumps", §8.3's no-store
 // table, §5.1). A BOX verb: it derives no identity and writes no spool line. In order, each step a lib decision:
 //   1. the verb and its arguments, by parseOpVerbArgs. A refusal here spawns nothing;
@@ -1381,7 +1371,7 @@ export function formatHealth(health) {
 
 /** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
 export const OP_OF_VERB = Object.freeze({
-  import: 'import', prune: 'prune', reparse: 'reparse',
+  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off',
   '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
 });
 

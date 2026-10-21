@@ -5116,12 +5116,11 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
-  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
-  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
-  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
-  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
-  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
-  // exemption below.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer, sweep.mjs's
+  // `--op recall-off` (recallOffPass, W2-1), and it has readers in more files than the exact-holders form can list (the
+  // read verbs and the drain through readBounded, the hook's bash read, the replay driver's lstat). W2-1
+  // (W2-D29) replaced B1's half-case with the last case below: one writer, the hook the one bash file naming it, and the
+  // writer's shape.
   const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['history-steer-off', ['ccd/history/lib.mjs']],
@@ -5266,16 +5265,50 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     }
   });
 
-  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
-    const W2_WRITER = 'ccd/history/sweep.mjs';
-    // CONTROL: the writer shapes this describe classifies are seen against this name too.
-    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
-    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
-    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
-    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
-      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
-      .map(rel).sort();
-    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
+  // W2-1 (W2-D29): recall-off/<id> has exactly one writer, sweep.mjs's recallOffPass, and every content reader reads it
+  // through store.mjs's readBounded, so no corpus line pairs a write verb (`open` included) with a recall-off needle but the
+  // writer's own. KNOWN WIDTH: a recall-off path held in a variable and written on a later line (`const p = recallOffPath(
+  // home, id);` then `unlinkSync(p)`) is invisible to the needle scan. Inside recallOffPass the writer-shape rule below
+  // closes it (every mutation there names `recallOffPath(` or `.recallOffDir` on its own line); outside it, nothing does.
+  it('recall-off/<id>: exactly one writer, sweep.mjs', () => {
+    const WRITER = 'ccd/history/sweep.mjs';
+    const NEEDLES = ['recall-off', 'recallOffPath', 'recallOffDir', 'RECALL_OFF_DIR'] as const;
+    const langOf = (f: string): 'bash' | 'mjs' => (BASH.includes(f) ? 'bash' : 'mjs');
+    const writesOff = (l: string, lang: 'bash' | 'mjs'): boolean => NEEDLES.some((n) => l.includes(n) && writes(l, lang, n));
+    // CONTROL: the classifier sees the planted writer shapes.
+    expect(writesOff('writeFileSync(recallOffPath(home, id), g);', 'mjs')).toBe(true);
+    expect(writesOff('    unlinkSync(`${P.recallOffDir}/${n}`);', 'mjs')).toBe(true);
+    expect(writesOff('touch "$H/recall-off/$id"', 'bash')).toBe(true);
+    // CONTROL: and not the two reads W2-D29 keeps, each read from the real file it lives in.
+    const SWEEP_MJS = path.join(HISTORY_DIR, 'sweep.mjs');
+    const reader = code(SWEEP_MJS).filter((l) => l.includes('readBounded(recallOffPath('));
+    expect(reader, 'sweep.mjs reads recall-off/<id> through readBounded exactly once (W2-D29)').toHaveLength(1);
+    const driver = code(path.join(ccrcRoot, 'deploy', 'history-replay.mjs')).filter((l) => l.includes('lstatSync(recallOffPath('));
+    expect(driver, 'the replay driver\'s one recall-off line (W2-D78 (ii))').toHaveLength(1);
+    for (const l of [...reader, ...driver]) expect(writesOff(l, 'mjs'), l.trim()).toBe(false);
+    const writers = CORPUS.filter((f) => code(f).some((l) => writesOff(l, langOf(f)))).map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13)').toEqual([WRITER]);
+    // The bash half: the hook reads recall-off/<id> and is the one bash file naming it; none of its lines writes it.
+    const bashNaming = BASH.filter((f) => code(f).some((l) => l.includes('/recall-off')));
+    expect(bashNaming.map(rel).sort()).toEqual(['ccd/session-hook.sh']);
+    for (const f of bashNaming) {
+      for (const l of code(f).filter((x) => x.includes('/recall-off'))) expect(writes(l, 'bash', 'recall-off'), `${rel(f)}: \`${l.trim()}\``).toBe(false);
+    }
+    // The writer shape: recallOffPass's body, from its declaration to the next line that is exactly `}`.
+    const lines = code(SWEEP_MJS);
+    const at = lines.findIndex((l) => /^export function recallOffPass\(/.test(l));
+    expect(at, 'sweep.mjs declares no recallOffPass').toBeGreaterThan(-1);
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(|\b(?:removeEntry|writeFileAtomic|mkdirDurable)\s*\(/;
+    const mutations = lines.slice(at + 1, end).filter((l) => VERB.test(l));
+    for (const l of mutations) {
+      expect(/recallOffPath\(|\.recallOffDir\b/.test(l), `recallOffPass: \`${l.trim()}\` names no recall-off path on its own line`).toBe(true);
+    }
+    for (const v of ['mkdirSync(', 'openSync(', 'renameSync(', 'unlinkSync(']) expect(mutations.some((l) => l.includes(v)), `recallOffPass makes no ${v}`).toBe(true);
+    // Every recall-off write in sweep.mjs is the executor's.
+    const outside = lines.filter((l, i) => (i <= at || i >= end) && writesOff(l, 'mjs')).map((l) => l.trim());
+    expect(outside, 'a recall-off write in sweep.mjs outside recallOffPass').toEqual([]);
   });
 });
 describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {

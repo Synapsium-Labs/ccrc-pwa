@@ -6500,8 +6500,8 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
     expect(why('rebuild', [S])).toBe('bad-args');
   });
 
-  it('a verb B2 does not run is bad-args (recall-off ships in W2)', () => {
-    expect(why('recall-off', ['claude-demo'])).toBe('bad-args');
+  it('a verb this build does not run is bad-args, and recall-off parses since W2-1', () => {
+    expect(ok('recall-off', ['claude-demo'])).toEqual({ op: 'recall-off', mode: 'write', id: 'claude-demo', generation: null });
     expect(why('frobnicate', [])).toBe('bad-args');
   });
 });
@@ -10606,5 +10606,90 @@ describe('W2-1 Task 2: the recall-off paths, the presence constants and isSynthe
   it('W2-D10: the store schema stays at version 2 through W2 (the presence record is meta rows, never a table)', async () => {
     const lib = await import('../../ccd/history/lib.mjs');
     expect(lib.SCHEMA_VERSION).toBe(2);
+  });
+});
+
+// ── W2-1 Task 3: recall-off's grammar and its decision under the lock (W2-D27; D-5764 (history-w2-recall-off-generation-checks)) ──
+// parseOpVerbArgs reads `recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all` for both doors, every
+// shape error bad-args before the id grammar's bad-id (C66). decideRecallOffWrite is W2-D27's table over $REG/<id>.generation
+// read raw (one trailing LF trimmed, nothing else) and the --generation argument. Both new refusal words are exit-2 REASONS (C16).
+describe('W2-1 recall-off: the grammar and the generation checks (D-5764)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  const RID = 'claude-a-demo';
+
+  it('C16, its two words: generation-malformed and generation-mismatch are exit-2 REASONS words, so REFUSALS holds them', () => {
+    expect(REASONS['generation-malformed']).toBe(EXIT.REFUSED);
+    expect(REASONS['generation-mismatch']).toBe(EXIT.REFUSED);
+    expect(REFUSALS).toEqual(expect.arrayContaining(['generation-unreadable', 'generation-malformed', 'generation-mismatch']));
+  });
+
+  it('REASON_ROWS lists the two words beside their departure, D-5764', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l.includes("'generation-malformed', 'generation-mismatch',"));
+    expect(at, 'REASON_ROWS lists the two words on one line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5764 (history-w2-recall-off-generation-checks)');
+  });
+
+  const READS: ReadonlyArray<readonly [string, readonly string[], Record<string, unknown>]> = [
+    ['the write form', [RID], { op: 'recall-off', mode: 'write', id: RID, generation: null }],
+    ['the write form with --generation', [RID, '--generation', G], { op: 'recall-off', mode: 'write', id: RID, generation: G }],
+    ['--generation before the id', ['--generation', G, RID], { op: 'recall-off', mode: 'write', id: RID, generation: G }],
+    ['--clear', [RID, '--clear'], { op: 'recall-off', mode: 'clear', id: RID, generation: null }],
+    ['--clear-all alone', ['--clear-all'], { op: 'recall-off', mode: 'clear-all', id: null, generation: null }],
+  ];
+  it.each(READS)('recall-off argv reads: %s', (_what, argv, args) => {
+    expect(libPlan.parseOpVerbArgs('recall-off', argv)).toEqual({ ok: true, args });
+  });
+
+  const REFUSES: ReadonlyArray<readonly [string, readonly string[], string]> = [
+    ['no id', [], 'bad-args'],
+    ['two ids', [RID, RID], 'bad-args'],
+    ['--generation with no value', [RID, '--generation'], 'bad-args'],
+    ['an upper-case UUID', [RID, '--generation', G.toUpperCase()], 'bad-args'],
+    ['a padded UUID', [RID, '--generation', ` ${G}`], 'bad-args'],
+    ['a word for a UUID', [RID, '--generation', 'not-a-uuid'], 'bad-args'],
+    ['--generation with --clear', [RID, '--generation', G, '--clear'], 'bad-args'],
+    ['--clear then --generation', [RID, '--clear', '--generation', G], 'bad-args'],
+    ['--generation twice', [RID, '--generation', G, '--generation', G], 'bad-args'],
+    ['--clear twice', [RID, '--clear', '--clear'], 'bad-args'],
+    ['--clear-all with an id', ['--clear-all', RID], 'bad-args'],
+    ['--clear-all with --generation', ['--clear-all', '--generation', G], 'bad-args'],
+    ['--clear-all twice', ['--clear-all', '--clear-all'], 'bad-args'],
+    ['an unknown flag', [RID, '--bogus'], 'bad-args'],
+    ['a shape error before a bad id', ['../x', '--generation', 'not-a-uuid'], 'bad-args'],
+    ['an id that climbs out', ['../x', '--clear'], 'bad-id'],
+    ['the id ..', ['..'], 'bad-id'],
+    ['an id with a slash', ['a/b', '--generation', G], 'bad-id'],
+  ];
+  it.each(REFUSES)('recall-off argv refuses: %s', (_what, argv, reason) => {
+    expect(libPlan.parseOpVerbArgs('recall-off', argv)).toEqual({ ok: false, reason });
+  });
+
+  const no = (reason: string): Record<string, unknown> => ({ ok: false, rc: EXIT.REFUSED, reason });
+  const yes = (generation: string): Record<string, unknown> => ({ ok: true, generation });
+  // [what, the registry read, --generation, the answer]
+  const DECIDES: ReadonlyArray<readonly [string, Record<string, unknown>, string | null, Record<string, unknown>]> = [
+    ['unreadable, no --generation', { state: 'unreadable' }, null, no('generation-unreadable')],
+    ['unreadable, --generation G', { state: 'unreadable' }, G, no('generation-unreadable')],
+    ['over the cap is unreadable', { state: 'over-cap' }, null, no('generation-unreadable')],
+    ['absent, no --generation: the legacy family', { state: 'absent' }, null, yes('')],
+    ['absent, --generation G', { state: 'absent' }, G, no('generation-mismatch')],
+    ['empty, no --generation', { state: 'value', value: '' }, null, yes('')],
+    ['one LF, no --generation', { state: 'value', value: '\n' }, null, yes('')],
+    ['empty, --generation G', { state: 'value', value: '' }, G, no('generation-mismatch')],
+    ['G, no --generation', { state: 'value', value: G }, null, yes(G)],
+    ['G and one LF, no --generation', { state: 'value', value: `${G}\n` }, null, yes(G)],
+    ['G, --generation G', { state: 'value', value: G }, G, yes(G)],
+    ['G, --generation G2', { state: 'value', value: G }, G2, no('generation-mismatch')],
+    ['G and two LFs', { state: 'value', value: `${G}\n\n` }, null, no('generation-malformed')],
+    ['G padded with a space', { state: 'value', value: ` ${G}` }, null, no('generation-malformed')],
+    ['G upper-cased', { state: 'value', value: G.toUpperCase() }, null, no('generation-malformed')],
+    ['a word, --generation G', { state: 'value', value: 'not-a-generation' }, G, no('generation-malformed')],
+    ['two LFs alone', { state: 'value', value: '\n\n' }, null, no('generation-malformed')],
+  ];
+  it.each(DECIDES)('decideRecallOffWrite: %s', async (_what, registry, want, answer) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.decideRecallOffWrite({ registry: registry as never, want })).toEqual(answer);
   });
 });

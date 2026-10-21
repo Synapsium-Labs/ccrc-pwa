@@ -32,8 +32,8 @@
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
-  accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
-  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
+  accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
+  readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -56,7 +56,7 @@ import {
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatOpMarker, decideOpLive, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
-  decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
+  decideRecallOff, decideRecallOffWrite, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
   mergeJournalByTime, decideBind, restoreNameOk,
@@ -803,25 +803,14 @@ export function journalFile(home, ids, name, nowMs) {
   return { obs, text };
 }
 
-/** `recall-off/<id>` as a Presence, read bounded: the file holds one generation (§9.7). ENOENT is absent; any
- *  other failure, a symlink or a non-regular file is unreadable. W1-B2 (Task 11). */
-function recallOffPresence(home, id) {
-  let fd;
-  try {
-    fd = openSync(recallOffPath(home, id), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
-  }
-  try {
-    if (!fstatSync(fd).isFile()) return { state: 'unreadable' };
-    const b = Buffer.alloc(128);
-    const n = readSync(fd, b, 0, b.length, 0);
-    return { state: 'value', value: b.subarray(0, n).toString('utf8').trim() };
-  } catch {
-    return { state: 'unreadable' };
-  } finally {
-    closeSync(fd);
-  }
+/** `recall-off/<id>` as a Presence (W2-1, W2-D29): the drain's stale check below and the CLI's read verbs call it, and every
+ *  other content reader of a recall-off file in ccd/history reads through readBounded with the same arguments. It is
+ *  store.mjs's readBounded at CONTROL_FILE_MAX, never following a link: ENOENT is absent; a link, a non-regular file, a failed
+ *  read and a file over the cap are unreadable, which decideRecallOff reads as off (IV5); a value is the whole text, which
+ *  decideRecallOff trims. */
+export function recallOffPresence(home, id) {
+  const r = readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false);
+  return r.state === 'value' ? { state: 'value', value: r.value } : r.state === 'absent' ? ABSENT : UNREADABLE;
 }
 
 /** What one fresh receipt does besides being received (slug history-event-tables-v1, D-4213; a CLI's counters are
@@ -6258,8 +6247,9 @@ export function mergeSteps(db, ctx, budget) {
 // answers 75 for an --op pass (§5.1).
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
- *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild']);
+ *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run.
+ *  W2-1 adds recall-off, whose arm is opPass's own (recallOffPass): it has no dry run (D-5763 (history-w2-recall-off-no-dry-run)). */
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild', 'recall-off']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -6347,6 +6337,132 @@ export function writeOpMarker(P, verb, nowMs) {
     verb, pid: process.pid, startMs: nowMs,
     procStart: identity === null ? null : identity.procStart, bootId: identity === null ? null : identity.bootId,
   }), 0o600);
+}
+
+// ── W2-1: THE recall-off EXECUTOR (spec §8.4, §9.7; W2-D26, W2-D27, W2-D28) ──────────────────────────────────────────────
+// `--op recall-off <id> [--generation <uuid>]`, `--op recall-off <id> --clear` and `--op recall-off --clear-all`, under the
+// shim's lock, after opPass's gate and role check. It writes as invoked: recall-off has no dry run
+// (D-5763 (history-w2-recall-off-no-dry-run)). It is the ONE writer of recall-off/ (spec O13). Every mutation below names
+// `recallOffPath(` or `.recallOffDir` on its own line, which single-definition.test.ts's "recall-off/<id>: exactly one writer,
+// sweep.mjs" reads as the writer's shape. A path held in a variable and written on a later line is invisible to that pin's
+// needle scan, its KNOWN WIDTH, so none is. In order:
+//   1. the write form only: $REG/<id>.generation read raw, bounded, decided by lib's decideRecallOffWrite (W2-D27;
+//      D-5764 (history-w2-recall-off-generation-checks)). A refusal answers here, before any write;
+//   2. the root and recall-off/, by lstat. A root that is not a directory, or a recall-off/ that is a link or not a
+//      directory, answers rc 1 with one line, before any write. The executor follows no link;
+//   3. recall-off/ is made 0700 when absent, by the write form only: a clear of a directory that does not exist is rc 0;
+//   4. every `~tmp.*` entry is removed. Under the lock any such entry is stale, since no other writer is mid-write;
+//   5. the form:
+//      - the write goes through `recall-off/~tmp.<pid>` (`~` is outside ID_RE, so no reader takes it for an id), opened
+//        O_CREAT|O_EXCL|O_NOFOLLOW at 0600, written whole and fsynced, renamed over recall-off/<id>, and the directory
+//        fsynced;
+//      - `--clear` unlinks the one entry when it is a file or a link, never following it, and a missing one is rc 0;
+//      - `--clear-all` lstats every entry, whatever its name, unlinks files and links, and skips directories, FIFOs, sockets
+//        and devices. It prints `{rc, reason, cleared, skipped}` on its own line before the result line (lib decideRelay
+//        reads a result of rc and reason only), so the operator can check at close that `skipped` is empty.
+
+/** What lstat says a recall-off path is: 'absent', 'dir', 'link', 'file', 'special' (a FIFO, a socket, a device) or
+ *  'unmeasured' (any other failure). It never follows a link. */
+function recallOffKind(p) {
+  let st;
+  try {
+    st = lstatSync(p);
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? 'absent' : 'unmeasured';
+  }
+  if (st.isSymbolicLink()) return 'link';
+  if (st.isDirectory()) return 'dir';
+  return st.isFile() ? 'file' : 'special';
+}
+
+/** The words a recall-off path's kind is named with in a line. */
+const RECALL_OFF_KIND_WORDS = Object.freeze({
+  absent: 'absent', dir: 'a directory', file: 'a file', link: 'a link', special: 'a FIFO, a socket or a device', unmeasured: 'unmeasurable',
+});
+
+/** One recall-off pass (the block above). `args` is parseOpVerbArgs' `{ op: 'recall-off', mode, id, generation }`, and `out`
+ *  prints one stdout line. Answers `{ rc, reason? }`, which opPass prints as the result line. */
+export function recallOffPass(home, args, out) {
+  const P = historyPaths(home);
+  let content = null;
+  if (args.mode === 'write') {
+    const d = decideRecallOffWrite({ registry: readSmall(`${P.reg}/${args.id}.generation`, REG_VALUE_MAX), want: args.generation });
+    if (!d.ok) return { rc: d.rc, reason: d.reason };
+    content = d.generation === '' ? '' : `${d.generation}\n`;
+  }
+  const rootKind = recallOffKind(P.root);
+  const dirKind = rootKind === 'dir' ? recallOffKind(P.recallOffDir) : null;
+  if (rootKind !== 'dir' || (dirKind !== 'dir' && dirKind !== 'absent')) {
+    const [where, kind] = rootKind !== 'dir' ? ['~/.ccrc/history', rootKind] : ['~/.ccrc/history/recall-off', dirKind];
+    out(`history-sweep: recall-off: ${where} is ${RECALL_OFF_KIND_WORDS[kind]}, not a directory this pass writes in; nothing written`);
+    return { rc: EXIT.INTERNAL };
+  }
+  if (dirKind === 'absent') {
+    if (args.mode === 'clear-all') out(JSON.stringify({ rc: EXIT.OK, reason: null, cleared: 0, skipped: [] }));
+    if (args.mode !== 'write') return { rc: EXIT.OK };
+    mkdirSync(P.recallOffDir, { mode: 0o700 });
+    fsyncDir(P.root);
+  }
+  for (const n of readdirSync(P.recallOffDir).sort()) {
+    if (!n.startsWith('~tmp.')) continue;
+    try { unlinkSync(`${P.recallOffDir}/${n}`); } catch { /* a directory there stays, and --clear-all names it */ }
+  }
+  if (args.mode === 'write') {
+    let renamed = false;
+    try {
+      const fd = openSync(`${P.recallOffDir}/~tmp.${process.pid}`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try {
+        fchmodSync(fd, 0o600);
+        const buf = Buffer.from(content, 'utf8');
+        for (let off = 0; off < buf.length;) {
+          const n = writeSync(fd, buf, off, buf.length - off);
+          if (!(n > 0)) throw new Error('recall-off: a short write');
+          off += n;
+        }
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(`${P.recallOffDir}/~tmp.${process.pid}`, recallOffPath(home, args.id));
+      renamed = true;
+    } finally {
+      if (!renamed) { try { unlinkSync(`${P.recallOffDir}/~tmp.${process.pid}`); } catch { /* the next recall-off pass removes it */ } }
+    }
+    fsyncDir(P.recallOffDir);
+    out(`history-sweep: recall-off/${args.id} written`);
+    return { rc: EXIT.OK };
+  }
+  if (args.mode === 'clear') {
+    const kind = recallOffKind(recallOffPath(home, args.id));
+    if (kind === 'absent') {
+      out(`history-sweep: recall-off/${args.id} was already absent`);
+      return { rc: EXIT.OK };
+    }
+    if (kind !== 'file' && kind !== 'link') {
+      out(`history-sweep: recall-off/${args.id} is ${RECALL_OFF_KIND_WORDS[kind]}, neither a file nor a link: the operator removes it by hand; nothing removed`);
+      return { rc: EXIT.INTERNAL };
+    }
+    unlinkSync(recallOffPath(home, args.id));
+    fsyncDir(P.recallOffDir);
+    out(`history-sweep: recall-off/${args.id} cleared`);
+    return { rc: EXIT.OK };
+  }
+  const skipped = [];
+  let cleared = 0;
+  for (const n of readdirSync(P.recallOffDir).sort()) {
+    const kind = recallOffKind(`${P.recallOffDir}/${n}`);
+    if (kind === 'absent') continue;
+    if (kind !== 'file' && kind !== 'link') { skipped.push(n); continue; }
+    try {
+      unlinkSync(`${P.recallOffDir}/${n}`);
+      cleared += 1;
+    } catch (e) {
+      if (!(e !== null && typeof e === 'object' && e.code === 'ENOENT')) skipped.push(n);
+    }
+  }
+  fsyncDir(P.recallOffDir);
+  out(JSON.stringify({ rc: EXIT.OK, reason: null, cleared, skipped }));
+  return { rc: EXIT.OK };
 }
 
 /** One rostered home's projects/ tree, spelled and resolved: an unmade projects/ resolves to its spelling and holds nothing. */
@@ -6705,6 +6821,14 @@ async function opPass(parsed, deps, out) {
   if (role === 'server') {
     out('history-sweep: store-create-refused-role');
     return result(EXIT.NO_STORE);
+  }
+  if (parsed.op === 'recall-off') {
+    // W2-1 (W2-D26, W2-D27, W2-D28): recall-off's own pass. It runs after THE GATE (`apply-in-session`, and `history-off`,
+    // which refuses both its forms, neither binding a store) and the role check, and BEFORE the lock-take journal half: it
+    // opens no store, writes no op marker and journals nothing (D-6239 (history-recall-off-touches-no-store)). A
+    // registered recovery step never refuses it (RB12, lib recoveryExempt), so the RB6 half below would add nothing.
+    const r = recallOffPass(home, args, out);
+    return result(r.rc, r.reason);
   }
   if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
     // B1's D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or

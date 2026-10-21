@@ -6380,3 +6380,42 @@ describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-
     }
   });
 });
+
+// ── W2-1 Task 3: recall-off under a recovery step, and its generation read under the lock (W2-D27, W2-D28; RB12, C67) ──
+describe('W2-1 recall-off: RB12 and C67, decided under the lock', () => {
+  it('RB12: a registered recovery step never refuses recall-off; both forms run at both doors, and the step stays open', () => {
+    const box = makeHistoryBox('ccrc-history-recover-w21-rb12-');
+    seedFamily(box, {
+      id: ID, project: 'demo', uuid: u(0x41), generation: u(0xa4), workdir: WORK,
+      rows: [userRow({ uuid: u(0x4001), ts: new Date(Date.now() - 5 * MIN).toISOString(), text: 'zqrbtwelve words' })],
+    });
+    registerRecovery(box, Date.now());
+    // CONTROL: the step is registered, and it refuses a form RB12 does not exempt.
+    expect(lastRc(runShim(box, ['--op', 'import', '--apply']).stdout)).toEqual({ rc: 2, reason: 'recovering' });
+    const dir = path.join(historyPaths(box.home).root, 'recall-off');
+    const c = runCli(box, ['recall-off', ID, '--json']);
+    expect([c.code, c.json?.['reason']], `the CLI door\n${c.stdout}${c.stderr}`).toEqual([0, undefined]);
+    expect(fs.readFileSync(path.join(dir, ID), 'utf8')).toBe(`${u(0xa4)}\n`);
+    expect(lastRc(runShim(box, ['--op', 'recall-off', ID, '--clear']).stdout), 'the direct door').toEqual({ rc: 0 });
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(lastRc(runShim(box, ['--op', 'recall-off', ID]).stdout)).toEqual({ rc: 0 });
+    const all = runCli(box, ['recall-off', '--clear-all', '--json']);
+    expect([all.code, all.json?.['reason']], `${all.stdout}${all.stderr}`).toEqual([0, undefined]);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+  }, HEAVY);
+
+  it('C67 at the direct door: a $REG/<id>.generation present but unreadable refuses generation-unreadable under the lock, with or without --generation, and writes nothing', () => {
+    const box = makeHistoryBox('ccrc-history-recover-w21-c67-');
+    expect(runSweep(box).code).toBe(0);
+    plantSession(box, ID, { generation: 'unreadable' });
+    const before = ccrcSnapshot(box);
+    for (const extra of [[], ['--generation', u(0xa4)]]) {
+      const r = runShim(box, ['--op', 'recall-off', ID, ...extra]);
+      expect(lastRc(r.stdout), `${r.stdout}${r.stderr}`).toEqual({ rc: 2, reason: 'generation-unreadable' });
+      expect(r.code).toBe(2);
+    }
+    expect(ccrcSnapshot(box), 'nothing written').toEqual(before);
+    expect(fs.existsSync(path.join(historyPaths(box.home).root, 'recall-off'))).toBe(false);
+  }, HEAVY);
+});

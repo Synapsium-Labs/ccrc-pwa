@@ -111,6 +111,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['deploy/history-replay.mjs'], collector: null,
     bound: 'one W2 run, until the W2 decision is recorded', tier: 'one W2 run\'s transcripts and scores',
     ruling: 'operator-made; removed by hand once the W2 decision is recorded' },
+  // ccrc history, W2-1 (spec 2026-10-05 §9.4; W2-D9, W2-D28): the replay eval's control arm. sweep.mjs's --op recall-off is its
+  // one writer (O13), through its temp recall-off/~tmp.<pid>, which the next recall-off pass removes; the operator verbs clear
+  // it, `recall-off --clear-all` at W2 close, and an entry that verb skips is removed by hand.
+  { name: 'history-recall-off', root: '~/.ccrc/history/recall-off/<id>, and the writer\'s temp recall-off/~tmp.<pid> while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (--op recall-off)'],
+    collector: 'ccrc history recall-off <id> --clear, and recall-off --clear-all at W2 close (operator verbs through the shim, spec §10.6), or rm for an entry --clear-all skips; a stale ~tmp.<pid> is removed by the next recall-off pass',
+    bound: 'until cleared; every file by W2 close', tier: 'one generation per file: at most 37 B (a UUID and one LF), empty for a legacy family', ruling: null },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.

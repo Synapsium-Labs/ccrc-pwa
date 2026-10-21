@@ -2145,7 +2145,7 @@ This task ships the verb (W2-D26, W2-D27 and W2-D28) and pins its one writer (W2
   - in `describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8.4)"`, the case `it('a verb B2 does not run is bad-args (recall-off ships in W2)', () => {` (about :6503-6506), re-expected in place with its line count unchanged: its `recall-off` line refused the verb this task ships, so it would red at this task's own commit;
   - one describe appended at the end of the file (pins C16's two words, W2-D27's grammar and its table).
 - Test: `server/test/history-op.test.ts`: two describes appended at the end of the file. They pin C64's recall-off rows at both doors, the role gate, W2-D27's and W2-D28's mechanics through the shim (R3's unusable root and `recall-off/` among them), and in process the writer's own modes, open flags and directory fsync.
-- Test: `server/test/history-cli.test.ts`: one describe appended at the end of the file. It pins the CLI door's relay, C16 spawned, and the README text.
+- Test: `server/test/history-cli.test.ts`: one describe appended at the end of the file. It pins the CLI door's relay, C16 spawned, and the README text. One in-place number: H-32's `the scan sees every stderr write` count goes from 9 to 8, because deleting `recallOffVerb` deletes the stub's one `process.stderr.write` (measured: the case reds `expected 8 to be 9` at Step 14's full history-cli run; a comment beside the number says why).
 - Test: `server/test/history-recall.test.ts`:
   - the title line of the describe that holds the next case, `describe('the read verbs\' pure halves: parseReadArgs, selectColumns, decideRecallOffPreflight (W1-B2 Task 10)', () => {` (about :156), renamed in place so it names no removed function;
   - the case `it('decideRecallOffPreflight: the id grammar first, then the generation read, then W2\'s word', () => {` (about :203-214), replaced;
@@ -3119,8 +3119,7 @@ Expected RED (predicted). Step 3 left `cli.mjs` importing the removed `decideRec
   - Every mechanics row fails at the direct door with `expected [ 2, 'bad-args' ] to deeply equal …`, because `OP_VERBS` lacks `recall-off`. That includes the unusable-directory case, at its first form (`recall-off/ a file`, `[ 1, undefined ]` expected).
   - The in-process case passes its CONTROL (no `recall-off/` yet), then fails with `sweep.recallOffPass is not a function`; its `finally` restores the umask.
 - history-cli: 5 failed. The write case (`expected 2 to be 0`), C16 (`'bad-args'`), the bad-args case at its CONTROL (`expected 2 to be 0`), the summary case, and README (`expected … to contain '`recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all`'`).
-- history-recall: 4 failed:
-  - the replaced case, with `the B2 stub's decision went with the stub: expected true to be false`;
+- history-recall: 3 failed | 1 passed (measured; the plan said 4 failed). The replaced case, "recall-off's argv is parseOpVerbArgs' since W2-1 …", is green on arrival, because Step 3 already shipped the grammar and the case asserts only the removed stub's absence and the new parser's answers. Step 13's M31 is what pins it. The three that fail:
   - C66, at its replaced line;
   - the one-reader case, with `the drain reads the same whole file…: expected 0 to be 1`, because the base drain reads 128 bytes, so it sees G1 and answers off;
   - RP10, at its first write.
@@ -3643,8 +3642,9 @@ open(p, 'w').write(s.replace(gate, arm + gate))
 EOF
 (cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'W2-1 recall-off: C64')
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
-# Expected RED (predicted): 2 failed, the CLAUDECODE and history-off rows at the DIRECT door only: expected [ 0, undefined ] to deeply equal
-# [ 2, 'apply-in-session' ] (the CLI door still refuses: the mutant gates in cli.mjs alone).
+# Expected RED (measured: 3 failed | 2 passed; the plan said 2 failed): the CLAUDECODE and history-off rows at the DIRECT door (`recall-off via direct`:
+# expected [ 0, undefined ] to deeply equal [ 2, 'apply-in-session' ] or [ 2, 'history-off' ]; the CLI door still refuses), and the role-gate case, because
+# the arm above THE GATE also skips the role check: [ 1, undefined ] where [ 9, undefined ] is expected.
 
 # M15: the recall-off arm moved above the role check.
 python3 - ccd/history/sweep.mjs <<'EOF'
@@ -3656,8 +3656,8 @@ tail = "    return result(r.rc, r.reason);\n  }\n"
 end = s.index(tail, start) + len(tail)
 arm = s[start:end]
 s = s[:start] + s[end:]
-role = "  const role = readRole(P);\n  if (role === 'server') {\n    out('history-sweep: store-create-refused-role');\n"
-assert s.count(role) == 1
+role = "  const role = readRole(P);\n  if (role === 'server') {\n    out('history-sweep: store-create-refused-role');\n    return result(EXIT.NO_STORE);\n"
+assert s.count(role) == 1, s.count(role)   # the shorter anchor also matches scheduledPass (count 2): opPass's block ends in this return
 open(p, 'w').write(s.replace(role, arm + role))
 EOF
 (cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'the role gate')
@@ -3742,7 +3742,7 @@ cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
 # in-process case asserts the modes.
 
 # M26 (W2-D28's 0600): the temp opened 0644 and its fchmod deleted, so the umask decides the file's mode.
-mut ccd/history/sweep.mjs "constants.O_EXCL | constants.O_NOFOLLOW, 0o600);" "constants.O_EXCL | constants.O_NOFOLLOW, 0o644);"
+mut ccd/history/sweep.mjs '~tmp.${process.pid}`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);' '~tmp.${process.pid}`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);'   # the bare `O_EXCL | O_NOFOLLOW, 0o600);` also matches an older open (count 2)
 mut ccd/history/sweep.mjs "        fchmodSync(fd, 0o600);
 " ""
 (cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'in-process')
@@ -3785,6 +3785,24 @@ EOF
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
 # Expected RED (predicted): 1 failed: unlinkSync throws on the directory, the pass answers rc 1 with no line naming it: expected '…' to
 # contain 'history-sweep: recall-off/claude-a-demo is a directory, neither a file nor a link'.
+
+# M31 (P5: the replaced history-recall case): a recall-off `bad-args` arm restored in parseOpVerbArgs, ahead of the real one.
+mut ccd/history/lib.mjs "    case 'recall-off': {
+      // Every shape error" "    case 'recall-off':
+      return refuse('bad-args');
+    case 'recall-off-unreachable': {
+      // Every shape error"
+(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t "recall-off.s argv is parseOpVerbArgs")
+cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
+# Measured RED: 1 failed | 199 skipped: expected { ok: false, reason: 'bad-args' } to deeply equal { ok: false, reason: 'bad-id' }.
+
+# M32 (P10: a clear never makes recall-off/): the mkdir moved above the write-form split, so the clear forms make the directory too.
+mut ccd/history/sweep.mjs "    if (args.mode !== 'write') return { rc: EXIT.OK };
+    mkdirSync(P.recallOffDir, { mode: 0o700 });" "    mkdirSync(P.recallOffDir, { mode: 0o700 });
+    if (args.mode !== 'write') return { rc: EXIT.OK };"
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'the clear form: a missing entry|lstats every entry')
+cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
+# Measured RED: 2 failed: `a clear never makes recall-off/: expected true to be false` and `clear-all never makes recall-off/: expected true to be false`.
 
 for f in lib sweep cli; do cmp "$SCRATCH/$f.orig" "ccd/history/$f.mjs"; done
 cmp "$SCRATCH/shim.orig" ccd/ccd-history-sweep && cmp "$SCRATCH/lifecycle.orig" shared/lifecycle.ts && echo restored

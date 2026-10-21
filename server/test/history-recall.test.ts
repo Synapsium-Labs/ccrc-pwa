@@ -153,7 +153,7 @@ describe('C36, the Darwin row: a read verb answers 9 natively on macOS', () => {
   });
 });
 
-describe('the read verbs\' pure halves: parseReadArgs, selectColumns, decideRecallOffPreflight (W1-B2 Task 10)', () => {
+describe('the read verbs\' pure halves: parseReadArgs, selectColumns and recall-off\'s argv (W1-B2 Task 10)', () => {
   const parse = libRead.parseReadArgs;
   const bad = { ok: false, reason: 'bad-args' };
 
@@ -200,16 +200,13 @@ describe('the read verbs\' pure halves: parseReadArgs, selectColumns, decideReca
     expect(() => libRead.selectColumns(1, 'nodes', ['no_such_col'])).toThrow(TypeError);
   });
 
-  it('decideRecallOffPreflight: the id grammar first, then the generation read, then W2\'s word', () => {
-    const pre = libRead.decideRecallOffPreflight;
-    expect(pre({ args: ['../x', '--clear'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-id' });
-    expect(pre({ args: [ID], generation: null })).toEqual({ done: false, id: ID });
-    expect(pre({ args: [ID], generation: { state: 'unreadable' } })).toEqual({ done: true, exit: 2, reason: 'generation-unreadable' });
-    expect(pre({ args: [ID, '--clear'], generation: { state: 'value', value: G1 } })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [ID], generation: { state: 'absent' } })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: ['--clear-all'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [ID, '--bogus'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
+  it('recall-off\'s argv is parseOpVerbArgs\' since W2-1: the B2 preflight is gone, and the id grammar still comes before any path (C66)', () => {
+    expect('decideRecallOffPreflight' in libRead, 'the B2 stub\'s decision went with the stub').toBe(false);
+    const p = libRead.parseOpVerbArgs;
+    expect(p('recall-off', ['../x', '--clear'])).toEqual({ ok: false, reason: 'bad-id' });
+    expect(p('recall-off', [ID])).toEqual({ ok: true, args: { op: 'recall-off', mode: 'write', id: ID, generation: null } });
+    expect(p('recall-off', ['--clear-all'])).toEqual({ ok: true, args: { op: 'recall-off', mode: 'clear-all', id: null, generation: null } });
+    expect(p('recall-off', [ID, '--bogus'])).toEqual({ ok: false, reason: 'bad-args' });
   });
 });
 
@@ -409,7 +406,8 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(fs.readFileSync(victim, 'utf8'), 'nothing unlinked, nothing written').toBe('keep');
     fs.mkdirSync(path.join(box.reg, `${ID_B}.generation`));
     expect(answer(runCli(box, ['recall-off', ID_B, '--json'])), 'C67\'s recall-off clause').toEqual([2, 'generation-unreadable']);
-    expect(answer(runCli(box, ['recall-off', ID, '--json'])), 'the writing verb ships with W2').toEqual([2, 'bad-args']);
+    expect(answer(runCli(box, ['recall-off', ID, '--json'])), 'the verb writes since W2-1').toEqual([0, undefined]);
+    expect(fs.readFileSync(hist(box, 'recall-off', ID), 'utf8'), 'the id\'s generation, through the shim').toBe(`${G1}\n`);
   }, HEAVY);
 
   it('C48: with no CCRC_SESSION_GENERATION and $REG/<id>.generation = G, the scope is (id, G), not the newest family', () => {
@@ -5564,4 +5562,42 @@ describe.skipIf(process.platform === 'darwin')('W2-D33: the exports the deploy l
     expect(lines, 'main did not run: stdout is the child line alone').toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toEqual({ umask: 0o077, kinds: Array(6).fill('function') });
   }, HEAVY);
+});
+
+// ── W2-1 Task 3: one reader of recall-off/<id>, and RP10's verb half (W2-D28, W2-D29) ─────────────────────────────────
+// W2-D29: the CLI's read verbs and the drain's stale check read recall-off/<id> through ONE reader, sweep.mjs's
+// recallOffPresence (store.mjs readBounded at CONTROL_FILE_MAX), so they agree on every file. At the base the CLI read 4,096
+// bytes and the drain 128, and a file whose 129th byte onward differs from its head could be stale to one and off to the
+// other. RP10's verb half: the W2 close step clears every assigned file through the shim (its card half is beside RP8, W2-D32).
+describe('W2-1 recall-off: one reader, and RP10\'s verb half', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('W2-D29, one reader: G1, 200 spaces and a word is stale for the CLI and for the drain alike', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-w21one-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(hist(box, 'recall-off', ID), `${G1}${' '.repeat(200)}word\n`);
+    const r = treeJson(box);
+    expect(r.code, `the CLI reads the whole file: not G1, so stale, and recall proceeds. ${r.stderr}`).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => x.rc)).toEqual([0]);
+    expect(counters(box)['recall_off_stale'] ?? 0, 'the drain reads the same whole file, so it reaches the same verdict').toBe(1);
+  }, HEAVY);
+
+  it('RP10, verb half: three families switched off by the verb answer 8; recall-off --clear-all leaves none, cleared 3 and skipped none, and each family reads again', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-rp10-');
+    const FAMS = [[ID, TA, G1], [ID_B, TB, G2], [ID_D11, TD11, G4_11]] as const;
+    for (const [id, uuid, g] of FAMS) seedFamily(box, { id, project: PROJECT, uuid, generation: g, rows: turns(uuid, 2) });
+    for (const [id, , g] of FAMS) {
+      const w = runCli(box, ['recall-off', id, '--generation', g, '--json']);
+      expect(answer(w), `${w.stdout}${w.stderr}`).toEqual([0, undefined]);
+      expect(answer(treeJson(box, id)), `${id} is in the control arm`).toEqual([8, undefined]);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')).sort()).toEqual(FAMS.map(([id]) => id).sort());
+    const all = runCli(box, ['recall-off', '--clear-all']);
+    expect(all.code, `${all.stdout}${all.stderr}`).toBe(0);
+    expect(all.stdout).toContain('{"rc":0,"reason":null,"cleared":3,"skipped":[]}');
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'none left').toEqual([]);
+    for (const [id] of FAMS) expect(treeJson(box, id).code, `${id} reads again`).toBe(0);
+  }, 1.5 * HEAVY);
 });

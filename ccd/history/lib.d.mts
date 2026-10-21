@@ -698,7 +698,8 @@ export type OpArgs =
   | { readonly op: 'backup' }
   | { readonly op: 'adopt' }
   | { readonly op: 'restore'; readonly name: string }
-  | { readonly op: 'rebuild'; readonly storeId: string | null };
+  | { readonly op: 'rebuild'; readonly storeId: string | null }
+  | { readonly op: 'recall-off'; readonly mode: 'write' | 'clear' | 'clear-all'; readonly id: string | null; readonly generation: string | null };
 export function parseOpVerbArgs(op: string, args: readonly string[]):
   { ok: true; args: OpArgs } | { ok: false; reason: 'bad-args' | 'bad-id' | 'older-than-floor' | 'restore-refused' };
 export function decideOpDoor(f: CliStoreFacts):
@@ -807,7 +808,7 @@ export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; 
 export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
 export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };
 
-// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects, recall-off's B2 refusals
+// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects; W2-1: recall-off's write, decided
 export function paneOk(pane: unknown): boolean;
 export const TREE_DEPTH_DEFAULT: 2;
 export const TREE_DEPTH_MAX: 8;
@@ -831,10 +832,10 @@ export type ReadArgs =
 export function parseReadArgs(verb: string, argv: readonly string[]): ReadArgs;
 export function selectColumns(version: number, table: string, cols: readonly string[],
   schema?: Readonly<Record<number, SchemaVersionAdded>>, alias?: string | null): string;
-export type RecallOffPreflight =
-  | { done: true; exit: 2; reason: 'bad-args' | 'bad-id' | 'generation-unreadable' }
-  | { done: false; id: string };
-export function decideRecallOffPreflight(i: { args: readonly string[]; generation: Presence<string> | null }): RecallOffPreflight;
+export type RecallOffWrite =
+  | { ok: true; generation: string }
+  | { ok: false; rc: 2; reason: 'generation-unreadable' | 'generation-malformed' | 'generation-mismatch' };
+export function decideRecallOffWrite(i: { registry: Presence<string>; want: string | null }): RecallOffWrite;
 
 // --- W1-B2 Task 11: the --json scope's family bound
 export const SCOPE_FAMILIES_JSON_MAX: 3;

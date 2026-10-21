@@ -5736,6 +5736,14 @@ pausing before that filesystem's free-space floor. `doctor --backup` writes `db/
 `--restore <file>` puts one back, `--rebuild` remakes a lost store from the journal and the export, and
 until the sweep has replayed them every other writing verb refuses (`recovering`), bar the `--migrate`
 an older restored store needs first and the `--adopt` an unbound one needs.
+`recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all` set and clear the W2 replay
+eval's control arm, `~/.ccrc/history/recall-off/<id>`. They write as invoked, with no dry run, through the
+same shim; they refuse inside a session and under `~/.ccrc/history-off`, and still run during a recovery.
+The write records the id's generation as `$REG/<id>.generation` holds it then, and refuses before writing
+anything: `generation-mismatch` when `--generation` names another generation or the registry holds none,
+`generation-malformed` when the registry holds something that is not a generation, and
+`generation-unreadable` when it cannot be read. `--clear-all` prints how many files it removed and the
+names it skipped (a directory, a FIFO, a socket or a device), which the operator removes by hand.
 
 ---
 
