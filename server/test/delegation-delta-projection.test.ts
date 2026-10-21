@@ -342,7 +342,8 @@ describe('R8 / R9 / R10: the store half of the compare-and-swap and the count tr
     expect(err.code).toBe('projection-delta-mismatch');
     expect(err.message, 'names the table').toContain('delegation_activities');
     expect(err.message, 'names the key of the row that did not match').toContain(x.activityId);
-    expect(err.message, 'a compare-and-swap miss, not a count').not.toMatch(/\bcounts?\b/i);
+    expect(err.message, 'a compare-and-swap miss').toMatch(/compare-and-swap changed/);
+    expect(err.message, 'not the count tripwire\'s message').not.toMatch(/after the delta, expected/);
     expect(dumpAll(w.raw), 'SQLite after the call is SQLite before it').toEqual(before);
   });
 
@@ -685,6 +686,7 @@ describe('R16: one generated case per codec column', () => {
       const [table, col] = name.split('.') as [string, string];
       const spec = TABLES.find((t) => t.codec.table === table)!;
       const w = openWorld();
+      expect(w.prior, 'the twin store the full path is probed on mints the same run ids as this world').toEqual(twin().prior);
       const forced = replaceRow(w.prior, spec.field, 0, { ...(rowsOf(w.prior, spec.field)[0] as object), [col]: 'other-population' });
       expect(probe(forced), 'the full path itself refuses it, in SQLite').toEqual({ kind: 'invalid' });
       const before = dumpAll(w.raw);

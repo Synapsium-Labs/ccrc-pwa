@@ -39,9 +39,11 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec, prepareDelegationProjectionChanges,
+  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult, type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
+  prepareDelegationProjectionChanges,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
@@ -9030,13 +9032,14 @@ export class CoordStore {
     tx(this.db, () => {
       // Each statement is prepared at most once per call, the first time its table needs it (as the full path prepares once per table).
       const prepared = new Map<string, StatementSync>();
-      const prep = (key: string, sql: () => string): StatementSync => { const st = prepared.get(key) ?? this.db.prepare(sql()); prepared.set(key, st); return st; };
+      const prep = (key: string, sql: () => string): StatementSync => { let st = prepared.get(key); if (st === undefined) { st = this.db.prepare(sql()); prepared.set(key, st); } return st; };
       const swap = <Row, Col extends string>(head: string, codec: DelegationRowCodec<Row, Col>, insertSql: () => string) => ({
         update: (u: DelegationProjectionUpdate): void => {
           const written = codec.columns.filter((c) => !u.keyColumns.includes(c));
           const res = prep(head, () => `${head} SET ${written.map((c) => `${c} = ?`).join(', ')} WHERE ${codec.columns.map((c) => `${c} IS ?`).join(' AND ')}`)
             .run(...written.map((c) => u.next[c] as DelegationSqlValue), ...codec.columns.map((c) => u.prior[c] as DelegationSqlValue));
-          if (Number(res.changes) !== 1) throw new DelegationModelError('projection-delta-mismatch', `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
+          if (Number(res.changes) !== 1) throw new DelegationModelError('projection-delta-mismatch',
+            `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
         },
         insert: (i: DelegationProjectionInsert): void => { prep(i.table, insertSql).run(...codec.columns.map((c) => i.values[c] as DelegationSqlValue)); },
       });

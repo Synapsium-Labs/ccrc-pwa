@@ -409,7 +409,8 @@ describe('R8 / R9 / R10: out-of-band damage the delta refuses: the application r
     const refusal = (out.projection as { error: string }).error;
     expect(refusal, 'the refusal names the compare-and-swap miss on the table').toContain('delegation_activities');
     expect(refusal, 'and the key of the row that did not match').toContain(x.activityId);
-    expect(refusal, 'a compare-and-swap miss, not a count').not.toMatch(/\bcounts?\b/i);
+    expect(refusal, 'a compare-and-swap miss').toMatch(/compare-and-swap changed/);
+    expect(refusal, 'not the count tripwire\'s message').not.toMatch(/after the delta, expected/);
     await expectHealsOnNextPass(r, 'R8', 2);
     expect(r.store.db.prepare('SELECT displayName FROM delegation_activities WHERE activityId = ?').get(x.activityId)?.['displayName'], 'X is back, with the update').toBe('reviewer');
   });

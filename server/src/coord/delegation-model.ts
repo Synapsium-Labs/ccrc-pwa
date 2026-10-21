@@ -1255,11 +1255,11 @@ export function projectionViewOfDelegationCheckpoint(checkpoint: DelegationCheck
  * a single column is its text, several are the JSON list of their values.
  */
 function diffProjectionTable<Row, Col extends string>(
-  codec: DelegationRowCodec<Row, Col>, keyColumns: readonly Col[],
+  codec: DelegationRowCodec<Row, Col>, keyColumns: readonly (Col & keyof Row)[],
   frozen: (prior: Row | undefined, next: Row) => boolean, prior: readonly Row[], next: readonly Row[],
 ): { reason: string } | { updates: DelegationProjectionUpdate[]; inserts: DelegationProjectionInsert[] } {
   const keyOf = (row: Row): string => {
-    const parts = keyColumns.map((c) => (row as Readonly<Record<string, unknown>>)[c]);
+    const parts = keyColumns.map((c) => row[c]);
     return parts.length === 1 ? String(parts[0]) : JSON.stringify(parts);
   };
   const priorByKey = new Map<string, Row>();
