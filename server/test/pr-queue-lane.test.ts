@@ -127,7 +127,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   const stop = (): void => { w.stop(); };
   const queueFeed = () => coord.feedEvents(200).filter((e) => e.kind === 'queue');
   const mail = () => coord.mailForRecipient(COORDINATOR);
-  return { coord, sweep, restart, stop, sent, queueFeed, mail, runId, firstRunId: opened.id };
+  return { coord, deps, sweep, restart, stop, sent, queueFeed, mail, runId, firstRunId: opened.id };
 }
 
 describe('queueFor — the one reader of the queue fields', () => {
@@ -370,6 +370,60 @@ describe('the landing lane latches only what it told', () => {
     f.restart();
     await f.sweep();
     expect(f.mail()).toHaveLength(1);
+    f.stop();
+  });
+});
+
+// D-5860 (Task C1f, Step 1): the characterization of the landing step's feed-only "already told" read (`toldFeed`,
+// `hasFeedEvent('queue', id, body)`) AS IT STANDS, before any key. Rows (a), (b) and (e) of the plan's table are
+// "with no open run, records the feed event and mails nobody", the same block's second sweep, and "a restart
+// re-records no feed-only dequeue either" above. The mailed path's read (`hasMailWithSubject`) is not a feed read and
+// is not C1f's. The rows below are the ones a key read can answer differently; OA-C3 rules which of them change.
+describe('C1f characterization: the landing step\'s feed-only "already told" matches the archived body (D-5860, OA-C3)', () => {
+  const TAG = `queue-${ID}#42:dequeued@${T1}`;
+  it('(c) told WITH a coordinator, then the run fails, then a restart: TODAY the same removal is recorded and pushed AGAIN, feed-only', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    await f.sweep();
+    expect(f.queueFeed().map((e) => e.body)).toEqual([expect.stringContaining(`Mailed coordinator ${COORDINATOR}.`)]);
+    expect(f.coord.advance(f.runId!, 'failed', 'test').ok).toBe(true);
+    // Same process: the in-memory latch holds, whatever the run did.
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    f.restart();
+    await f.sweep();
+    // The second read asks the feed (no open run names a coordinator now) with a body whose last sentence changed.
+    expect(f.queueFeed().map((e) => e.body)).toEqual([
+      expect.stringContaining(`Mailed coordinator ${COORDINATOR}.`),
+      expect.stringContaining('No open run names a coordinator to tell.'),
+    ]);
+    expect(f.queueFeed().every((e) => e.body.includes(`(removed ${T1})`))).toBe(true);
+    expect(f.mail()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(2);
+    f.stop();
+  });
+  it('(c) the feed-only row\'s body changed (a reworded deploy), then a restart: TODAY recorded and pushed AGAIN', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    f.coord.db.prepare("UPDATE feed_events SET body = ? WHERE kind = 'queue'").run(`PR #42 was dequeued (an earlier wording) (removed ${T1})`);
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(2);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(2);
+    expect(f.mail()).toEqual([]);
+    f.stop();
+  });
+  it('(d)+(e) a ring restart (a new epoch) and a restart: the archived row is matched whatever epoch wrote it', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
+    await f.sweep();
+    const before = (f.deps as unknown as { notifyLog: NotifyLog }).notifyLog;
+    const fresh = new NotifyLog(path.join(mkTmp('ccrc-queue-ring-'), 'notify.json'));
+    await fresh.load();
+    expect(fresh.epoch).not.toBe(before.epoch);
+    (f.deps as unknown as { notifyLog: NotifyLog }).notifyLog = fresh;
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
     f.stop();
   });
 });
