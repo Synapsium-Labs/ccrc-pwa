@@ -21,8 +21,9 @@
 // read it from `origin/main`'s copy only (`exemptionsOnMain`), so a PR's own
 // entry never exempts that PR. The PR number comes from `GITHUB_REF`, paired
 // with its event (`prNumberFromEnv`). An entry waives its own file for its own
-// PR while the measured delta stays at or below its cap, and only when the PR
-// leaves the check's own files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
+// PR while the measured delta stays at or below its cap, and only when the diff
+// the run measures (merge-base(origin/main, HEAD)..HEAD) leaves the check's own
+// files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
 // `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
 // the pure decision inside it.
 import { execFileSync } from 'node:child_process';
@@ -297,21 +298,25 @@ export function exemptionsOnMain(files: readonly string[], cwd: string, today: D
   return text === null ? { entries: [], problems: [] } : parseExemptions(text, files, today);
 }
 
-/** The growth check's own files. A PR whose diff touches any of them gets no
- *  exemption, its own entry included, so the list, the code that reads it and
- *  the rows that decide stay outside the reach of the PR they judge. */
+/** The growth check's own files: this module and every module it imports, the
+ *  rows that decide, the list, and the list's stamp and its test. When the diff
+ *  the run measures (merge-base(origin/main, HEAD)..HEAD) touches any of them,
+ *  no exemption applies, its own entry included, so a PR cannot reach the code
+ *  that judges it and keep its exemption. */
 export const GROWTH_MACHINERY: readonly string[] = [
   'server/test/growthCheck.ts',
   'server/test/growth-check.test.ts',
   GROWTH_EXEMPTIONS_FILE,
   'server/test/rings/exemption-age.test.ts',
   'server/test/rings/exemption-age.data.ts',
+  'server/test/rings/exemptions.ts',
+  'server/test/scan/parse.ts',
 ];
 
 /** For each file in `over`, the entry naming it for PR `pr`, and whether it
- *  applies: the measured delta is at or below the entry's cap, and the PR
- *  touched none of `GROWTH_MACHINERY` (`touched` names what it did touch). No
- *  PR number, no match. */
+ *  applies: the measured delta is at or below the entry's cap, and the measured
+ *  diff touched none of `GROWTH_MACHINERY` (`touched` names what it did touch).
+ *  No PR number, no match. */
 export interface ExemptionMatch { file: string; entry: GrowthExemption; applies: boolean; touched: readonly string[] }
 export function matchExemptions(over: readonly string[], rows: readonly GrowthRow[],
   entries: readonly GrowthExemption[], pr: number | null, touched: readonly string[] = []): ExemptionMatch[] {
@@ -328,7 +333,7 @@ export function matchExemptions(over: readonly string[], rows: readonly GrowthRo
 
 /** Why an entry that names a file does not apply. */
 const notExempt = (m: ExemptionMatch): string => (m.touched.length
-  ? `not exempt: PR #${m.entry.pr} edits the growth check's own ${m.touched.join(', ')}`
+  ? `not exempt: the diff for PR #${m.entry.pr} edits the growth check's own ${m.touched.join(', ')}`
   : `over its exemption cap of ${m.entry.cap} for PR #${m.entry.pr}`);
 
 /** One listed file's verdict: its row's title, whether the row fails, and why. */
@@ -358,8 +363,8 @@ export function growthVerdicts(rows: readonly GrowthRow[], over: readonly string
 
 /** The armed rows' whole read and decision between `base` and `head` in
  *  `root`: each file's growth, the two waivers, origin/main's exemption list,
- *  the PR number, the growth check's own files the diff touches, and the
- *  verdict per file. */
+ *  the PR number, the growth check's own files the measured diff touches, and
+ *  the verdict per file. */
 export function armedGrowth(files: readonly string[], root: string, base: string, head: string,
   env: NodeJS.ProcessEnv, today: Date = new Date()) {
   const rows = files.map((f) => netGrowth(f, base, head, root));

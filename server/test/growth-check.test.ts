@@ -20,8 +20,8 @@
 // listed file up to the entry's cap. The armed rows call one helper,
 // `armedGrowth`, which reads `origin/main`'s copy of that list, never this
 // checkout's, takes the PR number from `GITHUB_REF` and its event, and withholds
-// every exemption from a PR that edits the growth check's own files. The HEAD
-// copy's shape is checked on every run, CI or not.
+// every exemption when the diff the run measures edits the growth check's own
+// files. The HEAD copy's shape is checked on every run, CI or not.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,6 +36,7 @@ import {
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, type GrowthRow, type GrowthExemption,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
+import { parseFile } from './scan/parse.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -241,6 +242,16 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
   });
   const list = (...entries: unknown[]): string => JSON.stringify({ exemptions: entries });
   const today = new Date('2026-10-21T12:00:00Z');
+  /** The growth check's own files as ruled (fix rounds 1 and 2), written out rather than read from the constant. */
+  const MACHINERY = [
+    'server/test/growthCheck.ts',
+    'server/test/growth-check.test.ts',
+    'server/test/growth-exemptions.json',
+    'server/test/rings/exemption-age.test.ts',
+    'server/test/rings/exemption-age.data.ts',
+    'server/test/rings/exemptions.ts',
+    'server/test/scan/parse.ts',
+  ];
 
   it('the PR number comes from GITHUB_REF under its event: a pull request\'s merge ref or a merge-queue branch', () => {
     const PR = 'pull_request';
@@ -381,6 +392,18 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
     }
   });
 
+  it('the growth check\'s own files are exactly the ruled seven', () => {
+    expect([...GROWTH_MACHINERY]).toEqual(MACHINERY);
+  });
+
+  it('every module growthCheck.ts imports is one of the growth check\'s own files', () => {
+    const src = path.join(ROOT, 'server/test/growthCheck.ts');
+    const relative = parseFile(src).imports.map((i) => i.specifier).filter((s) => s.startsWith('.'));
+    const repoPaths = relative.map((s) => path.relative(ROOT, path.resolve(path.dirname(src), s)).replace(/\.js$/, '.ts'));
+    expect(repoPaths.length, 'growthCheck.ts imports no relative module: the row has nothing to check').toBeGreaterThan(0);
+    expect(repoPaths.filter((p) => !GROWTH_MACHINERY.includes(p)), 'an import outside GROWTH_MACHINERY: add it there').toEqual([]);
+  });
+
   it('the decision: a row fails when its file is over and no entry applies to it', () => {
     const e = parseExemptions(list(entry({ cap: 400 })), GROWTH_FILES, today).entries;
     const row = (delta: number): GrowthRow => ({ file: 'ccd/ccd', base: 1000, head: 1000 + delta, delta, atBoth: true });
@@ -394,7 +417,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       ['over, another PR\'s entry', row(400), ['ccd/ccd'], e, 1101, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
       ['over, no PR number', row(400), ['ccd/ccd'], e, null, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
       ['over, the PR edits the growth check', row(400), ['ccd/ccd'], e, 1100, ['server/test/growth-exemptions.json'], true,
-        'ccd/ccd: delta +400 (GROWTH_OVER, not exempt: PR #1100 edits the growth check\'s own server/test/growth-exemptions.json)'],
+        'ccd/ccd: delta +400 (GROWTH_OVER, not exempt: the diff for PR #1100 edits the growth check\'s own server/test/growth-exemptions.json)'],
     ];
     for (const [what, r, over, entries, pr, touched, fails, title] of table) {
       const [v] = growthVerdicts([r], over, entries, pr, touched);
@@ -447,10 +470,12 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
       git('commit', '-q', '-am', 'the PR grows ccd/ccd');
       const named = ccd(git('rev-parse', 'HEAD'));
       expect({ fails: named.fails, applies: named.exemption?.applies }).toEqual({ fails: false, applies: true });
-      // That PR also edits one of the growth check's own files: no exemption.
-      for (const f of GROWTH_MACHINERY.filter((m) => m !== GROWTH_EXEMPTIONS_FILE)) {
+      // That PR also edits one of the growth check's own files: no exemption. The list is written out here, not
+      // read from GROWTH_MACHINERY, so a member dropped from the constant reds its case. The list file's case is the
+      // ruling's "its own entry included": the entry stands on origin/main, and the PR re-writes the same entry.
+      for (const f of MACHINERY) {
         git('checkout', '-q', '-B', 'pr3', 'pr2');
-        put(f, '// an edit\n');
+        put(f, f === GROWTH_EXEMPTIONS_FILE ? JSON.stringify({ exemptions: [entry({ cap: 100 })] }, null, 2) : '// an edit\n');
         git('add', '-A');
         git('commit', '-q', '-m', `the PR edits ${f}`);
         const v = ccd(git('rev-parse', 'HEAD'));
@@ -488,7 +513,7 @@ describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
     const plain = growthSummary({ base: 'abcdef1234567', rows, over, methods: { base: 1, head: 1 }, armed: true });
     expect(plain).toContain('GROWTH_OVER: `ccd/ccd`, `ccd/ccrc`');
     const edits = matchExemptions(['ccd/ccd'], rows, e, 1100, ['server/test/growthCheck.ts']);
-    expect(overLine(['ccd/ccd'], edits)).toBe('ccd/ccd (not exempt: PR #1100 edits the growth check\'s own server/test/growthCheck.ts)');
+    expect(overLine(['ccd/ccd'], edits)).toBe('ccd/ccd (not exempt: the diff for PR #1100 edits the growth check\'s own server/test/growthCheck.ts)');
   });
 
   it(`the HEAD copy of ${GROWTH_EXEMPTIONS_FILE} is well formed, and stamped under the 60-day rule`, () => {
