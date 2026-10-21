@@ -924,7 +924,7 @@ describe.skipIf(PY === null)('the advance deadline: one clipped clock, taken aft
   }, T);
 });
 
-// ── THE BUDGET FAILS CLOSED (the budget ruling, D-TBD-budget-fails-closed) ─────────────────────────────────────────────
+// ── THE BUDGET FAILS CLOSED (the budget ruling, D-6266) ────────────────────────────────────────────────────────────────
 // An operator who sets the budget to `off`, `false` or `-1` to stop the step is obeyed: a value that is not a whole
 // number is 0 for the run, said once on stderr without the value. A whole number over 3600 is 3600, decided by its digit
 // count before any `$(( ))`. Unset or empty is still the default, 250.

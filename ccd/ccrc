@@ -1395,7 +1395,7 @@ _models_answer() {
 #   (held past the bound), `lock-unwritable` (the directory or the file cannot be made, made 0700 or opened, or the path
 #   is a symlink or not a regular file) or `install-incomplete` (the wrapper-shape contract is missing), three remedies
 #   never folded into one (D-5204), and in the automatic context only `budget-deferred` too (the run's budget cannot
-#   carry the locked change; D-TBD-auto-lock-refusal-shape); rc 2, MODELS_LOCK_ERR=bad-account-id, for an id no lock
+#   carry the locked change; D-6261); rc 2, MODELS_LOCK_ERR=bad-account-id, for an id no lock
 #   path may be built from. It prints nothing: each of its two callers prints the one refusal in its own shape.
 # - RE-ENTRANT for the lane this shell, or a subshell of it, already holds: a second `flock` on a new open of the
 #   path would wait on this very process's lock. A call for another lane releases the first (one lane per shell).
@@ -11198,7 +11198,7 @@ MODELS_HOOK_S=5
 
 # The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, 250 when unset or empty; a
 # whole number is itself, base 10 (`0250` is 250), and 3600 at most, capped by its digit count before `$(( ))` could overflow
-# on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-TBD-budget-fails-closed).
+# on it; ANYTHING ELSE (`off`, `-1`, `1.5`) is 0, the step off for this run, said on stderr without the value (D-6266).
 _models_advance_budget_secs() {
   local s="${CCRC_MODELS_ADVANCE_BUDGET_S:-250}"
   case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
