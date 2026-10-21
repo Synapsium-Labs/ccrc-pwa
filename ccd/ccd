@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=10421e8d732dcd7825c3fd50137b5fb7fef661c46eda930ce7e34cc1483dd237
+# ccrc:generated 1 sha256=cb51450f92c6e9b1ff83ccd39426074799a1246d3573ba008782e2de0d68e39a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -37990,27 +37990,36 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 # can bind is inside this one (with no `orderBy` GitHub answers the OLDEST
 # hundred, and on a busy repository the PRs being landed would all read
 # `unmeasured`) — and the twenty most recently updated MERGED ones, each with
-# the LAST queue act on its timeline. The spec names
+# the LAST queue act on its timeline, and a removal's `reason`. The spec names
 # `mergeQueueEntry` and the last `REMOVED_FROM_MERGE_QUEUE_EVENT`; the last act
-# of EITHER kind is read instead, because a removal alone cannot tell "dequeued,
-# re-enqueued, landed" from "dequeued, then merged by hand" — the ADDED event
-# after the removal is the whole difference.
+# of EITHER kind is read instead, so that a PR re-enqueued after a removal reads
+# as queued again. The REASON is what tells a landing from a dequeue (landing-
+# order wave 3d): GitHub records a removal with reason `merged` at every
+# successful queue merge, at or one second before the PR reads MERGED (16 of 16
+# queue merges, measured 2026-10-21), so the add is never the last act of a
+# landed PR. `reason` is a free-form String with no documented values; the
+# exact text `merged` is the one this reads, and any other value, null or a
+# type GitHub did not promise keeps the answers this block gave before it.
 #
 # WHAT IT ANSWERS, per full line, in the additive `queue` field:
 #   queued      the PR is OPEN and has a queue entry now
 #   dequeued    the PR is OPEN, has no entry, and its last queue act is a removal
-#               — GitHub does not re-enqueue after a failed group
-#   landed      the PR is MERGED and its last queue act is the add (the queue merged it)
+#               whose reason is anything but `merged` (null and unknown included)
+#   landed      the queue merged it: the last queue act is a removal whose
+#               reason is `merged` (the PR may still read OPEN for that second),
+#               or the PR is MERGED and its last queue act is the add
 #   none        measured, and none of the above — including "this workspace has
-#               no bound PR", a PR that never met the queue, and a CLOSED PR
-#               that never merged: it is in neither window, but its own line
-#               already says `phase: closed`, and a closed PR is in no queue
+#               no bound PR", a PR that never met the queue, a MERGED PR whose
+#               last removal had another reason (merged by hand after it), and a
+#               CLOSED PR that never merged: it is in neither window, but its own
+#               line already says `phase: closed`, and a closed PR is in no queue
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
 #               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
-# only when it is shaped like a timestamp. `--session` never makes this call and
-# never carries the key: its absence is the OLDER-build answer, which a reader
-# must tell apart from `unmeasured`.
+# only when it is shaped like a timestamp. The reason only chooses the word: it
+# is never printed, so no GitHub text reaches the line. `--session` never makes
+# this call and never carries the key: its absence is the OLDER-build answer,
+# which a reader must tell apart from `unmeasured`.
 #
 # ITS OWN BOUND, AND IT MAY NOT COST THE ROWS. `PR_GH_QUEUE_TIMEOUT` is summed
 # with the other two calls' against the server's outer bound by
@@ -38038,7 +38047,7 @@ fragment Q on PullRequest {
   state
   mergeQueueEntry { state }
   timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
-    nodes { __typename ... on AddedToMergeQueueEvent { createdAt } ... on RemovedFromMergeQueueEvent { createdAt } }
+    nodes { __typename ... on AddedToMergeQueueEvent { createdAt } ... on RemovedFromMergeQueueEvent { createdAt reason } }
   }
 }'
 
@@ -38076,7 +38085,7 @@ import json, re, sys
 ISO = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$')
 
 def facts_in():
-    """{number: (state, has_entry, last_act, at)}, or None when the call did not
+    """{number: (state, has_entry, last_act, at, why)}, or None when the call did not
     answer or its body is not the shape the query asks for — never {} for that,
     because {} would read every bound PR as `unmeasured` for the WRONG reason
     and `none` for a PR the window genuinely covers is a claim."""
@@ -38104,7 +38113,8 @@ def facts_in():
             last = items[-1] if isinstance(items, list) and items and isinstance(items[-1], dict) else {}
             at = last.get('createdAt')
             at = at if isinstance(at, str) and ISO.match(at) else None
-            out[num] = (n.get('state'), n.get('mergeQueueEntry') is not None, last.get('__typename'), at)
+            # `why` is the removal's reason, RAW: it is only ever compared with the literal 'merged'.
+            out[num] = (n.get('state'), n.get('mergeQueueEntry') is not None, last.get('__typename'), at, last.get('reason'))
     return out
 
 FACTS = facts_in()
@@ -38120,9 +38130,11 @@ def word(line):
         if line.get('phase') == 'closed':
             return 'none', None
         return 'unmeasured', None
-    state, entry, act, at = f
+    state, entry, act, at, why = f
     if state == 'OPEN' and entry:
         return 'queued', at
+    if state in ('OPEN', 'MERGED') and act == 'RemovedFromMergeQueueEvent' and why == 'merged':
+        return 'landed', at
     if state == 'OPEN' and act == 'RemovedFromMergeQueueEvent':
         return 'dequeued', at
     if state == 'MERGED' and act == 'AddedToMergeQueueEvent':
