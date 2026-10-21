@@ -5,7 +5,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { CcdResult } from '../lifecycle.js';
-import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { readSwitches } from '../../../shared/switches.js';
@@ -34,8 +34,8 @@ import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState }
  * row: the job REPORTS (`CollectJobOutcome`), and the lane folds the report through its L1 rules (`collectLane.ts`). Its
  * one durable write is the marker's latch, through the store's one writer, and the lane writes that latch's row
  * (`collectRetireLatch`, path-identity spec 2026-10-12 §5.4).
- *   1. The box must PROVE both capabilities, `collect-v1` and `reclaim-pause-v1` (`capSupported`, which refuses on no
- *      evidence). An automatic destructive lane never runs on a box the phone cannot pause. Then the id predicate
+ *   1. The box must PROVE both capabilities, `collect-v1` (`ccdCan(state, 'wsCollect')`, D-5866) and the
+ *      precondition `reclaim-pause-v1` (`capSupported`); both refuse on no evidence. An automatic destructive lane never runs on a box the phone cannot pause. Then the id predicate
  *      AGAIN, on the job's own id: the population gated it, and this is the second check before any argv.
  *   2. The switch, from ONE registry listing. A raised `reclaim-paused`, or a listing that could not be taken, stops it.
  *   3. A person looking at the session stops it, with no ceiling and no licence past it.
@@ -431,10 +431,11 @@ export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitc
 
 /** Both capabilities, as the route and the Settings view read them (path-identity spec 2026-10-12 §5.6, §5.7). This is
  *  the ONE helper they call, so neither spells the capability. The executor's own step 6 asks the same pair inline, in
- *  the act's own scope (`collect-lane-scans.test.ts` counts that literal). `capSupported` refuses on no evidence, so a
- *  server with no fleet state reads both absent. */
+ *  the act's own scope (`collect-lane-scans.test.ts` counts that question). The collector's own row is asked through
+ *  `ccdCan` (D-5866) and the pause precondition through `capSupported`; both refuse on no evidence, so a server with no
+ *  fleet state reads both absent. */
 export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps {
-  return { collect: capSupported(state, COLLECT_CAP), reclaimPause: capSupported(state, RECLAIM_PAUSE_CAP) };
+  return { collect: ccdCan(state, 'wsCollect'), reclaimPause: capSupported(state, RECLAIM_PAUSE_CAP) };
 }
 
 // ── the one audit site ───────────────────────────────────────────────────────
@@ -454,9 +455,9 @@ interface CollectAuditRefused { readonly notAsked: 'capability' | 'verb' }
 async function collectAudit(
   deps: Pick<CollectTempRootDeps, 'runCcd' | 'fleetState' | 'lane'>, id: string,
 ): Promise<CollectAnswer<CollectAudit> | CollectAuditRefused> {
-  if (!capSupported(deps.fleetState, COLLECT_CAP)) return { notAsked: 'capability' };
+  if (!ccdCan(deps.fleetState, 'wsCollect')) return { notAsked: 'capability' };
   const argv = CCD_ARGV.wsCollectAudit(id);
-  if (!verbSupported(deps.fleetState, argv)) return { notAsked: 'verb' };
+  if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return { notAsked: 'verb' };
   const composed = deps.lane.generations(id);
   let res: CcdResult;
   try {
@@ -487,10 +488,11 @@ export async function learnCollect(
 // ── the job ──────────────────────────────────────────────────────────────────
 
 export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob): Promise<CollectJobOutcome> {
-  // 1 — BOTH capabilities, proven: `capSupported` refuses on no evidence, where `verbSupported` would permit. A box the
+  // 1 — BOTH capabilities, proven: each refuses on no evidence, where `verbSupported` would permit (D-5866: the
+  // collector's own row through `ccdCan`, the pause precondition through `capSupported`). A box the
   // phone cannot pause never runs an automatic destructive lane. Then the id predicate AGAIN, on the job's own id,
   // before any argv. The population gated it; this is the second check, pinned on its own (spec §5.10).
-  if (!capSupported(deps.fleetState, COLLECT_CAP) || !capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
+  if (!ccdCan(deps.fleetState, 'wsCollect') || !capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
     deps.lane.cleared('caps');
     return { kind: 'not-asked', step: 1, why: 'caps',
       detail: `the fleet host does not advertise both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}` };
@@ -542,7 +544,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
   // journal are read again below, so a refused, failed or thrown (`store-threw`) retire is resolved from what now stands.
   collectRetireLatch(deps.control, last, epoch);
   const caps: CollectLaneCaps = {
-    collect: capSupported(deps.fleetState, COLLECT_CAP), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
+    collect: ccdCan(deps.fleetState, 'wsCollect'), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
   };
   const lane = collectLaneEffective({
     switches: last, epoch, caps, control: collectControlNow(deps.control).control, node: deps.link.current(),

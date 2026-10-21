@@ -1074,3 +1074,72 @@ export function capSupported(
 export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
   return capSupported(state, 'stop-surface');
 }
+
+/**
+ * D-5866 (Task C1k; ARCH-71 (#806); spec K12's `ccdCan`): how ONE `CCD_ARGV` row is answered. `token` is the line
+ * `ccd caps` prints when the box can run that row, and `default` is the answer when there is no evidence at all
+ * (`ccdVerbs === null`). `'none'` is a verb ungated by decision (`verb-gate.test.ts`'s `UNGATED_BY_DECISION`): every
+ * ccd generation has it, so it is never asked.
+ *
+ * DEPARTURE (`ccd-can-verb-token`, recorded in the C1k PR body): a permitting row spells its verb name as its token,
+ * where the plan's `CanRow` wrote `null` for "the row's verb name". A `null` would need the verb read back off a built
+ * argv, and a builder cannot be called without its arguments; `verb-gate.test.ts` holds each such token equal to the
+ * builder's own first word, so it is not a second spelling that can drift.
+ */
+export type CanRow = { readonly token: string; readonly default: 'permit' | 'refuse' } | 'none';
+
+/** A verb `ccd caps` lists by name, which PERMITS on no evidence (`verbSupported`'s polarity). */
+const verbRow = (verb: string): CanRow => ({ token: verb, default: 'permit' });
+/** A capability token, which REFUSES on no evidence (`capSupported`'s polarity): a verb that never existed, or one
+ *  that is safe to send only on a box that proves it. */
+const capRow = (token: string): CanRow => ({ token, default: 'refuse' });
+
+/**
+ * One entry per `CCD_ARGV` row, keyed by the row's NAME. The name, not the argv's first word, is the key because rows
+ * share first words across different tokens: four rows start `swap`, three `route` (`ROUTE_CAP` for the read and the
+ * set, `ROUTE_APPLY_CAP` for the apply), and the three `ws-audit` modes are each asked beside a different mode token.
+ * Each default is the polarity its call sites used before D-5866, unchanged.
+ */
+export const CCD_CAN = {
+  start: 'none', enable: 'none', startCross: 'none', enableCross: 'none', ensure: 'none',
+  stopId: 'none', stopPair: 'none',
+  forget: verbRow('forget'),
+  hibernate: verbRow('hibernate'),
+  swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
+  wsAdd: 'none', wsAddWorker: 'none',
+  prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
+  wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
+  wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
+  wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),
+  wsExpireAudit: verbRow('ws-audit'), wsExpire: capRow(EXPIRE_CAP),
+  wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
+  wsAttic: verbRow('ws-attic'),
+  wsHold: verbRow('ws-hold'), wsRelease: verbRow('ws-release'), wsRename: verbRow('ws-rename'),
+  coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
+  projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
+  route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
+  winSize: capRow(WIN_SIZE_CAP),
+  docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
+  docsShowDraft: capRow(DOCS_CAP),
+  docsFetch: capRow(DOCS_CAP),
+} as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
+
+/** A `CCD_ARGV` row name: what `ccdCan` is asked about. */
+export type CcdRow = keyof typeof CCD_ARGV;
+
+/**
+ * THE one verb question (D-5866): can this box's DEPLOYED ccd run this row? Asked by row NAME, so a lane asks it when
+ * it selects work, before any argv exists. `'none'` answers true. No evidence (`ccdVerbs === null`, or no state at
+ * all) answers the row's `default`. Otherwise the row's token must be on the list.
+ *
+ * `verbSupported`, `capSupported` and `stopSurfaceSupported` stay exported: a FLAG an existing verb parses
+ * (`ACTOR_FLAGS_CAP`, `POOLS_CAP`, `stop-surface` …) and a second verb's token asked as a precondition
+ * (`RECLAIM_PAUSE_CAP` beside the collector's own question) are not verb questions, and keep `capSupported`.
+ */
+export function ccdCan(state: Pick<FleetState, 'ccdVerbs'> | undefined, row: CcdRow): boolean {
+  const can: CanRow = CCD_CAN[row];
+  if (can === 'none') return true;
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return can.default === 'permit';
+  return verbs.includes(can.token);
+}
