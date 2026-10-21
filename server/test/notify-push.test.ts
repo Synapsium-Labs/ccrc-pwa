@@ -24,6 +24,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { stepRoster } from './fixtures/advanceCases.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const NOTIFY_SH = path.join(REPO, 'deploy', 'notify.sh');
@@ -349,7 +350,9 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   });
 
   it('the over-cap clause is written from MODELS_PUSH_MAX, not as a number', () => {
-    const route = readFileSync(path.join(REPO, 'server', 'src', 'server.ts'), 'utf8');
+    // Keyed on the symbol (scan/symbols.ts), not on a read of server.ts: the literal-source-pin ratchet in
+    // single-definition.test.ts counts those and may only shrink.
+    const route = sourceOfSymbol(path.join(REPO, 'server', 'src', 'server.ts'), 'buildServer');
     expect(route).toContain('the push cap of ${MODELS_PUSH_MAX} characters');
     expect(route).not.toMatch(/push cap of \d/);
   });
