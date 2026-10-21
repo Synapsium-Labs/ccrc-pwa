@@ -40,6 +40,12 @@
     grid-column: 1 / -1;
     grid-row: 3;
   }
+  /* The fleet list's floating New session sits in the list column, clear of the rail (shell.css pins it to the
+     frame's left edge, which is the rail's here), and above the status bar. */
+  .ins-frame .fab {
+    left: calc(52px + var(--sp-4));
+    bottom: calc(var(--sp-4) + var(--tap-min));
+  }
 }
 
 @media (min-width: 1600px) {
@@ -62,12 +68,13 @@
   flex: none;
   padding-left: var(--sp-4);
 }
-/* The breadcrumb gives first: its middle crumbs truncate before anything else in the bar shrinks. */
+/* The breadcrumb gives first: it takes only the room the others leave (a zero basis), its middle crumbs truncate
+   before its last, and it keeps a floor, so the meters collapse before it would vanish. */
 .ins-crumbs {
   display: flex;
   flex: 1 1 0;
   align-items: center;
-  min-width: 0;
+  min-width: 16ch;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -76,15 +83,17 @@
   white-space: nowrap;
 }
 .ins-crumb {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 10 auto;
+  min-width: 3ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ins-crumb:first-child,
-.ins-crumb:last-child {
+.ins-crumb:first-child {
   flex: none;
-  max-width: 24ch;
+}
+.ins-crumb:last-child {
+  flex: 0 1 auto;
+  min-width: 6ch;
 }
 .ins-crumb + .ins-crumb::before {
   content: '›';
@@ -116,7 +125,6 @@
   display: flex;
   flex: 0 1000 auto;
   min-width: calc(var(--tap-min) + var(--sp-6));
-  max-width: 60ch;
 }
 .ins-meters > * {
   min-width: 0;
@@ -212,6 +220,10 @@
   margin-left: auto;
 }
 .ins-status-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   min-width: var(--tap-min);
   min-height: var(--tap-min);
 }
@@ -221,6 +233,7 @@
     min-height: 24px;
   }
   .ins-status-key {
+    height: 20px;
     min-width: 24px;
     min-height: 20px;
     padding: 0 var(--sp-1);
