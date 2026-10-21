@@ -20,7 +20,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import type { FleetSession } from '../../shared/api';
+import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 
 const { App } = await import('../src/app');
@@ -182,6 +182,12 @@ describe('the top bar', () => {
     expect(crumbs()).toEqual([title('fleet'), 'project-a']);
   });
 
+  it('a session the fleet does not list reads Fleet › Session, never a name guessed from its id', () => {
+    mount('/s/project-z-unlisted-basin');
+    const crumbs = [...topBar().querySelectorAll('.ins-crumb')].map((c) => c.textContent ?? '');
+    expect(crumbs).toEqual([ROUTES.find((r) => r.id === 'fleet')!.title, ROUTES.find((r) => r.id === 'session')!.title]);
+  });
+
   it('the command field opens the palette, and is not a text field', () => {
     mount('/');
     const field = within(topBar()).getByRole('button', { name: 'Search or run a command' });
@@ -239,6 +245,26 @@ describe('the status bar', () => {
     const keys = within(footer()).getAllByRole('button');
     expect(keys.map((k) => k.getAttribute('data-command'))).toEqual(['open-palette', 'show-shortcuts']);
     for (const k of keys) expect(k).toHaveClass('ins-status-key');
+  });
+
+  it('the agent link reads "agent: checking" until the health poll answers, never an all-clear', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    mount('/');
+    expect(footer().querySelector('.ins-status-link')).toHaveTextContent('agent: checking');
+    expect(footer()).not.toHaveTextContent('agent connected');
+  });
+
+  it('runs are counted only after a runs frame has arrived', () => {
+    const runs = [{ state: 'working' }] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: false }));
+    mount('/');
+    const summary = (): string => footer().querySelector('.ins-status-summary')!.textContent ?? '';
+    expect(summary()).toBe(fleetSummary([S, WS], null).readout);
+    expect(summary()).not.toContain('run');
+    act(() => useFleetStore.setState({ runsFrameSeen: true }));
+    expect(summary()).toBe(fleetSummary([S, WS], runs).readout);
+    expect(summary()).toContain('1 run');
+    act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
   });
 
   it('the status bar renders fleetSummary', () => {
