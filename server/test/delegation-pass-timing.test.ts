@@ -36,7 +36,7 @@
 // rows need: the owner listing hold is kept for R7, the other fault knobs are not).
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -1712,8 +1712,25 @@ describe('D-5835 R5 (review 677 F3): the turn before the repair keeps its CPU in
   });
 });
 
-describe('D-5836 R1: after one ready pass, a pass that appends a spool line projects once, from the flush, and its repair is skipped', () => {
-  it('D-5836 R1: three further passes each call projectDelegationCheckpoint once and report skipped:true; the armed one carries repairSkipped=1 and no attemptsSkipped (its attempts part did not run)', async () => {
+/** The delta projection (R1, R19): the store's delta method, `projectDelegationCheckpointChanges`, reached through a cast (it does not exist at
+ *  main, where `vi.spyOn` would throw on the missing property). Installs a recording wrapper on the instance that calls the real method
+ *  through when there is one, records what it returned, and runs `onCall.fn` (a row's virtual-clock advance) from inside the call. At main
+ *  nothing calls the wrapper, so a row counting its calls reds on its own assertion. */
+function watchDelta(w: World): { results: unknown[]; onCall: { fn: (() => void) | null } } {
+  const coord = w.coord as unknown as { projectDelegationCheckpointChanges?: (...a: unknown[]) => unknown };
+  const real = coord.projectDelegationCheckpointChanges?.bind(w.coord);
+  const seen = { results: [] as unknown[], onCall: { fn: null as (() => void) | null } };
+  coord.projectDelegationCheckpointChanges = (...a: unknown[]): unknown => {
+    seen.onCall.fn?.();
+    const v = real?.(...a);
+    seen.results.push(v);
+    return v;
+  };
+  return seen;
+}
+
+describe('D-5836 R1, R1 (d): after one ready pass, a pass that appends a spool line projects once, from the flush, as a delta, and its repair is skipped', () => {
+  it('D-5836 R1, R1 (d): three further passes each call the store\'s delta method once and projectDelegationCheckpoint never, and report skipped:true; the armed one carries repairSkipped=1, projectDelta=1, projectFull=0, deltaRows as the store returned, and no attemptsSkipped (its attempts part did not run)', async () => {
     const warn = quietWarn();
     const w = world();
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
@@ -1721,25 +1738,152 @@ describe('D-5836 R1: after one ready pass, a pass that appends a spool line proj
     const r = rig(w);
     const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
     const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
+    const delta = watchDelta(w);
     const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
     const filing = vi.spyOn(laneOf(w) as { fileAttempts(...a: unknown[]): Promise<Set<string>> }, 'fileAttempts');   // the attempts part's method; calls through
     for (let i = 0; i < 3; i++) {
       appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', `2026-10-15T10:0${2 + i}:00.000Z`));
       if (i === 2) r.arm({ noteSessions: 1001 });
-      const base = { projected: projected.mock.calls.length, repair: repair.mock.calls.length, change: change.mock.calls.length };
+      const base = { projected: projected.mock.calls.length, repair: repair.mock.calls.length, change: change.mock.calls.length, delta: delta.results.length };
       await censusPass(w, at(i), { demo: [] });
       expect(repair.mock.calls.length - base.repair, `pass ${i}: the repair ran once`).toBe(1);
       expect(change.mock.calls.length - base.change, `pass ${i}: no attempt or interval was filed`).toBe(0);
-      expect(projected.mock.calls.length - base.projected, `pass ${i}: projectDelegationCheckpoint is called once, from the flush`).toBe(1);
+      expect(delta.results.length - base.delta, `pass ${i}: the store's delta method is called once, from the flush`).toBe(1);
+      expect(projected.mock.calls.length - base.projected, `pass ${i}: projectDelegationCheckpoint is not called at all (the full rewrite is the repair's, and the repair was skipped)`).toBe(0);
       const report = (await repair.mock.results.at(-1)!.value) as DelegationProjectionRepairReport & { skipped?: boolean };
       expect(report.skipped, `pass ${i}: the repair's report says it was skipped`).toBe(true);
     }
     const m = theLine(slowLines(warn));
     expect(m.get('repairSkipped'), 'the armed pass\'s line says the repair was skipped').toBe(1);
+    // The delta keys: counted by the mode the store RETURNED (the last result is the armed pass's: one call a pass), rows summed.
+    const returned = delta.results.at(-1) as { mode?: string; rows?: number } | undefined;
+    expect(returned?.mode, 'the store answered the armed pass\'s flush with a delta').toBe('delta');
+    expect(m.get('projectDelta'), 'the line counts that one delta').toBe(1);
+    expect(m.get('projectFull'), 'and no full answer (the key is present, at 0)').toBe(0);
+    expect(m.get('deltaRows'), 'deltaRows is the rows the store returned on that pass').toBe(returned?.rows);
     // `attemptsSkipped` is sized only inside the attempts part (`fileAttempts`); these passes reconcile (the repair ran) but plan no attempt,
     // so the part did not run: the method was never called and its phase never announced, and the key is not on the line.
     expect(filing.mock.calls.length, 'the attempts part did not run in any of the three passes (fileAttempts was not called)').toBe(0);
     expect(r.fired, 'and its phase was not announced').not.toContain('attempts');
     expect(m.has('attemptsSkipped'), 'attemptsSkipped is absent: the attempts part did not run').toBe(false);
+  });
+});
+
+describe('R19 (d): the store\'s delta method is timed as `rewrite` through the production lane', () => {
+  it('R19 (d): on a steady pass the delta method advances the virtual clock by 1,500 ms from inside the call: projectDelta > 0, rewrite = 1500 exactly, rewrites = 1, and the flush that made the call holds it', async () => {
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await primed(w);                                                  // the lane's first ready pass
+    rig(w);                                                           // the real timedPort in the lane; nothing but the store method's timing is stubbed
+    const delta = watchDelta(w);
+    delta.onCall.fn = () => { w.clock.t += 1500; };                   // all of the pass's time lands inside the delta method
+    appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:02:00.000Z'));
+    await censusPass(w, at(0), { demo: [] });
+    expect(delta.results, 'the lane called the delta method once, in the pass').toHaveLength(1);
+    theLine(slowLines(warn));                                         // one line was written (the delta's 1,500 ms alone is over the threshold)
+    const m = expectTimings(slowLines(warn)[0]!, { flush: 1500, rewrite: 1500 });
+    expect(m.get('projectDelta'), 'the line counts the delta call').toBeGreaterThan(0);
+    expect(m.get('rewrite'), 'rewrite holds the 1,500 ms the call took, by the virtual clock').toBe(1500);
+    expect(m.get('rewrites'), 'rewrites counts the call').toBe(1);
+  });
+});
+
+describe('R22 (c/d): the measurement keys: `encodes` equals an independent count of whole-checkpoint canonical encodes, and `cpBytes` is the size of the file written', () => {
+  // The spy: `canonicalDelegationJson` is reached through the `model` namespace, as `policy` is in this file's other rows, and the applier
+  // (`delegation-checkpoint.ts`) reads it through its own import of that module, so a plain `vi.spyOn` on the namespace intercepts its
+  // calls (no `vi.mock` is needed). It counts WHOLE-CHECKPOINT arguments only: a plain object with `v === 1` and the checkpoint's arrays.
+  // Row and codec encodes, a journal record's, the lane's cursor compare and `applyCheckpointChange`'s lease compare take other arguments.
+  // The counts are read around the armed pass alone, and no row calls the function while it runs.
+  const wholeCheckpoint = (x: unknown): boolean => {
+    if (typeof x !== 'object' || x === null) return false;
+    const o = x as Record<string, unknown>;
+    return o['v'] === 1 && ['sessions', 'activities', 'attempts', 'leases', 'lineage', 'bucketCursors'].every((k) => Array.isArray(o[k]));
+  };
+  const encodeCount = (): { now: () => number } => {
+    const spy = vi.spyOn(model, 'canonicalDelegationJson');
+    return { now: () => spy.mock.calls.filter(([x]) => wholeCheckpoint(x)).length };
+  };
+  const fileSize = (w: World): number => statSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)).size;
+  const INTERVAL = {
+    kind: 'record-observation-interval' as const,
+    interval: { sessionId: 'demo-a', parentIncarnation: INC, utcHour: '2026-10-15T08:00:00.000Z', state: 'measured' as const, detail: null, recordedAt: '2026-10-15T09:30:00.000Z' },
+  };
+
+  // CASE NUMBERS (measured against the applier's `commitLocked`, which the lane's passes reach through the applier's public methods):
+  //   a no-op application ...... the compare's two encodes; it returns before the write: encodes 2, no `cpBytes`.
+  //   an appending flush ....... the applied position moves, so the compare is skipped; the one `encodeDelegationCheckpoint`: encodes 1.
+  //   a change (verifyDecodable) the compare's two, the encode, `verifyDecodable`'s re-encode: encodes 4, and `cpBytes` is the last write.
+
+  it('R22 (c/d) (a): a no-op application (the interval a pass re-records identically): encodes=2 as the spy counts it, and the line has no cpBytes key', async () => {
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await primed(w);
+    const r = rig(w);
+    const realPlan = policy.planDelegationReconciliation;
+    vi.spyOn(policy, 'planDelegationReconciliation').mockImplementation((input) => [...realPlan(input), INTERVAL]);
+    const apply = vi.spyOn(DelegationDurability.prototype, 'applyAccepted');
+    await censusPass(w, at(0), { demo: [] });                        // records the interval: a real change
+    const revision = checkpointOf(w.home).revision;
+    r.arm({ noteSessions: 1001 });
+    const counted = encodeCount();
+    const before = { encodes: counted.now(), applies: apply.mock.calls.length };
+    await censusPass(w, at(1), { demo: [] });                        // the same interval again: nothing is new, and nothing else commits
+    const spied = counted.now() - before.encodes;
+    expect(apply.mock.calls.length - before.applies, 'the pass made one application (the interval)').toBe(1);
+    expect(checkpointOf(w.home).revision, 'which wrote nothing: the revision did not move').toBe(revision);
+    expect(spied, 'the spy saw the compare\'s two whole-checkpoint encodes and no others').toBe(2);
+    const m = theLine(slowLines(warn));
+    expect(m.get('encodes'), 'the line\'s encodes is the independent count').toBe(spied);
+    expect(m.has('cpBytes'), 'nothing was written, so there is no cpBytes').toBe(false);
+  });
+
+  it('R22 (c/d) (b): an appending flush (one new spool line): encodes=1 as the spy counts it, and cpBytes is the size of delegation-checkpoint.json', async () => {
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await primed(w);
+    const r = rig(w);
+    appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:02:00.000Z'));
+    r.arm({ noteSessions: 1001 });
+    const counted = encodeCount();
+    const before = counted.now();
+    await censusPass(w, at(0), { demo: [] });
+    const spied = counted.now() - before;
+    expect(spied, 'the spy saw the one encodeDelegationCheckpoint (the compare is skipped: the applied position moved)').toBe(1);
+    const m = theLine(slowLines(warn));
+    expect(m.get('encodes'), 'the line\'s encodes is the independent count').toBe(spied);
+    expect(m.get('cpBytes'), 'cpBytes is the size of the checkpoint file after the pass').toBe(fileSize(w));
+  });
+
+  it('R22 (c/d) (c): a pass that also files one attempt (one applyCheckpointChange): encodes = the flush\'s 1 plus 4 for the change, and cpBytes is the size of the file (the last write)', async () => {
+    const NEW_ID = 'attempt-new-r22';
+    let counted: { now: () => number } | null = null;
+    let before = 0;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      extra: 1,
+      prelude: (i, count) => {                                       // the earlier pass files the raw tree's attempt and loses its lease, so one attempt is on file
+        if (i === count - 1) vi.spyOn(DelegationDurability.prototype, 'createLease').mockRejectedValueOnce(new Error('a fixture failure'));
+      },
+      setup: ({ w, plan, realPlan }) => {
+        const template = checkpointOf(w.home).attempts[0]!;
+        // the armed pass's only effect is the new attempt (no lease request: nothing else commits), and its flush appends the line the scenario wrote
+        plan.mockImplementation((input) => [
+          ...realPlan(input).filter((e) => e.kind !== 'request-linked-lease-identity'),
+          { kind: 'record-unowned-worktree' as const, attempt: { ...template, attemptId: NEW_ID } },
+        ]);
+        counted = encodeCount();
+        before = counted.now();
+      },
+    });
+    const spied = counted!.now() - before;
+    expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'the pass made exactly one checkpoint change').toBe(1);
+    expect(sc.leasesCreated, 'and journaled no lease').toBe(0);
+    expect(checkpointOf(sc.w.home).attempts.map((a) => a.attemptId), 'the new attempt is on file').toContain(NEW_ID);
+    expect(spied, 'the spy saw the flush\'s one encode and the change\'s four (the compare\'s two, the encode, verifyDecodable\'s re-encode)').toBe(1 + 4);
+    const m = theLine(sc.lines);
+    expect(m.get('encodes'), 'the line\'s encodes is the independent count').toBe(spied);
+    expect(m.get('cpBytes'), 'cpBytes is the size of the file the last write left').toBe(fileSize(sc.w));
   });
 });
