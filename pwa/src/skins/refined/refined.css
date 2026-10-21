@@ -187,6 +187,11 @@
 .ref-bar-gauges > .accounts-compact {
   flex: 1 1 auto;
 }
+/* The lanes take their own width and give it up as the bar narrows, so the "+n" sits after the last gauge shown,
+   not at the far edge of the room left over. */
+.ref-bar-gauges .accounts-compact-lanes {
+  flex-grow: 0;
+}
 .ref-bar-doors {
   display: flex;
   flex: none;
