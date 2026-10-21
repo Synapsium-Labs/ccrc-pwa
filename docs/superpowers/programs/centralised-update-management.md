@@ -2483,6 +2483,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 01:55: v0.0.506 (#832) released, unapplied. STATUS: fleet and server v0.0.493, newest v0.0.506, stable
         v0.0.502, intent dev/auto=off, backups fleet 185M/server 8951M, disk free fleet 187G/work volume 40G/server
         23G, no anomalies.
+      - 02:55: v0.0.507 (#1046) released, unapplied. STATUS: fleet and server v0.0.493, newest v0.0.507, stable
+        v0.0.502, intent dev/auto=off, backups fleet 185M/server 8951M, disk free fleet 187G/work volume 44G/server
+        23G, no anomalies.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
