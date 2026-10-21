@@ -4449,6 +4449,18 @@ fi
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
 # `ccrc doctor`'s `jq_regex` check names that box.
+# THE ACCOUNT ARM ON EVERY SESSION (D-6202; accounts plan Task A9, spec §3.1). The same program runs for a session that
+# is NOT a child in a fourth mode, `account`, which answers only the `account` category: the account-management verbs
+# (`ccrc account <ACCTV>` in `fmatch` and, for a `$VAR` program naming `ccrc`, `xmatch`; `ccd account-pane`; the
+# `ccd-account-auth` program, never a file merely named like it), read as written and as bash runs it (`norm`), and
+# `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
+# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`), a write under `~/.cc-sessions/.auth` or `.accounts`, and a
+# bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
+# `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
+# category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
+# It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
+# `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
+# guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
 def SP: "[" + WS + "]"; def NS: "[^" + WS + "]";
 def WB: "(?:^|" + SP + "|[;&|()`" + $q + "\"=/])";
@@ -4457,6 +4469,8 @@ def NB: "(?<![A-Za-z0-9_])";
 def NA: "(?![A-Za-z0-9_])";
 def FLAGS: "(?:-" + NS + "+" + SP + "+)*";
 def CCD: WB + "ccd[" + $q + "\"]?" + SP + "+" + FLAGS;
+def ACCTV: "add", "auth-start", "auth-code", "auth-cancel", "set", "check", "enable", "disable", "credential", "remove", "seed", "openrouter-management";
+def AAUTH: "(?:(?:^|[" + WS + ";&|()`" + $q + "\"=])|/\\.local/bin/)ccd-account-auth(?![A-Za-z0-9_.-])";
 def SENS: "(?:CLAUDE\\.md|settings(?:\\.local)?\\.json|session-hook\\.sh|/hooks/)";
 def CRED: "(?:\\.ssh(?![A-Za-z0-9_-])|\\.cc-secrets|\\.token(?![A-Za-z0-9_-])|\\.env(?:rc|\\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_-])|credentials|auth\\.json|\\.netrc|\\.pem(?![A-Za-z0-9_-])|\\.key(?![A-Za-z0-9_.-])|agent\\.env|gh/(?:hosts|config)\\.yml|\\.docker/config\\.json|\\.kube/config(?![A-Za-z0-9_-])|\\.npmrc|\\.pypirc|\\.git-credentials|(?<![A-Za-z0-9_-])\\.aws(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])\\.gnupg(?![A-Za-z0-9_-])|\\.config/gcloud(?![A-Za-z0-9_-])|_(?:rsa|dsa|ecdsa|ed25519)(?![A-Za-z0-9_-])|deploy_key|(?<![A-Za-z0-9_.-])identity(?![A-Za-z0-9_.-])|ssh_host_|\\.pgpass|\\.vault-token|rclone\\.conf|\\.s3cfg|(?<![A-Za-z0-9_-])\\.azure(?![A-Za-z0-9_-])|\\.git/config(?![A-Za-z0-9_-])|\\.claude\\.json|(?<![A-Za-z0-9_-])secrets?\\.(?:ya?ml|json|toml)(?![A-Za-z0-9_-])|_(?:ecdsa|ed25519)_sk(?![A-Za-z0-9_-])|\\.(?:p12|pfx|jks|keystore)(?![A-Za-z0-9_-])|\\.htpasswd|\\.my\\.cnf|kubeconfig|\\.tfstate|(?<![A-Za-z0-9_-])\\.boto(?![A-Za-z0-9_-])|service[-_]account[A-Za-z0-9_-]*\\.json|token\\.json(?![A-Za-z0-9_-])|\\.yarnrc\\.yml)";
 def PATHF: "/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])|approval-signing|approval-verify\\.mjs";
@@ -4473,6 +4487,9 @@ def fmatch:
   (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
   (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
   (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
+  (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
+  (select(test(AAUTH)) | "account\tccd-account-auth"),
   (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
   (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
@@ -4486,7 +4503,9 @@ def xmatch:
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
-  (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
+  (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
+  (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
+  (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
 ([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
 | ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
     | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
@@ -4530,7 +4549,7 @@ def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
 def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
 def TNC: "claude-" + TCH + "{1,64}";
-def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
 def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
 def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
 def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
@@ -4585,6 +4604,22 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
+def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
+def ENVP: "(?:[(`{]|\\$\\()";
+def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
+def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`]";
+def BSHC: "^" + SP + "*(?:" + NS + "*/)?(?:bash|sh)" + SP + "+-c" + SP + "+";
+def apmatch:
+  (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
+  (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
+  (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$";
+def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
+def acctpath($t; $i):
+  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD)) | "account\ta write to an account path")
+  elif $t == "Read" or $t == "Grep" or $t == "Glob" then first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string") | pnorm | select(test(APSEC)) | "account\ta read of a secret or scratch path of a fleet account")
+  else empty end;
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
     | if test(PATHF) then "other\ta forbidden path"
@@ -4595,25 +4630,45 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
-     elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
+     elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
+  elif $mode == "account" then
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first((., norm) | apmatch) // "" else "" end)
+     else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch) != null) then "other\tan MCP call naming a forbidden act"
   else ($i | pathwhy($t)) // ""
   end'
 # The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
 # first, as `norm` does in the program: `c''cd ws-rm` and `c\cd ws-rm` name `ccd` only once bash has removed them.
-apf=""
-if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+# A bare `env` word in the payload (D-6202's prefilter): `env` not inside a longer name (`.env`, `venv`, `ENV_X=`).
+APF_ENV_RE='(^|[^A-Za-z0-9_.-])env([^A-Za-z0-9_.=-]|$)'
+APF_ACCT_STRIP_MAX=8192
+apf="" amode=""
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   apf=$payload
-  if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
-  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
-     || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
-     || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
-     || "$apf" == *.cc-sessions* ]] || apf=""
+  # The strip is quadratic in bash on a quote- or backslash-dense payload, so on a session that is not a child it runs
+  # only under APF_ACCT_STRIP_MAX bytes; over that the account arm's prefilter reads the payload as written (a verb
+  # split by quotes inside a longer payload is a residual of the accident guard, D-6202). A child's arm is as before.
+  if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]] \
+     && { [[ -n "$id" && -e "$REG/$id.child" ]] || (( ${#apf} <= APF_ACCT_STRIP_MAX )); }; then
+    apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}
+  fi
+  if [[ -n "$id" && -e "$REG/$id.child" ]]; then
+    amode=deny
+    [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
+       || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
+       || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
+       || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+  else
+    # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
+    amode=account
+    [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
+       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+  fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
 # `--rawfile`, a file it could not open (mode 000, a directory, removed after the test) made jq exit 2 with no output,
@@ -4635,11 +4690,11 @@ if [[ -n "$apf" ]]; then
   case "${tool:-}" in
     Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
       adeny=()
-      if [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
+      if [[ "$amode" == deny && -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
         _hook_deny_text "$REG/child-deny.settings.json"
         [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
       fi
-      afw=$(jq -r --arg q "'" --arg mode deny "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      afw=$(jq -r --arg q "'" --arg mode "$amode" "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       areason=""
       case "$afw" in
         verb$'\t'*)
@@ -4648,6 +4703,10 @@ if [[ -n "$apf" ]]; then
         surface$'\t'*)
           areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
+        account$'\t'*)
+          areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202)."
+          areason+=" Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell."
+          areason+=" Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
         build$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
           areason+=" Report what you need to your coordinator instead." ;;

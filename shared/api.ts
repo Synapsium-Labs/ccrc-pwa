@@ -11961,3 +11961,54 @@ export const COLLECT_LEAF_END_WORDS: readonly CollectLeafEndWord[] = Object.keys
 export function isCollectLeafEndWord(v: unknown): v is CollectLeafEndWord {
   return typeof v === 'string' && (COLLECT_LEAF_END_WORDS as readonly string[]).includes(v);
 }
+
+// ── Accounts: the deny guard on every fleet session (D-6202; accounts plan Task A9, spec §3.1) ─────────────────────
+// APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
+
+/** The `ccrc account` subs that only read: no deny rule names them and the hook never refuses them. `roster` is what
+ *  `_account_still_rostered`'s refusal of a swap tells its reader to run (the operator's Q8 ruling of 2026-10-19). */
+export const ACCOUNT_READ_SUBS: readonly AccountSub[] = ['roster'];
+
+/** The account verbs no agent sub reaches (CLI-only: D-5518's `seed`, D-5554's management key, the sign-in helper and
+ *  its pane), each mapped to the spelling a shell runs it by. `ACCOUNT_DENY_RULES` names every one, which the sub union
+ *  alone cannot hold: A8's union has no `seed` and spells the management subs `or-management-remove|lower`. */
+export const ACCOUNT_CLI_ONLY_VERBS: Readonly<Record<string, string>> = Object.freeze({
+  'seed': 'ccrc account seed',
+  'openrouter-management install': 'ccrc account openrouter-management install',
+  'openrouter-management check': 'ccrc account openrouter-management check',
+  'openrouter-management remove': 'ccrc account openrouter-management remove',
+  'openrouter-management ceiling': 'ccrc account openrouter-management ceiling',
+  'ccd-account-auth': 'ccd-account-auth',
+  'ccd account-pane': 'ccd account-pane',
+});
+
+/** The `ccrc account` words the guard refuses: every mutating sub, `seed`, and `openrouter-management` (every sub of
+ *  it). The one list: the deny rules below, the approval classifier's forbidden rows (`FORBIDDEN_PATTERNS`) and, by
+ *  iteration, the hook's `ACCTV` copy. One `|`-joined string, as `CHILD_DENY_CCD_VERBS` is, so a verb census never
+ *  reads a quoted sub here as a composer of it. `roster` and `candidates` are reads and stay out. */
+export const ACCOUNT_DENY_SUBS: readonly string[] =
+  'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
+
+/** The account paths the guard covers (spec §3.1), as `~`-anchored spellings: Read (and Bash) of the first four,
+ *  writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log` and
+ *  `~/.cc-sessions/<id>.wrapper`, and a read of `.accounts/<id>.json` is not refused (spec §3.1 lists writes only). */
+export const ACCOUNT_SECRET_PATHS: readonly string[] =
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+
+/** The `permissions.deny` list of `~/.cc-sessions/account-deny.settings.json` (D-6202), which `ccd` passes to EVERY
+ *  fleet session's spawn in its one `--settings` (a top-level row, a routed row and a `.child` row alike), beside the
+ *  children's `CHILD_DENY_RULES`. An accident guard: `bash -c` with an assembled string, another interpreter or a
+ *  script file runs past it, and the session hook's account arm (`ccd/session-hook.sh`) covers the path-qualified,
+ *  quoted and `$VAR` forms these bare rules cannot (CF13's rig record: no leading wildcard matched). Bare `env` and
+ *  `printenv` have NO rule here: CF13's record never measured an exact (no `:*`) rule, and a prefix rule would refuse
+ *  `env FOO=1 ccd swap-self …`; the hook alone refuses the bare forms. It NEVER names a swap path (the operator's Q8
+ *  ruling of 2026-10-19): no `ccd` rule but `ccd account-pane`, no bare `ccrc account`, no parent directory. The
+ *  installer's bash copy is held equal to this list by iteration (`account-deny.test.ts`). */
+export const ACCOUNT_DENY_RULES: readonly string[] = [
+  ...[...ACCOUNT_DENY_SUBS, 'openrouter-management ceiling'].map((w) => `Bash(ccrc account ${w}:*)`),   // `ceiling` named on its own
+  'Bash(ccd-account-auth:*)',
+  'Bash(ccd account-pane:*)',
+  ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
+  ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+];

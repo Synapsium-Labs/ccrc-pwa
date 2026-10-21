@@ -10202,5 +10202,148 @@
     },
     "class": "escalate",
     "why": "D-5696: an edit tool writing ccd is not newly forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccrc account remove --id lane-x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: an account verb, bare"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "~/.local/bin/ccrc account add --id lane-x --provider anthropic"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: an account verb, path-qualified"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "FOO=1 ccrc account credential --id lane-x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: an account verb, env-prefixed"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "cd x && ccrc account seed --id lane-x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: the CLI-only seed, chained"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "bash -c 'ccrc account openrouter-management ceiling --usd 5'"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: the management ceiling inside bash -c"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd account-pane --id lane-x --method setup-token"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: the sign-in pane"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "\"$HOME/.local/bin/ccd-account-auth\" lane-x setup-token"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-6202: the sign-in helper, path-qualified"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccrc account roster"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202: the roster read is never forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccrc account candidates"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202: the candidates read is never forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd swap-self lane-b"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202 (Q8): a swap is never forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd prefer --cross-pool project-a-calm-mesa lane-b"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202 (Q8): home affinity is never forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd swap --interrupt project-a-calm-mesa lane-b"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202 (Q8): ccd swap is never forbidden"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "grep -n x ccd/ccd-account-auth.test.ts"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-6202: a test file named like the helper is not the helper"
   }
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5d7491ea75e502576382e04fb1c2e56e7f184a4a7420def8a6cae53017de4f86
+# ccrc:generated 1 sha256=7d147fda697aa0243776ef86962485ed7932abd07e515fe7ffef1512b31188d7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22881,10 +22881,22 @@ _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 
 # value and a second occurrence replaces the first, so a child whose routing
 # record already composed `--settings '<json>'` (the workflow keys) would lose
 # one of the two. For such a row the route's JSON and the deny file are merged
-# into that one inline value (`$route * $deny`, the deny file's keys last);
+# into that one inline value (`$route * $deny`, the deny file's keys last, and
+# the `permissions` arrays JOINED, `SETTINGS_UNION_JQ`, D-6202);
 # otherwise the file's path is appended. Either way the digest recorded is the
 # managed file's, which is what Task 16 compares against.
 CHILD_DENY_SETTINGS="$REG/child-deny.settings.json"
+# THE MERGE OF SEVERAL `--settings` VALUES INTO ONE (D-6202): jq's `*` merges
+# objects recursively, but where both sides hold an array the right one
+# REPLACES the left, so `$route * $child * $account` would throw away
+# `CHILD_DENY_RULES`. Over an array of objects: their `*`, then each of
+# `permissions.deny` and `permissions.allow` that any side carries set to the
+# union of every side's array, first-seen order kept.
+SETTINGS_UNION_JQ='. as $s | (reduce $s[] as $x ({}; . * $x))
+  | reduce ("deny", "allow") as $k (.; if any($s[]; (.permissions[$k]? | type) == "array")
+      then .permissions[$k] = ([$s[] | .permissions[$k]? | arrays | .[]] | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
+      else . end)'
+
 CHILD_SHELL_PIN=/bin/bash
 _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPAWN_ENV; writes the record
   local id="$1" flags="$2" f="$CHILD_DENY_SETTINGS" sum="" rjson merged re="--settings '([^']*)'"
@@ -22904,7 +22916,7 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || sum=""
   if [[ -n "$sum" && "$flags" =~ $re ]]; then
     rjson="${BASH_REMATCH[1]}"
-    if merged=$(jq -c -n --argjson r "$rjson" --slurpfile d "$f" '$r * $d[0]' 2>/dev/null) && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+    if merged=$(jq -c -n --argjson r "$rjson" --slurpfile d "$f" "[\$r, \$d[0]] | $SETTINGS_UNION_JQ" 2>/dev/null) && [[ -n "$merged" && "$merged" != *"'"* ]]; then
       CHILD_SPAWN_FLAGS="${flags%%"--settings '$rjson'"*}--settings '$merged'${flags#*"--settings '$rjson'"}"
     else
       sum=""
@@ -22919,6 +22931,47 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
     rm -f -- "$REG/$id.deny-settings"
     echo "ccd: warn: $id is a child but $f is missing or not a deny file — spawning without the children's deny rules; rulings will not engage for it" >&2
   fi
+}
+
+# ── EVERY ROW'S ACCOUNT DENY FILE (D-6202; accounts plan Task A9, spec §3.1) ──
+# `~/.cc-sessions/account-deny.settings.json` (written by
+# install-session-hooks.sh; `ACCOUNT_DENY_RULES` in shared/api.ts) reaches
+# EVERY row's spawn, top-level, routed and `.child` alike, in the row's ONE
+# `--settings` (D-5391): a row with none gets the file's path; a row whose
+# flags already carry one (the workflow keys' `'<json>'` on any routed row, or
+# the child's file or its merged value) gets that value and the account file
+# merged into one inline value, the deny arrays JOINED (`SETTINGS_UNION_JQ`).
+# A child's `.deny-settings` stays the CHILD file's digest (CF16 compares it).
+# IT FAILS OPEN FOR THE SPAWN: this composer is on every swap's path (the
+# restart at the end of `cmd_swap` spawns here), so a missing, unreadable,
+# symlinked or non-JSON file, or a failed merge, spawns the row without the
+# account rules and warns once. It never refuses or delays a spawn, so a
+# broken file never strands a session mid-move (the operator's Q8 ruling of
+# 2026-10-19); the session hook's account arm still runs on such a session.
+ACCOUNT_DENY_SETTINGS="$REG/account-deny.settings.json"
+_account_spawn_compose() {   # id launchflags -> sets ACCOUNT_SPAWN_FLAGS; never fails
+  local id="$1" flags="$2" a="$ACCOUNT_DENY_SETTINGS" v base="" merged re="--settings '([^']*)'"
+  ACCOUNT_SPAWN_FLAGS="$flags"
+  if ! [[ -f "$a" && ! -L "$a" && "$a" != *"'"* ]] || grep -q "'" -- "$a" 2>/dev/null \
+     || ! jq -e '.permissions.deny | type == "array" and length > 0 and all(.[]; type == "string")' "$a" >/dev/null 2>&1; then
+    echo "ccd: warn: $id: $a is missing or not a deny file — spawning without the account deny rules (the session hook still refuses them)" >&2
+    return 0
+  fi
+  if [[ "$flags" =~ $re ]]; then
+    v="${BASH_REMATCH[1]}"
+    if [[ "$v" == "{"* ]]; then base="$v"
+    elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
+    fi
+    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --slurpfile a "$a" "[\$b, \$a[0]] | $SETTINGS_UNION_JQ" 2>/dev/null) \
+       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      ACCOUNT_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+    else
+      echo "ccd: warn: $id: could not merge $a into this spawn's one --settings — spawning without the account deny rules (the session hook still refuses them)" >&2
+    fi
+  else
+    ACCOUNT_SPAWN_FLAGS="${flags:+$flags }--settings '$a'"
+  fi
+  return 0
 }
 
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
@@ -23476,12 +23529,16 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # THE CHILD'S DENY FILE AND SHELL PIN (plan Task 15, D-5299, D-5391), composed
   # ONCE, here, into the flags and the `env` string BOTH spawn lines splice, for
-  # `$rcflag`'s reason. A row without `.child` takes no branch, so its spawn
-  # line is byte-identical to before (`ccd-spawn-child-settings.test.ts`).
+  # `$rcflag`'s reason. A row without `.child` takes no branch here; the account
+  # file below is its only change (`ccd-spawn-account-settings.test.ts`).
   if _child_runid_valid "$(_reg_get "$id" child)"; then
     _child_spawn_compose "$id" "$launchflags"
     launchflags="$CHILD_SPAWN_FLAGS"; resenv="$resenv${CHILD_SPAWN_ENV:+ $CHILD_SPAWN_ENV}"
   fi
+  # THE ACCOUNT DENY FILE (D-6202), for EVERY row, after the child's: the one
+  # `--settings` the flags carry gains the account rules (`_account_spawn_compose`,
+  # which fails open), so a top-level spawn differs from before only by them.
+  _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

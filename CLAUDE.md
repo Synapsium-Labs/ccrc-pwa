@@ -125,6 +125,19 @@ real values: `deploy/reference-fleet.md` (gitignored).
   characters; an ACL change (`setfacl`) of a trusted file; a FIFO for the deny file; and a copy of the build a reader
   makes and runs under another name. The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
   automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
+- **Account management is never a session's** (D-6202; accounts spec 2026-10-18 §3.1): no fleet session — top-level,
+  coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
+  `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
+  included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
+  `~/.ccrc/codex/*/runtime.env` or `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` or
+  `~/.cc-sessions/.accounts/`; or prints the whole environment (bare `env`, `printenv`). They are the operator's, from
+  the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
+  quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
+  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. **Switching
+  accounts and the auto-swap are never refused** (the operator's ruling of 2026-10-19): `ccd swap-self`, `ccd prefer`,
+  `ccd swap` in every form, `POST /api/sessions/:id/swap`, `ccrc account roster`, `printenv <NAME>` and the reads
+  around a move stay open (`server/test/fixtures/account-deny/must-allow.json`).
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
