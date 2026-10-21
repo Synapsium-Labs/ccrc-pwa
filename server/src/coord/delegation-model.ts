@@ -1351,6 +1351,34 @@ export function prepareDelegationProjectionChanges(prior: DelegationCheckpointV1
   return diffDelegationProjection(prior, next);
 }
 
+/** D-6190: an attempt's DECISION key: every column except its clock (`attemptedAt`) and its witnesses (`evidenceJournalIds`). */
+export function delegationAttemptKeyOf(a: Pick<DelegationAttemptRow, 'parentId' | 'parentIncarnation' | 'project' | 'adminRecord' | 'canonicalPath' | 'rung' | 'verdict' | 'detail'>): string {
+  return canonicalDelegationJson([a.parentId, a.parentIncarnation, a.project, a.adminRecord, a.canonicalPath, a.rung, a.verdict, a.detail]);
+}
+const earlierAttempt = (x: DelegationAttemptRow, y: DelegationAttemptRow): boolean => {
+  const tx = parseDelegationInstant(x.attemptedAt), ty = parseDelegationInstant(y.attemptedAt);
+  return tx !== ty ? tx < ty : utf8Compare(x.attemptId, y.attemptId) < 0;
+};
+/** D-6190: the attempts on file by decision key, keeping the EARLIEST row of each key (the smallest attemptedAt; a tie goes to the
+ *  smaller attemptId under utf8Compare): the row the fixed keying would have filed, with its first filing's evidence. */
+export function delegationAttemptsByKey(attempts: readonly DelegationAttemptRow[]): Map<string, DelegationAttemptRow> {
+  const out = new Map<string, DelegationAttemptRow>();
+  for (const a of attempts) {
+    const k = delegationAttemptKeyOf(a);
+    const kept = out.get(k);
+    if (kept === undefined || earlierAttempt(a, kept)) out.set(k, a);
+  }
+  return out;
+}
+/** D-6191: one row per decision key, the earliest kept, the rest removed, relative order kept. The SAME array, and removed 0, when no key
+ *  repeats (as `upkeepDelegationIntervals` does), so a caller can tell there is nothing to do without a change. */
+export function collapseDelegationAttempts(attempts: readonly DelegationAttemptRow[]): { attempts: readonly DelegationAttemptRow[]; removed: number } {
+  const kept = delegationAttemptsByKey(attempts);
+  if (kept.size === attempts.length) return { attempts, removed: 0 };
+  const keep = new Set([...kept.values()].map((a) => a.attemptId));
+  return { attempts: attempts.filter((a) => keep.has(a.attemptId)), removed: attempts.length - kept.size };
+}
+
 // ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────
 //
 // Pure arithmetic from the CHECKPOINT's `observationIntervals` and nothing else. The interval rows are checkpoint-owned: SQLite carries
