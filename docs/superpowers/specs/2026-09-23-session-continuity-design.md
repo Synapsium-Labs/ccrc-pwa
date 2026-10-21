@@ -684,7 +684,7 @@ no line); and after a rollback and a roll-forward, keystrokes the older ccd type
 read as the operator's. Known silent costs, each with no line (drifted acknowledgement wording is not one: it logs `unmeasured`): D-3925 is closed by wave 4b: `_sync_uuid` promotes the outgoing transcript before replacing its UUID, with no choicekept mutation; compaction does not change the transcript. The costs that remain are an operator
 command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal, and never through
 a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
-a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a session whose
+a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a UUID that the background follow or a continuation chain moves, neither of which promotes (a pane-observed `/clear` does), so later keeps read only the new UUID's transcript and a choice held only by the old one, and not yet kept, is lost; a session whose
 source account is not on the roster (`cmd_swap` dies at its "no config-dir mapping" check before the keep, and at a
 stop or revival the wrapper reads as non-Anthropic (`_is_anthropic_backend`), so the keep returns before it reads; deferred); a route field whose mtime cannot be
 read, which the keep does not overwrite; a deploy-transition `/model` whose journal a `route --apply` keystroke opened first (above); and an interrupted stop (if a stop dies between its keep, which writes the marker,

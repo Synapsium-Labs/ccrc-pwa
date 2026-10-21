@@ -2570,6 +2570,8 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
     and never through a stop since;
   - an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through a stop
     since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side);
+  - a UUID the background follow or a continuation chain moves (neither promotes; a pane-observed `/clear` does):
+    later keeps read only the new UUID's transcript, so a choice held only by the old one and not yet kept is lost;
   - a session whose source account is not on the roster: `cmd_swap` dies at its "no config-dir mapping" check
     before the keep, and at a stop or revival the wrapper reads as non-Anthropic (`_is_anthropic_backend`), so the keep
     returns before it reads: nothing is kept (deferred);
