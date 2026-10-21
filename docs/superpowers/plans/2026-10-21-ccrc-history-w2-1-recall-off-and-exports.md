@@ -4154,8 +4154,8 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
   });
 
   it('refuses an observation that ends before it starts, and a file id outside the grammar', () => {
-    expect(() => plan({ startMs: 2000, endMs: 1999 })).toThrow(TypeError);
-    expect(() => plan({ files: [{ id: '../x', state: val(G1) }] })).toThrow(TypeError);
+    expect(() => plan({ startMs: 2000, endMs: 1999 })).toThrow(/planRecallOffObservation: startMs and endMs/);
+    expect(() => plan({ files: [{ id: '../x', state: val(G1) }] })).toThrow(/planRecallOffObservation: not a session id/);
   });
 
   it('journal: change and gap round-trip as recall-off records at v 1; an unknown rk is unknown, any other breach malformed', () => {
@@ -4244,7 +4244,7 @@ The gate module (`deploy/history-gate.mjs`) imports only `node:crypto` and `../c
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib: the recall-off presence record')
 ```
 
-Expected RED (predicted, written before the code): `15 failed`, the rest of the file skipped. `RECALL_OFF_KEYS` is undefined, so the keys case fails at its `toEqual`, and every other case fails with `TypeError: Cannot read properties of undefined` (reading `state`, `change` or `gap`) or `roLib.planRecallOffObservation is not a function`. The journal case fails first at `expect(JOURNAL_KINDS).toContain('recall-off')`. The filter selects only this describe: if the run reports `0 failed`, the filter is wrong.
+Expected RED (predicted, written before the code): `15 failed`, the rest of the file skipped. `RECALL_OFF_KEYS` is undefined, so the keys case fails at its `toEqual`, and every other case fails with `TypeError: Cannot read properties of undefined` (reading `state`, `change` or `gap`) or `roLib.planRecallOffObservation is not a function`. The journal case fails first at `expect(JOURNAL_KINDS).toContain('recall-off')`. The filter selects only this describe: if the run reports `0 failed`, the filter is wrong. Measured: `15 failed` as predicted, with these wordings: the `recallOffStateOf` case fails with `recallOffStateOf is not a function`, the older-build case with `journalRecord`'s own `TypeError` (`"recall-off" is not a JOURNAL_KINDS member`), and the refusal case at its message match (`expected [Function] to throw error matching /planRecallOffObservation: startMs and endMs/`). The refusal case matches the thrown messages, not the `TypeError` class: with `toThrow(TypeError)` it would pass before the code exists, because calling the undefined function throws a `TypeError` of its own, and Step 3 would read `14 failed | 1 passed`.
 
 - [ ] **Step 4: Write the lib grammar, the plan and the replay rows.** Five edits to `ccd/history/lib.mjs` and three to `ccd/history/lib.d.mts`. Each `old` text below is asserted unique before it is replaced (Step 11's `mut` helper does exactly that, and can be used here).
 
@@ -4894,7 +4894,7 @@ The case's pass runs with its clock a month past the passes `auditBox` made, so 
 ```
 
 Expected RED (predicted):
-- history-sweep: `4 failed`. Case 1 fails at its first gap assertion (`[]` where `[null]` is expected): no tick writes a presence row yet. Case 2 fails at `.at(-1)` (`undefined`). Case 3 fails at `toHaveLength(2)` (0). Case 4 fails at `recall_off_scan_capped` (`undefined` where 1 is expected).
+- history-sweep: `4 failed`. Case 1 fails at its first gap assertion (`[]` where `[null]` is expected): no tick writes a presence row yet. Case 2 fails at `.at(-1)` (`undefined`). Case 3 fails earlier than that, in `setSeen`, at `expected +0 to be 1` (no `seen_ms` row exists to update, measured). Case 4 fails at `recall_off_scan_capped` (`undefined` where 1 is expected).
 - history-recover: `3 failed`. Cases 1 and 2 fail at the CONTROL `W came and went` (0 where 2 is expected). Case 3 fails at `the first observation wrote its gap row`.
 - history-cli: `2 failed`, each at `Object.keys(undefined)` or `toEqual` on `undefined`: the envelope has no `recall_off` yet.
 - history-op: `1 passed` (skipped when run as root, as the case says). Step 6 (e)'s line is a re-expectation, not a new guard: before Step 8 the outbox holds the planted verdict alone, so the filtered count and the old one agree. Step 9 runs it again after the step lands.
@@ -5209,9 +5209,9 @@ mut ccd/history/sweep.mjs '    recordTick(db, ictx, null);' '    recordRecallOff
     recordTick(db, ictx, null);'
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'presence record across a recovery')
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
-# Expected RED (predicted): 3 failed. Case 1: the away directory reads as an empty observation, so X and Y change to absent
-# and seen_ms is written; case 2: X gains change rows; case 3: 'the recover arm wrote no change: row' (Z is recorded once the
-# step completes within the pass).
+# Expected RED (measured: 3 failed). Case 1 at 'seen_ms is not replayed' (the step observed the away directory, so seen_ms
+# is written); case 2: X gains change rows; case 3: 'the recover arm wrote no change: row' (Z is recorded once the step
+# completes within the pass).
 
 # M3: the step's own guard removed.
 mut ccd/history/sweep.mjs '  if (isRecovering(db)) return;
@@ -5225,8 +5225,11 @@ mut ccd/history/sweep.mjs '      if (r.del !== null) db.prepare(RECALL_OFF_DELET
       setMeta(db, RECALL_OFF_KEYS.seen, String(a.rec.t));'
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'presence record across a recovery')
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
-# Expected RED (predicted): 2 failed | 1 passed: case 1 at 'seen_ms is not replayed'; case 2 at Y's prev_seen_ms (a number, not
-# null) and at its new gaps ([], not [null]).
+# Expected RED (measured, clock-dependent: 2 or 3 failed): case 1 at 'seen_ms is not replayed'; case 2 at Y's prev_seen_ms
+# (a number, not null) and at its new gaps ([], not [null]); case 3, at 'and observed nothing', fails only when the
+# first tick's clock read for startMs and for endMs differ by a millisecond (the replayed gap record's t is endMs and
+# the original seen_ms is startMs): 3 failed in 1 run of 3, 2 failed | 1 passed in the other 2. Nondeterministic by
+# construction; the guard is red either way.
 
 # M5: a replayed change to absent writes the state row instead of deleting it.
 mut ccd/history/lib.mjs "  return rec.to === 'absent' ? { insert, put: null, del: key } : { insert, put: { k: key, v: canonicalJson(rec.to) }, del: null };" "  return { insert, put: { k: key, v: canonicalJson(rec.to) }, del: null };"
@@ -5336,7 +5339,7 @@ cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
 
 # M20: a file read absent treated as present.
 mut ccd/history/lib.mjs "    if (f.state === 'absent') continue;
-" ''
+    present.add(f.id);" "    present.add(f.id);"
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib: the recall-off presence record')
 cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
 # Expected RED (predicted): 1 failed, the unreadable case's CONTROL (put holds a state row of 'absent', del is []).
@@ -5347,8 +5350,9 @@ mut ccd/history/lib.mjs "'redact', 'tick', 'recall-off']);" "'redact', 'tick']);
 (cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t 'one tick step')
 (cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'every kind the sweep journals')
 cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
-# Expected RED (predicted): history-lib the journal, older-build and replay cases (journalRecord throws: not a JOURNAL_KINDS member);
-# history-sweep case 1 (the pass's step throws, exit 1); single-definition 1 failed ('ccd/history/sweep.mjs: recall-off').
+# Expected RED (measured): history-lib 3 failed (the journal, older-build and replay cases: journalRecord throws, not a
+# JOURNAL_KINDS member); history-sweep 4 failed, all four cases (the pass's step throws, exit 1, at tickOk's first
+# assertion); single-definition 1 failed ('ccd/history/sweep.mjs: recall-off').
 
 # M22: the scan follows a link at recall-off/<id> (W2-D29's no-follow read, R3).
 mut ccd/history/sweep.mjs '  const files = ids.map((id) => ({ id, state: recallOffStateOf(readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false)) }));' '  const files = ids.map((id) => ({ id, state: recallOffStateOf(readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, true)) }));'
@@ -5364,6 +5368,18 @@ cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
 # Expected RED (predicted): sweep.mjs reads recall-off/<id> through readBounded on two lines, recallOffPresence and the tick
 # scan (W2-D29, W2-D30): expected [ …(1) ] to have length 2. The scan is a text scan, so it reds whether or not sweep.mjs
 # imports readFileSync.
+
+# M24: the plan accepts an observation that ends before it starts.
+mut ccd/history/lib.mjs '  if (!isMs(startMs) || !isMs(endMs) || endMs < startMs) {' '  if (!isMs(startMs) || !isMs(endMs)) {'
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib: the recall-off presence record')
+cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
+# Expected RED (measured): 1 failed, the refusal case ('expected [Function] to throw an error').
+
+# M25: the plan accepts a file id outside the grammar.
+mut ccd/history/lib.mjs '    if (!idOk(f.id)) throw new TypeError(`planRecallOffObservation: not a session id: ${JSON.stringify(f.id)}`);' ''
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib: the recall-off presence record')
+cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
+# Expected RED (measured): 1 failed, the refusal case ('expected [Function] to throw an error').
 
 cmp "$SCRATCH/lib.orig" ccd/history/lib.mjs && cmp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs \
   && cmp "$SCRATCH/cli.orig" ccd/history/cli.mjs && echo restored

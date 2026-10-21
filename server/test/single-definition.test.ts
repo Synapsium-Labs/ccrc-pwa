@@ -5282,7 +5282,7 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     // CONTROL: and not the two reads W2-D29 keeps, each read from the real file it lives in.
     const SWEEP_MJS = path.join(HISTORY_DIR, 'sweep.mjs');
     const reader = code(SWEEP_MJS).filter((l) => l.includes('readBounded(recallOffPath('));
-    expect(reader, 'sweep.mjs reads recall-off/<id> through readBounded exactly once (W2-D29)').toHaveLength(1);
+    expect(reader, 'sweep.mjs reads recall-off/<id> through readBounded on two lines, recallOffPresence and the tick scan (W2-D29, W2-D30)').toHaveLength(2);
     const driver = code(path.join(ccrcRoot, 'deploy', 'history-replay.mjs')).filter((l) => l.includes('lstatSync(recallOffPath('));
     expect(driver, 'the replay driver\'s one recall-off line (W2-D78 (ii))').toHaveLength(1);
     for (const l of [...reader, ...driver]) expect(writesOff(l, 'mjs'), l.trim()).toBe(false);
@@ -5338,7 +5338,9 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
     'SEGMENT_HEADER_BYTES',
     // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, which sweep.mjs, cli.mjs and the gate read.
-    'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX'] as const;
+    'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
+    // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META.
+    'RECALL_OFF_KEYS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];

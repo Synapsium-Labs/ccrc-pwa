@@ -99,7 +99,7 @@ export const SCOPE_SOURCES: readonly ['tmux'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
-export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick';
+export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick' | 'recall-off';
 export const JOURNAL_KINDS: readonly JournalKind[];
 export type JournalVerdict = 'family' | 'epoch-confirmed' | 'epoch-unconfirmed' | 'epoch-chained'
   | 'generation-joined' | 'rekeyed' | 'mapping' | 'bind' | 'drained';
@@ -542,6 +542,27 @@ export function extractNodeId(raw: string): { ok: true; id: string } | { ok: fal
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
 
+// --- W2-1 Task 4: the recall-off presence record (W2-D30) and status's block (W2-D31)
+export const RECALL_OFF_KEYS: Readonly<{ seen: string; state: string; change: string; gap: string }>;
+export type RecallOffState = { s: 'value'; v: string } | { s: 'unreadable'; v: null };
+export function recallOffStateOf(
+  read: { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string },
+): RecallOffState | 'absent';
+export interface RecallOffRow { k: string; v: string }
+export interface RecallOffPlan {
+  seen: RecallOffRow; put: RecallOffRow[]; del: string[]; insert: RecallOffRow[];
+  records: Array<{ t: number; fields: JournalFields & { rk: 'change' | 'gap' } }>;
+  malformed: number;
+}
+export function planRecallOffObservation(i: {
+  seenRaw: string | null;
+  stateRows: ReadonlyArray<{ id: string; raw: string }>;
+  files: ReadonlyArray<{ id: string; state: RecallOffState | 'absent' }>;
+  startMs: number; endMs: number;
+}): RecallOffPlan;
+export function recallOffReplayRows(rec: JournalRecord): { insert: RecallOffRow; put: RecallOffRow | null; del: string | null };
+export function recallOffStatusOf(meta: Iterable<readonly [string, string]>): { seen_ms: number | null; files: number; unreadable: number };
+
 
 // --- W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10)
 export function sanitizeFtsQuery(raw: string): string;
@@ -739,6 +760,7 @@ export type ReplayAction =
   | { do: 'verdict'; rec: JournalRecord }
   | { do: 'redact'; len: number; sha256: string; t: number }
   | { do: 'tick'; t: number; lagMs: number | null }
+  | { do: 'recall-off'; rec: JournalRecord }
   | { do: 'skip'; counter: 'journal_line_malformed' | 'journal_record_unknown' | 'journal_head_mismatch' };
 export interface ReplayState {
   storeId: string; file: string | null; recvMs: number;

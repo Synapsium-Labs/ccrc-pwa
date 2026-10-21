@@ -10693,3 +10693,195 @@ describe('W2-1 recall-off: the grammar and the generation checks (D-5764)', () =
     expect(lib.decideRecallOffWrite({ registry: registry as never, want })).toEqual(answer);
   });
 });
+
+// ── W2-1 Task 4: the recall-off presence record (W2-D30), its journal records, and status's block (W2-D31) ────────────
+// lib decides every row the sweep's tick step writes: the state a read is, the rows and records one complete observation
+// writes, the rows one journal record replays to (byte for byte the live ones), and status's counts. The gate's own reader
+// (deploy/history-gate.mjs, W2-3) reads the rows back, so the two ends of W2-D30's keys are pinned against each other.
+import * as roLib from '../../ccd/history/lib.mjs';
+import * as roGate from '../../deploy/history-gate.mjs';
+
+describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', () => {
+  const K = roLib.RECALL_OFF_KEYS;
+  const GAP = roLib.RECALL_OFF_GAP_MS;
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  const X = 'claude-a-demo';
+  const Y = 'claude-b-demo';
+  const C = 'claude-c-demo';
+  const val = (v: string): { s: 'value'; v: string } => ({ s: 'value', v });
+  const UNREADABLE = { s: 'unreadable' as const, v: null };
+  const row = (id: string, st: object): { id: string; raw: string } => ({ id, raw: roLib.canonicalJson(st) });
+  type PlanIn = Parameters<typeof roLib.planRecallOffObservation>[0];
+  const plan = (o: Partial<PlanIn>): roLib.RecallOffPlan =>
+    roLib.planRecallOffObservation({ seenRaw: '1000', stateRows: [], files: [], startMs: 2000, endMs: 2005, ...o });
+  const changeOf = (p: roLib.RecallOffPlan, id: string): Array<Record<string, unknown>> => p.insert
+    .filter((r) => r.k.startsWith(K.change) && r.k.endsWith(`:${id}`)).map((r) => ({ k: r.k, ...(JSON.parse(r.v) as object) }));
+  const gapsOf = (p: roLib.RecallOffPlan): Array<Record<string, unknown>> => p.insert
+    .filter((r) => r.k.startsWith(K.gap)).map((r) => ({ k: r.k, ...(JSON.parse(r.v) as object) }));
+
+  it('RECALL_OFF_KEYS: the four keys, each under RECALL_OFF_META, frozen', () => {
+    const M = roLib.RECALL_OFF_META;
+    expect(K).toEqual({ seen: `${M}seen_ms`, state: `${M}state:`, change: `${M}change:`, gap: `${M}gap:` });
+    expect(Object.isFrozen(K)).toBe(true);
+  });
+
+  it('recallOffStateOf: a generation trimmed, unreadable and over-cap never absent, any other content a digest', () => {
+    expect(roLib.recallOffStateOf({ state: 'value', value: `${G1}\n` })).toEqual(val(G1));
+    expect(roLib.recallOffStateOf({ state: 'value', value: '' })).toEqual(val(''));
+    expect(roLib.recallOffStateOf({ state: 'unreadable' })).toEqual(UNREADABLE);
+    expect(roLib.recallOffStateOf({ state: 'over-cap' })).toEqual(UNREADABLE);
+    expect(roLib.recallOffStateOf({ state: 'absent' })).toBe('absent');
+    expect(roLib.recallOffStateOf({ state: 'value', value: ' not a generation \n' })).toEqual(val(`sha256:${roLib.sha256Hex('not a generation')}`));
+    expect(roLib.recallOffStateOf({ state: 'value', value: G1.toUpperCase() }), 'an uppercase UUID is no generation')
+      .toEqual(val(`sha256:${roLib.sha256Hex(G1.toUpperCase())}`));
+  });
+
+  it('the first observation ever: a gap from null, and a present file a change from unobserved with prev_seen_ms null', () => {
+    const p = plan({ seenRaw: null, files: [{ id: X, state: val(G1) }] });
+    expect(gapsOf(p)).toEqual([{ k: `${K.gap}2005`, from: null, to: 2000 }]);
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(val(G1)) }]);
+    expect(p.seen, 'seen_ms is the observation\'s START; its rows are keyed by its END').toEqual({ k: K.seen, v: '2000' });
+    expect(p.records).toEqual([
+      { t: 2005, fields: { rk: 'gap', from: null, to: 2000 } },
+      { t: 2005, fields: { rk: 'change', id: X, from: 'unobserved', to: val(G1), prev_seen_ms: null } },
+    ]);
+  });
+
+  it('an unchanged file is not flagged: no row, no record, no rewrite, and seen_ms still moves', () => {
+    const p = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: val(G1) }] });
+    expect([p.insert, p.records, p.put, p.del]).toEqual([[], [], [], []]);
+    expect(p.seen.v).toBe('2000');
+  });
+
+  it('one change row per transition: a new generation and a file gone carry the last observation, a new file null', () => {
+    const p = plan({ stateRows: [row(X, val(G1)), row(Y, val(G2))], files: [{ id: X, state: val(G2) }, { id: C, state: val(G1) }] });
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: val(G2), prev_seen_ms: 1000 }]);
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G2), to: 'absent', prev_seen_ms: 1000 }]);
+    expect(changeOf(p, C), 'a file with no state row is unobserved, whatever seen_ms says')
+      .toEqual([{ k: `${K.change}2005:${C}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(val(G2)) }, { k: `${K.state}${C}`, v: roLib.canonicalJson(val(G1)) }]);
+    expect(p.del).toEqual([`${K.state}${Y}`]);
+    expect(p.records.map((r) => r.fields.rk)).toEqual(['change', 'change', 'change']);
+  });
+
+  it('unreadable is never absent: an unreadable read is a change to unreadable, its state row kept', () => {
+    const p = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: UNREADABLE }] });
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: UNREADABLE, prev_seen_ms: 1000 }]);
+    expect(p.del).toEqual([]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(UNREADABLE) }]);
+    // CONTROL: a file gone between the listing and its read (readBounded answered absent) IS absent.
+    const gone = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: 'absent' }] });
+    expect(changeOf(gone, X).map((c) => c['to'])).toEqual(['absent']);
+    expect([gone.put, gone.del]).toEqual([[], [`${K.state}${X}`]]);
+  });
+
+  it('a gap row when the last observation is more than RECALL_OFF_GAP_MS old, and none at exactly that age', () => {
+    const at = 10 * GAP;
+    expect(gapsOf(plan({ seenRaw: String(at - GAP - 1), startMs: at, endMs: at + 3 })))
+      .toEqual([{ k: `${K.gap}${at + 3}`, from: at - GAP - 1, to: at }]);
+    expect(gapsOf(plan({ seenRaw: String(at - GAP), startMs: at, endMs: at + 3 })), 'CONTROL: exactly the gap is no gap').toEqual([]);
+  });
+
+  it('after a rebuild (state rows replayed, seen_ms never replayed): a gap from null, no row for an unchanged file, null for a changed one', () => {
+    const p = plan({ seenRaw: null, stateRows: [row(X, val(G1)), row(Y, val(G1))], files: [{ id: X, state: val(G1) }, { id: Y, state: val(G2) }] });
+    expect(gapsOf(p).map((g) => g['from'])).toEqual([null]);
+    expect(changeOf(p, X), 'unchanged since before the rebuild: no change row').toEqual([]);
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G1), to: val(G2), prev_seen_ms: null }]);
+  });
+
+  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; both counted', () => {
+    const p = plan({
+      seenRaw: '01000',
+      stateRows: [{ id: X, raw: '{"s":"maybe"}' }, { id: '../x', raw: roLib.canonicalJson(val(G1)) }],
+      files: [{ id: X, state: val(G1) }],
+    });
+    expect(gapsOf(p).map((g) => g['from'])).toEqual([null]);
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.malformed).toBe(2);
+    expect(p.del).toEqual([`${K.state}../x`]);
+    expect(p.records.some((r) => r.fields['id'] === '../x'), 'no record names an id outside the grammar').toBe(false);
+  });
+
+  it('refuses an observation that ends before it starts, and a file id outside the grammar', () => {
+    expect(() => plan({ startMs: 2000, endMs: 1999 })).toThrow(/planRecallOffObservation: startMs and endMs/);
+    expect(() => plan({ files: [{ id: '../x', state: val(G1) }] })).toThrow(/planRecallOffObservation: not a session id/);
+  });
+
+  it('journal: change and gap round-trip as recall-off records at v 1; an unknown rk is unknown, any other breach malformed', () => {
+    expect(roLib.JOURNAL_KINDS).toContain('recall-off');
+    const p = plan({ seenRaw: null, stateRows: [row(Y, val(G1))], files: [{ id: X, state: UNREADABLE }] });
+    expect(p.records.map((r) => r.fields.rk)).toEqual(['gap', 'change', 'change']);
+    for (const r of p.records) {
+      const line = roLib.journalRecord('recall-off', r.t, r.fields);
+      expect(roLib.parseJournalRecord(line)).toEqual({ kind: 'record', rec: { v: 1, k: 'recall-off', t: r.t, ...r.fields } });
+    }
+    const read = (o: object): string => roLib.parseJournalRecord(JSON.stringify({ v: 1, k: 'recall-off', t: 5, ...o })).kind;
+    const ok = { rk: 'change', id: X, from: 'unobserved', to: val(G1), prev_seen_ms: null };
+    expect(read(ok), 'CONTROL: well formed').toBe('record');
+    expect(read({ rk: 'moved', id: X }), 'a newer build\'s row kind: skipped and counted, never malformed').toBe('unknown');
+    expect(read({ rk: 7 })).toBe('malformed');
+    expect(read({ rk: 'gap', from: null })).toBe('malformed');
+    expect(read({ rk: 'gap', from: null, to: 4, id: X }), 'a field the gap shape does not declare').toBe('malformed');
+    expect(read({ ...ok, id: '../x' })).toBe('malformed');
+    expect(read({ ...ok, from: 'absent' }), 'from is never absent').toBe('malformed');
+    expect(read({ ...ok, to: 'unobserved' }), 'to is never unobserved').toBe('malformed');
+    expect(read({ ...ok, to: { s: 'value', v: 'x' } }), 'a value is a generation or a digest').toBe('malformed');
+    expect(read({ ...ok, to: { s: 'unreadable', v: 'x' } })).toBe('malformed');
+    expect(read({ ...ok, to: { s: 'value', v: G1, w: 1 } }), 'a state is exactly {s, v}').toBe('malformed');
+    expect(read({ ...ok, prev_seen_ms: -1 })).toBe('malformed');
+  });
+
+  it('an older build reads a recall-off record as an unknown kind, skipped and counted: v stays 1, so it is never newer', () => {
+    const o = JSON.parse(roLib.journalRecord('recall-off', 5, { rk: 'gap', from: null, to: 4 })) as Record<string, unknown>;
+    expect(o['v'], 'W2-1 does not bump JOURNAL_V: an older build answers unknown, not newer (counted malformed)').toBe(1);
+    expect(['head', 'file', 'spool', 'verdict', 'redact', 'tick'], 'the kinds a build before W2-1 knows').not.toContain(o['k']);
+    // A build without the kind reads it as this build reads any kind outside its list.
+    const older = roLib.parseJournalRecord(JSON.stringify({ ...o, k: 'recall-off-unknown-to-this-reader' }));
+    expect(older).toEqual({ kind: 'unknown' });
+    const state = { storeId: '00000000-0000-4000-8000-000000000001', file: null, recvMs: 0, drained: new Set<string>(),
+      verdictsByKey: new Map<string, readonly roLib.JournalRecord[]>(), ticksAfter: 0, ticksBefore: null };
+    expect(roLib.replayStep(state, older).actions).toEqual([{ do: 'skip', counter: 'journal_record_unknown' }]);
+  });
+
+  it('replayStep applies each recall-off record at its own position; recallOffReplayRows gives the rows the plan wrote, byte for byte', () => {
+    const withGap = plan({ seenRaw: null, files: [] });
+    const p = plan({ seenRaw: '1000', stateRows: [row(X, val(G1)), row(Y, val(G1))], files: [{ id: X, state: val(G2) }] });
+    const reads = [...withGap.records, ...p.records].map((r) => roLib.parseJournalRecord(roLib.journalRecord('recall-off', r.t, r.fields)));
+    const state = { storeId: '00000000-0000-4000-8000-000000000001', file: null, recvMs: 0, drained: new Set<string>(),
+      verdictsByKey: new Map<string, readonly roLib.JournalRecord[]>(), ticksAfter: 0, ticksBefore: null };
+    const recs = reads.map((r) => (r as { kind: 'record'; rec: roLib.JournalRecord }).rec);
+    for (const [i, r] of reads.entries()) expect(roLib.replayStep(state, r).actions).toEqual([{ do: 'recall-off', rec: recs[i] }]);
+    const rows = recs.map((rec) => roLib.recallOffReplayRows(rec));
+    expect(rows.map((r) => r.insert)).toEqual([...withGap.insert, ...p.insert]);
+    expect(rows.flatMap((r) => (r.put === null ? [] : [r.put]))).toEqual(p.put);
+    expect(rows.flatMap((r) => (r.del === null ? [] : [r.del])), 'a change to absent deletes the state row').toEqual(p.del);
+  });
+
+  it('every row the plan writes reads back through the gate\'s parseRecallOffRow, and changedFamilies drops the family it names', () => {
+    const S = '00000000-0000-4000-8000-0000000000aa';
+    const p = plan({ seenRaw: null, stateRows: [row(X, val(G1))], files: [{ id: X, state: val(G2) }], startMs: 5000, endMs: 5007 });
+    expect(p.insert.map((r) => roGate.parseRecallOffRow(r.k, r.v))).toEqual([
+      { kind: 'gap', ts_ms: 5007, from: null, to: 5000 },
+      { kind: 'change', ts_ms: 5007, id: X, from: val(G1), to: val(G2), prev_seen_ms: null },
+    ]);
+    expect(roGate.parseRecallOffRow(p.seen.k, p.seen.v), 'seen_ms is one of the gate\'s other rows').toEqual({ kind: 'other' });
+    for (const r of p.put) expect(roGate.parseRecallOffRow(r.k, r.v)).toEqual({ kind: 'other' });
+    const metaRows = p.insert.map((r) => ({ store_id: S, k: r.k, v: r.v }));
+    const list = [{ store_id: S, ccrc_id: X, generation: G2 }];
+    expect(roGate.changedFamilies(metaRows, { start_ms: 4000, end_ms: 6000 }, list).changed).toHaveLength(1);
+    expect(roGate.changedFamilies(metaRows, { start_ms: 5008, end_ms: 9000 }, list).changed, 'CONTROL: a window after the change drops nothing')
+      .toEqual([]);
+  });
+
+  it('recallOffStatusOf: seen_ms, the state rows, and those unreadable or off the grammar; counts only', () => {
+    const meta = new Map<string, string>([
+      [K.seen, '2000'], [`${K.state}${X}`, roLib.canonicalJson(val(G1))], [`${K.state}${Y}`, roLib.canonicalJson(UNREADABLE)],
+      [`${K.state}${C}`, 'not json'], [`${K.change}2005:${X}`, '{}'], [`${K.gap}2005`, '{}'], ['store_id', 'x'],
+    ]);
+    expect(roLib.recallOffStatusOf(meta)).toEqual({ seen_ms: 2000, files: 3, unreadable: 2 });
+    expect(roLib.recallOffStatusOf(new Map()), 'no record yet').toEqual({ seen_ms: null, files: 0, unreadable: 0 });
+    expect(roLib.recallOffStatusOf(new Map([[K.seen, 'soon']])).seen_ms).toBeNull();
+  });
+});

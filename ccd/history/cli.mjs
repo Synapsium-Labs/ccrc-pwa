@@ -168,6 +168,7 @@ function emptyEnvelope(P) {
     },
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
+    recall_off: { seen_ms: null, files: 0, unreadable: 0 },   // W2-D31 (W2-1 Task 4): no store read, no observation
     recovering: null, op: null, pass: null, pass_died: null, history_off: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
@@ -337,6 +338,7 @@ function readStore(env, P, nowMs) {
       .sort();
     const unreadable = parseJsonOr(meta.get('redact_unreadable'), []);
     env.redact_unreadable = Array.isArray(unreadable) ? unreadable.filter((x) => typeof x === 'string') : [];
+    env.recall_off = healthLib.recallOffStatusOf(meta);   // W2-D31 (W2-1 Task 4): from the meta rows, counts only
     decided(env, read);
   } finally {
     db.close();
@@ -427,6 +429,8 @@ export function render(env) {
       lines.push(`export(${h}): horizon=${ex.horizon_days ?? 'unmeasured'}d retention=${ex.retention_days ?? 'unmeasured'}d `
         + `due=${ex.due_blobs} overdue=${ex.overdue_blobs} segments=${ex.segments}`);
     }
+    const ro = env.recall_off;   // W2-D31 (W2-1 Task 4): the presence record, counts only
+    lines.push(`recall-off: seen=${ro.seen_ms === null ? 'never' : new Date(ro.seen_ms).toISOString()} files=${ro.files} unreadable=${ro.unreadable}`);
   }
   const op = env.op === null ? 'none' : `${env.op.verb}/${env.op.pid}${env.op.alive ? '' : ' (dead)'}`;
   const recovering = env.recovering === null ? 'no' : `${env.recovering.step} ${env.recovering.cursor}`;

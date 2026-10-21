@@ -1372,3 +1372,41 @@ describe('W2-1 recall-off: the CLI door relays the shim', () => {
     for (const w of ['generation-mismatch', 'generation-malformed', 'generation-unreadable']) expect(readme).toContain(`\`${w}\``);
   });
 });
+
+// ── W2-1 Task 4: status --json's recall_off block (W2-D31) ───────────────────────────────────────────────────────
+describe('status recall_off: the presence record, counts only (W2-D31; W2-1 Task 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  type RecallOffBlock = { seen_ms: number | null; files: number; unreadable: number };
+  const blockOf = (env: Envelope): RecallOffBlock => (env as unknown as { recall_off: RecallOffBlock }).recall_off;
+  const RID = 'claude-a-roffid';
+  const RID2 = 'claude-b-roffid';
+
+  it('after a write and a tick, seen_ms is later than the write; files and unreadable count the state rows; no id is printed', () => {
+    const box = boundBox('ccrc-hist-cli-roff-');
+    const dir = hist(box, 'recall-off');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, RID), `${G1}\n`, { mode: 0o600 });
+    fs.symlinkSync(path.join(box.home, 'nowhere'), path.join(dir, RID2));   // a link: unreadable, never absent
+    const wrote = fs.statSync(path.join(dir, RID)).mtimeMs;
+    const t = runSweep(box);
+    expect(t.code, t.stderr).toBe(0);
+    const s = status(box);
+    expect(s.code, s.stderr).toBe(0);
+    const ro = blockOf(s.env);
+    expect(Object.keys(ro).sort()).toEqual(['files', 'seen_ms', 'unreadable']);
+    expect(ro.seen_ms).toBeGreaterThan(wrote);
+    expect([ro.files, ro.unreadable]).toEqual([2, 1]);
+    expect(s.stdout, 'status is identity-free').not.toContain(RID);
+    expect(s.stdout).not.toContain(RID2);
+    const human = status(box, { args: ['status'] });
+    expect(human.code).toBe(0);
+    expect(human.stdout.split('\n')).toContain(`recall-off: seen=${new Date(ro.seen_ms!).toISOString()} files=2 unreadable=1`);
+  });
+
+  it('with no store read, the block is there and says nothing was observed', () => {
+    const shimOnly = makeHistoryBox('ccrc-hist-cli-roff-none-', { role: 'fleet', shim: true });
+    const s = status(shimOnly);
+    expect(s.code).toBe(6);
+    expect(blockOf(s.env)).toEqual({ seen_ms: null, files: 0, unreadable: 0 });
+  });
+});

@@ -6419,3 +6419,107 @@ describe('W2-1 recall-off: RB12 and C67, decided under the lock', () => {
     expect(fs.existsSync(path.join(historyPaths(box.home).root, 'recall-off'))).toBe(false);
   }, HEAVY);
 });
+
+// ── W2-1 Task 4: the presence record across a recovery (W2-D30) ──────────────────────────────────────────────────
+// Replay rebuilds the change, gap and state rows from the journal without reading recall-off/, never replays seen_ms, and
+// never rewrites a row the store holds; the recover arm runs no presence step; the first ordinary tick after a rebuild
+// writes no change row for a file unchanged since before it.
+import * as roLib from '../../ccd/history/lib.mjs';
+
+describe('the recall-off presence record across a recovery (W2-D30; W2-1 Task 4)', () => {
+  interface RecallOffStep { recordRecallOff(db: DatabaseSync, ctx: Record<string, unknown>): void }
+  const K = roLib.RECALL_OFF_KEYS;
+  const [GA, GB, GC] = [u(0xc1), u(0xc2), u(0xc3)];
+  const [X, Y, W, Z] = ['claude-a-demo', 'claude-b-demo', 'claude-c-demo', 'claude-d-demo'];
+  const dirOf = (box: HistoryBox): string => path.join(box.root, 'recall-off');
+  const plant = (box: HistoryBox, id: string, gen: string): void => {
+    fs.mkdirSync(dirOf(box), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dirOf(box), id), `${gen}\n`, { mode: 0o600 });
+  };
+  const presence = (box: HistoryBox): Record<string, string> => Object.fromEntries(
+    rows(box, 'SELECT k, v FROM meta WHERE k >= ? AND k < ? ORDER BY k', roLib.RECALL_OFF_META, `${roLib.RECALL_OFF_META.slice(0, -1)};`)
+      .map((r) => [String(r['k']), String(r['v'])]));
+  const changeKeys = (p: Record<string, string>, id?: string): string[] =>
+    Object.keys(p).filter((k) => k.startsWith(K.change) && (id === undefined || k.endsWith(`:${id}`)));
+  const changeCountOn = (db: DatabaseSync): number =>
+    Number((db.prepare('SELECT count(*) AS n FROM meta WHERE k >= ? AND k < ?').get(K.change, `${K.change.slice(0, -1)};`) as { n: number }).n);
+  /** A store whose record holds a first gap, X unchanged at GA, Y moved GA to GB, and W planted and then removed. Then
+   *  the DB is lost and recall-off/ moved away, so a replay that read it would find nothing; a rebuild is bound. */
+  const lostAfterTicks = (prefix: string): { box: HistoryBox; before: Record<string, string>; version: number } => {
+    const box = makeHistoryBox(prefix);
+    const P = historyPaths(box.home);
+    pass(box);
+    plant(box, X, GA); plant(box, Y, GA); plant(box, W, GA);
+    pass(box);
+    plant(box, Y, GB);
+    fs.rmSync(path.join(dirOf(box), W));
+    pass(box);
+    const before = presence(box);
+    expect(changeKeys(before, W), 'CONTROL: W came and went').toHaveLength(2);
+    expect(before[`${K.state}${W}`]).toBeUndefined();
+    const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+    fs.renameSync(dirOf(box), `${dirOf(box)}.away`);
+    return { box, before, version: boundEmptyStore(box, storeId).version };
+  };
+
+  it('replay rebuilds the change, gap and state rows from the journal without reading the directory; seen_ms is never replayed', () => {
+    const { box, before, version } = lostAfterTicks('ccrc-history-roff-replay-');
+    pass(box);   // the recovery step, whole; the recover arm runs no presence step
+    expect(recoverRow(box)).toMatchObject({ version, completed_ms: expect.any(Number) });
+    const after = presence(box);
+    expect(after[K.seen], 'seen_ms is not replayed').toBeUndefined();
+    expect(after).toEqual(Object.fromEntries(Object.entries(before).filter(([k]) => k !== K.seen)));
+    expect(fs.existsSync(dirOf(box)), 'CONTROL: the directory was away for the whole replay').toBe(false);
+  }, HEAVY);
+
+  it('a rebuild mid-window, then a tick: no change row for a file unchanged since before the rebuild, a gap from null, and null for one changed meanwhile', () => {
+    const { box, before } = lostAfterTicks('ccrc-history-roff-midwin-');
+    pass(box);   // the recovery step
+    fs.renameSync(`${dirOf(box)}.away`, dirOf(box));
+    plant(box, Y, GC);   // CONTROL: Y changed while the store was rebuilt; X did not
+    pass(box);   // the first ordinary tick after the step
+    const after = presence(box);
+    expect(changeKeys(after, X), 'X is unchanged since before the rebuild: no new change row').toEqual(changeKeys(before, X));
+    const newY = changeKeys(after, Y).filter((k) => !(k in before));
+    expect(newY.map((k) => JSON.parse(after[k]!) as unknown)).toEqual([{ from: { s: 'value', v: GB }, to: { s: 'value', v: GC }, prev_seen_ms: null }]);
+    const newGaps = Object.keys(after).filter((k) => k.startsWith(K.gap) && !(k in before));
+    expect(newGaps.map((k) => (JSON.parse(after[k]!) as { from: unknown }).from), 'the first observation after a rebuild is a gap from null').toEqual([null]);
+    expect(after[K.seen]).toMatch(/^[0-9]+$/);
+  }, HEAVY);
+
+  it('a recover pass with planted files writes no change: row and replay keeps a row the store holds; the step writes nothing while a recovery step is registered', () => {
+    const box = makeHistoryBox('ccrc-history-roff-recover-');
+    const P = historyPaths(box.home);
+    pass(box);   // the first observation: one gap row, journaled
+    const p0 = presence(box);
+    const gapKey = Object.keys(p0).find((k) => k.startsWith(K.gap));
+    expect(gapKey, 'the first observation wrote its gap row').toBeDefined();
+    plant(box, Z, GA);
+    // A row the store already holds under a journaled key, with another value: replay inserts DO NOTHING, so it stays.
+    const held = roLib.canonicalJson({ from: null, to: 1 });
+    const raw = new DatabaseSync(P.dbFile);
+    try { expect(Number(raw.prepare('UPDATE meta SET v = ? WHERE k = ?').run(held, gapKey!).changes)).toBe(1); } finally { raw.close(); }
+    registerRecovery(box, Date.now());
+    pass(box);   // the recover arm: the step replays this store's own journal and completes
+    expect(recoverRow(box)?.completed_ms).toEqual(expect.any(Number));
+    const mid = presence(box);
+    expect(changeKeys(mid), 'the recover arm wrote no change: row').toEqual([]);
+    expect(mid[`${K.state}${Z}`]).toBeUndefined();
+    expect(mid[K.seen], 'and observed nothing').toBe(p0[K.seen]);
+    expect(mid[gapKey!], 'a replayed gap record leaves the row the store held').toBe(held);
+    // The step guards itself: called in-process while a recovery step is registered, it writes nothing.
+    registerRecovery(box, Date.now() + 1);
+    const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+    const db = openWriter(P.dbFile);
+    try {
+      (SW as unknown as RecallOffStep).recordRecallOff(db, stepCtx(box, ids));
+      expect(changeCountOn(db), 'no change: row while a recovery step is registered').toBe(0);
+      db.prepare("DELETE FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL").run();
+      (SW as unknown as RecallOffStep).recordRecallOff(db, stepCtx(box, ids));
+      expect(changeCountOn(db), 'CONTROL: with none registered, the planted file is recorded').toBe(1);
+    } finally {
+      closeWriter(db);
+    }
+  }, HEAVY);
+});

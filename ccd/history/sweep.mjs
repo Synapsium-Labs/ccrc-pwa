@@ -32,7 +32,7 @@
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
-  accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
+  accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync,
   readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -68,6 +68,8 @@ import {
   segmentListingRecord, addSegmentToListing, segmentListingVanished,
   decideReplayMark, replayWriterLayout, planReplayLayout, formatReplayLayout, widestReplayRanges,
   carryHoldAdvice,
+  // W2-1 Task 4 (W2-D30): the presence record's lib decisions.
+  RECALL_OFF_KEYS, RECALL_OFF_SCAN_MAX, recallOffStateOf, planRecallOffObservation, recallOffReplayRows,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -2573,6 +2575,16 @@ function applyReplayAction(db, run, a) {
     case 'tick':
       db.prepare(RECOVER_TICK_INSERT).run(a.t, a.lagMs);
       return;
+    case 'recall-off': {
+      // W2-1 Task 4 (W2-D30): a change or gap row is inserted DO NOTHING (a restored backup may already hold it); a state row
+      // is last-wins from the record's `to`, in journal order, and deleted on 'absent'. seen_ms is never replayed, and no
+      // directory is read: the first ordinary tick after a rebuild observes, with no seen_ms, and writes a gap from null.
+      const r = recallOffReplayRows(a.rec);
+      db.prepare(RECALL_OFF_INSERT_SQL).run(r.insert.k, r.insert.v);
+      if (r.put !== null) setMeta(db, r.put.k, r.put.v);
+      if (r.del !== null) db.prepare(RECALL_OFF_DELETE_SQL).run(r.del);
+      return;
+    }
     case 'skip':
       bump(db, a.counter);
       return;
@@ -3632,13 +3644,16 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     predictions of the sessions whose transcript copy ingest skipped (a read error), admission refused or whose parse crashed this tick
  *     (D-5061 (history-card-withdraw-on-a-skipped-copy));
  * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
- * 19. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
- * 20. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
+ * 19. `recordRecallOff`: W2-D30's presence record (W2-1 Task 4): recall-off/ read once, at most RECALL_OFF_SCAN_MAX
+ *     entries, outside the run budget; its meta rows and its change and gap records committed in one transaction through
+ *     the outbox; only while no recovery step is registered (the recover arm never calls it, and replay never observes);
+ * 20. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
+ * 21. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
  *     7 days on (card.mjs; W1-B3 Task 7);
- * 21. `markScan`: a due scan is marked done, unless the roster was unreadable;
- * 22. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, with a writer token only,
+ * 22. `markScan`: a due scan is marked done, unless the roster was unreadable;
+ * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, with a writer token only,
  *     outside the ingest gate, behind its own floor on the home filesystem;
- * 23. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
+ * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
  *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
@@ -3736,6 +3751,9 @@ export async function tick(db, ctx) {
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
   mergeSteps(db, ictx, ctx.budget);
+  // W2-D30 (W2-1 Task 4): the recall-off presence record, immediately before the tick's row, on this normal pass only. It
+  // returns at once while a recovery step is registered; recoverPass never calls it.
+  recordRecallOff(db, ctx);
   // §9.2 step 6: the tick's row and journal record. A paused ingest records an unmeasured lag.
   recordTick(db, ictx, ing);
   // §9.4 (W1-B3 Task 7): the scope markers and card directories of purged sessions, 7 days on, at the periodic scan.
@@ -5156,6 +5174,94 @@ export function behindStats(db, homes) {
   let bytes = 0;
   for (const g of gaps.values()) bytes += g;
   return { files: gaps.size, bytes };
+}
+
+// ── W2-1 Task 4: the recall-off presence record, tick step 19 (W2-D30) ──────────────────────────────────────────────
+/** A change or gap row, live or replayed: a row the store already holds is never rewritten. */
+const RECALL_OFF_INSERT_SQL = 'INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO NOTHING';
+const RECALL_OFF_DELETE_SQL = 'DELETE FROM meta WHERE k = ?';
+/** The state rows by key range, from RECALL_OFF_KEYS.state up to the same prefix with its last character (':') replaced
+ *  by the next code point (';'): meta's primary key bounds the read, and the change and gap rows, which accumulate, are
+ *  never read by a tick. */
+const RECALL_OFF_STATE_SQL = 'SELECT k, v FROM meta WHERE k >= ? AND k < ?';
+
+/** recall-off/ read once (W2-D30). ENOENT is an empty, complete observation. Any other lstat failure, a link or a
+ *  non-directory there, an opendir that fails or a listing that throws is `unreadable`, and nothing behind a link is read.
+ *  More than RECALL_OFF_SCAN_MAX entries is `capped`, found by a counted iteration that stops at the first entry past it;
+ *  names come first, so a capped directory has none of its files read. Only idOk names are read, each through
+ *  readBounded with no link followed (W2-D29's one reader shape); any other name (the writer's `~tmp.<pid>`, a name with a
+ *  space) is counted in `skipped` and never opened. */
+function scanRecallOff(home, dir) {
+  let st;
+  try {
+    st = lstatSync(dir);
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? { kind: 'complete', files: [], skipped: 0 } : { kind: 'unreadable' };
+  }
+  if (!st.isDirectory()) return { kind: 'unreadable' };
+  let d;
+  try {
+    d = opendirSync(dir);
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  const names = [];
+  try {
+    for (let e = d.readSync(); e !== null; e = d.readSync()) {
+      if (names.length === RECALL_OFF_SCAN_MAX) return { kind: 'capped' };
+      names.push(e.name);
+    }
+  } catch {
+    return { kind: 'unreadable' };
+  } finally {
+    try { d.closeSync(); } catch { /* already closed */ }
+  }
+  const ids = names.filter((n) => idOk(n));
+  const files = ids.map((id) => ({ id, state: recallOffStateOf(readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false)) }));
+  return { kind: 'complete', files, skipped: names.length - ids.length };
+}
+
+/** Tick step 19 (W2-D30): the recall-off presence record, immediately before recordTick, on the normal pass only and only
+ *  while no recovery step is registered. lib decides (planRecallOffObservation); this measures and writes.
+ *  - The observation starts at `startMs`, read before the directory is opened, which becomes seen_ms; its rows are keyed
+ *    by `endMs`, read after the last file, so a change made during the scan lies inside (prev_seen_ms, ts_ms].
+ *  - A capped or unreadable directory writes nothing, leaves seen_ms, and is counted (recall_off_scan_capped,
+ *    recall_off_dir_unreadable).
+ *  - A complete one writes, in ONE transaction: seen_ms, the state rows, the change and gap rows, the skipped-name and
+ *    malformed-row counts, and one journal_outbox row per change and gap record, FULL when it holds a record, NORMAL when
+ *    only seen_ms moves. The records are flushed right after, as verdictTx flushes (a JournalError counted
+ *    journal_write_failed; with no writer token they wait in the outbox), never through recordTick's best-effort append.
+ *  Outside the run budget, as recordTick is: RECALL_OFF_SCAN_MAX bounds its reads. seen_ms is kept across a restore or an
+ *  adopt, which only widens the next interval (D-6240 (history-recall-off-seen-survives-restore)). */
+export function recordRecallOff(db, ctx) {
+  if (isRecovering(db)) return;
+  const startMs = ctx.now();
+  const scan = scanRecallOff(ctx.home, ctx.paths.recallOffDir);
+  if (scan.kind !== 'complete') {
+    countOutside(db, scan.kind === 'capped' ? 'recall_off_scan_capped' : 'recall_off_dir_unreadable');
+    return;
+  }
+  const endMs = Math.max(startMs, ctx.now());
+  const lo = RECALL_OFF_KEYS.state;
+  const stateRows = db.prepare(RECALL_OFF_STATE_SQL).all(lo, `${lo.slice(0, -1)};`)
+    .map((r) => ({ id: String(r.k).slice(lo.length), raw: String(r.v) }));
+  const plan = planRecallOffObservation({ seenRaw: getMeta(db, RECALL_OFF_KEYS.seen), stateRows, files: scan.files, startMs, endMs });
+  withTx(db, plan.records.length > 0 ? 'FULL' : 'NORMAL', () => {
+    setMeta(db, plan.seen.k, plan.seen.v);
+    for (const r of plan.put) setMeta(db, r.k, r.v);
+    for (const k of plan.del) db.prepare(RECALL_OFF_DELETE_SQL).run(k);
+    for (const r of plan.insert) db.prepare(RECALL_OFF_INSERT_SQL).run(r.k, r.v);
+    if (scan.skipped > 0) bump(db, 'recall_off_name_skipped', scan.skipped);
+    if (plan.malformed > 0) bump(db, 'recall_off_state_malformed', plan.malformed);
+    for (const r of plan.records) outboxRow(db, journalRecord('recall-off', r.t, r.fields));
+  });
+  if (plan.records.length === 0 || ctx.ids === null) return;
+  try {
+    flushOutbox(db, ctx.home, ctx.ids, ctx.now());
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    countOutside(db, 'journal_write_failed');
+  }
 }
 
 /** The tick's `ticks` row and its journal `tick` record (§9.2 step 6; W1-b, doctor's catching-up; slug
