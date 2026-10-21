@@ -2079,3 +2079,19 @@ Found in the wave-3 follow-up 6 (run 728, block D-6162..D-6169, taken in order):
 - **D-6168** — `the-delta-pre-begin-checks-live-in-the-model` (a departure from the task text, which put the delta's pre-BEGIN checks in the store method): main armed the god-file growth check (#1058) after the text was written, and measured at `16fc9746a` (`GROWTH_CHECK=1`, committed head against the merge-base) `store.ts` grew by 66 net code lines against a limit of 40, where `watch.ts` grew by 10. The pure pre-BEGIN work (the version, the applied position, `assertWave3Leases`, the diff, in that order; a duplicate-session check followed until `4c2993963`) therefore moved into ONE exported pure helper in `delegation-model.ts`, `prepareDelegationProjectionChanges(prior, next)`, which returns the diff; the store keeps the fallback, `PRAGMA foreign_keys` and the SQL, the fallback ahead of the foreign-keys check since `18446f0b6` (the task text's order put the check first, so a declined `next` on a handle without foreign keys was refused `foreign-keys-off` where the full path gives its own code). Otherwise the same order, the same codes and messages (R15's twin parity measures both code and message against the full path on a twin store, so the move cannot drift), no new import, no clock. With the per-table prepare-once change, `store.ts` ends at +38 net code lines (+35 at `8bae10497`, then +3 for the restored import lines and the wrapped compare-and-swap throw that the review asked for; the limit is 40 and the file has little room left in this PR) and `watch.ts` at +10. Re-measure: `cd server && GROWTH_CHECK=1 systemd-run --user --scope -q -p MemoryMax=4G ./node_modules/.bin/vitest run test/growth-check.test.ts --reporter=verbose | grep delta` (the test is unarmed without `GROWTH_CHECK=1`, so the number is the criterion). Commits: `8bae10497` (the helper and prepare-once), `fdd92900c` (the import lines restored byte-identical where a census pins them, the throw wrapped to the file's norm), `4c2993963` (the helper returns a not-applicable diff at once and its duplicate-session loop is removed as unreachable on the applicable path; the diff is a loop that ends at the first declining table; the store inserts before it updates; store.ts stays +38).
 - **D-6169** — `unused` (run 728): issued to this follow-up; no departure took it.
 - **Unused:** D-6169 was issued to this follow-up and is unused.
+
+Found in the wave-3 follow-up 7 (run 740, block D-6190..D-6201, taken in order):
+
+- **D-6190** — `an-attempt-is-a-decision-not-its-witnesses` (placeholder: an attempt row is keyed on the decision, never on its evidence, so the v2 attempt ID hashes the decision key alone and policy deduplicates by that key; the full entry follows with the code).
+- **D-6191** — `repeated-attempts-collapse-to-the-earliest` (placeholder: attempts already on file that repeat one decision collapse to the earliest row of each key, in the existing upkeep phase; the full entry follows with the code).
+- **D-6192** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6193** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6194** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6195** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6196** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6197** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6198** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6199** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6200** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **D-6201** — `unused` (run 740): issued to this follow-up; no departure took it.
+- **Unused:** D-6192..D-6201 were issued to this follow-up and are unused.

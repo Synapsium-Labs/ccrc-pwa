@@ -1567,6 +1567,36 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID, NEW_ID].sort()]);
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says a call was made').toBe(0);
   });
+
+  it('C-K3 (D-6191): a steady pass with attempts on file, no repeated decision and nothing for the interval upkeep to do makes no applyCheckpointChange call in the upkeep phase, and the revision does not move across it (green at main: no collapse exists; MK2 reds it)', async () => {
+    type Reading = { calls: number; revision: number; attempts: number; keys: number; intervalsHaveNothingToDo: boolean };
+    let atUpkeep: Reading | null = null;
+    let atPrune: Reading | null = null;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      ...replay,
+      setup: ({ w, r }) => {
+        const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');       // the scenario's own spy: a second spyOn returns it
+        const read = (): Reading => {
+          const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
+          const keys = new Set(cp.attempts.map((a) => JSON.stringify([a.parentId, a.parentIncarnation, a.project, a.adminRecord, a.canonicalPath, a.rung, a.verdict, a.detail])));
+          return {
+            calls: change.mock.calls.length, revision: cp.revision, attempts: cp.attempts.length, keys: keys.size,
+            intervalsHaveNothingToDo: model.upkeepDelegationIntervals(cp.observationIntervals, Date.now()).changed === false,
+          };
+        };
+        r.also('upkeep', () => { atUpkeep = read(); });
+        r.also('prune', () => { atPrune = read(); });
+      },
+    });
+    expectReached('attempts', sc);
+    expect(atUpkeep, 'the pass announced the upkeep').not.toBeNull();
+    expect(atPrune, 'and the prune, which follows it').not.toBeNull();
+    expect(atUpkeep!.attempts, 'attempts are on file').toBeGreaterThanOrEqual(1);
+    expect(atUpkeep!.keys, 'and no decision repeats').toBe(atUpkeep!.attempts);
+    expect(atUpkeep!.intervalsHaveNothingToDo, 'and the interval upkeep has nothing to do').toBe(true);
+    expect(atPrune!.calls - atUpkeep!.calls, 'no applyCheckpointChange call was made between the upkeep announcement and the prune announcement').toBe(0);
+    expect(atPrune!.revision, 'and the revision did not move across the upkeep').toBe(atUpkeep!.revision);
+  });
 });
 
 describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real setImmediate queued after the last real I/O before its boundary', () => {

@@ -974,6 +974,54 @@ describe('Task 8A additions: the lease lineage ID, the intent derivation and the
   });
 });
 
+describe('D-6190, D-6191: an attempt is a decision; rows that repeat one decision collapse to the earliest', () => {
+  // The three functions do not exist at the base: they are reached through a namespace and a cast (as `allocateDelegationActivityIdInto`
+  // is above), so each row is red on its own assertion and never as a whole file on an import error.
+  type Collapse = (a: readonly DelegationAttemptRow[]) => { attempts: readonly DelegationAttemptRow[]; removed: number };
+  const named = <F>(name: string): F => {
+    const fn = (modelNs as unknown as Record<string, unknown>)[name];
+    expect(typeof fn, `${name} is exported by the model`).toBe('function');
+    return fn as F;
+  };
+  const keyOf = (): ((a: DelegationAttemptRow) => string) => named('delegationAttemptKeyOf');
+  const collapse = (): Collapse => named('collapseDelegationAttempts');
+  const id = (n: number): string => n.toString(16).padStart(64, '0');
+  const row = (n: number, at: string, over: Partial<DelegationAttemptRow> = {}): DelegationAttemptRow => ({
+    attemptId: id(n), parentId: 'lane-a-demo', parentIncarnation: 'g1', project: 'project-a', adminRecord: 'wt-raw',
+    canonicalPath: '/fixture/project-a/.claude/worktrees/wt-raw', attemptedAt: at, rung: null, verdict: 'unresolved',
+    evidenceJournalIds: [id(1000 + n)], detail: 'parent-cwd', ...over,
+  });
+
+  it('C-K1: five rows of one decision collapse to the earliest (a tie to the smaller ID); unrelated rows are untouched and keep their order', () => {
+    // Out of ID order: the smallest ID (…01) is the LATEST row; …02 and …03 share the earliest instant, so …02 (the smaller ID) is kept.
+    const r1 = row(5, T1), r2 = row(3, T0), r3 = row(1, T2), r4 = row(2, T0), r5 = row(4, T1);
+    const u1 = row(9, T1, { adminRecord: 'wt-before' }), u2 = row(8, T1, { detail: 'rungs-disagree' }), u3 = row(7, T0, { verdict: 'conflicting' });
+    const input = [u1, r1, r2, u2, r3, r4, u3, r5];
+    const out = collapse()(input);
+    expect(out.removed).toBe(4);
+    expect(out.attempts).toEqual([u1, u2, r4, u3]);
+    expect(input).toHaveLength(8);                                                    // the input is not edited
+  });
+
+  const FIELDS: { field: string; over: Partial<DelegationAttemptRow> }[] = [
+    { field: 'parentId', over: { parentId: 'lane-b-demo' } },
+    { field: 'parentIncarnation', over: { parentIncarnation: 'g2' } },
+    { field: 'project', over: { project: 'project-b' } },
+    { field: 'adminRecord', over: { adminRecord: 'wt-other' } },
+    { field: 'canonicalPath', over: { canonicalPath: '/fixture/project-a/.claude/worktrees/elsewhere' } },
+    { field: 'rung', over: { rung: 3 } },
+    { field: 'verdict', over: { verdict: 'conflicting' } },
+    { field: 'detail', over: { detail: 'rungs-disagree' } },
+  ];
+  it.each(FIELDS)('C-K2[$field]: two rows that differ only in $field are two decisions: nothing collapses, and the SAME array comes back', ({ over }) => {
+    const input = [row(1, T0), row(2, T1, over)];
+    const out = collapse()(input);
+    expect(out.attempts).toBe(input);
+    expect(out.removed).toBe(0);
+    expect(keyOf()(input[0]!)).not.toBe(keyOf()(input[1]!));
+  });
+});
+
 describe('the model is L1: pure, with no randomness and no IO of its own', () => {
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-model.ts'), 'utf8');
   const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
