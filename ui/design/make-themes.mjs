@@ -611,10 +611,13 @@ function build(seed) {
   t['--status-cleanup'] = dot('cleanup'); t['--status-cleanup-text'] = text('cleanup');
 
   // Account hues: each is ink on ITS OWN tint, so each pair is fitted together.
+  // THE PAGE IS A GROUND TOO (D-5478): Instrument's panels sit on --bg-page
+  // where Refined's cards sit on --bg-surface (spec §8.2), and its lane labels
+  // are drawn there, so the page joins the fit and the gate pairs it.
   for (const k of ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']) {
     const tint = over(hues[k], dark ? 0.18 : 0.16, surface);
     t[`--acct-${k}-tint`] = tint;
-    t[`--acct-${k}`] = fit(`${name} acct-${k}`, hues[k], [tint, surface, ...ROW], 4.5, up, 0.3);
+    t[`--acct-${k}`] = fit(`${name} acct-${k}`, hues[k], [tint, surface, page, ...ROW], 4.5, up, 0.3);
   }
 
   t['--limit-track'] = edge(0.03);

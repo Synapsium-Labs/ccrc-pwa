@@ -1,6 +1,6 @@
 # Runs close themselves, and the runs page becomes a programme view (design)
 
-**Status:** rev 1 (2026-10-20), a draft for the operator's review. Rev 1 applies three reviews (correctness, safety and UX); the Review log at the end records each finding and its outcome. It defines no D-numbers; the plan that follows it allocates them. Every operator choice it needs is in §6, each with a recommended option.
+**Status:** rev 2 (2026-10-21), ruled. The operator accepted every recommended option of §6 on 2026-10-21 (§6.1, the decision log): G1 to G6 are decided, each at its option (a). Rev 1 (2026-10-20) applied three reviews (correctness, safety and UX); the Review log at the end records each finding and its outcome. This spec defines no D-numbers; the plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md` allocates them (D-6170 to D-6175).
 
 **The request (operator, 2026-10-20, verbatim):**
 
@@ -438,7 +438,7 @@ W2 (shadow ─▶ armed) ─┘
 
 ## 6. Operator decisions
 
-Each decision has options with a recommended one and its trade-off. None is ruled yet.
+Each decision has options with a recommended one and its trade-off. All six are ruled: §6.1 is the decision log.
 
 **G1. The never-started grace (E1).**
 - (a) **Recommended.** 72 h of programme quiet (drift's `RUN_QUIET_MS`), with the warning at 48 h. All 5 runs Abandoned last week were Abandoned before 72 h (14 to 71 h), so (a) alone would have prevented none of them; it works only together with W0 (no Abandon on finished rows) and W3's "ccrc closes them in <when>" line. A run Abandoned at 14 h would have closed about 58 h later, and only if its programme stayed quiet. The §8 target for manual Abandons after W1 is therefore conditional on W0 and W3. Trade-off: a forgotten run holds its programme's holds for 3 days.
@@ -471,6 +471,23 @@ Each decision has options with a recommended one and its trade-off. None is rule
 - (a) **Recommended.** `/runs` lands on the programme list. A programme with no open run sits in a collapsed "Finished" group for 7 days after its last close, with its ending in words, then only in the ledger. Trade-off: an older programme is one tap further away.
 - (b) It lands on a needs-you list, with programmes one tap further. Quickest answer to "does anything need me"; the programme picture is hidden.
 - (c) The programme list, and finished programmes shown forever with a filter. Complete; the list grows without bound.
+
+### 6.1 Decision log
+
+**2026-10-21. The operator ruled G1 to G6.** Asked "Runs page: accept the recommended G1–G6 from the merged spec (#1013)?", the operator answered, verbatim:
+
+> "Accept all recommended (Recommended)"
+
+| Decision | Ruled | What it binds |
+|---|---|---|
+| G1, the never-started grace (E1) | **decided: (a)** | 72 h of programme quiet (drift's `RUN_QUIET_MS`), with the warning at 48 h (grace − 24 h) |
+| G2, a coordinator gone by a deliberate act (E3, E3s) | **decided: (a)** | a removal the journal records: 1 h; stopped by a person: 24 h; stopped by a swap, a supervisor, an OOM policy or maintenance, or hibernated: never; absent with no lifecycle history: listed under needs you and never closed (`deadCoordinatorCrash`'s `unmeasured` rule kept; option (d) not taken) |
+| G3, the worker-gone grace (E4) | **decided: (a)** | 24 h after the worker reads `dead` with no activity, read from the #119 heartbeat (`workerLastSeen`, D-5915), so E4 lands in W5 |
+| G4, how a row is armed | **decided: (a)** | shadow for 3 days, then the operator creates each group's marker after reading its "would close" list: three acts, `runs-expire-never-started` (E1, E1r), `runs-expire-coordinator-gone` (E3, E3s, E5) and `runs-expire-worker-gone` (E2, E4) |
+| G5, manual Abandon | **decided: (a)** | it stays under Advanced, on open rows only, with "ccrc would close this itself <when>", plus "Close anyway" as a needs-you door for unpushed commits under a gone coordinator |
+| G6, the default landing and finished programmes | **decided: (a)** | `/runs` lands on the programme list; a programme with no open run sits in a collapsed "Finished" group for 7 days after its last close, then only in the ledger |
+
+The plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md` turns these rulings and §5's waves into tasks.
 
 ## 7. Risks and rollback
 
