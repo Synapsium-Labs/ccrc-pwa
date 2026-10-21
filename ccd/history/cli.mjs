@@ -93,6 +93,10 @@ const EXIT_MEANING = Object.freeze({
   [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
 });
 
+/** What recall-off's stated rc 1 prints after the pass's own line (which names the entry or the directory): the pass stopped
+ *  by design, so OP_EXIT_WORDS[EXIT.INTERNAL]'s "gave no result" is false there. The operator note still follows. */
+const RECALL_OFF_STATED_WORDS = 'the history writer stopped, as the line above says';
+
 /** The inputs §8.3's table does not reach on its first rows (Darwin, a server role, an unsettled stat):
  *  passed as unmeasured, so the table, not this file, decides every answer. */
 function unmeasuredFacts(role) {
@@ -1427,19 +1431,6 @@ const ERR_HOLD_CAP = 1 << 20;
 const SIGNAL_FLUSH_MS = 2000;
 const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 
-/** Whether the shim's last stdout line was a result the sweep stated at rc 1, a bare `{"rc":1}` that exited 1. decideRelay
- *  answers {exit: 1} for that and for a shim that gave no result, so this is the one test that tells them apart, for
- *  recall-off's designed rc 1, whose own line has already said what is wrong (spec §8.4: exit 1 with one line, R3). */
-function resultRelayedAtRc1(lastLine, status) {
-  if (typeof lastLine !== 'string' || status !== EXIT.INTERNAL) return false;
-  try {
-    const r = JSON.parse(lastLine);
-    return r !== null && typeof r === 'object' && !Array.isArray(r) && Object.keys(r).join(',') === 'rc' && r.rc === EXIT.INTERNAL;
-  } catch {
-    return false;
-  }
-}
-
 /** The shim as a child: its stdout relayed as it arrives, each read's whole lines as one batch (D-5747), its LAST stdout
  *  line held back for the relay; its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling
  *  5020: a per-line redaction cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which
@@ -1535,8 +1526,7 @@ function opRelay(P, op, opArgs, emit) {
       let lastLine = null;
       if (held !== null && held.startsWith('{"rc"')) lastLine = held;
       else if (held !== null) emit(held, false);
-      const decided = healthLib.decideRelay({ status, signal, lastLine });
-      finish(decided.exit === EXIT.INTERNAL && resultRelayedAtRc1(lastLine, status) ? { ...decided, relayed: true } : decided);
+      finish(healthLib.decideRelay({ status, signal, lastLine }));
     });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', onOut);
@@ -1687,10 +1677,12 @@ export async function operatorMain(home, argv) {
       scope: null, header: null, items: [], shown: 0, total: 0, next: null,
     });
     process.stdout.write(`${JSON.stringify(env)}\n`);
-  } else if (r.exit !== EXIT.OK && !thrown && !(verb === 'recall-off' && r.relayed === true)) {
+  } else if (r.exit !== EXIT.OK && !thrown) {
     // recall-off's designed rc 1 (an unusable history root or recall-off/, a --clear on an entry that is neither a file nor a
-    // link) is a result the sweep stated, after the line that names the entry: the generic "gave no result" words are false there.
-    const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
+    // link) is a result the sweep stated (lib decideRelay's `stated`), after the line that names the entry: the generic
+    // "gave no result" words are false there, so the one line names the operator and points at the line above.
+    const stated = verb === 'recall-off' && r.stated === true;
+    const words = stated ? RECALL_OFF_STATED_WORDS : OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
     process.stderr.write(`ccrc history ${verb}: ${words}; ${OP_OPERATOR_NOTE[r.exit] ?? OP_OPERATOR_NOTE_ANY}\n`);
   }
   return r.exit;

@@ -4451,11 +4451,10 @@ const RECALL_OFF_SEEN_RE = /^(?:0|[1-9][0-9]{0,15})$/;
 /** seen_ms as stored: a decimal ms within Date's range, else null. A value off that grammar, or past Date's last ms (so
  *  `new Date(..).toISOString()` in status cannot throw), reads as never observed, the conservative reading: a null
  *  prev_seen_ms reads as -Infinity downstream (W2-D23), and a null gap `from` reports the gap. */
-const DATE_MAX_MS = 8.64e15;
 function recallOffSeenOf(raw) {
   if (typeof raw !== 'string' || !RECALL_OFF_SEEN_RE.test(raw)) return null;
   const n = Number(raw);
-  return Number.isSafeInteger(n) && n <= DATE_MAX_MS ? n : null;
+  return Number.isSafeInteger(n) && n <= ROW_TS_MAX_MS ? n : null;
 }
 /** A state row's value, or null when it is off the grammar (isRecallOffState). */
 function recallOffStateRowOf(raw) {
@@ -5521,7 +5520,10 @@ export function decideRelay({ status, signal, lastLine }) {
   if (keys !== 'rc' && keys !== 'rc,reason') return internal;
   if (!Object.values(EXIT).includes(r.rc) || r.rc !== status) return internal;
   if (REASON_EXITS.has(r.rc)) return typeof r.reason === 'string' && Object.hasOwn(REASONS, r.reason) && REASONS[r.reason] === r.rc ? { exit: r.rc, reason: r.reason } : internal;
-  return r.reason === undefined ? { exit: r.rc } : internal;
+  if (r.reason !== undefined) return internal;
+  // A stated `{"rc":1}` is told apart from no result by a field, never a REASONS word (R3): the operator relay prints the arm's
+  // own line for a verb whose pass states its rc 1 (recall-off), and the generic words for a shim that gave nothing.
+  return r.rc === EXIT.INTERNAL ? { exit: EXIT.INTERNAL, stated: true } : { exit: r.rc };
 }
 
 // derived from lossless-claw src/large-files.ts @ e05d8d3, MIT, see LICENSE.lossless-claw

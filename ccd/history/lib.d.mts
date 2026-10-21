@@ -633,7 +633,7 @@ export type CursorOf<R extends CursorResource> = Extract<Cursor, { resource: R }
 export function encodeCursor(c: Cursor): string;
 export function decodeCursor<R extends CursorResource>(s: string, resource: R): CursorOf<R> | null;
 export function decideRelay(i: { status: number | null; signal: string | null; lastLine: string | null }):
-  { exit: number; reason?: string };
+  { exit: number; reason?: string; stated?: true };
 export function stripReadPrefix(text: string): string;
 export type ExploreKind = 'json' | 'csv' | 'tsv' | 'code';
 export function exploreKindOf(path: string | null): ExploreKind | null;

@@ -5232,8 +5232,8 @@ function scanRecallOff(home, dir) {
  *    only seen_ms moves. The records are flushed right after, as verdictTx flushes (a JournalError counted
  *    journal_write_failed; with no writer token they wait in the outbox), never through recordTick's best-effort append.
  *  Outside the run budget, as recordTick is: RECALL_OFF_SCAN_MAX bounds its reads. seen_ms is kept across a restore or an
- *  adopt. A restore only widens the next interval; an adopt carries the old box's seen_ms, which a clock running ahead of
- *  this box's narrows, a residual D-6240 (history-recall-off-seen-survives-restore) names. */
+ *  adopt (D-6240 (history-recall-off-seen-survives-restore)). A restore only widens the next interval. After an adopt, a
+ *  clock running ahead on the old box narrows the next interval; the PR names that as a residual. */
 export function recordRecallOff(db, ctx) {
   if (isRecovering(db)) return;
   const startMs = ctx.now();
@@ -6459,9 +6459,9 @@ export function writeOpMarker(P, verb, nowMs) {
 //      directory, answers rc 1 with one line, before any write. The executor follows no link;
 //   3. recall-off/ is made 0700 when absent, by the write form only: a clear of a directory that does not exist is rc 0;
 //   4. every stale `~tmp.*` entry that is a regular file or a link is unlinked (D-6241). Under the lock any such entry is stale,
-//      since no other writer is mid-write. A directory, FIFO, socket or device of that name, or one it cannot measure, is not the writer's (it only
-//      makes regular temps), so it stays for `--clear-all` to name, and the write's failure path unlinks its own temp only
-//      when this pass created it;
+//      since no other writer is mid-write. A directory, FIFO, socket or device of that name, or one it cannot measure, is
+//      not the writer's (it only makes regular temps), so it stays for `--clear-all` to name, and the write's failure path
+//      unlinks its own temp only when this pass created it;
 //   5. the form:
 //      - the write goes through `recall-off/~tmp.<pid>` (`~` is outside ID_RE, so no reader takes it for an id), opened
 //        O_CREAT|O_EXCL|O_NOFOLLOW at 0600, written whole and fsynced, renamed over recall-off/<id>, and the directory
@@ -6519,7 +6519,7 @@ export function recallOffPass(home, args, out) {
   for (const n of readdirSync(P.recallOffDir).sort()) {
     if (!n.startsWith('~tmp.')) continue;
     const tk = recallOffKind(`${P.recallOffDir}/${n}`);
-    if (tk !== 'file' && tk !== 'link') continue;   // a directory, a FIFO, a socket or a device stays, and --clear-all names it
+    if (tk !== 'file' && tk !== 'link') continue;   // a directory, a FIFO, a socket, a device or an unmeasured entry stays, and --clear-all names it
     try { unlinkSync(`${P.recallOffDir}/${n}`); } catch { /* the next recall-off pass tries again */ }
   }
   if (args.mode === 'write') {

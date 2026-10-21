@@ -5049,8 +5049,8 @@ function scanRecallOff(home, dir) {
  *    only seen_ms moves. The records are flushed right after, as verdictTx flushes (a JournalError counted
  *    journal_write_failed; with no writer token they wait in the outbox), never through recordTick's best-effort append.
  *  Outside the run budget, as recordTick is: RECALL_OFF_SCAN_MAX bounds its reads. seen_ms is kept across a restore or an
- *  adopt. A restore only widens the next interval; an adopt carries the old box's seen_ms, which a clock running ahead of
- *  this box's narrows, a residual D-6240 (history-recall-off-seen-survives-restore) names. */
+ *  adopt (D-6240 (history-recall-off-seen-survives-restore)). A restore only widens the next interval. After an adopt, a
+ *  clock running ahead on the old box narrows the next interval; the PR names that as a residual. */
 export function recordRecallOff(db, ctx) {
   if (isRecovering(db)) return;
   const startMs = ctx.now();

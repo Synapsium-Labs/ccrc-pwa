@@ -1365,7 +1365,7 @@ describe('W2-1 recall-off: the CLI door relays the shim', () => {
     expect(json.stderr).toContain('{"rc":0,"reason":null,"cleared":0,"skipped":["claude-d-dir"]}');
   }, 60_000);
 
-  it('a designed rc 1 prints the arm\'s own line and nothing more; an rc 1 with no result keeps the generic words (final wave B1)', () => {
+  it('a designed rc 1 prints the arm\'s own line and one line naming the operator; an rc 1 with no result keeps the generic words (final wave B1)', () => {
     const box = rBox('ccrc-hist-cli-w21e-');
     fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
     expect(spawnSync('mkfifo', [hist(box, 'recall-off', ID)]).status).toBe(0);
@@ -1373,6 +1373,7 @@ describe('W2-1 recall-off: the CLI door relays the shim', () => {
     expect(human.code, `${human.stdout}${human.stderr}`).toBe(1);
     expect(`${human.stdout}${human.stderr}`, 'the arm\'s own line, naming the entry').toContain(`recall-off/${ID}`);
     expect(`${human.stdout}${human.stderr}`, 'no generic words after a result the relay received').not.toContain('gave no result');
+    expect(human.stderr, 'one line that names the operator (R-X-OPERATOR)').toContain('ccrc history recall-off: the history writer stopped, as the line above says; ccrc history\'s operator verbs are the operator\'s to run');
     const json = healthHh.runCli(box, ['recall-off', ID, '--clear', '--json']);
     expect([json.code, json.json?.['exit']], `${json.stdout}${json.stderr}`).toEqual([1, 1]);
     // CONTROL: the same verb, an rc 1 and no result line (a shim that wrote something else): the generic words stay.
