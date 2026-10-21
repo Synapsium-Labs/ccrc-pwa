@@ -13,7 +13,7 @@ import {
 import { formatAge } from '../fleet/formatReset';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import {
@@ -223,7 +223,7 @@ export function freshnessChip(
 /** The crumbs (spec 4.4's layout): every crumb on a desktop; on a phone (under 900 px) the last two behind a leading
  *  `…` button, which shows them all. The last crumb is the page itself. */
 function Crumbs(p: { readonly crumbs: readonly DocsCrumb[] }): ReactNode {
-  const desktop = useMediaQuery('(min-width: 900px)');
+  const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
   const folded = !desktop && !whole && p.crumbs.length > 2;
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;

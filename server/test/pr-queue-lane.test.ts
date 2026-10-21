@@ -448,3 +448,92 @@ describe('C1f: the landing step\'s feed-only "already told" is the removal\'s ke
     f.stop();
   });
 });
+
+// Landing-order wave 3d: the merged lane's feed row is once per (workspace, PR) across a restart, as the queue and
+// nudge rows are. The in-memory `mergedNotified` is this process's latch; the archive is every process's. Measured
+// 2026-10-21: a server restart wrote a merged PR's `merged` row a second time while its run waited at `merging`.
+describe('the merged feed row is once-only across a restart (landing-order wave 3d)', () => {
+  const TAG = `merged-${ID}#42`;
+  const mergedFeed = (f: Awaited<ReturnType<typeof harness>>) => f.coord.feedEvents(200).filter((e) => e.kind === 'merged');
+
+  it('a restart writes no second merged row and sends no second push', async () => {
+    const f = await harness(mergedLine());
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(1);
+    f.restart();
+    const reads = vi.spyOn(f.coord, 'hasNotice');
+    await f.sweep();
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    expect(f.mail()).toHaveLength(1);
+    // The durable hit latches in memory too: one read per process, not one per sweep.
+    expect(reads.mock.calls.filter((c) => c[0] === 'merged')).toHaveLength(1);
+    f.stop();
+  });
+
+  it('the key matches when the body changed across the restart: the run closed, so the reason clause went', async () => {
+    const f = await harness(mergedLine());
+    await f.sweep();
+    expect(mergedFeed(f).map((e) => e.body)).toEqual([expect.stringContaining(`run ${f.runId} is still open`)]);
+    expect(f.coord.advance(f.runId!, 'failed', 'test').ok).toBe(true);
+    f.restart();
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    f.stop();
+  });
+
+  it('a row archived before the key, its body unchanged, is matched by that body: no repeat', async () => {
+    const f = await harness(mergedLine());
+    await f.sweep();
+    f.coord.db.prepare("UPDATE feed_events SET dedupe_key = NULL WHERE kind = 'merged'").run();
+    f.restart();
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    f.stop();
+  });
+
+  it('a row archived before the key whose body has changed since is announced ONCE more, at the deploy, then never', async () => {
+    // The third repeat by design: the usual merged workspace was a queue landing whose run waited at `merging`, so its
+    // pre-key row names the open run; the coordinator closed that run since, so the body the new code builds differs,
+    // and the row has no key to match. The repeat writes a keyed row, so the restart after it matches by key.
+    const f = await harness(mergedLine());
+    await f.sweep();
+    f.coord.db.prepare("UPDATE feed_events SET dedupe_key = NULL WHERE kind = 'merged'").run();
+    expect(f.coord.advance(f.runId!, 'failed', 'test').ok).toBe(true);
+    f.restart();
+    await f.sweep();
+    expect(mergedFeed(f).map((e) => e.body)).toEqual([
+      expect.stringContaining(`run ${f.runId} is still open`), 'PR #42 merged; nothing archived.']);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(2);
+    f.restart();
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(2);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(2);
+    f.stop();
+  });
+
+  it('a SECOND PR from the same workspace is a new key: recorded and pushed', async () => {
+    const f = await harness(mergedLine());
+    await f.sweep();
+    f.restart();
+    await f.sweep(mergedLine({}, 43));
+    expect(mergedFeed(f).map((e) => e.body)).toEqual([expect.stringContaining('PR #42 merged'), expect.stringContaining('PR #43 merged')]);
+    f.stop();
+  });
+
+  it('a durable read that throws announces, as before the read existed, and costs the landing lane nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(mergedLine());
+    vi.spyOn(f.coord, 'hasNotice').mockImplementation(() => { throw new Error('database is locked'); });
+    await f.sweep();
+    expect(mergedFeed(f)).toHaveLength(1);
+    expect(f.sent.filter((p) => p.tag === TAG)).toHaveLength(1);
+    expect(f.mail(), 'the throw cost sweepLanding its sweep').toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^ccrc-server: merged notice read for demo-quiet-basin failed \(database is locked\)/));
+    warn.mockRestore();
+    f.stop();
+  });
+});

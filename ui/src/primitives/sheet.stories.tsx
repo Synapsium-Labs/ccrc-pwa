@@ -20,11 +20,13 @@ function Demo({
   title,
   eyebrow,
   full,
+  size,
   children,
 }: {
   title?: string;
   eyebrow?: string;
   full?: boolean;
+  size?: 'sm' | 'md' | 'lg';
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
@@ -33,9 +35,9 @@ function Demo({
       <div className="w-[240px]">
         <Button onClick={() => setOpen(true)}>Open the sheet</Button>
       </div>
-      <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} full={full}>
-        {children}
-      </Sheet>
+      {full
+        ? <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} full>{children}</Sheet>
+        : <Sheet open={open} onClose={() => setOpen(false)} title={title} eyebrow={eyebrow} size={size}>{children}</Sheet>}
     </div>
   );
 }
@@ -91,6 +93,43 @@ claude-3   busy    2h14m   feat/limits-ranking
 claude-7   idle    18m     main
 $ `}
       </pre>
+    </Demo>
+  ),
+};
+
+/** THE DESKTOP ARM (D-5933): from 900 every sheet but the terminal drawer is a centred dialog on `--elev-pop`, with
+ *  a ✕ and no grabber or drag. One story per size, at the laptop width: `sm` 440 (a confirm), `md` 560 (the
+ *  default), `lg` 720 (What's new). */
+const desk = { viewport: { defaultViewport: 'laptop' } };
+
+export const DeskSmall: Story = {
+  parameters: desk,
+  render: () => (
+    <Demo title="Forget this session?" size="sm">
+      <p className="text-base leading-normal text-ink-secondary">Its history stays on disk. The card leaves the fleet.</p>
+    </Demo>
+  ),
+};
+
+export const DeskMedium: Story = {
+  parameters: desk,
+  render: () => (
+    <Demo eyebrow="claude is asking" title="Which migration should I run first?">
+      <div className="grid gap-2">
+        <Button variant="ghost">The schema one</Button>
+        <Button variant="ghost">The backfill</Button>
+      </div>
+    </Demo>
+  ),
+};
+
+export const DeskLarge: Story = {
+  parameters: desk,
+  render: () => (
+    <Demo eyebrow="3 releases" title="What's new since v0.0.7" size="lg">
+      <p className="text-base leading-normal text-ink-secondary">
+        Release notes read at a prose measure: the widest dialog is for reading, not for choosing.
+      </p>
     </Demo>
   ),
 };

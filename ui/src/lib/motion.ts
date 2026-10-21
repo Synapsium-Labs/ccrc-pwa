@@ -48,3 +48,12 @@ export const PALETTE_MOTION_VARS =
   + ' [--vaul-in-curve:var(--curve-swift)]'
   + ' [--vaul-out-dur:var(--dur-fast)]'
   + ' [--vaul-out-curve:var(--curve-swift)]';
+
+/** The Sheet's desktop arm's pace (D-5933, D-6032): from 900 the centred dialog fades in at '--dur-base' and out at
+ *  '--dur-fast', both on the swift curve, scrim and panel alike. Written after 'SHEET_MOTION_VARS' on the same
+ *  element, so at that width these win (a media variant is emitted after the plain utility). */
+export const SHEET_DESK_MOTION_VARS =
+  'min-[900px]:[--vaul-in-dur:var(--dur-base)]'
+  + ' min-[900px]:[--vaul-in-curve:var(--curve-swift)]'
+  + ' min-[900px]:[--vaul-out-dur:var(--dur-fast)]'
+  + ' min-[900px]:[--vaul-out-curve:var(--curve-swift)]';

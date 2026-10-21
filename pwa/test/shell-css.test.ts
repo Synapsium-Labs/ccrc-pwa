@@ -151,13 +151,18 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
     // the stylesheet alone leaves nothing matching at exactly 900px while the
     // JS still reports desktop (seen for real in this worktree during the D-161
     // review). This is the ledger that says they must move together.
-    // Since W2 Task S2b the query is `DESK_QUERY` (lib/useMediaQuery.ts),
-    // read by the fleet column and by the frame (skins/frame.tsx), and by no
-    // literal anywhere else.
+    // Since W2 Task S2b the query is `DESK_QUERY`, read by the fleet column and
+    // by the frame (skins/frame.tsx), and by no literal anywhere else. Since
+    // D-5933 its owner is @ccrc/ui (ui/src/lib/use-media-query.ts), where the
+    // Sheet's desktop arm reads it too; lib/useMediaQuery.ts re-exports it.
     expect(shellCss).toContain(`@media (max-width: ${BREAKPOINT - 0.02}px)`);
     const src = (rel: string): string => readFileSync(path.join(import.meta.dirname, '..', 'src', rel), 'utf8');
-    expect(src('lib/useMediaQuery.ts')).toContain(`DESK_QUERY = '(min-width: ${BREAKPOINT}px)'`);
-    for (const rel of ['screens/FleetColumn.tsx', 'skins/frame.tsx']) expect(src(rel), rel).toContain('useMediaQuery(DESK_QUERY)');
+    const owner = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'lib', 'use-media-query.ts'), 'utf8');
+    expect(owner).toContain(`DESK_QUERY = '(min-width: ${BREAKPOINT}px)'`);
+    expect(src('lib/useMediaQuery.ts'), 'the app\'s path is a re-export, not a second owner').not.toMatch(/min-width/);
+    for (const rel of ['screens/FleetColumn.tsx', 'skins/frame.tsx', 'docs/DocsHead.tsx', 'session/SessionDetails.tsx']) {
+      expect(src(rel), rel).toContain('useMediaQuery(DESK_QUERY)');
+    }
     expect(src('app.tsx'), 'no second spelling in the shell').not.toMatch(/min-width:\s*\d+px/);
   });
 
