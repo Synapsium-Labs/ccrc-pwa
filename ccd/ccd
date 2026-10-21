@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=902b14da1c412094941772ae019e55bb752826792ed2edb22dd4326079b45bb9
+# ccrc:generated 1 sha256=92f1b13b1150fc4f61ae5b8097af83263ed4b9852848164a60eaae2f278676db
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23235,8 +23235,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: every
   # supported wrapper (an external-provider shim included) execs Claude Code, so
   # on a non-home-able lane the RESUME vars `_resume_env` composes reach it too,
-  # and what fails closed there is `_redrive_after_spawn`'s transcript
-  # measurement; its pressure-reap key is deliberately LIVE there as well, so
+  # and `_redrive_after_spawn` measures that lane's transcript as it does any
+  # other's; its pressure-reap key is deliberately LIVE there as well, so
   # gating this line would drop both from that lane and buy nothing at all.
   resenv=$(_resume_env "$id")   # D-5237: the prompt names a recent end's cause
   # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
