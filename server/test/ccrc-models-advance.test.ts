@@ -74,11 +74,17 @@ if ((process.env.OP_HANG ?? '').split(',').includes(a[0])) {
   process.exit(1);
 }
 if ((process.env.OP_GARBAGE ?? '') === a[0]) { process.stdout.write('not one object\\n'); process.exit(0); }
-if (a[0] === 'advance-plan' && process.env.OP_PLAN_EXTRA) {
-  // The real planner's answer with extra class rows appended: a row the frame protocol cannot carry.
+if ((process.env.OP_REFUSE ?? '') === a[0]) {
+  process.stdout.write(JSON.stringify({ ok: false, error: 'registry-invalid', detail: 'the fixture refuses this op.' }) + '\\n');
+  process.exit(1);
+}
+if (a[0] === 'advance-plan' && (process.env.OP_PLAN_EXTRA || process.env.OP_PLAN_WHY)) {
+  // The real planner's answer with extra class rows appended (a row the frame protocol cannot carry) and/or its why replaced
+  // by the JSON value in OP_PLAN_WHY.
   const r = spawnSync(process.execPath, [${JSON.stringify(path.join(REPO, 'deploy', 'models-op.mjs'))}, ...a], { encoding: 'utf8', env: process.env });
   const j = JSON.parse(r.stdout);
-  j.classes.push(...JSON.parse(process.env.OP_PLAN_EXTRA));
+  if (process.env.OP_PLAN_EXTRA) j.classes.push(...JSON.parse(process.env.OP_PLAN_EXTRA));
+  if (process.env.OP_PLAN_WHY) j.why = JSON.parse(process.env.OP_PLAN_WHY);
   process.stdout.write(JSON.stringify(j) + '\\n');
   process.exit(r.status ?? 1);
 }
@@ -137,7 +143,7 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
     'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
-    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_PLAN_EXTRA', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
+    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_EXTRA', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
     delete inherited[k];
   }
@@ -1712,8 +1718,7 @@ describe.skipIf(PY === null || !HAS_FLOCK)('every re-admission after the backfil
   it('the shim question is not asked once the LiteLLM question has spent the time it needed', async () => {
     await setup();
     tier(0);
-    const r = run(250, bump('_models_lane_verdict', 0).replace('SECONDS=$(( SECONDS + 0 ))', ':')
-      + '\n' + wrap('_models_lane_verdict', { after: 'SECONDS=$(( SECONDS + 160 ))' }).replace(/^eval.*\n/, ''), {});
+    const r = run(250, wrap('_models_lane_verdict', { after: 'SECONDS=$(( SECONDS + 160 ))' }), {});
     expect(JSON.parse(r.stdout)).toEqual([]);
     expect(laneCalls(), 'the second tier was asked with its allowance gone').toEqual(['ours lane-a litellm']);
     expect(laneProxyRequests(proxy)).toEqual([]);
@@ -1828,20 +1833,44 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read cannot be failed by a 
     expect(rowOf(r)['advance']).toEqual([MOVED]);
   }, T);
 
-  it('a plan that is not an object, or that the planner refused, still ends the lane', async () => {
+  it.each([
+    ['is not an object', { OP_GARBAGE: 'advance-plan' }],
+    ['is refused by the planner (an error answer, exit 1)', { OP_REFUSE: 'advance-plan' }],
+  ] as [string, NodeJS.ProcessEnv][])('a plan that %s still ends the lane: no backfill, nothing settled', async (_w, extra) => {
     await setup({ opStub: OP_STUB });
     tier(0);
-    expect(JSON.parse(sourced(lane(250), { OP_GARBAGE: 'advance-plan' }).stdout)).toEqual([]);
+    plantLandedIntent();
+    expect(JSON.parse(sourced(lane(250), extra).stdout)).toEqual([]);
     expect(opCalls().some((l) => l.startsWith('advance-backfill'))).toBe(false);
+    expect(advanceFile().pending).not.toBeNull();
   }, T);
 
-  it('the effort pattern is the canary\'s own, held equal to it', () => {
+  /** A JavaScript `^…$` as the jq (Oniguruma) pattern this file writes: its `$` also matches before a final newline, so the
+   *  anchor is `\z`; the group is a plain one; a `/` needs no escape in a jq string. Compared as text, DELIBERATELY. */
+  const jqOf = (js: string): string => js.replace('(?:', '(').replace(/\\\//g, '/').replace(/\$$/, '\\z');
+  const jqDef = (name: string): string => {
+    const m = new RegExp(`(?:^|')def ${name}: type == "string" and test\\("(.+)"\\);$`, 'm').exec(fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(m, `ccd/ccrc has no \`def ${name}\``).not.toBeNull();
+    return m![1]!.replace(/\\\\/g, '\\');   // the jq string spells a backslash twice
+  };
+
+  it('the effort pattern is the canary\'s own, held equal to it (anchors compared deliberately: ^…$ is ^…\\z)', () => {
     const canary = /^const EFFORT_RE = \/(.+)\/;$/m.exec(fs.readFileSync(join(REPO, 'deploy', 'models-canary.mjs'), 'utf8'));
-    const defs = /^def eff: type == "string" and test\("(.+)"\);$/m.exec(fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
     expect(canary, 'the canary has no EFFORT_RE').not.toBeNull();
-    expect(defs, 'ccd/ccrc has no `def eff`').not.toBeNull();
-    // jq's pattern (Oniguruma) has no non-capturing group syntax this file uses, and spells the escapes with a doubled backslash.
-    expect(defs![1]!.replace(/\\\\/g, '\\')).toBe(canary![1]!.replace('(?:', '('));
+    expect(jqDef('eff')).toBe(jqOf(canary![1]!));
+  });
+
+  it('the model-id pattern is the registry\'s MODEL_ID_RE, the one grammar the canary and the commit accept', () => {
+    const re = /^export const MODEL_ID_RE = \/(.+)\/;$/m.exec(fs.readFileSync(join(REPO, 'shared', 'models.mjs'), 'utf8'));
+    expect(re, 'shared/models.mjs has no MODEL_ID_RE').not.toBeNull();
+    expect(jqDef('tok')).toBe(jqOf(re![1]!));
+  });
+
+  it('every grammar of the step ends in \\z, never $: a final newline is the one character a line frame cannot carry', () => {
+    const defs = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8').match(/^MODELS_JQ_DEFS='[\s\S]*?\n'$/m)![0];
+    const tests = [...defs.matchAll(/test\("((?:[^"\\]|\\.)*)"\)/g)].map((m) => m[1]!);
+    expect(tests.length, 'the definitions block lost its patterns').toBeGreaterThanOrEqual(3);
+    for (const t of tests.filter((x) => x.startsWith('^'))) expect(t, `${t} ends in $`).toMatch(/\\\\z$/);
   });
 });
 
@@ -1871,7 +1900,7 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
    *  line: the multi-line reading, to the next `}` at column 0, would swallow whatever follows it. */
   const defs = (): Map<string, string> => {
     const m = new Map<string, string>();
-    for (const x of src.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{([^\n]*)(?:\n|$)/gm)) {
+    for (const x of src.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\)[ \t]*\{([^\n]*)(?:\n|$)/gm)) {
       const oneLine = /^ .*\}\s*$/.test(x[2]!);
       const body = oneLine ? x[0] : /^[\s\S]*?\n\}/.exec(src.slice(x.index))![0];
       m.set(x[1]!, code(body));
@@ -1898,15 +1927,17 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
     const reach = reachable();
     for (const must of ['_models_advance_steps', '_models_adv_body_plan', '_models_adv_body_check', '_models_adv_body_canary',
       '_models_adv_body_receipt', '_codex_tier_read_body', '_models_advance_read_body', '_models_advance_plan', '_models_advance_check',
-      '_models_advance_canary', '_models_advance_receipt', '_codex_tier_ours', '_models_node_locked', '_models_lock']) {
+      '_models_advance_canary', '_models_advance_receipt', '_codex_tier_ours', '_models_node_locked', '_models_lock',
+      // Defined with more than one space before the brace (`name()    { …; }`): the extractor must still see them.
+      '_codex_lane_dir', '_codex_shim_file']) {
       expect(reach, `${must} is not reached: the derivation lost the step`).toContain(must);
     }
     expect(reach.filter((f) => /\b_codex_lock\b/.test(all.get(f)!)), 'a function the step reaches takes the tier lock').toEqual([]);
   });
 
-  it('the jq vocabulary is written once, in MODELS_JQ_DEFS, and every step program begins with it', () => {
+  it('the jq vocabulary is written once, in MODELS_JQ_DEFS, and no step program writes a definition of its own', () => {
     for (const d of ['tok', 'word', 'flat', 'eff', 'ofpin']) {
-      expect(src.match(new RegExp(`\\bdef ${d}[:(]`, 'g')), `def ${d} is written more than once`).toHaveLength(1);
+      expect(src.match(new RegExp(`\\bdef\\s+${d}\\s*[:(]`, 'g')), `def ${d} is written more than once`).toHaveLength(1);
     }
     const all = defs();
     for (const fn of ['_models_adv_body_plan', '_models_adv_body_canary', '_models_adv_body_receipt', '_models_hand_settled']) {
@@ -1916,8 +1947,14 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
 
   it('MODELS_AUTO_TAIL_S is read in one place, and the lock and the writer both ask it', () => {
     const all = defs();
-    const readers = [...all].filter(([, body]) => /MODELS_AUTO_TAIL_S:-/.test(body)).map(([n]) => n);
+    // ANY read of it: `${MODELS_AUTO_TAIL_S:-}`, `$MODELS_AUTO_TAIL_S`, `${MODELS_AUTO_TAIL_S}`, in a function or at file scope. The
+    // assignments (`MODELS_AUTO_TAIL_S=31`, the step's `local …=0`) and the `unset` are not reads.
+    const READ = /\$\{?MODELS_AUTO_TAIL_S\b/;
+    const readers = [...all].filter(([, body]) => READ.test(body)).map(([n]) => n);
     expect(readers).toEqual(['_models_auto_tail_secs']);
+    const fileScope = code(src).split('\n').filter((l) => READ.test(l));
+    expect(fileScope.length, 'a read of MODELS_AUTO_TAIL_S outside the one reader').toBe(
+      all.get('_models_auto_tail_secs')!.split('\n').filter((l) => READ.test(l)).length);
     for (const fn of ['_models_lock', '_models_node_locked']) expect(all.get(fn)).toContain('$(_models_auto_tail_secs)');
   });
 
@@ -1933,5 +1970,147 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
     expect(m, 'deploy/notify.sh has no curl -m').not.toBeNull();
     expect(h, 'ccd/ccrc has no MODELS_HOOK_S').not.toBeNull();
     expect(Number(h![1])).toBe(Number(m![1]));
+  });
+});
+
+// ══ FIX ROUND 2 ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// S1 the plan read's `why`; S2 the model-id grammar is the registry's; S3 every grammar ends in \z; S4 an effort that begins with
+// `--` is dropped. The plan body and the receipt body are called directly (the step's own children run these very functions),
+// with a planner stand-in that appends rows or replaces the `why`.
+
+describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the grammars at the frame (fix round 2, S1-S4)', () => {
+  /** A plan row, in the planner's own shape, with `over` laid over it. */
+  const prow = (over: Record<string, unknown>): Record<string, unknown> => ({ class: 'sonnet', pin: 'model-6-beta', family: 'beta',
+    held: false, candidate: 'model-7-beta', reason: 'newer', blocked: null, effortTo: 'high', canaryEffort: 'high', ...over });
+  const planFrames = (extra: NodeJS.ProcessEnv): string[] => {
+    const r = sourced(`${SHAPE}\n_models_adv_body_plan lane-a`, extra);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    return r.stdout.split('\n').filter(Boolean);
+  };
+  const cands = (frames: string[]): string[] => frames.filter((l) => l.startsWith('CAND\t')).map((l) => l.split('\t').slice(1).join('|'));
+  const OPUS_CAND = 'opus|model-5.6-gamma|model-6.1-gamma|low';
+  const journal = (): string[] => lines('op-calls').map((l) => l.split(' ')[0]!);
+
+  describe('S1: a why the frame cannot carry reads as unknown', () => {
+    it.each([
+      ['a newline and a tab (a fabricated CAND line)', 'none\nCAND\topus\tnone\tmodel-x\tnone'],
+      ['more than 40 characters', 'x'.repeat(50)],
+      ['a trailing newline', 'none\n'],
+    ])('a why of %s: the backfill still settles, nothing is canaried, no commit runs', async (_w, why) => {
+      await setup({ opStub: OP_STUB, canaryStub: LOGGING_CANARY });
+      tier(0);
+      plantLandedIntent();
+      const frames = planFrames({ OP_PLAN_WHY: JSON.stringify(why) });
+      expect(frames[0], 'the first line of the plan frame').toBe('PLAN\teligible\tunknown');
+      expect(frames.filter((l) => l.startsWith('CAND')).filter((l) => l.includes('model-x'))).toEqual([]);
+      const r = sourced(lane(250), { OP_PLAN_WHY: JSON.stringify(why) });
+      expect(JSON.parse(r.stdout)).toEqual([{ ...MOVED, recovered: true }]);
+      expect(notifyCalls()).toEqual(['--push\tlane-a: opus model-5.6-gamma → model-6.1-gamma']);
+      expect(laneCalls(), 'a candidate was canaried or a tier asked on a why that read as unknown').toEqual([]);
+      expect(journal().filter((o) => o === 'advance-commit')).toEqual([]);
+      expect(journal()).toContain('advance-backfill');
+    }, T);
+
+    it('a why that is null, or one of the planner\'s own words, is carried as it is', async () => {
+      await setup({ opStub: OP_STUB });
+      expect(planFrames({})[0]).toBe('PLAN\teligible\tnone');
+      expect(planFrames({ OP_PLAN_WHY: JSON.stringify('catalogue-stale') })[0]).toBe('PLAN\teligible\tcatalogue-stale');
+    }, T);
+  });
+
+  describe('S2: the model-id grammar is the registry\'s (colon and slash included)', () => {
+    const ID5 = 'vendor-a/model-5:beta';
+    const ID6 = 'vendor-a/model-6:beta';
+
+    it('a candidate whose ids carry a slash and a colon passes the plan and reaches the canary', async () => {
+      await setup({ opStub: OP_STUB, canaryStub: LOGGING_CANARY, registry: { ...STEP_REGISTRY,
+        classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' }, effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } } });
+      tier(0);
+      const extra = { OP_PLAN_EXTRA: JSON.stringify([prow({ pin: ID5, candidate: ID6, canaryEffort: 'low' })]) };
+      expect(cands(planFrames(extra))).toEqual([`sonnet|${ID5}|${ID6}|low`]);
+      const r = sourced(lane(250), extra);
+      expect(r.code, r.stderr).toBe(0);
+      expect(laneCalls()).toContain(`canary lane-a ${ID6}`);
+    }, T);
+
+    it('the receipt carries such ids in a moved event and in its push', async () => {
+      await setup({ opStub: OP_STUB });
+      const answer = JSON.stringify({ ok: true, op: 'advance-commit', id: 'lane-a', class: 'sonnet', outcome: 'moved', from: ID5, to: ID6,
+        effort: { from: null, to: null }, push: true, recovered: false });
+      const r = sourced(`${SHAPE}\nprintf '%s' '${answer}' | _models_adv_body_receipt commit lane-a sonnet ${ID5} ${ID6} passed`);
+      expect(r.stdout.split('\n').filter(Boolean)).toEqual([
+        `EVENT ${JSON.stringify({ class: 'sonnet', from: ID5, to: ID6, outcome: 'moved' })}`,
+        `PUSH lane-a: sonnet ${ID5} → ${ID6}`,
+        'END',
+      ]);
+    }, T);
+
+    it('a recovered move whose from and to carry them is a recovered event and a push, from the step and from a hand verb', async () => {
+      await setup({ opStub: OP_STUB });
+      const answer = JSON.stringify({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false, why: 'present',
+        recoveredMove: { class: 'sonnet', from: ID5, to: ID6, how: 'advance' } });
+      const r = sourced(`${SHAPE}\nprintf '%s' '${answer}' | _models_adv_body_receipt backfill lane-a - - - -`);
+      expect(r.stdout.split('\n').filter(Boolean)).toEqual([
+        `EVENT ${JSON.stringify({ class: 'sonnet', from: ID5, to: ID6, outcome: 'moved', recovered: true })}`,
+        `PUSH lane-a: sonnet ${ID5} → ${ID6}`,
+        'END',
+      ]);
+      const h = sourced(`_models_hand_settled lane-a '${answer}'`);
+      expect(h.code, h.stderr).toBe(0);
+      expect(notifyCalls()).toEqual([`--push\tlane-a: sonnet ${ID5} → ${ID6}`]);
+    }, T);
+  });
+
+  describe('S3: a final newline is refused where a value enters', () => {
+    it('a class, a candidate, a pin and an effort with a trailing newline each drop their row; the good rows stay', async () => {
+      await setup({ opStub: OP_STUB });
+      const extra = { OP_PLAN_EXTRA: JSON.stringify([
+        prow({ class: 'haiku\n' }), prow({ candidate: 'model-8-x\n' }), prow({ pin: 'model-5-x\n' }), prow({ canaryEffort: 'High\n' }),
+        prow({ candidate: 'model-8-beta' }),
+      ]) };
+      expect(cands(planFrames(extra))).toEqual([OPUS_CAND, 'sonnet|model-6-beta|model-8-beta|high']);
+    }, T);
+
+    it('a recovered move whose class or ids end in a newline is no event and no push', async () => {
+      await setup({ opStub: OP_STUB });
+      for (const bad of [{ class: 'sonnet\n', from: 'a-1-b', to: 'a-2-b' }, { class: 'sonnet', from: 'a-1-b', to: 'a-2-b\n' },
+        { class: 'sonnet', from: 'a-1-b\n', to: 'a-2-b' }]) {
+        const answer = JSON.stringify({ ok: false, error: 'x', recoveredMove: { ...bad, how: 'advance' } });
+        const r = sourced(`${SHAPE}\nprintf '%s' '${answer}' | _models_adv_body_receipt backfill lane-a - - - -`);
+        expect(r.stdout.split('\n').filter(Boolean), JSON.stringify(bad)).toEqual(['END']);
+        expect(sourced(`_models_hand_settled lane-a '${answer}'`).code).toBe(0);
+      }
+      expect(notifyCalls()).toEqual([]);
+    }, T);
+
+    it('a commit answer whose class or id ends in a newline is not an event: it reads as no answer and ends the lane', async () => {
+      await setup({ opStub: OP_STUB });
+      const answer = JSON.stringify({ ok: true, op: 'advance-commit', id: 'lane-a', class: 'opus', outcome: 'moved', from: 'a-1-b', to: 'a-2-b\n',
+        push: true });
+      const r = sourced(`${SHAPE}\nprintf '%s' '${answer}' | _models_adv_body_receipt commit lane-a opus a-1-b a-2-b passed`);
+      expect(r.stdout.split('\n').filter(Boolean)).toEqual([
+        `EVENT ${JSON.stringify({ class: 'opus', from: 'a-1-b', to: 'a-2-b', outcome: 'abandoned', why: 'no-answer' })}`, 'LANEEND', 'END']);
+    }, T);
+  });
+
+  describe('S4: an effort that begins with -- is dropped (the canary\'s argv reader refuses it)', () => {
+    it('--max is dropped, while -max, max and a single dash inside are kept', async () => {
+      await setup({ opStub: OP_STUB });
+      const extra = { OP_PLAN_EXTRA: JSON.stringify([
+        prow({ canaryEffort: '--max', candidate: 'model-8-a' }), prow({ canaryEffort: '-max', candidate: 'model-8-b' }),
+        prow({ canaryEffort: 'max', candidate: 'model-8-c' }), prow({ canaryEffort: 'x-high', candidate: 'model-8-d' }),
+      ]) };
+      expect(cands(planFrames(extra))).toEqual([OPUS_CAND, 'sonnet|model-6-beta|model-8-b|-max', 'sonnet|model-6-beta|model-8-c|max',
+        'sonnet|model-6-beta|model-8-d|x-high']);
+    }, T);
+
+    it('so one such candidate cannot end the lane\'s candidate loop: the next candidate is canaried', async () => {
+      await setup({ opStub: OP_STUB });
+      tier(0);
+      const extra = { OP_PLAN_EXTRA: JSON.stringify([prow({ class: 'fable', pin: null, canaryEffort: '--max', candidate: 'model-8-z' })]) };
+      const r = sourced(lane(250), extra);
+      expect(JSON.parse(r.stdout)).toEqual([MOVED]);
+      expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);
+    }, T);
   });
 });

@@ -11277,15 +11277,20 @@ _models_push() {   # <message> -> rc 0
 # rename. It reads `recoveredMove` whether or not the answer was ok: a refusal after the writer's first successful write
 # carries it, and an answer that settled nothing carries none. A hand set-class's landed move (`how: "hand"`) is the
 # operator's own act, and is neither an event nor a push (ruling RC3). The tokens are validated to a safe alphabet here,
-# once, so everything downstream reads them with builtins and a message cannot carry a newline. `eff` is the canary's own
-# effort pattern (`deploy/models-canary.mjs`'s EFFORT_RE, held equal by a test): printable ASCII, 1 to 64 characters, no
-# space at either end - which carries no tab and no newline, so it is also safe in a tab-separated frame. EVERY jq program
-# of the step begins with these definitions; none writes its own.
-MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$");
-def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}$");
+# once, so everything downstream reads them with builtins and a message cannot carry a newline. THE GRAMMARS, each held
+# equal to its owner by a test (a JavaScript `^…$` is spelled `^…\z` here): `tok` is `MODEL_ID_RE` of `shared/models.mjs`,
+# the one model-id grammar (the canary and the registry accept exactly it, `:` and `/` included); `eff` is the canary's
+# own EFFORT_RE (`deploy/models-canary.mjs`): printable ASCII, 1 to 64 characters, no space at either end. EVERY pattern
+# ends in `\z`, never `$`: jq's Oniguruma lets `$` match before a final newline, which JavaScript's does not, and a newline
+# is the one character a line-framed protocol cannot carry. A character set with no tab and no newline in it is therefore
+# frame-safe. The step also drops an effort that begins with `--` (see the plan body: the canary's argv reader refuses it).
+# NONE of the step's jq programs writes a definition of its own; the plan, canary and receipt programs and the hand verbs'
+# reader begin with these, and the check program and the final strict jq need none.
+MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\\z");
+def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}\\z");
 def flat($n): if type == "string" then (gsub("[^ -~]+"; " ") | gsub("^ +| +$"; "") | .[0:$n]) else "" end;
 def ofpin: if . == null then "none" else . end;
-def eff: type == "string" and test("^[\\x21-\\x7e]([\\x20-\\x7e]{0,62}[\\x21-\\x7e])?$");
+def eff: type == "string" and test("^[\\x21-\\x7e]([\\x20-\\x7e]{0,62}[\\x21-\\x7e])?\\z");
 def recovered($id):
   (.recoveredMove // null) as $rm
   | if ($rm | type) == "object" and $rm.how == "advance" and ($rm.class | word) and ($rm.to | tok)
@@ -11426,8 +11431,11 @@ _models_advance_read_body() {   # <phase> [args…]
 # shared `MODELS_JQ_DEFS`), so the caller reads it with builtins. THE READ'S SUCCESS DEPENDS ON THE PLANNER'S ANSWER AND
 # NEVER ON A CANDIDATE ROW: it is the lane gate before the backfill (D-5215), so a row the frame cannot carry safely (a
 # class or model word off the grammar, an effort off the canary's pattern or with a control character) DROPS that
-# candidate for the hour, and the lane still settles a crash-gap move. A plan that is not an object, or that the planner
-# refused, fails the read and ends the lane; a `why` word the frame cannot carry reads as `unknown`.
+# candidate for the hour, and the lane still settles a crash-gap move. An effort that begins with `--` is dropped too:
+# the canary's argv reader refuses such a value (`bad-argv`, which `_models_canary` reads as `unavailable`), and one such
+# candidate would end the lane's whole candidate loop for the hour; so the step carries the canary's EFFORT_RE minus a
+# leading `--`, the canary's argv rule. A plan that is not an object, or that the planner refused, fails the read and ends
+# the lane; a `why` word the frame cannot carry reads as `unknown`.
 _models_adv_body_plan() {   # <id>
   local ans
   ans="$(_models_node advance-plan --file "$(_models_roster_path)" --id "$1" 2>/dev/null)" || return 1
@@ -11435,7 +11443,7 @@ _models_adv_body_plan() {   # <id>
     if type == "object" and .ok == true and (.eligible | type) == "boolean" and (.classes | type) == "array" then
       [.classes[] | select(type == "object" and .held == false and .blocked == null and (.candidate | type) == "string")
        | select((.class | word) and (.candidate | tok) and (.pin == null or (.pin | tok))
-                and (.canaryEffort == null or (.canaryEffort | eff)))] as $c
+                and (.canaryEffort == null or ((.canaryEffort | eff) and (.canaryEffort | startswith("--") | not))))] as $c
       | "PLAN\t\(if .eligible then "eligible" else "ineligible" end)\t\(if .why == null then "none" elif (.why | word) then .why else "unknown" end)",
         ($c[] | "CAND\t\(.class)\t\(.pin // "none")\t\(.candidate)\t\(.canaryEffort // "none")"),
         "END"
