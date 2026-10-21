@@ -8223,6 +8223,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // on the shift, not a repaired anchor; Task 11 still owns the debt. `ccd/ccd` 148 -> 147, `deploy/deploy.sh`
     // 2 -> 4, no other key moves. Headline 196 -> 197. Measured by diffing the dumped failure sets of the two
     // trees, never retyped. No D-number.
+    // RE-MEASURED at model-class auto-advance W2 (Codex arm), S6-R11 (base `7da6498a7` = origin/main, the tip =
+    // this branch merged onto it). Neither frozen corpus document changed (`git diff --quiet` between the base and
+    // the tip, on the spec and the plan), and README's own entry is empty at the tip, so nothing was re-pointed and
+    // no rule changed. What moved is this branch's one line-shifting insertion under frozen anchors: in `ccd/ccd`,
+    // the strict deadline's two neighbours of `_plat_timeout` (`_plat_timeout_capability`, `_plat_timeout_strict`),
+    // +51 lines after the base's line 689 (41866 -> 41917: the auto-advance plan's Task 11 part 1b mirror
+    // `b34c9bfc3`, +46, and its fix round 1 `e15cb0c70`, +5 inside the same block; the stamp line and `1427b2772`'s
+    // `cmd_swap` notify-hook comment are length-neutral). Every mover sits below it and is a pure shift, measured
+    // per site: the tip's cited bytes equal the base's 51 lines above, and the base's cited bytes stand 51 lines
+    // below on the tip, so each anchor now lands on different text. `ccd/ccrc`'s net +778 lines and README's net
+    // +114 moved nothing here. FACT TWO holds at the tip, by its own assertion (`weak` is empty).
+    // Entered, all in `ccd/ccd`: `plan:2747 :3940-3951`, `plan:3184 :4006-4035`, `plan:3240 :3050-3070` and
+    // `spec:2230 :4006-4035`, the four reclaim-entry-safety booked as coincidental passes on its shift. They fail
+    // again because this shift took the coincidence away: still stale in fact, not new rot and not a repair, and
+    // the compaction-card plan's Task 11 still owns the debt. Nothing left. `ccd/ccd` 147 -> 151, no other key
+    // moves. Headline 200 -> 204. Measured by diffing the dumped failure sets of the two trees, never retyped.
+    // No D-number.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
       // and DOWN is the direction that needs an argument rather than a shrug.
@@ -8438,7 +8455,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted
       // emitter call was re-pointed by content before this map was measured. Every other hook edit is in
       // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
-      'ccd/ccd': 147,
+      // 147 -> 151 at model-class auto-advance W2 (Codex arm), S6-R11: the note above the map names the movers.
+      'ccd/ccd': 151,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8872,7 +8890,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // neither frozen corpus document changed. S6-R11, no new D-number.
     // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
     // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(200);
+    // 200 -> 204 at model-class auto-advance W2 (Codex arm), S6-R11, the census's own arithmetic: `ccd/ccd`
+    // 147 -> 151 and nothing else moved (the note above the map names the four movers and their one cause).
+    // Measured from the same dump as the map, never retyped. No D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(204);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9067,6 +9088,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // entered the census is NOT in this set — those two citations are not **Files:** references. Both corpus
     // documents and README are byte-identical to origin/main, measured, so nothing was re-pointed.
     // Measured by `cite-remeasure.py` against `origin/main`, never retyped. No D-number.
+    // RE-MEASURED at model-class auto-advance W2 (Codex arm), S6-R11 (base `7da6498a7` = origin/main, the tip =
+    // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is empty
+    // at the tip, so nothing was re-pointed and no rule changed. What moved is the one insertion the census note
+    // names, +51 lines in `ccd/ccd` after the base's line 689, and each mover is a pure shift (the tip's cited
+    // bytes equal the base's 51 lines above). FACT TWO holds at the tip. **Files:** 19 -> 21. Entered, both
+    // `plan:2747`'s and both in `ccd/ccd`: `:4006-4035` and `:3940-3951`, each a coincidental pass at the base
+    // (each left this set on an earlier shift) that fails again on this one; not a repair. Spelled in two parts
+    // below so the citations ratchet does not count a census row. Nothing left. The pin on the five references
+    // below and the only-this-pass set are unmoved. Measured by diffing the dumped failure sets of the two trees,
+    // never retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // RE-MEASURED on the merge of `origin/main` (at the forked-session-transcript review, 2026-10-13) into
@@ -9092,6 +9123,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // (S6-R11).
         'ccd/ccd:13020',
         'ccd/ccd:19131',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':4006-4035',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
         // census entry that left: at `origin/main` this range opened on
         // `_auto_swap_check`'s reachability paragraph, and at this tree it opens
@@ -9100,6 +9133,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:4045',
         'ccd/ccd:4029',
         'ccd/ccd:4047',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':3940-3951',
         'ccd/ccd:5828-5830',
         'ccd/ccd:1330-1333',
         'ccd/session-hook.sh:1098',
@@ -9546,6 +9581,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // a line slid under that site whose token the row quotes. Neither frozen corpus document changed, so nothing was
     // re-pointed and no rule changed; a coincidental pass is not a green anchor. Measured by running this test on the
     // pre-S1 tree and on this one, never retyped. S6-R11 covers the re-measurement, so no D-number.
+    // RE-MEASURED at model-class auto-advance W2 (Codex arm), S6-R11 (base `7da6498a7` = origin/main, the tip =
+    // this branch merged onto it), 55 -> 58, FROM THE SAME RUN as the site-level set below. Neither frozen corpus
+    // document changed, checked, and README's own entry is empty at the tip, so nothing was re-pointed and no rule
+    // changed. What moved is the one insertion the census note names, +51 lines in `ccd/ccd` after the base's line
+    // 689; every mover sits below it and is a pure shift, measured per site (the tip's cited bytes equal the base's
+    // 51 lines above, and each anchor now lands on different text). FACT TWO holds at the tip.
+    // Entered, all in `ccd/ccd`: `spec:2124 :3038`, `spec:2220 :3070` x3, `spec:2222 :5353-5362` and `spec:2222
+    // :5385-5388`. Left: `spec:2220 :2874` x2 and `spec:2222 :5819-5823`. Each is a coincidence of the shift: an
+    // entry is a row whose base line carried one of its tokens and whose tip line carries none, a departure the
+    // reverse. None is new rot and none a repair; the compaction-card plan's Task 11 still owns the debt. The new
+    // entries are spelled in two parts so the citations ratchet does not count a census row. Measured by diffing
+    // the dumped failure sets of the two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -9775,6 +9822,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':3038',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
@@ -9819,16 +9868,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
-        'ccd/ccd:2874',
-        'ccd/ccd:2874',
+        // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
         'ccd/session-hook.sh:993',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':3070',
+        'ccd/ccd' + ':3070',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:6771',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':5385-5388',
         'ccd/ccd:4642-4653',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'ccd/ccd' + ':5353-5362',
         'ccd/ccd:5828-5830',
-        'ccd/ccd:5819-5823',
+        // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9891,6 +9948,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
     // RE-MEASURED at named workspaces S1, 35 -> 34, FROM THE SAME RUN as the row-pass set above: the spec-2210 site of
     // the same ccd anchor leaves, the one site of that anchor the `|`-row set also lost. Nothing was re-pointed.
+    // RE-MEASURED at model-class auto-advance W2 (Codex arm), S6-R11 (base `7da6498a7` = origin/main, the tip =
+    // this branch merged onto it), 35 -> 38, FROM THE SAME RUN as the row-pass set above, and every move mirrors
+    // one there: `spec:2124 :3038`, `spec:2220 :3070` x3 and `spec:2222 :5385-5388` enter, `spec:2220 :2874` x2
+    // leave, all in `ccd/ccd`. The row set's other two movers (`spec:2222 :5353-5362` in, `spec:2222 :5819-5823`
+    // out) are absent here because no other pass reaches those sites, which is what this list measures. Same one
+    // cause, the +51 lines in `ccd/ccd` after the base's line 689, and nothing re-pointed: both corpus documents are
+    // byte-identical to the base. Measured by diffing the dumped failure sets of the two trees, never retyped.
+    // No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
@@ -10012,6 +10077,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
@@ -10044,10 +10111,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2210 ccd/ccd' + ':13573-13575',
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
-        'spec:2220 ccd/ccd:2874',
-        'spec:2220 ccd/ccd:2874',
+        // LEFT here at model-class auto-advance W2 (S6-R11): `spec:2220 :2874` x2 (the note above this assertion).
         'spec:2220 ccd/session-hook.sh:993',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'spec:2220 ccd/ccd' + ':3070',
+        'spec:2220 ccd/ccd' + ':3070',
+        'spec:2220 ccd/ccd' + ':3070',
         'spec:2222 ccd/ccd:6771',
+        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
+        'spec:2222 ccd/ccd' + ':5385-5388',
       ]);
   });
 

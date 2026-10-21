@@ -185,4 +185,15 @@ export {
   parseWindows,
   WINDOW_MIN,
   WINDOW_MAX,
+  MODELS_LANE_ID_RE,
+  MODELS_RESERVED_IDS,
+  MODELS_PUSH_MAX,
+  modelsPushOf,
+  modelsPushDecision,
+  // The policy's own types, declared in `shared/models.d.mts` and erased at runtime. They sit in this one block, not in
+  // a second type-only re-export statement: a test pins that this file names `./models.mjs` exactly once.
+  type ModelsPushDecision,
+  type ModelsPushKind,
+  type ModelsPushRefusal,
+  type ModelsPushRoster,
 } from './models.mjs';

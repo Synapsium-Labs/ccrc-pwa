@@ -406,7 +406,12 @@ through your own server. What does leave the box, all of it on your behalf:
   (`touch ~/.ccrc/keepalive-paused` stops it). The seeded `claude` account is a measured one.
   A ChatGPT/Codex lane adds a third, `ccrc-codex-usage@<id>.timer`: every 15 minutes it sends
   the Codex backend one minimal request ("reply ok", to the lane's haiku-class model) with that
-  lane's own token, to read the usage headers on the answer.
+  lane's own token, to read the usage headers on the answer. And `ccrc-models.timer` (or a hand `ccrc models refresh`)
+  sends the Codex backend, through the lane's own shim and LiteLLM tier and on the lane's own sign-in, one fixed
+  request for each class it would move to a new model, and again on each run while that request is refused: a user
+  turn that reads "Reply with the single word OK." (at most 512 tokens, streamed, at the lowest effort level the model
+  lists), with no session data (see "Turning the step off" in
+  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where `CCRC_MODELS_ADVANCE_BUDGET_S=0` must be set).
 - **Only if you set them up** — DuckDNS and an ACME CA, as `ccrc expose` uses them (DuckDNS
   for its `duckdns` arm, the CA for `duckdns` and `byo`, neither for `ip`); your browser's
   push service once VAPID keys are set (each notification is encrypted to the
@@ -496,7 +501,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-graph-sweep.timer` | fleet, both | 15 min | refreshes per-tree code graphs | `~/.ccrc/graph-sweep-paused` |
 | `ccd-account-health.timer` | fleet, both | 15 min | probes each setup-token account's credential, spending no tokens | `~/.ccrc/account-health-paused` |
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
-| `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue | — |
+| `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue, and on a Codex lane the advance step ("Model classes per lane") | — |
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
 | `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
@@ -1823,7 +1828,7 @@ ccrc models <id> release <class>           # it may move again, canary first
 ccrc models <id> revert <class>            # back to its model before its last advance, and held there
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
-ccrc models refresh <id> | --all           # re-probe the provider catalogues
+ccrc models refresh <id> | --all           # re-probe the provider catalogues; a Codex lane may also move classes
 ccrc models litellm <id>                   # re-render a Codex lane's LiteLLM model list
 ```
 
@@ -1832,8 +1837,10 @@ ccrc models litellm <id>                   # re-render a Codex lane's LiteLLM mo
 `~/.ccrc/models/<id>.json`, written by `ccrc-models-probe` and refreshed hourly by `ccrc-models.timer`
 (`ccrc models refresh --all`, installed on a Linux box of any role but `server`). A failed probe never deletes
 a catalogue: it rewrites the last one with `stale: true` and the error in `lastError`. A model that has left
-the catalogue shows as `RETIRED` and is unavailable for routing; a new one is listed as unclassified, never
-classed on its own. OpenRouter starts with an empty discovery list — its public catalogue is large, so you
+the catalogue shows as `RETIRED` and is unavailable for routing. A new model is listed as unclassified until a class
+names it. On a Codex lane, a newer model of a family some class follows can move that class on its own, canary first
+(below); a model that moves no class stays unclassified until you assign it one. OpenRouter starts with an empty
+discovery list — its public catalogue is large, so you
 `discovery add` the ones you want (`discovery catalogue` is refused on an OpenRouter lane) — while `codex` and
 `compatible` start from the whole catalogue. `init codex` is refused (`codex-registry-needs-codex-lane`) on a
 lane whose `exec.kind` is not `codex`: only a codex lane declares the `authDir` its probe reads, so a codex
@@ -1876,14 +1883,119 @@ family for every class, an empty one included. `set-class` records the move and 
 and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
 `hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
 model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
-on record it refuses `no-previous`. Holds arrive one build before the automatic advance itself, so a class that
-must stay where it is can be held first. Every write to a lane's model files — every per-lane verb but `show`, and
+on record it refuses `no-previous`. Every write to a lane's model files — every per-lane verb but `show`, and
 the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
 finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
 before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
 the one lane model file written outside the lock: the probe replaces it whole, by a rename, so a writer under the
 lock always reads one complete catalogue. `rm` reaps the advance file with the lane's other model files, and never
 the lock.
+
+**Classes follow new releases (Codex lanes).** `ccrc models refresh`, hourly from its timer or run by hand, can move each
+class of a Codex lane (`exec.kind: "codex"`, probe `codex`) to the newest eligible model of its own family: a model the
+catalogue lists as visible and the lane's discovery scope includes, whose id is shaped `<vendor>-<version>-<family>` (the
+family is its last part), with versions compared part by part as integers. A class follows the family of the model it
+names or, when it is empty, the family stored for it. The model must be newer than the one the class names; two ids of
+one version are never chosen, nor is a model another class already names; and when the newest model of the family is one
+another class already names, the class does not move at all, not even to the next one down. A class whose own model has
+left a fresh catalogue moves to the newest eligible model its family still lists, and on a stale catalogue (a failed
+probe) nothing advances. Before it moves a class the step sends one "reply OK" request (the canary) for the new model
+through the lane's own shim (the loopback listener Claude Code talks to, on its `proxyPort`; see "A ChatGPT/Codex lane",
+below), at the lowest effort level the model offers, and only after the shim has answered a probe as that lane: a
+listener that answers as another lane, as no lane, or with more than 4 KiB gets no key, and the canary reports
+`unavailable`. The request is authenticated with the lane's key, which the canary's own process reads and never puts in
+an argument list or the environment, and only a 200 that carries text moves the class. Then the lane's files are
+re-materialised, the model the class had is kept for `revert`, and one push says so (`<id>: <class> <old> → <new>`).
+The class keeps its effort level when the new model offers it, and otherwise takes the highest level the new model
+offers below it, or its lowest when none is below. A held class never moves (`ccrc models <id> hold <class>`), and a
+hold set while a canary is out wins; `revert <class>` puts the previous model back and holds it, and a class you emptied
+by hand stays empty. A candidate the step cannot carry safely (a malformed row, or an effort level that begins with
+`--`) is skipped for that run and never blocks the lane.
+
+**When the step runs.** It runs after the refresh has probed, re-materialised and re-rendered every lane, so it never
+delays another lane's refresh, and it spends only what is left of the invocation. Its deadline is the smaller of
+`CCRC_MODELS_ADVANCE_BUDGET_S` (250 seconds by default) from then and 282 seconds after the invocation began (the refresh
+unit's 300 seconds less room for the final output; a hand run is clipped the same way), and before each phase it checks
+again that the phase still fits. A whole candidate (the canary, the locked registry write, reading its answer, and its
+pushes) needs 221 seconds by default. A backfill (creating a lane's advance file, or settling a move a stopped run left
+half done) needs 95, and it starts only if a readiness question (98 seconds by default) would also still fit. Work that
+does not fit waits for the next run. Each catalogue request has a 30-second timeout (per socket operation on a Codex
+lane, whose probe may refresh its token first), nothing times a probe as a whole, and the unit ends a run that outlasts
+its 300 seconds; so the probe and render pass has no budget of its own, and a slow one leaves the step less time,
+possibly none.
+
+**Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off. So does any value that is not a whole number
+(`off`, `false`, `-1`, `1.5`, a space): the step is off for that run, and the refresh says so in one line on standard
+error, which names the variable but not its value. Unset or empty, the budget is the default, 250; a whole number is read
+in base 10 (`0250` is 250), and one over 3600 is read as 3600. Set it in the environment of each run you mean to switch
+off. The hourly unit gets it from a drop-in of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
+`Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without the `[Service]` line systemd ignores the assignment). A hand
+`ccrc models refresh`, including the one `ccrc doctor`'s remedies name, does not read the drop-in: it reads its own
+environment, so it runs the step unless its command line sets the variable too. `~/.ccrc/ccrc.env` does not set it: the
+unit reads no environment file, and `ccrc` never sources that one. To keep one class still under every run, hold it. The
+step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
+where `timeout` cannot escalate to KILL.
+
+**When a new model moves a class.** A run that finds a new model re-renders the lane's LiteLLM list and restarts a
+running tier, and does not wait for it to come up. The step runs after every lane's probe and render, and moves a class
+only when that lane's LiteLLM tier and shim answer as the lane's own, its list is fresh, the budget fits and no hold
+stands. So a move can come in the same run, if the restarted tier already answers when the step reaches the lane, and
+otherwise it waits for a later run. The step waits silently (no history entry, no push) while the lane's LiteLLM tier or
+its shim is down, still starting, not provably this lane's or cannot be asked, while the lane's LiteLLM list is stale (a
+check-only render would still change it), and while the shim is waiting out a restarting gateway. `ccrc doctor`'s
+`codex` check reports most of what the step waits on, though not the waiting itself: a LiteLLM list that is stale
+against the catalogue (FAIL), a tier that is not provably the lane's (FAIL, or WARN while its unit is unproven), a lane
+with one tier up and one down (FAIL), a tier it cannot measure (WARN), and a LiteLLM tier that is down while a session
+runs on the lane (WARN). A lane with both tiers down and no live session passes, and a starting tier shows only in the
+check's tier words. `ccrc models <id> show` lists a model that is still unclassified and any held class, `show --json`
+carries each class's recent moves, and `ccrc codex status <id>` shows each tier's state; a newer model still listed as
+unclassified, with no recent move, is the sign of a lane that keeps waiting. To keep a class where it is whatever
+arrives, hold it.
+
+**Refusals, waits and a cut-short move.** A canary that the lane answers with an error (except the shim's 502 below), or
+with a 200 that ends, or passes its read cap, without text, is refused: the class stays where it is, the failure is
+recorded in the advance file, and one push says so, not one a run; the refresh unit stays green and the next run
+retries. A canary that cannot tell yet is not a refusal, and the class waits with no history entry and no push: the
+lane's shim does not answer its probe in time, its port refuses the connection, it answers 502 after waiting out a
+refused connection to the gateway, the request gets no answer before the canary's deadline (90 seconds by default), a
+200 is still streaming without text when that deadline passes, or the canary refuses an argument it cannot carry
+(`unavailable`, as above). A move whose re-materialise fails is recorded as a failure and pushed the same way, and the
+step writes the old registry back and re-materialises it. If that re-materialise fails too, the lane's files may no
+longer match its registry; if the old registry cannot be written back at all, it still names the new model and the step
+keeps its intent. In both of those cases that lane's entry in the refresh's JSON answer is `ok: false` and the run exits
+1. In the first, fix what the failure named. The next refresh whose probe succeeds re-materialises the lane, as does any
+models verb that writes the registry or a window (`set-class`, `set-effort`, `set-subagent`, `set-window`,
+`clear-window`, `discovery`, `revert`), but not `hold`, `release` or `show`. Until then, each refresh's entry for the
+lane stays `ok: false` with the reason, and `show --json` carries the failed move; `show` names a settings drift only
+when `settings.json` is the file left behind. In the second, the failure has been recorded and pushed while `show` lists
+the new model: the next refresh whose step reaches its backfill, or the lane's next `hold`, `release`, `revert` or
+`set-class`, records the move as landed; `revert <class>` records it itself and then puts the old model back and holds
+it (a plain `hold` would hold the new one). A move that a stopped refresh cut short is recorded, and pushed, by
+whichever comes first: the next refresh whose step reaches that lane's backfill, or the lane's next `hold`, `release`,
+`revert` or `set-class`. A `set-class` stopped after it wrote the registry is recorded the same way, as the hand change
+it was, and sends no push.
+
+**The push.** It is requested through the box's `notify.sh` hook, called with `--push`, which asks the server for a phone
+push as well as the banner in an open console. A phone push also needs the push setup the console already needs
+("Turning push on", in [Attention, notifications and answering](#attention-notifications-and-answering)); with no VAPID
+keys the banner is all there is. The server grants it only for a model-class line from a lane that is codex-kind in the
+roster the server itself holds, and tags it `models-advance:<lane>:<class>`, so one class's notice does not replace
+another's on the phone. A line over 300 characters (a failure line with long model ids) gets the banner only, so
+delivery is not promised. So does a line from a lane that is unknown to the server's roster, or not codex-kind there, and
+the server then logs a warning that names the lane and the remedy, in its own log (`ccrc logs` on the server box, which
+tails `ccrc.service`). That roster is the server box's roster file, `~/.ccrc/accounts.json` or the file `CCRC_ACCOUNTS`
+(in `~/.ccrc/ccrc.env`) names, read when the server starts. Nothing re-reads it for an `exec.kind`-only change: the
+comparison the two boxes make of their rosters leaves `exec.kind` out, the only other re-read follows a box-token
+rotation, and in this release no account route changes it. So the server box's roster must hold the lane's complete
+codex row (in remote mode, copy the fleet box's whole accounts.json over this server box's accounts.json), and the server
+must be restarted afterwards. A complete codex
+row has `exec.kind: "codex"`, `exec.provider: "openai"`, an `exec.authDir` and two ports of its own, `exec.proxyPort` and
+`exec.litellmPort`, and a codex row without them stops the server at start. In remote mode that file is a copy of the
+fleet box's roster, which a later roster answer from the fleet box replaces wholesale.
+
+A running session may keep the old model until it picks the new one up by itself or is relaunched, and nothing is typed
+into one. A planned `ccrc doctor` check, `model-sessions-behind`, will name a live session still on the old model a day
+after the move; this build has no such check.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3000,8 +3112,10 @@ which setting to change.
 
 **What pushes:** a question (`❓ Question`, with up to two answer buttons, below), a finished turn (`✓ Finished`),
 a merged PR (`✓ merged › <workspace>`), mail between sessions (`✉ <kind> › <workspace>`), a run's state change
-(`▸ <state> › <workspace>`), the stall watch's reports and its operator pushes (r3, the caps and wave 2's arms), and
-a new release when Settings' release-notification choice selects it. Ask nudges to a coordinator, stall checks and
+(`▸ <state> › <workspace>`), the stall watch's reports and its operator pushes (r3, the caps and wave 2's arms), a
+Codex lane's model class that moved, or stayed put after a refused canary or a failed move (titled `Model classes`,
+tagged `models-advance:<lane>:<class>`, opening `/accounts`; "Model classes per lane" says when), and a new release
+when Settings' release-notification choice selects it. Ask nudges to a coordinator, stall checks and
 replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move to `closing` are recorded in `/mail`
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.

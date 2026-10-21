@@ -696,3 +696,40 @@ describe('shared/models: the .ts declares nothing the .mjs lacks', () => {
     expect(declared(read('models.mjs'))).toContain('CLASSES');
   });
 });
+
+// ── auto-advance plan W2 Task 7: every runtime value reaches both twins ─────
+// The describe above pins the .ts's OWN declarations against the .mjs. This
+// one pins the other direction: every value the .mjs exports is reachable
+// through the .ts (re-exported, or declared there for its `as const` type)
+// and declared in the .d.mts, so a name added to the .mjs alone is red here
+// rather than `undefined` in a bundle or invisible to tsc.
+describe('shared/models: every value the .mjs exports reaches the .ts and the .d.mts', () => {
+  const read = (f: string): string => readFileSync(path.join(REPO, 'shared', f), 'utf8');
+  const valueExports = (src: string): string[] =>
+    [...src.matchAll(/^export (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]!).sort();
+  const reExported = (src: string): string[] => {
+    const m = /export \{([^}]*)\} from '\.\/models\.mjs';/.exec(src);
+    expect(m, "shared/models.ts has no re-export block from './models.mjs'").not.toBeNull();
+    return m![1]!.split(',').map((s) => s.trim()).filter((s) => s !== '');
+  };
+  const declaredIn = (src: string): string[] =>
+    [...src.matchAll(/^export declare (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]!);
+
+  it('the .ts re-exports, or itself declares, every value export of the .mjs', () => {
+    const ts = read('models.ts');
+    const reachable = new Set([...reExported(ts), ...valueExports(ts)]);
+    expect(valueExports(read('models.mjs')).filter((n) => !reachable.has(n))).toEqual([]);
+  });
+
+  it('the .d.mts declares every value export of the .mjs', () => {
+    const declared = new Set(declaredIn(read('models.d.mts')));
+    expect(valueExports(read('models.mjs')).filter((n) => !declared.has(n))).toEqual([]);
+  });
+
+  it('the lane-id pattern and the reserved words are among them, so the two checks above are not over nothing', () => {
+    const mjs = valueExports(read('models.mjs'));
+    expect(mjs).toContain('MODELS_LANE_ID_RE');
+    expect(mjs).toContain('MODELS_RESERVED_IDS');
+    expect(mjs.length).toBeGreaterThan(15);
+  });
+});
