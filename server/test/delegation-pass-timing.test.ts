@@ -6,7 +6,7 @@
 // WHAT THIS FILE PINS
 //   R1  a full pass: one line; its phases, derived keys and sizes are exactly what ran, each size equal to a count measured INDEPENDENTLY
 //       of the lane's new code (spies on correlation and policy, the applier's own return values, the report, the checkpoint on disk);
-//       the same for the five repair sizes (a real repair of a drifted `coord.db`, a null report, a throw), for an unknown-repository
+//       the same for the six repair sizes (a real repair of a drifted `coord.db`, a null report, a throw), for an unknown-repository
 //       window (after a restart) and for the mark, dropped-key, lost-project and flag sizes (the lane's forgetting seams)
 //   R2  strictly more than 1,000 ms of BLOCKING time writes a line; exactly 1,000 does not; no read phase (`open recover root load owners
 //       readMetas`) is blocking
@@ -24,10 +24,18 @@
 // that has none of them yet, and each row then fails on its own assertion (no line written, formatter not a function), never as a
 // whole file on an import error.
 //
+// D-5832..D-5836 (run 645) extend the file: the line also carries CPU, the event-loop stall, the repair's own rewrite time, the turns' time
+// and two sizes (D-5832); the attempts write is skipped when nothing is new (D-5834); the lane yields to the loop between its phases
+// (D-5835); and the per-pass repair skips its rewrite when the projection is known current (D-5836). Their rows follow R7, each titled by
+// its id. The harness grows two virtual seams, installed by `world()` and kept by `rig()`: `cpuMicros` (a CPU clock, `w.cpu`) and
+// `loopDelay` (the stall sampler, `w.stall`), both reading 0 until a row sets them. The lane's production turns are real unless a row
+// passes `loopTurn`; a row selects a production seam by passing its key as `undefined`.
+//
 // Every directory here is a FIXTURE home: nothing reads or writes the live `~/.ccrc` or `~/.cc-sessions`, and no ccd verb runs.
 // `world()`, `setCensus`, `censusPass`, `primed` and `disk` below MIRROR the fixture of `delegation-watch.test.ts` (trimmed to what these
 // rows need: the owner listing hold is kept for R7, the other fault knobs are not).
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -41,9 +49,11 @@ import { openCoordDb } from '../src/coord/db.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import * as correlation from '../src/coord/delegation-correlation.js';
 import * as model from '../src/coord/delegation-model.js';
+import * as checkpointMod from '../src/coord/delegation-checkpoint.js';
 import type { DelegationCensusPass, ParentIncarnation, WorktreeCensus } from '../src/coord/gitref.js';
 import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint, type DelegationProjectionRepairReport } from '../src/coord/delegation-checkpoint.js';
-import { DELEGATION_EVENTS_CAP, type DelegationCensusRecord, type DelegationCheckpointV1 } from '../src/coord/delegation-model.js';
+import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
+import { DELEGATION_EVENTS_CAP, canonicalDelegationJson, type DelegationAttemptRow, type DelegationCensusRecord, type DelegationCheckpointV1 } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -72,6 +82,12 @@ interface World {
   calls: { listings: string[] };
   /** The virtual monotonic clock the lane times itself by (`Deps.monotonicMs`). Only a row's hook advances it. */
   clock: { t: number };
+  /** D-5832: the virtual CPU clock (`cpuMicros`): cumulative microseconds, and whether it is a thread's. */
+  cpu: { us: number; thread: boolean };
+  /** D-5832: the virtual stall sampler (`loopDelay`): `stretch` is read and zeroed by the next stretch read; `max`/`p99` are the pass-wide values. */
+  stall: { stretch: number; max: number; p99: number };
+  /** The lane seams every world starts with (the virtual CPU clock and sampler); `rig()` merges them back under its own. */
+  defaultSeams: Record<string, unknown>;
 }
 const worlds: Array<{ watcher: FleetWatcher }> = [];
 
@@ -107,7 +123,19 @@ function world(opts: { home?: string } = {}): World {
   const clock = { t: 0 };
   const fleet = { connected: true, downSince: null, ccdVerbs: ['caps', DELEGATION_EVENTS_CAP] as string[] | null };
   const deps = { ...testDeps(home), cfg, io, coord, fleetState: fleet, monotonicMs: () => clock.t };
-  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, hold, calls, clock };
+  const cpu = { us: 0, thread: false };
+  const stall = { stretch: 0, max: 0, p99: 0 };
+  const defaultSeams: Record<string, unknown> = {
+    cpuMicros: () => ({ micros: cpu.us, thread: cpu.thread }),
+    loopDelay: {
+      startPass: (): void => {},
+      stretch: (): number => { const v = stall.stretch; stall.stretch = 0; return v; },
+      pass: (): { max: number; p99: number } => ({ max: stall.max, p99: stall.p99 }),
+      stop: (): void => {},
+    },
+  };
+  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, hold, calls, clock, cpu, stall, defaultSeams };
+  made.watcher.setDelegationSeams(defaultSeams as never);
   worlds.push(made);
   return made;
 }
@@ -187,31 +215,55 @@ const quietWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
 interface Rig {
   /** every key the lane announced, in order (empty against code that has no `onPassPhase`) */
   fired: string[];
-  /** Arms the NEXT pass: the first time each key in `adds` fires, the clock advances by its ms. `rewriteAfter` makes the first
-   *  `project` call of the coordination store made while the last phase announced was that one advance the clock by 1,500. */
-  arm(adds: Record<string, number>, rewriteAfter?: 'flush' | 'repair'): void;
+  /** Arms the NEXT pass: the first time each key in `adds` fires, the clock advances by its ms (a list: the n-th firing takes the n-th ms).
+   *  `rewriteAfter` makes the first `project` call of the coordination store made while the last phase announced was that one advance the
+   *  clock by 1,500. Clears whatever `also` and `onProject` registered for the pass before. */
+  arm(adds: Record<string, number | number[]>, rewriteAfter?: 'flush' | 'repair'): void;
+  /** For the armed pass: runs each `fn` at the next firings of `key` (the n-th firing runs the n-th `fn`), after that firing's clock advance. */
+  also(key: string, ...fns: Array<() => void>): void;
+  /** For the armed pass: runs `fn` once, inside the first `project` call of the coordination store made while `last` is the last phase. */
+  onProject(last: string, fn: () => void): void;
+  /** The last timed phase announced (`rewrite` and `yields` are not phases that enclose a store call, so they never count). */
+  last(): string | null;
 }
-/** Installs the hook. The "last phase" ignores `rewrite` (the lane may announce it from inside the port's closures). */
+/** Installs the hook. The "last phase" ignores `rewrite` (the lane may announce it from inside the port's closures) and `yields` (a turn
+ *  between phases: no store call is made in it, and a row that asks what phase a store call was made in means the phase). The world's
+ *  default seams (virtual CPU clock and sampler) are merged under `seams` and `onPassPhase`. */
 function rig(w: World, seams: Record<string, unknown> = {}): Rig {
-  const st = { last: null as string | null, left: new Map<string, number>(), rewriteAfter: null as string | null };
+  /** `left`: per key, one list of actions per firing still to come (the clock advance of `arm`, then whatever `also` adds to that firing). */
+  const st = { last: null as string | null, left: new Map<string, Array<Array<() => void>>>(), projects: new Map<string, () => void>() };
   const fired: string[] = [];
   w.watcher.setDelegationSeams({
+    ...w.defaultSeams,
     ...seams,
     onPassPhase: (k: string): void => {
       fired.push(k);
-      if (k !== 'rewrite') st.last = k;
-      const ms = st.left.get(k);
-      if (ms !== undefined) { st.left.delete(k); w.clock.t += ms; }
+      if (k !== 'rewrite' && k !== 'yields') st.last = k;
+      for (const fn of st.left.get(k)?.shift() ?? []) fn();
     },
   } as never);
   const project = w.coord.projectDelegationCheckpoint.bind(w.coord);
   w.coord.projectDelegationCheckpoint = ((cp: Parameters<CoordStore['projectDelegationCheckpoint']>[0]) => {
-    if (st.rewriteAfter !== null && st.last === st.rewriteAfter) { st.rewriteAfter = null; w.clock.t += 1500; }
+    const fn = st.last === null ? undefined : st.projects.get(st.last);
+    if (fn !== undefined) { st.projects.delete(st.last!); fn(); }
     return project(cp);
   }) as CoordStore['projectDelegationCheckpoint'];
+  const also = (key: string, ...fns: Array<() => void>): void => {
+    const firings = st.left.get(key) ?? [];
+    fns.forEach((fn, i) => { (firings[i] ??= []).push(fn); });
+    st.left.set(key, firings);
+  };
   return {
     fired,
-    arm: (adds, rewriteAfter) => { st.left = new Map(Object.entries(adds)); st.rewriteAfter = rewriteAfter ?? null; st.last = null; },
+    arm: (adds, rewriteAfter) => {
+      st.left = new Map(Object.entries(adds).map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).map((ms) => [() => { w.clock.t += ms; }])] as const));
+      st.projects = new Map();
+      if (rewriteAfter !== undefined) st.projects.set(rewriteAfter, () => { w.clock.t += 1500; });
+      st.last = null;
+    },
+    also,
+    onProject: (last, fn) => { st.projects.set(last, fn); },
+    last: () => st.last,
   };
 }
 
@@ -247,20 +299,40 @@ function expectTimings(lineText: string, ms: Record<string, number>): Map<string
 const RAW = record('demo', 'raw-tree');
 const OLD = record('demo', 'old-tree');
 type Shape = 'std' | 'recover' | 'absence' | 'intervals';
+/** D-5836: the forced full repair's interval, reached through a namespace so the file is type-clean at main (the fallback is the ruling's hour). */
+const FULL_MS = ((checkpointMod as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'] as number | undefined) ?? 3_600_000;
+type PlanFn = typeof policy.planDelegationReconciliation;
+interface PlanSpy { mockImplementation(fn: (input: Parameters<PlanFn>[0]) => ReturnType<PlanFn>): unknown }
+/** What a row may ask of `scenario` beyond its shape and the clock it arms. */
+interface ScenarioX {
+  /** Advance the virtual clock past `FULL_MS` before the armed pass (outside every phase, so no time key moves): the lane's per-pass repair
+   *  then takes the FULL path, with the event counts equal (nothing is deleted, so no replay follows). */
+  full?: boolean;
+  /** Lane seams of the rig (over the world's defaults). */
+  seams?: Record<string, unknown>;
+  /** Lines appended to the owner's first bucket, before every pass. */
+  spool?: string[];
+  /** Further unarmed census passes before the armed one (the fixture's raw tree files its attempt in the pass that ARMS by default). */
+  extra?: number;
+  /** Runs before each unarmed census pass (`i` of `count`): a fault planted in an earlier pass. */
+  prelude?: (i: number, count: number) => void;
+  /** Runs after the pass is armed and before it runs: registers `also`/`onProject` hooks, spies, lane fields. */
+  setup?: (ctx: { w: World; r: Rig; plan: PlanSpy; realPlan: typeof policy.planDelegationReconciliation }) => void;
+}
 
 /** The standard fixture: a session ran a raw `git worktree add` (the incident's case), so the third census pass requests a lease and files
  *  an attempt. `last` passes run unarmed; the next one runs armed with `adds`. Every shape appends one line to the spool before the armed
  *  pass, so its flush has a result to apply. Fixture-sanity facts are read from spies on the real code, never from the new hook. */
-async function scenario(shape: Shape, adds: Record<string, number>, rewriteAfter?: 'flush' | 'repair') {
+async function scenario(shape: Shape, adds: Record<string, number | number[]>, rewriteAfter?: 'flush' | 'repair', x: ScenarioX = {}) {
   vi.restoreAllMocks();                                               // a row may run several scenarios: none inherits a spy of the last
   const warn = quietWarn();
   const w = world();
   writeBucket(w, 'demo-a', BUCKET10,
     startLine('demo-a', '2026-10-15T10:01:00.000Z'),
     bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'),
-    bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'));
+    bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'), ...(x.spool ?? []));
   await primed(w);
-  const r = rig(w);
+  const r = rig(w, x.seams);
   const realPlan = policy.planDelegationReconciliation;
   const plan = vi.spyOn(policy, 'planDelegationReconciliation');
   // The policy plans no `record-observation-interval` in wave 3 (it is "a member of the union"), so that case appends one.
@@ -275,8 +347,11 @@ async function scenario(shape: Shape, adds: Record<string, number>, rewriteAfter
     recover: vi.spyOn(proto, 'recover'), createLease: vi.spyOn(proto, 'createLease'), repair: vi.spyOn(proto, 'repairProjection'),
     applyAccepted: vi.spyOn(proto, 'applyAccepted'), applyChange: vi.spyOn(proto, 'applyCheckpointChange'),
   };
-  const lastUnarmed = shape === 'absence' ? 4 : 2;
-  for (let i = 0; i < lastUnarmed; i++) await censusPass(w, at(i), shape === 'absence' && i >= 3 ? { demo: [OLD] } : { demo: [OLD, RAW] });
+  const lastUnarmed = (shape === 'absence' ? 4 : 2) + (x.extra ?? 0);
+  for (let i = 0; i < lastUnarmed; i++) {
+    x.prelude?.(i, lastUnarmed);
+    await censusPass(w, at(i), shape === 'absence' && i >= 3 ? { demo: [OLD] } : { demo: [OLD, RAW] });
+  }
   appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:06:00.000Z'));
   if (shape === 'recover') {
     // the applier is found failed at the pass's first check (once), so the lane's not-ready branch runs `recover()` (it is past the retry interval)
@@ -284,13 +359,18 @@ async function scenario(shape: Shape, adds: Record<string, number>, rewriteAfter
   }
   const before = {
     plan: plan.mock.calls.length, recover: spies.recover.mock.calls.length, createLease: spies.createLease.mock.calls.length,
-    repair: spies.repair.mock.calls.length, applyAccepted: spies.applyAccepted.mock.calls.length,
+    repair: spies.repair.mock.calls.length, applyAccepted: spies.applyAccepted.mock.calls.length, applyChange: spies.applyChange.mock.calls.length,
   };
+  if (x.full === true) w.clock.t += FULL_MS + 1;
   r.arm(adds, rewriteAfter);
+  x.setup?.({ w, r, plan: plan as never, realPlan });
+  const armedFrom = r.fired.length;
   await censusPass(w, at(lastUnarmed), shape === 'absence' ? { demo: [OLD] } : { demo: [OLD, RAW] });
   const kinds = (plan.mock.results.at(-1)!.value as ReturnType<typeof policy.planDelegationReconciliation>).map((e) => e.kind);
   return {
-    w, warn, kinds,
+    w, warn, kinds, r, spies, plan, realPlan, before, proto,
+    /** the phases and turns the armed pass announced (a cut pass may announce more after the call returns) */
+    armed: (): string[] => r.fired.slice(armedFrom),
     reconciles: plan.mock.calls.length - before.plan,
     recovered: spies.recover.mock.calls.length - before.recover,
     leasesCreated: spies.createLease.mock.calls.length - before.createLease,
@@ -366,6 +446,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const upkeep = vi.spyOn(model, 'upkeepDelegationIntervals');
     const batch = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch');
     const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
+    const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
     const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
     const inserted = vi.spyOn(w.coord, 'insertDelegationEvents');
 
@@ -395,7 +476,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const base = {
       plan: plan.mock.calls.length, corr: corr.mock.calls.length, mark: markForced.mock.calls.length, win: windowForced.mock.calls.length,
       lost: lostForced.mock.calls.length, upkeep: upkeep.mock.results.length, batch: batch.mock.calls.length, repair: repair.mock.calls.length,
-      projected: projected.mock.calls.length, inserted: inserted.mock.calls.length,
+      projected: projected.mock.calls.length, inserted: inserted.mock.calls.length, change: change.mock.calls.length,
     };
     r.arm({ pairs: 1500 });
     // the armed pass lists `other` as unlistable (its view is null) and five late trees; its census was measured 7 s before it
@@ -461,6 +542,16 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       // the checkpoint on disk after the pass
       cpSessions: cp.sessions.length, cpAttempts: cp.attempts.length, cpLeases: cp.leases.length, openLeases: cp.leases.filter((l) => l.releasedAt === null).length,
       cpLineage: cp.lineage.length, cpIntervals: cp.observationIntervals.length, cpCursors: cp.bucketCursors.length,
+      // D-5832 (run 645): the virtual CPU clock and sampler read 0 in this pass (nothing sets them), so every CPU and stall key is present
+      // and 0; the flush, upkeep, effects, reconcile and owners phases ran, the repair did not (the policy spy filters it), so there is no
+      // `repairCpu`, no `stallRepair`, no `repairRewrite` and no `repairSkipped`; the stretch opened after turn 1 (`stallMid`; the flush's own was
+      // closed by turn 1's read) is the one open at the line, so `stallMid` is the line's read; the pass took its turns (0 ms on the virtual clock), so `yields` is present and 0.
+      blockCpu: 0, flushCpu: 0, upkeepCpu: 0, effectsCpu: 0, reconcileCpu: 0, ownersCpu: 0, cpuThread: 0,
+      stallMax: 0, stallP99: 0, stallFlush: 0, stallMid: 0, yields: 0,
+      // the checkpoint's own counts; `attemptsSkipped` is 1 when the pass made no checkpoint change at all (upkeep changed nothing, asserted
+      // above, so every change this pass made came from the attempts part) and 0 when it made one
+      cpActivities: cp.activities.length, cpMapping: Object.keys(cp.activityIdsByNaturalKey).length,
+      attemptsSkipped: change.mock.calls.length - base.change === 0 ? 1 : 0,
       // the lane's own report
       markPaths: report.marks.paths, markIds: report.marks.ids, lostProjects: report.marks.lostProjects.length, lostPrefixes: report.marks.lostPrefixes,
       lossy: report.marks.lossy ? 1 : 0, droppedMeasured: report.droppedEvidence.measured ? 1 : 0,
@@ -556,7 +647,7 @@ describe('D-5692 R1 (an unknown-repository window): the window sizes and the win
   });
 });
 
-describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s own report, and absent when no report came back', () => {
+describe('D-5692 R1 (a repair report): the six repair sizes are the repair\'s own report, and absent when no report came back', () => {
   const OWNERS_R = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e'];
   /** Five owners with a spool, two unarmed census passes (each repairs a healthy projection: a report of zeros), then the rig. */
   async function repairWorld() {
@@ -572,7 +663,8 @@ describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s o
     await censusPass(w, at(1), view, sessions);
     return { warn, w, r, repair, sessions, view, base: repair.mock.calls.length };
   }
-  const sizeKeys = ['repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed'];
+  // D-5832: `repairSkipped` is a sixth size of the same report: absent with no report, 1 only when the report says the short path ran
+  const sizeKeys = ['repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed', 'repairSkipped'];
 
   it('D-5692 R1: after SQLite drifts (an event missing, three sessions\' events altered) the repair\'s report is on the line: passes 2, healed 3, inserted 4, a full replay and no wipe', async () => {
     const { warn, w, r, repair, sessions, view, base } = await repairWorld();
@@ -602,13 +694,18 @@ describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s o
     expect(m.get('repairFull')).toBe(report.fullReplay ? 1 : 0);
     expect(m.get('repairWiped')).toBe(report.wipedAll ? 1 : 0);
     expect(m.get('repairHealed')).toBe(report.healedSessions);
+    // the deleted event makes the counts disagree, so the lane's per-pass repair takes the full path: it was not skipped
+    expect(m.get('repairSkipped'), 'a repair that replayed the journal was not skipped').toBe(0);
+    // `repairRewrite` mirrors `rewrite`: present iff a port call was charged while the repair part was open. The full path made several.
+    expect(m.has('repairRewrite'), 'the repair made port calls, so repairRewrite is on the line').toBe(true);
+    expect(m.get('repairRewrite')!, 'and it is a share of the pass\'s rewrite').toBeLessThanOrEqual(m.get('rewrite')!);
     expect(m.has('repair'), 'the repair phase ran').toBe(true);
   });
 
   it.each([
     { title: 'a null report', arrange: (repair: { mockResolvedValueOnce(v: null): unknown }) => { repair.mockResolvedValueOnce(null); } },
     { title: 'a repair that throws', arrange: (repair: { mockRejectedValueOnce(v: Error): unknown }) => { repair.mockRejectedValueOnce(new Error('a fixture failure')); } },
-  ])('D-5692 R1: $title leaves all five repair sizes off the line, while the repair phase is on it', async ({ arrange }) => {
+  ])('D-5692 R1: $title leaves all six repair sizes off the line, while the repair phase is on it', async ({ arrange }) => {
     const { warn, w, r, repair, sessions, view, base } = await repairWorld();
     (arrange as (r: unknown) => void)(repair);
     r.arm({ noteSessions: 1001 });
@@ -619,6 +716,9 @@ describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s o
     const m = parse(lines[0]!);
     expect(m.has('repair'), 'the repair phase ran').toBe(true);
     expect(sizeKeys.filter((k) => m.has(k)), 'no repair size is on the line').toEqual([]);
+    // `repairRewrite` mirrors `rewrite`'s rule (present iff a port call was charged while the part was open): the repair part ran here but made
+    // no port call (the report is null, or the call threw before any), so it is absent although `repair` is present
+    expect(m.has('repairRewrite'), 'no port call was charged to the repair part').toBe(false);
   });
 });
 
@@ -730,7 +830,10 @@ describe('D-5692 R3: 1,500 ms inside a phase or part is that phase\'s, its enclo
     // encloses nothing) so that the line is written at all. A rewrite is timed from inside the port's `project`: no hook advances it.
     const tested = key === 'noteSessions';
     const adds: Record<string, number> = tested ? { noteSessions: 1500 } : rewriteAfter === undefined ? { [key]: 1500, noteSessions: 1001 } : { noteSessions: 1001 };
-    const sc = await scenario(shape, adds, rewriteAfter);
+    // The repair's rewrite is the FULL repair's (D-5836: the lane's per-pass repair skips its rewrite when the projection is known current,
+    // so it makes no `project` call then): the forced-full clock is advanced past `DELEGATION_REPAIR_FULL_MS` before the armed pass, outside
+    // every phase, so no time key moves and the event counts stay equal (no row is deleted, so no replay follows).
+    const sc = await scenario(shape, adds, rewriteAfter, { full: rewriteAfter === 'repair' });
     expectReached(key, sc);
     if (rewriteAfter === 'repair') {
       // the rewrite is the repair's: the plan asked for it and the repair ran once, before the red assertion below reads its time
@@ -767,6 +870,7 @@ type SlowLine = (fields: Readonly<Record<string, number>>, bound?: number) => st
 /** Design: the one list of keys the line may carry, in the one order it is written. */
 const SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
+  'blockCpu', 'stallMax', 'stallP99', 'cpuThread',                  // D-5832: right after `other`, so the bound drops them last
   'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
@@ -781,6 +885,9 @@ const SLOW_KEYS = [
   'eLease', 'eRunChild', 'eUnowned', 'eAbsence', 'eRepair', 'eInterval',
   'repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed',
   'censusAge',
+  // D-5832: after `censusAge`, so the formatter's list-order fill drops these first
+  'flushCpu', 'upkeepCpu', 'effectsCpu', 'repairCpu', 'reconcileCpu', 'ownersCpu',
+  'stallFlush', 'stallMid', 'stallRepair', 'repairRewrite', 'yields', 'cpActivities', 'cpMapping', 'repairSkipped', 'attemptsSkipped',
   'dropped',
 ];
 
@@ -800,7 +907,8 @@ describe('D-5692 R5: the line is numbers only, in a fixed grammar, and bounded',
     expect(lines, 'one slow line is written').toHaveLength(1);
     const text = lines[0]!;
     for (const secret of ['zq-proj', 'agent-zqrec', 'zqrec', '/zqpath/x', 'zqpath', 'zq-']) expect(text, `the line holds ${secret}`).not.toContain(secret);
-    expect(text).toMatch(/^ccrc-server: delegation pass slow:( [a-z][a-zA-Z]*=\d+)+$/);
+    // D-5832: a key may now hold a digit (`stallP99`), so the grammar's key class takes digits after its first letter; the values stay numbers only
+    expect(text).toMatch(/^ccrc-server: delegation pass slow:( [a-z][a-zA-Z0-9]*=\d+)+$/);
     const keys = surface['DELEGATION_PASS_SLOW_KEYS'] as readonly string[] | undefined;
     expect(Array.isArray(keys), 'DELEGATION_PASS_SLOW_KEYS is exported').toBe(true);
     for (const k of parse(text).keys()) expect(keys, `${k} is a key of the fixed list`).toContain(k);
@@ -976,5 +1084,662 @@ describe('D-5692 R7: a pass cut by its budget writes its line at its late settle
     expect(m.get('block')).toBe(2501);
     expect(m.get('total')).toBe(2501);
     expect(m.has('reconcile'), 'a cut pass reconciles nothing').toBe(false);
+  });
+});
+
+// ══ Run 645: D-5832 (CPU and stall on the line), D-5834 (no attempts write when nothing is new), D-5835 (the turns), D-5836 (the repair) ══
+//
+// The rows below were written RED FIRST, before the code they pin: against `main` each fails on its own assertion (a missing key, a call
+// count, a flag not yet run), except the rows marked "green by design" (parity guards and the trigger), which pass at `main` and are
+// reddened by the mutants named on them. Rows a review's fix round added came after the code and state their own status in their
+// titles (several are green by design at that round's base and red at `main`); the bound row came with the code.
+
+/** The lane itself (private), for the fields a row sets or reads and the methods it spies. */
+const laneOf = (w: World): Record<string, unknown> => (w.watcher as unknown as { delegationLane(): Record<string, unknown> }).delegationLane();
+/** A synchronous stall of `ms` of REAL time: the event loop cannot turn while it runs. */
+const stallFor = (ms: number): void => { const end = performance.now() + ms; while (performance.now() < end) { /* the loop is blocked */ } };
+/** The one line of a scenario, parsed. */
+const theLine = (lines: string[]): Map<string, number> => { expect(lines, 'one slow line is written').toHaveLength(1); return parse(lines[0]!); };
+/** The turns are three: after the flush, before the reconcile, before the repair. */
+const YIELDS_OF = (fired: string[]): number => fired.filter((k) => k === 'yields').length;
+
+describe('D-5832 R1: the line carries the CPU per phase, the stall per stretch, the repair\'s rewrite, the turns and the checkpoint\'s sizes, each as the virtual clocks were set', () => {
+  const agentId = (n: number): string => `a1b2c3d4e5f6${(0x2000 + n).toString(16)}`;
+  /** Three agents start: the fold opens three activities, so `cpActivities` and `cpMapping` are not zero. */
+  const AGENTS = [1, 2, 3].map((n) => lineOf(common('demo-a', {
+    eventKind: 'SubagentStart', agentId: agentId(n), agentType: null, cwd: '/w/demo', transcriptPath: `/w/demo/${CLAUDE}.jsonl`,
+  }, `2026-10-15T10:02:0${n}.000Z`)));
+  /** CPU ms each phase's own hook adds to the virtual CPU clock (distinct primes). `effects` encloses the repair part, `reconcile` the stepped phases. */
+  const CPU: Record<string, number> = {
+    noteSessions: 11, expire: 13, owners: 59, flush: 101, upkeep: 7, prune: 3, reconcile: 53,
+    pre: 5, prep: 17, build: 19, pairs: 23, forced: 29, lostForced: 31, policy: 37, effects: 41, repair: 43,
+  };
+
+  it('D-5832 R1: blockCpu is the sum over exactly block\'s phases; each *Cpu, stall*, repairRewrite, yields, cpActivities, cpMapping and cpuThread equals what the virtual clocks were set to', async () => {
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      full: true, spool: AGENTS,
+      setup: ({ w, r }) => {
+        w.cpu.thread = true;
+        w.stall.max = 307; w.stall.p99 = 293;                         // the pass-wide histogram; stallMax is at least every stretch
+        for (const [k, ms] of Object.entries(CPU)) r.also(k, () => { w.cpu.us += ms * 1000; });
+        // the stretches: set in the hook of the phase that opens each (a stretch is read after the turn that closes it)
+        r.also('flush', () => { w.stall.stretch = 211; });            // read after the turn after the flush
+        r.also('upkeep', () => { w.stall.stretch = 223; });           // read after the turn before the repair
+        r.also('repair', () => { w.stall.stretch = 227; });           // read at the line
+        r.onProject('repair', () => { w.clock.t += 700; });           // the repair's own rewrite: the full path projects
+      },
+    });
+    expectReached('repair', sc);
+    expect(sc.armed().filter((k) => k === 'repair'), 'the repair part ran').toHaveLength(1);
+    const cp = checkpointOf(sc.w.home);
+    expect(cp.activities.length, 'the fold opened the three agents\' activities').toBeGreaterThanOrEqual(3);
+    const m = theLine(sc.lines);
+
+    const stepped = ['pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy'];
+    const effectsCpu = CPU['effects']! + CPU['repair']!;               // the repair part runs inside effects
+    const reconcileCpu = CPU['reconcile']! + stepped.reduce((n, k) => n + (CPU[k] ?? 0), 0) + effectsCpu;
+    const blockCpu = BLOCK.reduce((n, k) => n + (k === 'effects' ? effectsCpu : CPU[k] ?? 0), 0);
+    expect(blockCpu, 'the fixture: block\'s phases carry distinct CPU, owners (a read) is not among them').toBe(380);
+    const expected: Record<string, number> = {
+      blockCpu, cpuThread: 1,
+      flushCpu: CPU['flush']!, upkeepCpu: CPU['upkeep']!, effectsCpu, repairCpu: CPU['repair']!, reconcileCpu, ownersCpu: CPU['owners']!,
+      stallFlush: 211, stallMid: 223, stallRepair: 227, stallMax: 307, stallP99: 293,
+      repairRewrite: 700, yields: 0,
+      cpActivities: cp.activities.length, cpMapping: Object.keys(cp.activityIdsByNaturalKey).length,
+    };
+    for (const [key, value] of Object.entries(expected)) expect(m.get(key), key).toBe(value);
+    // `cpActivities` and `cpMapping` are equal by the checkpoint's own invariant (one mapping entry per activity), so a swap of the two is
+    // not shown; each still equals its own independent count above.
+    expect(m.get('cpMapping')).toBe(m.get('cpActivities'));
+  });
+});
+
+describe('D-5832 R2: the trigger is unchanged: a stall alone, with block at or under the threshold, writes no line', () => {
+  it('D-5832 R2 (green by design at main; M2 reds it): block 1,000 with a virtual stall of 2,000 in every stretch and in the pass-wide histogram writes nothing; block 1,001 writes the line', async () => {
+    const stalled = ({ w, r }: { w: World; r: Rig }): void => {
+      w.stall.max = 2000; w.stall.p99 = 2000;
+      for (const k of ['flush', 'upkeep', 'repair']) r.also(k, () => { w.stall.stretch = 2000; });
+    };
+    const quiet = await scenario('std', { noteSessions: 1000 }, undefined, { setup: stalled });
+    expectReached('repair', quiet);
+    expect(quiet.lines, 'a stall of 2,000 ms with a block of exactly 1,000 ms is not slow').toEqual([]);
+    const loud = await scenario('std', { noteSessions: 1001 }, undefined, { setup: stalled });
+    expectReached('repair', loud);
+    expect(loud.lines, 'one more millisecond of block is').toHaveLength(1);
+  });
+});
+
+describe('D-5832 R3: repairRewrite holds only the port time charged while the repair part is open', () => {
+  it('D-5832 R3: 1,500 ms in the flush\'s own project and 700 ms in the repair\'s: rewrite 2,200, repairRewrite 700', async () => {
+    const sc = await scenario('std', {}, undefined, {
+      full: true,                                                     // the FULL repair projects; the short path (D-5836) would make no port call
+      setup: ({ w, r }) => {
+        r.onProject('flush', () => { w.clock.t += 1500; });
+        r.onProject('repair', () => { w.clock.t += 700; });
+      },
+    });
+    expectReached('repair', sc);
+    theLine(sc.lines);
+    const m = expectTimings(sc.lines[0]!, { flush: 1500, rewrite: 2200, repair: 700, effects: 700, reconcile: 700 });
+    expect(m.get('repairRewrite'), 'the repair\'s share of the rewrite is 700 (flush\'s 1,500 is not in it)').toBe(700);
+  });
+});
+
+describe('D-5832 R4 (owed from review 642 F6): a pass that throws out of run, and each not-ready return, still writes its one line', () => {
+  const FAILURE = { code: 'journal-unreadable', detail: 'a fixture failure' };
+  const cases: Array<{ title: string; arrange: (ctx: { w: World; proto: typeof DelegationDurability.prototype }) => void; failed?: boolean; recovers?: boolean }> = [
+    { title: 'a throw out of run (the upkeep throws)', failed: true, arrange: () => { vi.spyOn(model, 'upkeepDelegationIntervals').mockImplementation(() => { throw new Error('a fixture throw'); }); } },
+    { title: 'the not-ready return of a failed applier inside the retry interval', arrange: ({ w, proto }) => {
+      laneOf(w)['lastRecoverAt'] = at(2);                              // the armed pass's own clock: the retry interval has not passed
+      vi.spyOn(proto, 'failure').mockReturnValue(FAILURE as never);
+    } },
+    { title: 'the not-ready return while a recovery the lane started has not settled', arrange: ({ w }) => { laneOf(w)['recovering'] = true; } },
+    { title: 'the not-ready return after a recover() that leaves the applier failed', recovers: true, arrange: ({ proto }) => {
+      // `lastRecoverAt` is left old (the open was 32 minutes before the armed pass): the retry interval has passed, so recover() runs
+      vi.spyOn(proto, 'failure').mockReturnValue(FAILURE as never);
+    } },
+    { title: 'the not-ready return of an applier that did not open', arrange: ({ w }) => {
+      vi.spyOn(laneOf(w) as { applier(): Promise<unknown> }, 'applier').mockResolvedValue(null);
+    } },
+  ];
+  it.each(cases)('D-5832 R4 (green by design at main; MX1/MX2 red it): $title, with 1,001 ms of block, writes one line', async ({ arrange, failed, recovers }) => {
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, { setup: ({ w }) => arrange({ w, proto: DelegationDurability.prototype }) });
+    expect(sc.reconciles, 'the pass did not reach the reconcile').toBe(0);
+    if (recovers === true) expect(sc.recovered, 'the not-ready branch ran recover()').toBe(1);
+    if (failed === true) expect(sc.warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes('a delegation pass failed')), 'the pass threw out of run').toBe(true);
+    const m = theLine(sc.lines);
+    expect(m.get('noteSessions')).toBe(1001);
+    expect(m.get('cut')).toBe(0);
+    expect(m.has('reconcile'), 'no reconcile ran').toBe(false);
+  });
+});
+
+/**
+ * Review 677 F6: `run` has two more not-ready returns than R4's cases above, R109's "cut before the owners" exits: the one after the `root`
+ * phase and the one after the `load` phase. Each is reached the way the lane reaches it in production: the pass budget (a global timer)
+ * fires while the phase's read is still open, `sweep` returns at the cut, and the cut pass's `run` takes the exit when the read answers
+ * late. Under `noteSessions: 1001` its block is over the threshold before either exit, so the `finally` must write the one line (cut=1).
+ * Green by design at main; MX2 (no line on a not-ready return) reds both rows on their line-count assertion. A fresh lane starts not ready,
+ * so the exits are proven by the phases announced and the one line, not by `notReady`.
+ */
+describe('D-5832 R4 (review 677 F6): the two R109 cut-before-owners exits each write their one line at the late settle', () => {
+  const lineAtTheLateSettle = async (
+    w: World, warn: ReturnType<typeof quietWarn>, r: Rig, started: () => boolean, release: () => void, stuck: Promise<void>, exit: string,
+  ): Promise<Map<string, number>> => {
+    await vi.waitFor(() => expect(started(), `the pass is inside ${exit}'s read`).toBe(true), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await stuck;                                                      // the pass ended although the read did not
+    expect(slowLines(warn), 'a pass that has not settled has written nothing, though its block is already over the threshold').toEqual([]);
+    expect(r.fired, 'no owner was reached').not.toContain('owners');
+    release();                                                        // the late answer arrives: the cut pass takes the R109 exit and settles
+    await vi.waitFor(() => expect(slowLines(warn), 'one line, at the late settle').toHaveLength(1), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(10);
+    const lines = slowLines(warn);
+    expect(lines, 'and exactly one').toHaveLength(1);
+    const m = parse(lines[0]!);
+    expect(m.get('cut')).toBe(1);
+    expect(m.get('noteSessions')).toBe(1001);
+    expect(m.get('block'), 'only noteSessions took block time').toBe(1001);
+    expect(m.has('reconcile'), 'a cut pass reconciles nothing').toBe(false);
+    expect(w.calls.listings, 'no owner was listed').toEqual([]);
+    return m;
+  };
+  const setUp = (): { w: World; warn: ReturnType<typeof quietWarn>; r: Rig } => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    const r = rig(w);
+    r.arm({ noteSessions: 1001 });                                    // block is over the threshold before either exit
+    setNow(NOW);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
+    return { w, warn, r };
+  };
+
+  it('D-5832 R4 (review 677 F6; green by design at main; MX2 reds it): a pass cut while the projects root resolves takes the exit after the root phase and writes one line, cut=1', async () => {
+    const { w, warn, r } = setUp();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // `resolveProjectsRoot` awaits this read; when it answers late its own `if (pass.signal.aborted) return;` returns into `run`, whose check
+    // right after the `root` phase takes the exit (the load phase was never announced).
+    const io = (laneOf(w)['deps'] as { io: FleetIO }).io;
+    const real = io.realpath.bind(io);
+    vi.spyOn(io, 'realpath').mockImplementation(async (p: string) => { started = true; await gate; return real(p); });
+    const passesBefore = laneOf(w)['passes'];
+    const stuck = pass(w, DEMO_A);
+    const m = await lineAtTheLateSettle(w, warn, r, () => started, release, stuck, 'the root phase');
+    expect(r.fired, 'the root phase was announced and the load phase was not').toEqual(expect.arrayContaining(['noteSessions', 'open', 'root']));
+    expect(r.fired).not.toContain('load');
+    expect(r.fired.filter((k) => ['expire', 'flush', 'reconcile'].includes(k)), 'nothing after the exit ran').toEqual([]);
+    expect(laneOf(w)['passes'], 'the pass count (incremented after the exit) did not move').toBe(passesBefore);
+    expect(m.has('load'), 'no load phase is on the line').toBe(false);
+  });
+
+  it('D-5832 R4 (review 677 F6; green by design at main; MX2 reds it): a pass cut while the evidence loads takes the exit after the load phase and writes one line, cut=1', async () => {
+    const { w, warn, r } = setUp();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // `loadEvidence` awaits the journal visit; when it answers late the load completes and `run`'s check right after the `load` phase takes
+    // the exit (`pass.reachedOwners` was never set; the owners phase was never announced).
+    const visit = DelegationDurability.prototype.visitRetainedRecords;
+    vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockImplementation(async function (this: DelegationDurability, ...args: Parameters<typeof visit>) {
+      started = true; await gate; return visit.apply(this, args);
+    });
+    const passesBefore = laneOf(w)['passes'] as number;
+    const stuck = pass(w, DEMO_A);
+    const m = await lineAtTheLateSettle(w, warn, r, () => started, release, stuck, 'the load phase');
+    expect(r.fired, 'the root and load phases were announced').toEqual(expect.arrayContaining(['noteSessions', 'open', 'root', 'load']));
+    expect(r.fired.filter((k) => ['expire', 'flush', 'reconcile'].includes(k)), 'nothing after the exit ran').toEqual([]);
+    expect(laneOf(w)['passes'], 'the pass count (incremented before the load) moved by one').toBe(passesBefore + 1);
+    expect(m.has('load'), 'the load phase is on the line').toBe(true);
+  });
+});
+
+describe('D-5832 R5: the real loop: a 50 ms synchronous stall inside the store\'s projection reads in the stretch it was made in', () => {
+  it.each([
+    { arm: 'repair', key: 'stallRepair' },
+    { arm: 'flush', key: 'stallFlush' },
+  ])('D-5832 R5: with the production sampler and turns, 50 ms made inside the $arm\'s project reads $key >= 50 (M3, M19 red it)', async ({ arm, key }) => {
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      full: true,                                                     // the repair\'s FULL path projects; counts equal, so no replay (and no yield) follows
+      seams: { loopDelay: undefined },                                // the production sampler; no `loopTurn` seam: the production turns
+      setup: ({ r }) => { r.onProject(arm, () => stallFor(50)); },
+    });
+    expectReached('repair', sc);
+    const report = (await sc.spies.repair.mock.results.at(-1)!.value) as DelegationProjectionRepairReport;
+    expect([report.fullReplay, report.journalPasses], 'the repair projected and replayed nothing: its stall is the projection\'s alone').toEqual([false, 0]);
+    const m = theLine(sc.lines);
+    expect(m.has(key), `${key} is on the line`).toBe(true);
+    expect(m.get(key), `${key} reads the 50 ms stall`).toBeGreaterThanOrEqual(50);
+    expect(m.get('stallMax'), 'stallMax is at least every stretch').toBeGreaterThanOrEqual(m.get(key)!);
+    expect(m.get('stallMax'), 'and the pass-wide max saw the 50 ms').toBeGreaterThanOrEqual(50);
+    // not `stallP99 >= 50`: past 100 sampler fires the 99th percentile is not the max, so a busy box would flake it
+    expect(m.get('stallP99'), 'the pass-wide percentile is measured').toBeGreaterThan(0);
+    expect(m.get('stallP99'), 'and never above the max').toBeLessThanOrEqual(m.get('stallMax')!);
+  });
+});
+
+describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s thread clock where it has one, else the real process clock (green by design at bdc3baebb; red at main, where the CPU keys are absent)', () => {
+  /** The production-clock pass: no CPU seam (the world's virtual one is taken off), a line written by the 1,001 ms in `noteSessions`. */
+  const productionPass = (setup?: ScenarioX['setup']) =>
+    scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
+
+  it('D-5832 R6 (i) (MCPUlie, MCPUsrc red it):with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
+    const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
+    const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
+    let calls = 0;
+    let sc: Awaited<ReturnType<typeof scenario>>;
+    try {
+      sc = await productionPass(() => {
+        if (!hasThread) return;                                           // absent: the fallback is R6 (ii)'s
+        usage.spy = vi.spyOn(process as unknown as { threadCpuUsage(): unknown }, 'threadCpuUsage');   // calls through; the scenario's own mock restore ran before this setup
+        calls = usage.spy!.mock.calls.length;
+      });
+      if (usage.spy !== null) calls = usage.spy.mock.calls.length - calls;
+    } finally {
+      usage.spy?.mockRestore();
+    }
+    const m = theLine(sc.lines);
+    expect(m.get('cpuThread'), `cpuThread follows the runtime's feature (threadCpuUsage is ${hasThread ? 'present' : 'absent'})`).toBe(hasThread ? 1 : 0);
+    for (const k of ['blockCpu', 'effectsCpu', 'reconcileCpu']) {
+      expect(m.has(k), `${k} is on the line`).toBe(true);
+      const v = m.get(k)!;
+      expect(Number.isInteger(v) && v >= 0, `${k} is a whole non-negative number (read ${v})`).toBe(true);
+    }
+    if (hasThread) expect(calls, 'process.threadCpuUsage is the source of the thread clock: the pass read it at least twice (one read to open a phase and one to close it)').toBeGreaterThanOrEqual(2);
+  });
+
+  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it; MCPUsrc reds R6 (i) too, since its thread-clock spy):with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
+    const holder = process as unknown as { threadCpuUsage?: unknown };
+    const had = Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage');
+    const desc = Object.getOwnPropertyDescriptor(process, 'threadCpuUsage');
+    const typeBefore = typeof holder.threadCpuUsage;
+    const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
+    let calls = 0;
+    let sc: Awaited<ReturnType<typeof scenario>>;
+    try {
+      sc = await productionPass(() => {
+        delete holder.threadCpuUsage;
+        if (typeof holder.threadCpuUsage === 'function') throw new Error('process.threadCpuUsage is still a function after the delete (a copy on the prototype?): the fallback cannot be reached, so this row cannot pin it');
+        usage.spy = vi.spyOn(process, 'cpuUsage');                        // calls through; the scenario's own mock restore ran before this setup
+        calls = usage.spy!.mock.calls.length;
+      });
+      calls = usage.spy!.mock.calls.length - calls;
+    } finally {
+      usage.spy?.mockRestore();
+      if (had) Object.defineProperty(process, 'threadCpuUsage', desc!);
+      else delete holder.threadCpuUsage;
+    }
+    expect(typeof holder.threadCpuUsage, 'process.threadCpuUsage is back as it was').toBe(typeBefore);
+    expect(Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage'), 'and is an own property exactly when it was').toBe(had);
+    expect(Object.getOwnPropertyDescriptor(process, 'threadCpuUsage'), 'with the same descriptor').toEqual(desc);
+    expect(calls, 'the pass read process.cpuUsage (the fallback ran): at least one read to open a phase and one to close it').toBeGreaterThanOrEqual(2);
+    const m = theLine(sc.lines);
+    expect(m.get('cpuThread'), 'the process clock is not a thread clock').toBe(0);
+    expect(m.has('blockCpu'), 'blockCpu is on the line').toBe(true);
+    expect(Number.isInteger(m.get('blockCpu')) && m.get('blockCpu')! >= 0, 'and is a whole non-negative number').toBe(true);
+  });
+});
+
+describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
+  it('D-5832: at realistic values (7 digits each) the whole line is 1,817 bytes and drops nothing; at the largest values (2,042 bytes, 77 of the 102 input keys kept, dropped=25) the keys that drop are a suffix of the list and the first four new keys stay', () => {
+    const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
+    expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
+    const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
+    expect(keys, 'the list holds the 83 old input keys and the 19 new ones').toHaveLength(102);
+    const real = format!(Object.fromEntries(keys.map((k) => [k, 1234567])));
+    const realPairs = parse(real);
+    expect(realPairs.size, 'every key is on the line (an unknown key is ignored by the formatter at main)').toBe(keys.length);
+    expect(realPairs.has('dropped'), 'nothing drops at realistic values').toBe(false);
+    expect(Buffer.byteLength(real)).toBe(1817);
+
+    const MAX = Number.MAX_SAFE_INTEGER;
+    const big = format!(Object.fromEntries(keys.map((k) => [k, MAX])));
+    expect(Buffer.byteLength(big)).toBeLessThanOrEqual(2048);
+    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2042);
+    const bp = parse(big);
+    const present = keys.filter((k) => bp.has(k));
+    expect(present, 'exactly 77 of the 102 input keys are kept').toHaveLength(77);
+    expect(bp.size, 'the 77 kept keys and the `dropped` pair are the line\'s pairs').toBe(78);
+    expect(present, 'with equal-width values the greedy fill keeps a prefix: the end of the list drops').toEqual(keys.slice(0, present.length));
+    for (const k of ['blockCpu', 'stallMax', 'stallP99', 'cpuThread']) expect(bp.has(k), `${k} (right after other) is never the first to go`).toBe(true);
+    for (const k of ['attemptsSkipped', 'repairSkipped', 'cpMapping', 'cpActivities', 'yields', 'repairRewrite', 'stallRepair', 'stallMid', 'stallFlush', 'ownersCpu']) {
+      expect(bp.has(k), `${k} (after censusAge) drops at the largest values`).toBe(false);
+    }
+    expect(bp.get('dropped'), 'and the line counts them').toBe(keys.length - present.length);
+    expect(bp.get('dropped'), 'exactly 25 of them').toBe(25);
+  });
+});
+
+describe('D-5834 R1: a pass whose attempts are all already filed makes no checkpoint change; one with a new attempt makes exactly one, and files it', () => {
+  /** The crash-replay the policy really produces: the pass that files the raw tree's attempt fails to journal its lease (once), so the NEXT
+   *  pass plans the same lease request again, with an attempt that is already on file. One extra unarmed pass makes the armed one that replay. */
+  const replay = {
+    extra: 1,
+    prelude: (i: number, count: number): void => {
+      if (i === count - 1) vi.spyOn(DelegationDurability.prototype, 'createLease').mockRejectedValueOnce(new Error('a fixture failure'));
+    },
+  };
+
+  // The attempts part sits between two phase announcements: `attempts` (its start) and `leases` (the next, once it has ended). The lane's
+  // in-memory checkpoint and the file are read at both, so what the part itself did to the revision and the bytes is pinned apart from the
+  // flush's commit before it and the lease's after it.
+  type Snap = { revision: number; canonical: string; file: Buffer; ids: string[] };
+  const snap = (w: World): Snap => {
+    const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
+    return { revision: cp.revision, canonical: canonicalDelegationJson(cp), file: readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)), ids: cp.attempts.map((a) => a.attemptId).sort() };
+  };
+  const sha = (x: string | Buffer): string => createHash('sha256').update(x).digest('hex');
+  /** What `fileAttempts` answers, taken from a spy on the lane that calls through (the method has this name and answer at the review base). */
+  const answers = (w: World): { all: () => Promise<string[][]> } => {
+    const spy = vi.spyOn(laneOf(w) as { fileAttempts(...a: unknown[]): Promise<Set<string>> }, 'fileAttempts');
+    return { all: async () => Promise.all(spy.mock.results.map(async (r) => [...(await (r.value as Promise<Set<string>>))].sort())) };
+  };
+
+  // The boundary values both rows pin. Computed by this fixture with production at ee03056ab (the review base) and identical at this commit:
+  // the state at the attempts boundary rests on the fixture's fixed clock (`NOW`/`setNow`), its fixed session and tree names, and ids that
+  // are content hashes of those, so nothing in it depends on the random fixture home (measured equal over repeated runs at both). Each
+  // `sha` is of the canonical JSON of the lane's in-memory checkpoint, or of the checkpoint file's bytes, read at the `attempts` announcement
+  // (start) and the `leases` announcement (end).
+  const FILED_ID = '6e45196d4b26808fa5e3facdca82c8e0d79facf14c0691c0a4d9de1a11f76e31';
+  const AT_START = { revision: 3, canonical: '536b91c4b758575c220d5c37773e3b2fa6ccb50b51511f6c5b3c94fd23f827ed', file: 'cf44ab9aeaa8901be3e2629e59bad6dc8ba7060489fdce1fe2d1b6e2b62bbd0b' };
+  const AT_END_B = { revision: 4, canonical: '2537dd6c9e4d330d5e49630ccc59fe1ea6eade21685979e6f827d0356f0782a0', file: 'a0d42d895275258e78148a70d5dcf6058358c12065e6f3e7389cbc02be35adfd' };
+  const shaOf = (s: Snap | null): { revision: number; canonical: string; file: string } => ({ revision: s!.revision, canonical: sha(s!.canonical), file: sha(s!.file) });
+
+  it('D-5834 R1 (a): every attempt already on file: no applyCheckpointChange call, the same attempts, the lease request still reaches createLease, attemptsSkipped=1', async () => {
+    let attemptsBefore: readonly DelegationAttemptRow[] = [];
+    let start: Snap | null = null;
+    let end: Snap | null = null;
+    let returned: { all: () => Promise<string[][]> } | null = null;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      ...replay,
+      setup: ({ w, r }) => {
+        attemptsBefore = checkpointOf(w.home).attempts;
+        returned = answers(w);
+        r.also('attempts', () => { start = snap(w); });
+        r.also('leases', () => { end = snap(w); });
+      },
+    });
+    expectReached('attempts', sc);
+    expect(attemptsBefore.length, 'the earlier pass filed the attempt and lost its lease').toBeGreaterThanOrEqual(1);
+    expect(sc.armed(), 'the attempts part ran').toContain('attempts');
+    expect(sc.leasesCreated, 'the filed attempt let its lease request through').toBeGreaterThanOrEqual(1);
+    expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'fileAttempts made no change call').toBe(0);
+    expect(checkpointOf(sc.w.home).attempts, 'the attempts on file are what they were').toEqual(attemptsBefore);
+    // Zero calls, so the part changed nothing: same revision, same canonical checkpoint, same file bytes (at main the no-op call wrote
+    // nothing either, so these are parity pins), and the set `fileAttempts` answers (the attempt ids on file) is the one the lease part saw.
+    expect(start, 'the attempts part started').not.toBeNull();
+    expect(end, 'and the lease part began after it').not.toBeNull();
+    expect(end!.revision, 'the attempts part left the revision alone').toBe(start!.revision);
+    expect(end!.canonical, 'and the checkpoint\'s canonical bytes').toBe(start!.canonical);
+    expect(end!.file.equals(start!.file), 'and the file on disk').toBe(true);
+    expect([...end!.ids].sort(), 'the ids on file (the set the part answers) are the ones that were').toEqual(attemptsBefore.map((a) => a.attemptId).sort());
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes').toEqual(AT_START);
+    expect(shaOf(end), 'and at its end: the revision, the canonical bytes and the file bytes are unchanged').toEqual(AT_START);
+    expect(end!.ids, 'the ids on file are the one attempt').toEqual([FILED_ID]);
+    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID]]);
+    expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says the call was skipped').toBe(1);
+  });
+
+  it('D-5834 R1 (b): one new attempt beside a filed one: exactly one call, and it is filed (green at main; M8 reds them); attemptsSkipped=0 (red at main: no such key)', async () => {
+    const NEW_ID = 'attempt-new-5834';
+    let attemptsBefore: readonly DelegationAttemptRow[] = [];
+    let start: Snap | null = null;
+    let end: Snap | null = null;
+    let returned: { all: () => Promise<string[][]> } | null = null;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      ...replay,
+      setup: ({ w, r, plan, realPlan }) => {
+        attemptsBefore = checkpointOf(w.home).attempts;
+        const template = attemptsBefore[0]!;
+        plan.mockImplementation((input) => [...realPlan(input), { kind: 'record-unowned-worktree' as const, attempt: { ...template, attemptId: NEW_ID } }]);
+        returned = answers(w);
+        r.also('attempts', () => { start = snap(w); });
+        r.also('leases', () => { end = snap(w); });
+      },
+    });
+    expectReached('attempts', sc);
+    expect(attemptsBefore.length, 'the earlier pass filed the first attempt').toBeGreaterThanOrEqual(1);
+    expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'one change for the lot').toBe(1);
+    const after = checkpointOf(sc.w.home).attempts;
+    expect(after.map((a) => a.attemptId).sort(), 'the new attempt is on file beside the old ones').toEqual([...attemptsBefore.map((a) => a.attemptId), NEW_ID].sort());
+    expect(start, 'the attempts part started').not.toBeNull();
+    expect(end, 'and the lease part began after it').not.toBeNull();
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes (the same as (a)\'s)').toEqual(AT_START);
+    expect(shaOf(end), 'and at its end the one change left the revision, canonical bytes and file bytes the review base computes').toEqual(AT_END_B);
+    expect(end!.ids, 'the filed attempt and the new one').toEqual([FILED_ID, NEW_ID].sort());
+    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID, NEW_ID].sort()]);
+    expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says a call was made').toBe(0);
+  });
+});
+
+describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real setImmediate queued after the last real I/O before its boundary', () => {
+  /** A fixture home whose owner has a spool; the lane's first ready pass has run and the rig is in. */
+  async function turnWorld() {
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await primed(w);
+    const r = rig(w);
+    return { warn, w, r };
+  }
+
+  it('D-5835 R1 (i): an immediate queued inside the store\'s project, while flush is the last phase, has run by onPassPhase(upkeep)', async () => {
+    const { w, r } = await turnWorld();
+    appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:06:00.000Z'));   // the flush has a result to apply: it projects
+    r.arm({});
+    let queued = false;
+    let ran = false;
+    let ranByUpkeep: boolean | null = null;
+    const project = w.coord.projectDelegationCheckpoint;               // the rig's wrapper
+    w.coord.projectDelegationCheckpoint = ((cp: Parameters<CoordStore['projectDelegationCheckpoint']>[0]) => {
+      if (!queued && r.last() === 'flush') { queued = true; setImmediate(() => { ran = true; }); }
+      return project(cp);
+    }) as CoordStore['projectDelegationCheckpoint'];
+    r.also('upkeep', () => { ranByUpkeep = ran; });
+    await censusPass(w, at(0), { demo: [] });
+    expect(queued, 'the flush projected').toBe(true);
+    expect(ranByUpkeep, 'the immediate ran before the upkeep began').toBe(true);
+  });
+
+  it('D-5835 R1 (ii): an immediate queued at the start of prune, in a pass whose prune and upkeep write nothing, has run by onPassPhase(reconcile)', async () => {
+    const { w, r } = await turnWorld();
+    const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
+    const pruned = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    r.arm({});
+    let ran = false;
+    let ranByReconcile: boolean | null = null;
+    r.also('prune', () => { setImmediate(() => { ran = true; }); });
+    r.also('reconcile', () => { ranByReconcile = ran; });
+    await censusPass(w, at(0), { demo: [] });
+    expect(r.fired, 'the pass reached its reconcile').toContain('reconcile');
+    expect([change.mock.calls.length, pruned.mock.calls.length], 'upkeep and prune wrote nothing').toEqual([0, 0]);
+    expect(ranByReconcile, 'the immediate ran before the reconcile began').toBe(true);
+  });
+
+  it('D-5835 R1 (iii): an immediate queued at onPassPhase(effects), in a pass whose only effect is repair-report-projection, has run when repairProjection is entered', async () => {
+    const { w, r } = await turnWorld();
+    const plan = vi.spyOn(policy, 'planDelegationReconciliation');
+    const original = DelegationDurability.prototype.repairProjection;
+    let ran = false;
+    let ranAtRepair: boolean | null = null;
+    vi.spyOn(DelegationDurability.prototype, 'repairProjection').mockImplementation(function (this: DelegationDurability, ...args: Parameters<DelegationDurability['repairProjection']>) {
+      ranAtRepair = ran;
+      return original.apply(this, args);
+    });
+    r.arm({});
+    r.also('effects', () => { setImmediate(() => { ran = true; }); });
+    await censusPass(w, at(0), { demo: [] });
+    expect(plan.mock.results.length, 'the pass planned').toBeGreaterThan(0);
+    expect((plan.mock.results.at(-1)!.value as Array<{ kind: string }>).map((e) => e.kind), 'the pass\'s only effect is the repair').toEqual(['repair-report-projection']);
+    expect(ranAtRepair, 'the immediate ran before the repair was entered').toBe(true);
+  });
+});
+
+describe('D-5835 R2: the turns change no result', () => {
+  /** A parent working inside a scratch tree and a subagent of it: the policy plans an unowned-worktree attempt (no lease, so no random id
+   *  enters the journal or the checkpoint, and two runs of the fixture are byte-for-byte comparable). */
+  const SCRATCH = record('demo', 'scratch-tree-1');
+  const scratchLines = [
+    lineOf(common('demo-a', { eventKind: 'SessionStart', source: 'startup', cwd: SCRATCH.canonicalPath }, '2026-10-15T10:01:30.000Z')),
+    lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: 'ag1', agentType: null, cwd: '/w/demo' }, '2026-10-15T10:02:50.000Z')),
+    lineOf(common('demo-a', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_s1', outcome: 'completed', agentId: 'ag1', cwd: SCRATCH.canonicalPath }, '2026-10-15T10:03:00.000Z')),
+  ];
+  async function outcome(seams: Record<string, unknown>) {
+    vi.restoreAllMocks();
+    quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, ...scratchLines);
+    await primed(w);
+    rig(w, seams);
+    const plan = vi.spyOn(policy, 'planDelegationReconciliation');
+    const view = { demo: [SCRATCH] };
+    await censusPass(w, at(0), view);
+    await censusPass(w, at(1), view);
+    appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:06:00.000Z'));
+    await censusPass(w, at(2), view);
+    expect(plan.mock.results.length, 'the fixture planned at least once').toBeGreaterThan(0);
+    const cp = checkpointOf(w.home);
+    return {
+      kinds: (plan.mock.results.at(-1)!.value as Array<{ kind: string }>).map((e) => e.kind),
+      revision: cp.revision,
+      checkpoint: canonicalDelegationJson(cp),
+      journal: readFileSync(path.join(w.cfg.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8'),
+      rows: canonicalDelegationJson(w.coord.readDelegationProjection()),
+      effects: JSON.stringify(plan.mock.results.at(-1)!.value),
+    };
+  }
+  it('D-5835 R2 (green by design at main; M22 reds it): one fixture pass with the production turns and with the turns seamed off leaves the same checkpoint, revision, journal, delegation rows and effects', async () => {
+    const turned = await outcome({});
+    const bare = await outcome({ loopTurn: async () => {} });
+    expect(turned.kinds, 'the pass planned an unowned-worktree attempt and the repair').toEqual(expect.arrayContaining(['record-unowned-worktree', 'repair-report-projection']));
+    expect(turned.revision, 'the pass wrote').toBeGreaterThan(1);
+    expect(turned).toEqual(bare);
+  });
+});
+
+describe('D-5835 R3: a cut fired during a turn runs nothing after it', () => {
+  it.each([
+    { turn: 1, boundary: 'after the flush' },
+    { turn: 2, boundary: 'before the reconcile' },
+    { turn: 3, boundary: 'before the repair' },
+  ])('D-5835 R3: the cut fires during turn $turn ($boundary) (M15 reds it)', async ({ turn }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let active = false;
+    let calls = 0;
+    // The n-th turn of the armed pass advances the faked clock past the pass budget: the budget timer aborts the pass during that turn.
+    const loopTurn = async (): Promise<void> => {
+      if (!active) return;
+      calls += 1;
+      if (calls === turn) vi.advanceTimersByTime(DELEGATION_PASS_BUDGET_MS + 1);
+    };
+    let reconciledBefore: unknown;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      seams: { loopTurn },
+      setup: ({ w }) => { active = true; reconciledBefore = laneOf(w)['reconciledAt']; },
+    });
+    // the cut pass keeps running after `sweep`'s race: its late settle writes the one line
+    await vi.waitFor(() => expect(slowLines(sc.warn), 'one line, at the late settle').toHaveLength(1), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(10);
+    const ran = sc.armed();
+    expect(YIELDS_OF(ran), `the pass took exactly ${turn} turn(s) of its own`).toBe(turn);
+    expect(calls, 'and the cut was fired in the last of them').toBeGreaterThanOrEqual(turn);
+    expect(parse(slowLines(sc.warn)[0]!).get('cut'), 'the pass was cut').toBe(1);
+    if (turn === 1) for (const k of ['upkeep', 'prune', 'reconcile']) expect(ran, `${k} began after the cut`).not.toContain(k);
+    if (turn === 2) {
+      expect(ran, 'the upkeep and the prune ran before the cut').toEqual(expect.arrayContaining(['upkeep', 'prune']));
+      expect(ran, 'reconcile began after the cut').not.toContain('reconcile');
+      expect(laneOf(sc.w)['reconciledAt'], 'and reconciledAt did not move').toBe(reconciledBefore);
+    }
+    if (turn === 3) {
+      expect(ran, 'the effects began before the cut').toContain('effects');
+      expect(sc.spies.repair.mock.calls.length - sc.before.repair, 'repairProjection was not called after the cut').toBe(0);
+      expect(ran, 'and no repair part began').not.toContain('repair');
+    }
+  });
+});
+
+describe('D-5835 R4: a turn\'s time is in yields and in total, and in no other time key', () => {
+  it.each([
+    { title: 'the turn after the flush', yields: [1500], total: 1500 },
+    { title: 'the turn before the repair', yields: [0, 0, 1500], total: 1500 },
+    { title: 'both', yields: [1500, 0, 1500], total: 3000 },
+  ])('D-5835 R4: 1,500 ms in $title shows in yields and total; block, other, effects and reconcile exclude it (M20 reds it)', async ({ yields, total }) => {
+    const sc = await scenario('std', { noteSessions: 1001, yields }, undefined, {});
+    expectReached('repair', sc);
+    expect(YIELDS_OF(sc.armed()), 'the pass took its three turns').toBe(3);
+    const m = theLine(sc.lines);
+    for (const k of TIME_KEYS) if (m.has(k)) expect(m.get(k), `${k} (ms)`).toBe(k === 'noteSessions' ? 1001 : 0);
+    expect(m.get('yields'), 'the turns\' time').toBe(total);
+    expect(m.get('total'), 'total is the pass\'s span: it keeps the turns').toBe(1001 + total);
+    expect(m.get('block'), 'block excludes the turns').toBe(1001);
+    expect(m.get('other'), 'nothing is unaccounted for').toBe(0);
+  });
+});
+
+describe('D-5835 R5 (review 677 F3): the turn before the repair keeps its CPU in the phases that enclose it, and its elapsed time leaves them', () => {
+  it('D-5835 R5: pins the approved "CPU while open" reading: 61 ms of CPU and 97 ms of elapsed time in turn 3 are in effectsCpu, reconcileCpu and blockCpu, and the 97 ms is in yields and total and not in effects, reconcile or block (green by design at bdc3baebb; red at main, where the turns and CPU keys are absent; MturnCpu reds it)', async () => {
+    let active = false;
+    let turns = 0;
+    let w!: World;
+    // Only the third turn of the armed pass (the one before the repair, inside `effects` and `reconcile`) spends CPU and time; the line's own turn is the fourth.
+    const loopTurn = async (): Promise<void> => {
+      if (!active) return;
+      turns += 1;
+      if (turns === 3) { w.cpu.us += 61_000; w.clock.t += 97; }
+    };
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      full: true, seams: { loopTurn },
+      setup: (ctx) => { w = ctx.w; active = true; },
+    });
+    expectReached('repair', sc);
+    expect(YIELDS_OF(sc.armed()), 'the pass took its three turns').toBe(3);
+    expect(turns, 'and the line took its own (the fourth), which spends nothing').toBe(4);
+    const m = theLine(sc.lines);
+    expect(m.get('effectsCpu'), 'effectsCpu holds the CPU spent in turn 3, which `effects` encloses').toBe(61);
+    expect(m.get('reconcileCpu'), 'reconcileCpu holds it too').toBe(61);
+    expect(m.get('blockCpu'), 'blockCpu sums effects\' CPU, so it holds it').toBe(61);
+    expect(m.get('repairCpu'), 'the repair part opens after the turn: none of the 61 ms is its own').toBe(0);
+    expect(m.get('flushCpu'), 'nor the flush\'s').toBe(0);
+    expect(m.get('effects'), 'effects (elapsed) excludes the 97 ms').toBe(0);
+    expect(m.get('reconcile'), 'reconcile (elapsed) excludes it').toBe(0);
+    expect(m.get('block'), 'block excludes it: the 1,001 ms of noteSessions only').toBe(1001);
+    expect(m.get('yields'), 'yields holds it').toBe(97);
+    expect(m.get('total'), 'total keeps it').toBe(1001 + 97);
+    expect(m.get('other'), 'nothing is unaccounted for').toBe(0);
+  });
+});
+
+describe('D-5836 R1: after one ready pass, a pass that appends a spool line projects once, from the flush, and its repair is skipped', () => {
+  it('D-5836 R1: three further passes each call projectDelegationCheckpoint once and report skipped:true; the armed one carries repairSkipped=1 and no attemptsSkipped (its attempts part did not run)', async () => {
+    const warn = quietWarn();
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await primed(w);                                                  // the lane's first ready pass: its repair is the full one
+    const r = rig(w);
+    const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
+    const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
+    const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
+    const filing = vi.spyOn(laneOf(w) as { fileAttempts(...a: unknown[]): Promise<Set<string>> }, 'fileAttempts');   // the attempts part's method; calls through
+    for (let i = 0; i < 3; i++) {
+      appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', `2026-10-15T10:0${2 + i}:00.000Z`));
+      if (i === 2) r.arm({ noteSessions: 1001 });
+      const base = { projected: projected.mock.calls.length, repair: repair.mock.calls.length, change: change.mock.calls.length };
+      await censusPass(w, at(i), { demo: [] });
+      expect(repair.mock.calls.length - base.repair, `pass ${i}: the repair ran once`).toBe(1);
+      expect(change.mock.calls.length - base.change, `pass ${i}: no attempt or interval was filed`).toBe(0);
+      expect(projected.mock.calls.length - base.projected, `pass ${i}: projectDelegationCheckpoint is called once, from the flush`).toBe(1);
+      const report = (await repair.mock.results.at(-1)!.value) as DelegationProjectionRepairReport & { skipped?: boolean };
+      expect(report.skipped, `pass ${i}: the repair's report says it was skipped`).toBe(true);
+    }
+    const m = theLine(slowLines(warn));
+    expect(m.get('repairSkipped'), 'the armed pass\'s line says the repair was skipped').toBe(1);
+    // `attemptsSkipped` is sized only inside the attempts part (`fileAttempts`); these passes reconcile (the repair ran) but plan no attempt,
+    // so the part did not run: the method was never called and its phase never announced, and the key is not on the line.
+    expect(filing.mock.calls.length, 'the attempts part did not run in any of the three passes (fileAttempts was not called)').toBe(0);
+    expect(r.fired, 'and its phase was not announced').not.toContain('attempts');
+    expect(m.has('attemptsSkipped'), 'attemptsSkipped is absent: the attempts part did not run').toBe(false);
   });
 });

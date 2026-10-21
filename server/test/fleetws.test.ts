@@ -92,7 +92,8 @@ describe('fleet REST + WS', () => {
   afterEach(async () => {
     if (app) await app.close();
     app = undefined;
-    rmSync(home, { recursive: true, force: true });
+    // The bare-watcher cases' first tick can still be landing a server-caps write here; `maxRetries` covers `ENOTEMPTY`.
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     vi.restoreAllMocks();
   });
 

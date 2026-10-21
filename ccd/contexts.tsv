@@ -333,6 +333,7 @@ _model_family_class	C1
 _model_class_of	C1
 _operator_choice_read	C3
 _operator_choice_keep	C3
+_operator_choice_promote	C3
 _operator_choice_unmark	C3
 _operator_choice_say	C3
 _route_apply_now	C3
@@ -364,9 +365,11 @@ _child_tmpdir	C4
 _delegation_spool_dir	C5
 _child_spawn_compose	C5
 _ws_tmproot_witness_file	C4
+_ws_tmproot_aside_path	C4
 _reg_id_ok	C1
 _reg_id_cap	C1
 _ws_tmproot_id_ok	C4
+_ws_tmproot_witness_parse	C4
 _ws_tmproot_witness_read	C4
 _ws_tmproot_witness_write	C4
 _child_runid_valid	C5
@@ -454,6 +457,8 @@ cmd_enable	C1
 cmd_stop	C4
 _hib_refuse	C4
 _hib_wake_clear	C4
+_hold_is_programme	C4
+_hib_hold_ok	C4
 cmd_hibernate	C4
 cmd_forget	C4
 cmd_ls	C1
@@ -540,9 +545,11 @@ _ws_leaf_read_small	C4
 _ws_leaf_checkout_accepted	C4
 _ws_leaf_checkout_one	C4
 _ws_leaf_checkouts	C4
+_ws_removal_mounts_clear	C4
 _ws_leaf_remove	C4
 _ws_tmproot_remove	C4
 _ws_tmproot_witness_drop	C4
+_ws_tmproot_aside_settle	C4
 _ws_leaf_why_line	C4
 _ws_reclaim_tmproot_wait_s	C4
 _ws_reclaim_tmproot_quiet	C4
@@ -578,11 +585,13 @@ _ws_expire_return_gap	C4
 _ws_collect_enc	C4
 _ws_collect_pairs_ok	C4
 _ws_collect_rec_id	C4
+_ws_collect_aside_id	C4
 _ws_collect_qrec_dir	C4
 _ws_collect_qpath	C4
 _ws_collect_record_write	C4
 _ws_collect_record_read	C4
 _ws_collect_records_of	C4
+_ws_collect_asides_of	C4
 _ws_collect_record_drop	C4
 _ws_collect_now_ns	C4
 _ws_collect_qcheck	C4
@@ -609,6 +618,7 @@ _ws_collect_slots_of	C4
 _ws_collect_root_dev	C4
 _ws_collect_eval	C4
 _ws_collect_resume_eval	C4
+_ws_collect_aside_judge	C4
 _ws_collect_witness_judge	C4
 _ws_collect_records_judge	C4
 _ws_collect_prelock	C4

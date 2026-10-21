@@ -96,7 +96,7 @@ printf '%s\\n' "$$" > "$rec/claude.pid"
 printf '%s\\n' "$#" > "$rec/claude.argc"
 printf '%s\\0' "$@" > "$rec/claude.argv"
 compgen -e | LC_ALL=C sort > "$rec/claude.envnames"
-for v in ANTHROPIC_BASE_URL CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY API_TIMEOUT_MS CLAUDE_CODE_MAX_RETRIES CLAUDE_CONFIG_DIR; do
+for v in ANTHROPIC_BASE_URL CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY API_TIMEOUT_MS CLAUDE_CODE_MAX_RETRIES CLAUDE_CONFIG_DIR CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP; do
   printf '%s=%s\\n' "$v" "\${!v-<unset>}"
 done > "$rec/claude.env"
 lane=none
@@ -484,13 +484,19 @@ describe('ccrc-codex — the launch', () => {
     writeFileSync(path.join(b.bin, 'codex-a'), body, { mode: 0o755 });
     copyFileSync(launcher(), path.join(b.bin, 'ccrc-codex'));
     chmodSync(path.join(b.bin, 'ccrc-codex'), 0o755);
-    const r = run(b, { file: path.join(b.bin, 'codex-a'), cfg: null, args: ['--session-id', 'fixture-uuid'] });
+    const r = run(b, {
+      file: path.join(b.bin, 'codex-a'), cfg: null,
+      args: ['--session-id', 'fixture-uuid'],
+      env: { CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP: '1' },
+    });
     expect(r.code, r.err).toBe(0);
     expect(ccrcCalls(b)).toEqual([['codex', 'start', 'codex-a']]);
     expect(claudeEnv(b)['CLAUDE_CONFIG_DIR']).toBe(path.join(b.home, r0.configDirSuffix));
     expect(claudeEnv(b)['ANTHROPIC_BASE_URL']).toBe(`http://127.0.0.1:${r0.exec.proxyPort}`);
     expect(tokenLane(b)).toBe('codex-a');
     expect(claudeArgv(b)).toEqual(['--session-id', 'fixture-uuid']);
+    expect(claudeEnv(b)['CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP']).toBe('1');
+    expect(recText(b, 'claude.pid').trim()).toBe(String(r.pid));
   });
 });
 

@@ -87,6 +87,7 @@ const REASON_TEXT: Record<PrReason, string> = {
   // because that is where the other two server-code -> sentence maps live.
   unsupported: UNSUPPORTED_VERB_TEXT,
   'agent-down': 'ccrc could not reach the sessions box.',
+  'cut-short': 'ccrc could not finish reading the PRs in time.',
   error: 'GitHub could not be read.',
   // The one reason that is NOT a failed read: GitHub answered, and said merged.
   // So this copy must not blame the connection — it says what is missing and

@@ -15,6 +15,7 @@ import {
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
 import { isRegistryId } from '../../../shared/api.js';
+import { notify } from '../notice.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -237,7 +238,12 @@ const notRanDetail = (argv: CcdArgv, res: Extract<CcdResult, { ran: false }>): s
 
 // ── the feed row ─────────────────────────────────────────────────────────────
 
-const iso = (epochS: number): string => new Date(epochS * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+// D-5859: the row's body is built as the funnel's argument, outside its archive guard, so it never throws: an instant
+// beyond what `Date` renders (a corrupt registry document) is said as the raw epoch instead.
+const iso = (epochS: number): string => {
+  const d = new Date(epochS * 1000);
+  return Number.isNaN(d.getTime()) ? `epoch ${epochS} s` : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+};
 
 const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   expired: 'archived workspace cleaned up',
@@ -306,15 +312,7 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
  *  stands is one row, not one a minute. `kind: 'run'` with no run: recorded, never pushed, in the unfiltered feed.
  *  A missing log degrades the record and never the act. */
 export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    const ev = log.record({ kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r, standing) });
-    deps.coord.recordFeedEvent(log.epoch, ev);
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — archived expiry ${r.kind}, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
+  notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r, standing) },
+    'record-only', { degraded: `archived expiry ${r.kind}, feed archive degraded` });
 }

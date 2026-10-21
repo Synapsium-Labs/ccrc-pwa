@@ -642,13 +642,14 @@ export function registerCoordRoutes(
   const attributionVerdict = async (
     whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid' | 'sessionUuid',
   ): Promise<AttributionRead> => {
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // One read (D-5863): `names` and `records` come from the same listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return { ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
     }
-    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
@@ -848,23 +849,22 @@ export function registerCoordRoutes(
     // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
     // already state for the done-authority checks, inverted here (fix-round
     // finding 1 / D-37): a fact this route could not measure must never read
-    // as a fact that MISMATCHED either. `names` — the raw directory listing —
-    // is read directly, ONCE, and reused below rather than re-derived,
-    // mirroring the same fail-shut-on-unlistable-registry idiom Task 8's
-    // `sweepMail` and Task 9's dispatch-pause check both use for the same
-    // directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // as a fact that MISMATCHED either. The registry is read ONCE (D-5863):
+    // `readRegistryMeasured`'s `listed: false` is the unlistable arm, and its
+    // `names` (the raw listing) and `records` (the rows built from that same
+    // listing) are reused below rather than re-derived by a second listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
 
     // 5: sender — a registry row must exist for fromId.
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
-      // `readRegistry` also drops a row that WAS listed (its `.uuid` file
+      // `records` also omits a row that WAS listed (its `.uuid` file
       // exists in `names`) when a sibling field read fails (`registry.ts:125`,
       // "incomplete registry entry — skip, don't crash") — ALSO transient,
       // not "this session does not exist". `names` proves presence
@@ -1083,14 +1083,15 @@ export function registerCoordRoutes(
     // (fix-round finding 1 / D-37): `io.readdir` failing outright is not
     // evidence the acking session does not exist — the cost here is lower
     // (a replay just retries the ack next sweep) but a recorded, permanent
-    // `unknown-sender` would be equally false.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // `unknown-sender` would be equally false. One read (D-5863), as the
+    // ingress route's: `names` and `records` come from the same listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       if (names.includes(`${fromId}.uuid`)) {

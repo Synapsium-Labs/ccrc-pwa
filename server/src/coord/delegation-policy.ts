@@ -19,7 +19,7 @@
 //                        work, and a reason policy has never heard of fails closed.
 //   unmeasured        -> nothing. Unknown stays unmeasured and is retried; it is never reported as work, as absence or as ownership.
 //   a record missing from this census AND the previous SUCCESSFUL one -> `record-measured-absence`, for a tree the broker once held.
-//   every ready pass  -> one `repair-report-projection` naming the checkpoint revision the pass read.
+//   every ready pass  -> one `repair-report-projection` naming the checkpoint revision the pass read (D-5836: applier skips the rewrite when current).
 //
 // INTERPRETATIONS (each recorded in the task report)
 //   * D-4650: the input pairs each verdict with its record (`correlations` is `{record, verdict}[]`), so a verdict can never be applied
