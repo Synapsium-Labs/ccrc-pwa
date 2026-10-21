@@ -1492,14 +1492,15 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     return { all: async () => Promise.all(spy.mock.results.map(async (r) => [...(await (r.value as Promise<Set<string>>))].sort())) };
   };
 
-  // The boundary values both rows pin. Computed by this fixture with production at ee03056ab (the review base) and identical at this commit:
+  // The boundary values both rows pin. Computed by this fixture with production at d9243ee16 plus this change (D-6190: the v2 attempt ID, and
+  // (b)'s injected attempt re-pointed to another decision key) and identical at this commit; the review base's values (ee03056ab) held the v1 ID:
   // the state at the attempts boundary rests on the fixture's fixed clock (`NOW`/`setNow`), its fixed session and tree names, and ids that
   // are content hashes of those, so nothing in it depends on the random fixture home (measured equal over repeated runs at both). Each
   // `sha` is of the canonical JSON of the lane's in-memory checkpoint, or of the checkpoint file's bytes, read at the `attempts` announcement
   // (start) and the `leases` announcement (end).
-  const FILED_ID = '6e45196d4b26808fa5e3facdca82c8e0d79facf14c0691c0a4d9de1a11f76e31';
-  const AT_START = { revision: 3, canonical: '536b91c4b758575c220d5c37773e3b2fa6ccb50b51511f6c5b3c94fd23f827ed', file: 'cf44ab9aeaa8901be3e2629e59bad6dc8ba7060489fdce1fe2d1b6e2b62bbd0b' };
-  const AT_END_B = { revision: 4, canonical: '2537dd6c9e4d330d5e49630ccc59fe1ea6eade21685979e6f827d0356f0782a0', file: 'a0d42d895275258e78148a70d5dcf6058358c12065e6f3e7389cbc02be35adfd' };
+  const FILED_ID = '12129f27f20b679f7c58884549630b0c922c9cfc05448a217b5defab7f1db64a';
+  const AT_START = { revision: 3, canonical: 'f913857b28deb46bda524fad18d0271f7c739c83bc22ab24c623e8995ed458af', file: 'f994f70e688a3c760443fcaf566df57cb82e6bdf892ad7f3934f6e0c906a1c58' };
+  const AT_END_B = { revision: 4, canonical: '480ce0c0a368881adbee24bcea4526628adc8fa7939c279c55e983ea26266f2e', file: '48ff0c5a2d10d511711ca8584ceba333f92bf1c41c78f42dd8f98b8f6714102b' };
   const shaOf = (s: Snap | null): { revision: number; canonical: string; file: string } => ({ revision: s!.revision, canonical: sha(s!.canonical), file: sha(s!.file) });
 
   it('D-5834 R1 (a): every attempt already on file: no applyCheckpointChange call, the same attempts, the lease request still reaches createLease, attemptsSkipped=1', async () => {
@@ -1548,7 +1549,8 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
       setup: ({ w, r, plan, realPlan }) => {
         attemptsBefore = checkpointOf(w.home).attempts;
         const template = attemptsBefore[0]!;
-        plan.mockImplementation((input) => [...realPlan(input), { kind: 'record-unowned-worktree' as const, attempt: { ...template, attemptId: NEW_ID } }]);
+        // D-6190/D-6191: another DECISION (a distinct key: another `detail`), so the collapse never removes it on a later pass.
+        plan.mockImplementation((input) => [...realPlan(input), { kind: 'record-unowned-worktree' as const, attempt: { ...template, attemptId: NEW_ID, detail: 'rungs-disagree' } }]);
         returned = answers(w);
         r.also('attempts', () => { start = snap(w); });
         r.also('leases', () => { end = snap(w); });

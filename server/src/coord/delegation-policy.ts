@@ -47,6 +47,8 @@ import {
   DELEGATION_MODEL_REFUSALS,
   DelegationModelError,
   canonicalDelegationJson,
+  delegationAttemptKeyOf,
+  delegationAttemptsByKey,
   delegationSha256Hex,
   leaseSourceKindOfActivity,
   parseDelegationInstant,
@@ -236,7 +238,7 @@ interface Ground {
   activitiesById: ReadonlyMap<string, DelegationActivityRow>;
   activitiesByIdentity: ReadonlyMap<string, readonly DelegationActivityRow[]>;
   sessions: ReadonlySet<string>;
-  attemptIds: ReadonlySet<string>;
+  attemptsByKey: ReadonlyMap<string, DelegationAttemptRow>;
   finalConflicts: ReadonlySet<string>;
   /** Every unreleased lease: whoever holds a tree holds it, whichever activity it names. */
   openLeases: readonly { activityId: string; parentId: string; parentIncarnation: string; project: string; adminRecord: string; canonicalPath: string }[];
@@ -252,7 +254,7 @@ function groundOf(now: string, recovery: DelegationRecoveryState): Ground {
     activitiesById: new Map(cp.activities.map((a) => [a.activityId, a] as const)),
     activitiesByIdentity: byIdentity,
     sessions: new Set(cp.sessions.map((s) => parentKey(s.sessionId, s.parentIncarnation))),
-    attemptIds: new Set(cp.attempts.map((a) => a.attemptId)),
+    attemptsByKey: delegationAttemptsByKey(cp.attempts),
     finalConflicts: new Set(cp.attempts.filter((a) => a.verdict === 'conflicting').map((a) => treeKey(a.project, a.adminRecord))),
     openLeases: cp.leases.filter((l) => l.releasedAt === null).map((l) => ({
       activityId: l.activityId, parentId: l.parentId, parentIncarnation: l.parentIncarnation, project: l.project, adminRecord: l.adminRecord, canonicalPath: l.canonicalPath,
@@ -284,8 +286,8 @@ function attemptOf(
   const evidence = idsOf(fields.evidence);
   return {
     attemptId: delegationSha256Hex(canonicalDelegationJson([
-      'delegation_attempt_v1', parent.parentId, parent.parentIncarnation, record.project, record.adminRecord, record.canonicalPath,
-      fields.rung, fields.verdict, fields.detail, evidence,
+      'delegation_attempt_v2', parent.parentId, parent.parentIncarnation, record.project, record.adminRecord, record.canonicalPath,
+      fields.rung, fields.verdict, fields.detail,
     ])),
     parentId: parent.parentId,
     parentIncarnation: parent.parentIncarnation,
@@ -309,7 +311,7 @@ function planRunChildOwned(ground: Ground, record: DelegationCensusRecord, verdi
   const owner = ground.activitiesById.get(verdict.activityId);
   if (owner === undefined || !ground.sessions.has(parentKey(owner.parentId, owner.parentIncarnation))) return [];
   const attempt = attemptOf(ground, owner, record, { rung: 1, verdict: 'linked', detail: null, evidence: verdict.evidenceJournalIds });
-  return ground.attemptIds.has(attempt.attemptId) ? [] : [{ kind: 'record-run-child-owned', attempt }];
+  return ground.attemptsByKey.has(delegationAttemptKeyOf(attempt)) ? [] : [{ kind: 'record-run-child-owned', attempt }];
 }
 
 function planLinked(ground: Ground, record: DelegationCensusRecord, verdict: Extract<DelegationCorrelationVerdict, { kind: 'linked' }>): DelegationReportEffect[] {
@@ -325,9 +327,11 @@ function planLinked(ground: Ground, record: DelegationCensusRecord, verdict: Ext
   if (holders.length > 0) {
     if (holders.every((l) => l.activityId === activity.activityId)) return [];
     const attempt = attemptOf(ground, parent, record, { rung: null, verdict: 'conflicting', detail: 'rungs-disagree', evidence: verdict.evidenceJournalIds });
-    return ground.attemptIds.has(attempt.attemptId) ? [] : [{ kind: 'record-unowned-worktree', attempt }];
+    return ground.attemptsByKey.has(delegationAttemptKeyOf(attempt)) ? [] : [{ kind: 'record-unowned-worktree', attempt }];
   }
-  const attempt = attemptOf(ground, parent, record, { rung: verdict.rung, verdict: 'linked', detail: null, evidence: verdict.evidenceJournalIds });
+  const fresh = attemptOf(ground, parent, record, { rung: verdict.rung, verdict: 'linked', detail: null, evidence: verdict.evidenceJournalIds });
+  // The row on file for this decision, if any, is the request's attempt (a v1 row's lease gate still finds it); the request is the pass's own.
+  const attempt = ground.attemptsByKey.get(delegationAttemptKeyOf(fresh)) ?? fresh;
   const request: DelegationLeaseCreationRequest = {
     activityId: activity.activityId,
     parentId: activity.parentId,
@@ -365,7 +369,8 @@ function planWorkspaceOverLease(ground: Ground, record: DelegationCensusRecord, 
     const attempt = attemptOf(ground, holder, record, {
       rung: null, verdict: 'conflicting', detail: 'rungs-disagree', evidence: identity === undefined ? verdict.evidenceJournalIds : [...verdict.evidenceJournalIds, identity],
     });
-    if (!ground.attemptIds.has(attempt.attemptId) && !out.some((e) => e.kind === 'record-unowned-worktree' && e.attempt.attemptId === attempt.attemptId)) {
+    const k = delegationAttemptKeyOf(attempt);
+    if (!ground.attemptsByKey.has(k) && !out.some((e) => e.kind === 'record-unowned-worktree' && delegationAttemptKeyOf(e.attempt) === k)) {
       out.push({ kind: 'record-unowned-worktree', attempt });
     }
   }
@@ -377,7 +382,7 @@ function planUnowned(ground: Ground, record: DelegationCensusRecord, verdict: Ex
   const out: DelegationReportEffect[] = [];
   for (const parent of parentsNamedBy(ground, verdict.evidenceJournalIds)) {
     const attempt = attemptOf(ground, parent, record, { rung: null, verdict: verdict.kind, detail: verdict.reason, evidence: verdict.evidenceJournalIds });
-    if (!ground.attemptIds.has(attempt.attemptId)) out.push({ kind: 'record-unowned-worktree', attempt });
+    if (!ground.attemptsByKey.has(delegationAttemptKeyOf(attempt))) out.push({ kind: 'record-unowned-worktree', attempt });
   }
   return out;
 }
