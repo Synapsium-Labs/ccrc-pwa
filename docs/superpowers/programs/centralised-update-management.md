@@ -2617,6 +2617,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         4.1G away. The work volume is back to 15.3G. STATUS: fleet and server v0.0.533, newest v0.0.536, stable
         v0.0.502, intent dev/auto=off, backups fleet 188M/server 12504M, disk free fleet 77G/work volume 15G/server
         19G, no anomalies.
+      - **16:55 UTC: two operator taps in the hour (v0.0.535, v0.0.536), both clean; the server's 15G line is 2.5G away.**
+        - v0.0.535: fleet from 16:08:08 (gate 16:09:26), server 16:09:54 to about 16:11:49 (`ccrc.service` restarted
+          16:11:36). v0.0.536 (#1010): fleet 16:18:16 to 16:19:35, server 16:19:55 to 16:22:56 (restarted 16:21:35).
+          All four runs `done`, `from: pwa`, gates passed, doctor 0 failed.
+        - Each tap pruned the oldest backup and kept 10; the set is 14050M, the newest 1666M. Server free disk is
+          17,528M, 2.5G above the line: about three taps, or two to three days with none. The broker's coordinator was
+          told as the soak asks (7720, corrected by 7721). The operator decides at the line.
+        - The work volume ANOMALY again: 8.65G free at 17:02 (15.25G at 15:58), while the root disk gained 23G.
+          The owning session's evidence directory is flat at 25.6G, and the busiest other scratchpad holds 0.8G.
+          So the loss is unattributed. Read-only; nothing deleted. The 13:05 mail to the evidence owner is still queued.
+        - STATUS: fleet and server v0.0.536, newest v0.0.537, stable v0.0.502, intent dev/auto=off, backups fleet
+          207M/server 14050M, disk free fleet 100G/work volume 10G (8.65G at 17:02)/server 18G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
