@@ -43,6 +43,10 @@ export interface NoticeOpts {
   readonly url?: string;
   /** The writer's degrade sentence: the text after `— ` in the archive-failure warning. */
   readonly degraded?: string;
+  /** D-5860: the notice's once-only key, archived beside its row (`CoordStore.hasNotice` reads it). Passed through to
+   *  the archive and nothing else: the funnel never suppresses the ring or the push on it, and the archive refuses
+   *  nothing; whether to raise the notice at all is the caller's read, made before the write. */
+  readonly dedupeKey?: string;
 }
 
 /** What happened: whether the ring recorded it, and the archive's fate (`'none'`: no `notifyLog` or no `coord`, or
@@ -75,10 +79,13 @@ export function notify(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, 
  *  archive and push, for a writer that writes several rows in one try (`endDeadCoordinator.ts`): the batch STOPS at
  *  its first failed archive, so the rows after it reach neither the ring nor the archive and the caller's sentence is
  *  printed once, and the ring is flushed once, after the records. The outcome is the batch's: `recorded` if any row
- *  was, `archived` the failed row's `'failed'`, else `'landed'` if any row's archive landed, else `'none'`. */
+ *  was, `archived` the failed row's `'failed'`, else `'landed'` if any row's archive landed, else `'none'`.
+ *  D-5860: a batch carries no once-only key (one key on every row would make each row "already sent" for the others),
+ *  so `dedupeKey` is not in its opts and is stripped if forced in. */
 export function notifyEach(
-  deps: NoticeDeps, events: readonly NoticeRecord[], mode: NoticeMode, opts: NoticeOpts = {},
+  deps: NoticeDeps, events: readonly NoticeRecord[], mode: NoticeMode, batchOpts: Omit<NoticeOpts, 'dedupeKey'> = {},
 ): NoticeOutcome {
+  const { dedupeKey: _unkeyed, ...opts } = batchOpts as NoticeOpts;
   let recorded = false;
   let archived: NoticeOutcome['archived'] = 'none';
   try {
@@ -109,7 +116,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     if (flush) void log.flush();
     if (deps.coord) {
       try {
-        deps.coord.recordFeedEvent(log.epoch, ev);
+        // ONE call line: the feed-writer ratchet (D-5859) counts call lines. No key, no third argument.
+        deps.coord.recordFeedEvent(log.epoch, ev, ...(opts.dedupeKey === undefined ? [] : [opts.dedupeKey] as const));
         archived = 'landed';
       } catch (err) {
         archived = 'failed';

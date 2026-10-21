@@ -84,11 +84,11 @@ export const feedRecorder = async (
   const archive = coord.recordFeedEvent.bind(coord);
   let archiveN = 0;
   let throwOn: number | 'every' | null = null;
-  coord.recordFeedEvent = (epoch, ev) => {
+  coord.recordFeedEvent = (epoch, ev, dedupeKey?) => {
     calls.push('archive');
     archiveN += 1;
     if (throwOn === 'every' || throwOn === archiveN) throw new Error(ARCHIVE_FAILURE);
-    archive(epoch, ev);
+    archive(epoch, ev, dedupeKey);
     archived.push(ev);
   };
   const push = {
