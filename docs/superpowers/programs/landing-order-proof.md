@@ -39,4 +39,4 @@ Each proof PR changes only its own slot line below, and nothing else in the repo
 
 ### Slot D
 
-- Slot D: open.
+- Slot D: a one-line proof PR for the merge queue's re-run.
