@@ -2657,6 +2657,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         the growth is unattributed (a bounded scan timed out). Read-only; nothing deleted. STATUS: fleet and server
         v0.0.541, newest v0.0.541, stable v0.0.502, intent dev/auto=off, backups fleet 228M/server 14778M, disk free
         fleet 124G/work volume 8G/server 17G.
+      - 21:55: the probe's NOTE (about 21:58), on an attempt-filing pass (block 29.4 s, `stallMid` 21.7 s). The delta
+        projection's signals stay clean: `projectFull` 0 on all 55 passes this hour, no mismatch line. But 38 of the 55
+        passes filed an attempt (`cpAttempts` +38 in the hour, against about 20 an hour earlier today), and `stallMid`
+        peaked at 25.1 s (21:04). Sent to the broker's coordinator. The work volume is at 7.9G (its ANOMALY stands).
+        STATUS: fleet and server v0.0.541, newest v0.0.541, stable v0.0.502, intent dev/auto=off, backups fleet
+        228M/server 14778M, disk free fleet 132G/work volume 8G/server 17G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
