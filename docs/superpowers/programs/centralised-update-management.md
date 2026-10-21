@@ -2561,6 +2561,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - The standing cleanup (`/tmp/cdk.out*`) is on the root disk, which has 132G free, so it does not apply.
         - STATUS: fleet and server v0.0.514, newest v0.0.518, stable v0.0.502, intent dev/auto=off, backups fleet
           186M/server 10262M, disk free fleet 134G/work volume 14G (12.6G at 08:24)/server 22G.
+      - 08:55: the same ANOMALY, improving: the work volume has 13.2G free (12.6G at 08:44). Mail 7629: the owning
+        session is moving its finished copies, mostly repeated dependency snapshots, to its own root-disk storage. It
+        keeps a link at each original path and checks every copy; the root disk fell from 132G to 125G free. Nothing
+        here was touched. STATUS: fleet and server v0.0.514, newest v0.0.521, stable v0.0.502, intent dev/auto=off,
+        backups fleet 186M/server 10262M, disk free fleet 122G/work volume 13G/server 22G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
