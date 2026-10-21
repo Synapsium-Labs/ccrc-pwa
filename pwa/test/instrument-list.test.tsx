@@ -1,0 +1,293 @@
+// Instrument's list column (W2 Task S10, D-5473): the status-grouped table, the status · project toggle and the phone
+// tabs. Each case mounts the whole `App` under Instrument, at a desk width or a phone's, with a fleet that has a row in
+// every bucket and a coordinator with a child; or reads `instrument.css` / `FleetTable.tsx` where the claim is the
+// file's (jsdom applies no media query and lays nothing out, so the PR's real-browser renders measure the pixels).
+//
+// RED FIRST, on the task's base: this file did not compile there (no `skins/instrument/FleetTable.tsx`).
+//
+// MUTATION TABLE (plan Task S10 Step 3; RUN, each mutant on a `git archive` copy, this suite alone):
+//   project mode without the per-row word ................ "…each row shows its word beside its lamp"
+//   FleetTable.tsx given its own WORD record ............. "the table renders SessionLine and defines no state-word table"
+//   archive-all dropped from Instrument's project cards .. "project mode's cards hold the pool and archive-all doors…"
+//   the toggle as two aria-pressed buttons ............... "the toggle is a radiogroup…"
+//   rows at min-h-[32px] ................................. "rows are 44px under a coarse pointer"
+//   the toggle read without try/catch .................... "…storage that throws leaves status"
+//   Idle open by default ................................. "…the last four folded"
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
+
+const { App } = await import('../src/app');
+const { navigate, useLocation } = await import('../src/lib/router');
+const { initSkin, setSkin } = await import('../src/lib/skin');
+const { useFleetStore } = await import('../src/stores/fleet');
+const { api } = await import('../src/lib/api');
+const { STATUS_GROUPS } = await import('../src/fleet/statusGroups');
+const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
+
+const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument');
+const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
+const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
+const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
+
+const LABELS = ['Needs you', 'Working', 'Done', 'Idle', 'Cleanup', 'Archived', 'Dead'];
+
+const COORD = 'project-a-coord';
+const CHILD = 'project-a-worker';
+const at = (id: string, bucket: SessionBucket, over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+  id, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: id.replace(/^project-a-/, ''), bucket,
+  status: bucket === 'working' ? 'busy' : bucket === 'dead' ? 'dead' : 'idle', ...over,
+});
+const FLEET: FleetSession[] = [
+  at('project-a-asks', 'attention', { dialogPending: true, hookState: 'waiting' }),
+  at(COORD, 'working', { role: 'coordinator', name: 'the coordinator' }),
+  at(CHILD, 'done'),
+  at('project-a-quiet', 'idle'),
+  at('project-a-merged', 'cleanup'),
+  at('project-a-shelved', 'archived', { archivedAt: 1_800_000_000 }),
+  at('project-a-gone', 'dead'),
+];
+const RUN: RunSummary = {
+  id: 41, program: 'port-api', programTitle: 'Port the API', wave: 1, waveOf: 3,
+  project: 'project-a', homeProject: 'project-a', sessionId: CHILD, workspace: 'worker', branch: null,
+  state: 'dispatched', kind: 'work', reviews: null, claimedBy: COORD, resumed: false, clearedAt: null,
+  openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+  items: { done: 0, total: 0 }, unreadMail: 0,
+  health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+            briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+} as RunSummary;
+
+/** A desk (or a phone), and a fine pointer (or a coarse one). */
+function stubWidth(desk: boolean, fine = true): void {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width: 900px') ? desk : q.includes('pointer: fine') ? fine : false,
+    media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+}
+
+let where = '/';
+function Where(): null { where = useLocation().path; return null; }
+
+function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): void {
+  act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true, fleetFrameSeen: true }));
+  navigate('/');
+  render(<><App /><Where /></>);
+}
+
+const table = (): HTMLElement => document.querySelector<HTMLElement>('.ins-table')!;
+const groups = (): HTMLElement[] => [...table().querySelectorAll<HTMLElement>('[data-status-group]')];
+const head = (g: HTMLElement): HTMLElement => g.querySelector<HTMLElement>('[aria-expanded]')!;
+const groupOf = (bucket: SessionBucket): HTMLElement => table().querySelector<HTMLElement>(`[data-status-group="${bucket}"]`)!;
+const rowIds = (el: HTMLElement): string[] =>
+  [...el.querySelectorAll<HTMLElement>('[data-row]')].map((r) => r.getAttribute('data-row')!);
+const toggle = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Group sessions by' });
+const pick = (mode: 'Status' | 'Project'): void => { fireEvent.click(within(toggle()).getByRole('radio', { name: mode })); };
+
+/** The declarations of every rule whose selector list includes `selector`, outside any at-rule. */
+function declsOf(selector: string): string {
+  const top = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
+  const out: string[] = [];
+  for (const r of top.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (r[1]!.split(',').map((s) => s.trim()).includes(selector)) out.push(r[2]!);
+  }
+  return out.join(';');
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  document.documentElement.removeAttribute('data-skin');
+  initSkin();
+  act(() => { setSkin(INSTRUMENT); });
+  stubWidth(true);
+  vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  navigate('/');
+  act(() => useFleetStore.setState({ sessions: [], runs: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
+  act(() => { setSkin(REFINED); });
+  localStorage.clear();
+});
+
+describe('status mode', () => {
+  it('status mode renders the groups in groupByStatus\'s order, the last four folded', () => {
+    mount();
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
+      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+    expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
+      ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
+    // A folded group draws no rows; an open one draws its own.
+    expect(rowIds(groupOf('idle'))).toEqual([]);
+    expect(rowIds(groupOf('dead'))).toEqual([]);
+    expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
+    // The folds are the model's, never a second list.
+    expect(Object.entries(STATUS_GROUPS).filter(([, g]) => g.folds).map(([b]) => b)).toEqual(['idle', 'cleanup', 'archived', 'dead']);
+  });
+
+  it('each group header names its status, and in project mode each row shows its word beside its lamp', () => {
+    mount();
+    expect(groups().map((g) => head(g).textContent)).toEqual(LABELS.map((l) => expect.stringContaining(l)));
+    // Each header carries its count in its name, so a folded group still says how many it holds.
+    expect(head(groupOf('idle'))).toHaveAccessibleName(/^Idle.*1/);
+    pick('Project');
+    const lines = [...table().querySelectorAll<HTMLElement>('.sess-line')];
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      const lamp = line.querySelector('.sess-lamp');
+      const word = line.querySelector('.sess-state');
+      expect(lamp, line.textContent ?? '').not.toBeNull();
+      expect(word?.textContent?.trim(), line.textContent ?? '').toBeTruthy();
+    }
+  });
+
+  it('the table renders SessionLine and defines no state-word table', () => {
+    const code = TABLE_SRC.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(code).toMatch(/<SessionLine\b/);
+    expect(code).not.toMatch(/Record<\s*SessionBucket/);
+    expect(code).not.toMatch(/\bSTATE_WORD\b/);
+    for (const w of ['waiting', 'exited', 'merged', 'needs you']) expect(code).not.toContain(`'${w}'`);
+  });
+
+  it('in status mode a child row carries its coordinator\'s crumb; in project mode it nests as today', () => {
+    mount();
+    const child = groupOf('done').querySelector<HTMLElement>(`[data-row="${CHILD}"]`)!;
+    expect(child).not.toBeNull();
+    expect(child.querySelector('.ins-coord-crumb')?.textContent).toContain('the coordinator');
+    // The coordinator itself carries no crumb.
+    expect(groupOf('working').querySelector(`[data-row="${COORD}"] .ins-coord-crumb`)).toBeNull();
+    pick('Project');
+    expect(table().querySelector('.ins-coord-crumb')).toBeNull();
+    // Project mode is the shared card: the child sits under its coordinator (a nest, or the rollup's workers line).
+    const nested = table().querySelector('.proj-nest[data-depth="1"]') ?? table().querySelector('.proj-children-toggle');
+    expect(nested).not.toBeNull();
+  });
+});
+
+describe('project mode and the doors', () => {
+  it('project mode\'s cards hold the pool and archive-all doors, each carrying data-action', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({
+      roots: [],
+      projects: [{ name: 'project-a', workdir: '/project-a', pool: { state: 'tagged', name: 'pool-a' }, placement: { kind: 'unmeasurable' } }],
+    } as Awaited<ReturnType<typeof api.projects>>);
+    localStorage.setItem('ccrc.fleet-folded.v1', JSON.stringify(['project-a::released']));
+    const rel = { runId: 9, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 9, child: false };
+    mount([...FLEET, at('project-a-released', 'idle', { releasedFrom: rel })]);
+    act(() => useFleetStore.setState({
+      pools: { listed: true, byProject: { 'project-a': { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' } as never,
+    }));
+    pick('Project');
+    const pool = await screen.findByRole('button', { name: 'project pool pool-a' });
+    expect(pool.getAttribute('data-action')).toBe('open-pool');
+    const archiveAll = screen.getByRole('button', { name: /^Archive all 1 released workspace in project-a$/ });
+    expect(archiveAll.getAttribute('data-action')).toBe('archive-all');
+    expect(table().contains(pool) && table().contains(archiveAll)).toBe(true);
+  });
+
+  it('the toggle is a radiogroup with one checked; the phone tabs are a tablist with one selected', () => {
+    mount();
+    const radios = within(toggle()).getAllByRole('radio');
+    expect(radios.map((r) => r.textContent)).toEqual(['Status', 'Project']);
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'false']);
+    for (const r of radios) expect(r.hasAttribute('aria-pressed')).toBe(false);
+    pick('Project');
+    expect(within(toggle()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    cleanup();
+    stubWidth(false, false);
+    mount();
+    pick('Status');
+    const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Working/), expect.stringMatching(/^Done/), expect.stringMatching(/^All/)]);
+    expect(tabs.filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
+  });
+
+  it('a fold is remembered through useFolded', () => {
+    mount();
+    fireEvent.click(head(groupOf('idle')));
+    expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
+    expect(rowIds(groupOf('idle'))).toEqual(['project-a-quiet']);
+    expect(JSON.parse(localStorage.getItem('ccrc.fleet-folded.v1') ?? '[]')).toContain('status::idle');
+    // An open group closes the same way, and its key is the inverse (presence = closed for an open-by-default group).
+    fireEvent.click(head(groupOf('working')));
+    expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
+    cleanup();
+    mount();
+    expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
+    expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('the toggle is remembered, and storage that throws leaves status', () => {
+    mount();
+    pick('Project');
+    expect(localStorage.getItem(GROUP_MODE_KEY)).toBe('project');
+    cleanup();
+    mount();
+    expect(table().getAttribute('data-mode')).toBe('project');
+    cleanup();
+    localStorage.setItem(GROUP_MODE_KEY, 'sideways');
+    mount();
+    expect(table().getAttribute('data-mode')).toBe('status');
+    cleanup();
+    localStorage.setItem(GROUP_MODE_KEY, 'project');
+    const real = window.localStorage.getItem.bind(window.localStorage);
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation((k: string) => {
+      if (k === GROUP_MODE_KEY) throw new Error('storage refused');
+      return real(k);
+    });
+    mount();
+    expect(table().getAttribute('data-mode')).toBe('status');
+  });
+
+  it('a row opens its session, and ⋯ opens the fleet flow\'s actions sheet', async () => {
+    mount();
+    const row = groupOf('attention').querySelector<HTMLElement>('[data-row="project-a-asks"]')!;
+    const more = row.querySelector<HTMLElement>('[data-action="open-actions"]')!;
+    expect(more).not.toBeNull();
+    fireEvent.click(more);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    cleanup();
+    mount();
+    fireEvent.click(groupOf('attention').querySelector<HTMLElement>('[data-row="project-a-asks"] .sess-open')!);
+    expect(where).toBe('/s/project-a-asks');
+  });
+
+  it('rows are 44px under a coarse pointer', () => {
+    mount();
+    const rows = [...table().querySelectorAll<HTMLElement>('[data-row]')];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.className.split(/\s+/)).toContain('min-h-row');
+    // The shared line inside follows the density role, never a literal: 44 under a coarse pointer, 32 under a fine one
+    // (skins.css's `--row-h`).
+    expect(declsOf('.ins-row .sess-line')).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-row .sess-line')).not.toMatch(/\d+px/);
+    expect(TABLE_SRC).not.toMatch(/min-h-\[\d+px\]/);
+  });
+});
+
+describe('phone', () => {
+  it('phone: the tabs select one group; All shows every group', () => {
+    stubWidth(false, false);
+    mount();
+    const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
+    fireEvent.click(tab(/^Working/));
+    expect(tab(/^Working/).getAttribute('aria-selected')).toBe('true');
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['working']);
+    fireEvent.click(tab(/^Needs you/));
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['attention']);
+    fireEvent.click(tab(/^All/));
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
+      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+    expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
+      ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
+    // A tab's name carries its group's count.
+    expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
+  });
+});

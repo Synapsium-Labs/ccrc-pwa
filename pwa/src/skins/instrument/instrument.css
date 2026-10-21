@@ -244,3 +244,59 @@
     padding: 0 var(--sp-1);
   }
 }
+
+/* W2 Task S10 (D-5473): the list column's table. The toggle, the phone tabs, the status groups and the dense rows.
+   A row is the shared `.sess-line` inside `.ins-row`; its height follows `--row-h` (44 under a coarse pointer, 32 under
+   a fine one, skins.css), never a literal, so the table is dense with a mouse and the tap floor under a thumb. */
+.ins-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.ins-toggle,
+.ins-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.ins-toggle-option[aria-checked='true'],
+.ins-tab[aria-selected='true'] {
+  font-weight: var(--weight-semibold);
+}
+/* The four tabs share the row at 360: each takes an equal part, none wraps or scrolls. Underline tabs: the ghost
+   button's hairline goes, and the chosen tab alone carries an accent bottom edge. */
+.ins-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: 0;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+.ins-tab[aria-selected='true'] {
+  border-bottom: 2px solid var(--accent);
+}
+.ins-group-head {
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+.ins-group-count {
+  font-variant-numeric: tabular-nums;
+}
+.ins-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ins-row .sess-line {
+  min-height: var(--row-h);
+}
+.ins-coord-crumb {
+  display: block;
+  padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) * 3);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
