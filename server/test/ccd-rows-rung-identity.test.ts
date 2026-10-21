@@ -640,3 +640,104 @@ describe('the mount table has exactly two readers, both through its one seam (R1
     expect([...holders].sort()).toEqual(['_carry_py', '_ws_collect_mountinfo']);
   });
 });
+
+describe('a `//` spelling the strings cannot place: the walk places it NESTED inside the child, and outside it the strings’ hold stands (path-identity spec §4.5)', () => {
+  // Bash's `pwd -P` keeps a link target's leading `//`, which Linux reads as `/`. So on Linux the strings cannot place
+  // a row that resolves through such a link (pass A's resolved-`//` arm, `unplaced`), nor any row against a child whose
+  // own workdir resolves that way (its `//`-child arm, `unmine`). The rung queues each such row's ancestry first, so
+  // the walk places a row that lies INSIDE the child NESTED by device and inode, a terminal containment-unproven on
+  // every platform. A row OUTSIDE it stays in the strings' hold: retryable, unmeasured. Whether this platform's
+  // `pwd -P` keeps the `//` is read in each case, never assumed; where it collapses it, the strings place the row.
+  /** The rung's clause for a row pass A's resolved-`//` arm leaves unplaced. */
+  const UNPLACED = 'name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them'
+    + ' against this child';
+  /** The rung's clause for a row its `//`-child arm cannot place, for the row `o`. */
+  const UNMINE = (o: string): string => `registry row(s) ${o} cannot be placed against this child: ${CHILD_ID}'s own`
+    + ' workdir resolves to a path opening with //';
+  /** `$HOME/elsewhere/<name>`, a link whose target is `/` + `target`: the row spelled `<link>/<sub>`, and how
+   *  `_ws_realpath` resolves it on this platform. */
+  const dsLink = (name: string, target: string, sub: string): { value: string; resolved: string } => {
+    fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
+    fs.symlinkSync(`/${target}`, path.join(h.home, 'elsewhere', name));
+    const value = path.join(h.home, 'elsewhere', name, sub);
+    return { value, resolved: h.sh(`_ws_realpath "${value}"`) };
+  };
+  /** The child's own workdir made to resolve to a `//` spelling: `$HOME/worktrees` becomes a link to `/` +
+   *  `$HOME/wtreal`. Returns how `_ws_realpath` resolves the child on this platform. */
+  const dsChild = (c: Child): string => {
+    fs.renameSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtreal'));
+    fs.symlinkSync(`/${path.join(h.home, 'wtreal')}`, path.join(h.home, 'worktrees'));
+    return h.sh(`_ws_realpath "${c.wt}"`);
+  };
+  const realChild = (): string => path.join(h.home, 'wtreal', 'demo', 'quiet-basin');
+
+  it('DS1 in: a plain row through a link whose target opens with `//`, INTO the child, is NESTED on every platform: containment-unproven, no token', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(c.wt, 'server'));
+    const { value, resolved } = dsLink('dslink', c.wt, 'server');
+    if (process.platform !== 'darwin') expect(resolved, 'bash keeps the link target’s leading `//`').toBe(`/${c.wt}/server`);
+    row('demo-dslink', value);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain('registry row(s) demo-dslink rooted inside');
+    expect(r.detail, 'the value is never printed').not.toContain(value);
+  }, 60_000);
+
+  it('DS2 in: the real path inside a child whose own workdir resolves to `//` is NESTED on every platform: containment-unproven, no token', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(c.wt, 'server'));
+    const mine = dsChild(c);
+    if (process.platform !== 'darwin') expect(mine, 'the child resolves to a `//` spelling').toBe(`/${realChild()}`);
+    expect(evalOf(h).verdict, 'the CONTROL: with no other row, the `//` child reclaims').toBe('reclaimable');
+    row('demo-other', path.join(realChild(), 'server'));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain('registry row(s) demo-other rooted inside');
+    expect(r.detail, 'the value is never printed').not.toContain('wtreal');
+  }, 60_000);
+
+  it('DS1 out: the same kind of link to a directory OUTSIDE the child stays unplaced: unmeasured, the unplaced clause, the value never printed, the outside file standing', () => {
+    makeChild(h);
+    const afar = path.join(h.home, 'afar');
+    fs.mkdirSync(path.join(afar, 'kept'), { recursive: true });
+    fs.writeFileSync(path.join(afar, 'kept', 'live.txt'), 'another session’s uncommitted work\n');
+    const { value, resolved } = dsLink('dsfar', afar, 'kept');
+    if (process.platform !== 'darwin') expect(resolved, 'bash keeps the link target’s leading `//`').toBe(`/${afar}/kept`);
+    expect(evalOf(h).verdict, 'the CONTROL: without the row').toBe('reclaimable');
+    row('demo-far', value);
+    const r = evalOf(h);
+    if (resolved.startsWith('//')) {
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+      expect(r.detail).toContain(`registry row(s) demo-far ${UNPLACED}`);
+    } else {
+      expect(r.verdict, `where pwd -P collapses the //, the row resolves plainly outside: ${r.detail}`).toBe('reclaimable');
+    }
+    expect(r.detail, 'the value is never printed').not.toContain(value);
+    expect(r.detail, 'nor where it resolves').not.toContain(afar);
+    expect(fs.readFileSync(path.join(afar, 'kept', 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('DS2 out: a real path OUTSIDE a child whose own workdir resolves to `//`, beside it, stays unplaceable against it: unmeasured, the unmine clause, the value never printed', () => {
+    const c = makeChild(h);
+    const mine = dsChild(c);
+    if (process.platform !== 'darwin') expect(mine, 'the child resolves to a `//` spelling').toBe(`/${realChild()}`);
+    expect(evalOf(h).verdict, 'the CONTROL: with no other row, the `//` child reclaims').toBe('reclaimable');
+    const beside = path.join(h.home, 'wtreal', 'demo', 'elsewhere');
+    fs.mkdirSync(beside);
+    fs.writeFileSync(path.join(beside, 'live.txt'), 'another session’s uncommitted work\n');
+    row('demo-beside', beside);
+    const r = evalOf(h);
+    if (mine.startsWith('//')) {
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+      expect(r.detail).toContain(UNMINE('demo-beside'));
+    } else {
+      expect(r.verdict, `where pwd -P collapses the //, the row resolves plainly outside: ${r.detail}`).toBe('reclaimable');
+    }
+    expect(r.detail, 'the value is never printed').not.toContain('wtreal');
+    expect(fs.readFileSync(path.join(beside, 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+});
