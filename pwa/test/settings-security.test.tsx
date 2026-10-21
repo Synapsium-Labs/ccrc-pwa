@@ -61,10 +61,10 @@ const security = async (answer: Parameters<typeof authStatus>[0], hostname = 'cc
 };
 
 describe('the Sign-in gate card, per state (spec §5.5)', () => {
-  it('is the first card on Security, scoped to This box, before Box token', async () => {
+  it('is the first card on Security, scoped to This box, before Box token (and the Linear card, which follows it)', async () => {
     await security({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
     await screen.findByRole('region', { name: 'Box token' });
-    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Sign-in gate', 'Box token']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Sign-in gate', 'Box token', 'Linear']);
     expect(within(gateCard()).getByText('This box')).toBeInTheDocument();
   });
 
