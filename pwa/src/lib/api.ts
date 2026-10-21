@@ -9,6 +9,10 @@ import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBod
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
 
+import {
+  LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, type LinearCheckOutcome, type LinearConnectionView,
+} from '../../../shared/linear';
+import { isResolveReason, type LookupNote, type ResolveRead } from '../fleet/workspaceNameWords';
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
@@ -619,6 +623,97 @@ function rotateRefusalOf(err: unknown): RotateAnswer | null {
   return null;
 }
 
+/**
+ * The Linear section's state, read off `{ok: true, connection}` (also off the `connection` a 409 `not-connected`
+ * carries). A state this build does not know, or a field of the wrong type, reads as null: the section then says
+ * it could not read the connection, never a state the box did not send. Every key the view has is checked, and
+ * NOTHING else is kept, so a field a newer server adds is never rendered by accident.
+ */
+export function readLinearConnection(raw: unknown): LinearConnectionView | null {
+  if (!isRecord(raw)) return null;
+  const shown = (outcome: LinearCheckOutcome): { org: string | null; user: string | null; keyTail: string; checkedAt: number; outcome: LinearCheckOutcome } | null => {
+    const { org, user, keyTail, checkedAt } = raw;
+    if (!orNull(org, (x) => typeof x === 'string') || !orNull(user, (x) => typeof x === 'string')) return null;
+    if (typeof keyTail !== 'string' || typeof checkedAt !== 'number' || !Number.isFinite(checkedAt)) return null;
+    return { org: org as string | null, user: user as string | null, keyTail, checkedAt, outcome };
+  };
+  switch (raw.state) {
+    case 'not-connected': case 'unreadable': case 'unusable': case 'placeholder':
+      return { state: raw.state };
+    case 'details-unknown':
+      return isWord(LINEAR_DETAILS_PROBLEMS, raw.why) ? { state: 'details-unknown', why: raw.why } : null;
+    case 'connected': case 'key-rejected': case 'key-forbidden': case 'unreachable': {
+      const state = raw.state;
+      const outcome: LinearCheckOutcome = state === 'connected' ? 'ok'
+        : state === 'key-rejected' ? 'rejected' : state === 'key-forbidden' ? 'forbidden' : 'unreachable';
+      if (!isWord(LINEAR_CHECK_OUTCOMES, raw.outcome) || raw.outcome !== outcome) return null;
+      const s = shown(outcome);
+      if (s === null) return null;
+      return state === 'connected' ? { state, ...s, outcome: 'ok' }
+        : state === 'key-rejected' ? { state, ...s, outcome: 'rejected' }
+          : state === 'key-forbidden' ? { state, ...s, outcome: 'forbidden' }
+            : { state, ...s, outcome: 'unreachable' };
+    }
+    default:
+      return null;
+  }
+}
+
+/** A 2xx `{ok: true, connection}` body, read; anything else is `'unreadable'`. */
+function linearViewOf(raw: unknown): LinearConnectionView | 'unreadable' {
+  return (isRecord(raw) && raw.ok === true ? readLinearConnection(raw.connection) : null) ?? 'unreadable';
+}
+
+/**
+ * `GET /api/linear/resolve`'s answer for a name that parsed, read (named workspaces S7). `named` is the only kind the
+ * sheet asks it about, and the only one read: an `auto` or `refused` answer for a name the grammar here accepted is a
+ * server whose grammar differs, and reads as unreadable rather than as a refusal the operator never earned. NOTHING
+ * ELSE is kept, so a field a newer server adds is never shown by accident. An offline answer's `reason` is the
+ * server's own word when this build knows it, and `unrecognised` when it does not: a lookup that failed in a way
+ * this build cannot name is still a failure, never silence.
+ */
+export function readResolve(raw: unknown): ResolveRead | null {
+  if (!isRecord(raw) || raw.kind !== 'named') return null;
+  if (typeof raw.title !== 'string' || raw.title === '') return null;
+  if (raw.source !== 'linear' && raw.source !== 'offline') return null;
+  const note: LookupNote | null = raw.source === 'linear' || raw.reason === undefined
+    ? null
+    : isResolveReason(raw.reason) ? raw.reason : 'unrecognised';
+  return { title: raw.title, source: raw.source, note };
+}
+
+/** A named create's 200: the workspace the box made, with the title it was given. `{ok:true}` alone is today's
+ *  create, which makes no claim about a name. A named answer this build cannot read is `named: false`: the create
+ *  DID land (the exchange completed and answered 2xx), only the title echo is lost, and the board shows the truth. */
+export type WorkspaceAddAnswer =
+  | { named: false }
+  | { named: true; id: string; slug: string; title: string };
+
+export function readWorkspaceAdd(raw: unknown): WorkspaceAddAnswer {
+  if (isRecord(raw) && raw.ok === true && typeof raw.id === 'string' && typeof raw.slug === 'string' && typeof raw.title === 'string') {
+    return { named: true, id: raw.id, slug: raw.slug, title: raw.title };
+  }
+  return { named: false };
+}
+
+/** What a workspace create can carry. `name` and `wrapper` ride the body only for a NON-BLANK name: a blank one is
+ *  today's create (the server ignores `wrapper` then, and an old server has no use for either), so the request is
+ *  byte for byte what it was before names existed. */
+export interface WorkspaceAddOptions { route?: RouteFields; name?: string; wrapper?: string }
+
+/** What a rename can ask of `POST /api/sessions/:id/title` (named workspaces S9): set the title to text the server
+ *  resolves (a plain title, a Linear ticket or a pasted link), or clear it, which hands the row back to the ai-title sweep. */
+export type WorkspaceTitleChange = { title: string } | { clear: true };
+
+/** A rename's 200: the title the box now holds, `null` after a clear. An answer this build cannot read is `'unreadable'`:
+ *  the exchange completed and answered 2xx, so the rename DID land and only the echo is lost; the board shows the truth. */
+export type WorkspaceTitleAnswer = { title: string | null } | 'unreadable';
+
+export function readWorkspaceTitle(raw: unknown): WorkspaceTitleAnswer {
+  if (isRecord(raw) && raw.ok === true && (raw.title === null || typeof raw.title === 'string')) return { title: raw.title };
+  return 'unreadable';
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -896,6 +991,32 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       return view === null ? 'unreadable' : { ok: true, outcome: answer.outcome, view };
     },
 
+    /** The Linear section's four calls (named workspaces S4b, design §5.1). Each answers the connection's state, or
+     *  `'unreadable'` for a 2xx whose body is not one (the exchange completed, so a write may have landed: the
+     *  section re-reads). A refusal rejects with its `ApiError`, whose body names the word (`bad-key`,
+     *  `key-rejected`, `unreachable`, `step-up-required`…); `checkLinear` is the one exception, resolving the state
+     *  a 409 `not-connected` carries, because that state IS its answer. The key is only ever in the PUT's body. */
+    linearConnection: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    connectLinear: async (key: string): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ key }),
+      })).json().catch(() => null)),
+    checkLinear: async (): Promise<LinearConnectionView | 'unreadable'> => {
+      try {
+        return linearViewOf(await (await request('/api/linear/connection/check', jsonInit())).json().catch(() => null));
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && isRecord(err.body) && err.body.error === 'not-connected') {
+          return readLinearConnection(err.body.connection) ?? 'unreadable';
+        }
+        throw err;
+      }
+    },
+    disconnectLinear: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
+
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster
     // field added in Stage 2a is exactly the kind of addition that lands in two
@@ -931,10 +1052,33 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
      *  is selected there, and an ordinary `+` (the chooser left on
      *  "Coordinator row") calls this with one argument, so its request body
-     *  is byte-identical to every caller that predates this parameter. */
-    workspaceAdd: (project: string, route?: RouteFields): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
-        route === undefined ? undefined : { route }),
+     *  is byte-identical to every caller that predates this parameter.
+     *
+     *  `name` (named workspaces S7) rides only when it is non-blank after a trim, and `wrapper` only beside a name:
+     *  the server ignores a wrapper without one, so sending it would be a field with no meaning. The 2xx is READ:
+     *  a named create answers `{ok, id, slug, title}`. */
+    workspaceAdd: async (project: string, opts: WorkspaceAddOptions = {}): Promise<WorkspaceAddAnswer> => {
+      const name = opts.name?.trim() ?? '';
+      const body: Record<string, unknown> = {
+        ...(opts.route === undefined ? {} : { route: opts.route }),
+        ...(name === '' ? {} : { name, ...(opts.wrapper === undefined ? {} : { wrapper: opts.wrapper }) }),
+      };
+      return readWorkspaceAdd(await postRead<unknown>(`/api/projects/${encodeURIComponent(project)}/workspaces`, null,
+        Object.keys(body).length === 0 ? undefined : body));
+    },
+    /** `POST /api/sessions/:id/title` — rename an EXISTING workspace: the title only, the slug and branch never change
+     *  (named workspaces S9). A title is sent trimmed; `{clear: true}` removes it. A refusal rejects with its `ApiError`
+     *  (`workspaceRenameWords.ts` reads the word); a 2xx is READ, `'unreadable'` when this build cannot. */
+    workspaceTitle: async (id: string, change: WorkspaceTitleChange): Promise<WorkspaceTitleAnswer> =>
+      readWorkspaceTitle(await postRead<unknown>(`${sid(id)}/title`, null,
+        'clear' in change ? { clear: true } : { title: change.title.trim() })),
+    /** `GET /api/linear/resolve?ref=` — what a typed or pasted name would become, with Linear's real title when it
+     *  can be asked (named workspaces S4/S7). Session-gated like every PWA read. A refusal (`bad-ref`,
+     *  `ref-too-long`, a signed-out 401) rejects with its `ApiError`; a 2xx this build cannot read is `'unreadable'`,
+     *  never a guess at a title. */
+    linearResolve: async (ref: string): Promise<ResolveRead | 'unreadable'> =>
+      readResolve(await (await request(`/api/linear/resolve?ref=${encodeURIComponent(ref)}`,
+        { headers: { accept: 'application/json' } })).json().catch(() => null)) ?? 'unreadable',
     /** `POST /api/projects/:project/pool` — tag the project into an account
      *  pool, or clear it with an explicit `null`.
      *

@@ -29,7 +29,7 @@ import {
   UNCONFIRMED_TEXT,
 } from '../src/screens/settings/UpdatesSection';
 import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
-import { UNARMED_EXPOSURE_TEXT, unarmedExposure } from '../src/screens/settings/SecuritySection';
+import { unarmedExposure } from '../src/screens/settings/SignInGateCard';
 import { renderSettings } from './settingsHost';
 import { App } from '../src/app';
 import { render } from '@testing-library/react';
@@ -56,10 +56,14 @@ import {
 } from '../src/screens/updates';
 import { releaseDate } from '../src/lib/format';
 import {
-  CATALOGUE_CHECK_MINUTES, CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, STALL_LEVEL_NOTE, STALL_WORDS, UPDATES_TEXT,
-  nodeRollbackNote, stallQuietBoundsText,
+  CATALOGUE_CHECK_MINUTES, CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, SIGN_IN_GATE_TEXT, STALL_LEVEL_NOTE, STALL_WORDS,
+  UPDATES_TEXT, nodeRollbackNote, stallQuietBoundsText,
 } from '../src/fleet/settingsText';
 import { ackNote } from '../src/fleet/updateAck';
+
+/** A card's purpose line (settings Task R2b2): the `Section`'s own paragraph, between its head and its card. */
+const isPurposeLine = (el: HTMLElement): boolean =>
+  el.tagName === 'P' && el.parentElement?.tagName === 'SECTION' && el.previousElementSibling?.querySelector('h3') != null;
 import { MOVE_REQUESTED_TEXT } from '../src/fleet/UpdateMoveSheet';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
@@ -1707,9 +1711,10 @@ describe('SettingsScreen — notifications: helpers', () => {
     expect(unarmedExposure({ mode: 'off' }, '203.0.113.7')).toBe(true);
   });
 
-  it('the banner sentence names the route it warns about and the three settings that arm the gate', () => {
-    expect(UNARMED_EXPOSURE_TEXT).toContain('POST /api/updates/apply');
-    for (const word of ['CCRC_AUTH=on', 'CCRC_RP_ID', 'CCRC_ORIGIN']) expect(UNARMED_EXPOSURE_TEXT).toContain(word);
+  // Settings Task R2b2 (spec §5.5): the remedy moved from the top-of-page paragraph into the Sign-in gate card; the
+  // banner keeps only the lead and a link there (settings-security.test.tsx holds both).
+  it('the gate card\'s remedy names the three settings that arm the gate', () => {
+    for (const word of ['CCRC_AUTH=on', 'CCRC_RP_ID', 'CCRC_ORIGIN']) expect(SIGN_IN_GATE_TEXT.remedy).toContain(word);
   });
 
   it('labels every NotifyMode, and nothing else', () => {
@@ -1894,7 +1899,12 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));   // independent of the update view
     renderSettings('updates');
-    const shown = await screen.findByText(UNARMED_EXPOSURE_TEXT);
+    const shown = await waitFor(() => {
+      const b = document.querySelector<HTMLElement>('[data-gate-banner]');
+      expect(b).not.toBeNull();
+      return b!;
+    });
+    expect(shown).toHaveTextContent(SIGN_IN_GATE_TEXT.exposedLead);
     expect(shown).toHaveClass('settings-unarmed');
     expect(shown).toHaveAttribute('role', 'alert');
     // Directly under the header: before the Updates section, not inside it.
@@ -1961,7 +1971,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockResolvedValue(t10View());
     renderSettings(null);
-    await screen.findByText(UNARMED_EXPOSURE_TEXT);
+    await waitFor(() => expect(document.querySelector('[data-gate-banner]')).not.toBeNull());
     const urls = f.mock.calls.map(([u]) => String(u));
     expect(urls.filter((u) => u === '/api/auth/status')).toHaveLength(1);
     expect(urls.some((u) => u.startsWith('/health'))).toBe(false);
@@ -2377,12 +2387,12 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LOADING state: the Automation page is Stall watch, then Temp root collector, each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Temp root collector, then Cleanup pause, each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Cleanup pause']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {
@@ -3222,7 +3232,16 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     for (const line of [
       UPDATES_TEXT.channelPurpose, UPDATES_TEXT.channelWhen, UPDATES_TEXT.autoPurpose, UPDATES_TEXT.autoWhen,
       UPDATES_TEXT.checkNowNote, UPDATES_TEXT.checkNowWhen, UPDATES_TEXT.nodesLead, CATALOGUE_EXPLAIN_TEXT,
-    ]) expect(within(region).getByText(line), line).toHaveClass('settings-note');
+    ]) expect(within(region).getByText(line), line).toBeInTheDocument();
+    // Settings Task R2b2 (D-5503): what a control does stays the secondary note; when you would use it is the card's
+    // tertiary when-line; the node lead is the Nodes card's purpose line.
+    for (const line of [UPDATES_TEXT.channelPurpose, UPDATES_TEXT.autoPurpose, UPDATES_TEXT.checkNowNote, CATALOGUE_EXPLAIN_TEXT]) {
+      expect(within(region).getByText(line), line).toHaveClass('settings-note');
+    }
+    for (const line of [UPDATES_TEXT.channelWhen, UPDATES_TEXT.autoWhen, UPDATES_TEXT.checkNowWhen]) {
+      expect(within(region).getByText(line), line).toHaveClass('settings-when');
+    }
+    expect(isPurposeLine(within(region).getByText(UPDATES_TEXT.nodesLead))).toBe(true);
   });
 
   it("the catalogue line's interval is the server's own CATALOGUE_POLL_INTERVAL_MS", () => {
@@ -3243,7 +3262,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     }));
     expect(within(region).getByRole('button', { name: "See what's new" })).toBeInTheDocument();
     expect(within(region).getByText(UPDATES_TEXT.whatsNewNote)).toHaveClass('settings-note');
-    expect(within(region).getByText(UPDATES_TEXT.whatsNewWhen)).toHaveClass('settings-note');
+    expect(within(region).getByText(UPDATES_TEXT.whatsNewWhen)).toHaveClass('settings-when');
   });
 
   it('a node row notes its Update and Roll back where each is offered', async () => {
@@ -3305,11 +3324,13 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
     renderSettings('notifications');
     const group = await screen.findByRole('group', { name: NOTIFICATIONS_TEXT.announceLegend });
-    const section = group.closest('section')!;
-    expect(within(section).getByText(NOTIFICATIONS_TEXT.announcePurpose)).toHaveClass('settings-note');
-    expect(within(section).getByText(NOTIFICATIONS_TEXT.announceWhen)).toHaveClass('settings-note');
-    expect(within(section).getByText(NOTIFICATIONS_TEXT.browserPurpose)).toHaveClass('settings-note');
-    expect(within(section).getByText(NOTIFICATIONS_TEXT.browserWhen)).toHaveClass('settings-note');
+    const page = screen.getByRole('region', { name: 'Notifications' });
+    // Settings Task R2b2: each is its card's purpose line, and each when-line is the card's tertiary step.
+    expect(isPurposeLine(within(page).getByText(NOTIFICATIONS_TEXT.announcePurpose))).toBe(true);
+    expect(within(group.closest('section')!).getByText(NOTIFICATIONS_TEXT.announcePurpose)).toBeInTheDocument();
+    expect(within(page).getByText(NOTIFICATIONS_TEXT.announceWhen)).toHaveClass('settings-when');
+    expect(isPurposeLine(within(page).getByText(NOTIFICATIONS_TEXT.browserPurpose))).toBe(true);
+    expect(within(page).getByText(NOTIFICATIONS_TEXT.browserWhen)).toHaveClass('settings-when');
   });
 
   // ── Stall watch (spec §5.4) ──
@@ -3338,7 +3359,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
 
   it('the level reads its purpose, its lead, and each option with its note as its description', async () => {
     const group = await swMount(swView());
-    expect(within(swSection()).getByText(STALL_WORDS.purpose)).toHaveClass('settings-note');
+    expect(isPurposeLine(within(swSection()).getByText(STALL_WORDS.purpose)), 'the card\'s purpose line').toBe(true);
     expect(within(group).getByText(STALL_WORDS.levelLead)).toHaveClass('settings-note');
     for (const level of STALL_LEVELS) {
       expect(swRadio(STALL_LEVEL_TEXT[level].label)).toHaveAccessibleDescription(STALL_LEVEL_NOTE[level]);
@@ -3489,7 +3510,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     const region = await mountUpdates(updatesView({ nodes: [t7Node()] }));
     const gate = await within(region).findByText(/^Auto-install needs every node to run a ccrc with the update gate\. Not yet: /);
     expect(gate.nextElementSibling).toHaveTextContent(UPDATES_TEXT.autoGateWhen);
-    expect(gate.nextElementSibling).toHaveClass('settings-note');
+    expect(gate.nextElementSibling).toHaveClass('settings-when');
     cleanup();
     const quiet = await mountUpdates(updatesView({ nodes: [t7Node({ caps: T7_GATED })] }));
     expect(within(quiet).queryByText(UPDATES_TEXT.autoGateWhen), 'no gate note, no when-line').toBeNull();

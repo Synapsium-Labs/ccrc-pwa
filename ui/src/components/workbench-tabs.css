@@ -1,0 +1,275 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workbench tabs — the desk's strip of open tabs, and the phone      *
+   *  header's switcher. Tokens only; dim by stepping ink, never fading. *
+   * ------------------------------------------------------------------ */
+
+  /* The strip: a page-ground band with one hairline below. Self-grounded, so
+     every ink inside is measured against a ground this sheet names. */
+  .wb-tabs {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    color: var(--ink-secondary);
+    background: var(--bg-page);
+    border-bottom: 1px solid var(--edge-subtle);
+  }
+
+  /* The tablist. It scrolls sideways with its bar hidden (the standard property
+     only — base.css's note: no `::-webkit-scrollbar` rule is left in the tree).
+     The scroll padding keeps `scrollIntoView` from parking the active tab under
+     the sticky Fleet tab and the start fade on the left, or the end fade on the
+     right. */
+  .wb-tabs-scroll {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    scroll-padding-inline: calc(var(--tap-min) + var(--sp-10)) var(--sp-10);
+  }
+
+  /* Each tab's `role="none"` wrapper: the tab button and its close control. */
+  .wb-tabs-item {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    min-width: 132px;
+    max-width: 220px;
+    border-right: 1px solid var(--edge-subtle);
+    color: var(--ink-secondary);
+    background: var(--bg-page);
+  }
+  @media (hover: hover) {
+    .wb-tabs-item:hover {
+      color: var(--ink-primary);
+      background: var(--bg-hover);
+    }
+  }
+  /* The active tab: the surface's own ground, continuous with the pane below,
+     at semibold, with ONE accent rail on its bottom edge. Three cues, none of
+     them a second accent colour. */
+  .wb-tabs-item[data-active='true'] {
+    color: var(--ink-primary);
+    background: var(--bg-surface);
+    font-weight: var(--weight-semibold);
+  }
+  .wb-tabs-item[data-active='true']::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    pointer-events: none;
+  }
+  /* The Fleet tab: caret only, one tap square wide, held at the left edge while
+     the strip scrolls under it. */
+  .wb-tabs-item[data-pinned='true'] {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: var(--tap-min);
+  }
+  /* A drag over a tab marks the side the drop will land on. */
+  .wb-tabs-item[data-drop='before'] {
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .wb-tabs-item[data-drop='after'] {
+    box-shadow: inset -2px 0 0 var(--accent);
+  }
+
+  /* The tab itself. Its floor is token arithmetic, not a skin selector: 44 in
+     Refined, 44 in Instrument under a coarse pointer, 32 in Instrument under a
+     fine one — the card's three heights from `--row-h` alone. */
+  .wb-tabs-tab {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    align-self: stretch;
+    min-height: min(var(--tap-min), var(--row-h));
+    padding: 0 var(--sp-1) 0 var(--sp-3);
+    font-size: var(--fs-ui);
+    line-height: 1;
+    color: inherit;
+    background: none;
+    border: 0;
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+  }
+  .wb-tabs-item[data-pinned='true'] .wb-tabs-tab {
+    justify-content: center;
+    padding: 0;
+  }
+  .wb-tabs-item .wb-tabs-caret {
+    font-family: var(--family-mono);
+    font-size: var(--fs-md);
+    line-height: 1;
+    color: var(--accent);
+  }
+  .wb-tabs-item .wb-tabs-lead {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    color: var(--ink-tertiary);
+  }
+  .wb-tabs-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wb-tabs-item .wb-tabs-tag {
+    flex: none;
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps-sm);
+    color: var(--ink-tertiary);
+  }
+
+  /* Close: pointer-only (the a11y departure in workbench-tabs.tsx). A tap square
+     by default — the `pointer: none` device keeps the floor — and the card's
+     24px only under a fine pointer. Shown on the active tab, on hover, and
+     always on touch. */
+  .wb-tabs-item .wb-tabs-close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    margin-right: var(--sp-1);
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    color: var(--ink-tertiary);
+    background: none;
+    cursor: pointer;
+    visibility: hidden;
+  }
+  @media (pointer: fine) {
+    .wb-tabs-item .wb-tabs-close {
+      width: 24px;
+      height: 24px;
+    }
+  }
+  .wb-tabs-item[data-active='true'] .wb-tabs-close {
+    visibility: visible;
+  }
+  @media (hover: hover) {
+    .wb-tabs-item:hover .wb-tabs-close {
+      visibility: visible;
+    }
+    .wb-tabs-item .wb-tabs-close:hover {
+      color: var(--ink-primary);
+      background: var(--bg-pressed);
+    }
+  }
+  @media (pointer: coarse) {
+    .wb-tabs-item .wb-tabs-close {
+      visibility: visible;
+    }
+  }
+
+  /* The cut edges, each only while something is cut there: a 40px fade into
+     the page ground. `end` is a flex sibling laid over the scroller's last
+     40px, before "all tabs"; `start` is laid over the scroller's first 40px,
+     just after the pinned Fleet tab when there is one (one tap square, its
+     hairline inside). No text and no `color`, so the contrast gate has nothing to
+     measure; the only gradients in the workbench. */
+  .wb-tabs-fade {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .wb-tabs-fade[data-edge='end'] {
+    flex: 0 0 var(--sp-10);
+    margin-left: calc(-1 * var(--sp-10));
+    background-image: linear-gradient(90deg, transparent, var(--bg-page));
+  }
+  .wb-tabs-fade[data-edge='start'] {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--sp-10);
+    background-image: linear-gradient(270deg, transparent, var(--bg-page));
+  }
+  .wb-tabs-fade[data-edge='start'][data-pinned='true'] {
+    left: var(--tap-min);
+  }
+
+  /* "All tabs": the open count and a down chevron, after the scroller. */
+  .wb-tabs .wb-tabs-all {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    min-width: var(--tap-min);
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-2);
+    border: 0;
+    border-left: 1px solid var(--edge-subtle);
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+    background: var(--bg-page);
+    cursor: pointer;
+  }
+  @media (pointer: fine) {
+    .wb-tabs .wb-tabs-all {
+      min-height: 0;
+    }
+  }
+  @media (hover: hover) {
+    .wb-tabs .wb-tabs-all:hover {
+      color: var(--ink-primary);
+      background: var(--bg-hover);
+    }
+  }
+
+  /* The phone header's switcher: the active tab's lead and title, and the open
+     count in a mono keycap-like box. One button; the app opens the list. */
+  .wb-tabs-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: var(--tap-min);
+    padding: 0;
+    border: 0;
+    text-align: left;
+    font-size: var(--fs-ui);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-primary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  .wb-tabs-switch .wb-tabs-count {
+    flex: none;
+    min-width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0 var(--sp-1);
+    border: 1px solid var(--edge-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--r-sm);
+    font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+  }
+}

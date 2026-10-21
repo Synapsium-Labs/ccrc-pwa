@@ -330,6 +330,15 @@ describe('Section (D-5102, D-5666)', () => {
     expect([...s.querySelectorAll('p')].filter((p) => p.textContent === '')).toEqual([]);
   });
 
+  it('the title is an h2 by default and an h3 at level 3, wearing the same classes and labelling the section', () => {
+    render(<><Section title="Two"><p>a</p></Section><Section level={3} scope="Whole fleet" title="Three"><p>b</p></Section></>);
+    const two = screen.getByRole('heading', { level: 2, name: 'Two' });
+    const three = screen.getByRole('heading', { level: 3, name: 'Three' });
+    expect(three.className).toBe(two.className);
+    expect(screen.getByRole('region', { name: 'Three' })).toContainElement(three);
+    expect([...three.parentElement!.children].map((c) => c.tagName)).toEqual(['H3', 'P']);
+  });
+
   it('D-5666: Refined lifts the scope above the title, Instrument sets it beside', () => {
     // Refined's place is the default, in tokens.css; Instrument's in skins.css's
     // bare block (every width, every pointer), and nowhere else.

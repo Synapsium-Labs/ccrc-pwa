@@ -104,9 +104,23 @@ export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHead
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';
 // `Prose` is the one composite that renders no tree of its own: what makes
-// prose prose is seventy-six rules, and the app still owns the react-markdown
-// map that decides which element each token becomes.
+// prose prose is rules (the seventy-six that moved, and the list markers
+// since), and the app still owns the react-markdown map that decides which
+// element each token becomes.
 export { Prose, PROSE } from './components/prose';
+// — the workbench shell —
+// The desk's five pieces: the session tree, the tab strip, the terminal pane
+// with its phone dock, the account fold and the status line. Each takes plain
+// data and callbacks; every sentence that states app behaviour (state words,
+// reasons, reset and build text) arrives as a prop, and the width of the
+// sidebar column belongs to the shell that places it.
+export { WorkbenchSidebar, type WorkbenchSidebarProps, type WorkbenchSidebarMode, type WorkbenchSection,
+  type WorkbenchSessionItem, type WorkbenchAgentItem, type WorkbenchAccountTag, type WorkbenchStatus } from './components/workbench-sidebar';
+export { WorkbenchTabs, nextAfterClose, type WorkbenchTabsProps, type WorkbenchTabItem, type WorkbenchTabLead } from './components/workbench-tabs';
+export { WorkbenchTerminal, type WorkbenchTerminalProps, type WorkbenchTerminalView, type WorkbenchKey } from './components/workbench-terminal';
+export { WorkbenchAccountRow, hottestWindows, type WorkbenchAccountRowProps, type WorkbenchAccountItem,
+  type WorkbenchUsageWindow } from './components/workbench-account-row';
+export { WorkbenchStatusBar, type WorkbenchStatusBarProps } from './components/workbench-status-bar';
 
 // — themes —
 // The palettes themselves live in styles/tokens.css and are DISCOVERED by the

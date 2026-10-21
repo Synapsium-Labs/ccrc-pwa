@@ -162,6 +162,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the temp-root collector granted without its confirmation token',
     codes: ['TS2322'],
   },
+  // NAMED WORKSPACES S9, g11's and g12's shape for the rename verb: enrolled on `--session`, its whole argument surface,
+  // so the narrowed grant is a compile error.
+  'g21-ws-title-without-session.ts': {
+    what: 'the workspace rename verb granted without --session',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -384,6 +390,15 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
       .toThrow(/only grantable with '--expect'/);
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  // NAMED WORKSPACES S9: `ws-title` is enrolled for its ARGUMENT SURFACE (`route`'s reason), so the audit refuses the bare
+  // verb, the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a ws-title with no --session, the wrong flag, or the flag out of place (named workspaces S9)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-title']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--title']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--clear', '--session']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--session']]))).not.toThrow();
   });
 
   // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).

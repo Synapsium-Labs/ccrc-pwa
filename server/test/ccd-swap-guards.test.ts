@@ -24,6 +24,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
@@ -494,5 +495,229 @@ describe('a woken row takes no affinity swap for SWAP_COOLDOWN (D-5242)', () => 
     arrange(null);
     decide();
     expect(detached()).toHaveLength(1);
+  });
+});
+
+// ── an affinity move waits for background work (`_swap_bg_hold`) ─────────────
+// Measured on a fleet box: an auto-home move restarted a session that sat idle at its prompt while two
+// background subagents ran, and the restart killed both. None of the gate's four checks (no `esc to interrupt`,
+// a prompt, live `idle`, SWAP_CEIL_QUIET) sees background work; the turn marker the hook writes at every Stop
+// does (`bg`). The hold is the gate's last check, so it is the ONE gate both callers share: the tick and the
+// act's re-run. The rescue arm never reaches the gate.
+describe('an affinity move waits while the turn marker reports background work', () => {
+  const MAX_S = 7200;
+  const ago = (s: number): number => Date.now() - s * 1000;
+  interface Mark { state?: string; sessionId?: string; stopAt?: number | null; at?: number; bg?: number | string; kinds?: string }
+  /** The hook's line, in the hook's key order (`TURN_MARK_PROGRAM`), compact like `jq -c`. */
+  const markerLine = (m: Mark = {}): string => {
+    const at = m.at ?? ago(120);
+    return JSON.stringify({
+      v: 1, sessionId: m.sessionId ?? UUID, state: m.state ?? 'done', event: 'Stop', at, turnAt: null,
+      stopAt: m.stopAt === undefined ? at : m.stopAt, bg: m.bg ?? 2, bgKinds: m.kinds ?? 'subagent', bgIds: 'a1,a2',
+      err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0,
+    });
+  };
+  const marker = (m: Mark = {}): void => { fs.writeFileSync(regPath('turn.json'), `${markerLine(m)}\n`); };
+  const aged = (p: string, s: number): void => { const t = new Date(ago(s)); fs.utimesSync(p, t, t); };
+  const arrange = (m: Mark | null = {}): void => {
+    seed('claude'); pane('❯ '); live('claude', 'idle');
+    if (m !== null) marker(m);
+  };
+  const deferLines = (): string[] => swapLog().split('\n').filter((l) => /swap-defer /.test(l));
+  const moved = (): boolean => detached().length === 1;
+
+  it('control: no marker at all (an older hook) dispatches as before', () => {
+    arrange(null);
+    decide();
+    expect(moved()).toBe(true);
+    expect(deferLines()).toEqual([]);
+  });
+
+  it('control: bg 0 dispatches', () => {
+    arrange({ bg: 0, kinds: '' });
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('bg > 0 within the bound: nothing dispatched, nothing stamped, one line says why', () => {
+    arrange({ bg: 2 });
+    decide();
+    expect(detached()).toEqual([]);
+    expect(h.reg(ID, 'lastswap'), 'a deferred tick stamps no lastswap').toBeNull();
+    expect(deferLines()).toHaveLength(1);
+    expect(deferLines()[0]).toContain(`swap-defer ${ID}: background work (bg=2 kinds=subagent)`);
+  });
+
+  it('reads the line the hook\'s own jq program writes, not just this file\'s copy of its shape', () => {
+    const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
+    const program = /^TURN_MARK_PROGRAM='([^']*)'$/m.exec(hook)?.[1];
+    expect(program, 'the hook still carries its marker program in one single-quoted block').toBeTruthy();
+    const at = String(ago(90));
+    const written = execFileSync('jq', ['-cn', '--arg', 'prev', '', '--arg', 'kind', 'done', '--arg', 'sid', UUID,
+      '--arg', 'ev', 'Stop', '--argjson', 'at', at, '--argjson', 'bg', '2', '--argjson', 'crons', '0',
+      '--arg', 'bgk', 'subagent,shell', '--arg', 'bgi', 'a1,a2', '--arg', 'err', '', program!], { encoding: 'utf8' });
+    arrange(null);
+    fs.writeFileSync(regPath('turn.json'), written);
+    decide();
+    expect(detached()).toEqual([]);
+    expect(deferLines()[0]).toContain('background work (bg=2 kinds=shell,subagent)');
+  });
+
+  it('twelve more ticks of the same Stop add no line: one line per episode', () => {
+    arrange({ bg: 2 });
+    for (let i = 0; i < 13; i++) decide();
+    expect(deferLines()).toHaveLength(1);
+    expect(detached()).toEqual([]);
+  });
+
+  it('a later Stop with work still running is a new episode and says so once', () => {
+    arrange({ bg: 2, at: ago(300) });
+    decide(); decide();
+    marker({ bg: 1, at: ago(60), kinds: 'shell' });
+    decide(); decide();
+    expect(deferLines()).toHaveLength(2);
+    expect(deferLines()[1]).toContain('bg=1 kinds=shell');
+  });
+
+  it('the work ended: the next tick dispatches and the episode field is gone', () => {
+    arrange({ bg: 2 });
+    decide();
+    expect(h.reg(ID, 'swapdefer')).not.toBeNull();
+    marker({ bg: 0, kinds: '', at: ago(5) });
+    decide();
+    expect(moved()).toBe(true);
+    expect(h.reg(ID, 'swapdefer')).toBeNull();
+    expect(swapLog()).not.toContain('swap-defer-end');
+  });
+
+  it('past SWAP_BG_HOLD_MAX the hold lets go, and says so once if it had spoken', () => {
+    arrange({ bg: 2, at: ago(MAX_S - 100) });
+    decide();
+    expect(detached()).toEqual([]);
+    marker({ bg: 2, at: ago(MAX_S + 1) });   // the SAME work, now older than the bound
+    fs.writeFileSync(regPath('swapdefer'), `bg:${ago(MAX_S - 100)}`);
+    decide();
+    expect(moved()).toBe(true);
+    expect(swapLog().match(/swap-defer-end /g) ?? []).toHaveLength(1);
+    expect(h.reg(ID, 'swapdefer')).toBeNull();
+  });
+
+  it('a Stop older than the bound dispatches at once, with no line (today\'s behaviour)', () => {
+    arrange({ bg: 5, at: ago(MAX_S + 60) });
+    decide();
+    expect(moved()).toBe(true);
+    expect(swapLog()).not.toMatch(/swap-defer/);
+  });
+
+  it('a stamp far in the future cannot pin the session: it reads as unmeasured and does not hold', () => {
+    arrange({ bg: 2, at: Date.now() + 10 * 3600 * 1000 });
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('a marker naming another conversation\'s session id does not hold', () => {
+    arrange({ bg: 2, sessionId: 'b0000000-0000-4000-8000-000000000002' });
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('a row with no uuid cannot match the marker: it does not hold', () => {
+    arrange({ bg: 2 });
+    fs.rmSync(regPath('uuid'));
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('bg -1 (a Stop with no list, or a /clear) holds, bounded: from stopAt, else from at', () => {
+    arrange({ bg: -1 });
+    decide();
+    expect(detached()).toEqual([]);
+    expect(deferLines()[0]).toContain('bg=unknown');
+    marker({ bg: -1, stopAt: null, at: ago(60) });   // what `clear` writes
+    decide();
+    expect(detached()).toEqual([]);
+    marker({ bg: -1, stopAt: null, at: ago(MAX_S + 60) });
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('a running or failed turn is not background work, whatever bg an earlier Stop left', () => {
+    arrange({ state: 'working', bg: 3 });
+    decide();
+    expect(moved()).toBe(true);
+    fs.rmSync(regPath('lastswap'), { force: true }); fs.rmSync(path.join(h.home, 'detached'));
+    marker({ state: 'failed', bg: 3 });
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('a malformed marker holds while the file is recent, and lets go once the file is older than the bound', () => {
+    arrange(null);
+    fs.writeFileSync(regPath('turn.json'), 'not the hook\'s line\n');
+    decide();
+    expect(detached()).toEqual([]);
+    expect(deferLines()[0]).toContain('the turn marker is malformed');
+    aged(regPath('turn.json'), MAX_S + 60);
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('a `done` line with no integer bg is malformed, not "nothing running"', () => {
+    arrange(null);
+    fs.writeFileSync(regPath('turn.json'), `${markerLine({ bg: 2 }).replace('"bg":2', '"bg":"x"')}\n`);
+    decide();
+    expect(detached()).toEqual([]);
+    expect(deferLines()[0]).toContain('malformed');
+  });
+
+  it('an unreadable marker (a directory in its place) holds, bounded the same way', () => {
+    arrange(null);
+    fs.mkdirSync(regPath('turn.json'));
+    decide();
+    expect(detached()).toEqual([]);
+    expect(deferLines()[0]).toContain('the turn marker is unreadable');
+    aged(regPath('turn.json'), MAX_S + 60);
+    decide();
+    expect(moved()).toBe(true);
+  });
+
+  it('the act\'s re-run defers too: work that started in the jitter re-queues the move', () => {
+    arrange({ bg: 0, kinds: '' });
+    const prev = String(nowS() - 5000);
+    fs.writeFileSync(regPath('lastswap'), prev);
+    decide();
+    expect(moved(), 'the control: the decision dispatched').toBe(true);
+    marker({ bg: 2, at: ago(2) });
+    expect(act()).toContain('rc=0');
+    expect(swapLog()).toContain(`requeue ${ID}: busy after jitter`);
+    expect(deferLines()).toHaveLength(1);
+    expect(h.reg(ID, 'lastswap'), 'lastswap restored to the decision\'s prior value').toBe(prev);
+    expect(stopped(), 'nothing stopped').toBe(false);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('the act with the work done proceeds', () => {
+    arrange({ bg: 0, kinds: '' });
+    decide();
+    act();
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+  });
+
+  it('a hard-blocked session is still rescued with background work standing', () => {
+    // The mutant this kills is the hold placed ahead of the rescue arm: a session on a rate-limited account can
+    // not work, so the background work it holds cannot either, and keeping it there strands it.
+    seed('gpt');
+    pane('API Error: 429 Too Many Requests');
+    marker({ bg: 3 });
+    decide();
+    expect(moved()).toBe(true);
+    expect(swapLog()).toContain(`auto-rescue ${ID}: gpt (blocked) -> claude-d`);
+    expect(deferLines()).toEqual([]);
+  });
+
+  it('a manual swap is not held: the operator\'s hand is not the affinity arm', () => {
+    arrange({ bg: 2 });
+    expect(manual(`${ID} claude-d`).rc).toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
   });
 });
