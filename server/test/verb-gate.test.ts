@@ -39,7 +39,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD_ARGV } from '../src/ccdargv.js';
+import { CCD_ARGV, CCD_CAN } from '../src/ccdargv.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -509,5 +509,40 @@ describe('every wsCollectAudit( scope asks the collector’s capability too (spe
   it('each holds capSupported(…, COLLECT_CAP) and verbSupported( in its own scope', () => {
     expect(sites.filter((s) => !COLLECT_GATE.test(s.src)).map(show)).toEqual([]);
     expect(sites.filter((s) => !AUDIT_VERB_GATE.test(s.src)).map(show)).toEqual([]);
+  });
+});
+
+// D-5866 (Task C1k; ARCH-71 #806). `CCD_CAN` is the one table `ccdCan(state, row)` answers from, keyed by `CCD_ARGV`
+// row name. These rows hold it to this file's own vocabulary, so the table and the scan above cannot disagree.
+describe('CCD_CAN agrees with the verb-gate vocabulary (D-5866)', () => {
+  const rows = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];
+
+  it('every CCD_ARGV row has a CCD_CAN entry, and CCD_CAN names no other row', () => {
+    // The type-level half: `CCD_CAN satisfies Record<keyof typeof CCD_ARGV, CanRow>` in `ccdargv.ts`, so a row with
+    // no entry is a compile error there too. This is the runtime half.
+    expect(Object.keys(CCD_CAN).sort()).toEqual([...rows].sort());
+  });
+
+  it('every CAP_GATED_VERBS verb\'s CCD_CAN rows default to refuse', () => {
+    const wrong = rows.filter((r) => CAP_GATED_VERBS.has(VERB_OF[r]!))
+      .filter((r) => { const c = CCD_CAN[r]; return c === 'none' || c.default !== 'refuse'; });
+    expect(wrong).toEqual([]);
+    expect(rows.filter((r) => CAP_GATED_VERBS.has(VERB_OF[r]!)).length, 'CONTROL: the filter found rows').toBeGreaterThan(0);
+  });
+
+  it('a row is ungated (\'none\') exactly when its verb is in UNGATED_BY_DECISION', () => {
+    expect(rows.filter((r) => (CCD_CAN[r] === 'none') !== UNGATED_BY_DECISION.has(VERB_OF[r]!))).toEqual([]);
+  });
+
+  it('a permitting row is answered by its own verb name, spelled as the builder spells it', () => {
+    // A `permit` row's token is the verb `ccd caps` lists (`verbSupported`'s question). Held equal to the builder's
+    // first argv word here, so the verb is not a second, drifting spelling.
+    const drift = rows.filter((r) => { const c = CCD_CAN[r]; return c !== 'none' && c.default === 'permit' && c.token !== VERB_OF[r]; });
+    expect(drift).toEqual([]);
+  });
+
+  it('a refusing row is answered by a capability token, never by its bare verb name', () => {
+    const bare = rows.filter((r) => { const c = CCD_CAN[r]; return c !== 'none' && c.default === 'refuse' && c.token === VERB_OF[r]; });
+    expect(bare).toEqual([]);
   });
 });
