@@ -64,8 +64,8 @@ export function AppBar(): ReactNode {
         <Door {...commandDoor('go-settings')} glyph={<Icon name="settings" />} aria-label="Settings" className="ref-bar-door">
           <span className="sr-only">Settings</span>
         </Door>
-        <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new">
-          <span aria-hidden="true">+</span> New session
+        <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new gap-1">
+          <span aria-hidden="true">+</span>New session
         </Button>
       </div>
     </div>

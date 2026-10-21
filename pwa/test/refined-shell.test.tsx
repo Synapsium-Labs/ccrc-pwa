@@ -190,7 +190,8 @@ describe('the app bar (W2 Task S4b)', () => {
         expect(bar().contains(readouts[0]!), 'the gauges are the bar\'s').toBe(true);
         expect(fleet.contains(slot), 'the banners span the frame, not the sidebar').toBe(false);
         expect(slot.closest('.shell-banners')).not.toBeNull();
-        // The sidebar's head keeps its readouts and gives its doors to the bar.
+        // The sidebar's head keeps its readouts and gives its wordmark and doors to the bar: one identity mark.
+        expect(document.querySelectorAll('[data-wordmark], .wordmark')).toHaveLength(1);
         expect(within(fleet).queryByRole('button', { name: /^Mail —/ })).toBeNull();
         expect(within(fleet).queryByRole('button', { name: /^Settings/ })).toBeNull();
       } else {

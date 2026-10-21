@@ -45,7 +45,7 @@ export function FleetScreen({
   selectedId = null,
   showAccounts = true,
   banners = true,
-  headDoors = true,
+  headChrome = true,
   epoch,
   observedEpoch,
 }: {
@@ -57,8 +57,9 @@ export function FleetScreen({
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
   banners?: boolean;
-  /** False where the skin's bar holds the head's doors (Refined at a desk, W2 Task S4b); the readouts stay. */
-  headDoors?: boolean;
+  /** False where the skin's bar holds the head's wordmark and doors (Refined at a desk, W2 Task S4b); the readouts
+   *  stay. */
+  headChrome?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -259,7 +260,7 @@ export function FleetScreen({
         countLine={sessions.length > 0 ? countLine : null}
         poolLag={poolLag}
         unreadMail={unreadMail}
-        doors={headDoors}
+        chrome={headChrome}
       />
       {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
           (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}

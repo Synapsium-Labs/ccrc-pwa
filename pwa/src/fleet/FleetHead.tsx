@@ -19,19 +19,20 @@ import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
 export function FleetHead(
-  { countLine, poolLag, unreadMail, doors = true }: {
+  { countLine, poolLag, unreadMail, chrome = true }: {
     /** The "N sessions" readout, or `null` on an empty fleet. */
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
     unreadMail: number;
-    /** False where the skin's bar holds the doors (Refined at a desk, W2 Task S4b): the readouts stay here. */
-    doors?: boolean;
+    /** The wordmark and the doors. False where the skin's bar holds them (Refined at a desk, W2 Task S4b): the
+     *  readouts stay here, and the identity mark is drawn once. */
+    chrome?: boolean;
   },
 ): ReactNode {
   return (
     <header className="fleet-head">
-        <span className="wordmark">ccrc</span>
+        {chrome && <span className="wordmark">ccrc</span>}
         <div className="fleet-head-right">
           {countLine !== null && <span className="fleet-count">{countLine}</span>}
           {poolLag !== null && (
@@ -39,7 +40,7 @@ export function FleetHead(
               {poolLag}
             </span>
           )}
-          {doors && (
+          {chrome && (
             <>
               {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a
                   word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings: the Docs index
