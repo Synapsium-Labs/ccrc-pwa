@@ -123,7 +123,7 @@ async function world(opts: WorldOptions = {}): Promise<World> {
     now: () => Date.now(), randomUUID: () => randomUUID(), ...(opts.faults.onEdge === undefined ? {} : { onEdge: opts.faults.onEdge }),
   });
   // `stop` is what `buildServer` calls when the app closes.
-  const standIn = { stop: () => undefined, ...((opts.faults.watcher?.(durable) ?? { delegationApplier: () => Promise.resolve(durable) }) as object) } as unknown as FleetWatcher;
+  const standIn = { stop: () => undefined, serverCapsSettled: async () => {}, ...((opts.faults.watcher?.(durable) ?? { delegationApplier: () => Promise.resolve(durable) }) as object) } as unknown as FleetWatcher;
   const app = await buildServer(deps, bus, standIn);
   closers.push(() => app.close(), () => durable.close());
   return { home, dir, app, coord, db, durable, watcher: null };

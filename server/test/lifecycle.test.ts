@@ -89,7 +89,7 @@ async function makeApp(
     // unconditionally, so a watcher stub missing either throws inside the
     // route rather than answering `unmeasured`. Empty map: no test in this
     // file measures a repo, only that the key is present and defaulted.
-    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {} } as never)
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {}, serverCapsSettled: async () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),

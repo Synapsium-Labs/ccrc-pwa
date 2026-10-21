@@ -123,6 +123,20 @@ describe('GET /api/sessions/:id/pr', () => {
     await a.close();
   });
 
+  it('answers unknown/cut-short when the runner killed the read', async () => {
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => {
+      calls.push(args);
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+    };
+    const a = await buildServer(testDeps(seedWorkspace(), run));
+    const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'cut-short' });
+    await a.close();
+  });
+
   it('passes ccd\'s own answer object through, timeout and all', async () => {
     const { app: a } = await app('{"phase":"unknown","reason":"timeout"}');
     expect((await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' })).json().pr.reason)

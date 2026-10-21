@@ -1,7 +1,7 @@
 // `update-branch` is ABSENT from executable source (landing-order spec
 // 2026-09-23 §5.1, "Pins"). GitHub's update-branch pushes a merge of main onto
 // a PR's head from the REMOTE side: it restarts CI, it is not a clean-merge
-// proof anyone measured, and it breaks the workspace↔PR binding (`is_ours`
+// proof anyone measured, and it breaks the workspace↔PR binding (`ours_of`
 // binds a PR by ancestry from the workspace's LOCAL tip, so a remote-made
 // descendant rebinds the sweep to an older PR and the close refuses
 // `pr-regressed` — run 47, 2026-09-16). 183 of them landed in one 55.7-hour
