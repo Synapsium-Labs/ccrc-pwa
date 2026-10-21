@@ -1,61 +1,93 @@
 // Settings › Appearance (settings spec §3.3, §5.2; D-5503): one card (scope "This device") holding Layout's
-// `SkinFieldset` and its fonts line, then Theme's rows. This device's choices, so it reads nothing from the frame's
-// view. The page's `<h2>` is the frame's; the card's title is an `<h3>`.
-import type { ReactNode } from 'react';
-import { SYSTEM, Section, THEMES } from '@ccrc/ui';
-import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from '../AppearanceRow';
+// `SkinFieldset` and its fonts line, then Theme as a preview grid (settings Task R2e). This device's choices, so it
+// reads nothing from the frame's view. The page's `<h2>` is the frame's; the card's title is an `<h3>`.
+//
+// THE GRID (spec §5.2). Thirteen cards, `THEME_CHOICES`' order: Follow the system, then the eight dark and four light
+// palettes. Each palette card carries `data-theme`, so it is drawn IN the palette it names: tokens.css's blocks are
+// plain attribute selectors and resolve on any element, so a card cannot show a hand-copied approximation. Phosphor &
+// Ink is `:root` and answers to no attribute, so its card stamps none; Follow the system is not a palette and stamps
+// none either (both draw the page's own palette; see the PR's departure note). Each card is a `Radio` (the label is
+// the 44px target; its input is the group's one tab stop), its note in the card's `title` and, on a phone, under the
+// grid for the checked card only; a wide column shows every card's note (settings.css's container query).
+//
+// ONE RADIO GROUP, AND THE KEYS ARE OURS. `role="radiogroup"` names the set "Theme". The arrow keys move the choice
+// here, and `preventDefault` keeps the browser's own radio arrowing from moving it a second time: one press is one
+// `setTheme`, one storage write. The checked card is `useThemeChoice()`, the choice in force as the boot read it from
+// storage or `setTheme` last made it (D-5572), never a copy of the last tap.
+import { useId, type KeyboardEvent, type ReactNode } from 'react';
+import { PHOSPHOR, RADIO_LEGEND, Radio, SYSTEM, Section } from '@ccrc/ui';
+import { THEME_CHOICES } from '../AppearanceRow';
 import { SkinFieldset } from '../SkinFieldset';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
-// `dayClock` and `elapsedWords` come THROUGH the update plane's reading
-// surface, which is where the twenty wire-row-to-sentence helpers moved: the
-// box-token card landed on main while that move was happening on this branch,
-// and it reads two of the same clocks.
+import { doorMark } from '../../command/door';
 import { setTheme, useThemeChoice } from '../../lib/theme';
-// The update plane's reading surface moved to a file of its own; this screen
-// composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
-// `NodeItem` is their consumer — see that file's header.
 import '../../fleet/fleet.css';
+import './settings.css';
 
+const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
-// The row the Theme fieldset draws moved to `AppearanceRow.tsx` (D-5458): the
-// Layout fieldset draws it too, and two copies of its markup are what the
-// markup census refuses.
+function ThemeGrid(): ReactNode {
+  const current = useThemeChoice();
+  const legend = useId();
+  const at = Math.max(0, THEME_CHOICES.findIndex((c) => c.id === current));
+  const checked = THEME_CHOICES[at]!;
 
-/** Not a palette, and deliberately not in `THEMES`: the generator writes that
- *  list and `themes:check` rules on it. This is the row that says "whichever
- *  of those two the phone is in". */
-const FOLLOW_SYSTEM = {
-  id: SYSTEM,
-  label: 'Follow system',
-  note: 'Phosphor & Ink after dark, Phosphor Daylight otherwise.',
-};
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    const step = STEP[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    const n = THEME_CHOICES.length;
+    const next = (at + step + n) % n;
+    setTheme(THEME_CHOICES[next]!.id);
+    e.currentTarget.querySelectorAll<HTMLInputElement>('input[type="radio"]')[next]?.focus();
+  };
+
+  return (
+    <div className="settings-palettes-wrap" {...doorMark('switch-theme')}>
+      <p id={legend} className={RADIO_LEGEND}>Theme</p>
+      <div role="radiogroup" aria-labelledby={legend} className="settings-palettes" onKeyDown={onKeyDown}>
+        {THEME_CHOICES.map((c) => {
+          const active = c.id === checked.id;
+          const stamp = c.id === SYSTEM || c.id === PHOSPHOR ? {} : { 'data-theme': c.id };
+          return (
+            <span key={c.id} className="settings-palette" data-active={active} title={c.note} {...stamp}>
+              <Radio
+                className="settings-palette-hit"
+                name="settings-theme"
+                value={c.id}
+                checked={active}
+                tabIndex={active ? 0 : -1}
+                onChange={() => setTheme(c.id)}
+                bare
+              >
+                <span className="settings-palette-chips" aria-hidden="true">
+                  <i className="settings-palette-chip-accent" />
+                  <i className="settings-palette-chip-attention" />
+                  <i className="settings-palette-chip-dead" />
+                </span>
+                <span className="settings-palette-text">
+                  <span className="settings-palette-name">{c.label}</span>
+                  <span className="settings-palette-note">{c.note}</span>
+                </span>
+                {active && <span className="settings-palette-check" aria-hidden="true">✓</span>}
+              </Radio>
+            </span>
+          );
+        })}
+      </div>
+      <p className="settings-note settings-palette-current">{checked.note}</p>
+    </div>
+  );
+}
 
 /** The Appearance page's body (the heading is the frame's `<h2>`). Exported for its tests: it reads no poll, so a test
  *  of a radio group needs no control plane. */
 export function AppearanceSection(): ReactNode {
-  // The choice in force, as `initTheme` read it at boot or `setTheme` last
-  // made it — here or in the palette's "Switch theme…" — so the control opens
-  // on what is actually applied and never keeps a stale row (D-5572).
-  const current = useThemeChoice();
-  const pick = (id: string): void => { setTheme(id); };
-
-  const dark = THEMES.filter((t) => t.mode === 'dark');
-  const light = THEMES.filter((t) => t.mode === 'light');
-
   const card = SETTINGS_CARDS.appearance.look;
   return (
     <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       <SkinFieldset />
-      <AppearanceFieldset legend="Theme" command="switch-theme">
-        <AppearanceRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} group="settings-theme" swatch={false} />
-        {/* Grouped by how the palette reads, because that is the first thing
-            anyone is choosing between — and the ask was light AND dark, not a
-            dark list with one light apology. */}
-        <AppearanceGroup>Dark</AppearanceGroup>
-        {dark.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
-        <AppearanceGroup>Light</AppearanceGroup>
-        {light.map((t) => <AppearanceRow key={t.id} choice={t} current={current} onPick={pick} group="settings-theme" />)}
-      </AppearanceFieldset>
+      <ThemeGrid />
     </Section>
   );
 }

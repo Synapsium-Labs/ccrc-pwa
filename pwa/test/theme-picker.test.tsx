@@ -95,9 +95,9 @@ describe('the Appearance control', () => {
   // updates poll a radio-group test has no business needing.
   it('offers every palette the app can render, plus Follow system', () => {
     render(<AppearanceSection />);
-    // Scoped to the Theme group: Appearance also holds the Layout picker
+    // Scoped to the Theme grid: Appearance also holds the Layout picker
     // (skin-picker.test.tsx), whose radios are not palettes.
-    expect(within(screen.getByRole('group', { name: 'Theme' })).getAllByRole('radio')).toHaveLength(THEMES.length + 1);
+    expect(within(screen.getByRole('radiogroup', { name: 'Theme' })).getAllByRole('radio')).toHaveLength(THEMES.length + 1);
     // Anchored: each row's accessible name is "<label> <note>", and the
     // Follow-system note names both Phosphor palettes — so an unanchored
     // match finds two radios and the ambiguity is the test's, not the UI's.
@@ -118,41 +118,8 @@ describe('the Appearance control', () => {
     render(<AppearanceSection />);
     expect((screen.getByRole('radio', { name: /^Tokyo Night/ }) as HTMLInputElement).checked).toBe(true);
   });
-
-  it('groups dark and light, so the first choice anyone makes is visible', () => {
-    render(<AppearanceSection />);
-    expect(screen.getByText('Dark')).toBeInTheDocument();
-    expect(screen.getByText('Light')).toBeInTheDocument();
-  });
-
-  it('each row previews its OWN palette, by stamping data-theme on the swatch', () => {
-    // The swatches are the palette, not a hand-copied approximation of it:
-    // tokens.css's blocks are plain attribute selectors, so they resolve on any
-    // element. A row therefore cannot lie about its colours. Phosphor is the
-    // one row that stamps nothing — it is :root.
-    render(<AppearanceSection />);
-    const swatches = [...document.querySelectorAll('.settings-theme-swatch')];
-    expect(swatches.length).toBe(THEMES.length);
-    expect(swatches.filter((s) => s.getAttribute('data-theme') === 'nord')).toHaveLength(1);
-    expect(swatches.filter((s) => !s.hasAttribute('data-theme'))).toHaveLength(1);
-  });
-
-  it('each swatch sits beside its own name, not at the far edge of the row', () => {
-    // As the row's last item behind a `flex: 1` body, the swatch rendered at
-    // the section's right edge — measured ~1400px from its name at a 1920px
-    // window. It is the name's preview, so it shares the name's line: the
-    // name's NEXT SIBLING, inside the one head, at every width.
-    render(<AppearanceSection />);
-    const swatches = [...document.querySelectorAll('.settings-theme-swatch')];
-    expect(swatches.length).toBe(THEMES.length);
-    for (const sw of swatches) {
-      const name = sw.previousElementSibling;
-      expect(name?.classList.contains('settings-theme-name')).toBe(true);
-      expect(sw.parentElement?.classList.contains('settings-theme-head')).toBe(true);
-      // and the head is inside the body the row's flex gives the width to
-      expect(sw.parentElement?.parentElement?.classList.contains('settings-theme-body')).toBe(true);
-    }
-  });
+  // The grid's own shape (13 cards, each stamped with its palette, the arrow keys, the check glyph) is
+  // settings-appearance.test.tsx's (settings Task R2e).
 });
 
 // D-5572: the palette's "Switch theme…" (command/commands.ts) calls setTheme
@@ -161,7 +128,7 @@ describe('the Appearance control', () => {
 // mount, so the checked row is never stale and can be picked straight back.
 describe('the Theme picker follows a choice made anywhere', () => {
   const radio = (name: RegExp): HTMLInputElement =>
-    within(screen.getByRole('group', { name: 'Theme' })).getByRole('radio', { name }) as HTMLInputElement;
+    within(screen.getByRole('radiogroup', { name: 'Theme' })).getByRole('radio', { name }) as HTMLInputElement;
 
   /** Run "Switch theme…" → <title> as the palette does, through the real registry. */
   const viaPalette = (title: string): void => {
@@ -198,7 +165,7 @@ describe('the Theme picker follows a choice made anywhere', () => {
     const first = render(<AppearanceSection />);
     const second = render(<AppearanceSection />);
     const nord = (r: typeof first): HTMLInputElement =>
-      within(within(r.container).getByRole('group', { name: 'Theme' })).getByRole('radio', { name: /^Nord/ }) as HTMLInputElement;
+      within(within(r.container).getByRole('radiogroup', { name: 'Theme' })).getByRole('radio', { name: /^Nord/ }) as HTMLInputElement;
     fireEvent.click(nord(first));
     expect(nord(second).checked).toBe(true);
   });

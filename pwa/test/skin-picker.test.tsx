@@ -28,7 +28,7 @@ describe('the Layout picker', () => {
     const names = within(group).getAllByRole('radio').map((r) => (r as HTMLInputElement).value);
     expect(names).toEqual([AUTO, ...SKINS.map((s) => s.id)]);
     // A layout is not a palette: no row previews one (data-theme="refined" is no palette).
-    expect(group.querySelector('.settings-theme-swatch')).toBeNull();
+    expect(group.querySelector('[data-theme]')).toBeNull();
     for (const s of SKINS) {
       const label = s.preview ? `${s.label} (preview)` : s.label;
       expect(within(group).getByText(label)).toBeInTheDocument();
@@ -105,7 +105,7 @@ describe('the Layout picker', () => {
   it('is a radio group of its own, never joined to the theme rows', () => {
     render(<AppearanceSection />);
     const layout = within(screen.getByRole('group', { name: 'Layout' })).getAllByRole('radio') as HTMLInputElement[];
-    const theme = within(screen.getByRole('group', { name: 'Theme' })).getAllByRole('radio') as HTMLInputElement[];
+    const theme = within(screen.getByRole('radiogroup', { name: 'Theme' })).getAllByRole('radio') as HTMLInputElement[];
     const layoutNames = new Set(layout.map((r) => r.name));
     expect(layoutNames.size).toBe(1);
     for (const r of theme) expect(layoutNames.has(r.name)).toBe(false);
@@ -120,8 +120,10 @@ describe('the Layout picker', () => {
 describe('Appearance', () => {
   it('Appearance renders Layout above Theme', () => {
     render(<AppearanceSection />);
-    const legends = [...document.querySelectorAll('legend')].map((l) => l.textContent);
-    expect(legends).toEqual(['Layout', 'Theme']);
+    // Layout is a fieldset; Theme is the preview grid's radiogroup (settings Task R2e).
+    const layout = screen.getByRole('group', { name: 'Layout' });
+    const theme = screen.getByRole('radiogroup', { name: 'Theme' });
+    expect(layout.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   // The plan's "the fonts line links /licenses/Geist-OFL.txt" waits for #402:
@@ -131,7 +133,7 @@ describe('Appearance', () => {
     render(<AppearanceSection />);
     const line = screen.getByText('Fonts: Geist and Geist Mono, SIL Open Font License 1.1.');
     const layout = screen.getByRole('group', { name: 'Layout' });
-    const theme = screen.getByRole('group', { name: 'Theme' });
+    const theme = screen.getByRole('radiogroup', { name: 'Theme' });
     expect(layout.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(line.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
