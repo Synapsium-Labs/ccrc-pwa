@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ce96054c1085f470bdff692602b8f33b2353f9a489d0403c9b4d82e05b47f89c
+# ccrc:generated 1 sha256=eec18f52bd8caf1e6e19e6e4a50a2438112f186487ae18da7f748bb464c96784
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13320,8 +13320,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # verdict: no token, and the same token name the eval uses, so the sheet
   # reads the same sentence whichever read caught it.
   if [[ $mode == reclaim ]]; then
-    printf '"mode":"reclaim","childOf":%s,"generation":%s,' \
-      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)"
+    printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
+      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -29092,6 +29092,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
   _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
   EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
+  _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
 }
 
 _ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
@@ -29443,6 +29444,7 @@ _ws_workdirid_read() {   # id logical -> 0 `valid` (_WS_WDID_IDENT "<dev>:<ino>:
 }
 
 _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
+_WS_LEGACY_ROWS=''; _WS_PENDING_ROWS=''   # THE COUNTS of `_ws_reclaim_workdir_shared` ('' = not counted)
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
   #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
   #                                 lies INSIDE it, or at, inside or through a leaf the tail removes
@@ -29668,6 +29670,55 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # after the loop — unmeasured, never "no row inside it" — and, like every
   # other not-asked arm, outranked by a SHARED, NESTED or THROUGH row.
   #
+  # AND WHERE EACH ROW ENTERED (path-identity spec §4.3 to §4.5; §4.10, PI1 B,
+  # PI2 L1, PI7 P2). A row carries one entry field: its pane's own record of the
+  # directory it reached after its `cd` (that directory's identity, its physical
+  # path, and the logical spelling it was given), read through
+  # `_ws_workdirid_read` alone. It is read for every row whose `.workdir` reads,
+  # BEFORE any arm below can `continue` past the row, so a row the string arms
+  # leave unplaced is still placed by it, and it never adds a `continue`. A
+  # VALID field joins the one walk; a PENDING one (a spawn whose pane never
+  # recorded where it entered) and an UNMEASURED one (not a regular file, or
+  # unreadable) hold the child, by row id, with their remedies; a LEGACY one
+  # (absent, a link, unparseable, or naming another logical spelling) is today's
+  # string rule plus the row's current identity, and is only counted. A valid
+  # field is asked four things, and each answer may only ADD the row to SHARED,
+  # NESTED or THROUGH, or to a not-asked bucket; nothing removes a row from any:
+  #   (a) its recorded identity is the child's own (`_ws_ident_eq` against the
+  #       child's identity and birth time, read by the walk), or its recorded
+  #       physical path IS the child's: SHARED, terminal even for a row the
+  #       string arms could not place (a `..` spelling that names the child);
+  #   (b) its recorded physical path lies inside the child, or at or inside a
+  #       standing directory leaf, as a string: NESTED;
+  #   (c) its recorded path, walked now, is the child or lies inside it or a
+  #       leaf (device and inode at one instant): SHARED or NESTED. A walk of it
+  #       that did not answer holds; one that found it GONE adds nothing by
+  #       itself;
+  #   (d) only for a row whose current spelling resolved `complete`, never a
+  #       gone row: its recorded identity differs from its current one, and its
+  #       recorded path does not stand with the recorded identity. Where it
+  #       entered can no longer be placed, and that holds.
+  # A BIRTH TIME THE WALK COULD NOT READ IS NEVER "NONE KEPT". `-` (a file
+  # system that keeps none) compares device and inode alone (`_ws_ident_eq`);
+  # a birth time that could not be read leaves rule (a) or (d) unasked, and
+  # that holds. So a row with a valid field is placed where it entered, the
+  # re-pointed alias the projection paragraph above names included; a LEGACY
+  # row keeps that residual until a spawn records its field (path-identity
+  # spec §4.4).
+  # NO FIELD RELEASES A ROW. A gone row is released only by the git-record and
+  # breadcrumb arms (`_ws_reclaim_recorded`), as before: a recorded path
+  # outside the child is negative evidence, never a licence, so a blank admin
+  # entry still holds every child while a gone row of its repository exists
+  # (`_ws_reclaim_admin_entries`).
+  # THE COUNTS. `_WS_LEGACY_ROWS` counts the OTHER rows whose `.workdir` read
+  # and whose field is in a `legacy-*` state, and `_WS_PENDING_ROWS` those
+  # whose field reads `pending`; an `unmeasured` field is in neither, and it
+  # holds the child (above). Both are set after the registry loop on every
+  # call that lists the registry, and '' when not
+  # counted (cleared here and by `_ws_reclaim_reset`; a registry that will not
+  # list leaves them ''). `cmd_ws_audit` prints them in the reclaim document as
+  # `legacyRows` and `pendingRows`, `null` when not counted, and so does `_ws_expire_audit_contained` in the expiry one.
+  #
   # AND BY DEVICE AND INODE, BESIDE THE STRINGS (path-identity spec §4.5 and
   # §4.8; PI3 B, PI6 M4). A string says where a spelling reads now, and a bind
   # mount or a link gives one directory two spellings that share no prefix. So
@@ -29719,6 +29770,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local -a rid=() req=()
   local _WS_IDWALK_OUT='' _WS_IDWALK_WHY=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
+  # The entry field's state for this ONE call (AND WHERE EACH ROW ENTERED, above); `efst` and `efid` are the
+  # CURRENT row's field state and identity, from its field read to the end of that row's pass.
+  local efst="" efid="" unpend="" unfield="" unrec="" nlegacy=0 npending=0 efbt0=-1
+  local eff efx efy efk efn efr efr1 efp1 efhit efok eft0 efc0 efb efa efcur efrc efstand
+  local -a efo=() efi=() efp=() efw=() efbp=() efbw=() wbt=()
+  local -A efans=() efbt=() efaidx=()
+  _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
   if _ws_reclaim_resolve "$wd"; then
@@ -29769,6 +29827,16 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     w=$(_reg_read "$o" workdir); rc=$?
     (( rc == 1 )) && continue   # gone between the listing and the read
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
+    # The entry field: read HERE, before any arm below can `continue` past the row (path-identity spec §4.5).
+    efst=""; efid=""
+    _ws_workdirid_read "$o" "$w"
+    efst="$_WS_WDID_STATE"
+    case "$efst" in
+      valid) efid="$_WS_WDID_IDENT"; efo+=("$o"); efi+=("$efid"); efp+=("$_WS_WDID_PHYS"); efw+=("") ;;
+      pending) npending=$(( npending + 1 )); unpend+="${unpend:+, }$o" ;;
+      legacy-*) nlegacy=$(( nlegacy + 1 )) ;;
+      *) unfield+="${unfield:+, }$o" ;;
+    esac
     ri=${#rid[@]}; rid+=("$o")   # this row's index in the identity walk's requests and answers
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
@@ -29782,6 +29850,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
     [[ -n "$wr" ]] || rok=0
     [[ "$basis" != complete || -z "$wr" ]] || req+=("A"$'\t'"$ri"$'\t'"$wr")   # ancestry of where it reads now
+    # A valid field's row resolved `complete` has its current identity asked (its `A` request): rule (d) reads it.
+    [[ "$efst" == valid && "$basis" == complete && -n "$wr" ]] && efw[${#efw[@]}-1]="$wr"
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     llit=0
     for lw in ${lspell[@]+"${lspell[@]}"}; do [[ "$w" == "$lw" || "$w" == "${lw%/}/"* ]] && llit=1; done
@@ -29822,11 +29892,27 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       (( ! lhit )) || _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o"
     fi
   done <<< "$names"
+  _WS_LEGACY_ROWS="$nlegacy"; _WS_PENDING_ROWS="$npending"   # THE COUNTS (above): this call listed the registry
   # THE ONE WALK, and its answers, which only ever ADD (pass B). A walk that
   # did not answer is collected whole; a row, target or leaf it could not
   # answer for is collected by name. A row a string arm already placed is not
   # placed twice.
-  _ws_reclaim_idwalk "$mi" < <(for q in ${req[@]+"${req[@]}"}; do printf '%s\0' "$q"; done); rc=$?
+  # THE ENTRY FIELDS' REQUESTS, after every other, in the ONE walk (path-identity spec §4.9): each valid field's
+  # recorded path (`F`, by field), and the birth times rules (a) and (d) read: the child's (only when its `T` is
+  # asked), each recorded path's, and each current spelling whose `A` is asked.
+  if (( ${#efo[@]} )); then
+    for efx in ${req[@]+"${req[@]}"}; do
+      [[ "$efx" == T$'\t'0$'\t'* ]] || continue
+      wbt+=("${efx#T$'\t'0$'\t'}"); efbt0=$(( ${#wbt[@]} - 1 )); break
+    done
+    for (( eff = 0; eff < ${#efo[@]}; eff++ )); do
+      req+=("F"$'\t'"$eff"$'\t'"${efp[eff]}")
+      wbt+=("${efp[eff]}"); efbp+=("$(( ${#wbt[@]} - 1 ))"); efbw+=(-1)
+      [[ -z "${efw[eff]}" ]] || { wbt+=("${efw[eff]}"); efbw[eff]=$(( ${#wbt[@]} - 1 )); }
+    done
+  fi
+  nbt=${#wbt[@]}   # one B line each in the walk's reply, which the match after the call counts
+  _ws_reclaim_idwalk "$mi" ${wbt[@]+"${wbt[@]}"} < <(for q in ${req[@]+"${req[@]}"}; do printf '%s\0' "$q"; done); rc=$?
   (( rc == 0 )) || unwalk="any row ($_WS_IDWALK_WHY)"
   # THE REPLY IS MATCHED WITH THIS PASS'S OWN LIST (path-identity spec §4.9).
   # The walk matches its reply with the requests it READ, and a request stream
@@ -29872,6 +29958,88 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       esac
     done <<< "$_WS_IDWALK_OUT"
   fi
+  # AND WHERE EACH ROW ENTERED: rules (a) to (d) of the header, each only ever ADDING (path-identity spec §4.5).
+  if (( ${#efo[@]} )); then
+    efok=0; efx="${_WS_IDWALK_OUT-}"; efx="${efx%$'\n'}"
+    [[ -z "${_WS_IDWALK_WHY-}" && "${efx##*$'\n'}" == end\ * ]] && efok=1
+    if (( efok )); then
+      for efx in ${req[@]+"${req[@]}"}; do
+        [[ "$efx" == A$'\t'* ]] || continue
+        efy="${efx#A$'\t'}"; efk="${efy#*$'\t'}"
+        [[ -z "$efk" ]] || efaidx["$efk"]="${efy%%$'\t'*}"
+      done
+      while IFS=' ' read -r efk efn efr; do
+        [[ "$efn" =~ ^[0-9]+$ ]] || continue
+        case "$efk" in
+          T|A|F) efans["$efk$efn"]="$efr" ;;
+          B) efbt["$efn"]="$efr" ;;
+        esac
+      done <<< "${_WS_IDWALK_OUT-}"
+    fi
+    eft0=""; efc0=""
+    if (( efok )) && [[ "${efans[T0]-}" == ok\ * ]]; then
+      eft0=ok; efy="${efans[T0]#ok }"; efb="${efbt[$efbt0]-un}"
+      [[ "$efb" == un ]] || efc0=$(_ws_ident_compose "${efy%% *}" "$efb") || efc0=""
+    fi
+    for (( eff = 0; eff < ${#efo[@]}; eff++ )); do
+      efr1="${efi[eff]}"; efp1="${efp[eff]}"; efhit=""
+      # (a) the child's own identity, or its own physical path: SHARED (PI7 P2)
+      if [[ -n "$mine" && -z "$minewhy" && "$efp1" == "$mine" ]]; then efhit=SHARED
+      elif [[ "$eft0" == ok && -z "$efc0" ]]; then unwalk+="${unwalk:+, }row ${efo[eff]} (the birth time of the child could not be read)"
+      elif [[ "$eft0" == ok ]] && _ws_ident_eq "$efr1" "$efc0"; then efhit=SHARED   # by identity
+      fi
+      # (b) its recorded physical path, as a string, inside the child, or at or inside a standing directory leaf
+      if [[ -z "$efhit" && -n "$mine" && -z "$minewhy" && "$efp1" == "${mine%/}/"* ]]; then
+        _ws_reclaim_plain_path "$efp1" && efhit=NESTED || efhit=THROUGH
+      fi
+      for (( efk = 0; efk < ${#lres[@]}; efk++ )); do
+        [[ -z "$efhit" && -n "${lres[efk]}" ]] || continue
+        [[ "$efp1" == "${lres[efk]}" || "$efp1" == "${lres[efk]%/}/"* ]] && efhit=NESTED
+      done
+      # (c) its recorded path, walked now (device and inode at one instant); GONE adds nothing by itself
+      if (( efok )); then
+        efr="${efans[F$eff]-}"
+        if [[ "$efr" == ok\ * ]]; then
+          case "${efr##* }" in
+            eq:0) efhit=SHARED ;;
+            in:0|eq:[12]|in:[12]) [[ "$efhit" == SHARED ]] || efhit=NESTED ;;   # inside the child, or a leaf
+          esac
+        elif [[ "$efr" != gone ]]; then
+          unwalk+="${unwalk:+, }row ${efo[eff]} (where it entered: ${efr:-no answer})"
+        fi
+      fi
+      # (d) the mismatch rule: only a row whose current spelling resolved complete, so never a gone row
+      if (( efok )) && [[ -n "${efw[eff]}" ]]; then
+        efa="${efaidx["${efw[eff]}"]-}"
+        if [[ -z "$efa" ]]; then
+          unwalk+="${unwalk:+, }row ${efo[eff]} (its current identity was never asked)"
+        elif [[ "${efans[A$efa]-}" == ok\ * ]]; then
+          efy="${efans[A$efa]#ok }"; efb="${efbt[${efbw[eff]}]-un}"; efcur=""
+          [[ "$efb" == un ]] || efcur=$(_ws_ident_compose "${efy%% *}" "$efb") || efcur=""
+          if [[ -z "$efcur" ]]; then
+            unwalk+="${unwalk:+, }row ${efo[eff]} (the birth time of where its workdir leads now could not be read)"
+          elif ! _ws_ident_eq "$efr1" "$efcur"; then
+            efstand=0; efr="${efans[F$eff]-}"
+            if [[ "$efr" == ok\ * ]]; then
+              efy="${efr#ok }"; efb="${efbt[${efbp[eff]}]-un}"; efrc=""
+              [[ "$efb" == un ]] || efrc=$(_ws_ident_compose "${efy%% *}" "$efb") || efrc=""
+              if [[ -z "$efrc" ]]; then
+                efstand=2; unwalk+="${unwalk:+, }row ${efo[eff]} (the birth time of where it entered could not be read)"
+              elif _ws_ident_eq "$efr1" "$efrc"; then
+                efstand=1
+              fi
+            fi
+            (( efstand != 0 )) || unrec+="${unrec:+, }${efo[eff]}"
+          fi
+        fi
+      fi
+      case "$efhit" in
+        SHARED) [[ ", $_WS_SHARED_ROWS, " == *", ${efo[eff]}, "* ]] || _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }${efo[eff]}" ;;
+        NESTED) [[ ", $_WS_NESTED_ROWS, " == *", ${efo[eff]}, "* ]] || _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }${efo[eff]}" ;;
+        THROUGH) [[ ", $_WS_THROUGH_ROWS, " == *", ${efo[eff]}, "* ]] || _WS_THROUGH_ROWS+="${_WS_THROUGH_ROWS:+, }${efo[eff]}" ;;
+      esac
+    done
+  fi
   [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
   [[ -z "$unmine" ]] \
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
@@ -29888,6 +30056,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }the identity walk of the registry rows did not answer for $unwalk, so whether a row lies at, inside or through $id's tree by device and inode, or a mount stands under it, was never asked — retry"
   [[ -z "$unmount" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a mount stands at or under $id's tree, or one of its file system's roots lies at or under it ($unmount), or the mount table could not place it, so ccd cannot prove which tree a removal would take — unmount it, or retry once it is gone"
+  [[ -z "$unpend" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unpend began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot place them against this child — restart that session (ccd start <id>), or purge its row once its session has ended"
+  [[ -z "$unfield" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unfield have an entry-identity field that is not a regular file or cannot be read, so ccd cannot place them against this child — remove what stands at that field and restart that session"
+  [[ -z "$unrec" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unrec entered a directory other than the one their workdir names now, and where they entered can no longer be placed, so ccd cannot place them against this child — stop each session and start it again, or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
@@ -35663,9 +35837,9 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   # else). Both null when no archive could be read as an epoch.
   local stamp=null expires=null
   if _ws_expire_epoch_ok "$EXPIRE_STAMP_AT"; then stamp="$EXPIRE_STAMP_AT"; expires=$(( EXPIRE_STAMP_AT + WS_EXPIRE_AFTER_S )); fi
-  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,' \
+  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
-    "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens"
+    "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then
