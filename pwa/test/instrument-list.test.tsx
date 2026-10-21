@@ -237,13 +237,27 @@ describe('project mode and the doors', () => {
     expect(table().getAttribute('data-mode')).toBe('status');
     cleanup();
     localStorage.setItem(GROUP_MODE_KEY, 'project');
-    const real = window.localStorage.getItem.bind(window.localStorage);
-    vi.spyOn(window.localStorage, 'getItem').mockImplementation((k: string) => {
-      if (k === GROUP_MODE_KEY) throw new Error('storage refused');
-      return real(k);
-    });
-    mount();
-    expect(table().getAttribute('data-mode')).toBe('status');
+    // A store installed on `window` itself, throwing for the mode's key and delegating the rest: a spy on the instance
+    // does not hold on jsdom's Storage (a named-property proxy stores it as a key), and the Storage shape differs
+    // between a local Node and CI's, so the test owns the whole accessor and restores it.
+    const real = window.localStorage;
+    const own = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    const refusing = {
+      getItem: (k: string) => { if (k === GROUP_MODE_KEY) throw new Error('storage refused'); return real.getItem(k); },
+      setItem: (k: string, v: string) => real.setItem(k, v),
+      removeItem: (k: string) => real.removeItem(k),
+      clear: () => real.clear(),
+      key: (i: number) => real.key(i),
+      get length() { return real.length; },
+    };
+    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => refusing });
+    try {
+      mount();
+      expect(table().getAttribute('data-mode')).toBe('status');
+    } finally {
+      if (own === undefined) delete (window as { localStorage?: Storage }).localStorage;
+      else Object.defineProperty(window, 'localStorage', own);
+    }
   });
 
   it('a row opens its session, and ⋯ opens the fleet flow\'s actions sheet', async () => {
