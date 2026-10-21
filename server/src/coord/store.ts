@@ -9023,14 +9023,14 @@ export class CoordStore {
    *
    * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
    * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
-   * encoding, and a handle that does not enforce foreign keys. A session key repeated inside `next` is not a delta: it runs the
-   * full projection, which refuses it.
+   * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
+   * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
     const diff = prepareDelegationProjectionChanges(prior, next);
+    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
     if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
-    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     tx(this.db, () => {
       // Each statement is prepared at most once per call, the first time its table needs it (as the full path prepares once per table).
       const prepared = new Map<string, StatementSync>();
