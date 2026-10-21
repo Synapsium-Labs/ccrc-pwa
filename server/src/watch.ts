@@ -1723,7 +1723,8 @@ export class FleetWatcher {
   /** Resolves once none of the writers `tick()` fires without awaiting is in flight: the server-caps beat, the
    *  inventory run and the dispatch run it ends in (D-6179). Each writes under `<ccrcDir>`, so a caller that removes
    *  that directory (a test's teardown) awaits this after `stop()`. It loops because a run that settles can start the
-   *  next (the dispatch run's follow-up). Never rejects: each lane warns on its own. */
+   *  next (the dispatch run's follow-up). It does not cover an inventory rerun queued by `triggerInventory()`, which
+   *  starts a few microtasks after `inventoryRun` clears. Never rejects: each lane warns on its own. */
   async settled(): Promise<void> {
     for (;;) {
       const inFlight = [this.serverCapsRun, this.inventoryRun, this.dispatchRun].filter((p) => p !== null);
