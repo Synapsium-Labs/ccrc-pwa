@@ -1658,33 +1658,41 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // roster this server holds at this request, and this route only applies the
     // answer. The box token proves "a process on the fleet box" and no more
     // (notify.sh's own header), so only a model-class line of a codex-kind lane
-    // is pushable (D-5211). THE LANE MUST BE codex-kind IN THE SERVER BOX'S
-    // ROSTER, not only in the fleet box's (in local mode the two are one file):
-    // the advance step gates on the fleet box's `~/.ccrc/accounts.json`, this
-    // route on `deps.cfg.roster`, and the two rosters are compared by a digest of
-    // accounts.sh, which does not carry a lane's `exec.kind`, so they can differ
-    // here and still read as agreed. The refusal names the lane and says what to
-    // fix in this server's own mode.
+    // is pushable (D-5211). THE LANE MUST BE codex-kind IN THE ROSTER THIS
+    // SERVER HOLDS, not only in the one the advance step read: the step gates
+    // on `~/.ccrc/accounts.json` on the box it runs on, and this route on
+    // `deps.cfg.roster`. In local mode that is one box, and one file while the
+    // server reads its default path (`CCRC_HOME` and `CCRC_ACCOUNTS` can move
+    // it), though the roster in memory can still lag the file (below). In
+    // remote mode they are two rosters on two boxes, which the server compares
+    // only by a digest of accounts.sh, and that digest does not carry a lane's
+    // `exec.kind`, so the two can differ there and still read as agreed. The
+    // refusal names the lane and says what to fix in this server's own mode.
     //
-    // WHAT TO FIX, BY MODE. The roster is read at each request, never cached.
-    // `cfg.roster` is read once, from the server box's own accounts.json, by
-    // `loadRoster` in `loadConfig` (config.ts); nothing watches the file. After
-    // that it changes only in `reloadRoster`, which index.ts hands the answer of
-    // every account verb the server drives (every mutating sub, and reconcile's
-    // `roster` sub). `reloadRoster` refuses an answer unless its fleet identity is
-    // the one the server knows; otherwise it compares the answer's roster with the
-    // roster IN MEMORY, not with the file, and replaces `cfg.roster` when they
-    // differ. In LOCAL mode the file is the box's own, written by the verb: an
-    // edit there is taken at the next restart, or from the next roster-carrying
-    // answer. In REMOTE mode the verb runs on the fleet box (accounts/ops.ts), so
-    // the answer is the FLEET box's roster and the server box's accounts.json is a
-    // mirror of it: the durable fix is the fleet box's row, which the server takes
-    // from the next roster-carrying answer (`reloadRoster` then also rewrites the
-    // mirror from it), or at a restart once its mirror holds it. A hand edit of
-    // the mirror is read only at a restart: no answer reads it, the next answer
-    // that differs from memory replaces it, and one equal to memory leaves it on
-    // disk, unread. Reconcile compares digests of accounts.sh, which do not carry
-    // `exec.kind`, so an exec-only difference never triggers it.
+    // WHAT TO FIX, BY MODE. This route reads `deps.cfg.roster` at each request
+    // and keeps no copy of its own. `cfg.roster` itself is read once, from this
+    // box's accounts.json, by `loadRoster` in `loadConfig` (config.ts), and
+    // nothing watches the file. After that only `reloadRoster` changes it. Its
+    // one caller is the reload hook of index.ts's `reconcilingAccountOps`
+    // wrapper, whose answers arrive from two places: the egress masker's re-key
+    // (a `roster` sub, run only while the masker holds rows of an older
+    // box-token generation, that is after a rotation), and the divergence
+    // reconcile (remote mode only, run when the fleet's `rosterFp` differs from
+    // the digest of the accounts.sh this server's roster generates). No route
+    // drives an account verb yet: deps.ts names the account routes as the
+    // wrapper's consumers, and none exists. So nothing re-reads the roster
+    // because a lane's `exec.kind` alone differs: the divergence reconcile's
+    // digest does not carry `exec.kind`, the re-key runs only after a box-token
+    // rotation, and no account route drives a verb. When a roster answer does
+    // land, `reloadRoster` takes it only if its fleet identity is the one the
+    // server knows and its roster parses; it then replaces `cfg.roster` when the
+    // answer differs from the roster in memory and, in remote mode, rewrites
+    // this box's copy from it too. So the fix that works, in both modes, is the
+    // lane's row in THIS box's accounts.json, then a restart. In LOCAL mode that
+    // file is the box's own. In REMOTE mode it is a copy of the fleet box's
+    // roster, which the next roster answer from the fleet box that differs from
+    // memory replaces wholesale, so the fleet box's row must say the same or the
+    // fix is undone.
     //
     // What a pushable line can carry is stated in the policy's docstring: up to
     // 120 characters of printable ASCII in a failure line's reason slot, and
@@ -1716,14 +1724,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
     // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
     // the direct callers of `PushService.notify` in server/src, so that wave
-    // finds this one mechanically. It is lexical: it counts a non-comment line
-    // that spells a call of a member named `notify` as a call, an optional or
-    // non-null-asserted call, a type argument, a `bind`/`call`/`apply`, a
-    // bracketed name, or a line ending in `.notify`. It sees only those
-    // spellings, on lines that do not begin with a comment marker. It does not
-    // see any other spelling (a parenthesised member, `Reflect.apply`, a
-    // reference destructured or aliased and called later), or code on a line
-    // that begins with `*` or `*/`.
+    // finds this one mechanically. It is lexical. It strips a line's inline
+    // `/* … */` spans first, so a line that begins with an inline block comment
+    // and then has code is counted, and it skips the line when what is left
+    // begins with `//`, `/*` or `*`. On every other line it counts a spelling
+    // of a call of a member named `notify`: a call, an optional or
+    // non-null-asserted call, a call with a type argument that has no nested
+    // angle brackets or parentheses, a `bind`/`call`/`apply`, a bracketed name,
+    // or a line ending in `.notify` or `.notify!`. It sees only those
+    // spellings. It does not see any other spelling (a parenthesised member,
+    // `Reflect.apply`, a reference destructured or aliased and called later),
+    // or code on a line that begins with `*` or `*/`.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,
@@ -1739,11 +1750,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
             + '(the server decides from the roster it holds)'
             + (deps.cfg.fleetMode === 'remote'
-              ? '; fix the lane\'s row on the fleet box, of which this server box\'s accounts.json is a copy: the server '
-                + 'takes that row from the next account verb it drives that answers with the roster, or at a restart '
-                + 'once its copy holds it'
-              : '; fix the lane\'s row in this box\'s accounts.json: the server reads it at its next restart, or from '
-                + 'the next account verb it drives that answers with the roster')
+              ? '; make the lane\'s row in this server box\'s accounts.json carry it, and restart the server: that file '
+                + 'is a copy of the fleet box\'s roster, which a later roster answer from the fleet box replaces, so the '
+                + 'fleet box\'s row must say the same'
+              : '; make the lane\'s row in this box\'s accounts.json carry it, and restart the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
