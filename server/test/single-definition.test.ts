@@ -5770,13 +5770,19 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
   const literalCalls = (files: readonly Text[]): string[] =>
     files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
   const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** D-5866 (Task C1k): `CCD_CAN`'s own entry for the row, a NAME keyed to its capability token, which builds and
+   *  calls nothing. It is excepted in `ccdargv.ts` alone, on its own line, and held to exactly one such line below. */
+  const CAN_ENTRY = /^\s*docsFetch: capRow\(DOCS_CAP\),\s*$/;
   /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
   const docsFetchLines = (files: readonly Text[]): string[] =>
-    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n')
+      .filter((l) => DOCS_FETCH_ID.test(l) && !(n === ARGV && CAN_ENTRY.test(l))).map(() => n));
   /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
   const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
   /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
-  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  // D-5866 (Task C1k): a TYPE query `keyof typeof CCD_ARGV` (the row-name type `CCD_CAN` is keyed by) reads no value,
+  // so it is not an escape. A bare `typeof CCD_ARGV` is still one.
+  const ARGV_ESCAPE = /(?<!\bkeyof\s+typeof\s+)\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
   const ARGV_DECLARATION = 'export const CCD_ARGV = {';
   /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
    *  declaration excepted. */
@@ -5799,6 +5805,24 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
 
   it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
     expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49: CCD_CAN\'s docsFetch entry is one line, in ccdargv.ts, and the exception sees nothing else (D-5866)', () => {
+    const argvText = LIVE.find(([n]) => n === ARGV)![1];
+    expect(stallCodeText(argvText).split('\n').filter((l) => CAN_ENTRY.test(l))).toHaveLength(1);
+    const before = docsFetchLines(LIVE).length;
+    expect(docsFetchLines(plantedIn(SOURCE, '  docsFetch: capRow(DOCS_CAP),')).length, 'outside ccdargv.ts it counts')
+      .toBe(before + 1);
+    expect(docsFetchLines(plantedIn(ARGV, '  docsFetch: (p, b) => CCD_ARGV.docsFetch(p, b),')).length, 'another line counts')
+      .toBe(before + 1);
+  });
+
+  it('CONTROL: a keyof-typeof type query is not an escape; a bare typeof or a value use still is (D-5866)', () => {
+    const before = argvEscapes(LIVE).length;
+    expect(argvEscapes(plantedIn(SOURCE, 'type R = keyof typeof CCD_ARGV;')).length).toBe(before);
+    expect(argvEscapes(plantedIn(SOURCE, 'type T = typeof CCD_ARGV;')).length).toBe(before + 1);
+    expect(argvEscapes(plantedIn(SOURCE, 'const r = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];')).length)
+      .toBe(before + 1);
   });
 
   it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
