@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=75947061940cdfbab03f6ea4690178e71684bfc9d9a18ac489d75aa6b3e20f2f
+# ccrc:generated 1 sha256=2f94f3b300f17aedb4442fcb600049f3a2f5ce7474c2afdc3c4ce60b258388c5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18503,7 +18503,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -18554,10 +18554,10 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     verdict="$scan_verdict"
   else
     born=$(_pane_born "$id")
-    _limit_dated "$id" transcript "$born" && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
+    _limit_dated "$id" transcript "$born"; lrc=$?; (( lrc == 0 )) && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
-  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; return 1; }
+  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }   # D-6180: a fresh scan names a carried-in row
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.

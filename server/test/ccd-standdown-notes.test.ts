@@ -134,7 +134,7 @@ describe('characterization: what each silent exit writes today', () => {
     seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 2000}`);
     writeTranscript([limitRow(T0 - 3000)]);
     const out = h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?|$HARD_BLOCK_NO"`, env(T0, T0 - 1900));
-    expect(out).toBe('1|negative');
+    expect(out).toBe('1|carried-in');   // flipped by D-6180's carried-in word; the cached value is still 0
     expect(h.reg(ID, 'tscan')).toBe(`${T0} 0`);
   });
 
@@ -323,6 +323,23 @@ describe('D-6180: every silent stand-down logged, once per episode, with a re-lo
     tick(DRAFT, { target: '' });
     expect(standDowns()).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: draft evidence=transcript banner-outside-tail=no$/)]);
     expect(dispatches()).toEqual([]);
+  });
+
+  it('a carried-in transcript row reads carried-in, not negative', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 2000}`);
+    writeTranscript([limitRow(T0 - 3000)]);
+    const out = h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?|$HARD_BLOCK_NO"`, env(T0, T0 - 1900));
+    expect(out).toBe('1|carried-in');
+    expect(h.reg(ID, 'tscan')).toBe(`${T0} 0`);
+  });
+
+  it('the cached verdict is reused unchanged', () => {
+    seed(); h.sh(`_reg_set ${ID} lastswap ${T0 - 2000}`);
+    writeTranscript([limitRow(T0 - 3000)]);
+    const call = (now: number): string => h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?|$HARD_BLOCK_NO"`, env(now, T0 - 1900));
+    expect(call(T0)).toBe('1|carried-in');
+    expect(call(T0 + 10), 'the cached 0 answers as any cached no').toBe('1|negative');
+    expect(h.reg(ID, 'tscan')).toBe(`${T0} 0`);
   });
 
   it('target-unavailable is logged when hard-blocked', () => {
