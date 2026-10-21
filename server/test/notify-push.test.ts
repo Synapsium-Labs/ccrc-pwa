@@ -793,10 +793,12 @@ describe('the policy\'s types are held by a consumer, so typecheck-tests holds t
     'not-a-model-line': true, 'over-cap': true, 'unknown-lane': true, 'not-a-codex-lane': true,
   };
   const VERDICTS: Record<ModelsPushDecision['verdict'], true> = { pushable: true, refused: true };
-  // The reasons of the arm that carries the lane: exactly these two, in both directions, at compile time.
-  const LANE_REASONS: Record<Extract<ModelsPushDecision, { verdict: 'refused'; lane: string }>['reason'], true> = {
-    'unknown-lane': true, 'not-a-codex-lane': true,
-  };
+  // The reasons of the arm that carries the lane: exactly these two, in both directions, at compile time. An arm that
+  // lost its `lane` would leave this Extract empty, and a Record over an empty key set accepts anything, so `laneOf` reads
+  // the lane off the arm too: on an empty arm (`never`) that read does not compile.
+  type LaneArm = Extract<ModelsPushDecision, { verdict: 'refused'; lane: string }>;
+  const LANE_REASONS: Record<LaneArm['reason'], true> = { 'unknown-lane': true, 'not-a-codex-lane': true };
+  const laneOf = (d: LaneArm): string => d.lane;
   const roster: ModelsPushRoster = new Map([['lane-a', { exec: { kind: 'codex' } }], ['lane-c', { exec: { kind: 'generated' } }]]);
 
   it('every kind modelsPushOf reads is a ModelsPushKind, and every ModelsPushKind is read', () => {
@@ -817,6 +819,11 @@ describe('the policy\'s types are held by a consumer, so typecheck-tests holds t
       if (d.verdict !== 'refused') continue;
       expect('lane' in d, `the refusal ${d.reason}`).toBe(d.reason in LANE_REASONS);
     }
+  });
+
+  it('the lane a lane-arm refusal carries is the lane its line names', () => {
+    expect(laneOf(modelsPushDecision('lane-z: opus model-5.6-gamma → model-6.1-gamma', roster) as LaneArm)).toBe('lane-z');
+    expect(laneOf(modelsPushDecision('lane-c: opus model-5.6-gamma → model-6.1-gamma', roster) as LaneArm)).toBe('lane-c');
   });
 
   it('every refusal word the policy produces is a ModelsPushRefusal, and every ModelsPushRefusal is produced', () => {
