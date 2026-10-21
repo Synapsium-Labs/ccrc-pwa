@@ -37,7 +37,6 @@ import {
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
-import ts from 'typescript-api';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -566,27 +565,22 @@ function importClosure(roots: readonly string[]): { modules: string[]; unfollowa
     if (seen.has(rel)) continue;
     seen.add(rel);
     const abs = path.join(ROOT, rel);
-    for (const spec of parseFile(abs).imports.map((i) => i.specifier)) {
+    const parsed = parseFile(abs);
+    for (const spec of parsed.imports.map((i) => i.specifier)) {
       if (spec === 'module' || spec === 'node:module') unfollowable.push(`${rel}: imports ${spec}`);
       if (!spec.startsWith('.')) continue;
       const target = path.resolve(path.dirname(abs), spec);
       const asTs = target.replace(/\.js$/, '.ts');
       queue.push(path.relative(ROOT, target !== asTs && existsSync(asTs) ? asTs : target));
     }
-    const sf = ts.createSourceFile(abs, readFileSync(abs, 'utf8'), ts.ScriptTarget.Latest, true);
-    const visit = (n: ts.Node): void => {
-      if (ts.isCallExpression(n)) {
-        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
-        const callee = n.expression;
-        const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : '';
-        if (callee.kind === ts.SyntaxKind.ImportKeyword && !(n.arguments[0] && ts.isStringLiteralLike(n.arguments[0]))) {
-          unfollowable.push(`${rel}:${line}: import() of a computed specifier`);
-        }
-        if (name === 'require' || name === 'createRequire') unfollowable.push(`${rel}:${line}: ${name}(…)`);
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
+    for (const c of parsed.calls) {
+      if (c.name === 'require' || c.name === 'createRequire') unfollowable.push(`${rel}:${c.line}: ${c.name}(…)`);
+    }
+    // The parser records an `import(…)` only when its argument is a literal, so any `import(` in the code (comments
+    // stripped) beyond the ones it recorded has a computed specifier.
+    const calls = stripTs(parsed.text).match(/\bimport\s*\(/g)?.length ?? 0;
+    const literal = parsed.imports.filter((i) => i.kind === 'dynamic' || i.kind === 'type-query').length;
+    if (calls > literal) unfollowable.push(`${rel}: ${calls - literal} dynamic imports of a computed specifier`);
   }
   return { modules: [...seen].sort(), unfollowable };
 }
