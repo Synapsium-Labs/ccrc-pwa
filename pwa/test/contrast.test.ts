@@ -1155,6 +1155,7 @@ describe('every stylesheet under src/ is audited', () => {
     const APP_SHEETS = [
       'src/docs/docs.css',
       'src/fleet/fleet.css',
+      'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
