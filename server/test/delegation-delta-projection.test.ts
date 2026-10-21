@@ -288,6 +288,15 @@ describe('R6: a row leaving falls back to the full projection inside the same ca
     expect(changes(w.s, w.prior, next)).toEqual({ mode: 'full' });
     expectParity(w.s, next);
   });
+
+  it('R6: a lease leaving alone (no lineage row, unreachable through a projected prior) is declined by the pure diff itself; MD3(leases) reds it', () => {
+    const w = openWorld();
+    const alone = leaseRow(9, w.prior.activities[0]!);
+    expect(w.prior.lineage.some((n) => n.leaseId === alone.leaseId), 'the extra lease has no lineage row, so only the lease check can see it leave').toBe(false);
+    const prior = { ...w.prior, leases: [...w.prior.leases, alone] };
+    const next = { ...w.prior, leases: [...w.prior.leases] };
+    expect(diffOf(prior, next).applicable, 'the pure diff declines: a lease left').toBe(false);
+  });
 });
 
 // ── R7: any lease row or lease-lineage row that differs, is new or leaves ────────────────────────────────────────────────
@@ -679,6 +688,15 @@ describe('R16: one generated case per codec column', () => {
       }, 120_000);
     }
   }
+
+  it('R16 (d\'): a lease differing in disposition alone is declined by the pure diff (the store refuses it earlier); MD8 on disposition reds it', () => {
+    const w = openWorld();
+    const lease = w.prior.leases[0]!;
+    const other = DELEGATION_DISPOSITIONS.find((d) => d !== lease.disposition)!;
+    const next = { ...w.prior, leases: w.prior.leases.map((l, i) => (i === 0 ? { ...l, disposition: other } : { ...l })) };
+    expect(next.leases[0], 'the pair differs in disposition and in no other column').toEqual({ ...lease, disposition: other });
+    expect(diffOf(w.prior, next).applicable, 'the pure diff declines').toBe(false);
+  });
 
   for (const [name, reason] of Object.entries(UNCHANGEABLE)) {
     it(`R16 (e): ${name} cannot be changed validly (${reason}); a forced value falls back and the schema refuses it`, () => {
