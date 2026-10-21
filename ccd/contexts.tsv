@@ -370,6 +370,7 @@ _tool_adj_env	C2
 _child_tmpdir	C4
 _delegation_spool_dir	C5
 _child_spawn_compose	C5
+_account_spawn_compose	C2
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
 _reg_id_ok	C1
