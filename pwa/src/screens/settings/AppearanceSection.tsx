@@ -10,16 +10,16 @@
 // the 44px target; its input is the group's one tab stop), its note in the card's `title` and, on a phone, under the
 // grid for the checked card only; a column of 480 or more shows every card's note (settings.css's container query).
 //
-// ONE RADIO GROUP, AND THE KEYS ARE OURS. `role="radiogroup"` names the set "Theme". The arrow keys move the choice
+// ONE RADIO GROUP, AND THE KEYS ARE OURS. Theme stays an `AppearanceFieldset`, like Layout: its legend names it and it
+// is the Switch theme command's door (`doorMark`, D-5469). Inside it the cards are one `role="radiogroup"`. The arrow keys move the choice
 // here, and `preventDefault` keeps the browser's own radio arrowing from moving it a second time: one press is one
 // `setTheme`, one storage write. The checked card is `useThemeChoice()`, the choice in force as the boot read it from
 // storage or `setTheme` last made it (D-5572), never a copy of the last tap.
-import { useId, type KeyboardEvent, type ReactNode } from 'react';
-import { PHOSPHOR, RADIO_LEGEND, Radio, SYSTEM, Section } from '@ccrc/ui';
-import { THEME_CHOICES } from '../AppearanceRow';
+import type { KeyboardEvent, ReactNode } from 'react';
+import { PHOSPHOR, Radio, SYSTEM, Section } from '@ccrc/ui';
+import { AppearanceFieldset, THEME_CHOICES } from '../AppearanceRow';
 import { SkinFieldset } from '../SkinFieldset';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
-import { doorMark } from '../../command/door';
 import { setTheme, useThemeChoice } from '../../lib/theme';
 import '../../fleet/fleet.css';
 import './settings.css';
@@ -28,7 +28,6 @@ const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -
 
 function ThemeGrid(): ReactNode {
   const current = useThemeChoice();
-  const legend = useId();
   const at = Math.max(0, THEME_CHOICES.findIndex((c) => c.id === current));
   const checked = THEME_CHOICES[at]!;
 
@@ -43,40 +42,41 @@ function ThemeGrid(): ReactNode {
   };
 
   return (
-    <div className="settings-palettes-wrap" {...doorMark('switch-theme')}>
-      <p id={legend} className={RADIO_LEGEND}>Theme</p>
-      <div role="radiogroup" aria-labelledby={legend} className="settings-palettes" onKeyDown={onKeyDown}>
-        {THEME_CHOICES.map((c) => {
-          const active = c.id === checked.id;
-          const stamp = c.id === SYSTEM || c.id === PHOSPHOR ? {} : { 'data-theme': c.id };
-          return (
-            <span key={c.id} className="settings-palette" data-active={active} title={c.note} {...stamp}>
-              <Radio
-                className="settings-palette-hit"
-                name="settings-theme"
-                value={c.id}
-                checked={active}
-                tabIndex={active ? 0 : -1}
-                onChange={() => setTheme(c.id)}
-                bare
-              >
-                <span className="settings-palette-chips" aria-hidden="true">
-                  <i className="settings-palette-chip-accent" />
-                  <i className="settings-palette-chip-attention" />
-                  <i className="settings-palette-chip-dead" />
-                </span>
-                <span className="settings-palette-text">
-                  <span className="settings-palette-name">{c.label}</span>
-                  <span className="settings-palette-note">{c.note}</span>
-                </span>
-                {active && <span className="settings-palette-check" aria-hidden="true">✓</span>}
-              </Radio>
-            </span>
-          );
-        })}
+    <AppearanceFieldset legend="Theme" command="switch-theme">
+      <div className="settings-palettes-wrap">
+        <div role="radiogroup" aria-label="Theme palettes" className="settings-palettes" onKeyDown={onKeyDown}>
+          {THEME_CHOICES.map((c) => {
+            const active = c.id === checked.id;
+            const stamp = c.id === SYSTEM || c.id === PHOSPHOR ? {} : { 'data-theme': c.id };
+            return (
+              <span key={c.id} className="settings-palette" data-active={active} title={c.note} {...stamp}>
+                <Radio
+                  className="settings-palette-hit"
+                  name="settings-theme"
+                  value={c.id}
+                  checked={active}
+                  tabIndex={active ? 0 : -1}
+                  onChange={() => setTheme(c.id)}
+                  bare
+                >
+                  <span className="settings-palette-chips" aria-hidden="true">
+                    <i className="settings-palette-chip-accent" />
+                    <i className="settings-palette-chip-attention" />
+                    <i className="settings-palette-chip-dead" />
+                  </span>
+                  <span className="settings-palette-text">
+                    <span className="settings-palette-name">{c.label}</span>
+                    <span className="settings-palette-note">{c.note}</span>
+                  </span>
+                  {active && <span className="settings-palette-check" aria-hidden="true">✓</span>}
+                </Radio>
+              </span>
+            );
+          })}
+        </div>
+        <p className="settings-note settings-palette-current">{checked.note}</p>
       </div>
-      <p className="settings-note settings-palette-current">{checked.note}</p>
-    </div>
+    </AppearanceFieldset>
   );
 }
 

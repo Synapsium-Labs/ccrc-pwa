@@ -95,9 +95,9 @@ describe('the Appearance control', () => {
   // updates poll a radio-group test has no business needing.
   it('offers every palette the app can render, plus Follow system', () => {
     render(<AppearanceSection />);
-    // Scoped to the Theme grid: Appearance also holds the Layout picker
+    // Scoped to the Theme group: Appearance also holds the Layout picker
     // (skin-picker.test.tsx), whose radios are not palettes.
-    expect(within(screen.getByRole('radiogroup', { name: 'Theme' })).getAllByRole('radio')).toHaveLength(THEMES.length + 1);
+    expect(within(screen.getByRole('group', { name: 'Theme' })).getAllByRole('radio')).toHaveLength(THEMES.length + 1);
     // Anchored: each row's accessible name is "<label> <note>", and the
     // Follow-system note names both Phosphor palettes — so an unanchored
     // match finds two radios and the ambiguity is the test's, not the UI's.
@@ -128,7 +128,7 @@ describe('the Appearance control', () => {
 // mount, so the checked row is never stale and can be picked straight back.
 describe('the Theme picker follows a choice made anywhere', () => {
   const radio = (name: RegExp): HTMLInputElement =>
-    within(screen.getByRole('radiogroup', { name: 'Theme' })).getByRole('radio', { name }) as HTMLInputElement;
+    within(screen.getByRole('group', { name: 'Theme' })).getByRole('radio', { name }) as HTMLInputElement;
 
   /** Run "Switch theme…" → <title> as the palette does, through the real registry. */
   const viaPalette = (title: string): void => {
@@ -165,7 +165,7 @@ describe('the Theme picker follows a choice made anywhere', () => {
     const first = render(<AppearanceSection />);
     const second = render(<AppearanceSection />);
     const nord = (r: typeof first): HTMLInputElement =>
-      within(within(r.container).getByRole('radiogroup', { name: 'Theme' })).getByRole('radio', { name: /^Nord/ }) as HTMLInputElement;
+      within(within(r.container).getByRole('group', { name: 'Theme' })).getByRole('radio', { name: /^Nord/ }) as HTMLInputElement;
     fireEvent.click(nord(first));
     expect(nord(second).checked).toBe(true);
   });

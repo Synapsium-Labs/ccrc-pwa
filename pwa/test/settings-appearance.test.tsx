@@ -16,7 +16,9 @@ const media = (matches: boolean) => ({ matches, addEventListener: () => {} });
 beforeEach(() => { localStorage.clear(); document.documentElement.removeAttribute('data-theme'); initTheme(media(false)); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
 
-const grid = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Theme' });
+// The Theme fieldset (the Switch theme door) holds the cards' one radiogroup.
+const theme = (): HTMLElement => screen.getByRole('group', { name: 'Theme' });
+const grid = (): HTMLElement => within(theme()).getByRole('radiogroup', { name: 'Theme palettes' });
 const radios = (): HTMLInputElement[] => within(grid()).getAllByRole('radio') as HTMLInputElement[];
 const card = (r: HTMLInputElement): HTMLElement => r.closest('.settings-palette') as HTMLElement;
 const checked = (): HTMLInputElement[] => radios().filter((r) => r.checked);
@@ -113,5 +115,6 @@ describe('the Theme preview grid', () => {
     render(<AppearanceSection />);
     const layout = screen.getByRole('group', { name: 'Layout' });
     expect(layout.compareDocumentPosition(grid()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(theme()).toHaveAttribute('data-command', 'switch-theme');
   });
 });
