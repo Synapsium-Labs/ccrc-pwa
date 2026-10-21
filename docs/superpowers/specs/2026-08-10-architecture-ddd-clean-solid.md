@@ -302,7 +302,7 @@ pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 | Cross-language fixture test (ccd's bash copies against the roster) | done | `wrapper-roster-fixture.test.ts`, `roster-exec-parity.test.ts` |
 | Totality test for every wire union | open | ARCH-12 (#552) |
 | Mutant duty in `coord/` | review rule | CLAUDE.md's mutation-table discipline; every PR body carries its table. No test can see a missing mutant |
-| Ratchet budgets on `watch.ts` and `coord/routes.ts` | reporting | `growth-check.test.ts` (ARCH-01, #526; D-5848): net growth against the merge-base, not an absolute line count; it fails only once the operator arms it (OA-C2) |
+| Ratchet budgets on `watch.ts` and `coord/routes.ts` | done | `growth-check.test.ts` (ARCH-01, #526; D-5848): net growth against the merge-base, not an absolute line count; armed by the operator on 2026-10-21 (OA-C2, D-6178), so growth past the limit fails CI |
 | Scanner-coverage pins | done, per walk | each walk's own "visits the whole directory" or "covers the directory" row in `single-definition.test.ts` |
 | Docstring-claim rule | partly | single-definition's "store.ts docstrings that describe their own callers"; doc-coupling pins are ARCH-07 (#558) |
 

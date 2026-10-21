@@ -250,6 +250,24 @@ const pairs = (T, name) => [
   [`${name} acct magenta / surface (sess-acct)`, T.magenta, T.surface, 4.5],
   [`${name} acct amber / surface (sess-acct)`, T.amber, T.surface, 4.5],
   [`${name} acct green / surface (sess-acct)`, T.green, T.surface, 4.5],
+  // THE PAGE GROUND (D-5478). Instrument's panels sit on --bg-page where
+  // Refined's cards sit on --bg-surface (spec §8.2), so its status words and
+  // lane labels are drawn on the page. The status texts were already fitted
+  // there (make-themes.mjs's `text()` names the page); these pairs are the
+  // gate that was missing. attention-text / page and dead-text / page are
+  // the two kinds already gated above and below; these are the other three.
+  [`${name} status busy text / page`, T.busyText, T.page, 4.5],
+  [`${name} status done text / page`, T.doneText, T.page, 4.5],
+  [`${name} status cleanup text / page`, T.cleanupText, T.page, 4.5],
+  // The lane hues were fitted on their tint, the surface and the row grounds,
+  // never the page, so the page joins the --acct-* fit in the same change
+  // (D-5478).
+  [`${name} acct-cyan / page`, T.cyan, T.page, 4.5],
+  [`${name} acct-violet / page`, T.violet, T.page, 4.5],
+  [`${name} acct-blue / page`, T.blue, T.page, 4.5],
+  [`${name} acct-magenta / page`, T.magenta, T.page, 4.5],
+  [`${name} acct-amber / page`, T.amber, T.page, 4.5],
+  [`${name} acct-green / page`, T.green, T.page, 4.5],
   // The PR keycap's merged dot (--pr-merged, tokens.css) on the keycap's own
   // background (--bg-raised). A non-text graphical object, so 3:1, not 4.5.
   [`${name} pr-merged / raised (UI 3:1)`, T.prMerged, T.raised, 3],
