@@ -4810,13 +4810,19 @@ never reclaimed out from under it, and closes only once the PR reads MERGED at `
 server reports how the queue answered: `ccd pr-state --project` makes one GraphQL read per repository
 per sweep (the newest open PRs and the most recently merged, under its own 4 s timeout) and stamps
 each line with an additive `queue` word — `queued`, `dequeued`, `landed`, `none`, or `unmeasured`
-when the read failed or the PR is outside its windows, which costs no row — and `queueAt`. The
+when the read failed or the PR is outside its windows, which costs no row — and `queueAt`. GitHub
+records a removal with reason `merged` at every successful queue merge, at or a second before the PR
+reads merged; that removal reads `landed`, never `dequeued`, and, while the PR is open, a removal for
+any other reason, or none, reads `dequeued` on the first sweep that sees it (landing-order wave 3d). The
 landing lane, `sweepLanding` (every decision in the pure `server/src/coord/landing.ts`), mails the
 coordinator of the open run naming that workspace a `status` mail from `operator`: `merged:#<n>` when
 the PR merges while its run waits at `merging`, asking for the merge proof before the close; or
 `dequeued:#<n>@<time>` when the queue removed it without landing — GitHub does not re-enqueue —
 naming the queue's own `merge_group` CI run as the place to read why, plus a `⤺ dequeued` feed
-record. Each notice goes out once; a restart repeats neither. `ci.yml` answers `merge_group` and runs
+record. Each notice goes out once; a restart repeats neither, and since wave 3d it does not repeat
+the merged lane's `✓ merged` feed record either while that record is still in the archive (one written
+before wave 3d whose run has closed since is repeated once, at the deploy). `ci.yml` answers
+`merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
 `--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,
 comments and heredoc bodies the way bash reads them, to any session whose hold names a programme wave

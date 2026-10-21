@@ -102,6 +102,8 @@ export function QuickConfirm({
       open={open}
       onClose={onClose}
       title={title}
+      // A question and two answers: the narrowest dialog from 900 (D-5933).
+      size="sm"
       initialFocus={cancelRef}
       // The answers are pinned in the Sheet's footer (D-5932): a long consequence scrolls, they stay.
       footer={

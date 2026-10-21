@@ -1890,6 +1890,16 @@ Issued and unused (Task A12): none.
 
 Issued and unused (Task A9): none.
 
+### As built, extending D-5513's backups row (Task A11b)
+
+No number was issued to Task A11b, so its departures extend D-5513's backups row here and redefine nothing. Five decisions its section did not make:
+
+1. **Where the stated answer lives.** The section says "the operator's answer at install", but no task writes that answer from install, and A11b's Files are the doctor checks only. So `snapshot-posture` reads one line of `~/.ccrc/snapshot-posture` (`none`, or any of `server-backups server-snapshots volume-snapshots`), and until a writer lands, a box holding lane secrets WARNs "not stated" with a remedy saying how to write the file. **No task owns the writer yet**: an install prompt, or a `ccrc` verb, that writes this file is a follow-up for the orchestrator to assign to the task that owns `install`. Until then the live fleet box WARNs until the operator writes the file by hand.
+2. **FileVault Off is a WARN, not a FAIL.** Disk encryption is the machine's policy, which ccrc does not own and an operator may have chosen, and install's exit code is doctor's, so a FAIL would fail every install on such a Mac. `secrets-backup-excluded` FAILs as the section says, because the account verbs own that exclusion (D-5755 (8), D-5756).
+3. **The subject is a box that holds a lane secret.** All three checks SKIP when neither `~/.cc-secrets` nor `~/.ccrc/auth-scratch` exists: a fresh install has nothing to measure, and a server-role box never holds a lane secret.
+4. **The answer file is never quoted.** A line `snapshot-posture` cannot read FAILs naming only how many words it did not know, never the line itself (the file is free text an operator may mistype a secret into), and a symlinked `~/.ccrc/snapshot-posture` FAILs unread, since it could point at a lane secret. The `secrets-backup-excluded` remedy names every included directory in one runnable `tmutil addexclusion`.
+5. **A file outside the Files list.** `server/test/ccrc-install.test.ts`'s fleet-box class map gains the three checks (SKIP on the fresh box), and its provisioned box states `none` and PASSes `snapshot-posture`, because the install suite pins every doctor class.
+
 ### Departures defined here by slug, awaiting numbers
 
 These are decisions with no number yet: the spec's N2, and five this plan found (N7 at rev 2). The spec's N1 took D-6202 (defined above, Task A9). Each takes a number from `POST /api/ledger/deviations` before the task that implements it is dispatched, and the PR that implements it replaces the label with the number here and in the spec, in the same act.

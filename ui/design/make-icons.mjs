@@ -29,7 +29,8 @@ const OUT = path.join(HERE, '..', 'src', 'icons', 'lucide.ts');
  *  `bot`, `chevron-right`, `palette`, `refresh-cw` and `shield` are the
  *  Settings index's (the Settings redesign, Task R2a; spec §3.2).
  *  `chevron-down` and `x` are the workbench tab strip's: "all tabs" and a
- *  tab's close (the close is never `✕`, the dead glyph). */
+ *  tab's close (the close is never `✕`, the dead glyph); `x` is also the
+ *  Sheet's desktop arm's close (D-5933, D-6033). */
 const NAMES = [
   'bell',
   'bell-off',

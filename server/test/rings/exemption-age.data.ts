@@ -22,5 +22,6 @@ export const EXEMPTION_SET_STAMPS: Readonly<Record<string, SetStamp>> = {
   'server/test/rings/pwa-rings.data.ts#PWA_L1_EXEMPTIONS': { size: 14, reason: 'the PWA L1 modules\' merge-day runtime edges to a .tsx file, a store or lib/api.ts (D-6118); each drains by moving its value inward', since: '2026-10-20' },
   'server/test/rings/pwa-rings.data.ts#UI_PWA_EXEMPTIONS': { size: 0, reason: 'empty since stage 3 landed (D-6118)', since: '2026-10-20' },
   'server/test/rings/wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS': { size: 28, reason: 'merge-day listless literal unions in shared/; ARCH-12 follow-ups drain them', since: '2026-10-20' },
+  'server/test/growth-exemptions.json#exemptions': { size: 0, reason: 'empty: an entry names one PR the operator exempted from the growth check, and goes once that PR lands (D-6211)', since: '2026-10-21' },
   'server/test/deviation-refs.test.ts#GRANDFATHERED': { size: 16, reason: "re-reviewed 2026-10-20: the 16 pre-allocator D-number collisions all still collide (deviation-refs pins each member); wave 10's reconciliation drains them", since: '2026-10-20' },
 };

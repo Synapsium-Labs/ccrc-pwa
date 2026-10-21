@@ -101,13 +101,15 @@ vi.mock('../src/coord/delegation-journal.js', async (importOriginal) => {
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The projection port over the store: three one-line adapters. `projectDelegationCheckpoint`, `insertDelegationEvents` (ONE
- * transaction, a conflict reported and never thrown) and `delegationEventStats` are the production methods Task 7's second fix round
- * gave the store, so this is the same port production uses and the SQLite differential below runs against the real thing.
+ * The projection port over the store: four one-line adapters. `projectDelegationCheckpoint`, `projectDelegationCheckpointChanges` (the
+ * rows that changed, or the full projection inside the same call), `insertDelegationEvents` (ONE transaction, a conflict reported and never
+ * thrown) and `delegationEventStats` are the production methods of the store, so this is the same port production uses and the SQLite
+ * differential below runs against the real thing.
  */
 function delegationProjectionPortOfStore(store: CoordStore): DelegationProjectionPort {
   return {
     project: (cp) => store.projectDelegationCheckpoint(cp),
+    projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => store.insertDelegationEvents(rows),
     eventStats: () => store.delegationEventStats(),
   };
@@ -1042,6 +1044,7 @@ function harness(opts: { dir?: string; store?: CoordStore } = {}): Harness {
   const real = delegationProjectionPortOfStore(store);
   const projection: DelegationProjectionPort = {
     project: (cp) => { log.push('project'); real.project(cp); },
+    projectChanged: (prior, next) => { log.push('projectChanged'); return real.projectChanged(prior, next); },
     insertEvents: (rows) => { log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
     eventStats: () => real.eventStats(),
   };
@@ -1084,7 +1087,7 @@ describe('the durable applier: O5 ordering, the entry point Task 9 calls', () =>
     expect(h.log).toEqual([
       expect.stringMatching(/^journal\.write:\d+:10$/), 'journal.sync', 'dir.sync',                        // the new journal's entry is made durable once
       expect.stringMatching(/^checkpoint\.write:\d+:10$/), 'checkpoint.sync', 'rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json', 'dir.sync',
-      'project', 'insertEvents:1',
+      'projectChanged', 'insertEvents:1',
     ]);
     expect(edges).toEqual(DELEGATION_DURABILITY_EDGES.flatMap((e) => [`${e}:before`, `${e}:after`]));
     expect(out.durable).toBe(true);
@@ -1158,9 +1161,9 @@ describe('the durable applier: O5 ordering, the entry point Task 9 calls', () =>
     const dur = await h.open();
     h.log.length = 0;
     await dur.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3), sessionStart(4)]));
-    expect(h.log.filter((l) => l === 'project')).toHaveLength(1);
+    expect(h.log.filter((l) => l === 'project' || l === 'projectChanged'), 'one projection of either kind, and on the flush it is the delta').toEqual(['projectChanged']);
     expect(h.log.filter((l) => l.startsWith('insertEvents'))).toEqual(['insertEvents:4']);
-    expect(h.log.indexOf('project')).toBeGreaterThan(h.log.lastIndexOf('dir.sync'));
+    expect(h.log.indexOf('projectChanged')).toBeGreaterThan(h.log.lastIndexOf('dir.sync'));
   });
 
   it('rejects a cursor that recovery could not read, before anything is written', async () => {
@@ -1320,7 +1323,7 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
       for (const when of ['before', 'after'] as const) {
         if (checkpointDurable(edge, when)) continue;
         const { projectionLog } = await crashRun(edge, when);
-        expect(projectionLog.filter((l) => l === 'project' || l.startsWith('insertEvents')), `${when} ${edge}`).toEqual([]);
+        expect(projectionLog.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents')), `${when} ${edge}`).toEqual([]);
       }
     }
   });
@@ -1411,7 +1414,7 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
           expect(dur.state().checkpoint.leases).toEqual([]);
           expect(dur.state().checkpoint.lineage).toEqual([]);
           // ...not in SQLite (nothing was projected before the directory fsync)...
-          expect(h.log.filter((l) => l === 'project' || l.startsWith('insertEvents'))).toEqual([]);
+          expect(h.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
           expect(h.store.readDelegationProjection().leases).toEqual([]);
           expect(h.store.readDelegationProjection().lineage).toEqual([]);
           // ...and not in the checkpoint file unless the rename completed (the journal MAY hold the entry: it is authority, not exposure).
@@ -2201,7 +2204,7 @@ describe('O1 crash-window row (W3-M12): a meta-opened activity ID escapes only a
         expect(returned).toEqual([]);
         expect(dur.state().checkpoint.activities).toEqual([]);                  // not even the applier's own state shows it
         expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual({});
-        expect(h2.log.filter((l) => l === 'project' || l.startsWith('insertEvents'))).toEqual([]);
+        expect(h2.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
         expect(store2.readDelegationProjection().activities).toEqual([]);
         const onDisk = decodeDelegationCheckpoint(new Uint8Array(readDisk(h2.dir).checkpoint!));
         const renamed = edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
@@ -2655,7 +2658,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     expect(statsOf(rolledStore)).toEqual({ count: 3, maxSequence: 3 });
     const port = delegationProjectionPortOfStore(rolledStore);
     const inserted: number[] = [];
-    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), eventStats: () => port.eventStats(), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
+    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
     const report = await repairDelegationProjection({
       projection: spy, checkpoint: (await harness({ dir: h.dir }).open()).state().checkpoint,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
@@ -2676,7 +2679,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     let ticks = 0;
     const timer = setInterval(() => { ticks++; }, 0);
     await repairDelegationProjection({
-      projection: { project: (cp) => port.project(cp), eventStats: () => port.eventStats(), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
+      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
       checkpoint: dur.state().checkpoint, chunkSize: 10,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
     });
@@ -2776,6 +2779,8 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     const port: DelegationProjectionPort = {
       // a checkpoint that holds no session is the wipe (the projection deletes the events of a LEAVING session): it clears what is held
       project: (cp) => { calls.project++; if (cp.sessions.length === 0) held.clear(); },
+      // the repair never calls it (it is full); a fake that did would write the whole checkpoint, as its own `project` does
+      projectChanged: (_prior, next) => { port.project(next); return { mode: 'full' }; },
       insertEvents: (rows) => {
         calls.inserts.push(rows.length);
         let inserted = 0;
@@ -3428,7 +3433,7 @@ describe('Task 13: applyPositiveWorkflowMeta opens a workflow worker exactly as 
         expect(returned).toEqual([]);
         expect(dur.state().checkpoint.activities.map((a) => a.upstreamId)).toEqual([RUN]);   // not even the applier's own state shows the worker
         expect(Object.keys(dur.state().checkpoint.activityIdsByNaturalKey)).toHaveLength(1);
-        expect(h2.log.filter((l) => l === 'project' || l.startsWith('insertEvents'))).toEqual([]);
+        expect(h2.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
         expect(store2.readDelegationProjection().activities.map((a) => a.upstreamId)).toEqual([RUN]);
         const onDisk = decodeDelegationCheckpoint(new Uint8Array(readDisk(h2.dir).checkpoint!));
         const renamed = edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
@@ -3500,7 +3505,8 @@ describe('Task 13 fix 1 (R58, D-4654): pruneBucketCursors drops a cursor only un
     expect(edges).toEqual(DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'journal-write' && e !== 'journal-fsync').flatMap((e) => [`${e}:before`, `${e}:after`]));
     expect(h.log.filter((l) => l.startsWith('journal.'))).toEqual([]);             // no journal write, fsync or open for append
     expect(h.log).toContain('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json');
-    expect(h.log.indexOf('project')).toBeGreaterThan(h.log.indexOf('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json'));
+    expect(h.log.indexOf('projectChanged'), 'the prune is projected as a delta, after the rename').toBeGreaterThan(h.log.indexOf('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json'));
+    expect(h.log.indexOf('project')).toBe(-1);
     expect(readDisk(h.dir).journal).toEqual(journalBefore);
   });
 
@@ -3887,6 +3893,11 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
         h.log.push('project');
         if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
         real.project(cp);
+      },
+      projectChanged: (prior, next) => {
+        h.log.push('projectChanged');
+        if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
+        return real.projectChanged(prior, next);
       },
       insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
       eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },

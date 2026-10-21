@@ -636,6 +636,10 @@ function build(seed) {
   t['--elev-sheet'] = dark
     ? '0 -8px 40px rgba(0, 0, 0, 0.55)'
     : '0 -8px 40px rgba(26, 32, 27, 0.22)';
+  // The Sheet's desktop arm and the Popover (D-5933, D-6019): centred, so the shadow falls DOWN, not up.
+  t['--elev-pop'] = dark
+    ? '0 12px 40px rgba(0, 0, 0, 0.55)'
+    : '0 12px 40px rgba(26, 32, 27, 0.22)';
   // GLOW MEANS LIFE — only busy and attention emit, in every theme.
   const glow = (c) => `\n    0 0 0 1px   rgba(${rgbOf(c)}, 0.35),\n    0 0 16px    rgba(${rgbOf(c)}, 0.18),\n    0 0 40px    rgba(${rgbOf(c)}, 0.08)`;
   t['--glow-busy'] = glow(t['--status-busy']);

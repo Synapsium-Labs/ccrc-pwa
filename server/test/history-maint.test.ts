@@ -17,10 +17,10 @@ import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
   SCHEMA_VERSION, beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
-  REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf,
+  REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf, entryIndexText,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createFtsTables, getMeta, openWriter, setMeta, withTx, V2_INDEXES } from '../../ccd/history/store.mjs';
-import { backupOp, ftsOwedPlans, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
+import { backupOp, beltWitness, ftsOwedPlans, ftsTextOfBlob, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
@@ -663,18 +663,23 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
   // The argument, in numbers. The shim writes ALL its stderr, touches its marker, then waits (bounded, 120 s) for a go-file. It cannot touch
   // the marker until the CLI has accepted every byte (a pipe holds 64 KiB, so at most the last 64 KiB are still in flight, and the CLI reads
   // them next), and while it waits nothing else arrives. So whether any stderr reached the terminal BEFORE the go-file depends only on the
-  // cap, never on a pipe's size or on timing: a hold is spilled once its byte count is OVER the cap (`errBytes > ERR_HOLD_CAP`), and
+  // cap, never on a pipe's size or on timing (a claim about the spill and every green case below; one mutant's red on a byte count
+  // is not, see the lower side): a hold is spilled once its byte count is OVER the cap (`errBytes > ERR_HOLD_CAP`), and
   //   - a stream of exactly 1,048,577 bytes ((1 << 20) + 1) is over it with its last byte: it spills before the go-file (upper side:
   //     red for any cap of 1,048,577 or more, so `(1 << 20) + 1`, `+ 300000`, `+ 380000`, 2 MiB, no spill at all);
   //   - a stream of exactly 1,048,576 bytes (1 << 20) is not over it: nothing reaches the terminal until the shim ends and the close
-  //     flushes it (lower side: red for any cap below 1,048,576, so `1 << 16`, `(1 << 20) - 1`, and a comparison `>=`).
+  //     flushes it (lower side: red for any cap below 1,048,576, so `1 << 16`, `(1 << 20) - 1`, and a comparison `>=`). The cap
+  //     `(1 << 20) - 1` also reds the no-line-break over-the-cap case on its byte count, but only when a read ends exactly at byte
+  //     1,048,576 (64 KiB and 4 KiB reads do; 65,535-byte reads and one whole read do not), so its red rests on these two cases.
   // The lower side waits a settle window (5 s) after the marker before it calls stderr empty. The green direction does not depend on that
   // window (a held stream stays held however long it is watched); only a mutant's red does, when the spill is written within it.
   // Exact byte counts come from `head -c`. The lines stream is 128-byte lines, so 1 MiB is 8,192 whole lines; the stream with no line
   // break is `z` bytes. At the seam the spill and the close together add no byte and drop none, apart from the one line break `emit` adds
   // where a held text ends without one (spillErr's comment, cli.mjs): the lines stream, ending in a line break at 1 MiB, gets none added,
   // and its one extra byte past the cap is a partial last line that gets its line break at the close; the stream with no line break gets
-  // exactly one, so the bytes received are the bytes written plus that one.
+  // exactly one, so the bytes received are the bytes written plus that one. Since wave 5h-2 (D-5747) the spill and the close write
+  // through the stream's look-behind window (`redactAfter`: the text alone, then with the last RELAY_LOOKBEHIND_BYTES of the stream,
+  // unioned with each line read alone), which changes no byte of a text no rule masks, so these counts stand as they were.
   const CAP = 1 << 20;
   const CAP_LINE = `zqx23 ${'y'.repeat(121)}`;   // 127 bytes and a line break: 128, so 1 MiB is 8,192 lines
   const CAP_BOUND = [
@@ -2832,6 +2837,256 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
       }
       const r = runCli(box, [...args, '--json'], { env: { CLAUDECODE: '1' } });
       expect(gtPipedEnvelope(r, `${r.stdout}${r.stderr}`), `ccrc history ${cmd}`).toEqual({ exit: 2, reason: 'apply-in-session' });
+    }
+  }, HEAVY);
+});
+
+// ── W5h-2 Task 2: stored text is re-cleaned under the widened class, as a sweep phase (D-5746 (history-belt-v2-value-class-reindex)) ─
+// End to end, through the real scheduled sweep on a fixture HOME. The store is left as a BELT_VERSION 1 build (B4, W5h-1) leaves
+// it: the blobs_fts row of the searchable request that holds `password=zqa&<tail>` indexes the tail as a term of its own, one
+// leaf's gist and its nodes_fts row hold `password=[redacted]&<tail>`, and fts_belt is stamped v 1 with the store's own witness,
+// taken in a transaction of its own after the index writes committed (a witness read inside the transaction that wrote blobs_fts
+// may be behind, spec §6.2 "Witness timing", and a moved witness would open a generation whatever the version). One more row,
+// holding no named value, carries a sentinel term the re-derivation would never write: the generation must leave that row alone.
+describe('W5h-2 Task 2: the scheduled ticks re-clean a store a BELT_VERSION 1 build indexed (D-5746)', () => {
+  skipOnDarwin();
+
+  it('the ticks rewrite the blobs_fts rows and the gist holding a widened value and stamp BELT_VERSION; a row holding none keeps its planted body', async (ctx) => {
+    const tail = `zqwt${randomBytes(6).toString('hex')}7`;
+    const box = makeHistoryBox('ccrc-hist-w5h2-belt-', { role: 'fleet', shim: true });
+    // A searchable row (summaries are not indexed) holding the widened value: segment 0's first request.
+    const rows = compactionSequence({ n: 2, trigger: 'manual' }).rows
+      .map((r) => JSON.parse(JSON.stringify(r).replaceAll('Segment 0 request 0.', `Segment 0 request 0 password=zqa&${tail} end.`)) as typeof r);
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows });
+    expect(runSweep(box).code).toBe(0);
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();          // a Node without FTS5 has no index to re-derive
+    const leaf = maintQ<{ node_id: string; rid: number }>(box, 'SELECT node_id, rowid AS rid FROM nodes WHERE depth = 0 ORDER BY rowid LIMIT 1')[0];
+    expect(leaf, 'CONTROL: the fixture derived a leaf').toBeDefined();
+    const plantedGist = `Rotate the service password=${REDACTED_MARK}&${tail} for segment 0.`;
+    const bare = makePairIndex([]);
+    const db = new DatabaseSync(dbFile(box));
+    let planted = 0;
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      const blobs = db.prepare('SELECT blob_id, z, raw_len, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL ORDER BY blob_id').all() as Array<{ blob_id: number; z: Uint8Array; raw_len: number; is_sidecar: number }>;
+      let sentinel = false;
+      for (const b of blobs) {
+        const t = await ftsTextOfBlob(b.z, b.is_sidecar === 1, bare, Number(b.raw_len));
+        if (t.text === null) continue;
+        const now = entryIndexText(t.text, bare);
+        let body: string | null = null;
+        if (t.text.includes(tail)) {
+          body = now.replaceAll(`password=${REDACTED_MARK}`, `password=${REDACTED_MARK}&${tail}`);
+          expect(body, 'CONTROL: the row this build wrote masks the value whole').not.toBe(now);
+          planted += 1;
+        } else if (!sentinel && !t.text.includes('=')) {
+          body = `${now} zqkeep7`;
+          sentinel = true;
+        }
+        if (body === null) continue;
+        db.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(b.blob_id);
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(b.blob_id, body);
+      }
+      expect(sentinel, 'CONTROL: a row with no named value took the sentinel').toBe(true);
+      const row = db.prepare('SELECT topics, refs FROM nodes_fts WHERE rowid = ?').get(leaf!.rid) as { topics: string; refs: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(plantedGist, leaf!.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(leaf!.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(leaf!.rid, plantedGist, row.topics, row.refs);
+      db.exec('COMMIT');
+      db.exec('BEGIN IMMEDIATE');
+      const s0 = JSON.parse(getMeta(db, BELT_META)!) as { rids: number[] };
+      setMeta(db, BELT_META, formatBeltState({ v: 1, rids: s0.rids, gen: null, w: beltWitness(db) }));
+      db.exec('COMMIT');
+    } finally { db.close(); }
+    expect(planted, 'CONTROL: one indexed row holds the widened value').toBe(1);
+    const tailQ = `"${tail}"`;
+    const nodesMatch = (): number => maintQ<{ n: number }>(box, 'SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH ?', tailQ)[0]!.n;
+    const belt = (): { v: number; gen: number[] | null } => JSON.parse(maintMeta(box, BELT_META)!) as { v: number; gen: number[] | null };
+    const nodesBeltDone = (): boolean =>
+      maintQ<{ c: number | null }>(box, "SELECT completed_ms AS c FROM derivation_state WHERE step = 'nodes-belt' AND version = 1")[0]?.c != null;
+    expect(maintMatch(box, tailQ), 'CONTROL: the planted rows answer the tail, as v1 rows do').toBe(planted);
+    expect(nodesMatch(), 'CONTROL: and so does the planted gist\'s nodes_fts row').toBe(1);
+    expect(maintMatch(box, 'zqkeep7'), 'CONTROL: the sentinel is indexed').toBe(1);
+    expect(belt().v, 'CONTROL: stamped as a BELT_VERSION 1 build stamps it').toBe(1);
+    for (let k = 0; k < 6 && !(belt().v === BELT_VERSION && belt().gen === null && nodesBeltDone()); k += 1) expect(runSweep(box).code).toBe(0);
+    expect(belt().v, 'the generation completed under this version').toBe(BELT_VERSION);
+    expect(maintMatch(box, tailQ), 'no blobs_fts row answers the tail').toBe(0);
+    expect(maintMatch(box, 'zqkeep7'), 'a row with no widened value is not rewritten').toBe(1);
+    const gist = maintQ<{ gist: string }>(box, 'SELECT gist FROM nodes WHERE node_id = ?', leaf!.node_id)[0]!.gist;
+    expect(gist, 'the stored gist is re-cleaned from its own text').toBe(`Rotate the service password=${REDACTED_MARK} for segment 0.`);
+    expect(nodesMatch(), 'and its nodes_fts row with it').toBe(0);
+  }, HEAVY);
+});
+
+// ── W5h-2 Task 3: the relay reads each shim stream through a look-behind window (D-5747 (history-relay-lookbehind-window)) ─
+// D-5022 left stdout per line, so a JSON value on the line after its key and a PEM body after its BEGIN line printed in
+// clear; and stderr's 1 MiB spill was a seam no pass saw across. Each SOURCE stream now keeps its last RELAY_LOOKBEHIND_BYTES
+// of raw text, and every batch is redacted with it (lib redactAfter). The shapes here are JSON and PEM, whose masking does
+// not depend on the named rule's value class. No case here waits on a clock: the split cases have the stand-in write one
+// part, touch a marker and wait (bounded) for a go-file the case writes only once the first part has reached the terminal.
+describe.skipIf(process.platform === 'darwin')('the relay reads each shim stream through a look-behind window: a shape split across lines, chunks or the stderr spill is masked (D-5747)', () => {
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(randomBytes(n), (b) => AL[b % AL.length]!).join('');
+  // assembled at run time: the repository is public, and a key-shaped literal is what push protection reads
+  const BEGIN = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
+  const END = ['-----END ', 'PRIVATE KEY-----'].join('');
+  const BODY1 = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+  const BODY2 = 'MIIBzqx26AAAABBBBCCCCDDDDEEEEFFFFGGGGHHH';
+  const until = async (ok: () => boolean, ms = 30_000): Promise<void> => {
+    const t0 = Date.now();
+    while (!ok()) {
+      if (Date.now() - t0 > ms) throw new Error('timed out waiting for the stand-in shim');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+  /** A stand-in line that waits (bounded, 120 s) for a go-file, after touching its marker. */
+  const waitFor = (box: HistoryBox, n: number): string[] => [
+    `touch ${JSON.stringify(path.join(box.home, `wrote${n}`))}`,
+    `for i in $(seq 1 1200); do [ -e ${JSON.stringify(path.join(box.home, `go${n}`))} ] && break; sleep 0.1; done`,
+  ];
+  const sq = (s: string): string => `'${s}'`;
+
+  it('a JSON value on the line after its key and a PEM body after its BEGIN line, on the shim\'s stdout, reach the terminal masked, in order, human and --json', () => {
+    const V = `hunter2${alnum(12)}`;
+    const box = boundBox('ccrc-hist-relay-lb1-');
+    stubShim(box, {
+      stdout: `zqx26 start\n{"password":\n  "${V}"}\nzqx26 mid\n${BEGIN}\n${BODY1}\n${BODY2}\n${END}\nzqx26 after\n{"rc":0}\n`, exit: 0,
+    });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    for (const [where, text] of [['human stdout', h.stdout], ['--json stderr', j.stderr]] as const) {
+      const lines = text.split('\n');
+      expect(lines, `CONTROL ${where}: the lines around the shapes arrive unchanged`).toEqual(expect.arrayContaining(['zqx26 start', '{"password":', 'zqx26 mid', 'zqx26 after']));
+      expect(lines.indexOf('zqx26 start'), `${where}: arrival order`).toBeLessThan(lines.indexOf('zqx26 mid'));
+      expect(lines.indexOf('zqx26 mid'), `${where}: arrival order`).toBeLessThan(lines.indexOf('zqx26 after'));
+      expect(text, `${where}: the JSON value on the line after its key`).not.toContain(V);
+      expect(text, `${where}: the PEM body`).not.toContain('MIIB');
+      expect(lines, `${where}: the value's line keeps its quotes, the mark inside`).toContain(`  "${REDACTED_MARK}"}`);
+    }
+    expect(h.stdout, 'CONTROL: the result line is not relayed').not.toContain('{"rc"');
+  }, HEAVY);
+
+  for (const form of [[], ['--json']] as const) {
+    it(`the same shapes with the key and the value in SEPARATE writes are masked by the window, and stdout stays live${form.length ? ' (--json)' : ''}`, async () => {
+      const V = `hunter2${alnum(12)}`;
+      const box = boundBox(`ccrc-hist-relay-lb2${form.length ? 'j' : 'h'}-`);
+      rawShim(box, [
+        `printf '%s\\n' 'zqx26 start' ${sq(BEGIN)} ${sq(BODY1)}`,
+        ...waitFor(box, 1),
+        `printf '%s\\n' ${sq(BODY2)} ${sq(END)} 'zqx26 mid' '{"password":' ''`,
+        ...waitFor(box, 2),
+        `printf '%s\\n' '  "${V}"}' 'zqx26 after' '{"rc":0}'`,
+      ]);
+      const cli = startCli(box, ['doctor', '--backup', ...form]);
+      const seen = (): string => (form.length ? cli.peek().stderr : cli.peek().stdout);
+      let liveStart = false;
+      let liveMid = false;
+      try {
+        await until(() => fs.existsSync(path.join(box.home, 'wrote1')));
+        await until(() => seen().includes('zqx26 start\n'));
+        liveStart = true;
+        fs.writeFileSync(path.join(box.home, 'go1'), '');
+        await until(() => fs.existsSync(path.join(box.home, 'wrote2')));
+        await until(() => seen().includes('zqx26 mid\n'));
+        liveMid = true;
+      } finally {
+        fs.writeFileSync(path.join(box.home, 'go1'), '');
+        fs.writeFileSync(path.join(box.home, 'go2'), '');   // the stand-in ends either way
+      }
+      const r = await cli.done;
+      expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+      expect([liveStart, liveMid], 'CONTROL: each part reached the terminal before the next was written, so the key and the value were relayed apart').toEqual([true, true]);
+      const text = form.length ? r.stderr : r.stdout;
+      expect(text, 'the PEM body, written after its BEGIN line had been relayed').not.toContain('MIIB');
+      expect(text, 'the JSON value, written after its key had been relayed').not.toContain(V);
+      expect(text.split('\n'), 'CONTROL: the line after each shape arrives unchanged').toEqual(expect.arrayContaining(['zqx26 start', 'zqx26 mid', 'zqx26 after']));
+      expect(text, 'CONTROL: a mark stands').toContain(REDACTED_MARK);
+    }, HEAVY);
+  }
+
+  it('a JSON key just before the stderr spill seam and its value just after it: the value is masked across the seam', async () => {
+    const V = `hunter2${alnum(12)}`;
+    const box = boundBox('ccrc-hist-relay-lb3-');
+    const CAP_LINE = `zqx26 ${'y'.repeat(121)}`;   // 128 bytes with its line break: exactly 1 MiB is 8,192 lines
+    rawShim(box, [
+      // exactly the 1 MiB hold, then the key line in ONE write: the hold goes over the cap with it, so the spill writes through it
+      `yes ${JSON.stringify(CAP_LINE)} 2>/dev/null | head -c ${1 << 20} >&2`,
+      'printf \'%s\\n\' \'{"password":\' >&2',
+      ...waitFor(box, 1),
+      `printf '%s\\n' '  "${V}"}' 'zqx26 after' >&2`,
+      'printf \'%s\\n\' \'{"rc":0}\'',
+    ]);
+    const cli = startCli(box, ['doctor', '--backup']);
+    let spilled = false;
+    try {
+      await until(() => fs.existsSync(path.join(box.home, 'wrote1')), 60_000);
+      await until(() => cli.peek().stderr.endsWith('{"password":\n'));
+      spilled = true;
+    } finally {
+      fs.writeFileSync(path.join(box.home, 'go1'), '');
+    }
+    const r = await cli.done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    expect(spilled, 'CONTROL: the spill wrote through the key line before the value was written: the shape is split across the seam').toBe(true);
+    const lines = r.stderr.split('\n');
+    expect(lines.filter((l) => l === CAP_LINE), 'CONTROL: every line before the seam arrives').toHaveLength(8192);
+    expect(r.stderr, 'the value after the seam').not.toContain(V);
+    expect(lines, 'the value\'s line keeps its quotes, the mark inside').toContain(`  "${REDACTED_MARK}"}`);
+    expect(lines, 'CONTROL: the line after it arrives unchanged').toContain('zqx26 after');
+  }, 1.5 * HEAVY);
+
+  it('the windows are keyed by the shim\'s stream, never by where the CLI writes it: a PEM left open on stdout does not mask a stderr line, human and --json', () => {
+    const box = boundBox('ccrc-hist-relay-lb4-');
+    // stdout's window ends in an unterminated PEM block when the child closes; the held stderr is written at the close
+    stubShim(box, {
+      stderr: 'zqx26 err plain line\n',
+      stdout: `zqx26 start\n${BEGIN}\n${BODY1}\n{"rc":0}\n`, exit: 0,
+    });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    expect(h.stderr, 'human: the stderr line arrives as written').toBe('zqx26 err plain line\n');
+    expect(j.stderr.split('\n'), '--json: the stderr line arrives as written, beside stdout\'s lines').toContain('zqx26 err plain line');
+    for (const [where, text] of [['human stdout', h.stdout], ['--json stderr', j.stderr]] as const) {
+      expect(text, `CONTROL ${where}: the PEM is masked`).not.toContain('MIIB');
+      expect(text.split('\n'), `CONTROL ${where}: the line before it arrives`).toContain('zqx26 start');
+    }
+  }, HEAVY);
+
+  it('a JSON key and, on the next line, the next pair, in ONE stdout chunk: the value is masked as each line alone masks it, human and --json (review finding 11)', () => {
+    const V = `hunter2${alnum(12)}`;
+    const box = boundBox('ccrc-hist-relay-lb5-');
+    stubShim(box, { stdout: `zqx26 start\n{"token":\n"password": "${V}"}\nzqx26 after\n{"rc":0}\n`, exit: 0 });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    for (const [where, text] of [['human stdout', h.stdout], ['--json stderr', j.stderr]] as const) {
+      expect(text, `${where}: the value`).not.toContain(V);
+      const lines = text.split('\n');
+      // read as one text, the JSON-form rule takes "password" as token's value and the value prints; the union writes the next pair
+      // as one mark from its key on, where the per-line reading prints the key and masks the value
+      expect(lines, `${where}: the next pair is one mark from its key on`).toContain(`"${REDACTED_MARK}`);
+      expect(lines, `CONTROL ${where}: the lines around it arrive unchanged`).toEqual(expect.arrayContaining(['zqx26 start', '{"token":', 'zqx26 after']));
+    }
+  }, HEAVY);
+
+  // The plan's second review: one more one-chunk shape the per-line relay masked. A PEM block whose mark runs to an END line takes the
+  // next line's NAME in (the union's pin).
+  it('a PEM block that runs into the next line\'s NAME, in ONE stdout chunk: the value glued after its END is masked as its line alone masks it, human and --json', () => {
+    const V1 = `hunter2${alnum(12)}`;
+    const box = boundBox('ccrc-hist-relay-lb6-');
+    stubShim(box, { stdout: `zqx26 start\nzqx26 ${BEGIN}\nTOKEN=${BEGIN}abc${END}${V1}\nzqx26 after\n{"rc":0}\n`, exit: 0 });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    for (const [where, text] of [['human stdout', h.stdout], ['--json stderr', j.stderr]] as const) {
+      expect(text, `${where}: the value glued after END, whose NAME the PEM mark took in`).not.toContain(V1);
+      expect(text.split('\n'), `CONTROL ${where}: the lines around it arrive unchanged`).toEqual(expect.arrayContaining(['zqx26 start', 'zqx26 after']));
     }
   }, HEAVY);
 });

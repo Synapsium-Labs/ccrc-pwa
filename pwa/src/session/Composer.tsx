@@ -12,7 +12,7 @@ import { PALETTE_KEYS } from '../command/CommandLayer';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import './chat.css';
@@ -49,7 +49,7 @@ interface DraftConflict {
 }
 
 /** Where the key hints show: a desk-width pane with a physical keyboard. */
-const KEY_HINTS_QUERY = '(min-width: 900px) and (pointer: fine)';
+const KEY_HINTS_QUERY = `${DESK_QUERY} and (pointer: fine)`;
 
 /** The hints, in the order a reader reaches for them. Esc is the session screen's interrupt (`useEscapeInterrupt`);
  *  ⌘K the command palette's. */

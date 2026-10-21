@@ -1,0 +1,20 @@
+{
+  "exemptions": [
+    {
+      "pr": 1100,
+      "file": "ccd/ccd",
+      "cap": 400,
+      "reason": "fixture: the exemption-age CONTROL measures a non-empty list exactly",
+      "ruling": "fixture, not a ruling",
+      "since": "2026-10-21"
+    },
+    {
+      "pr": 1100,
+      "file": "ccd/ccrc",
+      "cap": 50,
+      "reason": "fixture: a second entry, so a count that answers 0 or 1 is red",
+      "ruling": "fixture, not a ruling",
+      "since": "2026-10-21"
+    }
+  ]
+}
