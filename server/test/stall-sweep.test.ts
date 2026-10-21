@@ -117,7 +117,7 @@ const seedTurnMark = (home: string, id: string, over: Record<string, unknown> = 
 const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   hibernatedAt: null,
   id, wrapper: 'claude', home: '/home/u', project: 'demo', workdir: '/w/demo',
-  workspace: `${id}-ws`, name: null, status: 'idle', statusUpdatedAt: IDLE_AT, limits: null,
+  workspace: `${id}-ws`, name: null, title: null, status: 'idle', statusUpdatedAt: IDLE_AT, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
@@ -131,6 +131,7 @@ const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join
 /** A complete registry row (`hold-gate.test.ts`'s literal), measured unless `over` says otherwise. */
 const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
   hibernatedAt: null,
+  namedByOperator: false, title: null,
   id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,

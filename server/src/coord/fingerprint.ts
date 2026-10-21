@@ -1,4 +1,4 @@
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
@@ -46,7 +46,7 @@ export type DoneVerdict =
  *  and does not cover), and an inline multi-line object-type parameter pushes
  *  the `{` onto its own line, which the scanner then cannot resolve to this
  *  function at all — the call site would report `gated: false` regardless of
- *  the `verbSupported(` call two lines below it. Naming the types keeps the
+ *  the `ccdCan(` call two lines below it. Naming the types keeps the
  *  signature, params and return type on one line. */
 export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState }
 /** `branch` here is a FALLBACK, not the measurement, and after Wave 3 §3.2 it
@@ -273,7 +273,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   }
 
   const argv = CCD_ARGV.prStateSession(run.sessionId);
-  if (!verbSupported(deps.fleetState, argv)) {
+  if (!ccdCan(deps.fleetState, 'prStateSession')) {
     return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
   }
   const res = await deps.runCcd(argv);

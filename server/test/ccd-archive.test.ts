@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -176,6 +176,11 @@ describe('ccd caps', () => {
     // spellings are free to drift, which is the drift this block exists for.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(SWAP_BUSY_CAP);
+    // Named workspaces (S1): the two `ws-add` flags. The server gates `--title` and `--wrapper` on these and sends
+    // neither to a box that does not list them (an older ccd binds an unknown token as a positional, D-6164); this
+    // holds the string here equal to both the constant the route will read and ccd's own `echo`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_TITLE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_WRAPPER_CAP);
     // Child reclamation wave 3's token: the third spelling of `reclaim-v1`,
     // held equal to the constant the executor gates on (`capSupported`) and to
     // ccd's own `echo reclaim-v1`.

@@ -22,7 +22,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
-| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | — | planned (plan added with this record); to dispatch |
+| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deploy AGENT-FIRST via ccrc's updater, then Task 7's re-run |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -702,6 +702,61 @@ carries it (spec §5.1, amended 2026-09-24).
       - inside the window, (e) comes first, and a silent lane is a stop;
       - every entry is dequeued before any rollback;
       - a bypass merge during the window is recorded, not a stop.
+- **2026-10-20 18:07 — wave 3c dispatched: run 710.** The plan merged as #974 (`afd71583`, squash at 17:31 UTC)
+  after three plan reviews and a verification pass, all findings folded. Main's own citation ratchet was red on
+  every pull request that afternoon (a count one below an exact baseline), so #974 waited for #988's fix and then
+  merged main in. The dispatch at 17:33 was refused at the daily session cap and retried at 18:07.
+  - **The run.** Run 710 is this programme's wave 5 on the server; the ledger calls it wave 3c. Run 310 (wave 3b)
+    stays open and planned. A block of 10 deviation numbers was issued at run-open. The worker names each departure
+    in its wave-done, and the coordinator defines the numbers at the wave's close, in the plan's Deviations found.
+  - **Task order, by the claims at dispatch.** Two other runs held files this wave edits: run 308's worker held
+    `ccd/ccd` (Task 1), and the path-identity worker held `server/src/watch.ts`, `shared/api.ts` and
+    `server/test/single-definition.test.ts` (Task 2). So the brief runs Tasks 3, 4 and 5 first, Task 2 when its
+    files free, and Task 1 when `ccd/ccd` frees. A worker that runs out of free tasks pushes, reports and waits.
+- **2026-10-20 23:50 — wave 3c's wave-done, review 718, and fix round 1.**
+  - **The wave-done** came back at `24f52cf0` (PR #1046). All six tasks were done, each with a clean task review,
+    then a whole-branch review with fixes and its fix wave. Its suite line read red, which it put down to `boot`'s
+    hung-ccd wall-clock case. Review 718 measured that case red on the merge base's source too and green in CI, so
+    it is the box's.
+  - **No pull-request CI ran.** The PR was opened while it already conflicted with `main` on `ccd/ccd`'s stamp, so
+    GitHub made no merge ref to test. A full run at the tip (`workflow_dispatch`) was red on one server file,
+    `collect-lane-prose`.
+  - **Review 718** ran the held-out panel and two wave lenses, with no finding unexamined and no lens unverified.
+    It found two important and nine minor findings. Three need a ruling:
+    - F1: Task 2's two added lines in `shared/api.ts` moved a test-pinned citation in the child-reclamation
+      spec's Appendix A. The wave re-anchored the README's citations but not this one, and it is the full run's red.
+    - F2: the runbook's UI-armed by-hand path ran the rollback block's `exit 1` lines in the operator's own shell,
+      and it stopped before the block's queue-empty and `seen` prints.
+    - F3: the rollback block writes the ruleset even after a `STILL LISTED` line, against the letter of the
+      carried constraint below.
+  - **Fix round 1, as ruled:**
+    - a land-sync merge of `main` first, on the stamp only, with the `ccd/ccd` holder's consent;
+    - F1 re-anchored by content, with `collect-lane-prose` added to the gate;
+    - F2's by-hand path runs inside the subshell, without the guard and without the write;
+    - two new pins, for the sweep latch's change of reason and for an external signal (F4, F5);
+    - the text fixes to a docstring, a comment, a moved docstring and the runbook's old function name (F6, F8,
+      F9, F11), with F6 made only with the `ccd/ccd` holder's agreement.
+    - F7 is a behaviour edit inside a docs-titled commit. Its answers are unchanged, as measured, so there is no
+      history rewrite.
+  - **F3 stands.** A rollback exists to unwedge the repository, so waiting on a `LOCKED` entry that never clears
+    would defeat it. The carried constraint below now names that exception.
+  - **Carried to a later wave (F10).** A failed sweep's log line carries no detail on the agent's deadline kill.
+    So the plan's sentence that a reader can tell which case it was holds only for a call that never ran.
+- **2026-10-21 02:12 — wave 3c merged as #1046 (`4ce282f8`); run 710 closed.**
+  - **Fix round 1** came back at `a91a490c`. It merged `main` once, on the stamp only, under the `ccd/ccd` holder's
+    consent, and it shipped every ruling, the docstring fix with the holder's own agreement.
+    - Review 724 found five minor findings and no regression.
+    - A full run at that tip passed on every leg, macOS included.
+  - **Fix round 2** came back at `ca246c27`. It is three small items: the by-hand rollback restores the UI settings
+    only after a run with no `STOP:` line, the proof record and the spec name `ours_of`, and a tip-null partner to
+    test (g) is added. Its pull-request CI passed on every job.
+    - Review 726 found six minor findings, four of them on the runbook's wording and one older behaviour, and no
+      regression. They are carried below, not sent back: none blocks the re-run, and each is read by hand inside it.
+  - **The merge.** It was a squash at the reviewed head, through the admin bypass, at 02:11 UTC. Before it, a
+    scratch landing merge with the newer `main` (#832 had also edited `server/src/watch.ts`) type-checked, and its
+    citation, prose, sweep and compaction-card suites passed.
+  - **The close.** Run 710 closed done and released its workspace. The wave's ten numbers are defined in the plan's
+    Deviations found, with the measured counts and the review rulings.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -741,7 +796,18 @@ carries it (spec §5.1, amended 2026-09-24).
 - **From Task 7's proof run (2026-10-20).** Never switch the queue requirement off while entries are in it: dequeue
   each entry first, so that GitHub records the removal and the lane can announce it. A queue window on this project
   starts only once the project's sweep is measured finishing within its bound, and inside it (e) is read first: a
-  removal the lane does not announce within one sweep ends the window.
+  removal the lane does not announce within one sweep ends the window. A rollback that cannot empty the queue (a
+  `LOCKED` entry that never clears, entries that keep arriving, or a dequeue that fails) writes anyway, and records
+  each such PR as silently dropped, with a comment on it (wave 3c, review 718's F3).
+- **From wave 3c's reviews, carried:**
+  - A failed sweep's log line names no detail for the agent's deadline kill (review 718's F10).
+  - Task 7's runbook, the by-hand rollback (review 726):
+    - its sentence says a run that printed `STOP:` "did not read the queue", where it means its last read failed;
+    - it does not point at the Expected paragraph's record-and-comment step for a `DEQUEUE FAILED` or
+      `STILL LISTED` PR;
+    - a `STOP:` after an earlier pass dequeued entries exits before the `seen` print, in the full block too. The
+      re-run reads the queue's removal events itself before relying on `seen`.
+  - Test (h)'s comment's last clause holds for the commit/blob collision only (review 726's F6).
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
@@ -751,7 +817,8 @@ carries it (spec §5.1, amended 2026-09-24).
 Waves 1–3 are merged (#231 `10f32755`, #234 `0087a045`, #248 `9a255a74`). Task 7's proof run on 2026-10-20 stopped
 on stop rule 3, and the queue is off (Decisions, 2026-10-20 13:00).
 
-**Wave 3c, Task 7's re-run preconditions, is planned next.** Its plan is
+**Wave 3c, Task 7's re-run preconditions, is merged as #1046 (`4ce282f8`, 2026-10-21 02:11; Decisions, 2026-10-21
+02:12).** Its plan is
 `docs/superpowers/plans/2026-10-20-landing-order-wave3c-task7-rerun-preconditions.md`. It carries:
 - `pr-state --project`'s per-workspace cost, with every answer unchanged;
 - a failed PR sweep that the server reports rather than hides;

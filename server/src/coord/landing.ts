@@ -4,7 +4,7 @@ import type { PrQueueRead } from '../prstate.js';
  * fastify-free and store-free, on `stall.ts`'s precedent — the coord-ring scan in `single-definition.test.ts` forbids
  * this file `./db.js` and `node:sqlite`, and `landing-verdict.test.ts` pins the rest: no node builtin, and no value
  * import but L0's `shared/api.ts` (today its imports are TYPES only). `watch.ts`'s `sweepLanding` keeps the READS
- * (the store, the registry, `survivorOf`, `resolveCoordinator`, `hasMailWithSubject`, `hasFeedEvent`) and the
+ * (the store, the registry, `survivorOf`, `resolveCoordinator`, `hasMailWithSubject`, `hasNotice`) and the
  * DELIVERIES (`queueSystemMail`, the feed record, the latch write); every DECISION is here: which notice a line asks
  * for, its latch key and whether it is already latched, whom to tell, whether a merge is told at all, which durable
  * read proves "already told", when to defer instead of latching, and the notice bodies.
@@ -88,7 +88,7 @@ export interface LandingFacts {
   /** The survivor run's own state, read for a merge only. `null` is a run row that is gone. */
   runState?: { ok: true; state: string | null } | { ok: false; detail: string };
   /** The durable "already told" answer: a mail through `hasMailWithSubject` when a coordinator is named, the feed
-   *  body through `hasFeedEvent` when none is. */
+   *  notice's key through `hasNotice` when none is (D-5860). */
   told?: boolean;
 }
 
@@ -97,6 +97,9 @@ export interface LandingMail {
 }
 export interface LandingRecord {
   title: string; body: string; runId: number | null; tag: string; recordAlways: true;
+  /** D-5860: the removal's once-only key (`LandingAsk.key`), archived beside the row whether or not a coordinator was
+   *  mailed, so a later feed-only read finds this removal whatever its wording (OA-C3, ruled A: the label decides). */
+  dedupeKey: string;
 }
 
 export type LandingStep =
@@ -104,7 +107,8 @@ export type LandingStep =
   | { step: 'coordinator'; runId: number }
   | { step: 'runState'; runId: number }
   | { step: 'toldMail'; runId: number; toId: string; subject: string }
-  | { step: 'toldFeed'; body: string }
+  /** D-5860: `key` is read first (`hasNotice`); `body` matches only a row archived before the key existed. */
+  | { step: 'toldFeed'; key: string; body: string }
   /** Say a warning, latch NOTHING: the next sweep re-reads. */
   | { step: 'defer'; detail: string }
   /** Say nothing and latch: told already, nobody to tell, or not a merge anyone waits on. */
@@ -142,7 +146,7 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
     + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`);
   const named = run !== null && coordinator !== null;
   if (f.told === undefined) {
-    return named ? { step: 'toldMail', runId: run.id, toId: coordinator, subject } : { step: 'toldFeed', body };
+    return named ? { step: 'toldMail', runId: run.id, toId: coordinator, subject } : { step: 'toldFeed', key: a.key, body };
   }
   if (f.told) return LATCH;
   return { step: 'deliver',
@@ -152,7 +156,7 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
       : null,
     // `recordAlways`: the record of a removal is never presence-gated.
     record: { title: `⤺ dequeued › ${a.workspace}`, body, runId: run?.id ?? null,
-      tag: `queue-${a.key}`, recordAlways: true } };
+      tag: `queue-${a.key}`, recordAlways: true, dedupeKey: a.key } };
 }
 
 // ── the notice bodies ─────────────────────────────────────────────────────────────────────────────────────────

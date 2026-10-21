@@ -5770,13 +5770,23 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
   const literalCalls = (files: readonly Text[]): string[] =>
     files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
   const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** D-5866 (Task C1k): `CCD_CAN`'s own entry for the row, a NAME keyed to its capability token, which builds and
+   *  calls nothing. It is excepted in `ccdargv.ts` alone, on its own line, and held to exactly one such line below. */
+  const CAN_ENTRY = /^\s*docsFetch: capRow\(DOCS_CAP\),\s*$/;
+  /** D-5866: the adapter's own gate, `ccdCan(deps.fleetState, 'docsFetch')`, ASKS by the row's name and builds
+   *  nothing. It is excepted in the adapter alone, on its own line, and held to exactly one such line below. */
+  const CAN_ASK = /^\s*if \(!ccdCan\(deps\.fleetState, 'docsFetch'\)\) return fail\('unsupported'\);\s*$/;
   /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
   const docsFetchLines = (files: readonly Text[]): string[] =>
-    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n')
+      .filter((l) => DOCS_FETCH_ID.test(l) && !(n === ARGV && CAN_ENTRY.test(l)) && !(n === SOURCE && CAN_ASK.test(l)))
+      .map(() => n));
   /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
   const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
   /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
-  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  // D-5866 (Task C1k): a TYPE query `keyof typeof CCD_ARGV` (the row-name type `CCD_CAN` is keyed by) reads no value,
+  // so it is not an escape. A bare `typeof CCD_ARGV` is still one.
+  const ARGV_ESCAPE = /(?<!\bkeyof\s+typeof\s+)\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
   const ARGV_DECLARATION = 'export const CCD_ARGV = {';
   /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
    *  declaration excepted. */
@@ -5799,6 +5809,30 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
 
   it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
     expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49: CCD_CAN\'s docsFetch entry is one line, in ccdargv.ts, and the exception sees nothing else (D-5866)', () => {
+    const argvText = LIVE.find(([n]) => n === ARGV)![1];
+    expect(stallCodeText(argvText).split('\n').filter((l) => CAN_ENTRY.test(l))).toHaveLength(1);
+    const before = docsFetchLines(LIVE).length;
+    expect(docsFetchLines(plantedIn(SOURCE, '  docsFetch: capRow(DOCS_CAP),')).length, 'outside ccdargv.ts it counts')
+      .toBe(before + 1);
+    expect(docsFetchLines(plantedIn(ARGV, '  docsFetch: (p, b) => CCD_ARGV.docsFetch(p, b),')).length, 'another line counts')
+      .toBe(before + 1);
+    const sourceText = LIVE.find(([n]) => n === SOURCE)![1];
+    expect(stallCodeText(sourceText).split('\n').filter((l) => CAN_ASK.test(l)), 'the adapter asks once').toHaveLength(1);
+    expect(docsFetchLines(plantedIn(ARGV, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return fail('unsupported');")).length,
+      'the ask counts outside the adapter').toBe(before + 1);
+    expect(docsFetchLines(plantedIn(SOURCE, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return run(CCD_ARGV.docsFetch(p, b));"))
+      .length, 'a line that asks AND calls counts').toBe(before + 1);
+  });
+
+  it('CONTROL: a keyof-typeof type query is not an escape; a bare typeof or a value use still is (D-5866)', () => {
+    const before = argvEscapes(LIVE).length;
+    expect(argvEscapes(plantedIn(SOURCE, 'type R = keyof typeof CCD_ARGV;')).length).toBe(before);
+    expect(argvEscapes(plantedIn(SOURCE, 'type T = typeof CCD_ARGV;')).length).toBe(before + 1);
+    expect(argvEscapes(plantedIn(SOURCE, 'const r = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];')).length)
+      .toBe(before + 1);
   });
 
   it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
@@ -8115,6 +8149,52 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   });
 });
 
+// D-5866 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1k, Step 4;
+// ARCH-71 (#806); spec §5.1 rule 3). The capability ratchet, placed directly after the ARCH-40 tail block and ahead of
+// the next appended block, so no cited line above it moves. Every verb question goes through `ccdCan(state, row)`:
+// a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
+// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there), and in
+// `watch.ts`, whose commit waits its turn in the one `watch.ts` queue behind C1f (named in the C1k PR body as the
+// follow-up `c1k-watch-after-c1f`). Both sets may only shrink. Flag and verb-precondition sites are reported, never
+// ratcheted. The census is loaded inside the rows, so this block adds no import line.
+describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
+  /** `watch.ts`'s legacy verb calls at C1k's tip: the name sweep's probe, child reclaim's and the collector's gates
+   *  (each with its pause beside it), the expiry selection and the project PR read. */
+  const WATCH_DEFERRED = 7;
+
+  it('no verb question outside ccdCan, except W4\'s three (and watch.ts\'s deferred commit)', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('./consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
+    const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
+    expect(show(legacy.filter((x) => x.file !== 'server/src/watch.ts')), 'ask ccdCan(state, row) instead').toEqual([]);
+    expect(legacy.filter((x) => x.file === 'server/src/watch.ts').length, 'watch.ts may only shrink')
+      .toBeLessThanOrEqual(WATCH_DEFERRED);
+    const w4 = sites.filter((x) => x.tag === 'w4-held');
+    expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
+      .toBeLessThanOrEqual(3);
+    expect(w4.every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    console.log(`capability census: flag ${sites.filter((x) => x.tag === 'flag').length}, verb-precondition ${
+      sites.filter((x) => x.tag === 'verb-precondition').length}, w4-held ${w4.length}, ccdCan ${
+      sites.filter((x) => x.form === 'ccdCan').length}`);
+  });
+
+  it('CONTROL: the census tags a planted verbSupported( outside W4 as a verb', async () => {
+    const { capabilityChoiceSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'ccd-can-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/x.ts'), 'if (!verbSupported(state, CCD_ARGV.wsHold(id, r, null))) return;\n');
+      const [x] = await capabilityChoiceSites(tree);
+      expect([x?.form, x?.tag]).toEqual(['verbSupported', 'verb']);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
@@ -8176,6 +8256,33 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+});
+
+// Named workspaces review fixes: vocabularies the PWA and the server both read are declared ONCE in `shared/` and the
+// other side imports them. Each was spelled twice before (the rename words' `BAD_TITLE_REASONS`; the Linear failure
+// arms as the server's `LINEAR_FAILURES` beside the PWA's `LOOKUP_NOTE` keys, and the preview's wire type as a loose
+// interface), which is how an arm gets added on one side only.
+describe('the named-workspace vocabularies have one home each', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('LINEAR_FAILURES').test("export const LINEAR_FAILURES = [")).toBe(true);
+    expect(decl('LINEAR_FAILURES').test("import { LINEAR_FAILURES } from '../../../shared/linear';")).toBe(false);
+  });
+  it('the Linear failure arms and the preview answer are declared once, in shared/linear.ts', () => {
+    for (const c of ['LINEAR_FAILURES', 'LinearFailure', 'ResolveAnswer']) expect(holders(decl(c)), c).toEqual(['shared/linear.ts']);
+  });
+  it('the bad-title reasons are declared once, in shared/refusal.ts, and no source spells the three words as a list', () => {
+    for (const c of ['BAD_TITLE_REASONS', 'BadTitleReason']) expect(holders(decl(c)), c).toEqual(['shared/refusal.ts']);
+    expect(holders(/'blank'\s*,\s*'control-characters'\s*,\s*'too-long'/)).toEqual(['shared/refusal.ts']);
+  });
+  it('the workspace id `${project}-${slug}` is spelled once, by workspaceId in shared/slug.ts', () => {
+    const spelled = /`[^`]*\$\{\s*(?:ctx\.)?project\s*\}-\$\{\s*(?:ctx\.|preview\.|plan\.ask\.)?slug\s*\}/;
+    expect(spelled.test('`${project}-${slug}`'), 'CONTROL: the pattern sees the spelling').toBe(true);
+    expect(spelled.test('`new workspace ${project}-${preview.slug} · branch`'), 'CONTROL: and the preview line').toBe(true);
+    expect(holders(spelled).filter((f) => f !== 'shared/slug.ts')).toEqual([]);
+    expect(holders(/\bexport const workspaceId\b/)).toEqual(['shared/slug.ts']);
   });
 });
 

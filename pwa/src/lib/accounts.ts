@@ -222,6 +222,15 @@ export function homeAbleLabelList(roster: readonly RosterWire[]): string {
   return joinLabels(roster.filter((a) => a.homeAble).map((a) => a.label));
 }
 
+/** Whether a workspace may START on this account (`homeAble`), for a door that must say so before the operator
+ *  commits to one (the new-session sheet's name field, named workspaces S8). ABSENCE PERMITS: a wrapper this roster
+ *  has no entry for (a live session reports it, or the roster has not arrived) is `true`, because this build cannot
+ *  tell, and ccd answers with its own reason (`<lane>:not-home-able`) if the lane is not one. Only a roster entry
+ *  that says `homeAble: false` closes the door here. */
+export function accountIsHomeAble(roster: readonly RosterWire[], wrapper: string): boolean {
+  return entryFor(roster, wrapper)?.homeAble ?? true;
+}
+
 /** The roster's ids, in declaration order — the base list `AccountsScreen`'s
  *  `rowOrder` and `SwapSheet`'s `pickableWrappers` each union in any extra
  *  wrapper a live session reports that the roster itself does not carry, so a

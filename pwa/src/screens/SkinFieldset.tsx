@@ -56,7 +56,7 @@ export function SkinFieldset(): ReactNode {
     <>
       <AppearanceFieldset legend="Layout" command="switch-layout">
         {choices.map((c) => (
-          <AppearanceRow key={c.id} choice={c} current={current} onPick={setSkin} group="settings-skin" swatch={false} />
+          <AppearanceRow key={c.id} choice={c} current={current} onPick={setSkin} group="settings-skin" />
         ))}
       </AppearanceFieldset>
       {/* Unlinked until #402 frees the control census (D-5459). */}

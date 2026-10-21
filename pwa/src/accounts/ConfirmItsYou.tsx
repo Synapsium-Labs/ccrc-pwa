@@ -13,13 +13,13 @@ export { LOCKED_TEXT } from './useStepUp';
  * A body, not a container: it sits inside whatever `Sheet` the account sheet opened, and its width is the sheet's.
  * Both skins draw it through the same primitives, so there is nothing here a skin varies.
  */
-export function ConfirmItsYou({ stepUp }: { stepUp: StepUp }): ReactNode {
+export function ConfirmItsYou({ stepUp, subject = 'an account' }: { stepUp: StepUp; subject?: string }): ReactNode {
   if (!stepUp.needed) return null;
   const { arm } = stepUp;
   return (
     <div className="flex flex-col gap-3" data-step-up={arm}>
       {arm !== 'locked' && arm !== 'unavailable' && (
-        <p className="m-0">Changing an account needs a fresh check that it&apos;s you.</p>
+        <p className="m-0">Changing {subject} needs a fresh check that it&apos;s you.</p>
       )}
       {/* A live region: a refusal arrives after the tap, so it announces itself. */}
       <p className="m-0" role="status">{stepUp.notice ?? ''}</p>

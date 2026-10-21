@@ -2,11 +2,11 @@
 // owns. These tests source ccd under an isolated HOME, exactly as
 // ccd-limits.test.ts does, so nothing here can touch the real registry.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, type CcdHarness } from './ccdWsHelpers.js';
-import { asManagerCalls } from './platformFixtures.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, seedAccountsSh, plantPoolEpoch, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls, itLinux } from './platformFixtures.js'; import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 
 let h: CcdHarness;
 let home: string;
@@ -1540,6 +1540,10 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
     { file: 'ccd-ws-slug-git.test.ts', grammar: 'slug-in-use', count: 3,
       what: 'the named-slug refusal\'s GIT/DISK arm (ws-slug-collision) — three assertions that a branch, a path and a registered worktree each refuse under the same `slug in use:` prefix, the prefix kept so one grep finds every refusal; the registry arm\'s message is untouched' },
+    { file: 'workspaces-named-route.test.ts', grammar: 'slug-in-use', count: 2,
+      what: 'named workspaces S5: a stubbed ccd stderr carrying the die sentence — one in the 409 `slug-taken` case (with the registry residue after the em-dash, which the route must not forward) and one in the transport-failure case that must NOT read as a refusal; the server classifies the sentence, it never emits it' },
+    { file: 'workspace-create-plan.test.ts', grammar: 'slug-in-use', count: 1,
+      what: 'named workspaces S5: `classifyAddFailure`\'s own unit case, a refusal sentence beside a wrapper refusal proving the wrapper arm is read first; a stubbed stderr, not an assertion on ccd\'s message' },
     { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
@@ -1626,5 +1630,424 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
     const bumped = DISPOSITION.map((d) => (d.file === 'ccd-reg-set-atomic.test.ts' ? { ...d, count: d.count + 1 } : d));
     expect(bumped.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
       .not.toEqual(bumped.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+  });
+});
+
+// ── NAMED WORKSPACES, S1: `ws-add --title`, `ws-add --wrapper`, `named`, caps ──
+// (docs/superpowers/specs/2026-10-20-named-workspaces-and-linear-tickets-design.md §4.1.)
+//
+// Everything below runs under the harness's fixture HOME; `WS_ADD` stubs the
+// spawn and the systemd calls, so what is asserted is what `cmd_ws_add` writes
+// and refuses, never a live session.
+describe('ws-add: --title, --wrapper and the named marker', () => {
+  /** Status and BOTH streams, separately: the refusal sentences are stderr and
+   *  a success line is stdout. The snippet and the free-text values ride the
+   *  ENVIRONMENT (`h.sh`'s own rule), so a control character or a 513-byte
+   *  title needs no shell quoting at all. */
+  const run = (snippet: string, extra: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
+    const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'],
+      { encoding: 'utf8', cwd: h.home, env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...extra }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: snippet } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const wsAdd = (args: string, extra: NodeJS.ProcessEnv = {}): ReturnType<typeof run> =>
+    run(`${WS_ADD} cmd_ws_add ${args}`, extra);
+
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const install = (w: string): void =>
+    fs.writeFileSync(path.join(home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+  const writeLimits = (w: string, five: number, seven: number): void =>
+    fs.writeFileSync(path.join(home, '.cc-limits', `${w}.json`),
+      JSON.stringify({ five, seven, ts: now(), fiveResetAt: now() + 10_000, sevenResetAt: now() + 400_000 }));
+  const tagPool = (project: string, pool: string): void => {
+    fs.mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'pools', project), `${pool}\n`);
+  };
+  /** The sweep report `_share_pct` reads, planted as `ccd-place-class.test.ts` plants it. */
+  const plantSweep = (estimates: Record<string, number>): void => {
+    const sw = path.join(home, '.cc-sessions', 'usage', 'sweep');
+    fs.mkdirSync(sw, { recursive: true });
+    const finishedAt = new Date(now() * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    fs.writeFileSync(path.join(sw, 'latest.json'), JSON.stringify({ finishedAt, perAccount: Object.fromEntries(
+      Object.entries(estimates).map(([k, v]) => [k, { fableShare: { estimate: v } }])) }));
+  };
+  const markAuthDead = (w: string): void =>
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${w}-authdead`), '1757203200 auth-401');
+  const disable = (w: string): void => fs.writeFileSync(path.join(home, '.cc-sessions', `${w}-disabled`), '');
+
+  /** FOUR home-able lanes, `claude-b` the CHEAPEST by a wide margin — so a test that names any OTHER lane
+   *  cannot pass by coincidence of the least-loaded pick. */
+  const claudeBCheapest = (): void => {
+    for (const w of ['claude', 'claude-a', 'claude-d']) writeLimits(w, 60, 60);
+    writeLimits('claude-b', 5, 5);
+  };
+
+  /** "Nothing exists": no worktree, no branch, no registry row — the refusal landed above the first write. */
+  const nothingCreated = (slug: string, project = 'demo'): void => {
+    const id = `${project}-${slug}`;
+    expect(fs.existsSync(path.join(home, 'worktrees', project, slug)), 'worktree').toBe(false);
+    expect(h.git(path.join(home, 'projects', project), 'branch', '--list', `ws/${slug}`), 'branch').toBe('');
+    const rows = fs.readdirSync(path.join(home, '.cc-sessions')).filter((f) => f.startsWith(`${id}.`) || f.startsWith(`.${id}.`));
+    expect(rows, 'registry rows').toEqual([]);
+  };
+
+  // ── the reason chain: characterised on the code as it stands, BEFORE it is extracted ─────────────────────
+  describe('the no-placement refusal keeps its exact words (characterisation, green before the extraction)', () => {
+    /** The full die sentence, minus nothing. `REG` is `<home>/.cc-sessions` — the harness plants it there. */
+    const refusal = (args: string): string => {
+      const r = wsAdd(args);
+      expect(r.status, r.stderr).toBe(1);
+      return r.stderr.trim();
+    };
+
+    it('an untagged project: every lane named with its own first failing predicate', () => {
+      h.makeRepo('demo');
+      disable('claude'); disable('claude-a'); disable('claude-b');
+      fs.rmSync(path.join(home, '.local', 'bin', 'claude-d'));
+      expect(refusal('demo eng-1234')).toBe(
+        'ccd: no account available for placement — claude:disabled claude-a:disabled claude-b:disabled claude-d:missing;'
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled) and retry — nothing was touched`);
+      nothingCreated('eng-1234');
+    });
+
+    it('a tagged project: pool= and class= reasons, and the pool remedy sentence', () => {
+      h.makeRepo('demo');
+      seedAccountsSh(home, POOLED_TEST_ROSTER);
+      plantPoolEpoch(home, POOL_BY_ID);
+      tagPool('demo', 'pool-b');
+      // claude is pool-a (mismatch); claude-a is switched off; claude-b is pool-b but has no wrapper; claude-d is
+      // untagged, so it passes the pool rule and is stopped by the class it cannot serve.
+      disable('claude-a');
+      fs.rmSync(path.join(home, '.local', 'bin', 'claude-b'));
+      writeLimits('claude-d', 5, 98); plantSweep({ 'claude-d': 0.55 });
+      expect(refusal('--route class=fable demo eng-1234')).toBe(
+        'ccd: no account available for placement in pool pool-b — claude:pool=pool-a claude-a:disabled claude-b:missing'
+        + ' claude-d:class=fable-unservable;'
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled), tag an account into pool pool-b in ~/.ccrc/accounts.json`
+        + ` and redeploy the agent lane, then let the projection (${home}/.cc-sessions/pool-epoch) carry the same edge`
+        + ' — that is what decides — or untag the project (ccd project-pool --project demo --clear) and retry — nothing was touched');
+    });
+
+    itLinux('a stale projection is named projection=<word>, the document and not the lane', () => {
+      h.makeRepo('demo');
+      seedAccountsSh(home, POOLED_TEST_ROSTER);
+      plantPoolEpoch(home, POOL_BY_ID, { lease: 1 });   // 1970: expired
+      tagPool('demo', 'pool-b');
+      const why = refusal('demo eng-1234');
+      expect(why).toContain(' claude:projection=stale claude-a:projection=stale claude-b:projection=stale claude-d:projection=stale;');
+    });
+
+    it('an undecidable project tag is named by tag:, never by a lane', () => {
+      h.makeRepo('demo');
+      tagPool('demo', 'Pool a');
+      expect(refusal('demo eng-1234')).toBe(
+        `ccd: no account available for placement — tag:malformed ${home}/.cc-sessions/pools/demo;`
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled) and retry — nothing was touched`);
+    });
+  });
+
+  // ── --title: the display title, and the marker that keeps a hand-given name out of the ai-title sweep ─────────
+  describe('--title writes `title` and `named`, and only --title does', () => {
+    const ID = 'demo-eng-1234';
+    const rawTitle = (): string => fs.readFileSync(path.join(home, '.cc-sessions', `${ID}.title`), 'utf8');
+
+    it('writes the title verbatim and the named marker', () => {
+      h.makeRepo('demo');
+      const r = wsAdd('--title "$T" demo eng-1234', { T: 'ENG-1234 - Fix the login flow' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(rawTitle(), 'the bytes, no newline a string-exact reader would trip on').toBe('ENG-1234 - Fix the login flow');
+      expect(h.reg(ID, 'named')).toBe('1');
+    });
+
+    it('the equals form and a position AFTER the positionals bind the same row (the strip loop is positionless)', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title="ENG-1234 - Fix" demo eng-1234').status).toBe(0);
+      expect(rawTitle()).toBe('ENG-1234 - Fix');
+      fs.rmSync(path.join(home, 'worktrees'), { recursive: true, force: true });
+      h.git(path.join(home, 'projects', 'demo'), 'worktree', 'prune');
+      h.git(path.join(home, 'projects', 'demo'), 'branch', '-D', 'ws/eng-1234');
+      for (const f of fs.readdirSync(path.join(home, '.cc-sessions'))) {
+        if (f.startsWith(`${ID}.`)) fs.rmSync(path.join(home, '.cc-sessions', f), { force: true });
+      }
+      expect(wsAdd('demo eng-1234 --title "$T"', { T: 'Later position' }).status).toBe(0);
+      expect(rawTitle()).toBe('Later position');
+      expect(h.reg(ID, 'named')).toBe('1');
+    });
+
+    it('a slug WITHOUT a title writes neither — that is the coordinator dispatch shape (M9)', () => {
+      h.makeRepo('demo');
+      const r = wsAdd('--no-rc --surface agent --actor "run:7 dispatch" demo eng-1234');
+      expect(r.status, r.stderr).toBe(0);
+      expect(h.reg(ID, 'title')).toBeNull();
+      expect(h.reg(ID, 'named')).toBeNull();
+      expect(h.reg(ID, 'workspace')).toBe('eng-1234');
+    });
+
+    it('a bare project (a drawn slug) writes neither', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('demo', { CCD_WS_SLUG: 'quiet-mesa' }).status).toBe(0);
+      expect(h.reg('demo-quiet-mesa', 'title')).toBeNull();
+      expect(h.reg('demo-quiet-mesa', 'named')).toBeNull();
+    });
+
+    it('--title with NO slug still marks the workspace named — the title is the signal, not the slug', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title "$T" demo', { T: 'Hand named', CCD_WS_SLUG: 'quiet-mesa' }).status).toBe(0);
+      expect(h.reg('demo-quiet-mesa', 'named')).toBe('1');
+      expect(h.reg('demo-quiet-mesa', 'title')).toBe('Hand named');
+    });
+
+    it('accepts exactly 512 bytes', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title "$T" demo eng-1234', { T: 'a'.repeat(512) }).status).toBe(0);
+      expect(rawTitle()).toHaveLength(512);
+    });
+
+    it.each([
+      ['a blank title', '   ', '--title must be non-blank'],
+      ['an empty title', '', '--title must be non-blank'],
+      ['a tab', 'ENG-1234\t- Fix', '--title must not contain control characters'],
+      ['a newline', 'ENG-1234\n- Fix', '--title must not contain control characters'],
+      ['an escape', 'ENG-1234 \u001b[31m', '--title must not contain control characters'],
+      ['513 bytes', 'a'.repeat(513), '--title is longer than 512 bytes'],
+      // BYTES, NOT CHARACTERS: 200 characters, 600 bytes.
+      ['200 three-byte characters', '€'.repeat(200), '--title is longer than 512 bytes'],
+    ])('refuses %s, before any worktree, branch or row exists', (_n, title, sentence) => {
+      h.makeRepo('demo');
+      const r = wsAdd('--title "$T" demo eng-1234', { T: title });
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccd: ${sentence}`);
+      nothingCreated('eng-1234');
+    });
+
+    it('refuses a second --title, in either spelling', () => {
+      h.makeRepo('demo');
+      for (const args of ['--title one --title two demo eng-1234', '--title one --title=two demo eng-1234', '--title=one --title two demo eng-1234']) {
+        const r = wsAdd(args);
+        expect(r.status, args).toBe(1);
+        expect(r.stderr, args).toContain('usage: ccd ws-add');
+        nothingCreated('eng-1234');
+      }
+    });
+
+    it('as the FINAL token it refuses with the usage line rather than hanging', () => {
+      h.makeRepo('demo');
+      const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+        env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --title` } });
+      expect(r.status, 'a valueless --title ran past the wall clock').toBe(1);
+      expect(r.stderr).toContain('usage: ccd ws-add');
+      nothingCreated('eng-1234');
+    });
+
+    /** Re-defines `_reg_set` so ONE field's write fails and every other runs the real one. */
+    const failing = (field: string): string =>
+      `eval "$(declare -f _reg_set | sed '1s/^_reg_set/_reg_set_real/')"; `
+      + `_reg_set() { [[ "$2" == ${field} ]] && return 1; _reg_set_real "$@"; }; `;
+
+    it.each(['named', 'title'])('a failed %s write WARNS and the workspace still lands — silence would leave a human name open to the sweep', (field) => {
+      h.makeRepo('demo');
+      const r = run(`${WS_ADD} ${failing(field)} cmd_ws_add --title "$T" demo eng-1234`, { T: 'ENG-1234 - Fix' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`ccd: warn: could not write ${home}/.cc-sessions/${ID}.${field}`);
+      expect(h.reg(ID, field)).toBeNull();
+      expect(h.reg(ID, 'uuid')).not.toBeNull();
+    });
+  });
+
+  // ── --wrapper: the operator's account, honoured through placement AND the post-worktree re-take ───────────────
+  describe('--wrapper places on the named account and refuses, never falls back', () => {
+    const ID = 'demo-eng-1234';
+
+    it('lands on the named lane although another is strictly the least loaded, and the registry still says so after the post-worktree step', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      // THE CONTROL: the same fixture, no --wrapper, picks claude-b — so what follows cannot pass by coincidence.
+      expect(wsAdd('demo ctrl-one').status).toBe(0);
+      expect(h.reg('demo-ctrl-one', 'wrapper')).toBe('claude-b');
+      const r = wsAdd('--wrapper claude-d demo eng-1234');
+      expect(r.status, r.stderr).toBe(0);
+      // `wrapper` is written AFTER the re-pick (B2): re-picking there would overwrite the choice with claude-b.
+      expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      expect(h.reg(ID, 'home')).toBe('claude-d');
+    });
+
+    it('the equals form and a position after the positionals bind the same lane', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      expect(wsAdd('--wrapper=claude-a demo one-one').status).toBe(0);
+      expect(h.reg('demo-one-one', 'wrapper')).toBe('claude-a');
+      expect(wsAdd('demo two-two --wrapper claude-d').status).toBe(0);
+      expect(h.reg('demo-two-two', 'wrapper')).toBe('claude-d');
+    });
+
+    it('composes with --title: both are written', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      expect(wsAdd('--title "$T" --wrapper claude-d demo eng-1234', { T: 'ENG-1234 - Fix' }).status).toBe(0);
+      expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      expect(h.reg(ID, 'title')).toBe('ENG-1234 - Fix');
+    });
+
+    it('--wrapper alone does not mark the workspace named', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--wrapper claude-d demo eng-1234').status).toBe(0);
+      expect(h.reg(ID, 'named')).toBeNull();
+      expect(h.reg(ID, 'title')).toBeNull();
+    });
+
+    it('the post-worktree step RE-VALIDATES the named lane: one that stops qualifying while the worktree is made dies with the EXISTS sentence', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      // The lane is switched off in the window between the pre-flight and the re-take — the same window the
+      // placement re-pick exists for. `git worktree add` is the act in that window.
+      const switchOff = `git() { case "$*" in *"worktree add"*) : > "$HOME/.cc-sessions/claude-d-disabled" ;; esac; command git "$@"; }; `;
+      const r = run(`${WS_ADD} ${switchOff} cmd_ws_add --wrapper claude-d demo eng-1234`);
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain('--wrapper refused');
+      expect(r.stderr).toContain('claude-d:disabled');
+      expect(r.stderr).toContain(`The worktree ${home}/worktrees/demo/eng-1234 and the branch ws/eng-1234 EXIST and no registry row names them`);
+      // It did NOT fall back to claude-b, and no row was written.
+      expect(h.reg(ID, 'uuid')).toBeNull();
+      expect(h.reg(ID, 'wrapper')).toBeNull();
+      expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'eng-1234'))).toBe(true);
+    });
+
+    describe('a lane that cannot take it is refused with the lane\'s reason, and nothing exists afterwards', () => {
+      const refuses = (args: string, reason: string): void => {
+        const r = wsAdd(args);
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain('ccd: --wrapper refused');
+        expect(r.stderr).toContain(reason);
+        expect(r.stderr).toContain('nothing was touched');
+        nothingCreated('eng-1234');
+      };
+
+      it('an overflow (non-home-able) lane, even with its wrapper installed and enabled', () => {
+        h.makeRepo('demo');
+        install('gpt');
+        refuses('--wrapper gpt demo eng-1234', 'gpt:not-home-able');
+      });
+
+      it('a lane the roster does not know', () => {
+        h.makeRepo('demo');
+        refuses('--wrapper nosuch demo eng-1234', 'nosuch:not-home-able');
+      });
+
+      it('an auth-dead (condemned) lane — the operator named it, so it is not placed on silently', () => {
+        h.makeRepo('demo');
+        markAuthDead('claude-d');
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:auth-dead');
+      });
+
+      it('a disabled lane', () => {
+        h.makeRepo('demo');
+        disable('claude-d');
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:disabled');
+      });
+
+      it('a lane with no wrapper installed', () => {
+        h.makeRepo('demo');
+        fs.rmSync(path.join(home, '.local', 'bin', 'claude-d'));
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:missing');
+      });
+
+      it('a lane outside the project\'s pool', () => {
+        h.makeRepo('demo');
+        seedAccountsSh(home, POOLED_TEST_ROSTER);
+        plantPoolEpoch(home, POOL_BY_ID);
+        tagPool('demo', 'pool-b');
+        refuses('--wrapper claude demo eng-1234', 'claude:pool=pool-a');
+        // …and the pool's own lane is still welcome: the refusal is the pool rule, not the flag.
+        expect(wsAdd('--wrapper claude-b demo eng-1234').status).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+      });
+
+      it('a project whose pool tag nobody can read — named by tag:, as the placement refusal names it', () => {
+        h.makeRepo('demo');
+        tagPool('demo', 'Pool a');
+        refuses('--wrapper claude-d demo eng-1234', `tag:malformed ${home}/.cc-sessions/pools/demo`);
+      });
+    });
+
+    describe('the class gate applies ONLY to an explicit --route class=, and never degrades a rung', () => {
+      /** claude-d is past the seven-day ceiling, which makes `opus` unservable there — and `opus` is the coordinator
+       *  row's default class, the one nobody typed. A precondition, asserted: without it the cases below would
+       *  prove nothing about the gate. */
+      const claudeDPastCeiling = (): void => {
+        writeLimits('claude-d', 5, 98);
+        for (const w of ['claude', 'claude-a', 'claude-b']) writeLimits(w, 5, 5);
+        expect(run('_class_gate claude-d opus; echo "rc=$?"').stdout.trim()).toBe('rc=1');
+        expect(run('_class_gate claude-b opus; echo "rc=$?"').stdout.trim()).toBe('rc=0');
+      };
+
+      it('an explicit class the lane cannot serve is refused — not placed one rung down, not placed elsewhere', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--route class=opus --wrapper claude-d demo eng-1234');
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain('ccd: --wrapper refused');
+        expect(r.stderr).toContain('claude-d:class=opus-unservable');
+        nothingCreated('eng-1234');
+      });
+
+      it('the coordinator row\'s default class (nobody typed it) does NOT refuse the operator\'s pick', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--wrapper claude-d demo eng-1234');
+        expect(r.status, r.stderr).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      });
+
+      it('an explicit class the lane serves is placed on it', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--route class=opus --wrapper claude-b demo eng-1234');
+        expect(r.status, r.stderr).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+        expect(h.reg(ID, 'class')).toBe('opus');
+      });
+    });
+
+    describe('the flag itself is validated like --actor, above everything that creates', () => {
+      it.each([
+        ['a blank lane', '   ', '--wrapper must be non-blank'],
+        ['an empty lane', '', '--wrapper must be non-blank'],
+        ['a lane with a control character', 'claude\td', '--wrapper must not contain control characters'],
+        ['a 513-byte lane', 'a'.repeat(513), '--wrapper is longer than 512 bytes'],
+      ])('refuses %s', (_n, lane, sentence) => {
+        h.makeRepo('demo');
+        const r = wsAdd('--wrapper "$W" demo eng-1234', { W: lane });
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain(sentence);
+        nothingCreated('eng-1234');
+      });
+
+      it('refuses a second --wrapper', () => {
+        h.makeRepo('demo');
+        for (const args of ['--wrapper claude --wrapper claude-d demo eng-1234', '--wrapper=claude --wrapper claude-d demo eng-1234']) {
+          const r = wsAdd(args);
+          expect(r.status, args).toBe(1);
+          expect(r.stderr, args).toContain('usage: ccd ws-add');
+          nothingCreated('eng-1234');
+        }
+      });
+
+      it('as the FINAL token it refuses with the usage line rather than hanging', () => {
+        h.makeRepo('demo');
+        const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+          env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --wrapper` } });
+        expect(r.status, 'a valueless --wrapper ran past the wall clock').toBe(1);
+        expect(r.stderr).toContain('usage: ccd ws-add');
+        nothingCreated('eng-1234');
+      });
+    });
+  });
+
+  // ── caps: the server sends neither flag to a box that does not advertise it ───────────────────────────────
+  describe('ccd caps advertises both flags', () => {
+    it('lists ws-title-v1 and ws-wrapper-v1', () => {
+      const caps = h.sh('cmd_caps').split('\n');
+      expect(caps).toContain('ws-title-v1');
+      expect(caps).toContain('ws-wrapper-v1');
+    });
   });
 });

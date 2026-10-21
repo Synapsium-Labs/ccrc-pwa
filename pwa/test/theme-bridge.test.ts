@@ -35,6 +35,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { THEMES } from '@ccrc/ui';
 import path from 'node:path';
+import { rootBody } from './cssRule';
 
 const UI_STYLES = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles');
 const themeCss = readFileSync(path.join(UI_STYLES, 'theme.css'), 'utf8');
@@ -89,9 +90,9 @@ function rootTokens(css: string): Set<string> {
   // Slice from AFTER the brace: the first `;`-segment would otherwise carry
   // the `:root {` prefix and its token would not match at the segment head —
   // which cost exactly one token, --bg-page, the page ground itself.
-  const open = css.indexOf(':root {') + ':root {'.length;
-  const close = css.indexOf('\n}', open);
-  const body = css.slice(open, close);
+  // Every top-level `:root` rule: its colours are one block (shared with
+  // `[data-theme='phosphor']`, D-5503), type, density and motion the next.
+  const body = rootBody(css);
   // SPLIT ON `;`, not on newlines. tokens.css packs the spacing ramp four to a
   // line (`--sp-1: 4px;   --sp-2: 8px;   …`), so a line-anchored scan sees
   // --sp-1 and misses --sp-2 through --sp-4 — which is how this guard first

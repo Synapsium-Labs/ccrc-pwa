@@ -21,7 +21,7 @@ import {
   BACK_BUTTON, BARE_ROW, DOOR, KEYCAP, LIST_ROW, buttonVariants,
 } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
-import { atBlock, declValue, ruleIn, selectorsOf, stripComments } from './cssRule';
+import { atBlock, declValue, rootBody, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -201,16 +201,20 @@ describe('a lifted ground fades in at --dur-fast, the per-skin duration', () => 
   });
 
   it('the duration differs by skin: 180ms in Refined, 120ms in Instrument', () => {
-    expect(declValue(ruleIn(read('ui/src/styles/tokens.css'), ':root'), '--dur-fast')).toBe('180ms');
+    expect(declValue(rootBody(read('ui/src/styles/tokens.css')), '--dur-fast')).toBe('180ms');
     expect(read('ui/src/styles/skins.css'))
       .toMatch(/:root\[data-skin='instrument'\]\s*\{[^}]*--dur-fast:\s*120ms;/);
   });
 
   it('an anchor wearing the ghost lifts and sinks without enabled:, which never matches an <a>', () => {
-    const sheet = read('pwa/src/session/PrSheet.tsx');
-    const at = sheet.match(/<a className=\{([^}]*\}\)[^}]*)\}/);
-    expect(at, 'the Open on GitHub anchor').not.toBeNull();
+    // One owner for the shape (lib/ghostAnchor.ts); every anchor that wears the ghost wears it from there.
+    const owner = read('pwa/src/lib/ghostAnchor.ts');
+    const at = owner.match(/GHOST_ANCHOR = cn\(([^;]*)\);/);
+    expect(at, 'the ghost anchor').not.toBeNull();
     const expr = at![1]!;
+    for (const f of ['pwa/src/session/PrSheet.tsx', 'pwa/src/fleet/CollectLaneSection.tsx']) {
+      expect(read(f), f).toMatch(/<a\s+className=\{GHOST_ANCHOR\}/);
+    }
     expect(expr).toMatch(/buttonVariants\(\{ variant: 'ghost' \}\)/);
     expect(expr).toMatch(/(^|['\s])hover:bg-hover(\s|')/);
     expect(expr).toMatch(/(^|['\s])active:bg-pressed(\s|')/);

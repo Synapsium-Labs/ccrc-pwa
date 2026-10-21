@@ -38,6 +38,10 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   startCross: ['claude', 'demo'],
   enableCross: ['claude', 'demo'],
   wsAdd: ['demo'],
+  // The named create (named workspaces S5): the same bare `['ws-add']` grant, a third builder. Its sample carries a
+  // title, a wrapper, no route and a dec, so layer 2 proves the leading `--title`/`--wrapper` pair and the trailing slug
+  // cross the grant with no widening.
+  wsAddNamed: ['demo', 'eng-1234', { title: 'ENG-1234', wrapper: 'lane-a' }, null, { surface: 'pwa', actor: 'unmeasured', reason: null }],
   // Same bare `['ws-add']` grant, second builder: the dispatch path's
   // worker-declaring form. Its sample proves the FLAGGED shape crosses the
   // existing prefix with no widening — tokens after the prefix are
@@ -62,6 +66,10 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsArchive: ['demo-quiet-basin', null],
   wsRestore: ['demo-quiet-basin', null],
   wsAudit: ['demo-quiet-basin'],
+  // NAMED WORKSPACES S9: the rename verb's own two-token grant, `['ws-title','--session']`. The sample sets a title that
+  // BEGINS WITH DASHES, so layer 2 proves a title token ccd must read as text still crosses the grant; its sibling
+  // clear form is pinned by name in `whitelist-subset.test.ts`.
+  wsTitle: ['demo-quiet-basin', { title: '-- ENG-1234 - Fix the login flow' }],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   // CHILD RECLAMATION wave 3. The audit half rides wsAudit's grant; the verb
   // carries a dec, so `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses the new grant.

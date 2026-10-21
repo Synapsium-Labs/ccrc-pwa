@@ -19,6 +19,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { plantPoolEpoch } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { watcherTeardown } from './watcherTeardown.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
 
@@ -82,6 +83,10 @@ const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: bo
 describe('fleet REST + WS', () => {
   let home: string;
   let app: FastifyInstance | undefined;
+  // Every watcher a case builds goes through `mkWatcher`, so the teardown can await its in-flight writes before it
+  // removes the home (D-6179).
+  const teardown = watcherTeardown();
+  const mkWatcher = (...a: ConstructorParameters<typeof FleetWatcher>) => teardown.track(new FleetWatcher(...a));
 
   beforeEach(() => {
     home = mkTmp('ccrc-');
@@ -90,10 +95,9 @@ describe('fleet REST + WS', () => {
   });
 
   afterEach(async () => {
-    if (app) await app.close();
+    const closing = app;
     app = undefined;
-    // The bare-watcher cases' first tick can still be landing a server-caps write here; `maxRetries` covers `ENOTEMPTY`.
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await teardown.remove(home, closing);
     vi.restoreAllMocks();
   });
 
@@ -109,7 +113,7 @@ describe('fleet REST + WS', () => {
   it('WS /ws/fleet sends a snapshot on connect, then pushes fleet changes and notices', async () => {
     const deps = testDeps(home);
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus);
+    const watcher = mkWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
     await watcher.tick(); // prime the watcher's diff state before any client connects
 
@@ -213,7 +217,7 @@ describe('fleet REST + WS', () => {
     const io: FleetIO = { ...localIO, readdir: async (p) => (failListing ? null : localIO.readdir(p)) };
     const deps: Deps = { ...testDeps(home), io };
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus);
+    const watcher = mkWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
     await watcher.tick();   // broadcasts the one-session fleet
 
@@ -249,7 +253,7 @@ describe('fleet REST + WS', () => {
     };
     const deps = testDeps(home, run);
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus);
+    const watcher = mkWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
     await watcher.tick(); // watcher detects the dialog BEFORE any client connects
 
@@ -279,7 +283,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
@@ -295,7 +299,7 @@ describe('fleet REST + WS', () => {
     const deps: Deps = {
       ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath,
     };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
@@ -316,7 +320,7 @@ describe('fleet REST + WS', () => {
     seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick(); // both sessions readable — writes a 2-row cache
     let snap = await loadSnapshot(cachePath);
@@ -345,7 +349,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick(); // 1 row
     expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(1);
@@ -375,7 +379,7 @@ describe('fleet REST + WS', () => {
     mkdirSync(path.join(emptyHome, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
@@ -409,7 +413,7 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick(); // both sessions readable — writes a 2-row cache
       let snap = await loadSnapshot(cachePath);
@@ -444,7 +448,7 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
@@ -472,7 +476,7 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
@@ -530,7 +534,7 @@ describe('fleet REST + WS', () => {
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick(); // clean read — writes a 1-row cache
       let snap = await loadSnapshot(cachePath);
@@ -565,7 +569,7 @@ describe('fleet REST + WS', () => {
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       const firstSavedAt = (await loadSnapshot(cachePath))!.savedAt;
@@ -602,7 +606,7 @@ describe('fleet REST + WS', () => {
       const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       setDegraded(true);
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
 
@@ -628,7 +632,7 @@ describe('fleet REST + WS', () => {
         },
       };
       const deps: Deps = { ...testDeps(home), io: gatedIO };
-      const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+      const watcher = mkWatcher(deps, new Bus(), 10_000);
       const tick = (): Promise<void> => (watcher as unknown as { tick: () => Promise<void> }).tick();
 
       const p1 = tick();
@@ -668,7 +672,7 @@ describe('fleet REST + WS', () => {
       }) as { id: number };
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -717,7 +721,7 @@ describe('fleet REST + WS', () => {
         .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -759,7 +763,7 @@ describe('fleet REST + WS', () => {
       }) as { id: number };
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -791,7 +795,7 @@ describe('fleet REST + WS', () => {
       });
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -821,7 +825,7 @@ describe('fleet REST + WS', () => {
     it('a server with no coord sends no runs frame at all', async () => {
       const deps = testDeps(home);
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -862,7 +866,7 @@ describe('fleet REST + WS', () => {
       coord.db.close();
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       // Deliberately NOT ticked — this isolates the `/ws/fleet` connect
       // handler's own guard from `FleetWatcher`'s (which has its own tests).
@@ -899,7 +903,7 @@ describe('fleet REST + WS', () => {
     const connect = async (over: Partial<Deps> = {}, opts: { tick?: boolean } = {}) => {
       const deps = { ...testDeps(home), ...over };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       if (opts.tick !== false) await watcher.tick();
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -1072,7 +1076,7 @@ describe('fleet REST + WS', () => {
     ) => {
       const deps = { ...testDeps(home), ...over };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus, opts.intervalMs);
+      const watcher = mkWatcher(deps, bus, opts.intervalMs);
       app = await buildServer(deps, bus, watcher);
       if (opts.tick !== false) await watcher.tick();
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -1315,7 +1319,7 @@ describe('fleet REST + WS', () => {
         const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
         const deps = { ...testDeps(home), coord };
         const bus = new Bus();
-        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        app = await buildServer(deps, bus, mkWatcher(deps, bus));
         const res = await app.inject({ method: 'GET', url: '/api/fleet' });
         expect(res.statusCode).toBe(200);
         const body = res.json() as { pools: { epoch?: number; observedEpoch?: number | null } };
@@ -1334,7 +1338,7 @@ describe('fleet REST + WS', () => {
         coord.db.close();
         const deps = { ...testDeps(home), coord };
         const bus = new Bus();
-        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        app = await buildServer(deps, bus, mkWatcher(deps, bus));
         const res = await app.inject({ method: 'GET', url: '/api/fleet' });
         expect(res.statusCode).toBe(200);
         const body = res.json() as { pools: { epoch?: number } };
@@ -1355,7 +1359,7 @@ describe('fleet REST + WS', () => {
           fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP], rosterFp: null, build: null },
         };
         const bus = new Bus();
-        const watcher = new FleetWatcher(enforcedDeps, bus);
+        const watcher = mkWatcher(enforcedDeps, bus);
         app = await buildServer(enforcedDeps, bus, watcher);
         const res = await app.inject({ method: 'GET', url: '/api/fleet' });
         expect(res.statusCode).toBe(200);
@@ -1480,7 +1484,7 @@ describe('fleet REST + WS', () => {
       // arrival is ordered by this test instead of by a lane's own clock.
       const deps = testDeps(home);
       const bus = new Bus();
-      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+      app = await buildServer(deps, bus, mkWatcher(deps, bus));
 
       await app.listen({ host: '127.0.0.1', port: 0 });
       const addr = app.server.address();
@@ -1515,7 +1519,7 @@ describe('fleet REST + WS', () => {
       // clean census and a server that has not looked.
       const deps = testDeps(home);
       const bus = new Bus();
-      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+      app = await buildServer(deps, bus, mkWatcher(deps, bus));
 
       await app.listen({ host: '127.0.0.1', port: 0 });
       const addr = app.server.address();
