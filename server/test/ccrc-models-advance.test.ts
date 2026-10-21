@@ -61,13 +61,13 @@ const FAKES = [
   '_codex_start_tier() { printf \'start %s %s\\n\' "$1" "$2" >> "$HOME/lane-calls"; return 0; }',
 ].join('\n');
 
-/** A models-op stand-in: logs each call's op and flags (paths dropped) to `$HOME/op-calls`, hangs (ignoring TERM) for
+/** A models-op stand-in: logs each call's op and flags (absolute paths dropped; a model id that carries a slash stays) to `$HOME/op-calls`, hangs (ignoring TERM) for
  *  any op named in `OP_HANG`, then runs the REAL program in this very process. */
 const OP_STUB = `#!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const a = process.argv.slice(2);
-appendFileSync(\`\${process.env.HOME}/op-calls\`, a.filter((x) => !x.includes('/')).join(' ') + '\\n');
+appendFileSync(\`\${process.env.HOME}/op-calls\`, a.filter((x) => !x.startsWith('/')).join(' ') + '\\n');
 if ((process.env.OP_HANG ?? '').split(',').includes(a[0])) {
   process.on('SIGTERM', () => {});
   await new Promise((r) => setTimeout(r, 150_000));
@@ -79,12 +79,13 @@ if ((process.env.OP_REFUSE ?? '') === a[0]) {
   process.stdout.write(JSON.stringify({ ok: false, error: 'registry-invalid', detail: 'the fixture refuses this op.' }) + '\\n');
   process.exit(1);
 }
-if (a[0] === 'advance-plan' && (process.env.OP_PLAN_EXTRA || process.env.OP_PLAN_WHY)) {
+if (a[0] === 'advance-plan' && (process.env.OP_PLAN_EXTRA || process.env.OP_PLAN_PREPEND || process.env.OP_PLAN_WHY)) {
   // The real planner's answer with extra class rows appended (a row the frame protocol cannot carry) and/or its why replaced
   // by the JSON value in OP_PLAN_WHY.
   const r = spawnSync(process.execPath, [${JSON.stringify(path.join(REPO, 'deploy', 'models-op.mjs'))}, ...a], { encoding: 'utf8', env: process.env });
   const j = JSON.parse(r.stdout);
   if (process.env.OP_PLAN_EXTRA) j.classes.push(...JSON.parse(process.env.OP_PLAN_EXTRA));
+  if (process.env.OP_PLAN_PREPEND) j.classes.unshift(...JSON.parse(process.env.OP_PLAN_PREPEND));
   if (process.env.OP_PLAN_WHY) j.why = JSON.parse(process.env.OP_PLAN_WHY);
   process.stdout.write(JSON.stringify(j) + '\\n');
   process.exit(r.status ?? 1);
@@ -144,7 +145,7 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
     'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
-    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_RAW', 'OP_PLAN_EXTRA', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
+    '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_RAW', 'OP_PLAN_EXTRA', 'OP_PLAN_PREPEND', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
     delete inherited[k];
   }
@@ -1839,6 +1840,7 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read cannot be failed by a 
     ['is refused by the planner (an error answer, exit 1)', { OP_REFUSE: 'advance-plan' }],
     ['is valid JSON that is not a plan (an answer with no classes, exit 0)', { OP_PLAN_RAW: '{"ok":true,"eligible":true}' }],
     ['is a JSON array', { OP_PLAN_RAW: '[]' }],
+    ['says it is not ok (ok false, eligible, no classes, exit 0)', { OP_PLAN_RAW: '{"ok":false,"eligible":true,"classes":[]}' }],
   ] as [string, NodeJS.ProcessEnv][])('a plan that %s still ends the lane: no backfill, nothing settled', async (_w, extra) => {
     await setup({ opStub: OP_STUB });
     tier(0);
@@ -1869,12 +1871,6 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read cannot be failed by a 
     expect(jqDef('tok')).toBe(jqOf(re![1]!));
   });
 
-  it('every grammar of the step ends in \\z, never $: a final newline is the one character a line frame cannot carry', () => {
-    const defs = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8').match(/^MODELS_JQ_DEFS='[\s\S]*?\n'$/m)![0];
-    const tests = [...defs.matchAll(/test\("((?:[^"\\]|\\.)*)"\)/g)].map((m) => m[1]!);
-    expect(tests.length, 'the definitions block lost its patterns').toBeGreaterThanOrEqual(3);
-    for (const t of tests.filter((x) => x.startsWith('^'))) expect(t, `${t} ends in $`).toMatch(/\\\\z$/);
-  });
 });
 
 describe('an empty or zero deadline is refused by the bounded identity question (R3)', () => {
@@ -1903,8 +1899,10 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
    *  line: the multi-line reading, to the next `}` at column 0, would swallow whatever follows it. */
   const defs = (): Map<string, string> => {
     const m = new Map<string, string>();
-    for (const x of src.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\)[ \t]*\{([^\n]*)(?:\n|$)/gm)) {
-      const oneLine = /^ .*\}\s*$/.test(x[2]!);
+    for (const x of src.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{([^\n]*)(?:\n|$)/gm)) {
+      // The rest of the brace line. A definition may put its `{` on the next line (the `\s*` crosses it), and then the rest is
+      // empty or a comment; a one-line definition has `{ …; }` all on one line, led by whitespace.
+      const oneLine = /^\s.*\}\s*$/.test(x[2]!);
       const body = oneLine ? x[0] : /^[\s\S]*?\n\}/.exec(src.slice(x.index))![0];
       m.set(x[1]!, code(body));
     }
@@ -1938,11 +1936,13 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
     expect(reach.filter((f) => /\b_codex_lock\b/.test(all.get(f)!)), 'a function the step reaches takes the tier lock').toEqual([]);
   });
 
-  it('the jq vocabulary is written once, in MODELS_JQ_DEFS, and no step program writes a definition of its own', () => {
+  it('the five shared jq definitions (tok, word, flat, eff, ofpin) are written once, and no function the step reaches writes any definition', () => {
     for (const d of ['tok', 'word', 'flat', 'eff', 'ofpin']) {
       expect(src.match(new RegExp(`\\bdef\\s+${d}\\s*[:(]`, 'g')), `def ${d} is written more than once`).toHaveLength(1);
     }
     const all = defs();
+    // Any `def` at all, of any name: the five above are counted by name, this scan is what sees a sixth.
+    expect(reachable().filter((f) => /\bdef\s+[A-Za-z_][A-Za-z0-9_]*\s*[:(]/.test(all.get(f)!)), 'a function the step reaches writes a jq definition').toEqual([]);
     for (const fn of ['_models_adv_body_plan', '_models_adv_body_canary', '_models_adv_body_receipt', '_models_hand_settled']) {
       expect(all.get(fn), `${fn} does not start from the shared definitions`).toContain('"$MODELS_JQ_DEFS"');
     }
@@ -1950,15 +1950,30 @@ describe("the step's helpers and vocabulary, pinned in source (R2, R9, R12)", ()
 
   it('MODELS_AUTO_TAIL_S is read in one place, and the lock and the writer both ask it', () => {
     const all = defs();
-    // ANY read of it: `${MODELS_AUTO_TAIL_S:-}`, `$MODELS_AUTO_TAIL_S`, `${MODELS_AUTO_TAIL_S}`, in a function or at file scope. The
-    // assignments (`MODELS_AUTO_TAIL_S=31`, the step's `local …=0`) and the `unset` are not reads.
-    const READ = /\$\{?MODELS_AUTO_TAIL_S\b/;
-    const readers = [...all].filter(([, body]) => READ.test(body)).map(([n]) => n);
-    expect(readers).toEqual(['_models_auto_tail_secs']);
-    const fileScope = code(src).split('\n').filter((l) => READ.test(l));
-    expect(fileScope.length, 'a read of MODELS_AUTO_TAIL_S outside the one reader').toBe(
-      all.get('_models_auto_tail_secs')!.split('\n').filter((l) => READ.test(l)).length);
+    // ANY mention of the name outside the assignments (`MODELS_AUTO_TAIL_S=31`, the step's `local …=0`), the `unset` and the one
+    // reader is a read: `$X`, `${X}`, `${X:-}`, and the arithmetic and test contexts `$(( X ))`, `(( X > 0 ))`, `[[ X … ]]`.
+    const NAME = /\bMODELS_AUTO_TAIL_S\b/;
+    const ALLOWED = [/^\s*MODELS_AUTO_TAIL_S=\d+\s*$/, /^\s*local\b[^#]*\bMODELS_AUTO_TAIL_S=\d+\s*$/, /^unset MODELS_AUTO_DEADLINE MODELS_AUTO_TAIL_S$/];
+    const stray = (text: string): string[] => text.split('\n').filter((l) => NAME.test(l) && !ALLOWED.some((a) => a.test(l)));
+    const reader = '_models_auto_tail_secs';
+    expect(stray(all.get(reader)!).length, 'the reader no longer reads it').toBeGreaterThan(0);
+    // 1. Function by function: no other function reads it.
+    const others = [...all].filter(([n, body]) => n !== reader && stray(body).length > 0).map(([n]) => n);
+    expect(others, 'a second reader of MODELS_AUTO_TAIL_S').toEqual([]);
+    // 2. The whole file, comments excluded, the reader's own body removed: nothing is left, file scope included.
+    expect(stray(code(src).replace(all.get(reader)!, '')), 'a read of MODELS_AUTO_TAIL_S at file scope or outside the reader').toEqual([]);
     for (const fn of ['_models_lock', '_models_node_locked']) expect(all.get(fn)).toContain('$(_models_auto_tail_secs)');
+  });
+
+  it('every grammar of the step ends in \\z, never $: the definitions block, and every `test("^…")` in a function the step reaches', () => {
+    const block = src.match(/^MODELS_JQ_DEFS='[\s\S]*?\n'$/m)![0];
+    const PAT = /test\("((?:[^"\\]|\\.)*)"\)/g;
+    const inBlock = [...block.matchAll(PAT)].map((m) => m[1]!);
+    expect(inBlock.length, 'the definitions block lost its patterns').toBeGreaterThanOrEqual(3);
+    const all = defs();
+    const inBodies = reachable().flatMap((f) => [...all.get(f)!.matchAll(PAT)].map((m) => `${f}: ${m[1]!}`));
+    for (const t of inBlock.filter((x) => x.startsWith('^'))) expect(t, `${t} ends in $`).toMatch(/\\\\z$/);
+    for (const t of inBodies.filter((x) => x.includes(': ^'))) expect(t, `${t} ends in $`).toMatch(/\\\\z$/);
   });
 
   it('no RESTOREFAIL frame is sent: the row fails from the events themselves', () => {
@@ -1992,6 +2007,8 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the gramma
   };
   const cands = (frames: string[]): string[] => frames.filter((l) => l.startsWith('CAND\t')).map((l) => l.split('\t').slice(1).join('|'));
   const OPUS_CAND = 'opus|model-5.6-gamma|model-6.1-gamma|low';
+  const ID5 = 'vendor-a/model-5:beta';
+  const ID6 = 'vendor-a/model-6:beta';
   const journal = (): string[] => lines('op-calls').map((l) => l.split(' ')[0]!);
 
   describe('S1: a why the frame cannot carry reads as unknown', () => {
@@ -2022,9 +2039,6 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the gramma
   });
 
   describe('S2: the model-id grammar is the registry\'s (colon and slash included)', () => {
-    const ID5 = 'vendor-a/model-5:beta';
-    const ID6 = 'vendor-a/model-6:beta';
-
     it('a candidate whose ids carry a slash and a colon passes the plan and reaches the canary', async () => {
       await setup({ opStub: OP_STUB, canaryStub: LOGGING_CANARY, registry: { ...STEP_REGISTRY,
         classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' }, effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } } });
@@ -2086,13 +2100,25 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the gramma
       expect(notifyCalls()).toEqual([]);
     }, T);
 
-    it('a commit answer whose class or id ends in a newline is not an event: it reads as no answer and ends the lane', async () => {
+    it.each([
+      ['class', { class: 'opus\n', to: 'a-2-b' }],
+      ['to', { class: 'opus', to: 'a-2-b\n' }],
+      ['from', { class: 'opus', to: 'a-2-b', from: 'a-1-b\n' }],
+    ] as [string, Record<string, string>][])('a commit answer whose %s ends in a newline is not an event: it reads as no answer and ends the lane', async (_w, over) => {
       await setup({ opStub: OP_STUB });
-      const answer = JSON.stringify({ ok: true, op: 'advance-commit', id: 'lane-a', class: 'opus', outcome: 'moved', from: 'a-1-b', to: 'a-2-b\n',
-        push: true });
+      const answer = JSON.stringify({ ok: true, op: 'advance-commit', id: 'lane-a', outcome: 'moved', from: 'a-1-b', push: true, ...over });
       const r = sourced(`${SHAPE}\nprintf '%s' '${answer}' | _models_adv_body_receipt commit lane-a opus a-1-b a-2-b passed`);
       expect(r.stdout.split('\n').filter(Boolean)).toEqual([
         `EVENT ${JSON.stringify({ class: 'opus', from: 'a-1-b', to: 'a-2-b', outcome: 'abandoned', why: 'no-answer' })}`, 'LANEEND', 'END']);
+    }, T);
+
+    it('the op journal keeps a model id that carries a slash (only absolute paths are dropped from it)', async () => {
+      await setup({ opStub: OP_STUB });
+      const r = sourced(`${SHAPE}\n_models_node advance-commit --file "$(_models_roster_path)" --id lane-a --class sonnet --from ${ID5} --to ${ID6} --canary passed`);
+      expect(r.code, r.stderr).toBe(0);
+      const call = opCalls().find((l) => l.startsWith('advance-commit'));
+      expect(call, 'the journal lost the call').toBeDefined();
+      expect(call).toContain(`--from ${ID5} --to ${ID6}`);
     }, T);
   });
 
@@ -2107,10 +2133,13 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the plan read\'s why, and the gramma
         'sonnet|model-6-beta|model-8-d|x-high']);
     }, T);
 
-    it('so one such candidate cannot end the lane\'s candidate loop: the next candidate is canaried', async () => {
+    it('a -- effort AHEAD of a good candidate cannot end the lane\'s candidate loop: the good one is canaried and moves', async () => {
+      // The row is PREPENDED, so it is the first candidate the loop meets. Kept, it is canaried first, the canary refuses its
+      // argv (bad-argv, read as unavailable) and the loop breaks before opus: nothing moves.
       await setup({ opStub: OP_STUB });
       tier(0);
-      const extra = { OP_PLAN_EXTRA: JSON.stringify([prow({ class: 'fable', pin: null, canaryEffort: '--max', candidate: 'model-8-z' })]) };
+      const extra = { OP_PLAN_PREPEND: JSON.stringify([prow({ class: 'haiku', pin: null, canaryEffort: '--max', candidate: 'model-8-z' })]) };
+      expect(cands(planFrames(extra)), 'the row is ahead of opus in the frame, or was dropped').toEqual([OPUS_CAND]);
       const r = sourced(lane(250), extra);
       expect(JSON.parse(r.stdout)).toEqual([MOVED]);
       expect(laneProxyRequests(proxy).map((q) => q.model)).toEqual(['model-6.1-gamma']);

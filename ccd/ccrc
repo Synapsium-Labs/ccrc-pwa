@@ -11277,13 +11277,16 @@ _models_push() {   # <message> -> rc 0
 # rename. It reads `recoveredMove` whether or not the answer was ok: a refusal after the writer's first successful write
 # carries it, and an answer that settled nothing carries none. A hand set-class's landed move (`how: "hand"`) is the
 # operator's own act, and is neither an event nor a push (ruling RC3). The tokens are validated to a safe alphabet here,
-# once, so everything downstream reads them with builtins and a message cannot carry a newline. THE GRAMMARS, each held
-# equal to its owner by a test (a JavaScript `^…$` is spelled `^…\z` here): `tok` is `MODEL_ID_RE` of `shared/models.mjs`,
-# the one model-id grammar (the canary and the registry accept exactly it, `:` and `/` included); `eff` is the canary's
-# own EFFORT_RE (`deploy/models-canary.mjs`): printable ASCII, 1 to 64 characters, no space at either end. EVERY pattern
-# ends in `\z`, never `$`: jq's Oniguruma lets `$` match before a final newline, which JavaScript's does not, and a newline
-# is the one character a line-framed protocol cannot carry. A character set with no tab and no newline in it is therefore
-# frame-safe. The step also drops an effort that begins with `--` (see the plan body: the canary's argv reader refuses it).
+# once, so everything downstream reads them with builtins and a message cannot carry a newline. THE GRAMMARS are `tok`,
+# `word` and `eff`, and every one of them ends in `\z`, never `$`: jq's Oniguruma lets `$` match before a final newline,
+# which JavaScript's does not, and a newline is the one character a line-framed protocol cannot carry. A character set with
+# no tab and no newline in it is therefore frame-safe. `tok` and `eff` are each held equal to their owner by a test (a
+# JavaScript `^…$` is spelled `^…\z` here): `tok` is `MODEL_ID_RE` of `shared/models.mjs`, the one model-id grammar (the
+# canary and the registry accept exactly it, `:` and `/` included); `eff` is the canary's own EFFORT_RE
+# (`deploy/models-canary.mjs`): printable ASCII, 1 to 64 characters, no space at either end. `word` (a class or a why word)
+# has no JavaScript owner, so it has no equality pin, only the `\z` one. `flat` is a sanitiser, not a grammar: its trim runs
+# after every control character has become a space. The step also drops an effort that begins with `--` (see the plan
+# body: the canary's argv reader refuses it).
 # NONE of the step's jq programs writes a definition of its own; the plan, canary and receipt programs and the hand verbs'
 # reader begin with these, and the check program and the final strict jq need none.
 MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\\z");
