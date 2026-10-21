@@ -2592,6 +2592,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           Sent to the broker's coordinator as it asked.
         - STATUS: fleet and server v0.0.528, newest v0.0.529, stable v0.0.502, intent dev/auto=off, backups fleet
           186M/server 10999M, disk free fleet 74G/work volume 9G/server 21G.
+      - **13:55 UTC: both boxes on v0.0.531 (#1082) by the operator's tap, clean; the work volume still under 10G.**
+        - Fleet 13:41:50 to 13:43:06, server 13:43:27 to 13:46:45 (`ccrc.service` restarted 13:45:26). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both. Server backups 11752M, 10 kept, the newest 1589M.
+        - The fleet doctor's one new WARN against 11:49's set is graphify's "5 GiB free on the worktrees filesystem" at
+          13:42. So the volume dipped to about 5G, then came back to 9.6G by 13:58.
+        - The owning session's evidence directory stopped growing (25.5G at 13:03 and at 13:58). The 13:05 mail to it
+          is still queued behind its busy session. The dip is unattributed. Read-only; nothing deleted.
+        - STATUS: fleet and server v0.0.531, newest v0.0.533, stable v0.0.502, intent dev/auto=off, backups fleet
+          187M/server 11752M, disk free fleet 75G/work volume 10G (9.6G)/server 20G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
