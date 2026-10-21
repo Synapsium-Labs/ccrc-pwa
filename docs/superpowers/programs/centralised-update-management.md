@@ -2574,6 +2574,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         about 36.5G from 08:58 to 10:27, so that session was sent the figures (7644). Root is about 1G an hour since.
         STATUS: fleet and server v0.0.514, newest v0.0.527, stable v0.0.502, intent dev/auto=off, backups fleet
         186M/server 10262M, disk free fleet 84G/work volume 18G/server 21G.
+      - **11:55 UTC: both boxes on v0.0.528 (#1080) by the operator's tap, clean; the work volume ANOMALY again (13.5G).**
+        - Fleet 11:48:53 to 11:50:11, server 11:50:56 to 11:53:40 (`ccrc.service` restarted 11:52:22). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both. Server backups 10999M, 10 kept, the newest 1554M.
+        - The work volume fell from 17.8G at 10:58 to 13.5G, then rose 0.3G over the next minutes, so the writes come
+          in bursts. The owning session's remaining evidence directory regrew to 23.1G (about 2G since its move) and
+          grows about 0.8G an hour. The rest is unattributed. Read-only; nothing deleted. The operator has the figures.
+        - STATUS: fleet and server v0.0.528, newest v0.0.529, stable v0.0.502, intent dev/auto=off, backups fleet
+          186M/server 10999M, disk free fleet 81G/work volume 14G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
