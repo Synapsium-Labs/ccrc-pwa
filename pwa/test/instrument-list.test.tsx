@@ -298,7 +298,7 @@ describe('phone', () => {
 //   the held head's toggle not ignored .......................... "Needs you is held open while it holds a row…"
 //   the fold mark dropped or fixed to ▾ ......................... "each group head draws a fold mark…"
 //   the checked radio marked by weight alone .................... "the checked toggle option carries an accent edge…"
-//   the selected tab growing its border ......................... "every tab keeps a 2px bottom edge…"
+//   the selected tab's edge back to a border ..................... "the chosen tab's edge takes no room…"
 //   empty groups shown at a desk ................................ "a group with no rows is absent at a desk and under All…"
 //   the selected row's flag dropped ............................. "the open session's row is marked selected…"
 //   arrow keys ignored on either group .......................... "arrow keys move and choose…"
@@ -337,10 +337,13 @@ describe('review fixes', () => {
     expect(declsOf(".ins-toggle-option[aria-checked='true']")).toMatch(/(border|box-shadow)[^;]*var\(--accent\)/);
   });
 
-  it('every tab keeps a 2px bottom edge, so choosing one moves no label', () => {
-    expect(declsOf('.ins-tab')).toMatch(/border-bottom:\s*2px solid transparent/);
-    expect(declsOf(".ins-tab[aria-selected='true']")).not.toMatch(/border-bottom:/);
-    expect(declsOf(".ins-tab[aria-selected='true']")).toMatch(/border-bottom-color:\s*var\(--accent\)/);
+  it('the chosen tab\'s edge takes no room, so choosing one moves no label', () => {
+    expect(declsOf(".ins-tab[aria-selected='true']")).not.toMatch(/border|padding|margin/);
+    expect(declsOf('.ins-tab')).toMatch(/position:\s*relative/);
+    const edge = declsOf(".ins-tab[aria-selected='true']::after");
+    expect(edge).toMatch(/position:\s*absolute/);
+    expect(edge).toMatch(/height:\s*2px/);
+    expect(edge).toMatch(/background:\s*var\(--accent\)/);
   });
 
   it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {

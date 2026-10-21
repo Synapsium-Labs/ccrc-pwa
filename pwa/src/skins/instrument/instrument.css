@@ -272,30 +272,34 @@
   color: var(--ink-primary);
 }
 /* The four tabs share the row at 360: each takes an equal part, none wraps or scrolls. Underline tabs: the ghost
-   button's hairline goes; every tab keeps a 2px transparent bottom edge and the chosen one only colours it, so choosing
-   moves no label. */
+   button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`, which takes no room, so
+   choosing moves no label. */
 .ins-tab {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   gap: var(--sp-1);
   padding: 0 var(--sp-1);
   border: 0;
-  border-bottom: 2px solid transparent;
   border-radius: 0;
   white-space: nowrap;
   font-size: var(--fs-sm);
 }
-.ins-tab[aria-selected='true'] {
-  border-bottom-color: var(--accent);
+.ins-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: var(--accent);
 }
 .ins-group-head {
   gap: var(--sp-1);
   font-size: var(--fs-sm);
 }
+/* The fold mark inherits the head's ink, so it is measured with the head's word. */
 .ins-group-chevron {
   display: inline-block;
   width: 1ch;
-  color: var(--ink-secondary);
 }
 .ins-group-count {
   font-variant-numeric: tabular-nums;

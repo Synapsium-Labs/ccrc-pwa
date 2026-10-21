@@ -201,8 +201,10 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
     );
   };
 
-  // Needs you holding a row is held open, whatever is stored (D-6088 rule 5); every other group follows its fold.
-  const held = (g: StatusGroup): boolean => g.bucket === 'attention' && g.sessions.length > 0;
+  // Needs you holding a row is held open, whatever is stored (D-6088 rule 5); every other group follows its fold. The
+  // group is read by key from the model's map, never by comparing a bucket (instrument-shell's scan).
+  const asks = byBucket.get('attention');
+  const held = (g: StatusGroup): boolean => g === asks && g.sessions.length > 0;
   const isOpen = (g: StatusGroup): boolean => held(g) || g.folds === folded.has(foldKey(g.bucket));
   // At a desk and under All, every group that holds a row; under a phone tab, that one group, even when empty.
   const shown = phoneTab === null || phoneTab === 'all'
