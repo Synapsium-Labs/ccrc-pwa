@@ -56,17 +56,22 @@ export interface SettingsView {
   readonly push: PushState;
   /** Read the push state again (the index calls it when it mounts). */
   readonly rereadPush: () => void;
-  /** The passkey list, behind the status read's armed guard (R2d, D-5508). */
+}
+
+/** The view Settings' pages read (R2d, D-5508): the base view plus Security's own reads, kept apart so the base view
+ *  (and `sectionStatus`, which reads only it) stays as it was. */
+export interface SettingsPageView extends SettingsView {
+  /** The passkey list, behind the status read's armed guard. */
   readonly passkeys: PasskeysRead;
   /** Read the status again, then the passkey list under the same guard: the one way the list is re-read (Your
    *  sign-in calls it after a successful Add or Revoke). */
   readonly refreshAuth: () => void;
 }
 
-const SettingsViewContext = createContext<SettingsView | null>(null);
+const SettingsViewContext = createContext<SettingsPageView | null>(null);
 
 /** The one view, or null off Settings (and before the reads have mounted). */
-export function useSettingsView(): SettingsView | null {
+export function useSettingsView(): SettingsPageView | null {
   return useContext(SettingsViewContext);
 }
 
@@ -77,7 +82,7 @@ async function readPush(): Promise<PushState> {
   return (await pushEnabled()) ? 'on' : 'off';
 }
 
-function SettingsReads({ onView }: { onView: (view: SettingsView | null) => void }): null {
+function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => void }): null {
   // Each hook answers a fresh object per render, so each is held by its fields: the view changes only when a read
   // does, and handing it up never loops.
   const u = useUpdatesView();
@@ -135,17 +140,18 @@ function SettingsReads({ onView }: { onView: (view: SettingsView | null) => void
   const rereadPush = useCallback(() => setPushAsk((n) => n + 1), []);
 
   const view = useMemo<SettingsView>(
-    () => ({ updates, stall, collect, pause, auth, push, rereadPush, passkeys, refreshAuth }),
-    [updates, stall, collect, pause, auth, push, rereadPush, passkeys, refreshAuth],
+    () => ({ updates, stall, collect, pause, auth, push, rereadPush }),
+    [updates, stall, collect, pause, auth, push, rereadPush],
   );
+  const pageView = useMemo<SettingsPageView>(() => ({ ...view, passkeys, refreshAuth }), [view, passkeys, refreshAuth]);
   // A layout effect, so the frame's first paint on Settings already has the view.
-  useLayoutEffect(() => { onView(view); }, [view, onView]);
+  useLayoutEffect(() => { onView(pageView); }, [pageView, onView]);
   useLayoutEffect(() => () => onView(null), [onView]);
   return null;
 }
 
 export function SettingsDataProvider({ active, children }: { active: boolean; children?: ReactNode }): ReactNode {
-  const [view, setView] = useState<SettingsView | null>(null);
+  const [view, setView] = useState<SettingsPageView | null>(null);
   return (
     <SettingsViewContext.Provider value={active ? view : null}>
       {active ? <SettingsReads onView={setView} /> : null}

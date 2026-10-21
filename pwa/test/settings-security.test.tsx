@@ -11,10 +11,10 @@ import { navigate } from '../src/lib/router';
 import { SETTINGS_SECTIONS } from '../src/lib/routes';
 import { SETTINGS_CARDS, SIGN_IN_GATE_TEXT } from '../src/fleet/settingsText';
 import { renderSettings } from './settingsHost';
-import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsDataProvider, useSettingsView, type SettingsPageView } from '../src/screens/settings/SettingsDataProvider';
 import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { updatesView } from './settingsViewFixture';
-import { YourSignInCard } from '../src/screens/settings/YourSignInCard';
+import { SIGN_IN_TEXT, YourSignInCard } from '../src/screens/settings/YourSignInCard';
 import { ThisSessionCard } from '../src/screens/settings/ThisSessionCard';
 
 afterEach(() => {
@@ -409,5 +409,46 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('a failed passkey list read says so under the count, with no rows', async () => {
+    canEnrol();
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown): Promise<Response> => {
+      const u = String(url);
+      if (u === '/api/auth/status') return json(200, { authed: true, passkeysEnrolled: 2, mode: 'passphrase' });
+      if (u === '/api/auth/passkeys') return json(500, { error: 'internal' });
+      return json(404, { error: 'not-found' });
+    }));
+    host('ccrc.example');
+    quietReads();
+    renderSettings('security');
+    const card = await screen.findByRole('region', { name: 'Your sign-in' });
+    await waitFor(() => expect(within(card).getByText(SIGN_IN_TEXT.listFailed)).toBeInTheDocument());
+    expect(within(card).getByText(SIGN_IN_TEXT.count(2))).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /^Revoke passkey/ })).toBeNull();
+  });
+
+  it("the newest re-read wins: an older run's late passkey list never overwrites it", async () => {
+    const lists: ((r: Response) => void)[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown): Promise<Response> => {
+      const u = String(url);
+      if (u === '/api/auth/status') return json(200, { authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
+      if (u === '/api/auth/passkeys') return new Promise<Response>((r) => { lists.push(r); });
+      return json(404, { error: 'not-found' });
+    }));
+    quietReads();
+    let seen: SettingsPageView | null = null;
+    const Probe = (): null => { seen = useSettingsView(); return null; };
+    render(<SettingsDataProvider active><Probe /></SettingsDataProvider>);
+    await waitFor(() => expect(lists).toHaveLength(1));
+    act(() => { seen!.refreshAuth(); });
+    await waitFor(() => expect(lists).toHaveLength(2));
+    // The newer run answers first; the older one answers late and must not write.
+    await act(async () => { lists[1]!(json(200, { credentials: [KEY_B], storeUnreadable: false })); });
+    await settle();
+    await act(async () => { lists[0]!(json(200, { credentials: [KEY_A], storeUnreadable: false })); });
+    await settle();
+    const read = seen!.passkeys;
+    expect(read.kind === 'read' ? read.list.credentials.map((c) => c.credentialIdB64url) : read.kind).toEqual([KEY_B.credentialIdB64url]);
   });
 });

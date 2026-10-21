@@ -25,7 +25,7 @@ import { NotificationsSection } from './NotificationsSection';
 import { SecuritySection } from './SecuritySection';
 import { SignInGateBanner } from './SignInGateCard';
 import { indexRowOf, SettingsIndex } from './SettingsIndex';
-import { useSettingsView, type SettingsView } from './SettingsDataProvider';
+import { useSettingsView, type SettingsPageView } from './SettingsDataProvider';
 import { UpdatesSection } from './UpdatesSection';
 import './settings.css';
 
@@ -40,7 +40,7 @@ function settingsAt(path: string): At {
 }
 
 /** A section's page body: today's cards, moved (R2b1), over the one view. */
-function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsView }): ReactNode {
+function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsPageView }): ReactNode {
   switch (id) {
     case 'updates': return <UpdatesSection poll={view.updates} />;
     case 'appearance': return <AppearanceSection />;

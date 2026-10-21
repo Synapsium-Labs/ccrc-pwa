@@ -31,11 +31,21 @@ export const STORE_UNREADABLE_TEXT =
   'This box’s passkey file exists but cannot be read, so no passkey can sign in and enrolling is refused '
   + '— adding one would overwrite the keys that are already there. Fix the permissions on '
   + '~/.ccrc/passkeys.json (or wherever CCRC_PASSKEYS_PATH points on this box) and restart the server.';
+/** The sentence's path and key, set as code (as `AuthSection` set them); the words stay the constant above. */
+const STORE_UNREADABLE_CODE = ['~/.ccrc/passkeys.json', 'CCRC_PASSKEYS_PATH'] as const;
+function storeUnreadableSentence(): ReactNode {
+  const [head, rest] = STORE_UNREADABLE_TEXT.split(STORE_UNREADABLE_CODE[0]) as [string, string];
+  const [middle, tail] = rest.split(STORE_UNREADABLE_CODE[1]) as [string, string];
+  return <>{head}<code>{STORE_UNREADABLE_CODE[0]}</code>{middle}<code>{STORE_UNREADABLE_CODE[1]}</code>{tail}</>;
+}
 
 /** Your sign-in's words (spec §5.5). */
 export const SIGN_IN_TEXT = {
   none: 'No passkey is enrolled on this box — the passphrase is the only way in.',
   count: (n: number): string => `${n} passkey${n === 1 ? '' : 's'} enrolled on this box.`,
+  /** The list read failed (spec §11): said, so a count with no rows is never silent. Not D-153's sentence, which
+   *  claims more than a failed request shows. */
+  listFailed: 'The passkey list could not be read, so its passkeys are not shown here. Reload to try again.',
   addNote: 'Adds this device’s passkey, so you can sign in here without the passphrase.',
   added: 'Passkey added. It can sign you in from now on.',
   cancelled: 'That passkey ceremony was cancelled or could not finish.',
@@ -102,10 +112,11 @@ export function YourSignInCard({ status, passkeys, refreshAuth }: {
   };
 
   const body = list?.storeUnreadable === true ? (
-    <p className={SETTINGS_AMBER_NOTE}>{STORE_UNREADABLE_TEXT}</p>
+    <p className={SETTINGS_AMBER_NOTE}>{storeUnreadableSentence()}</p>
   ) : (
     <>
       <p className="settings-note">{count === 0 ? SIGN_IN_TEXT.none : SIGN_IN_TEXT.count(count)}</p>
+      {passkeys.kind === 'failed' && <p className={SETTINGS_AMBER_NOTE}>{SIGN_IN_TEXT.listFailed}</p>}
       {list !== null && list.credentials.length > 0 && (
         <ul className="settings-passkeys" aria-labelledby={listTitleId}>
           {list.credentials.map((c) => (

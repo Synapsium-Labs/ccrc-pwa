@@ -602,6 +602,8 @@ describe('PasskeySection', () => {
     // leave "fix the permissions" with no file to fix.
     expect(said.textContent).toContain('~/.ccrc/passkeys.json');
     expect(said.textContent).toContain('CCRC_PASSKEYS_PATH');
+    // The path and the key are set as code, as AuthSection set them.
+    expect([...said.querySelectorAll('code')].map((c) => c.textContent)).toEqual(['~/.ccrc/passkeys.json', 'CCRC_PASSKEYS_PATH']);
   });
 
   it('renders NOTHING on a dark box', async () => {
