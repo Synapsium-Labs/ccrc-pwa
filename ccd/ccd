@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=15eec9c2ff95b234e37331f78428d028b55e5f8d7b5c0dec772ced15c95722c8
+# ccrc:generated 1 sha256=1c319777ce48b2fe708208242e3c5ee5810e09b330852332e142934b38c1e766
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19571,7 +19571,97 @@ _swap_idle_gate() {   # id [pane [wrapper [now]]] -> rc 0 iff the session is at 
   # statusUpdatedAt (ms) ticks on every busy<->idle transition, incl. web/mobile clients.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 1
+  # LAST, AND ONLY WHEN EVERYTHING ABOVE SAID GO: the main loop is idle at its prompt, and
+  # none of the four checks above can see work it left running in the background
+  # (subagents, shells). A relocation restarts the session and that work dies with it
+  # (measured 2026-10-20: two background subagents, killed by an auto-home move).
+  _swap_bg_hold "$id" "$now" && return 1
   return 0
+}
+
+# The two tunables of the background hold sit beside it, below the gate's own code, and not beside
+# SWAP_CEIL_QUIET: the citation censuses pin frozen line numbers in this file, and a block added
+# above them moves every anchor under them. They are read when `_swap_bg_hold` runs, so where they
+# are assigned in this file does not matter.
+SWAP_BG_HOLD_MAX=7200           # seconds after the last Stop that live background work holds a non-blocked relocation off
+                                # (`_swap_bg_hold`): past it a stuck count can no longer pin a session off its home lane
+SWAP_BG_HOLD_SKEW=60            # seconds a marker's stamp may sit AHEAD of this clock and still read as measured (else: no hold)
+
+_swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says background work is live (the affinity move waits), 1 iff nothing holds it
+  # THE ONE READER OF THE TURN MARKER ON THE AFFINITY PATH. `$REG/<id>.turn.json` is the
+  # hook's line (`TURN_MARK_PROGRAM`, session-hook.sh; server/src/turnmark.ts reads it for
+  # the mail gate and the stall watch), and at a Stop it records `bg`, the count of
+  # background tasks Claude Code listed. Read with builtins, as `cmd_hibernate` reads it:
+  # this runs on the 5 s tick. Each field is its own regex, so the key order is not relied on.
+  #
+  # WHAT HOLDS, AND WHAT DOES NOT (each undecidable case decided once, here):
+  #   - `done` with `bg` > 0 and a Stop inside SWAP_BG_HOLD_MAX: HOLDS. This is the case.
+  #   - `done` with `bg` -1 (a Stop whose list was absent, or a `/clear`, which writes -1 and
+  #     no `stopAt`): HOLDS, bounded the same way, from `stopAt` or else `at`. Doubt reads as
+  #     HELD, the file's idiom for the cosmetic arm, but never unbounded.
+  #   - a marker present and NOT readable (a directory, a symlink, EACCES) or not the hook's
+  #     line (over 4096 bytes, no `"v":1`, no state word, no `at`, or a `done` with no
+  #     integer `bg`): HOLDS, bounded from the FILE'S mtime (the last time anything wrote
+  #     it), because a line we cannot read has no stamp of its own. No mtime, no hold.
+  #   - NO marker (an older hook, or no main event yet): does not hold. Absent is a
+  #     measured answer about a hook that never wrote it; today's behaviour.
+  #   - `working` or `failed`: does not hold. A running turn is the pane and status
+  #     checks' business, and a `bg` carried over from an earlier Stop describes nothing now.
+  #   - `bg` 0: does not hold. A `sessionId` that is not the row's uuid (another
+  #     conversation's line, or a row with no uuid), as the server's reader judges it:
+  #     does not hold. An unreadable uuid field cannot say which, so it is undecidable.
+  #   - past SWAP_BG_HOLD_MAX, or a stamp more than SWAP_BG_HOLD_SKEW ahead of this clock
+  #     (a stamp that never ages out would pin the session for ever): does not hold.
+  #     Today's behaviour returns.
+  # The marker is not re-measured against the live process: a restart writes `bg` 0
+  # (`restart` in the hook) and the bound caps a hook that did not run.
+  local id="$1" now="$2" line="" rrc re st="" sid="" at="" stop="" bg="" kinds="" uuid="" why="" anchor sig msg age
+  _reg_read_to line "$id" turn.json; rrc=$?; (( rrc == 2 )) && why=unreadable
+  (( rrc == 1 )) && { _swap_bg_release "$id"; return 1; }
+  re='^\{"v":1,'; [[ -z "$why" ]] && { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && why=malformed
+  if [[ -z "$why" ]]; then
+    # `sid` carries a leading `=` so a present-but-empty sessionId still reads as present.
+    re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && sid="=${BASH_REMATCH[1]}"
+    re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
+    re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
+    re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
+    re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
+    re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
+    # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
+    [[ -n "$sid" && -n "$st" && -n "$at" ]] && [[ "$st" != done || "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
+  fi
+  if [[ -z "$why" ]]; then
+    # Not a `done` line, or nothing running: no hold. Then another conversation's line: no hold.
+    { [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
+    _reg_read_to uuid "$id" uuid; (( $? == 2 )) && why=unreadable
+    [[ -z "$why" && ( -z "$uuid" || "$sid" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
+  fi
+  if [[ -n "$why" ]]; then
+    anchor=$(_plat_mtime "$REG/$id.turn.json" 2>/dev/null) || anchor=""
+    [[ "$anchor" =~ ^[0-9]{1,13}$ ]] || { _swap_bg_release "$id"; return 1; }
+    anchor=$(( 10#$anchor * 1000 )); sig="$why:$anchor"; msg="the turn marker is $why, so what runs in the background is unknown"
+  else anchor=$(( 10#${stop:-$at} )); sig="bg:$anchor"; msg="background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"; fi
+  age=$(( now * 1000 - anchor ))
+  (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )) && { _swap_bg_release "$id" expired; return 1; }
+  _swap_bg_note "$id" "$sig" "$msg"; return 0
+}
+
+_swap_bg_note() {   # id sig text — say ONCE per deferral EPISODE that the affinity move is waiting, and why
+  # An episode is one `sig`: the Stop that reported the work (`bg:<its stamp>`), or the marker
+  # file's own mtime when the line could not be read. A new turn ends a Stop's episode by
+  # itself (its next Stop carries a new stamp), so the note needs no clock and the 5 s tick
+  # writes ONE line, not twelve a minute per session into `$REG/swap.log`, a file a human
+  # reads. The anchor is the row's `swapdefer` field, the same one-field idiom as
+  # `_pane_narrow_note`; `_swap_bg_release` removes it when the hold lifts. A stamp that
+  # cannot be written says nothing: a line per tick would be worse than a silent wait.
+  local said=""; _reg_get_to said "$1" swapdefer; [[ "$said" == "$2" ]] && return 0
+  _reg_set "$1" swapdefer "$2" && echo "$(date '+%F %T') swap-defer $1: $3; the move waits (at most ${SWAP_BG_HOLD_MAX}s from the last write)" >> "$REG/swap.log"; return 0
+}
+
+_swap_bg_release() {   # id [expired] — the hold no longer stands: end its episode, and say so once if it ran out
+  [[ -e "$REG/$1.swapdefer" || -L "$REG/$1.swapdefer" ]] || return 0
+  [[ "${2:-}" == expired ]] && echo "$(date '+%F %T') swap-defer-end $1: the hold reached ${SWAP_BG_HOLD_MAX}s; the move goes ahead" >> "$REG/swap.log"
+  rm -f -- "$REG/$1.swapdefer"
 }
 
 _pane_statusline_seg() {   # pane-text glyph -> text of the statusline ROW's `<glyph> …` segment, or empty
