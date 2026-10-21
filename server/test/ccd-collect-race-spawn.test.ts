@@ -10,9 +10,11 @@
 // leaf), `moved` (after it, where the spawn makes a new inode), and `proven` and `removed` (step 6 removes the slot's
 // inode alone). It also forces the SPLIT (`.child` written at `slotted`, the `mkdir -p` at `moved`) and a straggler at
 // `moved`. It forces NOTHING at `emptied`, `witnessed` or `dropped`, at the putback's `restoring`, at the witness-only
-// path's `witnessed`, or at any boundary of a RESUME: none of those is pinned here. Review 369's C1 built each of them
-// through the verb and measured it safe, and its resume-boundary pins are carried to wave 9's pre-flight list. The
-// seam case photographs all ten points, with no spawn.
+// path's `witnessed`, or at any boundary of a RESUME: none of those is pinned here. Six of those (the three fresh
+// points, `restoring`, the witness-only `witnessed`, and a resume past `removed`) are pinned in
+// `ccd-collect-race-spawn-late.test.ts` (path-identity W2, TR12 B); review 369's C1 built the other seven through the
+// verb and measured them safe, and they stay unpinned by ruling. The seam case photographs all ten points, with no
+// spawn.
 // FIXTURE HOME ONLY (`collectRaceFixture.ts`). Linux only, and only where `mv --no-copy` exists (spec §5.10).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';

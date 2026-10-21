@@ -249,6 +249,8 @@ const CONTROLS: Record<string, string> = {
   'skins/frame.tsx <a> skip-link':
     'TOKEN. The frame\'s "Skip to content" link (W2 Task S2b): visually hidden until focused, '
     + 'then `.skip-link:focus` declares the floor. Its first focusable element, so a keyboard reaches it first.',
+  'skins/refined/TranscriptRow.tsx <button> ref-tool-group-row':
+    "TOKEN. Refined's grouped tool row (W2 Task S13b, D-5475): the whole line is the disclosure that opens the run.",
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',

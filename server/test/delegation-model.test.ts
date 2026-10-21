@@ -23,6 +23,7 @@ import {
   type DelegationActivityNaturalKey,
 } from '../../shared/api.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
+import * as modelNs from '../src/coord/delegation-model.js';
 import {
   DelegationJsonError,
   DelegationModelError,
@@ -370,6 +371,66 @@ describe('restoreOrAllocateActivityId — the mapping is read first and is immut
   it('reads an own property only: an inherited name is never a mapping', () => {
     const cp = { ...emptyDelegationCheckpoint(), activityIdsByNaturalKey: Object.create({ [KEY_ENCODING]: 'e'.repeat(64) }) as Record<string, string> };
     expect(restoreOrAllocateActivityId(KEY, J, cp).activityId).toBe(ACTIVITY_ID_FROM_JOURNAL);
+  });
+});
+
+// D-5833 R3: `allocateDelegationActivityIdInto(mapping, key, identityJournalId)` is the mapping-first rule the fold runs, written INTO the
+// mapping it is handed. It is reached through the namespace so this file stays type-clean (and every row below fails on its own
+// assertion) before the function exists.
+describe('D-5833 R3: allocateDelegationActivityIdInto — the mapping is read first, and an allocation is written into it', () => {
+  type InPlace = (mapping: Record<string, string>, key: DelegationActivityNaturalKey, identityJournalId: string | null) => string;
+  const present = (): InPlace => {
+    const fn = (modelNs as unknown as Record<string, unknown>)['allocateDelegationActivityIdInto'];
+    expect(typeof fn, 'allocateDelegationActivityIdInto is exported by delegation-model.ts').toBe('function');
+    return fn as InPlace;
+  };
+  const MAPPED = 'f'.repeat(64);
+  const OTHER_KEY_ENCODING = '11:lane-a-demo2:g15:agent12:agent-other0';
+
+  it('D-5833 R3: a key already in the mapping returns its mapped id and leaves the mapping unchanged, whatever journalId the caller now holds', () => {
+    const into = present();
+    for (const journalId of [ENVELOPE_EVENT_ID, J, null]) {
+      const mapping: Record<string, string> = { [KEY_ENCODING]: MAPPED, [OTHER_KEY_ENCODING]: 'e'.repeat(64) };
+      const before = JSON.stringify(mapping);
+      expect(into(mapping, KEY, journalId), `journalId ${String(journalId)}`).toBe(MAPPED);
+      expect(JSON.stringify(mapping), `journalId ${String(journalId)}: same keys, same values, same order`).toBe(before);
+      expect(Object.keys(mapping)).toEqual([KEY_ENCODING, OTHER_KEY_ENCODING]);
+    }
+  });
+
+  it('D-5833 R3: an unmapped key allocates from the accepted journalId, writes mapping[encoded] and returns the id', () => {
+    const into = present();
+    const mapping: Record<string, string> = { [OTHER_KEY_ENCODING]: 'e'.repeat(64) };
+    const id = into(mapping, KEY, J);
+    expect(id).toBe(ACTIVITY_ID_FROM_JOURNAL);
+    expect(mapping).toEqual({ [OTHER_KEY_ENCODING]: 'e'.repeat(64), [KEY_ENCODING]: ACTIVITY_ID_FROM_JOURNAL });
+    // a second call, with another journalId, is a hit: the key never mints a second activity
+    expect(into(mapping, KEY, ENVELOPE_EVENT_ID)).toBe(ACTIVITY_ID_FROM_JOURNAL);
+    expect(Object.keys(mapping)).toHaveLength(2);
+  });
+
+  it('D-5833 R3: an unmapped key with a null identityJournalId throws identity-journal-id-required and writes nothing', () => {
+    const into = present();
+    const mapping: Record<string, string> = { [OTHER_KEY_ENCODING]: 'e'.repeat(64) };
+    const before = JSON.stringify(mapping);
+    expect(() => into(mapping, KEY, null)).toThrowError(expect.objectContaining({ code: 'identity-journal-id-required' }));
+    expect(JSON.stringify(mapping)).toBe(before);
+    expect(Object.hasOwn(mapping, KEY_ENCODING)).toBe(false);
+  });
+
+  it('D-5833 R3: a malformed identityJournalId throws bad-identity-journal-id and writes nothing', () => {
+    const into = present();
+    const mapping: Record<string, string> = {};
+    expect(() => into(mapping, KEY, 'not-a-journal-id')).toThrowError(expect.objectContaining({ code: 'bad-identity-journal-id' }));
+    expect(mapping).toEqual({});
+  });
+
+  it('D-5833 R3: it reads an own property only: an inherited name is never a mapping, and the allocation is an own write', () => {
+    const into = present();
+    const mapping = Object.create({ [KEY_ENCODING]: 'e'.repeat(64) }) as Record<string, string>;
+    expect(into(mapping, KEY, J)).toBe(ACTIVITY_ID_FROM_JOURNAL);
+    expect(Object.hasOwn(mapping, KEY_ENCODING)).toBe(true);
+    expect(mapping[KEY_ENCODING]).toBe(ACTIVITY_ID_FROM_JOURNAL);
   });
 });
 

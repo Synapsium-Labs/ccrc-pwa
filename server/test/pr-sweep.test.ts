@@ -506,6 +506,125 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     w.stop();
   });
 
+  // Landing-order wave 3c: a read the runner or the server cut short is named for what it was, not `agent-down`.
+  it('names a pr-state the runner killed `cut-short`, and keeps the rest of the backoff as it was', async () => {
+    const home = seed(['demo-quiet-basin', 'demo-still-cove']);
+    liveIdle(home);
+    const failing = { value: false };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'pr-state') {
+        if (failing.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        return { code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+
+    failing.value = true;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
+    const quiet = w.currentPrStates().get('demo-quiet-basin')!;
+    expect(quiet.reason).toBe('cut-short');
+    expect(quiet.number).toBe(42);
+    expect(quiet.retryAt).not.toBeNull();
+    w.stop();
+  });
+
+  it("names the server's own wait running out `cut-short` too", async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const failing = { value: false };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'pr-state') {
+        if (failing.value) return { code: 1, stdout: '', stderr: 'timeout', ran: false, reason: 'timeout', detail: 'timeout' };
+        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+
+    failing.value = true;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
+    expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('cut-short');
+    w.stop();
+  });
+
+  it('logs a failed sweep once per reason, says it recovered, and speaks again on a later failure', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const failing = { value: true };
+    const killed = { value: true };
+    let prStateCalls = 0;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'pr-state') {
+        prStateCalls += 1;
+        if (failing.value && killed.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        if (failing.value) return { code: 1, stdout: '', stderr: '' };
+        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sweeps = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('PR sweep of demo'));
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const internals = w as unknown as { prSweepStartedAt: number; lastPrSweep: number; prBackoff: Map<string, unknown> };
+    // One forced pass: waits for the sweep's own runner call AND for its single-flight latch to release, so a step
+    // whose state does not change (the second failure) cannot be asserted before its sweep has run.
+    const pass = async (): Promise<void> => {
+      const before = prStateCalls;
+      internals.lastPrSweep = 0;
+      internals.prBackoff.clear();
+      await w.tick();
+      await vi.waitFor(() => expect(prStateCalls).toBe(before + 1));
+      await vi.waitFor(() => expect(internals.prSweepStartedAt).toBe(0));
+    };
+    try {
+      await pass();
+      expect(sweeps()).toHaveLength(1);
+      expect(sweeps()[0]).toMatch(/^ccrc-server: PR sweep of demo failed \(cut-short/);
+
+      await pass();
+      expect(sweeps()).toHaveLength(1);
+
+      failing.value = false;
+      await pass();
+      expect(sweeps()).toHaveLength(2);
+      expect(sweeps()[1]).toBe('ccrc-server: PR sweep of demo recovered');
+
+      failing.value = true;
+      await pass();
+      expect(sweeps()).toHaveLength(3);
+      expect(sweeps()[2]).toMatch(/failed \(cut-short/);
+
+      // A new reason speaks with no success between: cut-short, then a plain exit, which stays agent-down.
+      killed.value = false;
+      await pass();
+      expect(sweeps()).toHaveLength(4);
+      expect(sweeps()[3]).toMatch(/failed \(agent-down/);
+    } finally {
+      warn.mockRestore();
+      w.stop();
+    }
+  });
+
   it('unauthenticated jumps straight to the 15-minute ceiling, not the doubling step', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);

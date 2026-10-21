@@ -2,7 +2,8 @@
 // Task 2 Step 6). W1 plants every row spec §9 and plan Task 2 Step 6 name, so W2 and W3 mostly add ASSERTIONS to
 // `ccd-tick-diet-equivalence.test.ts`. A later task adds rows here only for the inputs its own guard is about (the
 // plan's File Structure: Tasks 8, 9, 13, 14, 15 and 16), and never an expected answer (below). Test-only: it imports
-// nothing from `server/src` and spawns nothing; the equivalence suite plants each row and runs it.
+// nothing from `server/src` and spawns nothing; `ccdTickDietRunner.ts` plants each row and runs it, for both locale
+// files (`ccd-tick-diet-equivalence.test.ts` and `ccd-tick-diet-equivalence-utf8.test.ts`).
 //
 // A row is DATA about one path: its shape (a regular file, a FIFO, a dangling symlink, …) and, where the shape holds
 // bytes, the exact bytes. NOTHING HERE STATES WHAT A HELPER ANSWERS for a row. The vendored legacy body does, at run

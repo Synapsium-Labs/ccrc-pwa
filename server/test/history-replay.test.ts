@@ -1127,6 +1127,13 @@ const T5_RECALL_KEYS = ['CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF', 'CCRC_RECALL_SESS
 /** Keys bash itself exports to what it execs; seen only on the generated route, which runs the wrapper. */
 const T5_BASH_KEYS = ['PWD', 'SHLVL', '_'];
 const T5_NEVER_KEYS = ['CCRC_SESSION_GENERATION', 'TMUX', 'TMUX_PANE', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'];
+/** D-6122 (precedent D-3701, ccd-child-reclaim-entry.test.ts's DARWIN_ADDED): macOS's runtime adds this one key to a
+ *  process started with a clean environment, so a stub records it though spawnEnv never passes it. Dropped only on
+ *  darwin; any other extra key still reds. */
+const DARWIN_ADDED_ENV_KEY = '__CF_USER_TEXT_ENCODING';
+function withoutDarwinAdded(keys: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  return platform === 'darwin' ? keys.filter((k) => k !== DARWIN_ADDED_ENV_KEY) : [...keys];
+}
 const t5job = (b: { out: string }, launch: T5Launch, mode: string, name: string, extra: Partial<T5Job> = {}): T5Job => ({
   launch, mode, model: `fixture-model-${mode}`, settingsMode: 'restricted', stdin: `fixture input for ${name}\n`,
   out: b.out, name, lang: 'fixture.UTF-8', ...(mode === 'arm' ? { recall: T5_RECALL } : {}), ...extra,
@@ -1156,6 +1163,20 @@ const t5Spellings = (home: string): string[] =>
 const t5Argv = (mode: string, model: string, home: string): string[] => ['--restricted', '-p', '--no-session-persistence',
   '--strict-mcp-config', '--output-format', 'stream-json', '--verbose', '--max-turns', '12', '--model', model,
   ...(mode === 'arm' || mode === 'box' ? ['--tools', 'Bash,Agent', '--allowedTools', ...t5Spellings(home)] : ['--tools', ''])];
+
+describe('D-6122: the key macOS adds to a clean env is tolerated on Darwin only', () => {
+  it('darwin drops __CF_USER_TEXT_ENCODING and keeps the other keys in order', () => {
+    expect(withoutDarwinAdded(['CLAUDE_CONFIG_DIR', 'HOME', DARWIN_ADDED_ENV_KEY, 'LANG', 'PATH'], 'darwin'))
+      .toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+  });
+  it('linux keeps it: the input comes back unchanged, in the same order', () => {
+    const keys = ['CLAUDE_CONFIG_DIR', 'HOME', DARWIN_ADDED_ENV_KEY, 'LANG', 'PATH'];
+    expect(withoutDarwinAdded(keys, 'linux')).toEqual(keys);
+  });
+  it('darwin keeps every other extra key, so only that one key is tolerated', () => {
+    expect(withoutDarwinAdded(['HOME', 'EXTRA_KEY', DARWIN_ADDED_ENV_KEY], 'darwin')).toEqual(['HOME', 'EXTRA_KEY']);
+  });
+});
 
 describe('W2-4 Task 5: the spawn argv and env, pure (W2-D50, W2-D51)', () => {
   const HOME = '/fixture/home';
@@ -1239,7 +1260,7 @@ describe('W2-4 Task 5: RP1-contract on the stub, launch per kind (W2-D50, W2-D51
     expect(log, 'the stub ran once').toHaveLength(1);
     const l = log![0]!;
     expect(l.argv).toEqual(t5Argv(mode, `fixture-model-${mode}`, b.home));
-    expect(l.envKeys).toEqual([...T5_BASE_KEYS, ...(mode === 'arm' ? T5_RECALL_KEYS : [])].sort());
+    expect(withoutDarwinAdded(l.envKeys)).toEqual([...T5_BASE_KEYS, ...(mode === 'arm' ? T5_RECALL_KEYS : [])].sort());
     expect(l.env['HOME']).toBe(b.home);
     expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`);
     expect(l.env['LANG']).toBe('fixture.UTF-8');
@@ -1264,7 +1285,7 @@ describe('W2-4 Task 5: RP1-contract on the stub, launch per kind (W2-D50, W2-D51
     await claimedRun(t5job(b, b.gen, 'writer', 'rp1-gen'));
     const l = stubLog(b.home)![0]!;
     expect(l.envKeys).toContain('CLAUDE_CODE_OAUTH_TOKEN');
-    expect(l.envKeys.filter((k) => !T5_BASH_KEYS.includes(k))).toEqual([...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
+    expect(withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k))).toEqual([...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
     expect(l.env['CLAUDE_CONFIG_DIR']).toBe(t5path.join(b.home, '.gen-a'));
     expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`);
     for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
@@ -3574,7 +3595,7 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
       t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(home, launcher), out, 'fixture.UTF-8')).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
       const log = JSON.parse(t7fs.readFileSync(t7path.join(home, 'version-stub.json'), 'utf8'));
       t7expect(log.argv).toEqual(['--version']);
-      t7expect(log.envKeys).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      t7expect(withoutDarwinAdded(log.envKeys)).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
       t7expect(log.entries).toEqual([]);
       t7expect(log.cwd.startsWith(out)).toBe(false);
       t7expect(t7fs.existsSync(log.cwd), 'the run cwd is removed afterwards').toBe(false);
@@ -4000,7 +4021,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       const argv = e.argv as string[];
       expect(argv, key).toEqual(want[key]);
       expect(e.stdin, key).toBe(replay.STEP0A_PROMPT);
-      expect(e.envKeys, key).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      expect(withoutDarwinAdded(e.envKeys), key).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
       expect(argv.some((t) => /dangerously|bypassPermissions/.test(t)), key).toBe(false);
       if (key === 'box') {
         expect(argv.slice(argv.indexOf('--tools'), argv.indexOf('--tools') + 2)).toEqual(['--tools', 'Bash,Agent']);
@@ -4720,7 +4741,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     const boxArgv = t9Driver.spawnArgv({ mode: 'box', model: T9_MODEL, settingsMode: 'restricted', home });
     for (const e of log!) {
       expect(e.argv, 'box mode: the arm tools and the three spellings, no arm values').toEqual(boxArgv);
-      expect([...e.envKeys].sort(), 'the box env: no CCRC_RECALL_*').toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      expect(withoutDarwinAdded(e.envKeys).sort(), 'the box env: no CCRC_RECALL_*').toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
     }
     expect(cmds.map((c) => log!.filter((e) => e.stdin.includes(c)).length), 'each spelling reaches the stub once').toEqual([1, 1, 1]);
 

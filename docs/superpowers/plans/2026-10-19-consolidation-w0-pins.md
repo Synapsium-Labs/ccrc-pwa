@@ -26,6 +26,7 @@
 | C0e | nothing | `reclaim-pause-pin.test.ts`: every reader's verdict, word for word, over four listings, and "a pause raised during the act holds" at each executor's late read |
 | C0f | nothing | `server/test/scan/parse.ts`, the one TS parser wrapper (after OA-C1) |
 | C0g | nothing | `server/test/scan/symbols.ts` and the literal source pins on W1a's files moved onto it |
+| C0o | nothing | the literal slices over W1b's rewritten regions moved onto `scan/symbols.ts`, and the ratchet extended to W1b's files |
 
 ---
 
@@ -48,6 +49,7 @@ Measured on 2026-10-19 at `f64c27b65` with `gh pr list -R Synapsium-Labs/ccrc-pw
 | C0e pause pin | merged | no | no | — | — |
 | C0f parser | merged | no | merge `main` if a server bump lands | **OA-C1** | — |
 | C0g symbol slice | merged | no | no | — | C0f |
+| C0o W1b symbol slice | merged | no | no | — | C0g; #832 holds one `stall-sweep` row, which waits |
 
 ## In flight, and what it fences off
 
@@ -626,6 +628,85 @@ A later W0 slice (spec §5.2; the §4.1 mapping table: "K2 needs honest stubs"),
 
 **Exit (GATES):** overrides naming no shipped function: 4 → 0, and a planted one is red; the four verb lists are one set, executed; 13 python heredocs parse and compile; the two installers place one path set. No shipped byte changes. **Not in this task:** moving the 1,248 existing overrides onto `stubFn` (they are checked by the scanner instead), and running ccd's `--json` envelopes through `shared/` decoders (spec §8, a later slice).
 
+### Task C0o: symbol-keyed source slices for W1b's files (D-6114; ARCH-06 (#554), the W1b slice) — lands now
+
+A later W0 slice (spec §5.2), in the same shape as C0g. The W1b plan (`2026-10-20-consolidation-w1b-schedule-listing-redactor.md`, §Gates) names it as the gate for C1g to C1l. It is named C0o because C0h is ARCH-02a's (#874). **Routing:** band 2. **Lane:** tests only; zero production bytes. **Needs:** C0g (#929) merged; it is. #1021 (D-6111) merged first, so the two ratchets share its one scan. **Gates:** #931, #933 and #943 (each held this plan) merged; they are.
+
+**Files:**
+- Modify only the suites whose literal slices read a region a W1b task rewrites, in `server/src/watch.ts`, `server/src/coord/routes.ts`, `server/src/ccdargv.ts`, `server/src/registry.ts` or `server/src/coord/redact.ts`. Each slice's region is found through `sourceOfSymbol` (C0g's `scan/symbols.ts`) in place of an `indexOf` or `startsWith` anchor, and every assertion inside the slice stays as it was. Measured on `b51f676c9`:
+  - `child-reclaim-generation-lane.test.ts` ("the pass awaits twice") and `child-reclaim-verdict-readers.test.ts` (`sweepChildReclaimLines`): `FleetWatcher.sweepChildReclaim`, which C1h PR 3 rewrites (its stamp, re-stamp and guard) and C1k gates through `ccdCan`.
+  - `collect-lane-pass.test.ts`: `methodOf` keyed on `FleetWatcher.sweepTempRootCollect` and `FleetWatcher.collectPass` (C1h PR 3's stamp, guard and re-stamp; C1k's collect gate), and the tick-order row read from `FleetWatcher.tick` rather than the whole file (C1h's call shapes; C1j's lane arguments).
+  - `divergence-sweep.test.ts` ("reads the heartbeat off the SAME records"): `FleetWatcher.sweepDivergences` (C1h PR 1b's throttle; C1j's listing).
+  - `lifecycle-sweep.test.ts` (`sweepMail`'s lifecycle reads): `FleetWatcher.sweepMail` (C1h PR 2's throttle; C1j's listing). Its hunk is line-disjoint from #832's.
+  - `registry-refused-census.test.ts` (the tick hand-off rows): `tickBodyOf` reads `FleetWatcher.tick`'s symbol instead of the whole file (C1h's dispatch; C1j's listing). Its CONTROL row is unchanged.
+  - `single-definition.test.ts` ("collectRetireLatch is called only by the executor and the pass"): the pass's call count reads `FleetWatcher.collectPass`'s symbol in place of a `bodyAfter` slice anchored on `private async collectPass(` (C1h PR 3's re-stamp). The anchor is a regex passed through a helper, so the ratchet's counting rule does not see it; it was found by grepping every helper-anchored slice over the methods above, and it is the only one.
+- **Not moved, with the reason:**
+  - **Held by an open PR:** `stall-sweep.test.ts`'s tick-order row ("sweepStalls: wiring"); #832 (draft) holds the lines next to it. It moves in the first PR after #832 merges or closes.
+  - **Rewritten text, which symbol keying cannot rescue**, re-pointed by the W1b task that rewrites it, in its own named commit: the stamp, guard and re-stamp literals inside the moved slices (`this.lastChildReclaimSweep = gate;`, `this.lastCollectSweep = gate;`, `this.collectSweeping = true;`, `this.lastCollectSweep = mono;`: C1h PR 3); the tick's `void this.sweepX(…)` and argument texts (C1h, C1j); `lifecycle-sweep`'s `void this.sweepLifecycle().catch(` and `delegation-watch`'s `noteDelegationRegistry` row (C1h, C1j); `single-definition`'s two redactor blocks (C1l, its own named commits); `verb-gate.test.ts`'s `COLLECT_GATE`, `collect-lane-scans.test.ts`'s `collectGate()` and `id-argv-census.test.ts`'s `EXPIRY_STEP_0` (C1k's characterization commit widens them).
+  - **No symbol to key on:** a route handler is an anonymous callback of `app.post(…)`, so `coord/routes.ts`'s slices are keyed by route string. None covers a region C1i or C1k rewrites: the pause docstring slice ends at its `app.post(` line, and the three mail ladders and the four gate sites have no literal slice. `CCD_ARGV` is an object literal; `ccdargv-dec-parity` and `ccdargv-dash-id-parity` scan its `argv([…])` literals, which C1k's `CCD_CAN` does not add.
+  - **Outside every W1b region:** `mail-sweep.test.ts`'s due-loop and `gated` slices (the mail delivery ladder, which no W1b task rewrites), `fleet-identity-composition`'s `runInventory`, `ledger-sweep`'s doc-comment passages, `readme-holds.test.ts`'s `capSupported` and `stopSurfaceSupported` bodies (C1k keeps both), and the `DelegationLane` slices (no W1b task edits that class), and `collect-switch-scans.test.ts`'s `collectAct` slice (no W1b task rewrites the act).
+- Modify `server/test/single-definition.test.ts`'s ARCH-40 block: C0g's counting rule reads W1b's three further files (`registry.ts`; `redact.ts`, like `routes.ts`, only beside `coord`), one memoised scan of `server/test` counts every ratcheted file and serves both ratchets (D-6111's prefilter, #1021, widened to W1b's basenames so a pin over `ccdargv.ts` alone is still parsed), `literalSourcePinCounts` takes the file list and reads that scan, a CONTROL row covers the three files (it goes red if the prefilter reads W1a's basenames alone), and a second ratchet, "literal source pins over W1b's files may only shrink", is pinned at what it measures on this slice's tip: `watch.ts` 85 (114 before), `coord/routes.ts` 40, `ccdargv.ts` 6, `registry.ts` 2, `coord/redact.ts` 0. C0g's W1a ceiling is not edited (#987 holds its `watch.ts` row); its count only falls.
+
+- [ ] **Step 0: Re-ground.** `gh pr view` #929, #931, #933 and #943 (merged). List every suite that reads the five files as text, every literal slice among them, and the region each covers; classify each slice as moved, held by an open PR, rewritten text, unkeyable or outside every W1b region (the lists above). Check each moved suite against every open PR's hunks.
+- [ ] **Step 1: Throwaway refactor, recorded.** On a git-archive copy, give each keyed method a no-behaviour signature change (`public` on the public lanes, `collectPass`'s parameters reflowed onto their own lines): the moved suites are red on `origin/main`'s tests and green on this slice's. The PR body records both runs.
+- [ ] **Step 2: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | one new literal `indexOf` pin over `ccdargv.ts` | single-definition | the W1b ratchet's `ccdargv.ts` row |
+  | the scan's prefilter reads W1a's basenames alone | single-definition | CONTROL (D-6114) |
+  | `redact.ts` counted without `coord` | single-definition | CONTROL (D-6114) |
+  | `sweepChildReclaim`'s gather awaited before the throttle stamp | child-reclaim-generation-lane | "the pass awaits twice" |
+  | `sweepTempRootCollect` dispatched before `sweepDeadCoordinators` in `tick` | collect-lane-pass | the tick-order row |
+  | `sweepDivergences` calls `readRegistry(` | divergence-sweep | "reads the heartbeat off the SAME records" |
+  | `sweepMail` names `lastLifecycleSweep` | lifecycle-sweep | "sweepMail reached into the lifecycle subsystem" |
+  | `tick` stops handing `sweepHookStates` its records | registry-refused-census | "tick() passes its records to sweepHookStates(" |
+  | `judged` read a second time in `sweepChildReclaim` | child-reclaim-verdict-readers | "(b) across the whole of sweepChildReclaim" |
+  | `sweepChildReclaim` renamed | child-reclaim-generation-lane | throws `scan/symbols: no symbol 'FleetWatcher.sweepChildReclaim'` |
+  | `collectPass`'s `collectRetireLatch(` call moved into a helper method | single-definition | "watch.ts's call is not in the pass" |
+
+- [ ] **Step 3: Verify** each modified suite alone, then `single-definition.test.ts`, `tsc --noEmit`, and the doc suites.
+
+**Exit (GATES):** every literal slice over a W1b-rewritten region that symbol keying can rescue is keyed on `scan/symbols.ts`, except `stall-sweep`'s tick order (held by #832, reported); the ratchet covers W1b's files; zero production bytes. **Not in this slice:** the rewritten-text pins (each W1b task re-points its own), and `stall-sweep`'s tick order until #832 has merged or closed.
+
+### Task C0p: the ring rules, stage 3 — a PWA L1 module loads no `.tsx`, no store and not `lib/api.ts`, and `ui/` never imports `pwa/` (D-6118; ARCH-04 (#545), stage 3) — lands now
+
+A later W0 slice (spec §5.2), in stages 1 and 2's shape (#934, #944). **Routing:** native (band 2: the PWA classifier decides every `pwa/src` file's ring, and which edges are debt is a judgment). **Lane:** tests and docs only; zero production bytes. **Needs:** nothing; no operator ruling. **Gates:** stage 2 (Task C0n, #944) merged; it is. No open PR holds `server/test/rings/`, this plan or the 08-10 spec. Open PRs hold `pwa/src` files on both ends of these edges (#983, #960, #992), which this slice does not edit: every violation is recorded, none fixed (none is a one-word fix; each moves a value inward).
+
+**Files:**
+- Modify `server/test/rings/ring.ts`: `pwaRing(file)`, the 08-10 spec's PWA ring rules in order (L5 `main.tsx`; L4 a `.tsx` or `.css` file, a `stores/` file, a file that exports a hook, or one that holds a scheduler or poller; L3 `lib/api.ts`, a file naming a browser I/O global, or one that holds a deadline timer; L2 types only; L1 the rest), over `serverRing`'s timer reading and header grammar, a declaration moving a file outward only; a browser I/O global is read from code with comments and string and template text blanked (a template's `${…}` kept), so a `*Words.ts` file's prose ("Open it in a new window.") does not move it to L3 and out of rule (1).
+- Create `server/test/rings/resolveVite.ts`: stage 1's Vite resolver, moved out of `mjs-node.test.ts` unchanged so both rules land an edge the same way.
+- Create `rings/pwa-rings.test.ts` + `pwa-rings.data.ts`: (1) the runtime edges from a `pwa/src` L1 module to a `.tsx` file, a `stores/` file or `lib/api.ts` are EXACTLY `PWA_L1_EXEMPTIONS`, keyed `<from> -> <to>`, generated by the scanner on the day the rule lands (14 file pairs from 9 modules); a type-only edge moves nothing. (2) The `ui/src` files that name `pwa/`, in any form (a type import, a relative path, the app's package name), are EXACTLY `UI_PWA_EXEMPTIONS` (empty). CONTROLs: each ring clause, the planted imports, both walks' floors.
+- Modify `rings/exemption-age.data.ts`: the two new sets' stamps.
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: the "Import-direction test" status row names the stage 3 rule.
+- **Not in this task:** one ring and one context per file (stage 4), draining any edge, and the PWA's other outward edges (an L1 module loading an L3 or L4 `.ts` file that is not a store or `lib/api.ts`), which stage 3's ticket does not name.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`, compute every `pwa/src` file's ring with the classifier (236 files: L5 1, L4 141, L3 14, L2 1, L1 79), list each L1 module's edges to a `.tsx` file, a store or `lib/api.ts` (14 runtime import lines over 14 file pairs, one line each, plus 4 type-only lines), and every `ui/src` edge into `pwa/` (none). `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** On a `git archive` of `origin/main` with the new test file copied in: it fails to load (`pwaRing` and `resolveVite.ts` are absent); with `ring.ts` and `resolveVite.ts` copied too, `exemption-age` is red on the two unstamped sets. Every rule's exact set is green on the tree.
+- [ ] **Step 2: Green.** The classifier, the resolver move, the rule and its data, the stamps, the status row.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | a runtime `import { MessageBubble } from './MessageBubble'` in `session/askWords.ts` | pwa-rings | red, listing `askWords.ts -> MessageBubble.tsx` |
+  | the `skins/index.ts -> skins/refined/parts.tsx` entry deleted | pwa-rings | red, listing the edge |
+  | an entry for `pwa/src/session/reapWords.ts -> pwa/src/lib/api.ts`, which does not occur | pwa-rings | red: stale entry |
+  | an exemption's reason blanked | pwa-rings | red, naming the entry |
+  | `import type { X } from '../../../pwa/src/lib/api'` in a `ui/src` file | pwa-rings | red, listing the file |
+  | the hook clause dropped from `pwaRing` | pwa-rings | red: the CONTROL |
+  | the browser I/O clause dropped from `pwaRing` | pwa-rings | red: the CONTROL |
+  | the store clause dropped from the forbidden targets | pwa-rings | red: the CONTROL, and `chatItems.ts -> stores/session.ts` goes stale |
+  | type-only edges counted in rule (1) | pwa-rings | red: the CONTROL and four new type-only pairs |
+  | a stamp's size off by one | exemption-age | red: the stamp's size |
+  | a walk's floor above its count | pwa-rings | red: `walkSrc` throws "below the floor" |
+  | a new `session/zzWords.ts` with `export const HINT = 'Open it in a new window.';` and a runtime `import { MessageBubble } from './MessageBubble'` | pwa-rings | red, listing `zzWords.ts -> MessageBubble.tsx` |
+  | `browserIoOf` reads `codeOnly` text without blanking literals | pwa-rings | red: the prose CONTROL and the planted prose Words file |
+  | template `${…}` expressions blanked too | pwa-rings | red: the template-expression CONTROL |
+
+- [ ] **Step 4: Verify.** From `server/`, one at a time with `--maxWorkers=2`: the rule files under `rings/`; `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`; then, after `git fetch -q origin main`, `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** the PWA L1 modules' forbidden runtime edges equal a 14-entry exemption set the scanner generated; `ui/` imports nothing from `pwa/`, with an empty exemption set; both sets stamped; zero production bytes.
+
 ## Operator acts in this wave
 
 - **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
@@ -743,6 +824,18 @@ Task C0k was issued three numbers, 6051 to 6053.
   - **Departs from ARCH-23 as written**, which states the four lists equal outright.
 - **D-6053** — `ccd-argv-samples-shared` (Task C0k): `whitelist-subset.test.ts`'s `SAMPLES` table moves to `server/test/ccdArgvSamples.ts`, a file the task's Files list does not name, so `ccd-verb-sets.test.ts` reads the same samples instead of keeping its own. `whitelist-subset.test.ts` imports it; there is one table, typed total over `CCD_ARGV`, so a new entry fails `tsc` until it has a sample.
   - **Departs from Task C0k's Files list as first written**, which moved the table.
+
+### Issued for Task C0o and defined here
+
+- **D-6114** — `symbol-slices-for-w1b` (Task C0o; ARCH-06 (#554), the W1b slice; extends D-5854): the suites whose literal slices read a region a W1b task (C1g to C1l) rewrites move onto `scan/symbols.ts`, and C0g's literal source-pin ratchet extends to W1b's files (`watch.ts`, `coord/routes.ts`, `ccdargv.ts`, `registry.ts`, `coord/redact.ts`) with its own ceiling, which may only shrink.
+
+### Issued for Task C0p and defined here
+
+- **D-6118** — `ring-rules-stage-3-pwa` (Task C0p; ARCH-04 (#545), stage 3; in D-6045's shape): a `pwa/src` file's ring is `rings/ring.ts`'s `pwaRing`, the 08-10 spec's PWA rules over the same timer reading and header grammar as `serverRing`, and an edge lands where Vite resolves it (`rings/resolveVite.ts`, stage 1's resolver moved, one owner). `rings/pwa-rings.test.ts` holds two rules, each over an exemption set in `pwa-rings.data.ts` held exactly and stamped for `exemption-age`: an L1 module's runtime edges to a `.tsx` file, a `stores/` file or `lib/api.ts` (14 file pairs on the day it landed, may only shrink), and `ui/src`'s edges into `pwa/` in any form (none). Rule (1) counts runtime edges only, as stage 2 does, because the spec says a type-only import moves nothing; rule (2) counts type edges too, because `ui/` must compile without `pwa/`. No violation was fixed in this slice: each needs a value moved inward, and the target or the source of five sits in a file an open PR holds (#983 holds `sectionStatus.ts` and two settings sections, #960 `UpdateBanner.tsx`, #992 `lib/markdown.tsx`).
+
+### Issued for C0a's job-summary follow-up and defined here
+
+- **D-6119** — `growth-check-job-summary` (C0a's follow-up; ARCH-01 (#526) acceptance 3; extends D-5848): the growth check appends a CI job summary to `$GITHUB_STEP_SUMMARY` from the test itself, so no workflow changes: each listed file's code lines at the merge-base and at HEAD with the net delta, `FleetWatcher`'s method count at both, read by ARCH-00's parser (`scan/parse.ts`, symbols of kind `method` keyed `FleetWatcher.<name>`; getters, setters, arrow properties, the constructor and nested functions are not counted), and `GROWTH_OVER`. The absolute numbers appear in the summary only, never in an assertion, so the test still holds no per-file constant. Arming stays OA-C2's (`GROWTH_ARMED` is unchanged). On the day it landed `FleetWatcher` had 181 methods; the ticket's 148 was counted at the audit.
 
 ## Out of scope
 

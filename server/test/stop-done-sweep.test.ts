@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
 import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -15,11 +15,12 @@ import { buildServer } from '../src/server.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
 import { Presence } from '../src/presence.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP } from '../src/ccdargv.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from '../src/coord/hibernate.js';
 
 // D-5370 (`stop-worker-at-run-done`): the lane. The verdict's holds are pinned in `stop-done-verdict.test.ts`; this
@@ -42,7 +43,7 @@ const rec = (id: string): SessionRecord => ({ id, uuid: `uuid-${id}` }) as unkno
 interface Fake {
   deps: StopDoneSweepDeps;
   argv: string[][];
-  feed: { sessionId: string; runId: number | null }[];
+  feed: { kind?: string; sessionId: string; runId: number | null; title?: string; body?: string }[];
   serialCalls: number;
   /** Per session: the newest run's state and close time, and whether another open run names it. */
   runs: Map<string, { runId: number; state: string; closedAt: number | null }>;
@@ -53,12 +54,18 @@ interface Fake {
   atAct: Map<string, Partial<FleetSession> | 'unreadable'>;
   /** Per session: the open run it reviews, if any (`runsNamingSession` → `run.reviews` → an open state). */
   reviewsOpen: Set<string>;
+  /** D-6091: sessions a newer `planned` run names (run 50): today it is their newest run and an open one. */
+  planned: Set<string>;
+  /** sibling-parked-run-takes-parked-clock: sessions an (older) run parked at review, merge or close names. */
+  parked: Set<string>;
+  /** D-6091: run states `run(id)` answers (a hold's `run:` suffix); absent → `working`. 'unreadable' → `ok: false`. */
+  runStates: Map<number, string>;
 }
 
-function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = {}): Fake {
+function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; holdOk?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
-    atAct: new Map(), reviewsOpen: new Set(),
+    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), parked: new Set(), runStates: new Map(),
     deps: undefined as unknown as StopDoneSweepDeps,
   };
   ids.forEach((id, i) => f.runs.set(id, { runId: 10 + i, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }));
@@ -68,29 +75,44 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = 
       lastRunBySession: (asked: readonly string[]) => ({
         ok: true as const,
         last: asked.flatMap((sessionId) => {
+          const r = f.planned.has(sessionId) ? { runId: 50, state: 'planned', closedAt: null } : f.runs.get(sessionId);
+          return r === undefined ? [] : [{ sessionId, ...r, program: 'p', programTitle: null, claimedBy: 'lane-a-project-a' }];
+        }),
+        lastPlaced: asked.flatMap((sessionId) => {
           const r = f.runs.get(sessionId);
           return r === undefined ? [] : [{ sessionId, ...r, program: 'p', programTitle: null, claimedBy: 'lane-a-project-a' }];
         }),
-        openWorkers: asked.filter((id) => f.openWorkers.has(id)),
+        openWorkers: asked.filter((id) => f.openWorkers.has(id) || f.planned.has(id)),
+        openPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
+        parkedPlacedWorkers: asked.filter((id) => f.parked.has(id)),
         openClaimants: ['lane-a-project-a'],
       }),
       activeClaims: () => [],
       outstandingMailFor: (toId: string) => (f.mailTo.has(toId) ? [{}] : []) as never,
       recordFeedEvent: () => undefined,
-      runsNamingSession: (id: string) => ({ ok: true as const, runs: f.reviewsOpen.has(id) ? [{ id: 900 }] : [] }) as never,
-      run: (runId: number) => ({ ok: true as const, run: runId === 900 ? { reviews: 901 } : { state: 'working', reviews: null } }) as never,
+      run: (runId: number) => {
+        const st = f.runStates.get(runId);
+        if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'locked' };
+        return { ok: true as const, run: (runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null }) as never };
+      },
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
-    fleetState: { ccdVerbs: o.verb === false ? ['stop-surface', ACTOR_FLAGS_CAP] : ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
+    fleetState: {
+      ccdVerbs: [...(o.verb === false ? ['stop-surface'] : ['hibernate']), ACTOR_FLAGS_CAP, ...(o.holdOk ? [HIBERNATE_HOLD_OK_CAP] : [])],
+    } as unknown as FleetState,
     presence: { isOpen: () => false },
     notifyLog: {
-      epoch: 'e', record: (e: { sessionId: string; runId: number | null }) => { f.feed.push({ sessionId: e.sessionId, runId: e.runId }); return { ...e, seq: ++seq, at: NOW }; },
+      epoch: 'e',
+      record: (e: { kind: string; sessionId: string; runId: number | null; title: string; body: string }) => {
+        f.feed.push(e.kind === 'coord' ? { kind: e.kind, sessionId: e.sessionId, runId: e.runId, title: e.title, body: e.body }
+          : { sessionId: e.sessionId, runId: e.runId });
+        return { ...e, seq: ++seq, at: NOW };
+      },
       flush: async () => undefined,
     } as unknown as StopDoneSweepDeps['notifyLog'],
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
     turnVerdict: async () => 'idle',
     mark: async () => MARK_IDLE,
-    readAfterHours: async () => null,
     rowAtAct: async (r) => {
       const a = f.atAct.get(r.id);
       return a === 'unreadable' ? { ok: false } : { ok: true, row: row(r.id, a ?? {}) };
@@ -104,6 +126,8 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = 
 }
 
 const mem = (): StopDoneMemory => ({ retryAt: new Map() });
+/** The `Worker asleep` rows alone: a process's first pass also writes its mail-only count, zero included (D-6091). */
+const sleepRows = (f: Fake) => f.feed.filter((e) => !('kind' in e));
 /** The argv the lane composes since Task 17b (stop-done-composes-hibernate (D-5427)): `ccd hibernate`, declared. */
 const HIB = (id: string): string[] => ['hibernate', id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
 const ID = 'project-a-quiet-basin';
@@ -119,22 +143,11 @@ describe('stopDonePass (D-5370)', () => {
     expect(live).not.toHaveBeenCalled();
   });
 
-  it('recent: a worker idle less than N (6 h) since its marker\'s last stamp is left awake', async () => {
+  it('recent: a worker quiet less than the grace since its marker\'s last stamp is left awake (D-6091: not N)', async () => {
     const f = fake([ID]);
-    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 5 * HOUR, stopAt: NOW - 5 * HOUR });
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 5 * 60_000, stopAt: NOW - 5 * 60_000 });
     await stopDonePass({ ...f.deps, mark }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
-  });
-
-  it('N is the operator\'s hibernate-after-hours, read only when listed: 2 puts a 3 h worker to sleep', async () => {
-    const f = fake([ID]);
-    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 3 * HOUR, stopAt: NOW - 3 * HOUR });
-    const after = vi.fn(async () => '2');
-    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], []);
-    expect(f.argv, 'unlisted: the default N holds the 3 h worker').toEqual([]);
-    expect(after).not.toHaveBeenCalled();
-    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], [HIBERNATE_AFTER_HOURS_FILE]);
-    expect(f.argv).toEqual([HIB(ID)]);
   });
 
   it('opted-out: a worker with $REG/<id>.no-hibernate is left awake', async () => {
@@ -157,7 +170,7 @@ describe('stopDonePass (D-5370)', () => {
     const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => { f.argv.push([...a]); return { ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane', killed: false, signal: null }; };
     const out = await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(out).toEqual([{ id: ID, kind: 'skipped', detail: 'attached' }]);
-    expect(f.feed).toEqual([]);
+    expect(sleepRows(f)).toEqual([]);
     await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
   });
@@ -168,7 +181,7 @@ describe('stopDonePass (D-5370)', () => {
     expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
     expect(f.argv).toEqual([HIB(ID)]);
     expect(f.serialCalls).toBe(1);
-    expect(f.feed).toEqual([{ sessionId: ID, runId: 10 }]);
+    expect(sleepRows(f)).toEqual([{ sessionId: ID, runId: 10 }]);
   });
 
   it('the kill switch: with stop-done-disabled listed, nothing is read and nothing is stopped', async () => {
@@ -339,7 +352,7 @@ describe('stopDonePass (D-5370)', () => {
     f.ccdOk = false;
     const m = mem();
     expect((await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []))[0]?.kind).toBe('failed');
-    expect(f.feed).toEqual([]);
+    expect(sleepRows(f)).toEqual([]);
     await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
     expect(f.argv.length).toBe(1);
     f.ccdOk = true;
@@ -376,18 +389,246 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('a reviewer whose reviewed run is still open is not stopped (reviewing)', async () => {
-    const f = fake([ID]);
-    f.reviewsOpen.add(ID);
-    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
-    expect(f.argv).toEqual([]);
-  });
-
   it('within the grace after the run closed, the worker is left alone', async () => {
     const f = fake([ID]);
     f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 60_000 });
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
+  });
+});
+
+// D-6091 (fleet capacity W1-1), the characterization: today's pass answers for the rows the behaviour commit flips.
+describe('stopDonePass: run-close timing, before and after (D-6091)', () => {
+  it('kept: a hold raised between pass and act holds (none at the pass, an operator hold at the act)', async () => {
+    const f = fake([ID]);
+    f.atAct.set(ID, { held: 'keep: debugging' });
+    const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
+    expect(f.argv).toEqual([]);
+  });
+});
+
+// D-6091, the new pass rows: what the lane does once the verdict's clock is the close.
+describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
+  const PROG = 'program:programme-a wave:3';
+  const HIB_OK = (id: string, text: string): string[] =>
+    ['hibernate', '--hold-ok', text, id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
+
+  it('a programme-held hibernate passes --hold-ok with the exact text', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: PROG });   // the record re-read at the act still carries it
+    const out = await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(f.argv).toEqual([HIB_OK(ID, PROG)]);
+  });
+
+  it('a terminal run\'s hold passes --hold-ok; an open run\'s hold and an unreadable one hold', async () => {
+    const held = 'program:programme-a wave:2 run:7';
+    const f = fake([ID], { holdOk: true });
+    f.runStates.set(7, 'done');
+    f.atAct.set(ID, { held });
+    await stopDonePass(f.deps, mem(), [row(ID, { held })], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB_OK(ID, held)]);
+    for (const st of ['working', 'unreadable']) {
+      const g = fake([ID], { holdOk: true });
+      g.runStates.set(7, st);
+      g.atAct.set(ID, { held });
+      await stopDonePass(g.deps, mem(), [row(ID, { held })], [rec(ID)], []);
+      expect(g.argv, st).toEqual([]);
+    }
+  });
+
+  it('without the hibernate-hold-ok token a programme-held child is held', async () => {
+    const f = fake([ID]);
+    await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('an operator\'s own hold holds even with the token', async () => {
+    const f = fake([ID], { holdOk: true });
+    await stopDonePass(f.deps, mem(), [row(ID, { held: 'keep: debugging' })], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a hold raised between pass and act holds (a programme hold at the pass, an operator hold at the act)', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: 'keep: debugging' });
+    const out = await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a hold changed between pass and act is passed with the ACT\'s text, which ccd then re-reads', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: 'program:programme-a wave:4' });
+    await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB_OK(ID, 'program:programme-a wave:4')]);
+  });
+
+  it('a planned run naming the child does not hold sleep', async () => {
+    const f = fake([ID]);
+    f.planned.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('a reviewer of an open run sleeps', async () => {
+    const f = fake([ID]);
+    f.reviewsOpen.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('the lane reads no hibernate-after-hours: a worker 11 minutes quiet after close sleeps, the file unread', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 11 * 60_000 });
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 11 * 60_000, stopAt: NOW - 11 * 60_000 });
+    const after = vi.fn(async () => '24');
+    await stopDonePass({ ...f.deps, mark, readAfterHours: after } as StopDoneSweepDeps, mem(), [row(ID)], [rec(ID)],
+      [HIBERNATE_AFTER_HOURS_FILE]);
+    expect(f.argv).toEqual([HIB(ID)]);
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it('a worker 11 minutes quiet after a done run, an older run of its parked at review, waits the parked 30 minutes', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 11 * 60_000 });
+    f.parked.add(ID);
+    const quiet = (ms: number): StopDoneSweepDeps['mark'] => async () => ({ ...MARK_IDLE, turnAt: NOW - ms, stopAt: NOW - ms });
+    await stopDonePass({ ...f.deps, mark: quiet(11 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, mark: quiet(30 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('HIBERNATE_HOLD_OK_CAP is a token ccd advertises (ccdCapTokens.ts)', () => {
+    expect(CCD_CAPABILITY_TOKENS).toContain(HIBERNATE_HOLD_OK_CAP);
+  });
+});
+
+// D-6091: the excluded row — the finished workers nothing but unread mail keeps awake, counted on the lane's feed.
+describe('stopDonePass: the mail-only feed row (D-6091)', () => {
+  const coordRows = (f: Fake) => f.feed.filter((e) => e.kind === 'coord');
+
+  it('the excluded row carries the mail-only count, once per change', async () => {
+    const f = fake([ID, 'project-a-other-basin']);
+    f.mailTo.add(ID);
+    f.mailTo.add('project-a-other-basin');
+    const m = mem();
+    const rows = [row(ID), row('project-a-other-basin')];
+    const recs = [rec(ID), rec('project-a-other-basin')];
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 2']);
+    expect(coordRows(f)[0]).toMatchObject({ sessionId: '', runId: null });
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f), 'unchanged: no second row').toHaveLength(1);
+    f.mailTo.delete(ID);
+    await stopDonePass(f.deps, m, rows, recs, []);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 2', 'Workers kept awake by unread mail: 1']);
+  });
+
+  it('the first pass of a process writes its count, zero included; then only a change writes one', async () => {
+    const f = fake([ID]);
+    const m = mem();
+    await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(f).map((e) => e.title), 'a restart writes one row, so zero reads apart from never-ran')
+      .toEqual(['Workers kept awake by unread mail: 0']);
+    await stopDonePass(f.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(f), 'still zero: no second row').toHaveLength(1);
+    const e = fake([]);
+    await stopDonePass(e.deps, mem(), [], [], []);
+    expect(coordRows(e).map((r) => r.title), 'an empty population writes its zero too')
+      .toEqual(['Workers kept awake by unread mail: 0']);
+    const g = fake([ID]);
+    g.mailTo.add(ID);
+    await stopDonePass(g.deps, m, [row(ID)], [rec(ID)], []);
+    g.mailTo.delete(ID);
+    await stopDonePass(g.deps, m, [row(ID)], [rec(ID)], []);
+    expect(coordRows(g).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 1', 'Workers kept awake by unread mail: 0']);
+  });
+
+  it('mail beside another hold is not counted', async () => {
+    const f = fake([ID]);
+    f.mailTo.add(ID);
+    f.openWorkers.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(coordRows(f).map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 0']);
+  });
+
+  it('the sleep row names the run\'s state', async () => {
+    const f = fake([ID]);
+    const bodies: string[] = [];
+    const log = { ...f.deps.notifyLog!, record: (e: { kind: string; body: string }) => {
+      if (e.kind === 'run') bodies.push(e.body);
+      return { ...e, seq: 1, at: NOW };
+    } };
+    await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
+    expect(bodies).toEqual([`${ID} was put to sleep: its run 10 is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+  });
+
+  it('the asleep row and journal line name a failed run as failed and a parked run by its state (D-6092)', async () => {
+    for (const [state, closedAt, words] of [
+      ['failed', NOW - STOP_DONE_GRACE_MS - 1, 'is failed'],
+      ['merging', null, 'is parked at merging'],
+      ['awaiting-review', null, 'is parked at awaiting-review'],
+    ] as const) {
+      const f = fake([ID]);
+      f.runs.set(ID, { runId: 10, state, closedAt });
+      const bodies: string[] = [];
+      const log = { ...f.deps.notifyLog!, record: (e: { kind: string; body: string }) => {
+        if (e.kind === 'run') bodies.push(e.body);
+        return { ...e, seq: 1, at: NOW };
+      } };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
+        expect(bodies, state).toEqual([`${ID} was put to sleep: its run 10 ${words} and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+        const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('put ' + ID + ' to sleep'));
+        expect(lines, state).toEqual([`ccrc-server: stop-done: put ${ID} to sleep (run 10 ${words.replace(/^is /, '')}, idle; D-5370, D-5427, D-6091, D-6092)`]);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  });
+
+  it('the feed archive keeps one writer site', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'stopDoneSweep.ts'), 'utf8');
+    expect(src.match(/\.recordFeedEvent\(/g) ?? []).toHaveLength(1);
+    expect(src.match(/\.record\(/g) ?? []).toHaveLength(1);
+  });
+});
+
+// D-6091: the sweep classifies the row's `.hold` for the verdict. Every read it cannot make holds.
+describe('heldKindOf: the row\'s hold, classified (D-6091)', () => {
+  const coord = (states: Record<number, string | 'unreadable' | 'absent' | 'throws'>) => ({
+    run: (id: number) => {
+      const st = states[id];
+      if (st === 'throws') throw new Error('locked');
+      if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'x' };
+      if (st === undefined || st === 'absent') return { ok: true as const, run: null };
+      return { ok: true as const, run: { state: st } };
+    },
+  }) as unknown as Pick<StopDoneSweepDeps['coord'], 'run'>;
+
+  it('no hold, an operator text, the unreadable and empty placeholders, a programme hold', () => {
+    const c = coord({});
+    expect(heldKindOf(null, c)).toBe('none');
+    expect(heldKindOf('keep: debugging', c)).toBe('operator');
+    expect(heldKindOf('<hold file unreadable — treated as held>', c)).toBe('operator');
+    expect(heldKindOf('', c)).toBe('operator');
+    expect(heldKindOf('program:programme-a wave:3', c)).toBe('programme');
+  });
+
+  it('a run: suffix reads the run: done and failed are terminal, every other state open', () => {
+    const c = coord({ 7: 'done', 8: 'failed', 9: 'working', 10: 'planned', 11: 'awaiting-review' });
+    expect(heldKindOf('program:programme-a wave:2 run:7', c)).toBe('run-terminal');
+    expect(heldKindOf('program:programme-a wave:2 run:8', c)).toBe('run-terminal');
+    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('run-live');
+  });
+
+  it('a run: suffix whose run cannot be read — refused, absent or throwing — is unreadable', () => {
+    const c = coord({ 7: 'unreadable', 8: 'absent', 9: 'throws' });
+    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('unreadable');
   });
 });
 
@@ -547,6 +788,45 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       writeFileSync(path.join(h.reg, `${WID}.turn.json`), `${JSON.stringify({
         v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
         bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  // D-6092 (fleet capacity W1-1b), the characterization over the real store: a `failed` run's worker, and a producer
+  // parked at `awaiting-review` (its marker quiet 7 hours), are held today: the first `not-done`, the second by its own
+  // parked run (`run-worker` before `not-done` is even asked).
+  it('now: a failed run\'s worker, closed past the grace and quiet, is put to sleep (was: held)', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('now: a producer parked at awaiting-review, quiet 7 hours, is put to sleep — its own parked run does not hold it (was: held)', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('kept: a working run\'s worker, quiet 7 hours, is held', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();
       const t = await h.tick();
       await h.w.sweepStopDone(t.rows, t.records, []);
       expect(h.stops()).toEqual([]);

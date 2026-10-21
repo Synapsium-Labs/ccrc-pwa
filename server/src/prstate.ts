@@ -1,5 +1,7 @@
 import type { PrChecks, PrReason, PrState, PrView, ProjectRepoWire, TaskItem } from '../../shared/api.js';
 import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
+import type { CcdResult } from './coord/ports.js';
+import { ccdEnding } from './lifecycle.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -257,6 +259,15 @@ export function queueFor(line: CcdPrLine): PrQueueRead {
     ? line.queue as PrQueue : 'unmeasured';
   const at = typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt) ? line.queueAt : null;
   return { state, at };
+}
+
+/** How a failed `pr-state` call failed (landing-order wave 3c). The runner's kill (`ccdEnding` `deadline`: the
+ *  deadline, or node's output cap) and this server's own wait running out (`ran: false`, `timeout`; also a link
+ *  that died without a close, until the heartbeat sees it) are `cut-short`: the read was ended before it answered.
+ *  Everything else keeps the old word, `agent-down`, because nothing else here was measured to be anything more. */
+export function sweepFailureReason(res: CcdResult): PrReason {
+  if (res.ran === false) return res.reason === 'timeout' ? 'cut-short' : 'agent-down';
+  return ccdEnding(res).kind === 'deadline' ? 'cut-short' : 'agent-down';
 }
 
 /** The repo cell for one project, from what the sweep measured about it.

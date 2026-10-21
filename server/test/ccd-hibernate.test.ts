@@ -208,6 +208,8 @@ describe('ccd hibernate: every re-measure refuses session-busy at exit 3 and tou
     ['crons -1', 'scheduled', () => { marker({ crons: -1 }); }],
     ['a marker with no crons (an older hook)', 'scheduled', () => { marker({ crons: undefined }); }],
     ['a .hold', 'held', () => { fs.writeFileSync(regPath('hold'), 'wave 2'); }],
+    // D-6091 characterization: without `--hold-ok`, a programme hold refuses exactly as an operator's own text does.
+    ['today: (h) a .hold reading program:programme-a wave:3', 'held', () => { fs.writeFileSync(regPath('hold'), 'program:programme-a wave:3'); }],
     ['a .no-hibernate', 'opted-out', () => { fs.writeFileSync(regPath('no-hibernate'), ''); }],
     ['a fresh lastswap', 'recent-swap', () => { fs.writeFileSync(regPath('lastswap'), String(nowS() - 30)); }],
     // The window's edge: past 60 s, inside SWAP_JITTER + 60 = 180 s (a swap still behind its random delay).
@@ -235,6 +237,87 @@ describe('ccd hibernate: every re-measure refuses session-busy at exit 3 and tou
     idle();
     fs.writeFileSync(regPath('lastswap'), String(nowS() - 400));
     expect(hibernate().rc).toBe(0);
+  });
+});
+
+// D-6091 (fleet capacity W1-1): `--hold-ok <text>` lets the run-done policy sleep a finished child whose `.hold` is a
+// programme hold — and nothing else. The server names the text it classified; ccd re-reads the file at the act and
+// passes it only byte-identical AND inside the programme-hold grammar. Every other case refuses `held` as today.
+describe('ccd hibernate --hold-ok (D-6091)', () => {
+  const PROG = 'program:programme-a wave:3';
+  const refusedHeld = (r: { rc: number; err: string }): void => {
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: held');
+    expect(has('hibernated'), 'no marker').toBe(false);
+    expect(killed(), 'the pane untouched').toBe(false);
+    expect(eventsOf(h.home, 'hibernate'), 'no hibernate journal row').toEqual([]);
+  };
+
+  it('--hold-ok with the byte-identical programme text hibernates', () => {
+    idle(); fs.writeFileSync(regPath('hold'), PROG);
+    const r = hibernate('', `--hold-ok '${PROG}' ${ID}`);
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`hibernated ${ID}`);
+    expect(has('hold'), 'the hold itself is untouched: it still guards retirement').toBe(true);
+  });
+
+  it('--hold-ok= spelling with a run: suffix hibernates', () => {
+    idle(); fs.writeFileSync(regPath('hold'), 'program:programme-a wave:2/4 run:7');
+    expect(hibernate('', `'--hold-ok=program:programme-a wave:2/4 run:7' ${ID}`).rc).toBe(0);
+  });
+
+  it('--hold-ok with an operator text (keep: debugging) still refuses held', () => {
+    idle(); fs.writeFileSync(regPath('hold'), 'keep: debugging');
+    refusedHeld(hibernate('', `--hold-ok 'keep: debugging' ${ID}`));
+  });
+
+  it('--hold-ok whose text differs from the file refuses held (the hold changed between pass and act)', () => {
+    idle(); fs.writeFileSync(regPath('hold'), 'program:programme-a wave:4');
+    refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));
+  });
+
+  it('--hold-ok against a file with a trailing newline refuses held (byte-identical, not trimmed)', () => {
+    idle(); fs.writeFileSync(regPath('hold'), `${PROG}\n`);
+    refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));
+  });
+
+  // Root reads a mode-000 file, so the case means nothing there (the directory row below stays root-safe).
+  it.skipIf(process.getuid?.() === 0)('an unreadable .hold refuses held with --hold-ok', () => {
+    idle(); fs.writeFileSync(regPath('hold'), PROG); fs.chmodSync(regPath('hold'), 0o000);
+    try {
+      refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));
+    } finally { fs.chmodSync(regPath('hold'), 0o600); }
+  });
+
+  it('a .hold that is a directory refuses held with --hold-ok', () => {
+    idle(); fs.mkdirSync(regPath('hold'));
+    refusedHeld(hibernate('', `--hold-ok '${PROG}' ${ID}`));
+  });
+
+  it('a dash-leading --hold-ok value is the usage line', () => {
+    idle(); fs.writeFileSync(regPath('hold'), PROG);
+    for (const args of [`--hold-ok --actor ${ID}`, `--hold-ok=-x ${ID}`, `--hold-ok '' ${ID}`]) {
+      const r = hibernate('', args);
+      expect(r.rc, args).toBe(1);
+      expect(r.err, args).toContain('usage: ccd hibernate');
+      expect(has('hibernated'), args).toBe(false);
+    }
+  });
+
+  it('control: --hold-ok on a row with no .hold changes nothing (the act lands as without it)', () => {
+    idle();
+    expect(hibernate('', `--hold-ok '${PROG}' ${ID}`).rc).toBe(0);
+  });
+
+  it('--hold-ok passes ONLY the hold: every other re-measure still refuses (opted-out after it)', () => {
+    idle(); fs.writeFileSync(regPath('hold'), PROG); fs.writeFileSync(regPath('no-hibernate'), '');
+    const r = hibernate('', `--hold-ok '${PROG}' ${ID}`);
+    expect(r.rc).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: opted-out');
+  });
+
+  it('caps advertises hibernate-hold-ok', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-hold-ok');
   });
 });
 
