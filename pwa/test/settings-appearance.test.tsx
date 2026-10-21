@@ -7,10 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { PHOSPHOR, SYSTEM, THEMES } from '@ccrc/ui';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { initTheme } from '../src/lib/theme';
+import { declValue, ruleIn, selectorsOf } from './cssRule';
 import { AppearanceSection } from '../src/screens/settings/AppearanceSection';
 
 const KEY = 'ccrc-theme';
+const ROOT = path.join(import.meta.dirname, '..', '..');
 const media = (matches: boolean) => ({ matches, addEventListener: () => {} });
 
 beforeEach(() => { localStorage.clear(); document.documentElement.removeAttribute('data-theme'); initTheme(media(false)); });
@@ -34,14 +38,48 @@ describe('the Theme preview grid', () => {
     expect(document.querySelectorAll('.settings-palette')).toHaveLength(13);
   });
 
-  it('each palette card carries its own data-theme', () => {
-    // The card IS the palette: tokens.css's blocks are attribute selectors, so they resolve on the card. Phosphor is
-    // :root and answers to no attribute, so its card stamps none; Follow the system is not a palette and stamps none.
+  it('each palette card carries its own data-theme, Phosphor & Ink included', () => {
+    // The card IS the palette: tokens.css's blocks are attribute selectors, so they resolve on the card. Phosphor &
+    // Ink answers to [data-theme='phosphor'] too, so its card is dark on a light page; Follow the system is not a
+    // palette and stamps none.
     render(<AppearanceSection />);
     for (const r of radios()) {
       const c = card(r);
-      if (r.value === SYSTEM || r.value === PHOSPHOR) expect(c.hasAttribute('data-theme'), r.value).toBe(false);
+      if (r.value === SYSTEM) expect(c.hasAttribute('data-theme'), r.value).toBe(false);
       else expect(c.getAttribute('data-theme'), r.value).toBe(r.value);
+    }
+  });
+
+  it('tokens.css draws Phosphor & Ink by name: its colours, and only its colours, answer to the attribute', () => {
+    // On a light device Follow the system stamps data-theme='light' on the root; without the alias the Phosphor card
+    // drew in Daylight, a copy of the card beside it. Type, density and motion stay :root-only, or the card would reset
+    // Instrument's :root[data-skin] values inside it.
+    const tokens = readFileSync(path.join(ROOT, 'ui/src/styles/tokens.css'), 'utf8');
+    const named = ruleIn(tokens, "[data-theme='phosphor']");
+    expect(selectorsOf(tokens, "[data-theme='phosphor']")).toContain(':root');
+    expect(declValue(named, '--bg-surface')).toBe(declValue(ruleIn(tokens, ':root'), '--bg-surface'));
+    for (const t of ['--bg-page', '--ink-primary', '--accent', '--status-attention', '--status-dead']) {
+      expect(declValue(named, t), t).not.toBeNull();
+    }
+    for (const m of named.matchAll(/(--[\w-]+)\s*:/g)) {
+      expect(m[1], 'a non-colour token in the aliased block').not.toMatch(/^--(fs|family|weight|lh|ls|sp|r|dur|curve|z|row|head|gutter|pad|gap|page|measure|tap|case)-?/);
+    }
+  });
+
+  it('one tab stop: only the checked card\'s input is in the tab order', () => {
+    localStorage.setItem(KEY, 'nord');
+    initTheme(media(false));
+    render(<AppearanceSection />);
+    const stops = radios().filter((r) => r.tabIndex === 0);
+    expect(stops.map((r) => r.value)).toEqual(['nord']);
+    expect(stops[0]!.checked).toBe(true);
+  });
+
+  it('every radio is described by its note, at every width (the visible note hides on a phone)', () => {
+    render(<AppearanceSection />);
+    for (const r of radios()) {
+      const note = r.value === SYSTEM ? /after dark/i : THEMES.find((t) => t.id === r.value)!.note;
+      expect(r, r.value).toHaveAccessibleDescription(note);
     }
   });
 

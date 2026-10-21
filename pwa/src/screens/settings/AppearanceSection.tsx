@@ -5,18 +5,20 @@
 // THE GRID (spec §5.2). Thirteen cards, `THEME_CHOICES`' order: Follow the system, then the eight dark and four light
 // palettes. Each palette card carries `data-theme`, so it is drawn IN the palette it names: tokens.css's blocks are
 // plain attribute selectors and resolve on any element, so a card cannot show a hand-copied approximation. Phosphor &
-// Ink is `:root` and answers to no attribute, so its card stamps none; Follow the system is not a palette and stamps
-// none either (both draw the page's own palette; see the PR's departure note). Each card is a `Radio` (the label is
-// the 44px target; its input is the group's one tab stop), its note in the card's `title` and, on a phone, under the
-// grid for the checked card only; a column of 480 or more shows every card's note (settings.css's container query).
+// Ink's colours answer to `[data-theme='phosphor']` as well as `:root` (tokens.css), so its card is dark on a light
+// page; Follow the system is not a palette and stamps none (it draws the page's own palette). Each card is a `Radio`
+// (the label is the 44px target; its input is the group's one tab stop), its note in the card's `title` and, on a
+// phone, under the grid for the checked card only; a column of 480 or more shows every card's note (settings.css's
+// container query). The note is the radio's DESCRIPTION, not part of its name, so a phone's screen reader still hears
+// every palette's note while the visible one is hidden.
 //
 // ONE RADIO GROUP, AND THE KEYS ARE OURS. Theme stays an `AppearanceFieldset`, like Layout: its legend names it and it
 // is the Switch theme command's door (`doorMark`, D-5469). Inside it the cards are one `role="radiogroup"`. The arrow keys move the choice
 // here, and `preventDefault` keeps the browser's own radio arrowing from moving it a second time: one press is one
 // `setTheme`, one storage write. The checked card is `useThemeChoice()`, the choice in force as the boot read it from
 // storage or `setTheme` last made it (D-5572), never a copy of the last tap.
-import type { KeyboardEvent, ReactNode } from 'react';
-import { PHOSPHOR, Radio, SYSTEM, Section } from '@ccrc/ui';
+import { useId, type KeyboardEvent, type ReactNode } from 'react';
+import { Radio, SYSTEM, Section } from '@ccrc/ui';
 import { AppearanceFieldset, THEME_CHOICES } from '../AppearanceRow';
 import { SkinFieldset } from '../SkinFieldset';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
@@ -28,6 +30,7 @@ const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -
 
 function ThemeGrid(): ReactNode {
   const current = useThemeChoice();
+  const noteId = useId();
   const at = Math.max(0, THEME_CHOICES.findIndex((c) => c.id === current));
   const checked = THEME_CHOICES[at]!;
 
@@ -47,7 +50,7 @@ function ThemeGrid(): ReactNode {
         <div role="radiogroup" aria-label="Theme palettes" className="settings-palettes" onKeyDown={onKeyDown}>
           {THEME_CHOICES.map((c) => {
             const active = c.id === checked.id;
-            const stamp = c.id === SYSTEM || c.id === PHOSPHOR ? {} : { 'data-theme': c.id };
+            const stamp = c.id === SYSTEM ? {} : { 'data-theme': c.id };
             return (
               <span key={c.id} className="settings-palette" data-active={active} title={c.note} {...stamp}>
                 <Radio
@@ -56,6 +59,7 @@ function ThemeGrid(): ReactNode {
                   value={c.id}
                   checked={active}
                   tabIndex={active ? 0 : -1}
+                  aria-describedby={`${noteId}-${c.id}`}
                   onChange={() => setTheme(c.id)}
                   bare
                 >
@@ -66,7 +70,7 @@ function ThemeGrid(): ReactNode {
                   </span>
                   <span className="settings-palette-text">
                     <span className="settings-palette-name">{c.label}</span>
-                    <span className="settings-palette-note">{c.note}</span>
+                    <span id={`${noteId}-${c.id}`} className="settings-palette-note" aria-hidden="true">{c.note}</span>
                   </span>
                   {active && <span className="settings-palette-check" aria-hidden="true">✓</span>}
                 </Radio>
