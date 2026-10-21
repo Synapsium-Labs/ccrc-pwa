@@ -17,6 +17,7 @@ export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand
 export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
+export { CloseButton, type CloseButtonProps } from './primitives/close-button';
 // The popover (D-5934): Radix's, on the layers the Sheet already runs on.
 export { Popover, PopoverTrigger, PopoverClose, PopoverContent, type PopoverContentProps } from './primitives/popover';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
@@ -151,3 +152,5 @@ export { FOCUS_RING } from './lib/focus';
 export { useNow } from './lib/use-now';
 export { elapsedWords, elapsedShort } from './lib/elapsed';
 export { prefersReducedMotion } from './lib/use-reduced-motion';
+// The desk width, written once (D-5933): the Sheet's desktop arm and the app's shell read the same reading.
+export { DESK_QUERY, useDesk, useMediaQuery } from './lib/use-media-query';

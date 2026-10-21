@@ -89,7 +89,7 @@ export interface SkinToken {
  *  step, a length, `none`, or an elevation recipe on `var(--edge-*)` — never a
  *  colour, never a new size. Holds exactly what this task declares; later
  *  tasks append their own (the meter's three came with Task 5, `--elev-pop` with the
- *  sheet's desktop arm).
+ *  sheet's desktop arm, D-5933).
  *
  *  THE IDENTITY CORE'S TOKEN GUARD (D-5094) holds every rule written beside a
  *  class below: `pwa/test/skin-identity.test.ts`. For every class: declared
@@ -155,6 +155,7 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
   // `--edge-strong` and nothing else. Never a glow: glow means life.
   elevation: [
     { name: '--elev-card' },
+    { name: '--elev-pop' },
   ],
   // METER. Lengths and counts, with no `var()`. Read by @ccrc/ui's Meter
   // (meter.css): `--meter-h` its height, and a segment mask from the other two

@@ -17,7 +17,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Door, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { cardFacts, contextFact, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
@@ -76,7 +76,7 @@ export function SessionDetails({ facts, coordination }: {
   facts: SessionFactSet;
   coordination: Coordination | null;
 }): ReactNode {
-  const wide = useMediaQuery('(min-width: 900px)');
+  const wide = useMediaQuery(DESK_QUERY);
   const [open, setOpen] = useState(false);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const subagentsId = useId();

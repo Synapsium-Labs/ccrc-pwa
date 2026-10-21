@@ -16,7 +16,7 @@ import { useFleetStore } from '../src/stores/fleet';
 import { UpdateBanner } from '../src/fleet/UpdateBanner';
 import { WhatsNewSheet, whatsNewReleases } from '../src/fleet/WhatsNewSheet';
 import { ReleaseList } from '../src/screens/updates';
-import { atBlock, declValue, ruleIn } from './cssRule';
+import { declValue, ruleIn } from './cssRule';
 
 afterEach(() => {
   cleanup();
@@ -229,16 +229,16 @@ describe('Settings → Updates renders a release row\'s notes the same way', () 
   });
 });
 
-describe('the sheet is a centred dialog at ≥900, and paints no colour of its own', () => {
-  const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
-  it('the panel rule sits inside a min-width: 900px query and centres the panel', () => {
-    const rule = ruleIn(atBlock(css, '@media (min-width: 900px)'), '.whats-new-panel');
-    expect(declValue(rule, 'inset')).toBe('0');
-    expect(declValue(rule, 'margin')).toBe('auto');
-    expect(declValue(rule, 'height')).toBe('fit-content');
+describe('the sheet is the Sheet\'s own centred dialog at ≥900, and paints no colour of its own', () => {
+  it('it asks the Sheet for the widest dialog and re-places nothing itself (D-5933)', () => {
+    render(<WhatsNewSheet open view={view()} tag="v0.0.9" halted={null} onClose={() => {}} onUpdateAll={() => {}} />);
+    const cls = document.querySelector('.sheet-panel')!.className;
+    expect(cls).toContain('min-[900px]:w-[min(720px,');
+    expect(cls).not.toContain('whats-new-panel');
+    // Layout only, no colour: the fleet.css block that remains sizes the notes and names no colour.
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const rule = ruleIn(css, '.whats-new-sheet .settings-release-notes');
     expect(declValue(rule, 'color')).toBeNull();
     expect(declValue(rule, 'background')).toBeNull();
-    // vaul's overscroll cover under a bottom drawer would show as a strip below a centred dialog.
-    expect(declValue(ruleIn(atBlock(css, '@media (min-width: 900px)'), '.whats-new-panel::after'), 'content')).toBe('none !important');
   });
 });
