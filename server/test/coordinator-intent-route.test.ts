@@ -115,6 +115,7 @@ async function world(opts: WorldOptions = {}): Promise<World> {
   }
   const real: DelegationProjectionPort = {
     project: (cp) => coord.projectDelegationCheckpoint(cp),
+    projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => coord.insertDelegationEvents(rows),
     eventStats: () => coord.delegationEventStats(),
   };
@@ -521,6 +522,7 @@ describe('POST /api/coordinators/:session/intent: durability', () => {
       faults: {
         projection: (real) => ({
           project: (cp) => { if (broken) throw new Error('the database is gone'); real.project(cp); },
+          projectChanged: (prior, next) => { if (broken) throw new Error('the database is gone'); return real.projectChanged(prior, next); },
           insertEvents: real.insertEvents, eventStats: real.eventStats,
         }),
       },
@@ -626,6 +628,7 @@ describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the
       faults: {
         projection: (real) => ({
           project: (cp) => { if (broken) throw new Error('the database is gone'); real.project(cp); },
+          projectChanged: (prior, next) => { if (broken) throw new Error('the database is gone'); return real.projectChanged(prior, next); },
           insertEvents: real.insertEvents, eventStats: real.eventStats,
         }),
       },
@@ -654,7 +657,7 @@ describe('POST /api/coordinators/:session/intent: SQLite is repairable output', 
     expect(fresh.readDelegationProjection().sessions, 'the fresh database knows nothing').toEqual([]);
     const reopened = await DelegationDurability.open({
       dir: w.dir, now: () => Date.now(), randomUUID: () => randomUUID(),
-      projection: { project: (cp) => fresh.projectDelegationCheckpoint(cp), insertEvents: (rows) => fresh.insertDelegationEvents(rows), eventStats: () => fresh.delegationEventStats() },
+      projection: { project: (cp) => fresh.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => fresh.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => fresh.insertDelegationEvents(rows), eventStats: () => fresh.delegationEventStats() },
     });
     closers.push(() => reopened.close());
     expect(reopened.failure()).toBeNull();

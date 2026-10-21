@@ -9958,8 +9958,13 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
 /** D-5692: every key the line may carry, in the one order it is written. Phases, parts, `rewrite`, `repairRewrite` and `yields` are elapsed ms (an awaited
  *  one holds its waits, it is never CPU time); `blockCpu` and the `*Cpu` keys are CPU ms (main-thread
  *  CPU when `cpuThread=1`, else process CPU); `stallMax`, `stallP99` and the `stall*` stretches are stall ms; the rest are sizes and counts,
- *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. The
- *  formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. `rewrite` times the
+ *  port's every call, the delta projection's included, so it now holds the delta's time too; `rewrites` counts both kinds, `projectDelta` and `projectFull` count the
+ *  delta method's calls by the mode it answered (a fallback is `projectFull`; a call that threw counts in neither) and `deltaRows` sums the rows the deltas wrote, so
+ *  `rewrites - (projectDelta + projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full) plus any delta call that threw (the `delegation
+ *  projection stale:` warn line names it). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
+ *  (its no-op compare's two, the written checkpoint's one, `verifyDecodable`'s re-encode) and `cpBytes` the bytes of the last checkpoint it wrote, absent on a pass that
+ *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
  *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
@@ -9967,9 +9972,9 @@ export const DELEGATION_PASS_SLOW_KEYS = [
   'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
-  'rewrite', 'rewrites', 'rewriteEvents',
+  'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
-  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -10024,6 +10029,12 @@ type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
 interface LanePassTiming {
   ms: Map<DelegationPassSlowKey, number>; sizes: Map<DelegationPassSlowKey, number>; startedAt: number; durable: DelegationDurability | null;
   rewrites: number; rewriteEvents: number; step: (() => void) | null;
+  /** The delta projection's calls by their returned mode, and the rows the deltas wrote (`project()` counts in neither). */
+  projectDelta: number; projectFull: number; deltaRows: number;
+  /** The applier's cumulative `commitMeasures()` when the pass began (null: no applier yet, so the pass's encodes count from 0). `encodes` and
+   *  `cpBytes` cover the pass's WINDOW, from `startTiming` to the line, so under an overlap a late commit of a cut pass counts in both passes'
+   *  lines; `projectDelta`, `projectFull` and `deltaRows` follow `passTiming` like `rewrites`, and do not. */
+  measures: ReturnType<DelegationDurability['commitMeasures']> | null;
   /** D-5832: CPU microseconds per phase or part (summed), and whether the last CPU read was a thread's (null: none yet). */
   cpu: Map<DelegationPassSlowKey, number>; cpuThread: boolean | null;
   /** D-5832: the stretch open now (null: none has opened), and whether the `repair` part is open (`repairRewrite` charges only then). */
@@ -10589,6 +10600,7 @@ class DelegationLane {
   private startTiming(pass: LanePass): LanePassTiming {
     const t: LanePassTiming = {
       ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null,
+      projectDelta: 0, projectFull: 0, deltaRows: 0, measures: this.durable?.commitMeasures() ?? null,
       cpu: new Map(), cpuThread: null, stretch: null, repairOpen: false, yieldRepair: 0,
     };
     this.timings.set(pass, t);
@@ -10596,28 +10608,31 @@ class DelegationLane {
     this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
-  /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
+  /** D-5692: the applier's open options with the projection port's four calls timed (`rewritten`); the port itself is called as before. The
    *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
   private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
     const port = deps.projection;
     if (port === null) return deps;
     return { ...deps, projection: {
       project: (cp) => this.rewritten(() => port.project(cp), 1, 0),
+      projectChanged: (prior, next) => this.rewritten(() => port.projectChanged(prior, next), 1, 0, (r) => r.mode === 'delta' ? r.rows : null),
       insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
       eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
     } };
   }
-  /** D-5692: times one call of the coordination store's port (`project`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+  /** D-5692: times one call of the coordination store's port (`project`, `projectChanged`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
    *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
    *  which holds it too, so it is never summed into `block`. */
-  private rewritten<T>(fn: () => T, projects: number, events: number): T {
+  private rewritten<T>(fn: () => T, projects: number, events: number, delta?: (result: T) => number | null): T {
     const at = this.mono();
     this.seams.onPassPhase?.('rewrite');
-    try { return fn(); } finally {
+    let answered: number | null | undefined;   // undefined: not a delta call; null: it answered full; a number: it answered delta, with its rows
+    try { const result = fn(); if (delta !== undefined) answered = delta(result); return result; } finally {
       const t = this.passTiming;
       if (t !== null) {
         const ms = this.mono() - at;
         t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + ms); t.rewrites += projects; t.rewriteEvents += events;
+        if (answered !== undefined) { if (answered === null) t.projectFull += 1; else { t.projectDelta += 1; t.deltaRows += answered; } }
         if (t.repairOpen) t.ms.set('repairRewrite', (t.ms.get('repairRewrite') ?? 0) + ms);   // D-5832: `rewrite` less this is every other caller's time, flush's included (review 705 F3)
       }
     }
@@ -10656,12 +10671,15 @@ class DelegationLane {
       f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
       if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
       for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }
-      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
+      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; f.projectDelta = t.projectDelta; f.projectFull = t.projectFull; f.deltaRows = t.deltaRows; }
       if (t.durable !== null) {
         const cp = t.durable.state().checkpoint;
         f.cpSessions = cp.sessions.length; f.cpAttempts = cp.attempts.length; f.cpLeases = cp.leases.length; f.openLeases = cp.leases.filter((l) => l.releasedAt === null).length;
         f.cpLineage = cp.lineage.length; f.cpIntervals = cp.observationIntervals.length; f.cpCursors = cp.bucketCursors.length;
         f.cpActivities = cp.activities.length; f.cpMapping = Object.keys(cp.activityIdsByNaturalKey).length;
+        const now = t.durable.commitMeasures();
+        f.encodes = now.encodes - (t.measures?.encodes ?? 0);
+        if (now.cpBytes !== null && now.writes > (t.measures?.writes ?? 0)) f.cpBytes = now.cpBytes;
       }
       f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;
       f.lostPrefixes = this.lostPrefixes().size; f.lossy = this.lossy ? 1 : 0; f.droppedMeasured = this.evidenceLoaded ? 1 : 0;
@@ -10898,6 +10916,7 @@ class DelegationLane {
             dir: this.deps.cfg.ccrcDir,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
+              projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
             },

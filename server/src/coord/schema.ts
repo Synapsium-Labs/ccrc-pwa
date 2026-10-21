@@ -1402,7 +1402,10 @@ export const MIGRATIONS: readonly string[] = [
   //     (`delegation-checkpoint.json`) are the record. The checkpoint carries sessions, attempts, activities, leases and
   //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
   //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
-  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. The checkpoint
+  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
+  //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
+  //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
