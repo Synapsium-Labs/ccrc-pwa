@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this plan is dispatched as a wave to a `ccrc-worker` session; follow the `ccrc-worker` skill for the protocol (ack, claims, asks, wave-done). To execute the tasks, REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** child-reclamation (CCR-15), **wave 8 of 9**, run 348. **Deploy class: server.** This wave is server and shared L0 only. It has no ccd, agent or PWA edit, and it reads every ccd field wave 7 added under absence-permits. **It is dispatched only after wave 7 (run 347) has merged** (ruling H1).
+**Programme:** child-reclamation (#166), **wave 8 of 9**, run 348. **Deploy class: server.** This wave is server and shared L0 only. It has no ccd, agent or PWA edit, and it reads every ccd field wave 7 added under absence-permits. **It is dispatched only after wave 7 (run 347) has merged** (ruling H1).
 
 **Goal:** Make the reclaim lane license `ws-reclaim` only against the workspace it judged, and say what it sees. After this wave:
 - **The licence is bound to the workspace it judged.** A licensed request that waited in the queue can never be spent on a re-minted workspace of the same id. The sweep binds the licence to the row's generation. The executor re-reads that generation before presence, and the audit's generation must match it (X1, R73).

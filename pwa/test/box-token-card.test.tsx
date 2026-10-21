@@ -7,16 +7,16 @@
 // to '/', the fleet store reset) and `api` spied. One live fetch is left: the screen's unarmed-exposure
 // banner reads GET /api/auth/status through `readAuthStatus`, a global `fetch` this file does not stub.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, UpdatesView } from '../../shared/api';
 import type { BoxTokenView, RotateAnswer } from '../../shared/box-token';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
-import { SettingsScreen, boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/SettingsScreen';
+import { boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/settings/SecuritySection';
+import { renderSettings } from './settingsHost';
 import { asUpdatesView } from '../src/fleet/useUpdatesView';
 import { ApiError, api, apiErrorText, createApi, readBoxTokenView } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ToastHost } from '@ccrc/ui';
 
 // Settings Task R1d (D-5503's words): the card's definition states the schedule's interval, read from
 // `TOKEN_ROTATION_INTERVAL_MS` and never typed. So this file runs against a 3-day interval: a card that typed
@@ -80,7 +80,7 @@ const summaryOf = (card: HTMLElement): HTMLElement => {
 const mount = async (v: UpdatesView): Promise<HTMLElement> => {
   vi.spyOn(api, 'updates').mockResolvedValue(v);
   spySectionReads();
-  render(<><ToastHost /><SettingsScreen /></>);
+  renderSettings('security', { toasts: true });
   return screen.findByRole('region', { name: 'Box token' });
 };
 
@@ -277,7 +277,7 @@ describe('Rotate now', () => {
     const rotate = vi.spyOn(api, 'rotateBoxToken')
       .mockResolvedValue({ ok: true, outcome: 'started', view: BT({ phase: 'staged' }) } satisfies RotateAnswer);
     spySectionReads();
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('security', { toasts: true });
     const card = await screen.findByRole('region', { name: 'Box token' });
     fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));
     await within(card).findByText('Rotation started.');

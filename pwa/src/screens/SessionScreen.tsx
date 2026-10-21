@@ -26,7 +26,11 @@ import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
-import { SessionHeader } from '../session/SessionHeader';
+import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
+import { useFrameSet } from '../skins/frame';
+import { SessionFlows, type SessionActions } from '../session/SessionFlows';
+import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
+import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordPresence } from '../fleet/coordWords';
@@ -302,9 +306,9 @@ export function SessionScreen({
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
-  // an `--acct-*` token. `claude-dev0`'s `colorVar` used to be the non-hue
+  // an `--acct-*` token. `claude-lab0`'s `colorVar` used to be the non-hue
   // `--ink-tertiary` (no account had it as a real hue), so the strip found no
-  // `--acct-` prefix, `acct` came back `undefined`, and dev0 rendered in
+  // `--acct-` prefix, `acct` came back `undefined`, and lab0 rendered in
   // `claude`'s cyan — a real user-visible bug this lookup closes, since
   // `accountHue` returns `undefined` for an unrostered wrapper and nothing
   // else.
@@ -324,7 +328,7 @@ export function SessionScreen({
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
-  const effectiveStatus = status ?? live?.status ?? null;
+  const effectiveStatus = liveStatus(status, live);
   const dead = effectiveStatus === 'dead';
   const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
@@ -456,34 +460,57 @@ export function SessionScreen({
     }
   };
 
+  // The session's flows (W2 Task S2d, D-5466): the ⋯ menu's and the PR sheet's doors run these, whichever skin's
+  // chrome is mounted.
+  const actions: SessionActions = {
+    changeModel,
+    changeEffort,
+    openHistory: () => setHistoryOpen(true),
+    moveAccount: () => setSwapOpen(true),
+    archive: () => setArchiveOpen(true),
+    restore: () => void restoreNow(),
+    openTerminal,
+    reapWorkspace: () => setReapOpen(true),
+  };
+
+  // The desktop Escape interrupt, once, here: neither skin's chrome holds it (W2 Task S2d). `busy` is `liveStatus`,
+  // the one derivation the header's chip reads too.
+  useEscapeInterrupt({
+    busy: effectiveStatus === 'busy',
+    onInterrupt: () => void interrupt('escape-key'),
+  });
+
+  // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
+  // none (Instrument until S12) and outside a frame, as most suites render this screen. A part takes no props, so the
+  // header's inputs reach it through `SessionChromeInputs`.
+  const SkinChrome = useFrameSet()?.SessionChrome ?? null;
+  const chromeInputs: SessionHeaderProps = {
+    session: live,
+    status,
+    statusUpdatedAt,
+    roster,
+    repo,
+    coordination,
+    facts,
+    onInterrupt: (source) => void interrupt(source),
+    onBack: () => navigate('/'),
+    queuedField,
+    fallback: { title: project, wrapper },
+  };
+
   return (
+    <SessionFlows key="session-flows" session={live} title={live?.project ?? project} actions={actions}>
     <div
       className="chat"
       data-acct={acct}
       data-kb={kbInset > 0 ? 'true' : undefined}
       style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
     >
-      <SessionHeader
-        session={live}
-        status={status}
-        statusUpdatedAt={statusUpdatedAt}
-        roster={roster}
-        repo={repo}
-        coordination={coordination}
-        facts={facts}
-        onInterrupt={(source) => void interrupt(source)}
-        onOpenTerminal={openTerminal}
-        onBack={() => navigate('/')}
-        onChangeModel={changeModel}
-        onChangeEffort={changeEffort}
-        queuedField={queuedField}
-        onMoveAccount={() => setSwapOpen(true)}
-        onArchive={() => setArchiveOpen(true)}
-        onRestore={() => void restoreNow()}
-        onOpenHistory={() => setHistoryOpen(true)}
-        onReapWorkspace={() => setReapOpen(true)}
-        fallback={{ title: project, wrapper }}
-      />
+      {/* THE COMPOSER NEVER MOVES (D-5466): the chrome, the transcript, the strips and the composer are keyed children
+          in one fixed order, so a switch replaces the chrome alone and the composer keeps its node and its text. */}
+      <SessionChromeInputs key="chrome" value={chromeInputs}>
+        {SkinChrome !== null ? <SkinChrome /> : <SessionHeader {...chromeInputs} />}
+      </SessionChromeInputs>
 
       {conn === 'down' && (
         <div className={`chat-banner chat-banner--offline ${ATTENTION_DOT}`} role="status">
@@ -560,7 +587,7 @@ export function SessionScreen({
         </div>
       )}
 
-      <div className="chat-body">
+      <div key="body" className="chat-body">
         {loading ? (
           <div className="chat-skel">
             <Skeleton lines={1} className="skel--user" />
@@ -594,21 +621,25 @@ export function SessionScreen({
         )}
       </div>
 
-      {/* Above the plan, which stays the composer's neighbour. */}
-      <MailStrip mail={mail} />
+      {/* The strips in ONE container under the transcript, in both skins (W2 Task S7c), until S8 and S12 place them
+          by width. */}
+      <div key="strips" className="chat-strips">
+        {/* Above the plan, which stays the composer's neighbour. */}
+        <MailStrip mail={mail} />
 
-      {/* D-5560: the workflows this session is running, between the mail and the
-          plan — one line each, the facts Claude Code's own row prints; the head
-          opens their phases and agents. Read-only. */}
-      <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+        {/* D-5560: the workflows this session is running, between the mail and the
+            plan — one line each, the facts Claude Code's own row prints; the head
+            opens their phases and agents. Read-only. */}
+        <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
 
-      {/* Sits between the conversation and the composer — where the TUI puts it,
-          directly above the prompt you're about to type into. */}
-      <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
+        {/* Sits between the conversation and the composer — where the TUI puts it,
+            directly above the prompt you're about to type into. */}
+        <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
+      </div>
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something
           to observe — Composer.tsx itself carries no ref to forward. */}
-      <div ref={composerRef} className="composer-measure">
+      <div key="composer" ref={composerRef} className="composer-measure">
         <Composer
           // send/resolve take the same opts shape the store does, so both cross
           // straight through — attachments included.
@@ -618,6 +649,9 @@ export function SessionScreen({
           disabled={dead || asleep}
           placeholder={asleep ? 'It is asleep — it can take a message once it wakes' : dead ? 'Restart the session to send' : `Message ${project}`}
           onResolve={useStore.getState().resolve}
+          // Stop in the send slot (W2 Task S7b, D-5471): the same LIVE `busy` the Escape interrupt reads.
+          busy={effectiveStatus === 'busy'}
+          onInterrupt={(source) => void interrupt(source)}
         />
       </div>
 
@@ -679,5 +713,6 @@ export function SessionScreen({
         onReaped={() => { setReapOpen(false); navigate('/'); }}
       />
     </div>
+    </SessionFlows>
   );
 }

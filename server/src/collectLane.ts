@@ -21,6 +21,7 @@ import {
   childReclaimTierFrom, childReclaimTierPaceMs,
   type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
 } from './childReclaimSweep.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -33,8 +34,9 @@ const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
  *  It arms `ws-collect` only while it stands AND its journaled latch is unset; Settings is the other arm, and the
  *  resolver at this file's foot decides (`collectLaneEffective`). Nothing in the tree writes it: it is hand-touched, on
  *  the `expire-lane-live` precedent, and once a coherent listing proves it absent the latch retires it for good (§5.4).
- *  Spelled ONCE, here (L1, no `node:` import); its code holders are this file and the executor, nearest the argv. */
-export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+ *  Spelled ONCE, in its `shared/switches.ts` row (D-5855; L0, no `node:` import), and re-exported here; its code holders
+ *  are the row, this file and the executor, nearest the argv. */
+export { COLLECT_LANE_LIVE_MARKER };
 
 // ── the probe and refusal tables (spec §5.10) ───────────────────────────────────────────────────────────────────
 
@@ -45,12 +47,12 @@ export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
  *  A word this table does not know is `load-sensitive`. */
 export type CollectProbeClass = 'box-wide' | 'per-leaf' | 'load-sensitive';
 
-/** ccd's probe words, each spelled once as a key: the twenty first arguments of `_ws_collect_unmeasured`, and the
+/** ccd's probe words, each spelled once as a key: the twenty-one first arguments of `_ws_collect_unmeasured`, and the
  *  four walk words `_ws_collect_eval` admits. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
 const COLLECT_PROBE_CLASS_TABLE = {
   platform: 'box-wide', mv: 'box-wide', flock: 'box-wide', witness: 'box-wide', floor: 'box-wide', clock: 'box-wide',
   eval: 'box-wide', quarantine: 'box-wide',
-  'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
+  aside: 'per-leaf', 'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
   'idle:timeout': 'load-sensitive', 'idle:walk-failed': 'load-sensitive', 'in-use': 'load-sensitive',
   checkouts: 'load-sensitive', rows: 'load-sensitive', registry: 'load-sensitive', identity: 'load-sensitive',
   leaf: 'load-sensitive', slot: 'load-sensitive', records: 'load-sensitive', token: 'load-sensitive',
@@ -320,8 +322,11 @@ export function parseCollectResult(sessionId: string, ok: boolean, stdout: strin
 // ── the population (spec §5.10, "the population") ───────────────────────────────────────────────────────────────
 //
 // The lane finds the temp roots it may collect by listing `$REG/tmproots` (one witness per id) and `$REG/tmpquarantine`
-// (one record per collection begun and not finished), never `~/.cc-tmp`. This block decides, purely, which names
-// become ids, which ids are audited this pass and which are forgotten. The executor's `readCollectPopulation`
+// (one record per collection begun and not finished), never `~/.cc-tmp`. One dot-leading name is read there too: a
+// compare-and-drop aside, `$REG/tmproots/.<id>.drop.<pid>`, which a crash inside ccd's compare-and-drop can leave with
+// no witness beside it (path-identity spec §3.6). Its id joins the population so that ccd is asked of it; ccd reads
+// the aside's body and decides whether it is the sole parseable one. This block decides, purely, which names become
+// ids, which ids are audited this pass and which are forgotten. The executor's `readCollectPopulation`
 // (`coord/collectTempRoot.ts`) makes the two reads; nothing here reads a file.
 
 /** The most names one listing may carry before the lane reads it as unmeasured (spec §5.10, the population). A
@@ -350,11 +355,13 @@ export type CollectListingDoubt =
   | { readonly listing: CollectListingName; readonly kind: 'over-cap'; readonly count: number };
 
 /** One pass's population (spec §5.10).
- *  - `ids`: every id a MEASURED listing names, as a witness or as a record's id, sorted. What forgetting reads.
+ *  - `ids`: every id a MEASURED listing names, as a witness, as a record's id or as a compare-and-drop aside's id,
+ *    sorted. What forgetting reads.
  *  - `candidates`: the ids this pass may audit: `ids` less the pre-filter, sorted.
  *  - `recordIds`: the ids a record in the MEASURED `tmpquarantine` listing names.
- *  - `refusedNames`: how many names, dot-leading ones aside, are no id the lane may take. The names themselves are
- *    never carried: they are untrusted same-uid input, and a sentence says the count alone.
+ *  - `refusedNames`: how many names, dot-leading ones aside, are no id the lane may take. A dot-leading name is never
+ *    counted: an aside's name under `tmproots` gives its id or nothing, and every other one is a writer's temp file.
+ *    The names themselves are never carried: they are untrusted same-uid input, and a sentence says the count alone.
  *  - `unmeasured`: each listing that gave no ids, and why.
  *  - `bothMeasured`: neither listing is in `unmeasured`, so an id neither names is gone from both. */
 export interface CollectPopulation {
@@ -378,18 +385,36 @@ export function parseCollectRecordName(name: string): string | null {
   return id !== undefined && isTmpRootId(id) ? id : null;
 }
 
+/** A compare-and-drop aside's name, `.<id>.drop.<pid>` (path-identity spec §3.6): ccd's own `_ws_collect_aside_id`
+ *  grammar, held equal to its text by a test. GREEDY, as the record's: the id is what the one trailing `.drop.<pid>`
+ *  leaves, so `.a.drop.1.drop.2` is for `a.drop.1`. No flag: `g` would make `.exec` stateful. */
+export const COLLECT_ASIDE_NAME_RE = /^\.(.+)\.drop\.([0-9]+)$/;
+
+/** The id a compare-and-drop aside's name is for, or null when the name is no aside's: it does not match the grammar,
+ *  or what it names is not an id the lane may take (`isTmpRootId`, L0's ONE temp-root id predicate). A NAME admits
+ *  the id to the population and nothing more: ccd reads the aside's body under its own rungs, and decides there
+ *  whether it is the sole parseable aside of that id (path-identity spec §3.6). */
+export function parseCollectAsideName(name: string): string | null {
+  const id = COLLECT_ASIDE_NAME_RE.exec(name)?.[1];
+  return id !== undefined && isTmpRootId(id) ? id : null;
+}
+
 /** The pass's population from its two listings and the tick's registry names (spec §5.10, the population). Pure.
  *  - A proven-absent listing is empty and MEASURED. An unmeasured listing, or one of more than
  *    `COLLECT_POPULATION_MAX` names, gives NO ids, and the other listing is still read: the lane audits the measured
  *    side only, and never reads a name's absence from an unmeasured listing.
- *  - A name that is not a string, or that leads with `.` (a writer's temp file), is dropped uncounted.
+ *  - A name that is not a string is dropped uncounted. So is a name that leads with `.` (a writer's temp file), save
+ *    ONE shape, in `tmproots` alone: a compare-and-drop aside (`parseCollectAsideName`), whose id joins `ids`
+ *    (path-identity spec §3.6). An aside name whose id the predicate refuses is dropped uncounted with the rest. Its
+ *    name is the whole of what the lane knows of an aside: ccd decides from the bodies whether it is sole and
+ *    parseable.
  *  - Every other name must be an id (`isTmpRootId`) in `tmproots`, or a record's name for one
  *    (`parseCollectRecordName`) in `tmpquarantine`, or it is counted in `refusedNames` and never becomes an id. This
  *    is the gate before any argv: a name that fails it is never audited and never composed.
  *  - THE PRE-FILTER is economy, never permission: an id is not a candidate while its EXACT `<id>.child` or `<id>.uuid`
  *    is among `registryNames`, unless a record in the measured `tmpquarantine` names it, because a kept record is
- *    never silent. Never a prefix: a row of `a.b` filters nothing of `a`. A row's absence licenses nothing: ccd's own
- *    `registered` rung decides. */
+ *    never silent. An aside lifts nothing: its id is filtered as a witnessed one is. Never a prefix: a row of `a.b`
+ *    filters nothing of `a`. A row's absence licenses nothing: ccd's own `registered` rung decides. */
 export function collectPopulation(input: {
   readonly tmproots: CollectListing;
   readonly tmpquarantine: CollectListing;
@@ -397,7 +422,8 @@ export function collectPopulation(input: {
 }): CollectPopulation {
   const unmeasured: CollectListingDoubt[] = [];
   let refusedNames = 0;
-  /** A listing's readable names, or null when it gives no ids this pass. */
+  /** A listing's string names, dot-leading ones included (each loop decides what one is), or null when it gives no ids
+   *  this pass. */
   const namesOf = (listing: CollectListingName, l: CollectListing): readonly string[] | null => {
     switch (l.kind) {
       case 'absent': return [];
@@ -407,19 +433,26 @@ export function collectPopulation(input: {
           unmeasured.push({ listing, kind: 'over-cap', count: l.names.length });
           return null;
         }
-        return l.names.filter((n) => typeof n === 'string' && !n.startsWith('.'));
+        return l.names.filter((n) => typeof n === 'string');
     }
   };
   const witnessed = new Set<string>();
+  const asides = new Set<string>();
   for (const n of namesOf('tmproots', input.tmproots) ?? []) {
+    if (n.startsWith('.')) {
+      const id = parseCollectAsideName(n);
+      if (id !== null) asides.add(id);
+      continue;
+    }
     if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;
   }
   const recordIds = new Set<string>();
   for (const n of namesOf('tmpquarantine', input.tmpquarantine) ?? []) {
+    if (n.startsWith('.')) continue;
     const id = parseCollectRecordName(n);
     if (id !== null) recordIds.add(id); else refusedNames += 1;
   }
-  const ids = [...new Set([...witnessed, ...recordIds])].sort();
+  const ids = [...new Set([...witnessed, ...recordIds, ...asides])].sort();
   const candidates = ids.filter((id) => recordIds.has(id) || !collectRowStands(input.registryNames, id));
   return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0 };
 }

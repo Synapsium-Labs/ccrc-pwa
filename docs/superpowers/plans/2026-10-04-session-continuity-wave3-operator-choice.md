@@ -1,6 +1,6 @@
 # Session continuity, wave 3 — wave 2's residue, then the operator's choice survives a restart (AGENT-FIRST) Implementation Plan
 
-> **Status: PLANNED 2026-10-04 on `main` `22f7931af` — ready for dispatch** (programme session-continuity, CCR-18;
+> **Status: PLANNED 2026-10-04 on `main` `22f7931af` — ready for dispatch** (programme session-continuity, #197;
 > wave 3 = run 248, planned). The prototype was first built on `59a435f0d`; `main` then took #239 and #242, which
 > touch `README.md`, `CLAUDE.md` and files this wave does not edit, so the README hunks were re-anchored and the
 > citation census, the repo-wide guards, the merge recipe and this document's replay were re-measured on `22f7931af`.

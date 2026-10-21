@@ -1251,7 +1251,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
 });
 
 describe('the read-back\'s second witness — the transcript\'s own acknowledged /model (2026-10-07: an idle pane renders no sidecar)', () => {
-  // THE FLEET'S SHAPE (claude-synapsium-platform, measured 2026-10-07): record class=opus, `routeapplied`
+  // THE FLEET'S SHAPE (claude-project-k, measured 2026-10-07): record class=opus, `routeapplied`
   // empty since its spawn, three refused applies so `apply-gave-up` every 30 min; the operator's own
   // `/model opus`, acknowledged `Set model to Opus 5.5 and saved as your default`, ~22 h ago; the pane idle
   // since, so its sidecar — right model, right uuid, written by the render the switch itself caused — is
@@ -1341,7 +1341,7 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     sidecarAt(ACK + 3, 'claude-opus-5-5');   // the render the switch caused: model and uuid right, 22 h old
   });
 
-  it('the synapsium shape: recorded applied, the counters cleared, ONE line naming the ack and the spawn, nothing typed — and apply-gave-up stops', () => {
+  it('the project-k shape: recorded applied, the counters cleared, ONE line naming the ack and the spawn, nothing typed — and apply-gave-up stops', () => {
     writeTranscript([turn(ACK - 600), cmd(ACK, 'model', 'opus'), ack(ACK, SAVED('Opus 5.5')), turn(ACK + 30)]);
     tick();
     expect(h.reg(ID, 'routeapplied')).toBe('class=opus');

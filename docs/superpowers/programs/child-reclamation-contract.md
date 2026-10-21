@@ -1818,7 +1818,7 @@ This note amends; it edits no earlier text.
 
 Wave 7's pre-flight was measured at `b0647d850` by five Opus readers and a completeness critic. The coordinator then
 drafted these rulings, and four Opus attackers (SAFETY at xhigh) attacked the draft. Every break they constructed is
-closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-preflight/` (`preflight.json`, `attack.json`).
+closed below. Evidence: the coordinator's `#166-evidence-archive/wave7-preflight/` (`preflight.json`, `attack.json`).
 
 - **R65 — the waves are re-cut, because R63 conflicts with R38/R48.**
   - **Why.** X1, X3 and R61's closure are server code. X1 changes when `ws-reclaim` is licensed, which is a second
@@ -2346,7 +2346,7 @@ the first draft proposed was dropped.
 Wave 8 (run 348) is reclaim's SERVER half (R65). It is server code and shared L0 only: no ccd, agent or PWA edit. Its
 SAFETY subject is "what `ws-reclaim` is licensed against". Its pre-flight was three Opus readers and a critic at
 `226bb881c`. The coordinator's draft rulings were then attacked by three Opus attackers, with SAFETY at xhigh. Every
-break they found is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave8/` (`preflight.json`,
+break they found is closed below. Evidence: the coordinator's `#166-evidence-archive/wave8/` (`preflight.json`,
 `attack.json`).
 
 - **R73 — X1 is closed on the server.** ccd's binding alone does not close X1, because the executor audits and acts
@@ -2656,7 +2656,7 @@ merge). The coordinator's draft rulings were then attacked by four Opus attacker
 attention, feasibility, SECURITY), with two Sonnet refuters for every break: 68 agents, no error, and 28 breaks
 survived. The revision was checked again by two Opus readers (SAFETY at xhigh) with refuters: 30 agents, no error, and 13
 more items survived, among them five SAFETY wedges and stale-answer paths. A last check (22 agents) found no route that
-composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave9-preflight/`
+composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `#166-evidence-archive/wave9-preflight/`
 (`preflight.json`, `attack.json`).
 
 **Measured at the pre-flight (2026-10-11; counts only, no contents read):**
@@ -3592,7 +3592,7 @@ differ, the spec's design governs and this section is corrected.
   - Its waves, in order: W1a, the server's id gate (run 399); W1b, ccd's id fix, after workspace-lifecycle wave 6 (#351)
     merges; W2, absences and mounts; W3, worktree path identity. W4 is not scheduled (PG1 B), so the spec's section 3.7
     residuals stand.
-  - **The collector's Settings switch is CCR-15's wave 10** (run 400; SW6 A), because it changes what arms this
+  - **The collector's Settings switch is #166's wave 10** (run 400; SW6 A), because it changes what arms this
     programme's destructive lane. R96 is its rule.
   - Every `ccd/ccd` edit waits for #351 and then goes in series. Anything the waves share with `ws-expire` needs
     workspace-lifecycle's coordinator's consent, per wave (PG2 A).
@@ -3662,7 +3662,7 @@ Where wave 10's code and the plan's text narrowed or spelled out R96, they now r
 edits no earlier text. It names each departure by slug and carries no number: the coordinator assigns this wave's
 numbers from the block run 400 was issued, and the wave 10 plan's `## Deviations found` defines them. This wave's
 committed comments and test titles cite §5 of the path-identity design spec, whose "§5 as built" note states the same
-points. The CCR-15 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
+points. The #166 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
 
 **R96 (two arms, then one), reconciled before the build.** The plan's rulings settle where the spec's sections and its
 Figure 5 differ, and the code keeps each:
@@ -4058,3 +4058,170 @@ its draft claims) and are defined in the plan's Task 12 deviation entry only.
   not edited.
 - Task 13: `superpowers-tracked-file-count-is-one`. The plan expected no tracked file under `.superpowers`; one is
   tracked on `main`, from before this wave, and this wave's diff holds no `.superpowers` path.
+
+### §17 as built (path-identity W2, run 652)
+
+Where W2's code and its plan's text narrowed, corrected or spelled out the spec's working rulings for absences and
+mounts (TR1 to TR8 and TR12, spec §3.2 to §3.6 and §3.9), they now read as follows. This note amends; it edits no
+earlier text. It names each departure by slug and carries no deviation number. This wave's numbers were issued before
+its plan was committed, and the W2 plan's `## Deviations found` defines them. The spec records the same wave in its
+§3.10. Where the two differ, the spec governs, as this section's opening says. This wave's committed comments and
+test titles cite the spec, never this contract.
+
+**R93 (the programme's shape).**
+- W2 was dispatched after #384, #397 and #410 merged and W1b's run, 433, closed. It ships as one pull request from a
+  fresh child. Its `ccd/ccd` edits went in series, one task at a time, and each was restamped with the repository's own
+  tool. No merge of `main` had been made when this note was written.
+- Workspace lifecycle's coordinator consented to the edits that ws-expire reaches through the shared tail:
+  - steps 3, 4 and 6;
+  - `_ws_tmproot_witness_drop`, `_ws_tmproot_remove`, `_ws_leaf_remove`, `_ws_leaf_read_small`,
+    `_ws_leaf_checkout_one` and `_lc_json`;
+  - the collector functions that the tail now reaches through the drop helper, the mount helper and the aside settle.
+
+  `_ws_expire_locked`, the EXPIRE-V1 note and the vocabulary were not edited, so ws-expire changes only by the
+  consented refusals and kept words.
+- Run 308's coordinator and the delegation broker's coordinator consented to coexistence. `_reg_purge` and
+  `_child_tmpdir` were not edited. Nor was `session-hook.test.ts`, which ccrc history holds.
+- The census boundary:
+  - `_lc_json` is the one edit where the compaction-card corpus's row pass would see an insert, and it kept its line
+    count. Every other `ccd/ccd` edit lies after line 19162, the corpus's highest `ccd/ccd` anchor.
+  - The five citation passes stayed green at the number they read on `main`, with no number edited.
+  - `shared/api.ts` kept every line above its foot, and `journalparse.ts` kept every line above its frozen anchor.
+- The wave added only the meas key `leaf`, with its two words, and the probe word `aside`. It added no route, table,
+  migration, capability word, ccd verb, refusal token, journal act, sanctioned `die` line, agent grant or
+  exec-whitelist entry.
+
+**R95 as built (the mount question).**
+- Every ask that R95 names goes through one helper, `_ws_removal_mounts_clear`. The helper reuses
+  `_ws_collect_mounts_clear` and answers 0 or 2, never 1.
+- `leaf-mount-ask-before-the-owner-bits`: the leaf's first ask sits directly after `_ws_leaf_remove`'s device compare.
+  That is before the owner-bits chmod, before `_ws_leaf_checkouts` and before normalise. The second ask sits directly
+  before `rm`. Both map to the leaf's unmeasured, so at the tail a mount under the clips leaf or the temp-root leaf
+  keeps that leaf `unmeasured`.
+- Step 3 asks of each standing nested checkout, and step 4 asks of the child's own worktree, resolved first. Each asks
+  before `keep_of` and again before `git worktree remove --force`. A mount, or an unreadable table, fails as
+  `worktree-remove-failed` and keeps the breadcrumb and the tree, as R95 says. A standing workdir that cannot be
+  resolved fails the same way, before `keep_of`.
+- Darwin skips every ask through the helper's one guard, which is its first line of code. A pin at each of the three
+  sites holds it.
+- The collector's own removal goes through the same helper. A mount that appears after its step-5 ask therefore
+  answers `failed quarantine-kept`.
+
+**R89's kept-leaf residual, cured.**
+- R89 stated that a witness-only `collect done` ends wave 8's kept-leaf temp-root half. That residual is cured:
+  - ccd's two collect `done` lines now carry `meas.leaf`, set to `removed` or `absent`, and both truncation rungs
+    keep it.
+  - The server ends the half only on `removed`, or on an uncut keyless row from an older ccd.
+  - On `absent`, the item stays until the horizon, with a clause that says the collector found nothing there.
+  - A cut keyless row and a malformed `leaf` fail closed.
+- `present-null-leaf-reads-as-legacy`: a stored `"leaf":null` reads keyless, as the store's own spelling of "not
+  carried".
+- R89's closure stands: no act joins `LIFECYCLE_BIRTH_ACT`, and `collect` stays out of the birth, generation,
+  latest-event and seed reads.
+- The fleet box is deployed first. An uncut row that an old server stored ends after the upgrade. A cut one reads
+  truncated-keyless and keeps its item until the horizon.
+
+**R83 changed (`aside-joins-the-population`).**
+- R83's population drops every dot-leading name. As built, it admits an id when at least one `.<id>.drop.<pid>` name
+  under `tmproots/` parses for it and `isTmpRootId` holds. These ids fold into `ids`, with no new field. Every other
+  dot-leading name is still dropped uncounted, and so is every dot-leading name in the quarantine listing. The
+  coordinator's docs change amends R83's text.
+
+**TR3 and TR4 (the witness drop).**
+- One helper drops a witness. In order, it:
+  1. asks the device that the witness records;
+  2. lists the id's quarantine slots;
+  3. proves the leaf absent again;
+  4. drops exactly the generation it read. Where a NOREPLACE move exists, it uses the collector's compare-and-drop;
+     elsewhere, a field compare.
+
+  Any standing slot keeps the witness.
+- `drop-helper-reproves-the-absence`: the re-proof widens the spec's Figure 3. A leaf that stands again answers kept.
+- `kept-witness-reason-in-the-row-not-on-stderr`: the helper prints nothing, and its reason reaches the done row.
+- `_ws_tmproot_remove` and step 6's two kept arms record a drop that is not complete as `tmpRootKept` `unmeasured`. No
+  drop call is suppressed.
+
+**TR6 (the compare-and-drop aside).**
+- The audit judges a sole parseable aside as the witness, read-only. Before the reap lock, that aside opens the lock
+  at once, and its ambiguity answer (`aside`, or `witness` when the asides cannot be listed) comes only after the
+  registry peek.
+- `aside-probe-word`: an ambiguous, malformed or competing aside answers the new per-leaf probe word `aside`.
+- `aside-restore-by-link-not-rename`: the restore is `link`, then a dev:ino proof, then `rm`. It runs under the reap
+  lock: in the verb before its evaluation, and in the tail before step 6.
+- `tail-aside-warns-without-keeping`: at the tail, an unsettled aside warns and never sets `tmpRootKept`. At the verb,
+  its doubt applies only when the evaluation answers `collectable`.
+
+**TR7, TR8 and TR12.**
+- The floor knob's zero strip is one anchored capture.
+- A back-link with a NUL inside the path it names is refused.
+- Six late recycled-spawn boundaries are pinned in a Linux-only file that is on the load-flake list.
+- Items 34 to 36 are pinned, item 36 at 2 cases.
+
+**Stated residuals**, named with no number; spec §3.10 says each one in full.
+- `tail-drop-not-noreplace-without-mv-no-copy`, `stale-aside-beside-a-new-leaf-is-a-mismatch` and
+  `git-mount-crossing-unmeasured`. The operator may measure the last on a throwaway box of their own choosing.
+- Beside them: `worktree-ask-to-force-window` and `drop-device-asked-once`.
+- Forwarded to workspace lifecycle: `audit-normalise-has-no-mount-ask`, `mount-found-after-the-kill-repeats`,
+  `human-gated-removals-ask-no-mounts`, `no-whole-child-mount-ask-before-step-3` and
+  `vanished-checkout-arms-ask-no-mounts`.
+- `absent-clause-names-a-drop-the-compare-kept`, `found-nothing-clause-yields-to-a-collector-item`,
+  `found-nothing-clause-yields-to-a-reclaim-item`, `non-object-meas-reads-as-keyless`,
+  `ccrc-timeout-knob-strip-is-quadratic` and `registry-id-l0-comments-say-ccd-scans-the-session-value`.
+- Prose and reads left as they were: `truncated-docstring-predates-meas-leaf`,
+  `store-reclaim-to-prose-predates-the-heir-gate` and `read-small-second-read-can-fail`.
+- Unmeasured: `item36-window-68-to-78-unmeasured`.
+- Standing from spec §3.7: `rec-eq-f-recycled-admin`, `device-test-cannot-see-a-same-device-bind-mount`,
+  `permanent-device-change-holds-every-absence`, `cc-tmp-deleted-whole-holds-its-witnesses`,
+  `source-parent-without-owner-write-loops` and `tmproot-probe-misses-the-whole-volume-spelling`.
+
+**Closed carries**, each by slug.
+- `tail-drop-believes-an-absent-leaf` and `tail-drop-ignores-a-recordless-slot`, by TR3 and TR4.
+- `server-docstrings-call-ccds-predicate-dot-only` and `comments-say-ccd-scans-the-session-value`, the two W1b
+  carries. The server's docstrings and `collect-l0.test.ts`'s comment now say what ccd has checked since W1b; two
+  comments in `registry-id-l0.test.ts` do not yet, a stated residual.
+- `collector-learning-audit-relies-on-the-population-gate`, `session-shape-prose-predates-the-id-gate` and
+  `leaf-end-acts-spelled-twice`.
+- `cad-header-calls-the-tail-drop-a-plain-unlink`: the compare-and-drop's header no longer calls the tail's drop a
+  plain unlink.
+- `learning-audit-gate-prose-in-two-test-comments`: two test comments no longer say that the learning audit asks no id
+  predicate of its own, and the id census registers its gate.
+- `review-335-f9-needle-outgrows-the-cap-under-this-tmpdir`, folded into item 36.
+
+**Found while building, per task.** Task 16's slugs concern this record itself, and only the plan's Task 16 deviation
+entry defines them.
+- Task 2: `read-small-partial-read-cleared` and `nul-why-leads-with-the-admin-path`. The small-file reader now clears
+  what it read when a read fails part-way, so no caller sees part of a file. The NUL refusal's reason leads with the
+  admin path, as every sibling reason of the checkout question does, and every pin reads the uncut reason.
+- Task 3: `s3-later-rung-refuses-containment-unproven` and `s6-applied-count-includes-moved-arm`. With the registry
+  rung deleted, a later rung, the row check in `_ws_collect_rows_clear`, still refuses with `containment-unproven`, so
+  the late-boundary file's header overstates when it says each of its six guards alone keeps the new child whole: at
+  the `dropped` and `witnessed` boundaries a second guard holds. The second slug is a plan-text count: a mutation row
+  expected its replaced line to be applied once, and a second identical line in the `moved` arm made it read two. The
+  mutation changed one line and measured red.
+- Task 4: `fuse-mount-skipped-not-crossed`. The header of `_ws_leaf_remove` says the crossing of a same-uid FUSE mount
+  is live. Mechanically, `rm --one-file-system` and `find -xdev` skip a mount on another device rather than cross it;
+  what a FUSE mount caused before was a partial removal and an unmeasured answer. The wording is the spec's.
+- Tasks 4 and 5: `resolve-reason-leads-with-the-path`. `_ws_removal_mounts_clear`'s resolve-mode reason leads with
+  the path it could not resolve, and the tail carries it into its journal row without `_ws_leaf_why_line`'s cut.
+- Task 5: `step-4-unresolvable-workdir-fails-before-keep-of` and `worktree-remove-failed-sentence-covers-a-mount`. A
+  standing workdir that cannot be resolved now fails `worktree-remove-failed` before `keep_of`. The refusal's
+  sentence says ccrc could not prove that the tree at the workspace's path, or a checkout inside it, is its own. That
+  sentence already covers a mount, so it was not edited.
+- Task 6: `t6-2-second-needle-on-two-lines`. A mutation row's second needle is a prefix of two lines. The variant
+  that deletes those same two lines reds exactly the cases the row names, and was taken as the row's measurement.
+- Task 8: `aside-lister-mirrors-the-records-lister`. `_ws_collect_asides_of` repeats `_ws_collect_records_of`'s
+  never-invisible listing protocol instead of sharing it. Sharing needs an edit to `_ws_collect_records_of`, which lies
+  outside what workspace lifecycle's coordinator consented to.
+- Task 9: `aside-half-not-in-the-id-argv-census`. The id census registers the learning audit's new gate, not the id
+  check the population makes on an aside's name, so the census does not cite that check.
+- Task 10: `prelock-resets-a-pre-peek-aside-answer` and `aside-detail-texts-beyond-p11`. Before the reap lock, the pass
+  clears the aside judge's first answer before the registry peek, so an `in-progress` audit document never carries a
+  stale probe word `aside`. Task 10 named the aside only in the `witness-mismatch` details; the final review's fix
+  wave closed the rest, so the two terminal `quarantine-kept` details and the `device` unmeasured detail name it too:
+  every detail that speaks of the witness names the aside when an aside was read as the witness.
+- Task 11: `aside-settle-link-spy-reads-tmproots-only`. The settle's link spy counts only the `link` calls under
+  `tmproots/`, because the reclaim verb already calls `link` for its own locks.
+- Task 13: `satisfies-after-a-line-break-is-asi`. A drafted layout that began a line with `satisfies` does not parse,
+  because the line above ends its statement. The keyword stays at the end of the line above.
+- Task 15: `learn-gate-refusal-leaves-no-trace`. `learnCollect`'s id gate answers `id-refused`, and the watcher returns
+  on it with no observation and no warning. A refused id is asked again each pass, which costs no argv.

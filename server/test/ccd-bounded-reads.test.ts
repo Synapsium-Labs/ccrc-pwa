@@ -321,7 +321,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape 
     }, 10000);
 
     it('cmd_forget answers "held: <unreadable — treat as held>", PROMPTLY', () => {
-      const id = 'claude-corp-demo';
+      const id = 'claude-acme-demo';
       regSet(id, 'uuid', 'u');
       plantBad(HOLD(id), shape);
       const r = boundedRun(`cmd_forget ${id}`);
@@ -498,7 +498,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
 
   /** `demo-quiet-basin`, zero-commit — the identical fixture
    *  `ccd-prhistory.test.ts`'s own `workspace()` builds, for the identical
-   *  reason: `is_ours` accepts a `headRefOid` equal to the branch's own tip,
+   *  reason: `ours_of` accepts a `headRefOid` equal to the branch's own tip,
    *  so no extra commit is needed to bind gh's row to this workspace. */
   const workspace = (): { id: string; tip: string } => {
     const main = hp.makeGhRepo('demo');

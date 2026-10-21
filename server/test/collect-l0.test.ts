@@ -22,8 +22,8 @@ describe('isTmpRootId — the one predicate of a temp-root id (spec §5.10)', ()
     expect(TMPROOT_ID_MAX_CHARS).toBe(255);
   });
 
-  // ccd's destructive verbs read their decision flags from any position, `--session`'s value included. Every such
-  // flag begins `--`, so an id that begins `-` could be read as one.
+  // A ccd older than path-identity W1b read its decision flags from any position, `--session`'s value included. Every
+  // such flag begins `--`, so an id that begins `-` could be read as one there; since W1b each key takes its value whole.
   it.each(['--actor', '--surface', '--reason', '--expect', '--session', '--', '-h', '-x'])(
     'a dash-leading id %j is refused, so no argv can carry it as a flag', (id) => {
       expect(isTmpRootId(id)).toBe(false);

@@ -44,7 +44,7 @@ Nothing else is enabled. No new noun (§6).
 
 ### 1.1 What already works, unmodified
 
-Measured end to end for a hypothetical run(wave 2, `project:'data-internal'`)
+Measured end to end for a hypothetical run(wave 2, `project:'project-e'`)
 under a programme whose wave 1 was `ccrc-pwa`:
 
 - **`runs.project` is a genuine per-row column** (`server/src/coord/schema.ts:70`),
@@ -75,7 +75,7 @@ under a programme whose wave 1 was `ccrc-pwa`:
   for what a crossing costs.
 
 **The assumption this all rests on, stated once:** every repo lives on one box,
-under one UNIX user, under one `projectsRoot`. `/data/projects/data-internal`
+under one UNIX user, under one `projectsRoot`. `/data/projects/project-e`
 is a sibling of `/data/projects/ccrc-pwa` today, which is why the join above
 resolves and why §2's absolute-path mechanism works at all. Cross-box relay
 remains a non-goal (Build 7 §10, "tailnet is the boundary"). If the fleet ever
@@ -100,8 +100,8 @@ verbs (`routes.ts:620-623`) can re-point one. And the coordinator SKILL invites
 the mistake in as many words — `ccd/coordinator-skill/references/wave-lifecycle.md`
 §1 step 1 ("For wave ≥ 2 … add `"sessionId"`") and SKILL.md's D-1 idiom present
 "same sessionId, same workspace" as the default. A coordinator following that
-literally while moving a wave to `data-internal` passes wave 1's ccrc-pwa-bound
-session id alongside `project:'data-internal'`; nothing refuses it; the brief is
+literally while moving a wave to `project-e` passes wave 1's ccrc-pwa-bound
+session id alongside `project:'project-e'`; nothing refuses it; the brief is
 queued unconditionally onto the cleared session (`dispatch.ts:308-310`); a
 worker starts working **in the wrong repo's checkout**, and the mismatch first
 surfaces one advance later as an opaque `tip-unmeasurable` from
@@ -263,7 +263,7 @@ force it.
 Cross-repo mail already works. Nothing in §1.2 blocks it. What is missing is that
 nobody knows it is there, so real cross-repo traffic still moves by rendering a
 doc to a URL and hoping a human carries it. The live pair is
-**custom-tools ↔ data-internal** (28 commits in the claude-usage area since
+**project-d ↔ project-e** (28 commits in the claude-usage area since
 2026-07-01; six brief/contract documents addressed cross-repo by header
 convention). These flows are mail-shaped **today**, with no build:
 
@@ -273,8 +273,8 @@ convention). These flows are mail-shaped **today**, with no build:
   cadences. One-directional, non-blocking, no return path — exactly what a mail
   is. Mail the pointer plus the identifier excerpt; the receiving side schedules
   its own work, as it already does.
-- **Publishing a finished consumer contract** the other way (data-internal →
-  custom-tools: "the marts are live, here is the schema"). A same-day mail on
+- **Publishing a finished consumer contract** the other way (project-e →
+  project-d: "the marts are live, here is the schema"). A same-day mail on
   merge beats the current pattern where the other side finds out later and cites
   the doc after the fact.
 - **Corrective facts that currently rot in a doc nobody re-reads** — the Jira
@@ -387,17 +387,17 @@ show a fact that fits in six characters.
 
 ## 7. Dogfood
 
-**First cross-repo programme: intake-platform ↔ data-internal**, after Build 4
+**First cross-repo programme: project-n ↔ project-e**, after Build 4
 completes and after F1 and F3 land. Honest sequencing note: that pair is today a
-documented *future* dependency, not live traffic — intake's own board design
-gates its Phase 3 on a data-internal field, migration and backfill that do not
-exist yet, and a grep for "intake" across all of data-internal's docs returns
+documented *future* dependency, not live traffic — project-n's own board design
+gates its Phase 3 on a project-e field, migration and backfill that do not
+exist yet, and a grep for "project-n" across all of project-e's docs returns
 zero hits. So the dogfood is real work whose start date belongs to that
-programme, not to this build. Meanwhile the live pair (custom-tools ↔
-data-internal) is served this week by §3's briefing, which needs no build at all.
+programme, not to this build. Meanwhile the live pair (project-d ↔
+project-e) is served this week by §3's briefing, which needs no build at all.
 
-**Acceptance, when it runs:** wave 1 in data-internal (producer: field,
-migration, backfill), wave 2 in intake-platform (consumer), opened without
+**Acceptance, when it runs:** wave 1 in project-e (producer: field,
+migration, backfill), wave 2 in project-n (consumer), opened without
 `sessionId`; the wave-2 brief cites the home repo's plan by absolute path at a
 sha and inlines the field contract verbatim from the merged file; the board shows
 the crossing on the wave-2 row; the ledger's wave table records both PRs across

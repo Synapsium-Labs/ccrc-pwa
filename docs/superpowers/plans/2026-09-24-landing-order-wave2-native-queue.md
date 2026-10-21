@@ -14,7 +14,7 @@
 
 **Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/session-hook.sh`), python 3.12 (the stamping pass, embedded in `ccd/ccd`), TypeScript (server, shared, pwa), Node 22 ES modules (`.github/ci/*.mjs`, dependency-free), GitHub Actions YAML, GitHub's GraphQL API through `gh api graphql` (gh 2.45 on the fleet box), vitest 4.1.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.2 (stage 2: "Repository code", "Operator configuration", "Rollout order inside stage 2"), §3 R3, R5, R9, §4 (roles table: the worker and coordinator rows), §7 (wire additive, `FLEET_PROTO` stays 1, one reader per field), §9 (stage 2 lands with or after stage 1; its wave re-planned against CCR-15; CI selection's shape), §10 (stage 2 metrics), §12. Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 2 row; carried constraints — CI selection landed first; skill pins move with the clauses). This plan departs from the spec's literal text in ten places, each argued where it is made and listed by slug under `## Deviations found` for the coordinator to number: the last queue act of EITHER kind (finding 3), the 25 s bound (findings 1 and 14), the ninth feed kind and the `operator` sender (finding 5), the lands-before-close rule and the landing lane's `merged:` notice (finding 12 (i), (i′)), the deny's child-marker arm (finding 12 (iii)), the pipeline check on a queue run (finding 13), the enqueue gated on the required checks and read back (finding 20), a coordinator the deny refuses enqueueing through the operator (finding 22), and the SERVER-FIRST rollout against §9's AGENT-FIRST (Global Constraints). **OUT of scope** (wave 2b, after the proof run): the every-session `--admin` deny and the `gh api` merge denies — the pulls merge endpoint and the GraphQL merge mutations (`mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge`), each measured passing this wave's deny under a wave hold.
+**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.2 (stage 2: "Repository code", "Operator configuration", "Rollout order inside stage 2"), §3 R3, R5, R9, §4 (roles table: the worker and coordinator rows), §7 (wire additive, `FLEET_PROTO` stays 1, one reader per field), §9 (stage 2 lands with or after stage 1; its wave re-planned against #166; CI selection's shape), §10 (stage 2 metrics), §12. Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 2 row; carried constraints — CI selection landed first; skill pins move with the clauses). This plan departs from the spec's literal text in ten places, each argued where it is made and listed by slug under `## Deviations found` for the coordinator to number: the last queue act of EITHER kind (finding 3), the 25 s bound (findings 1 and 14), the ninth feed kind and the `operator` sender (finding 5), the lands-before-close rule and the landing lane's `merged:` notice (finding 12 (i), (i′)), the deny's child-marker arm (finding 12 (iii)), the pipeline check on a queue run (finding 13), the enqueue gated on the required checks and read back (finding 20), a coordinator the deny refuses enqueueing through the operator (finding 22), and the SERVER-FIRST rollout against §9's AGENT-FIRST (Global Constraints). **OUT of scope** (wave 2b, after the proof run): the every-session `--admin` deny and the `gh api` merge denies — the pulls merge endpoint and the GraphQL merge mutations (`mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge`), each measured passing this wave's deny under a wave hold.
 
 **Prerequisite:** landing-order **wave 1 has merged to `main`** — it adds coordinator clause 15 (Task 5 appends to it) and the PreToolUse sync advisory (Task 4's deny supersedes it on a shared call). Child-reclamation wave 3 (#187) is on `main` since `1ffdf947`. This wave's workspace is a fresh child from current `main`; Task 1 Step 0 refuses to start without wave 1.
 
@@ -4032,8 +4032,8 @@ git fetch origin main
 git show origin/main:.github/workflows/ci.yml | grep -c '^  merge_group:$'
 M=<this wave's merge commit, from Task 6 Step 6>
 RID=""
-for r in $(gh run list --workflow ci.yml --branch main --limit 40 --json databaseId,event \
-             --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId'); do
+for r in $( { gh run list --workflow ci.yml --branch main --event schedule --limit 10 --json databaseId --jq '.[].databaseId'
+              gh run list --workflow ci.yml --branch main --event workflow_dispatch --limit 10 --json databaseId --jq '.[].databaseId'; } ); do
   sha=$(gh run view "$r" --json headSha --jq .headSha)
   git merge-base --is-ancestor "$M" "$sha" 2>/dev/null || continue
   n=$(gh run view "$r" --json jobs --jq '[.jobs[] | select(.name | test("^server [0-9]+/[0-9]+$")) | select(.conclusion != "skipped")] | length')
@@ -4063,6 +4063,12 @@ CENSUS
 ```
 
 Expected: `1`; one `full run <id> on <sha> (<n> server shards)` line; then every listed job — `typecheck (server)`, each `server k/n`, `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa` — `success`; both boxes name the same `version`, equal to Task 6's tag or a later one; the check prints `[current]` for both boxes (`--to` because a bare `--check` measures against the newest STABLE release, not the dev build the fleet is on); and `census-done: <n> coordinator(s) checked` alone, `n` the number of distinct coordinators of the open runs (`0` when no programme is open) — no coordinator carries the child marker (a reclaim heir that was the programme's own worker would) and no open run names a coordinator's own workspace (a self-claimed run would), so Task 4's deny refuses no coordinator's enqueue (Pre-flight findings 12 (iii) and 22; the census reads the open runs through `ccrc-api` and the marker files with `test -e`, and writes nothing). The census was exercised on 2026-09-29 against a stub `ccrc-api` in a throwaway HOME: a clean list, a marker, a self-claimed run, a `503 runs-unreadable` body (which `ccrc-api` answers with exit 0), a transport failure (exit 3) and an empty list each answered as described here. **Stop if the first answers `0`** — enabling the queue before `merge_group` is on `main` leaves every entry waiting for checks that never report (spec §5.2 rollout step 1 before step 2). **Stop on any listed job that is not `success`**; on any `STOP:` line — the census could not read the open runs, and a read that did not happen is not a clean census; and on any `MARKED COORDINATOR` or `HELD COORDINATOR` line — that coordinator's enqueue would be denied, so settle how it lands (the operator's shell, Task 5's paragraph) before the queue is turned on.
+
+**The project's PR sweep finishes within its bound (landing-order wave 3c).** The 2026-10-20 run found the landing lane blind: the project's `pr-state` read took longer than the server's `pr-state` bound (`server/src/remote/runner.ts`), so most likely every sweep timed out, silently, and no `queue` event or landing mail could appear. Before Step 4's write, on both boxes' current build:
+- on the fleet box, time `ccd pr-state --project <project>` three times — the same call the server's sweep makes every two minutes (it writes the same registry fields the sweep writes, so it is not a read-only probe, and it is no new act either) — and the SLOWEST must finish in under half of that bound;
+- on the server box, since the server's last start (`systemctl --user show ccrc -p ActiveEnterTimestamp`), `journalctl --user -u ccrc --since "<that time>" | grep 'PR sweep of <project>'` shows no `failed` line after the last `recovered` line;
+- `~/.local/bin/ccrc-api feed list --limit 50` holds a `merged` event for a PR merged on this project since that build was applied: the sweep completed and the merged lane spoke.
+Any one missing stops the runbook here, before any write. A removal cannot be announced before the queue is on; (e) is the first reading inside the window for that reason (Step 5).
 
 - [ ] **Step 2: Read the settings as they stand**
 
@@ -4127,11 +4133,40 @@ Expected: `main ruleset: <id>`, and the diff shows exactly three changes — the
   && gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-after.json --jq '{id, rules: [.rules[].type], bypass: .bypass_actors}'
 ```
 
-Expected: the ruleset, with `rules: ["pull_request","merge_queue"]` and one bypass actor (`RepositoryRole` 5). No output at all means the saved `ruleset-before.json` is not the ruleset `RS` names (or `RS` is empty), so nothing was written — re-run (4a). The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's per-ruleset read. Keep `ruleset-rollback.json`: `gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json` is the rollback, and restores the ruleset exactly as it was, maintain bypass included.
+Expected: the ruleset, with `rules: ["pull_request","merge_queue"]` and one bypass actor (`RepositoryRole` 5). No output at all means the saved `ruleset-before.json` is not the ruleset `RS` names (or `RS` is empty), so nothing was written — re-run (4a). The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's per-ruleset read. Keep `ruleset-rollback.json` and the shell's `RS`: they restore the ruleset exactly as it was, maintain bypass included. **THE ROLLBACK empties the queue before it writes** (landing-order wave 3c). Switching the requirement off with entries in it drops them silently. On 2026-10-20 four PRs then read open, not queued and not armed, with no removal event; each timeline's last queue act stayed `Added`, so no lane could announce it. Every rollback, a stop rule's or an unplanned one, is this block. It refuses to start without the (4a) directory and `RS`. In a new shell, `cd` to that directory and recompute `RS` as (4a) does. A queue armed in the UI has no rollback file, so the guard stops the block. The block runs in a subshell, `( … )`, so a STOP line's `exit 1` leaves only the subshell and never closes the shell that holds `RS`. Run the block without its guard (the first two lines inside `(`) and without its `gh api -X PUT` line, still inside `( … )`. It dequeues and reports without writing. A run that printed a `STOP:` line did not read the queue, and an unreadable queue is not an empty one: run it again and leave the UI alone. Only after a run with no `STOP:` line, restore the three settings in the UI (approvals 1, merge queue off, the maintain role back in the bypass list).
+
+```bash
+(
+[ -n "$RS" ] && [ -s ruleset-rollback.json ] && [ "$(jq -r .id ruleset-before.json 2>/dev/null)" = "$RS" ] \
+  || { echo 'STOP: cd to the (4a) directory and set RS as (4a) does; nothing dequeued or written'; exit 1; }
+q='query($o:String!,$n:String!){repository(owner:$o,name:$n){mergeQueue(branch:"main"){entries(first:50){nodes{state pullRequest{id number}}}}}}'
+dq='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){mergeQueueEntry{state}}}'
+rd() { gh api graphql -F o='{owner}' -F n='{repo}' -f query="$q" \
+         --jq '(.data.repository.mergeQueue.entries.nodes // [])[] | [.state, .pullRequest.id, .pullRequest.number] | @tsv'; }
+seen=""
+for pass in 1 2 3 4 5 6 7 8 9 10; do
+  rows=$(rd) || { echo "STOP: the queue read failed on pass $pass; the ruleset is NOT written"; exit 1; }
+  [ -z "$rows" ] && break
+  while IFS=$'\t' read -r st id num; do
+    case " $seen " in *" $num "*) ;; *) seen="$seen $num" ;; esac
+    [ "$st" = LOCKED ] && continue        # already merging: let it land, and read again
+    gh api graphql -F id="$id" -f query="$dq" >/dev/null || gh api graphql -F id="$id" -f query="$dq" >/dev/null \
+      || echo "DEQUEUE FAILED #$num"
+  done <<<"$rows"
+  sleep 10
+done
+left=$(rd) || { echo "STOP: the final queue read failed; the ruleset is NOT written"; exit 1; }
+[ -z "$left" ] && echo 'queue empty' || printf 'STILL LISTED: #%s %s\n' $(printf '%s\n' "$left" | awk -F'\t' '{print $3, $1}')
+gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json --jq '{id, rules: [.rules[].type]}'
+echo "seen:$seen"
+)
+```
+
+Expected: `queue empty`, then the ruleset reads `rules: ["pull_request"]`. A failed read stops the block before any write, with a `STOP:` line, because an unreadable queue is not an empty one. Re-read every PR in `seen` with (a2)'s timeline read: each one that did not merge ends in a `RemovedFromMergeQueueEvent`. Two cases are written anyway, and the PR is recorded as silently dropped, with a comment on it: a `DEQUEUE FAILED` line, and a `STILL LISTED` line (a `LOCKED` entry that never cleared, or entries that kept arriving). Comment on each removed PR that is not the proof's: say that the queue went off and the PR must be landed again by the pre-queue path.
 
 - [ ] **Step 5: THE PROOF RUN — spec §5.2 rollout step 3, stage 2's own gate**
 
-Make FIVE TRIVIAL PRs from fleet workspaces (so `is_ours` has a workspace to bind — e.g. five `ws-add` workspaces, each committing a one-line change to a different line of a doc file nothing pins) and wait for the first four PRs' own CI to go green; the fifth is (a1)'s, pushed to while its checks run. The landing spelling is clause 15's: `gh pr merge <n> --match-head-commit <sha>`, no `--squash`, no `--admin`; outside a programme the sha is the head the operator read.
+Make FIVE TRIVIAL PRs from fleet workspaces (so `ours_of`, with `one_ours` as its fallback, has a workspace to bind — e.g. five `ws-add` workspaces, each committing a one-line change to a different line of a doc file nothing pins) and wait for the first four PRs' own CI to go green; the fifth is (a1)'s, pushed to while its checks run. The landing spelling is clause 15's: `gh pr merge <n> --match-head-commit <sha>`, no `--squash`, no `--admin`; outside a programme the sha is the head the operator read.
 
 (a0) **The exact-SHA binding holds on a queue enqueue** (Pre-flight finding 16) — FIRST, on the fourth PR, a deliberately WRONG sha, then the queue read:
 
@@ -4143,6 +4178,14 @@ gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr-d> -f query='
 ```
 
 Expected: a non-zero `rc` whose message names the head (the expected sha does not match), and `mergeQueueEntry: null` — the PR was NOT queued. A refusal naming auto-merge, an approval or anything but the head is NOT this pass: it is stop rule 4, and (a0) is re-run once the enqueue path works. A wrong sha that was accepted is stop rule 7 (remove the entry in GitHub's UI first).
+
+(e) **The dequeue lane, FIRST inside the window** — on the fourth PR, right after (a0) and before (a1) or any landing (landing-order wave 3c: a lane that cannot announce a removal must be found before the landings wait on it). Once its required checks are green, enqueue it with the landing spelling, and read the entry back with (a0)'s read: a non-null `mergeQueueEntry` this time. Then remove it, with GitHub's UI ("Remove from queue") or with `gh api graphql -F id="$(gh pr view <pr-d> --json id -q .id)" -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){mergeQueueEntry{state}}}'`. Within one sweep (≤ 120 s):
+
+```bash
+~/.local/bin/ccrc-api feed list --limit 10
+```
+
+Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body naming `(removed <time>)` and `No open run names a coordinator to tell.` — a proof PR's workspace belongs to no run, so the lane records and mails nobody. No `queue` event naming the fourth PR's workspace within 120 s of the removal is stop rule 8. (e) never runs on a PR that (a1) has pushed to: a push made outside a PR's workspace moves the PR's head off the workspace's own tip, the PR no longer binds, and its removal cannot reach the lane (2026-10-20). Close the fourth PR afterwards. The lane's two MAILS need an open run at `merging`, which the proof does not stage: the first programme landing after this runbook measures them (Step 7).
 
 (a1) **An enqueue whose required checks have not passed ARMS auto-merge; it does not queue** (Pre-flight finding 20; gh 2.45's own help: "If required checks have not yet passed, auto-merge will be enabled") — on the FIFTH PR, push one more commit and, while its checks are still running, from the operator's shell:
 
@@ -4213,21 +4256,13 @@ gh run view <one merge_group run id> --json jobs --jq '.jobs[] | [.name, .conclu
 
 Expected: three `merge_group` runs, `success`, none of them cancelled (each ran in its own `queue-<run id>` group); in each, `select tests`, `typecheck (server)`, every `server k/n` shard, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` `success`; `test-macos` (reported under its unexpanded matrix name), `probe-macos`, `full-suite`, `trace …`, `map-build` and `times-build` `skipped`. On each run's summary page the **CI test selection** table reads event `merge_group` and tests `selected` — or `full` with a fallback reason (a missing map, a `.github/` change); while `CCRC_SELECTION` reads `shadow` a `selected` run still runs every server test, exactly as a pull request's does.
 
-(d) **`is_ours` still binds after a queue merge** — for each workspace, on the fleet box:
+(d) **`ours_of` (with its fallback `one_ours`) still binds after a queue merge** — for each workspace, on the fleet box:
 
 ```bash
 ccd pr-state --session <workspace id> | python3 -c 'import json,sys; v=json.loads(sys.stdin.readline()); print(v["phase"], v["number"], v.get("reason"))'
 ```
 
 Expected: `merged <its PR number> None` for all three — never `unknown merge-unproven`, never `none`.
-
-(e) **The dequeue lane** — enqueue a fourth trivial PR and remove it from the queue in GitHub's UI ("Remove from queue") before it lands; within one sweep (≤ 120 s):
-
-```bash
-~/.local/bin/ccrc-api feed list --limit 10
-```
-
-Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body naming `(removed <time>)` and `No open run names a coordinator to tell.` — a proof PR's workspace belongs to no run, so the lane records and mails nobody; and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6). Close the fourth PR afterwards. The lane's two MAILS need an open run at `merging`, which the proof does not stage: the first programme landing after this runbook measures them (Step 7).
 
 (f) **A worker cannot merge** — in a session whose workspace hold names a programme wave (a live worker's, or a scratch workspace held with `POST /api/sessions/:id/hold` and a `program:<slug> wave:1/1` reason, released afterwards), ask the session to run `gh pr merge <any closed PR number>`. Expected: the tool call is refused with `ccrc: this workspace's hold reads …`. A dispatched child in the window after its close (no hold, marker present) is refused by the marker arm — `ccrc: this workspace carries the child marker …`; that window is minutes long and rarely caught live, so Task 4's cases are its proof, and a live catch is a bonus for the ledger.
 
@@ -4236,12 +4271,15 @@ Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body nami
 Stop, report to the coordinator, and do NOT plan or dispatch wave 2b if any of these holds:
 
 1. **A single push to `main` carried more than one commit** (b), or a merge sha has no tag: the group settings did not take. Keep group size and build concurrency at 1 and re-run the proof; if they ARE 1, `release-main.sh` must tag every commit in the pushed range before the queue is used (spec §5.2 step 3) — a new wave.
-2. **`is_ours` failed to bind** after a queue merge (d): a finding against `pr-state`; the queue stays on only if the operator rules so.
-3. **A `merge_group` run failed for a reason that is not the PR's own** (c) — e.g. a guard that needs a base the queue checkout does not have. Roll back: re-apply `ruleset-rollback.json` (queue off, approvals 1, maintain bypass back). Landing returns to `--admin` exactly as before this runbook, because the every-session `--admin` deny (wave 2b) is not live.
+2. **`ours_of` (with its fallback `one_ours`) failed to bind** after a queue merge (d): a finding against `pr-state`; the queue stays on only if the operator rules so.
+3. **A `merge_group` run failed for a reason that is not the PR's own** (c) — e.g. a guard that needs a base the queue checkout does not have. Roll back with Step 4's rollback block (the queue emptied first, then queue off, approvals 1, maintain bypass back). Landing returns to `--admin` exactly as before this runbook, because the every-session `--admin` deny (wave 2b) is not live.
 4. **`gh pr merge <n> --match-head-commit <sha>` (no `--admin`) was refused** as needing an approval — Step 4 did not take; re-read with Step 2 — or because the repository has auto-merge disabled (gh reaches a required queue through the auto-merge mutation, finding 16): that is a setting this runbook does not change and clause 15 forbids a coordinator to write; the proof halts here and the operator decides then (operator ruling 2026-09-29). (a0) and (a1) answer the same way until the operator has.
 5. **An entry sat queued past the status-check timeout**: the required contexts are not reporting on `merge_group`; roll back as in 3.
-6. **A successful queue merge leaves a trailing removal** ((a) reads `merged … none`, or (a2)'s last node is a `RemovedFromMergeQueueEvent`), **or a `queue` event names a PR that landed** ((a2), (e)). `landed` is then unreachable, and the dequeue lane can announce a removal for a PR that merged: the lane must not announce until it has seen the removal on two consecutive sweeps with the PR still OPEN — a fix wave before 2b, with the (a2) readings as its evidence. The queue may stay on (nothing is merged wrongly; the cost is a false notice), if the operator rules so.
+6. **A successful queue merge leaves a trailing removal** ((a) reads `merged … none`, or (a2)'s last node is a `RemovedFromMergeQueueEvent`), **or a `queue` event names a PR that landed** ((a2)). `landed` is then unreachable, and the dequeue lane can announce a removal for a PR that merged: the lane must not announce until it has seen the removal on two consecutive sweeps with the PR still OPEN — a fix wave before 2b, with the (a2) readings as its evidence. The queue may stay on (nothing is merged wrongly; the cost is a false notice), if the operator rules so.
 7. **(a0)'s wrong-sha enqueue was ACCEPTED** (the PR entered the queue): gh's queue path does not carry `--match-head-commit`, so clause 15's spelling binds nothing on this gh and the exact-SHA merge proof rests on the coordinator's own reads alone. A fix wave before 2b decides the remedy (the programme ledger records the reading); the queue may stay on only if the operator rules so.
+8. **(e)'s removal was not announced within one sweep** — no `queue` event names the fourth PR's workspace 120 s after its removal, on a PR that still binds (`ccd pr-state --session` reads it `open`). The lane is blind: roll back with Step 4's rollback block before any landing is queued, and do not plan wave 2b.
+
+A merge to `main` through the admin bypass while the queue is on (another programme's landing; wave 2b's deny is not live) makes the queue rebuild its groups on the new base. It is recorded with its time and PR, and is not a stop by itself; a rebuilt group that then fails for a reason not its PR's own is stop rule 3.
 
 - [ ] **Step 7: Record the result**
 

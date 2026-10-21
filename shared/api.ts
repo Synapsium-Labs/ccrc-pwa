@@ -917,6 +917,8 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
  * whose shape is genuinely unknown, which is the only thing it was ever an
  * honest answer for.
  *
+ * `cut-short`: ccrc's own read of the PRs was ended before it answered — the runner's kill or the server's wait (not GitHub)
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -934,7 +936,7 @@ export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
   | 'merge-unproven' | 'branch-drift'
-  | 'unavailable' | 'truncated';
+  | 'unavailable' | 'truncated' | 'cut-short';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -955,7 +957,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
-  unavailable: true, truncated: true,
+  unavailable: true, truncated: true, 'cut-short': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -1511,8 +1513,10 @@ export type BucketInput = Pick<
  *  dropped) — whose work never holds the live file `busy`: an idle main loop
  *  over only shells or monitors writes `shell` or `idle`, and the other four are
  *  outside the live file's delegation set. The hook's `jq` in
- *  `ccd/session-hook.sh` is the documented second spelling, held equal by
- *  `session-hook-background.test.ts`, which iterates over this list. */
+ *  `ccd/session-hook.sh` is the documented second spelling and the rule's only
+ *  executor, held equal by `session-hook-background.test.ts`, which iterates
+ *  over this list and reads the jq's lists back as sets (D-6117). No TS
+ *  predicate over raw tasks exists: no TS reader holds them (D-6117). */
 export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
 /** D-5231: the terminal words of Claude Code's task code. A task whose status
  *  is one of them is finished, whatever its kind; `running`, `pending` and any
@@ -1520,12 +1524,10 @@ export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream
  *  finished tasks out, so this is a second wall: a finished task some later
  *  build lists must not keep a wedged `busy` on `working`. */
 export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
-/** D-5231: is this listed task delegated work that is still running? `type` is
- *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
-export function isDelegatedTask(t: { type: string; status: string }): boolean {
-  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
-    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
-}
+/* D-6117: the readerless `isDelegatedTask` predicate that stood here is gone;
+ * the server and the PWA read the hook's computed `bgDelegated` and
+ * `bgDelegatedKinds`. This note keeps the lines below where the line-anchored
+ * citations into this file expect them. */
 /** D-5231: the ONE reader of `FleetSession.background` for display. The live
  *  `fleet` frame is cast, not revived, so a server predating the field omits
  *  the key at runtime: `undefined` reads as null here, never as a TypeError.
@@ -1754,8 +1756,8 @@ export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
  * THE THRESHOLD, MEASURED, NOT GUESSED FROM THE ONE INCIDENT (its own
  * deviation text is explicit about this): `turn_duration` system events
  * streamed from every `*.jsonl` transcript under the fleet's five wrapper
- * HOMEs (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
- * `~/.claude-dev0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
+ * HOMEs (`~/.claude`, `~/.claude-home`, `~/.claude-acme`,
+ * `~/.claude-lab0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
  *
  *   p50 ~101s · p90 ~23.2m · p95 ~50.4m · p96 ~62.5m · p97 ~85.5m ·
  *   p97.5 ~102.2m · p99 ~271.1m · max ~104.8h
@@ -3767,16 +3769,16 @@ export interface LifecycleQueryResult {
  * SYSTEM, and its emptiness is the point of Stage 2a: the roster stopped being
  * source code.
  *
- * It used to be a five-member union (`'claude' | 'claude2' | 'claude-corp' |
- * 'gpt' | 'claude-dev0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
+ * It used to be a five-member union (`'claude' | 'claude9' | 'claude-acme' |
+ * 'gpt' | 'claude-lab0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
  * literal in this file, from which every other enumeration was derived. That
  * literal was itself the fix for a worse defect — one concept hand-enumerated
  * in eight places across three languages, no two of them the same set. A
- * missing entry in the first of those killed chat for six of `claude-dev0`'s
+ * missing entry in the first of those killed chat for six of `claude-lab0`'s
  * 24 sessions, silently, for the account's entire life (`resolve()` in
  * `sessionws.ts` returned null; the client only ever saw "unknown session",
  * indistinguishable from a reaped one). A hand-written, unordered prefix list
- * in the second attributed `claude-dev0-quiet-basin` to `claude`. Deriving
+ * in the second attributed `claude-lab0-quiet-basin` to `claude`. Deriving
  * every list from one literal closed that class of bug: N=1.
  *
  * What one literal could NOT close is that it was still a compile-time fact.
@@ -3806,8 +3808,8 @@ export interface LifecycleQueryResult {
  *                            switch that is not an account, from becoming a
  *                            phantom row on `GET /api/accounts`
  *   `roster.byIdLengthDesc`  (shared/roster.ts) — longest id first, so
- *                            `claude-dev0-quiet-basin` resolves to
- *                            `claude-dev0` rather than to the shorter `claude`
+ *                            `claude-lab0-quiet-basin` resolves to
+ *                            `claude-lab0` rather than to the shorter `claude`
  *                            (`idHomeWrapper`, server/src/fleet.ts)
  *   `roster.homeAble`        — the accounts ccd's `_ws_least_loaded` may land a
  *                            new workspace on (`projectHome`, limits.ts)
@@ -3995,11 +3997,11 @@ export interface AccountsResponse {
    *  lane declared off — NOT one row per rostered account. */
   accounts: AccountUsage[];
   projected: ProjectedHome | null;
-  /** Every account this box knows, in roster declaration order — including
-   *  accounts nothing has measured yet, which `accounts` has no row for at
-   *  all. This is what lets the PWA label and colour an account before any
-   *  telemetry for it exists. */
+  /** Every account this box knows, in roster declaration order — including accounts nothing has measured yet, which
+   *  `accounts` has no row for at all. This lets the PWA label and colour an account before any telemetry for it. */
   roster: RosterWire[];
+  lanes?: Record<string, LaneWire>; // keyed by lane id, session verdict only (see `LaneWire`; D-5511, D-5517)
+  connect?: AccountsConnect; // session verdict only, as `lanes` (see `AccountsConnect`)
 }
 
 /** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
@@ -7593,7 +7595,7 @@ export interface PasskeyRegisterStart {
   rpId: string;
   /** The `user.id` handed to `navigator.credentials.create` — an opaque
    *  per-box handle, never an email or a username. Single-operator boxes have
-   *  no user identity to carry (spec §6 holds that seam for the team edition),
+   *  no user identity to carry (spec §6 holds that seam for a later product decision),
    *  so this exists to satisfy the ceremony, not to name anyone. */
   userHandleB64url: string;
 }
@@ -7793,7 +7795,7 @@ export type LifecycleAct =
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
-                    // a start/ensure/swap/enable on an archived row (CCR-10).
+                    // a start/ensure/swap/enable on an archived row (#127).
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
 /** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
@@ -8289,17 +8291,17 @@ export interface LifecycleMeas {
    *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
    *  the key was absent: an act that is not a reclaim. */
   readonly residueBytes: string | null;
-  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
-   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
-   *  (a process of this uid still used it after the tail's bounded wait),
-   *  `unmeasured` (whether one did could not be measured, or a removal failed
-   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
-   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
-   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
+  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire` tail did not
+   *  prove gone (child reclamation wave 6, spec §5.6): `in-use` (a process of this uid still used
+   *  it after the tail's bounded wait), `unmeasured` (whether one did could not be measured, or a
+   *  removal failed part-way or was undone: kept means NOT PROVEN GONE, not untouched) or `refused`
+   *  (the helper refused it). The act COMPLETED, so this rides the `done` row and a purge failure's;
+   *  `detail` says why. Null: it went, or another act. */
   readonly tmpRootKept: string | null;
   /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
   readonly clipsKept: string | null;
+  /** A `collect` `done`'s leaf (path-identity spec §3.4): see `COLLECT_LEAF_END_WORDS`, at the foot. */ readonly leaf: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8321,7 +8323,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -9765,9 +9767,9 @@ export const UPDATE_GATE_CAP = 'update-gate';
  *
  *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
  *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
- *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *   - `child` — the registry's #166 child reading (`FleetSession.child`) is `child` or `unreadable`. An
  *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
- *     through CCR-15's own reclamation.
+ *     through #166's own reclamation.
  *
  * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
  * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
@@ -10390,9 +10392,9 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
 export const REGISTRY_ID_MAX_CHARS = 255;
 
 /** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
- *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
- *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `-` is a SAFETY rule (spec 2026-10-12 §2.1). A ccd older than path-identity W1b read its decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`; since W1b each identity key takes its value whole,
+ *    so this rule is the server's half of the same refusal and closes the redirect on an older ccd too. The shape refuses `=`.
  *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
  *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
  *    stored run row, a registry file name or an executor's job.
@@ -11805,6 +11807,49 @@ export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
 /** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
 export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
+import type { AccountStateAnswer, LaneState } from './accounts.js';
+/** One lane on `GET /api/accounts`'s `lanes` (spec §3.4, §13.1; D-5517; accounts plan Task A12), keyed by lane id and
+ *  read from `~/.cc-sessions/.accounts/<id>.json`. ONLY for a reader with the session verdict (D-5511): a dark gate's
+ *  reader gets today's three fields and nothing else, and an armed gate refuses a box token before the handler. Never
+ *  persisted by `offline.ts` (G15). Declared here, below every line the docs cite in this file (D-6058 (6)). `state` is `stateWordFor`'s answer
+ *  (`shared/accounts.ts`); every other field is the lane-state file's, held to its grammar (`laneStateOf`) and masked
+ *  on the server, its times in epoch ms. Absent fields were absent or off their grammar in the file. `ready` is the
+ *  file's own account of A13's three conditions (a credential recorded, a seed verified after the last run, a last
+ *  check of `ok`): display only, never `enable`'s authority, which reads the file on the box (D-5518). */
+export interface LaneWire {
+  state: AccountStateAnswer;
+  check?: { verdict: string; at: number };
+  identity?: string;
+  identitySource?: LaneState['identitySource'];
+  keyHint?: string;
+  validatedAt?: number;
+  credit?: { limit: number | null; remaining: number | null };
+  mintedAt?: number;
+  ready: boolean;
+  notReadyReason?: LaneNotReadyReason;
+}
+
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no last check of
+ *  `ok`, or no seed verified after the last run. */
+export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'seed-unverified'] as const;
+export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
+
+/** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
+ *  subs, advertised by the box task that ships them (A16); each later wave appends its own word. Accounts plan Task
+ *  A12 reads `account-v2` for `connect.accountOps`. */
+export const ACCOUNT_CAPS = ['account-v2'] as const;
+export type AccountCap = (typeof ACCOUNT_CAPS)[number];
+
+/** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
+ *  (`account-v2` in its measured caps, the refusing no-evidence polarity), the gate's posture, `cfg.origin`'s class,
+ *  and the first instant this session's step-up is no longer fresh (absent: none). */
+export interface AccountsConnect {
+  accountOps: 'available' | 'unsupported';
+  gate: 'armed' | 'dark';
+  origin: AccountOriginClass;
+  stepUpFreshUntil?: number;
+}
+
 /** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
  *  `ceiling-lower` (D-5554) name no lane; every other act names the lane it touched. */
 export const ACCOUNT_ACTS = [
@@ -11814,8 +11859,9 @@ export const ACCOUNT_ACTS = [
 ] as const;
 export type AccountAct = (typeof ACCOUNT_ACTS)[number];
 
-/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
-export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+/** The acts that may name no lane, so their row's `laneId` is NULL (and only theirs). `reconcile` names its lane after
+ *  a failed op and none after a roster disagreement (D-6057). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower', 'reconcile'];
 
 /** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
 export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;
@@ -11878,3 +11924,40 @@ export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
+
+/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
+ * files cite by number. */
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
+ *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
+ *  literal union in `shared/` to that. */
+const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
+export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
+
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
+ *  which `pwa/src/fleet/sortFleet.ts` owns). */
+const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
+  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
+};
+export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
+ *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
+ *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
+const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
+export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
+  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
+export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
+  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}
+
+/** What a `collect` `done` journals of the leaf it acted on (path-identity spec §3.4, TR1 A): `removed` on
+ *  `_ws_collect_finish`'s line (the slot's leaf proven gone after this collection removed it), `absent` on the
+ *  witness-only arm's (no leaf stood at the witness's path). Spelled ONCE, as a total table's keys. Not the audit
+ *  document's `collect.leaf` (`present`/`absent`), which is another wire. APPENDED at the foot, never inserted above:
+ *  README and the frozen spec and plan corpus cite this file by line. */
+export type CollectLeafEndWord = 'removed' | 'absent';
+const COLLECT_LEAF_END_TABLE: Readonly<Record<CollectLeafEndWord, true>> = { removed: true, absent: true };
+export const COLLECT_LEAF_END_WORDS: readonly CollectLeafEndWord[] = Object.keys(COLLECT_LEAF_END_TABLE) as CollectLeafEndWord[];
+export function isCollectLeafEndWord(v: unknown): v is CollectLeafEndWord {
+  return typeof v === 'string' && (COLLECT_LEAF_END_WORDS as readonly string[]).includes(v);
+}

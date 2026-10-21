@@ -463,7 +463,7 @@ _ct_read() {   # <path> -> CT_V CT_RAWN ; rc 0 read, 1 absent, 2 unmeasurable
 # this repo already made. `server/src/coord/peers.ts` (D9): the peers route
 # "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
 # decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
-# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# the contradiction. Measured on this box: `project-e-still-prairie` has
 # carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
 # server calls it `deliverable:"yes"`. In the other direction a main checkout
 # can never be archived at all, so an `.archived` filter over-counts a dead
@@ -2408,7 +2408,7 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # TWO OF THE THREE COMPONENTS ARE MODELLED, NOT BOUNDED. `$id` carries a shape
 # gate but no length cap and appears more than once across these sentences, so
 # 1826 assumes a 40-character id rather than proving a ceiling (the longest id
-# live on this fleet today is 29, `expoAI-assistant-keen-prairie`); and
+# live on this fleet today is 29, `project-h-id-pad-keen-prairie`); and
 # `$CT_N` is interpolated un-padded, so each extra digit adds one character —
 # 244 at one co-tenant, 245 at the two-digit counts this fleet actually
 # carries (`coTenantN:15` in the pre-deploy baseline), 246 at three. The
@@ -2497,7 +2497,7 @@ COMPACT_LIVE_S=120
 # index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
 # before it shipped — the p95 and peak RSS are recorded here by Task 6 of
 # plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
-# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (MekWarLive,
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (project-f,
 # 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
 # 2026-09-10).
 COMPACT_HELPER_TIMEOUT=8
@@ -2515,7 +2515,7 @@ COMPACT_WORKSET_MAX=12
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
 # acquisitions, which carry a twinned literal of the same value.
 #
-# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `openclaw`, load ~5.8,
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `<fleet-host>`, load ~5.8,
 # fixture HOME — never the live one). What a waiter can be blocked behind is
 # ONE HELD SECTION, so each section is timed at its own acquire and release
 # rather than the arm being timed end to end, n=30 per section:
@@ -4391,9 +4391,47 @@ fi
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
 # verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
 # 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
-# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's `install`
-# or `update` under any path head, a `claude…` wrapper name or a `~/.local/bin/<id>` launcher, with no flag between
-# (so `claude -p "update …"` is not one). A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
+# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
+# `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
+# head, the build's own path (any entry under `…/versions/`, `$CLAUDE_CODE_EXECPATH`, or `./<entry>` after a `cd` into
+# the build
+# directory) or a package runner of `@anthropic-ai/claude-code`, after up to eight flags (`CFLAGS`, each with at most
+# one value that does not start with `-`, `--` included). A print-mode word (`-p`, `--print`, `--print=…`) stops the
+# flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
+# are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
+# head only, where Claude Code runs it. The official installer's URLs (in any case) and a global npm, pnpm, yarn or bun
+# install of `@anthropic-ai/claude-code` (`-g`, `global`, `--prefix` with a path naming `.local`, `npm_config_global=`)
+# count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
+# any separator spelling (`SEPP`: `/`, `//`, `/./`, at most eight), absolute, home-anchored or relative at the start of
+# a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
+# a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
+# through `find` with an action, `| xargs`, an interpreter naming the path, a `cd` row (into the build directory,
+# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule, the name counting as a path component)
+# and a variable holding the path (one scan of all such names, and more than 16 deny outright: fail closed); and a
+# writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
+# edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
+# `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every group
+# repetition these arms define is bounded (`{0,8}` flags, separators and runner flags, `{0,2}` `cd` flags), since an
+# unbounded one made jq abort, which here is FAIL-OPEN, except main's `FLAGS` (`(?:-NS+SP+)*`), which BWR's `sed`
+# writer and the `$VAR` head reuse. Single-class runs (`SP+`, `SP*`, `NS*`, `NS+`, hb1's `[\s\S]*`) are not bounded,
+# in `CFLAGS`, `RUNH`, `CRUN` and `CDH` and in other arms; none raised a regex error below the ~225 KB single segment at
+# which hbt's prefix already hits the regex retry limit on main (D-6063, D-6064). Every segment-scanning arm first
+# tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
+# `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
+# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
+# edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
+# relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
+# The roster's upstream id (D-6066) comes from that deny file, read by the hook (`_hook_deny_text`: at most 64 KiB, up
+# to the first NUL, so over-cap means more than 64 KiB before any NUL, and text after a NUL is never read) and
+# passed to this arm alone as `--arg deny` when it is a regular file and not a symlink (the class-mode call passes
+# none, so `$ARGS.named.deny // ""` reads empty there): every head the file pairs as `Bash(<p> install:*)` AND
+# `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands alone in every file, so one verb is not enough). `UPRE` is
+# then a `claude…`-like head and a `~/.local/bin/<p>` launcher; with no such head, or a missing, unreadable,
+# non-regular, symlinked, over-cap or unparsable file (`try`), it never matches, as on main. The file is shared by the
+# whole box, so a child that makes it unreadable costs every child only these upstream-id arms, which main never had.
+# A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
 # head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
@@ -4401,9 +4439,14 @@ fi
 # bash word.
 #
 # ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
-# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, nor `claude` or
-# `/.local/bin/` together with `install`, `update` or `/.local/`, pay no fork. Every pattern needs one of those words
-# literally (JSON escaping never touches ASCII letters). A deny already set is
+# top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
+# (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
+# any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
+# `downloads.claude.ai` and `claude.ai/install` in any case (`${apf,,}`; an upper-case installer path names no `install`);
+# `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
+# `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
+# of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
+# `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
 # `ccrc doctor`'s `jq_regex` check names that box.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
@@ -4444,11 +4487,103 @@ def xmatch:
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
-def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|/\\.local/bin/[a-z][a-z0-9-]{0,31})";
+([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
+| ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
+    | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
+| def UPRE: if ($ups | length) == 0 then "(?!)" else "(?:" + ($ups | join("|")) + ")" end;
+def SEPP: "/(?:\\.?/){0,8}";
+def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
+def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
+def VEND: NW + "(?![./])";
+def CVERB: "(?:install|update|upgrade)" + VEND;
+def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
+def ENTW: "[^" + WS + "/;&|()<>`" + $q + "\"]{1,64}";
+def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + ENTW;
+def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
+def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + WB + UPRE + "|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
+def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + VEND + ")";
+def META: ";&|()<>`" + $q + "\"";
+def BT: "(?![A-Za-z0-9_.-])";
+def LOC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))\\.local" + SEPP;
+def GLOBW: "[^" + WS + "/" + META + "]{0,64}";
+def BUILDX: "(?:" + LOC + "share" + SEPP + "claude" + SEPP + "versions" + BT
+  + "|" + LOC + "share" + SEPP + "claude(?:" + SEPP + GLOBW + "[*?\\[{]" + GLOBW + ")?/{0,8}(?=$|[" + WS + META + "])"
+  + "|" + LOC + "bin" + SEPP + "(?:claude|" + UPRE + ")" + BT + ")";
+def SEG: "\n|;|(?<!>)&(?!>)|(?<!>)\\|";
+def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}/dev/null" + NW + ")";
+def BWR: "(?:" + RDR + "|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB
+  + "(?:mv|cp|ln|truncate|rm|install|dd|rsync|tar|unzip|chmod|chown|touch|mkdir|curl|wget|unlink|shred|patch)" + NA + ")";
+def hb1($head; $tail): ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
+  | $last >= 0 and (.[0:$last] | test($head));
+def END: "(?=$|[" + WS + ";&|)])";
+def ANC: "(?:(?:~|\\$\\{?HOME\\}?|/[^" + WS + ";&|()<>]{0,256}?)?" + SEPP + "|\\./)?";
+def CDH: "(?:^|[" + WS + "(])(?:cd|pushd)" + SP + "+(?:-[PLe]{1,3}" + SP + "+){0,2}";
+def CDT($dir): CDH + ANC + $dir + "/{0,8}" + END;
+def OPW: "(?<![^" + WS + "=/])";
+def VERSD: CDT("\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions");
+def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
+  | ([range(0; $s | length) | select($s[.] | test($cd))] | .[0]) as $k
+  | $k != null and any($s[$k + 1:][]; f));
+def BI: "build\tinstalling or updating a Claude Code build";
+def BW: "build\ta write to a Claude Code build or its launcher";
+def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
+def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
+def TNC: "claude-" + TCH + "{1,64}";
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
+def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
+def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
+def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
+def PDIR($d): DANC + $d + "(?:/\\.?){0,8}(?=$|[" + WS + META + "])";
+def COMP($n): "(?:^|[" + WS + "/=])" + $n + "(?=$|[" + WS + "/;&|)])";
+def pdirw($d; $n): test(PDIR($d)) and test(COMP($n)) and any(split(SEG; null)[]; test(BWR) and test(PDIR($d)) and test(COMP($n)));
+def findw($re): test(NB + "find" + NA) and test($re) and any(split(SEG; null)[]; test(NB + "find" + NA) and test($re)
+  and test(SP + "-(?:delete|exec|execdir|ok|okdir)" + NW));
+def xargsw($re): test(NB + "xargs" + NA) and test($re) and any(split("[\n;&]"; null)[]; split("|") as $p
+  | ([range(0; $p | length) | select($p[.] | test($re))] | .[0]) as $k
+  | $k != null and any($p[$k + 1:][]; test("^" + SP + "*xargs" + NA) and test(BWR)));
+def INTERP: NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA;
+def varw($re): test($re) and test("=") and (. as $c
+  | [limit(17; match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,1024})"; "g")
+      | select(.captures[1].string | test($re)) | .captures[0].string)]
+  | length > 16 or (length > 0 and (unique as $ns | $c | hbt(SEG; BWR; "\\$\\{?(?:" + ($ns | join("|")) + ")" + NA))));
+def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8}" + ENTW + "|" + VERS + ")" + CRUN;
+def CLOP: "claude(?=$|[" + WS + "/;&|)])";
+def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
 def bmatch:
-  (select(hbt("[\n;&|]"; WR; BUILD)) | "build\ta write to a Claude Code build or its launcher"),
-  (select(test(CLI + SP + "+(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build"),
-  (select(test(WB + "claude" + NW) and test(EXPV + "(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build");
+  (select(test(BUILDX) and hbt(SEG; BWR; BUILDX)) | BW),
+  (select(findw(BUILDX)) | BW),
+  (select(xargsw(BUILDX)) | BW),
+  (select(test(INTERP) and test(BUILDX)) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share" + SEPP + "claude(?:" + SEPP + "versions)?"); BWR; test(BWR))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share"); OPW + CLOP; hb1(BWR; OPW + CLOP))) | BW),
+  (select(cdthen(CDT("\\.local"); "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen("(?:" + CDH + "(?:~|\\$\\{?HOME\\}?)/{0,8}" + END + "|(?:^|[" + WS + "(])cd" + SP + "*$)"; "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "(?:claude|" + UPRE + ")" + END; hb1(BWR; OPW + "(?:claude|" + UPRE + ")" + END))) | BW),
+  (select(varw(BUILDX)) | BW),
+  (select(pdirw("\\.local(?:" + SEPP + "(?:share|bin))?"; "(?:claude|" + UPRE + ")")) | BW),
+  (select(test(TRUST) and hbt(SEG; BWR; TRUST)) | BTR),
+  (select(findw(TRUST)) | BTR),
+  (select(xargsw(TRUST)) | BTR),
+  (select(test(INTERP) and test(TRUST)) | BTR),
+  (select(varw(TRUST)) | BTR),
+  (select(pdirw("\\.ccrc"; TNC) or pdirw("\\.cc-sessions"; TNS)) | BTR),
+  (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
+  (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
+  (select(test(CLI + CRUN)) | BI),
+  (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + VEND + ")")) | BI),
+  (select(cdthen(VERSD; VERW; test(VERW))) | BI),
+  (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai"; "i")) | BI),
+  (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
+     and test(SP + "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|update|udpate|up|upgrade)" + NW)
+     and test("@anthropic-ai/claude-code")
+     and (test("(?:^|" + SP + ")(?:(?:-g|--global|--location=global|global)" + NW + "|--prefix(?:=|" + SP + "+)" + NS + "{0,256}\\.local(?![A-Za-z0-9_-]))")
+       or test("(?:^|" + SP + ")npm_config_(?:global|location)="; "i")))) | BI);
+def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
+  | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
+      elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
@@ -4461,7 +4596,7 @@ def pathwhy($t):
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
     (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string" and test(BUILD)) | "build\ta write to a Claude Code build or its launcher") // "")
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
@@ -4476,13 +4611,35 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   apf=$payload
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
-     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) \
-          && ( "$apf" == *install* || "$apf" == *update* || "$apf" == */.local/* ) ) ]] || apf=""
+     || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
+     || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
+     || "$apf" == *.cc-sessions* ]] || apf=""
 fi
+# The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
+# `--rawfile`, a file it could not open (mode 000, a directory, removed after the test) made jq exit 2 with no output,
+# so every arm below allowed, and the file is one per box; a FIFO, `/dev/zero` or a huge file blocked jq or ran it
+# unbounded, past the hook's timeout, which fails open too. The cap stays well under the 128 KiB a single `--arg` may
+# hold (E2BIG would fail open again). A FIFO still blocks the open: a residual, as in `install-session-hooks.sh`.
+# The read stops at the first NUL byte: a file with more than the cap's bytes before any NUL passes nothing, and text
+# after a NUL is never read (the safe direction: less text can only drop upstream-id arms).
+APF_DENY_BYTES=65536
+_hook_deny_text() {   # <file> -> APF_DENY (its text up to the first NUL; empty when it cannot be read, or when more
+                      # than APF_DENY_BYTES bytes come before any NUL)
+  local LC_ALL=C t=""
+  APF_DENY=""
+  IFS= read -r -d '' -n $((APF_DENY_BYTES + 1)) t 2>/dev/null <"$1"
+  (( ${#t} <= APF_DENY_BYTES )) && APF_DENY=$t
+  return 0
+}
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
     Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
-      afw=$(jq -r --arg q "'" --arg mode deny "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      adeny=()
+      if [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
+        _hook_deny_text "$REG/child-deny.settings.json"
+        [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
+      fi
+      afw=$(jq -r --arg q "'" --arg mode deny "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       areason=""
       case "$afw" in
         verb$'\t'*)

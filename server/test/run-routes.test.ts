@@ -261,12 +261,12 @@ describe('POST /api/runs', () => {
     // may sit in any project, so it is admitted and stamped with the REGISTRY
     // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
     const home = mkTmp('ccrc-runs-');
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, CLAIMED_BY, { project: 'project-n' });
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
     expect(res.statusCode).toBe(200);
-    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('project-n');
     seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
     const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
     expect(ok.statusCode).toBe(200);
@@ -280,19 +280,19 @@ describe('POST /api/runs', () => {
     // crossing marking reads. Binding an EXISTING child of the run's project
     // from outside it is refused: a crossing spawns fresh.
     const home = mkTmp('ccrc-runs-');
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, CLAIMED_BY, { project: 'project-n' });
     seed(home, 'demo-existing-child');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'intake-platform' });
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'project-n' });
     expect(res.statusCode).toBe(200);
     const id = (res.json() as { id: number }).id;
-    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('project-n');
     expect(okRun(w.coord.run(id))?.project).toBe(PROJECT);
-    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'intake-platform',
+    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'project-n',
       sessionId: 'demo-existing-child' });
-    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'intake-platform',
-      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of intake-platform — a crossing wave opens without sessionId and spawns fresh` }]);
+    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'project-n',
+      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of project-n — a crossing wave opens without sessionId and spawns fresh` }]);
   });
 
   it('refuses a coordinator with no registry record — 403 unknown-sender, where the stamp once read "absence permits" (D-5298)', async () => {
@@ -315,7 +315,7 @@ describe('POST /api/runs', () => {
     // is the transient 502 and an empty one is `project-mismatch`.
     const home = mkTmp('ccrc-runs-');
     const EMPTY_PROJECT_COORD = 'ccrc-pwa-coordinator-empty';
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });   // present, but reads UNREADABLE below
+    seed(home, CLAIMED_BY, { project: 'project-n' });   // present, but reads UNREADABLE below
     seed(home, EMPTY_PROJECT_COORD, { project: '', child: '' });   // present, zero bytes
     const io = unreadableField(CLAIMED_BY, 'project');
     const { run } = makeRunner(home);
@@ -3768,13 +3768,26 @@ describe('the hold reason', () => {
     // too; and `'program:'` as a whole quoted token is caught, while
     // `"program:name wave:2/4"` (the composer's placeholder, a prose example)
     // is not, because the quote must close immediately after the colon.
+    //
+    // ONE SANCTIONED READER since D-6091 (fleet capacity W1-1): `programmeHoldOf` in `coord/rundefs.ts` reads the
+    // text back through `HOLD_REASON_PATTERN`, so the run-done policy can tell a programme's hold from an operator's.
+    // It is cut out of its file before the scan, and nothing else in either ring may parse one. Run-awareness still
+    // comes from coord.db: a `run:` id is only looked up there (its state), never trusted as state itself.
+    const sanctioned = /^export const programmeHoldOf = [\s\S]*?^};$/m;
+    let cut = 0;
     for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
       for (const f of sourcesUnder(dir)) {
-        const src = readFileSync(f, 'utf8');
+        let src = readFileSync(f, 'utf8');
+        if (f === path.join(repoRoot, 'server', 'src', 'coord', 'rundefs.ts')) {
+          expect(sanctioned.test(src), 'programmeHoldOf is where the exemption says').toBe(true);
+          src = src.replace(sanctioned, '');
+          cut++;
+        }
         expect(/['"`](?:run|program):['"`]|run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+    expect(cut, 'the exemption cut exactly one file').toBe(1);
   });
 });
 

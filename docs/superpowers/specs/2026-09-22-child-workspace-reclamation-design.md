@@ -1,6 +1,6 @@
 # Child-workspace reclamation — the fleet closes the loop it has never closed
 
-**Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket CCR-15 ("Reclamation policy: the fleet can act on
+**Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket #166 ("Reclamation policy: the fleet can act on
 idle and finished workspaces"). Supersedes nothing; **narrows** two standing rulings and **satisfies** a
 third that has been open since 2026-08-11. Implementation rides nine waves (§8), agent-first; wave 7 is the temp-root collector.
 
@@ -2048,7 +2048,7 @@ both new verbs have a lawful grantable form.
   `[[ -z "$resumed" ]]`, and the comment at `:14183-14185` states the safety argument explicitly: it is safe
   only because `cmd_ws_archive` writes the marker *after* both. Nothing writes that marker for a child.
 
-**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4599-4600`). Claims
+**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4601-4602`). Claims
 are per-connection, client-re-stated, TTL-swept and never persisted.
 
 **PR sweep cadence.** `PR_SWEEP_MS = 120_000`; `PR_SWEEP_ACTIVE_MS = 30_000`, the latter only while some

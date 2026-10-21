@@ -17,7 +17,8 @@
  *     line into indented rows) a shape that reaches the end of its row also masks the leading token run of the next
  *     row, and on through every row that run fills; and a row whose last run has begun a shape (or ends in a prefix
  *     of one that the next row completes) is joined to the next indented row's leading run before the shapes are
- *     matched, so a key wrapped before its first row could match is matched whole (D-5995).
+ *     matched, so a key wrapped before its first row could match is matched whole; the shapes are matched on the
+ *     joined text and on the text as drawn, so a join never hides a key that begins the joined row (D-5995).
  *   - EXACT BYTES. A `compatible` key has no shape, so each lane secret has a fingerprint row (D-5996): the secret
  *     with its trailing `=` stripped, `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ that)`, and its byte length,
  *     computed on the box and stored in `secret_fingerprints` with the box-token generation it was keyed with. A
@@ -67,6 +68,9 @@ const DRAWER_HELD_MAX = RUN_MAX_BYTES + 1024;
 const REKEY_FIRST_MS = 1_000;
 const REKEY_MAX_MS = 600_000;
 const MAX_PREVIOUS_KEYS = 4;
+/** How long a fingerprint write waits on a locked coord.db before it is held and retried: `ingest` runs on the event
+ *  loop, so the connection's own 5 s timeout would stall every request behind it (D-5995 (10); accounts plan Task A12). */
+export const INGEST_BUSY_MS = 50;
 
 /** One fingerprint row as the table holds it. */
 export interface FingerprintRow { readonly laneId: string; readonly fp: string; readonly gen: string }
@@ -374,42 +378,47 @@ function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): { spans
   for (const sep of ['', '\0'] as const) {
     if (sep === '\0' && !hasEsc) break;   // with no escape the two views are one
     const v = viewOf(s, sep);
-    const j = rows ? joinWraps(v.t) : null;
-    const t = j === null ? v.t : j.t;
-    if (!SHAPE_HINT.test(t)) continue;
-    /** A span of `t` as original spans: split at each joined seam, so a row end between its rows is kept. */
-    const put = (a: number, b: number): void => {
-      if (j === null) { spans.push(spanIn(v, a, b)); return; }
-      let p = a;
-      for (let k = firstSeamAfter(j.seams, a); k < j.seams.length && j.seams[k]! < b; k++) {
-        spans.push(spanIn(v, j.map[p]!, j.map[j.seams[k]! - 1]! + 1));
-        p = j.seams[k]!;
-      }
-      spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
-    };
-    const r = rows ? new Rows(t) : null;
-    for (const re of masks) {
-      re.lastIndex = 0;
-      for (let m = re.exec(t); m !== null; m = re.exec(t)) {
-        if (m[0].length === 0) { re.lastIndex++; continue; }
-        let end = m.index + m[0].length;
-        put(m.index, end);
-        // A match across a joined row end already ran through every row its run fills: the join chain stopped at the
-        // row the value ends on.
-        if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
-        // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
-        // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
-        const full = r.length(m.index);
-        for (let first = true; ; first = false) {
-          if (!first && r.length(end - 1) < full) break;
-          const next = continuationAfter(t, end);
-          if (next === null) {
-            TEXT_END.lastIndex = end;
-            if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
-            break;
+    const joined = rows ? joinWraps(v.t) : null;
+    // The joined text AND the text as drawn (D-5995): a join glues a run that has begun a shape and matches none (a
+    // base64 JSON blob's `eyJ…`, a name like `sk-v1.py`) to the next row's leading run, so a key that begins that row
+    // loses its left boundary in the joined text; the text as drawn keeps it. The union of both is masked.
+    for (const j of joined === null ? [null] : [joined, null]) {
+      const t = j === null ? v.t : j.t;
+      if (!SHAPE_HINT.test(t)) continue;
+      /** A span of `t` as original spans: split at each joined seam, so a row end between its rows is kept. */
+      const put = (a: number, b: number): void => {
+        if (j === null) { spans.push(spanIn(v, a, b)); return; }
+        let p = a;
+        for (let k = firstSeamAfter(j.seams, a); k < j.seams.length && j.seams[k]! < b; k++) {
+          spans.push(spanIn(v, j.map[p]!, j.map[j.seams[k]! - 1]! + 1));
+          p = j.seams[k]!;
+        }
+        spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
+      };
+      const r = rows ? new Rows(t) : null;
+      for (const re of masks) {
+        re.lastIndex = 0;
+        for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+          if (m[0].length === 0) { re.lastIndex++; continue; }
+          let end = m.index + m[0].length;
+          put(m.index, end);
+          // A match across a joined row end already ran through every row its run fills: the join chain stopped at the
+          // row the value ends on.
+          if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
+          // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
+          // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
+          const full = r.length(m.index);
+          for (let first = true; ; first = false) {
+            if (!first && r.length(end - 1) < full) break;
+            const next = continuationAfter(t, end);
+            if (next === null) {
+              TEXT_END.lastIndex = end;
+              if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
+              break;
+            }
+            put(next[0], next[1]);
+            end = next[1];
           }
-          put(next[0], next[1]);
-          end = next[1];
         }
       }
     }
@@ -658,38 +667,103 @@ export class SecretMasker {
     return this.epoch;
   }
 
-  /** Stops the re-key retries (a test, or a server closing). */
+  /** Stops the re-key retries and a held offer's (a test, or a server closing). */
   close(): void {
     if (this.rekeyTimer !== null) clearTimeout(this.rekeyTimer);
     this.rekeyTimer = null;
+    if (this.heldTimer !== null) clearTimeout(this.heldTimer);
+    this.heldTimer = null;
   }
 
-  /** Writes the CURRENT generation's fingerprints (A12's `reloadRoster` calls it with every answer's
+  /** Writes the CURRENT generation's fingerprints (A12's `reloadRoster` calls it, through `offer`, with every answer's
    *  `fingerprints`, and the re-key lands here). An answer keyed with any other generation is refused and changes
-   *  nothing (D-5995). Rows of every other generation are deleted in the same transaction, and the previous tokens
-   *  are forgotten. True: it landed. */
+   *  nothing (D-5995). Each lane the answer NAMES has every row of every generation replaced by the answer's; a lane
+   *  it does not name keeps its rows, and the previous token that keys them is kept while they last, so a re-key
+   *  answered without one lane (its secret file unreadable at that moment) never unmasks that lane's key (D-5995 (10),
+   *  D-6057 (2)). True: it landed. Throws when coord.db stays locked past `INGEST_BUSY_MS`. */
   ingest(answer: FingerprintAnswer): boolean {
     this.syncKeys();
     const cur = this.keys[0];
     if (cur === undefined || this.db === null || answer.gen !== cur.gen) return false;
     const at = this.now();
-    const db = this.db;
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      // Every other generation's rows go; each lane named here has its current rows replaced by this answer's.
-      db.prepare('DELETE FROM secret_fingerprints WHERE gen <> ?').run(cur.gen);
-      const del = db.prepare('DELETE FROM secret_fingerprints WHERE gen = ? AND laneId = ?');
+    this.write((db) => {
+      const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
       const ins = db.prepare('INSERT OR REPLACE INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)');
-      for (const lane of new Set(answer.rows.map((r) => r.laneId))) del.run(cur.gen, lane);
+      for (const lane of new Set(answer.rows.map((r) => r.laneId))) del.run(lane);
       for (const r of answer.rows) if (validRow(r)) ins.run(r.laneId, r.fp, cur.gen, r.len, at);
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
-    this.keys = [cur];
-    this.load();
+    });
     return true;
+  }
+
+  /** Deletes every row of every lane outside `keep` (a lane the roster no longer has, or one whose entry holds no
+   *  secret): A12's `reloadRoster` calls it, through `offer`. Throws as `ingest` does. */
+  retain(keep: ReadonlySet<string>): void {
+    if (this.db === null) return;
+    const lanes = (this.db.prepare('SELECT DISTINCT laneId FROM secret_fingerprints').all() as unknown as { laneId: string }[])
+      .map((r) => r.laneId).filter((l) => !keep.has(l));
+    if (lanes.length === 0) return;
+    this.write((db) => {
+      const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
+      for (const l of lanes) del.run(l);
+    });
+  }
+
+  /**
+   * THE ROSTER'S ONE ENTRY (A12's `reloadRoster`; D-6057 (2)): ingests `answer` (when it carries fingerprints) and prunes every
+   * lane outside `keep`, never blocking the event loop on a locked coord.db for more than `INGEST_BUSY_MS`. A write
+   * that finds the database locked is held (the latest offer replaces an older held one, whose prune it subsumes and
+   * whose fingerprints it carries forward when it names none) and retried on an unref'd timer with the re-key's
+   * backoff until it lands. Never throws.
+   */
+  offer(answer: FingerprintAnswer | null, keep: ReadonlySet<string>): void {
+    const held = this.held;
+    this.held = { answer: answer ?? held?.answer ?? null, keep };
+    if (this.heldTimer === null) this.flushHeld();
+  }
+
+  private held: { answer: FingerprintAnswer | null; keep: ReadonlySet<string> } | null = null;
+  private heldTimer: ReturnType<typeof setTimeout> | null = null;
+  private heldDelay = REKEY_FIRST_MS;
+
+  private flushHeld(): void {
+    const h = this.held;
+    if (h === null) return;
+    try {
+      if (h.answer !== null) this.ingest(h.answer);
+      this.retain(h.keep);
+      this.held = null;
+      this.heldDelay = REKEY_FIRST_MS;
+    } catch {
+      this.log('[mask] coord.db was busy; the roster\'s fingerprints are held and retried');
+      const delay = Math.round(this.heldDelay * (0.75 + Math.random() * 0.5));
+      this.heldDelay = Math.min(this.heldDelay * 2, REKEY_MAX_MS);
+      this.heldTimer = setTimeout(() => { this.heldTimer = null; this.flushHeld(); }, delay);
+      this.heldTimer.unref?.();
+    }
+  }
+
+  /** One write transaction on coord.db under a short busy timeout (`INGEST_BUSY_MS`), the connection's own restored
+   *  after, then the in-memory mirror reloaded and the previous keys trimmed to those whose rows remain. A
+   *  `BEGIN IMMEDIATE` that stays busy throws and changes nothing (D-5995 (10)). */
+  private write(body: (db: DatabaseSync) => void): void {
+    const db = this.db!;
+    const prior = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number } | undefined)?.timeout ?? 0;
+    db.exec(`PRAGMA busy_timeout = ${INGEST_BUSY_MS}`);
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        body(db);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    } finally {
+      db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(prior))}`);
+    }
+    this.load();
+    const cur = this.keys[0];
+    this.keys = this.keys.filter((k) => k === cur || this.rows.has(k.gen));
   }
 
   /** The keys whose generation has rows to match. */

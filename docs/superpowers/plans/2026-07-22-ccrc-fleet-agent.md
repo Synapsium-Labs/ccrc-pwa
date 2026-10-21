@@ -104,7 +104,7 @@ Config additions (`config.ts`): `CCRC_FLEET` ('local'|'remote', default 'local')
 **Interfaces:** Consumes T3's `state`/`onStateChange`. Produces `/api/fleet/health` → `{mode:'local'|'remote', connected, downSince}`; `POST /api/fleet/reboot` → 202 `{ok:true}` | 409 (mode local) | 502 (Hetzner error).
 - `fleetstate.ts`: on each successful full fleet poll in remote mode, persist snapshot to `~/.ccrc/state-cache.json` (atomic tmp+rename); on `connected=false`, fleet API serves the cached snapshot with `stale: true` + `downSince`.
 - Reboot: guard `mode==='remote'`; POST Hetzner `servers/${CCRC_FLEET_SERVER_ID}/actions/reboot` with `CCRC_HETZNER_TOKEN` (undici fetch); no token/id configured → 501.
-- PWA: banner when `stale` — "Fleet host unreachable since <t>" + Reboot button with confirm dialog whose copy names the collateral: "Reboots the whole fleet box (also restarts the rp-llm services on it)". Poll /api/fleet/health with existing polling util.
+- PWA: banner when `stale` — "Fleet host unreachable since <t>" + Reboot button with confirm dialog whose copy names the collateral: "Reboots the whole fleet box (also restarts the project-j services on it)". Poll /api/fleet/health with existing polling util.
 - Tests: cache write+serve-stale path (inject fake state), reboot route guards (local→409, no-token→501, happy→202 with fetch mocked), PWA banner render + confirm flow (existing component-test patterns).
 - Commit: `feat(ccrc): degraded mode — snapshot cache, unreachable banner, fleet-host reboot`
 

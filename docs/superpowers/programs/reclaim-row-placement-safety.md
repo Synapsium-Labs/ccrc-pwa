@@ -2,7 +2,7 @@
 
 Plan: `docs/superpowers/plans/2026-10-01-reclaim-row-placement-safety.md` (created only after the run-open deviation allocation)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: a fresh child
-A one-wave safety prerequisite to `reclaim-entry-safety` and then `child-reclamation` wave 4 (CCR-15).
+A one-wave safety prerequisite to `reclaim-entry-safety` and then `child-reclamation` wave 4 (#166).
 
 **What this program is.** Child-reclamation wave 4's Fix Round 3 rereview measured a pre-existing gap in
 R31's cross-row ownership proof. A competing registry row can have entered a child through an ancestor symlink,

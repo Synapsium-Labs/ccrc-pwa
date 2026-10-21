@@ -1150,6 +1150,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/fleet/fleet.css',
       'src/screens/digest.css',   // the daily digest screen (D-5300)
+      'src/screens/settings/settings.css', // Settings' frame (settings Task R2b1, D-5504): layout only, no colour
       'src/session/chat.css',
       'src/skins/instrument/instrument.css', // W2 Task S2b: header-only until S9
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
@@ -1165,7 +1166,8 @@ describe('every stylesheet under src/ is audited', () => {
   // each with only its header, so the element guard has a sheet to find in
   // each skin; S4b and S9 fill them). Exact, both ways: a listed sheet that
   // gains a rule leaves this list, and is then held to the vacuity check.
-  const HEADER_ONLY = ['src/skins/instrument/instrument.css', 'src/skins/refined/refined.css'];
+  // refined.css left this list with its first rules (W2 Task S7c, the session chrome; layout only).
+  const HEADER_ONLY = ['src/skins/instrument/instrument.css'];
 
   it.each(stylesheets(ROOT).filter((rel) => !HEADER_ONLY.includes(rel)))('parses rules out of %s', (rel) => {
     expect(rulesOf(ROOT, rel).length).toBeGreaterThan(0);
@@ -1971,8 +1973,17 @@ describe('the /settings shell and its door are measured, not left in the blind s
     return ink as string;
   };
 
+  // Settings Task R2b1 (D-5504): the screen's <h1> is `PageScaffold`'s, so `.settings-title` and the shell's
+  // `.settings-screen`/`.settings-head` retired with their rules; a registration left behind would ground nothing.
+  it('the retired shell rules are gone, and so is their registration', () => {
+    for (const key of ['.settings-title', '.settings-screen', '.settings-head']) {
+      expect(fleetRules.some((r) => ruleKey(r) === key), key).toBe(false);
+      expect(INHERITED_GROUNDS[key], key).toBeUndefined();
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+    }
+  });
+
   it.each([
-    ['.settings-title'],
   ])('%s is registered on the page and measured in both themes', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);

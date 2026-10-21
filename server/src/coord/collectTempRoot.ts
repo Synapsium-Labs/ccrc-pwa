@@ -8,6 +8,7 @@ import type { CcdResult } from '../lifecycle.js';
 import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import { CHILD_BIRTH_SKEW_MS } from './childSpent.js';
 import {
   COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, parseCollectAudit, parseCollectResult,
@@ -199,10 +200,12 @@ export type CollectJobOutcome =
   | { readonly kind: 'acted'; readonly audit: CollectAnswer<CollectAuditCollectable>; readonly composedMono: number;
       readonly result: CollectResult; readonly arrived: CollectClock };
 
-/** The learning audit's answer: not asked, because the box cannot answer it, or answered, with its generations and
- *  its arrival. */
+/** The learning audit's answer: not asked, because the box cannot answer it; `id-refused`, because the id is not one
+ *  the collector may name (`isTmpRootId`, asked before any argv: the twin of the act's step-1 check), a DISTINCT arm
+ *  and never `not-asked`, whose caller clears every pair; or answered, with its generations and its arrival. */
 export type CollectLearnAnswer =
   | { readonly kind: 'not-asked'; readonly why: 'caps' }
+  | { readonly kind: 'id-refused' }
   | { readonly kind: 'answered'; readonly audit: CollectAnswer<CollectAudit> };
 
 // ── the words this file spells, for the coordination scanner ─────────────────
@@ -373,7 +376,7 @@ export async function collectSwitches(io: Pick<FleetIO, 'readdirMeasured'>, regi
   if (!listed.ok) return { paused: true, why: 'unlistable', reason: listed.reason };
   const names = listed.entries;
   const marker = names.includes(COLLECT_LANE_LIVE_MARKER);
-  return names.includes(RECLAIM_PAUSE_MARKER) ? { paused: true, why: 'raised', marker } : { paused: false, marker };
+  return readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' ? { paused: true, why: 'raised', marker } : { paused: false, marker };
 }
 
 // ── the switch's control state and the marker's latch (path-identity spec 2026-10-12 §5.2, §5.4) ──────────────
@@ -469,10 +472,14 @@ async function collectAudit(
 }
 
 /** The lane's LEARNING audit (spec §5.10). It is read-only on the box: the audit journals a terminal refusal and
- *  nothing else. It sits behind the capability, as the act does. The caller runs it on the id's queue key. */
+ *  nothing else. It asks the temp-root id predicate FIRST, the twin of the act's step-1 check: the population gated the
+ *  id, but path-identity W2 widened that population to an id a compare-and-drop aside is for, so the learning audit no
+ *  longer relies on that gate alone. Then it sits behind the capability, as the act does. The caller runs it on the
+ *  id's queue key. */
 export async function learnCollect(
   deps: Pick<CollectTempRootDeps, 'runCcd' | 'fleetState' | 'lane'>, id: string,
 ): Promise<CollectLearnAnswer> {
+  if (!isTmpRootId(id)) return { kind: 'id-refused' };
   const audit = await collectAudit(deps, id);
   return 'notAsked' in audit ? { kind: 'not-asked', why: 'caps' } : { kind: 'answered', audit };
 }

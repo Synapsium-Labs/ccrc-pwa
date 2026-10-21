@@ -2,14 +2,17 @@
 // the screen-level api.interrupt wiring (incl. the 409 not-busy toast), and
 // the visualViewport keyboard-inset hook.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { SessionScreen, chatPulsing, useKeyboardInsets } from '../src/screens/SessionScreen';
+// W2 Task S2d: the ⋯ menu's items and the PR cap are command doors, run by the one layer `app.tsx` mounts above the
+// screen; a case that drives them through `SessionScreen` mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
@@ -49,14 +52,14 @@ const fakeSocket = (): WebSocket =>
  *  that takes one. The reap tests below use it for the session, the audit
  *  fixture and the URL alike, because that is the only combination the
  *  server can actually serve (fix round 3, verifier P4). */
-const WS_ID = 'OpenClawHetzner-quiet-basin';
+const WS_ID = 'ProjectC-quiet-basin';
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', ...patch }));
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/root/projects/ProjectC', ...patch }));
 
-/** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
+/** Full HeaderHostProps with no-op callbacks — build it, don't render it,
  *  so tests that need to compose SessionHeader alongside sibling elements
  *  (the Escape-while-typing case) can render for themselves. */
-const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
+const props = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => ({
   session: fleetSession(),
   status: 'idle',
   statusUpdatedAt: null,
@@ -74,9 +77,9 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   ...over,
 });
 
-const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => {
+const renderHeader = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => {
   const p = props(over);
-  render(<SessionHeader {...p} />);
+  render(<SessionHeaderHost {...p} />);
   return p;
 };
 
@@ -204,26 +207,26 @@ describe('SessionHeader', () => {
     // Deep link, no session record yet: there IS no bucket, so the stream's
     // status is translated into the same vocabulary rather than guessed at.
     renderHeader({ session: null, status: 'busy', statusUpdatedAt: Date.now() - 1000,
-      fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
+      fallback: { title: 'ProjectC', wrapper: 'claude' } });
     expect(screen.getByRole('img', { name: 'working' })).toBeInTheDocument();
   });
 
   it('shows the clean project name, ignoring the auto-derived session name', () => {
-    // Even when Claude Code supplies a derived name like "openclawhetzner-8f",
-    // the header shows the project ("OpenClawHetzner"), not the noisy name.
-    renderHeader({ session: fleetSession({ name: 'openclawhetzner-8f' }) });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    // Even when Claude Code supplies a derived name like "projectc-8f",
+    // the header shows the project ("ProjectC"), not the noisy name.
+    renderHeader({ session: fleetSession({ name: 'projectc-8f' }) });
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
     cleanup();
     renderHeader({ session: fleetSession({ name: null }) });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
   });
 
   it('falls back to the id-derived identity before the fleet snapshot lands', () => {
     renderHeader({
       session: null,
-      fallback: { title: 'OpenClawHetzner', wrapper: 'claude' },
+      fallback: { title: 'ProjectC', wrapper: 'claude' },
     });
-    expect(screen.getByRole('heading', { name: 'OpenClawHetzner' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'ProjectC' })).toBeInTheDocument();
     expect(screen.getByText('team·max')).toBeInTheDocument();
   });
 
@@ -252,13 +255,13 @@ describe('SessionHeader', () => {
 describe('interrupt control', () => {
   it('renders the esc keycap on touch, where there is no Escape key', () => {
     stubPointer(false);
-    render(<SessionHeader {...props({ status: 'busy' })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy' })} />);
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 
   it('hides the keycap where a real keyboard exists', () => {
     stubPointer(true);
-    render(<SessionHeader {...props({ status: 'busy' })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy' })} />);
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 
@@ -267,7 +270,7 @@ describe('interrupt control', () => {
     // pass a change that silently removes the ability to interrupt.
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).toHaveBeenCalled();
     // D-5237: the physical key names itself as the interrupt's source.
@@ -277,7 +280,7 @@ describe('interrupt control', () => {
   it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<SessionHeader {...props({ status: 'idle', onInterrupt })} />);
+    render(<SessionHeaderHost {...props({ status: 'idle', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).not.toHaveBeenCalled();
   });
@@ -285,7 +288,7 @@ describe('interrupt control', () => {
   it('ignores Escape while typing — it dismisses, it does not interrupt', () => {
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<><textarea data-testid="box" /><SessionHeader {...props({ status: 'busy', onInterrupt })} /></>);
+    render(<><textarea data-testid="box" /><SessionHeaderHost {...props({ status: 'busy', onInterrupt })} /></>);
     const box = screen.getByTestId('box');
     box.focus();
     fireEvent.keyDown(box, { key: 'Escape' });
@@ -297,7 +300,7 @@ describe('interrupt control', () => {
 
 describe('SessionScreen interrupt wiring', () => {
   const makeStores = () => {
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -311,12 +314,34 @@ describe('SessionScreen interrupt wiring', () => {
   it('the stop keycap calls api.interrupt with the session id and its source (D-5237)', () => {
     const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
     const { store, fleet } = makeStores();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     act(() => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner', 'keycap');
+    // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
+    expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
+  });
+
+  it('the composer\'s send slot is Stop while busy and calls api.interrupt with keycap; idle, the slot is Send (W2 Task S7b, D-5471)', () => {
+    const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    const { store, fleet } = makeStores();
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
+    act(() => {
+      store.setState({ uuid: 'u1', status: 'busy' });
+    });
+    const head = document.querySelector<HTMLElement>('.chat-head')!;
+    const slot = screen.getAllByRole('button', { name: 'Stop' }).filter((b) => !head.contains(b));
+    expect(slot).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+    fireEvent.click(slot[0]!);
+    expect(spy).toHaveBeenCalledWith('claude:ProjectC', 'keycap');
+    act(() => {
+      store.setState({ status: 'idle' });
+      fleet.setState({ sessions: [fleetSession({ status: 'idle' })] });
+    });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('button', { name: 'Stop' }).filter((b) => !head.contains(b))).toHaveLength(0);
   });
 
   it('a 409 not-busy answer surfaces as a quiet toast', async () => {
@@ -326,19 +351,20 @@ describe('SessionScreen interrupt wiring', () => {
     const { store, fleet } = makeStores();
     render(
       <>
-        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
     );
     act(() => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too (D-5471).
+    fireEvent.click(within(document.querySelector<HTMLElement>('.chat-head')!).getByRole('button', { name: 'Stop' }));
     expect(await screen.findByText(/nothing to stop/)).toBeInTheDocument();
   });
 });
 
-// Fix round 1, finding 1: the dev0-in-cyan bug (see SessionScreen.tsx's own
+// Fix round 1, finding 1: the lab0-in-cyan bug (see SessionScreen.tsx's own
 // comment on `acct`) had NO regression coverage — `grep -rn "data-acct"
 // pwa/test` returned nothing before this block existed. Pins both the general
 // case (a non-cyan account stamps its OWN hue, not cyan) and finding 4's
@@ -346,14 +372,14 @@ describe('SessionScreen interrupt wiring', () => {
 // that would leave `--acct-active` at its cyan default).
 describe('SessionScreen account accent (data-acct)', () => {
   const makeStores = (roster: typeof TEST_ROSTER | []) => {
-    const store = createSessionStore('claude2:OpenClawHetzner', {
+    const store = createSessionStore('claude9:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
-        sessions: [fleetSession({ id: 'claude2:OpenClawHetzner', wrapper: 'claude2' })],
+        sessions: [fleetSession({ id: 'claude9:ProjectC', wrapper: 'claude9' })],
         conn: 'open',
         roster,
       });
@@ -364,9 +390,9 @@ describe('SessionScreen account accent (data-acct)', () => {
   it("stamps the session's own hue — a non-cyan account never renders in claude's cyan", () => {
     const { store, fleet } = makeStores(TEST_ROSTER);
     const { container } = render(
-      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+      <SessionScreen id="claude9:ProjectC" store={store} fleet={fleet} />,
     );
-    // claude2 -> violet (rosterFixture.ts). Cyan would mean the old
+    // claude9 -> violet (rosterFixture.ts). Cyan would mean the old
     // string-parsed lookup (or its regression) is back.
     expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'violet');
   });
@@ -374,7 +400,7 @@ describe('SessionScreen account accent (data-acct)', () => {
   it("stamps 'unknown', never cyan, before the roster has arrived", () => {
     const { store, fleet } = makeStores([]);
     const { container } = render(
-      <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
+      <SessionScreen id="claude9:ProjectC" store={store} fleet={fleet} />,
     );
     expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'unknown');
   });
@@ -385,7 +411,7 @@ describe('SessionScreen account accent (data-acct)', () => {
 // own — this exercises the store round trip `renderHeader` above cannot.
 describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => {
   const makeStores = () => {
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -400,17 +426,17 @@ describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => 
     const { store, fleet } = makeStores();
     act(() => {
       fleet.getState().setProjects([
-        { name: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', repo: { state: 'named', slug: 'Synapsium-Labs/OpenClawHetzner' } },
+        { name: 'ProjectC', workdir: '/root/projects/ProjectC', repo: { state: 'named', slug: 'example-org/example-repo' } },
       ]);
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
-    expect(screen.getByText('Synapsium-Labs/OpenClawHetzner')).toBeInTheDocument();
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
+    expect(screen.getByText('example-org/example-repo')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
 
   it('renders no repo chip when the store has never read `/api/projects` (D-3013)', () => {
     const { store, fleet } = makeStores();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(document.querySelector('.chip--repo')).toBeNull();
   });
 });
@@ -434,15 +460,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           //
           // Fix round 3, verifier P4: the previous note here justified the
           // change by calling the old `id: 'demo'` "a response ccd cannot
-          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // produce" — while substituting 'claude:ProjectC', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
           // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`
           // (ccd:738), and reap only ever applies to a workspace session.
-          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
-          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          id: 'ProjectC-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'ProjectC', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
@@ -464,7 +490,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         conn: 'open',
       });
     });
-    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={WS_ID} store={store} fleet={fleet} /></>);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     expect(await screen.findByText('/w/quiet-basin')).toBeInTheDocument();
@@ -487,15 +513,15 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           //
           // Fix round 3, verifier P4: the previous note here justified the
           // change by calling the old `id: 'demo'` "a response ccd cannot
-          // produce" — while substituting 'claude:OpenClawHetzner', which ccd
+          // produce" — while substituting 'claude:ProjectC', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
           // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`
           // (ccd:738), and reap only ever applies to a workspace session.
-          id: 'OpenClawHetzner-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
-          project: 'OpenClawHetzner', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+          id: 'ProjectC-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
+          project: 'ProjectC', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
           dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
           clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 2,
           pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },
@@ -521,7 +547,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         conn: 'open',
       });
     });
-    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={WS_ID} store={store} fleet={fleet} /></>);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-basin/ }));
@@ -600,7 +626,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
 
   it("the dead banner's Restart is disabled and never posts /ensure", () => {
     const spy = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore('claude:ProjectC', { makeSocket: fakeSocket });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
@@ -608,7 +634,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
         conn: 'open',
       });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     const btn = screen.getByRole('button', { name: /Restart session/ });
     expect(btn).toBeDisabled();
     expect(btn.getAttribute('title')).toContain('x');
@@ -622,7 +648,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // send re-reads the fault at the moment of firing, and the refusal is
     // named rather than swallowed.
     const spy = vi.spyOn(api, 'archive').mockResolvedValue(null);
-    const store = createSessionStore('claude:OpenClawHetzner', {
+    const store = createSessionStore('claude:ProjectC', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
@@ -632,7 +658,8 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     });
     render(
       <>
-        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <CommandLayer openNewSession={() => {}} />
+        <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -661,34 +688,34 @@ describe('breadcrumb', () => {
     // already renders this session's raw branch text, so a bare getByText for
     // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
     // crumb span, which is what this test is actually about.
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
-      project: 'custom-tools', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
+      project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
     }) })} />);
-    expect(screen.getByText('custom-tools')).toBeInTheDocument();
+    expect(screen.getByText('project-d')).toBeInTheDocument();
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
   });
 
   it('distinguishes two workspaces of one project — the whole point', () => {
     // Same ambiguity as above: the branch metachip duplicates the crumb text,
     // so assert against the crumb element specifically.
-    const { container, unmount } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container, unmount } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'a', project: 'demo', workspace: 'quiet-basin', branch: 'ws/quiet-basin' }) })} />);
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
     unmount();
-    const { container: container2 } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container: container2 } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'b', project: 'demo', workspace: 'still-cove', branch: 'ws/still-cove' }) })} />);
     expect(container2.querySelector('.chat-crumb')).toHaveTextContent('ws/still-cove');
   });
 
   it('shows the project alone for a main checkout', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
     expect(screen.getByText('demo')).toBeInTheDocument();
     expect(container.querySelector('.chat-crumb')).toBeNull();
   });
 
   it('prefers a chosen name over the branch, as the fleet line does', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
     expect(screen.getByText('refactor-auth')).toBeInTheDocument();
   });
@@ -697,7 +724,7 @@ describe('breadcrumb', () => {
   // `branch` and the crumb prints the exact same string the branch metachip
   // would — a few pixels below it. The chip must not repeat it.
   it('suppresses the branch chip when it would repeat the crumb', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
     expect(container.querySelector('.metachip--branch')).toBeNull();
@@ -708,7 +735,7 @@ describe('breadcrumb', () => {
   });
 
   it('keeps the branch chip once it differs from the crumb — two distinct elements', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
     const crumb = container.querySelector('.chat-crumb');
     const chip = container.querySelector('.metachip--branch');
@@ -723,7 +750,7 @@ describe('breadcrumb', () => {
     // render exactly as it always has. (Not the common case in practice —
     // `branch` is usually only parsed for worktree sessions — but the fix
     // must not regress it if it ever occurs.)
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: null, name: null, branch: 'main', id: 'demo' }) })} />);
     expect(container.querySelector('.chat-crumb')).toBeNull();
     expect(container.querySelector('.metachip--branch')).toHaveTextContent('main');
@@ -732,12 +759,12 @@ describe('breadcrumb', () => {
 
 describe('the PR cap in the header', () => {
   it('renders for a workspace session, whatever its pr value is', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
   });
 
   it('does NOT render for a project main checkout', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: null, pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: null, pr: null }) })} />);
     expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
   });
 
@@ -747,7 +774,7 @@ describe('the PR cap in the header', () => {
   // (status 'dead' — tmux gone) both still get the cap. Gating visibility on
   // either would hide the retry affordance behind a control that isn't there.
   it('renders during a gh outage — phase unknown is not phase absent', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin',
       pr: {
         phase: 'unknown', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -763,7 +790,7 @@ describe('the PR cap in the header', () => {
   });
 
   it('renders while the agent link is down (status dead)', () => {
-    render(<SessionHeader {...props({
+    render(<SessionHeaderHost {...props({
       status: 'dead',
       session: fleetSession({ workspace: 'quiet-basin', status: 'dead', pr: null }),
     })} />);
@@ -774,7 +801,7 @@ describe('the PR cap in the header', () => {
     // PrSheet fires a one-shot GET on open; stub it so this stays a unit test
     // rather than reaching a real network.
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     expect(screen.queryByText(/not checked yet/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/pull request/i));
     expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
@@ -782,7 +809,7 @@ describe('the PR cap in the header', () => {
 
   it('closes PrSheet (Task 16) via its own scrim, same as any other sheet', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     await screen.findByText(/not checked yet/i);
     fireEvent.click(screen.getByTestId('sheet-overlay'));
@@ -796,7 +823,7 @@ describe('the PR cap in the header', () => {
       phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
       ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
     };
-    render(<SessionHeader {...props({
+    render(<SessionHeaderHost {...props({
       onReapWorkspace,
       session: fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr }),
     })} />);
@@ -809,7 +836,7 @@ describe('the PR cap in the header', () => {
   it('sits after the ⋯ cap and before esc, which keeps the outer edge', () => {
     // esc is the interrupt and its position is muscle memory.
     stubPointer(false);
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin' }), status: 'busy' })} />);
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin' }), status: 'busy' })} />);
     const caps = [...container.querySelectorAll('.chat-head .keycap')].map((n) => n.className);
     expect(caps.findIndex((c) => c.includes('keycap--more')))
       .toBeLessThan(caps.findIndex((c) => c.includes('keycap--pr')));
@@ -820,7 +847,7 @@ describe('the PR cap in the header', () => {
 
 describe('archived chip', () => {
   it('says the session is archived and names the PR', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000,
       pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
@@ -831,7 +858,7 @@ describe('archived chip', () => {
   });
 
   it('renders no chip for a live session', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', archivedAt: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', archivedAt: null }) })} />);
     expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
   });
 
@@ -839,7 +866,7 @@ describe('archived chip', () => {
     // Pins the ternary's OTHER branch — the first test above only exercises
     // the "PR known" half, so a mutant collapsing both to one string would
     // survive it.
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000, pr: null,
     }) })} />);
     expect(screen.getByText('archived')).toBeInTheDocument();
@@ -848,7 +875,7 @@ describe('archived chip', () => {
   it('does not derive from pr.phase — a merged PR alone is not an archive', () => {
     // The context this chip exists for: a merged PR whose archive was
     // deferred (session busy, say) must not claim it was archived.
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: null,
       pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
@@ -859,8 +886,8 @@ describe('archived chip', () => {
 
 describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
   it('renders the repo unconditionally when it is known', () => {
-    renderHeader({ repo: 'Synapsium-Labs/custom-tools' });
-    expect(screen.getByText('Synapsium-Labs/custom-tools')).toBeInTheDocument();
+    renderHeader({ repo: 'example-org/example-repo' });
+    expect(screen.getByText('example-org/example-repo')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
   it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {
@@ -931,8 +958,8 @@ describe('the header before the first fleet frame lands', () => {
     // `SessionScreen` passes `fallback={{ title: project, wrapper }}` — both
     // derived from the id — and those arms had no case: the title would read
     // `…` and the account accent would be blank on a screen that knows both.
-    renderHeader({ session: null, fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
-    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
+    renderHeader({ session: null, fallback: { title: 'ProjectC', wrapper: 'claude' } });
+    expect(screen.getByText('ProjectC')).toBeInTheDocument();
   });
 
   it('and `…` when the caller has no fallback either', () => {
@@ -984,7 +1011,7 @@ describe('the Escape binding ignores every other key', () => {
     // kill the turn.
     stubPointer(true);
     const p = props({ status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     fireEvent.keyDown(document, { key: 'a' });
     fireEvent.keyDown(document, { key: 'Enter' });
     expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
@@ -1089,7 +1116,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     const p = props({ session: neutral, status: 'busy' });
     render(
       <>
-        <SessionHeader {...p} />
+        <SessionHeaderHost {...p} />
         <Sheet open onClose={onClose} title="a sheet"><button type="button">inside</button></Sheet>
       </>,
     );
@@ -1103,7 +1130,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('an Escape something earlier already handled (defaultPrevented) interrupts nothing', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     // What Radix's dismiss does: a document capture listener that prevents
     // the default and lets the event go on bubbling.
     const handled = (e: Event): void => { e.preventDefault(); };
@@ -1121,7 +1148,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     const p = props({ session: neutral, status: 'busy' });
     render(
       <>
-        <SessionHeader {...p} />
+        <SessionHeaderHost {...p} />
         <Sheet open onClose={vi.fn()} title="a sheet"><button type="button">inside</button></Sheet>
       </>,
     );
@@ -1134,7 +1161,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('with nothing open, Escape still interrupts, once', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
     expect(p.onInterrupt).toHaveBeenCalledTimes(1);
   });
@@ -1142,7 +1169,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('with focus in a textarea, Escape does not interrupt (unchanged)', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<><textarea data-testid="box" /><SessionHeader {...p} /></>);
+    render(<><textarea data-testid="box" /><SessionHeaderHost {...p} /></>);
     const box = screen.getByTestId('box');
     act(() => box.focus());
     fireEvent.keyDown(box, { key: 'Escape', code: 'Escape', keyCode: 27 });

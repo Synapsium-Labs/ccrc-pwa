@@ -1118,7 +1118,7 @@ describe('POST /api/updates/refresh announces what its poll listed (plan W3 Task
     expect(sent).toEqual([]);
     const r = await post(f.app, '/api/updates/refresh', {});
     expect(r.statusCode, r.body).toBe(200);
-    expect(sent.map((x) => [x.title, x.tag, x.url])).toEqual([['ccrc v0.0.10 is out', 'release-v0.0.10', '/settings']]);
+    expect(sent.map((x) => [x.title, x.tag, x.url])).toEqual([['ccrc v0.0.10 is out', 'release-v0.0.10', '/settings/updates']]);
     expect(f.coord.releases().find((x) => x.tag === 'v0.0.10')?.notifiedAt).toEqual(expect.any(Number));
   });
 });

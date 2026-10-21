@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { AUTO, INSTRUMENT, REFINED, SKINS, SKIN_STORAGE_KEY } from '@ccrc/ui';
 import { initSkin, setSkin } from '../src/lib/skin';
 import { SkinFieldset } from '../src/screens/SkinFieldset';
-import { AppearanceSection } from '../src/screens/SettingsScreen';
+import { AppearanceSection } from '../src/screens/settings/AppearanceSection';
 
 const root = document.documentElement;
 

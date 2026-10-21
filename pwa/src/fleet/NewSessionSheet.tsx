@@ -2,7 +2,7 @@
 // (shared AccountRow chips with limit gauges from GET /api/accounts).
 // Step 2: pick the project — searchable list from api.projects, with
 // registry projects first, most recently active on top. The confirm row
-// narrates the action in plain language ("Start OpenClawHetzner on
+// narrates the action in plain language ("Start project-c on
 // team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.

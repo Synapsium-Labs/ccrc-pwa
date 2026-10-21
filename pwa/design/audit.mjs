@@ -671,6 +671,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'every attention-state project-pool chip uses the same project-card ground as the base chip. The grouped selector changes the ink but still names no painted ancestor, so it needs its own registration',
   },
+  '.proj-children-part--needs-you': {
+    under: ['var(--bg-surface)'],
+    why: "D-6088: the `n needs you` count of a coordinator's folded-workers line, inside .proj-children-toggle on the project card's --bg-surface, the ground that rule's own entry names; its selector names no painted ancestor",
+  },
+  '.proj-card-last': {
+    under: ['var(--bg-surface)'],
+    why: "D-6088: a rolled-up project's `active <age>`, inside .proj-card-toggle beside .proj-card-stranded, on the project card's --bg-surface for the same reason: its selector names no painted ancestor",
+  },
   '.proj-card-stranded': {
     under: ['var(--bg-surface)'],
     why: 'the stranded count sits inside .proj-card-toggle, whose transparent background leaves the project card\'s --bg-surface behind it. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
@@ -827,9 +835,9 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
-  '.proj-released-toggle, .proj-archived-toggle': {
+  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle': {
     under: ['var(--bg-surface)'],
-    why: "the card's two fold toggles (workspace lifecycle spec §5.1), siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
+    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
   },
   '.proj-released-heading, .proj-released-note': {
     under: ['var(--bg-surface)'],
@@ -907,10 +915,8 @@ export const INHERITED_GROUNDS = {
   // design/contrast-check.mjs, which measures it in all twelve palettes for
   // every one of the five rather than for one of them. Worst 6.55 in
   // solarized-light.
-  '.settings-title': {
-    under: ['var(--bg-page)'],
-    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground. The chevron itself is `BackButton` now and its ink/ground pair moved to contrast-check.mjs's token contract; this <h1> is still a rule, so it is still grounded here",
-  },
+  // `.settings-title` RETIRED (settings Task R2b1, D-5504): the screen's <h1> is `PageScaffold`'s, a utility over
+  // the measured --ink-primary on --bg-page token pair, so no rule is left to ground.
   // `.settings-door` and `.settings-door:active` RETIRED from this registry
   // with the two header doors, which are @ccrc/ui's `Door` now.
   //

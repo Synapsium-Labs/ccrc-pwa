@@ -1,7 +1,8 @@
-import { createReadStream } from 'node:fs';
-import { lstat, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, mkdir, open, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
+import { laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** The agent's half of `server/src/io.ts`'s `failureFor` (D-1397) — the ONE place
  *  an errno becomes a `ReadFailure` on this side. Only a PROVEN `ENOENT` may
@@ -18,15 +19,47 @@ import type { ReadFailure } from '../../shared/agent-protocol.js';
 const failureFor = (e: unknown): ReadFailure =>
   (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
 
-/** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
-function readRange(file: string, start: number, end: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    createReadStream(file, { start, end: end - 1 })
-      .on('data', (c) => chunks.push(c as Buffer))
-      .on('end', () => resolve(Buffer.concat(chunks)))
-      .on('error', reject);
-  });
+/** `openRegular`'s answer: an open handle on a regular file and its size, or the failure word. */
+type Opened = { ok: true; fh: FileHandle; size: number } | { ok: false; reason: ReadFailure };
+
+/**
+ * THE ONE WAY A READ OP OPENS A FILE (accounts plan Task A12, after `readUpdateReport`'s precedent): `O_NONBLOCK`, so
+ * `open(2)` on a FIFO returns at once instead of waiting for a writer, then `fstat`, and anything that is not a regular
+ * file (a FIFO, a socket, a device) is `unreadable` and is closed UNREAD. The sign-in helper's FIFOs
+ * (`~/.cc-sessions/.auth/<id>.run/{in,out,in.child}`) sit inside the `.cc-sessions` read root: a plain `readFile` on
+ * `in` blocked a threadpool thread for as long as the helper held it open, and took the relayed code from the helper.
+ * `noFollow` adds `O_NOFOLLOW` for a lane-state file (`checkReadTarget`), so a symlink at its name is `unreadable`
+ * (ELOOP), never its target's bytes (D-5755 (13d)); and the open handle must still be the one regular file at that name,
+ * with no second name, in a real directory (`laneStateOpenHolds`, D-6058 (5)).
+ */
+async function openRegular(p: string, noFollow: boolean): Promise<Opened> {
+  let fh: FileHandle;
+  try {
+    fh = await open(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | (noFollow ? fsConstants.O_NOFOLLOW : 0));
+  } catch (e) {
+    return { ok: false, reason: failureFor(e) };
+  }
+  try {
+    const st = await fh.stat();
+    // A lane-state file must also be the one file at its name, with no second name, in a real directory (D-6058
+    // (5)): no hardlink and no directory swapped between `checkReadTarget`'s canonicalization and this open.
+    const holds = !noFollow || laneStateOpenHolds(st, await lstat(p), await lstat(path.dirname(p)));
+    if (st.isFile() && holds) return { ok: true, fh, size: st.size };
+  } catch { /* an fstat or lstat that fails is unreadable, as a non-regular file is */ }
+  await fh.close().catch(() => {});
+  return { ok: false, reason: 'unreadable' };
+}
+
+/** Read byte range [start, end) of an open file. */
+async function readRange(fh: FileHandle, start: number, end: number): Promise<Buffer> {
+  const buf = Buffer.alloc(end - start);
+  let got = 0;
+  while (got < buf.length) {
+    const { bytesRead } = await fh.read(buf, got, buf.length - got, start + got);
+    if (bytesRead === 0) break;   // truncated under us: what was there is what is answered
+    got += bytesRead;
+  }
+  return buf.subarray(0, got);
 }
 
 /**
@@ -66,17 +99,21 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  *  SAME RESIDUAL AS THE SERVER'S `ReadFailure` (wave-1 review minor m2), and
  *  it must be stated on both sides because this is where the wire's own
  *  absent-marker is decided: a DANGLING SYMLINK is followed, the target's
- *  ENOENT is what `readFile` throws, and `absent` comes back true for a name
+ *  ENOENT is what `open` throws, and `absent` comes back true for a name
  *  that is still in the directory listing. Not closed with an `lstat` ladder
  *  here for the same reason as there — a second syscall on every field read
  *  to separate a state no ccd verb can produce. */
 export type ReadResult = { data: string | null; absent: boolean };
 
-export async function readWhole(p: string): Promise<ReadResult> {
+export async function readWhole(p: string, noFollow = false): Promise<ReadResult> {
+  const o = await openRegular(p, noFollow);
+  if (!o.ok) return { data: null, absent: o.reason === 'absent' };
   try {
-    return { data: await readFile(p, 'utf8'), absent: false };
+    return { data: await o.fh.readFile('utf8'), absent: false };
   } catch (e) {
     return { data: null, absent: failureFor(e) === 'absent' };
+  } finally {
+    await o.fh.close().catch(() => {});
   }
 }
 
@@ -105,20 +142,16 @@ export type ReadB64Result =
 /** Binary-safe read: never decodes through a string, so bytes that aren't
  *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. Never throws, same
  *  contract as every other op in this file. */
-export async function readB64Measured(p: string): Promise<ReadB64Result> {
-  let size: number;
+export async function readB64Measured(p: string, noFollow = false): Promise<ReadB64Result> {
+  const o = await openRegular(p, noFollow);
+  if (!o.ok) return { ok: false, reason: o.reason };
   try {
-    size = (await stat(p)).size;
+    if (o.size > MAX_READ_B64_BYTES) return { ok: false, reason: 'too-large', size: o.size };
+    return { ok: true, dataB64: (await o.fh.readFile()).toString('base64') };
   } catch (e) {
     return { ok: false, reason: failureFor(e) };
-  }
-  if (size > MAX_READ_B64_BYTES) return { ok: false, reason: 'too-large', size };
-  try {
-    return { ok: true, dataB64: (await readFile(p)).toString('base64') };
-  } catch (e) {
-    // Unlinked between the stat and the read is a real race and a real
-    // absence; anything else is not.
-    return { ok: false, reason: failureFor(e) };
+  } finally {
+    await o.fh.close().catch(() => {});
   }
 }
 
@@ -135,29 +168,30 @@ export type ReadFromResult =
   | { ok: true; data: string; size: number; dataB64?: string }
   | { ok: false; reason: ReadFailure };
 
-export async function readFromMeasured(p: string, offset: number, maxBytes?: number): Promise<ReadFromResult> {
-  // Stream only [offset, size) — never load the whole file. A transcript backlog
+export async function readFromMeasured(
+  p: string, offset: number, maxBytes?: number, noFollow = false,
+): Promise<ReadFromResult> {
+  // Read only [offset, size) — never load the whole file. A transcript backlog
   // read of a tens-of-MB file used to slurp the whole thing here, ballooning the
   // agent's memory and stalling its event loop.
-  let size: number;
+  const o = await openRegular(p, noFollow);
+  if (!o.ok) return { ok: false, reason: o.reason };
+  const { fh, size } = o;
   try {
-    size = (await stat(p)).size;
-  } catch (e) {
-    return { ok: false, reason: failureFor(e) };
-  }
-  const from = Math.max(0, Math.min(offset, size));
-  // No `maxBytes`: the remainder, exactly as this function has always read it —
-  // NO default bound, because a caller that omitted the field is an old one
-  // and its answer must not change. `maxBytes`: at most that many bytes.
-  const bounded = maxBytes !== undefined;
-  const end = bounded ? Math.min(size, from + maxBytes) : size;
-  if (from >= end) return bounded ? { ok: true, data: '', dataB64: '', size } : { ok: true, data: '', size };
-  try {
-    const bytes = await readRange(p, from, end);
+    const from = Math.max(0, Math.min(offset, size));
+    // No `maxBytes`: the remainder, exactly as this function has always read it —
+    // NO default bound, because a caller that omitted the field is an old one
+    // and its answer must not change. `maxBytes`: at most that many bytes.
+    const bounded = maxBytes !== undefined;
+    const end = bounded ? Math.min(size, from + maxBytes) : size;
+    if (from >= end) return bounded ? { ok: true, data: '', dataB64: '', size } : { ok: true, data: '', size };
+    const bytes = await readRange(fh, from, end);
     const data = bytes.toString('utf8');
     return bounded ? { ok: true, data, dataB64: bytes.toString('base64'), size } : { ok: true, data, size };
   } catch (e) {
     return { ok: false, reason: failureFor(e) };
+  } finally {
+    await fh.close().catch(() => {});
   }
 }
 

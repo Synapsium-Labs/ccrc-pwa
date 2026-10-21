@@ -12,6 +12,7 @@ import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
 import { CONTENT_ID } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
+import { useSessionCommandTarget } from '../session/SessionFlows';
 import { baseCommands, fleetOrder } from './commands';
 import { available, rankCommands, type CommandContext, type CommandPage } from './registry';
 import { DOOR_EVENT } from './door';
@@ -26,6 +27,10 @@ const RESTORE_TRIES = 40;
 function isPage(r: void | CommandPage): r is CommandPage {
   return typeof r === 'object' && r !== null;
 }
+
+/** The palette's chord, which the layer owns (`useShortcuts` binds it). The shortcut sheet lists it, and the composer's key
+ *  hints show it (W2 Task S7c). */
+export const PALETTE_KEYS: readonly string[] = [COMMAND_KEY, 'K'];
 
 /** What the layer needs from the shell: the fleet flows' New session door
  *  (`useFleetFlows().openNewSession`), handed down by `app.tsx`. */
@@ -108,6 +113,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   }, [open]);
 
   const ordered = useMemo(() => fleetOrder(sessions, runs), [sessions, runs]);
+  // The open session's flows (W2 Task S2d): its commands are offered only while a session screen hosts them.
+  const session = useSessionCommandTarget();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
@@ -118,7 +125,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openNewSession,
     openPalette,
     paletteOpen: open,
-  }), [path, ordered, openNewSession, openPalette, open]);
+    session,
+  }), [path, ordered, openNewSession, openPalette, open, session]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
@@ -175,7 +183,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // The sheet lists what `useShortcuts` binds: the registry's own keys, plus
   // the one chord the layer itself owns.
   const rows: { id: string; title: string; keys: readonly string[] }[] = [
-    { id: 'palette', title: 'Open the command palette', keys: [COMMAND_KEY, 'K'] },
+    { id: 'palette', title: 'Open the command palette', keys: PALETTE_KEYS },
     ...commands.flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
   ];
 

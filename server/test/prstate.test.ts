@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   boundRow, checksFor, draftPr, isFullLine, isMergedRow, parsePrLines, phaseFor,
-  prView, unknownView,
+  prView, sweepFailureReason, unknownView,
   type CcdPrLine, type CcdPrRow,
 } from '../src/prstate.js';
-import type { TaskItem } from '../../shared/api.js';
+import { UNMEASURED } from '../src/unmeasured.js';
+import type { CcdResult } from '../src/coord/ports.js';
+import type { PrReason, TaskItem } from '../../shared/api.js';
 
 const row = (over: Partial<CcdPrRow> = {}): CcdPrRow => ({
   number: 42, state: 'MERGED', headRefName: 'ws/quiet-basin', headRefOid: 'deadbee',
@@ -111,7 +113,7 @@ describe('boundRow', () => {
   });
 
   it('refuses a row bound to a DIFFERENT branch, however well everything else matches', () => {
-    // The `is_ours` class this plan was already bitten by once (Task 3's
+    // The `ours_of` class this plan was already bitten by once (Task 3's
     // review: an unpinned `headRefOid` let a row naming a different ref bind
     // and report merged). `headRefName` is a conjunct, not a hint — a row for
     // `ws/still-cove` must never bind a query for `ws/quiet-basin` just
@@ -137,7 +139,7 @@ describe('checks', () => {
   });
 
   it('truncates an attacker-supplied check name and caps how many arrive', () => {
-    // Fork PRs are accepted continuously on public repos (MegaMek/megamek),
+    // Fork PRs are accepted continuously on public repos (example-org/example-repo),
     // and these names reach the UI. They are inert text there, but they are
     // still bytes crossing a wire and into a React tree.
     const many = Array.from({ length: 40 }, (_, i) => ({ name: 'x'.repeat(500) + i, conclusion: 'FAILURE' }));
@@ -458,5 +460,21 @@ describe('draftPr composition — exact title and body', () => {
     // M50: dropping `commits.length > 0` would render "## Commits" with
     // nothing under it.
     expect(draftPr(line({ commits: [] }), null).body).not.toContain('## Commits');
+  });
+});
+
+describe('sweepFailureReason (landing-order wave 3c)', () => {
+  const base = { ok: false as const, stdout: '', stderr: '' };
+  const rows: [string, CcdResult, PrReason][] = [
+    ['the agent killed it', { ...base, killed: true, signal: 'SIGTERM' }, 'cut-short'],
+    ["the server's own wait ran out", { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'timeout', detail: 'timeout' }, 'cut-short'],
+    ['the link dropped', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'transport', detail: 'disconnected' }, 'agent-down'],
+    ['the agent declined it', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'spawn', detail: 'x' }, 'agent-down'],
+    ['ccd exited non-zero by itself', { ...base, killed: false, signal: null }, 'agent-down'],
+    ['a signal the agent did not send', { ...base, killed: false, signal: 'SIGKILL' }, 'agent-down'],
+    ['an older agent measured nothing', { ...base, killed: UNMEASURED, signal: UNMEASURED }, 'agent-down'],
+  ];
+  it.each(rows)('%s', (_what, res, want) => {
+    expect(sweepFailureReason(res)).toBe(want);
   });
 });

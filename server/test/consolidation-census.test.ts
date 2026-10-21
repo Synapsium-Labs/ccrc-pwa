@@ -95,10 +95,12 @@ describe('reclaimPauseParseSites: includes(RECLAIM_PAUSE_MARKER) expressions und
       ['server/src/coord/rundefs.ts', 'server/src/lane.ts', 'server/src/watch.ts']);
   });
 
-  it("REAL: it finds childReclaim's read, and fewer files parse the marker than name it", () => {
+  // D-5856: the real-tree anchor is the stop-done lane's read, the one parse W1a's C1b leaves (W4 moves it); C1b folds
+  // childReclaim's, the anchor until then, onto `readSwitches`.
+  it("REAL: it finds stopDoneSweep's read, and fewer files parse the marker than name it", () => {
     const sites = reclaimPauseParseSites();
     show('reclaimPauseParseSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/coord/childReclaim.ts'), "childReclaim's read is not found").toBe(true);
+    expect(sites.some((s) => s.file === 'server/src/stopDoneSweep.ts'), "stopDoneSweep's read is not found").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\bincludes\(\s*RECLAIM_PAUSE_MARKER\s*\)/);
     const naming = filesNaming(['reclaim-paused', 'RECLAIM_PAUSE_MARKER']);
     console.log(`census files naming reclaim-paused: ${naming.length}\n  ${naming.join('\n  ')}`);
@@ -114,11 +116,11 @@ describe('markerDefinitions(name): const definitions of a marker literal under s
       .toEqual(['server/src/coord/rundefs.ts:2', 'server/src/watch.ts:1']);
   });
 
-  it("REAL: mail-disabled is defined in coord/rundefs.ts (exported) and in watch.ts (private)", () => {
+  it("REAL: mail-disabled is defined once, in its shared/switches.ts row (D-5855; 2 -> 1)", () => {
     const sites = markerDefinitions('mail-disabled');
     show('markerDefinitions(mail-disabled)', sites);
-    expect(sites.find((s) => s.file === 'server/src/coord/rundefs.ts')?.text).toMatch(/^export const MAIL_DISABLED_MARKER\b/);
-    expect(sites.find((s) => s.file === 'server/src/watch.ts')?.text).toMatch(/^const MAIL_DISABLED_MARKER\b/);
+    expect(sites.map((s) => s.file)).toEqual(['shared/switches.ts']);
+    expect(sites[0]?.text).toMatch(/^export const MAIL_DISABLED_MARKER\b/);
   });
 });
 
@@ -132,11 +134,13 @@ describe('markerLiteralFiles: quoted marker-name literals on code lines under se
     ]);
   });
 
-  it("REAL: it finds rundefs.ts spelling 'reclaim-paused'", () => {
+  it("REAL: the vocabulary survives the move to shared/switches.ts, and no server/src line defines a marker (D-5855)", () => {
     const sites = markerLiteralFiles();
     show('markerLiteralFiles', sites);
     console.log(`census files spelling a marker literal: ${files(sites).length}`);
-    expect(sites.some((s) => s.file === 'server/src/coord/rundefs.ts' && s.text.includes("'reclaim-paused'"))).toBe(true);
+    // dispatch.ts's refusal CODE spells 'mail-disabled': found only while the vocabulary is still read from shared/.
+    expect(sites.some((s) => s.file === 'server/src/coord/dispatch.ts' && s.text.includes("'mail-disabled'"))).toBe(true);
+    expect(sites.filter((s) => /\bconst\s+[A-Z0-9_]*_MARKER\b/.test(s.text)).map((s) => `${s.file}:${s.line}`)).toEqual([]);
   });
 });
 

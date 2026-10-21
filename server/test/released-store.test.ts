@@ -40,7 +40,9 @@ describe('CoordStore.lastRunBySession (workspace lifecycle spec §5.1)', () => {
     const r = open(s, 'lifecycle', 1);
     s.bindSession(r, 'someone-else');
     const read = s.lastRunBySession(['demo-worker']);
-    expect(read).toEqual({ ok: true, last: [], openWorkers: [], openClaimants: ['demo-coordinator'] });
+    expect(read).toEqual({
+      ok: true, last: [], openWorkers: [], openClaimants: ['demo-coordinator'], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+    });
   });
 
   it('names an asked session a NON-terminal run binds, even when its newest run is terminal', () => {
@@ -65,7 +67,9 @@ describe('CoordStore.lastRunBySession (workspace lifecycle spec §5.1)', () => {
   });
 
   it('reads nothing for an empty id list', () => {
-    expect(store().lastRunBySession([])).toEqual({ ok: true, last: [], openWorkers: [], openClaimants: [] });
+    expect(store().lastRunBySession([])).toEqual({
+      ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+    });
   });
 
   it('an unreadable close time costs THAT session its close time, and no other row its answer', () => {
@@ -101,5 +105,109 @@ describe('CoordStore.lastRunBySession (workspace lifecycle spec §5.1)', () => {
     expect(s.lastRunBySession(['demo-worker'])).toEqual({
       ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
     });
+  });
+});
+
+// D-6091 (fleet capacity W1-1): two ADDITIVE fields for the run-done policy. A `planned` run is a wave the coordinator
+// has not dispatched yet: it uses nothing, so it neither is the child's "newest run" nor holds it as an open worker.
+// `last`, `openWorkers` and `openClaimants` are unchanged for their other readers (`fleet.ts`, `watch.ts`).
+describe('CoordStore.lastRunBySession: the placed fields (D-6091)', () => {
+  it('lastPlaced skips a planned newest run for the newest placed one; last still answers the planned one', () => {
+    const s = store();
+    const older = open(s, 'lifecycle', 1);
+    s.bindSession(older, 'demo-worker');
+    expect(s.advance(older, 'failed', 'test-close').ok).toBe(true);
+    const planned = open(s, 'lifecycle', 2);
+    s.bindSession(planned, 'demo-worker');            // stays `planned`
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    expect(read.last.map((l) => l.runId)).toEqual([planned]);
+    expect(read.lastPlaced.map((l) => [l.sessionId, l.runId, l.state])).toEqual([['demo-worker', older, 'failed']]);
+    expect(read.openWorkers, 'the planned run is open').toEqual(['demo-worker']);
+    expect(read.openPlacedWorkers, 'but it is not placed').toEqual([]);
+  });
+
+  it('a session only a planned run names has no placed run at all', () => {
+    const s = store();
+    const planned = open(s, 'lifecycle', 1);
+    s.bindSession(planned, 'demo-worker');
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    expect(read.lastPlaced).toEqual([]);
+    expect(read.openPlacedWorkers).toEqual([]);
+  });
+
+  it('a placed open run (working) names the session in openPlacedWorkers', () => {
+    const s = store();
+    const r = open(s, 'lifecycle', 1);
+    s.bindSession(r, 'demo-worker');
+    s.db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(r);
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    expect(read.openPlacedWorkers).toEqual(['demo-worker']);
+    expect(read.lastPlaced.map((l) => l.runId)).toEqual([r]);
+  });
+});
+
+// D-6092 (fleet capacity W1-1b), the characterization: `openPlacedWorkers` is the run-done policy's "another run still
+// uses it" read. F5 (b) narrows it to the ACTIVE runs, so a producer parked at review, merge or close is not held by its
+// own parked run. The "today:" row is the one the behaviour commit flips; the "kept:" rows must not flip.
+describe('CoordStore.lastRunBySession: openPlacedWorkers per F5 (b) (D-6092)', () => {
+  const at = (state: string): string[] => {
+    const s = store();
+    const r = open(s, 'lifecycle', 1);
+    s.bindSession(r, 'demo-worker');
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, r);
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    return read.openPlacedWorkers;
+  };
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`now: a run parked at ${state} names no one in openPlacedWorkers (was: the session)`, () => {
+      expect(at(state)).toEqual([]);
+    });
+  }
+
+  for (const state of ['dispatched', 'working', 'unknown']) {
+    it(`kept: an active run (${state}) names the session in openPlacedWorkers`, () => {
+      expect(at(state)).toEqual(['demo-worker']);
+    });
+  }
+
+  it('kept: a state this build cannot name counts as active (the safe direction, as the caps read it)', () => {
+    expect(at('some-future-state')).toEqual(['demo-worker']);
+  });
+
+  it('kept: a terminal or planned run names no one', () => {
+    for (const state of ['done', 'failed', 'planned']) expect(at(state), state).toEqual([]);
+  });
+  // sibling-parked-run-takes-parked-clock: the sessions a PARKED run names, so the verdict takes the parked clock even
+  // when that run is not the session's newest placed one.
+  const both = (states: string[]) => {
+    const s = store();
+    for (const [i, state] of states.entries()) {
+      const r = open(s, 'lifecycle', i + 1);
+      s.bindSession(r, 'demo-worker');
+      s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, r);
+    }
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    return read;
+  };
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`an older run parked at ${state} beside a newer done one names the session in parkedPlacedWorkers`, () => {
+      const read = both([state, 'done']);
+      expect(read.lastPlaced.map((l) => l.state)).toEqual(['done']);
+      expect(read.openPlacedWorkers).toEqual([]);
+      expect(read.parkedPlacedWorkers).toEqual(['demo-worker']);
+    });
+  }
+
+  it('no parked run names no one in parkedPlacedWorkers: planned, active, terminal and unnamed states', () => {
+    for (const state of ['planned', 'dispatched', 'working', 'unknown', 'done', 'failed', 'some-future-state']) {
+      expect(both([state]).parkedPlacedWorkers, state).toEqual([]);
+    }
   });
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e33842c86eba2ce44447848332289188420af066bb478c1dde143410ba19ecd1
+# ccrc:generated 1 sha256=5d7491ea75e502576382e04fb1c2e56e7f184a4a7420def8a6cae53017de4f86
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -643,7 +643,7 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   rm -f -- "$stamp" 2>/dev/null
   "$@" &
   pid=$!
-  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the
   # watcher would stamp and signal in the same breath: every call would report
@@ -656,9 +656,9 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
   # substitution the caller reads, this subshell inherits that pipe on fd 1 -
   # and on fd 2 as well wherever the call site joins the two, which
-  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
-  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
-  # write end open and the substitution cannot see EOF until the full duration
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell used to kill the
+  # SUBSHELL and orphan its sleeper (D-6123 now takes it along), so the sleeper kept the
+  # write end open and the substitution could not see EOF until the full duration
   # has run out, long after the command answered. MEASURED on a box with no
   # coreutils, a 10-second deadline and a command that answers instantly: 10 006
   # ms before this redirection, 9 ms after. Neither stream carries anything a
@@ -678,7 +678,7 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # a fix for the WHOLE call-site population, not for one new call site. The
   # population is measured in ccrc-account.test.ts rather than counted here, so
   # the claim cannot rot back into a claim about one caller.
-  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( t=''; trap 't=1' TERM; sleep "$secs" 2>/dev/null & s=$!; trap 'kill "$s" 2>/dev/null; exit 0' TERM; [ -z "$t" ] || { kill "$s" 2>/dev/null; exit 0; }; wait "$s" || exit 0; trap 'exit 0' TERM; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
@@ -1297,7 +1297,7 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # Code on the ChatGPT-sub Codex backend — by name, which is why so many rules
 # below used to say `gpt` where they meant this.
 #
-# SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt2` carry
+# SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt7` carry
 # `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
 # HOME (no project STARTS there by accident)", which stood in this paragraph
 # until that date, is simply false about the live roster. The 272k window did
@@ -2144,7 +2144,7 @@ _codex_lane_status() {   # human-readable state of ONE Codex lane (for `ccd ls`)
   # PARAMETERISED 2026-09-14, was named _gpt_status — unbackticked because that
   # function no longer exists. `gpt` was written in five places; the footer it
   # feeds described one lane by name while the roster had carried two Codex lanes
-  # since 2026-09-10, so `gpt2` — the lane then holding sessions — had no line.
+  # since 2026-09-10, so `gpt7` — the lane then holding sessions — had no line.
   #
   # The prose below is Codex's own usage story ("Codex weekly cap", the 5h
   # cooldown, ccgpt-usage's JSON shape), which is a fact about THAT backend and
@@ -3138,7 +3138,7 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # invocations across 173 non-comment lines.
 #
 # THE LAST MOVE WAS the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
-# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3886,7 +3886,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
@@ -4907,7 +4907,7 @@ for drop in (None, "reason", "cgraw", "meas"):
     elif drop == "cgraw" and isinstance(ev.get("obs"), dict):
         ev["obs"].pop("cgraw", None); ev["truncated"] = True
     elif drop == "meas":
-        ev["meas"] = None; ev["truncated"] = True
+        ev["meas"] = {"leaf": meas["leaf"]} if "leaf" in meas else None; ev["truncated"] = True
     s = line(ev)
     # FIX ROUND 2 (task 15): THE BYTE MEASUREMENT IS CURRENTLY UNDETECTABLE
     # AS A DISTINCT CHOICE, and that is worth writing down rather than
@@ -4934,7 +4934,7 @@ for drop in (None, "reason", "cgraw", "meas"):
 # moment its payload was interesting.
 fb = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
       "outcome": outcome, "id": sid,
-      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True}
+      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True, **({"meas": {"leaf": meas["leaf"]}} if "leaf" in meas else {})}
 if tx: fb["tx"] = tx
 if ev.get("refusal"): fb["refusal"] = ev["refusal"]
 sys.stdout.write(line(fb))
@@ -5330,7 +5330,7 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # NON-ZERO when the set could not be read at all.
   #
   # --ignored=matching, NEVER `ls-files --others --ignored`: the latter
-  # enumerates per file (measured 210,070 entries / 24.6 MB in custom-tools,
+  # enumerates per file (measured 210,070 entries / 24.6 MB in project-d,
   # against an 8 MB agent EXEC_MAX_BUFFER), while this collapses each ignored
   # directory to one entry.
   #
@@ -5377,7 +5377,7 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # had one, so the two budgets now add up, and what they have to stay inside is
 # the server's outer bound on this verb — the one that decides whether a slow
 # GitHub reaches the phone as an honest `unavailable` or as the child being
-# killed, which the server reads as `agent-down` and backs the whole project
+# killed, which the server reads as `cut-short` and backs the whole project
 # off on.
 #
 # THE OUTER BOUND IS 25 s, NOT 90, AND EVERY CALL HERE HAS TO FIT INSIDE IT.
@@ -5613,7 +5613,7 @@ _gh_pr_checks() {   # repo -> `[{number, statusCheckRollup}, …]` on stdout for
   # it makes ONE exec's wall clock scale with the number of workspaces on the
   # project, so a slow GitHub stops being an honest `unavailable` for that repo
   # and becomes the outer bound killing the child, which the server reads as
-  # `agent-down` and backs the whole project off on. Two calls is two calls
+  # `cut-short` and backs the whole project off on. Two calls is two calls
   # whatever the fleet grows to.
   local repo="$1" out rc
   out=$(_plat_timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
@@ -5664,9 +5664,9 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
-# `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
-# first of them in a git argv. Spec §7: no GitHub-sourced string is ever placed
-# in a prompt, an argv, or a shell — so this is the boundary, not a formality.
+# `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED; `ours_of` gives the first to git
+# on stdin after this shape check (`one_ours`, its fallback, in an argv). Spec §7: no GitHub-
+# sourced string is ever placed in a prompt, an argv, or a shell — this is the boundary.
 # Both ends are anchored and the floor is 7, and both are pinned: a row saying
 # `headRefOid: "main"` otherwise resolves as a REVISION and binds (main really
 # is an ancestor of our tip), and `{1,40}` would let a three-character hex ref
@@ -5699,45 +5699,45 @@ def rows_in():
 def git(main, *args):
     return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
 
-def is_ours(main, tip, oid):
-    """Proof 0 — the PR's head commit exists locally AND, where we have a tip to
-    reach from, is reachable from it. This is what a recycled slug and a
-    stranger's fork both fail.
+def ours_of(main, tip, oids):
+    """Proof 0 for every row at once: the PR's head commit exists locally AND, given a tip, is reachable from it, which a recycled
+    slug and a stranger's fork both fail. `one_ours`'s SAME answers from ONE `cat-file --batch-check` and at most ONE `rev-list`.
+    Oids go on STDIN (spec §7) after `fullmatch`: `OID.match` passes a trailing newline, shifting later answers. Each is asked
+    peeled (`X^{commit}`) and bare, as merge-base does; ambiguous bare fails the reachability conjunct only, so with no tip one
+    peeling to a commit answers True, like `one_ours`. `tip is None` (hand rename or delete: ORDINARY, deviation 7) SKIPS
+    reachability: False would let a LOCAL fact demote a bound MERGED row, erasing GitHub's answer; a recycled slug always resolves.
+    An unreadable tip answers False; an unclean batch falls back. The wire says which rung answered: `tip` is null beside `ours`."""
+    cands = sorted({o for o in oids if isinstance(o, str) and OID.fullmatch(o)})
+    full, amb = {}, set()
+    if cands:
+        r = subprocess.run(['git', '-C', main, 'cat-file', '--batch-check=%(objectname) %(objecttype)'],
+                           input=''.join(o + '^{commit}\n' + o + '\n' for o in cands), capture_output=True, text=True)
+        got = r.stdout.split('\n')
+        if r.returncode != 0 or len(got) != 2 * len(cands) + 1 or got[-1] != '':
+            return [one_ours(main, tip, o) for o in oids]
+        for k, o in enumerate(cands):
+            f = got[2 * k].split(' ')
+            if len(f) == 2 and f[1] == 'commit' and re.fullmatch(r'[0-9a-f]{40}', f[0]):
+                full[o] = f[0]
+            if got[2 * k + 1] == o + ' ambiguous':
+                amb.add(o)
+    reach = None
+    if tip is not None and full:
+        r = git(main, 'rev-list', '--end-of-options', tip, '--')
+        reach = set(r.stdout.split()) if r.returncode == 0 else set()
+    return [isinstance(o, str) and o in full and (reach is None or (full[o] in reach and o not in amb)) for o in oids]
 
-    The cat-file rung survives mutation and is kept deliberately: `merge-base
-    --is-ancestor` on an object this repository does not have exits 128 and so
-    already answers False. Kept because 128 is git's *"I could not do this"*
-    and 1 is its *"no"*, and this function must not start reading a fatal as an
-    answer if the ancestry call is ever changed. (`OID`'s `{7,40}` survives too:
-    `{1,40}` accepts the same strings any real headRefOid is — it bounds a
-    GitHub-sourced string rather than deciding anything, and the cat-file rung
-    is what actually rejects a value.)
-
-    `tip is None` is the registry's branch not resolving in $main — a hand
-    rename or a hand delete, which deviation 7 measured and calls ORDINARY.
-    There is then no anchor to reach FROM, and answering False demotes a bound
-    MERGED row to `no-commits` and clears the persisted number: a LOCAL fact
-    erasing GitHub's answer about a PR. So the ancestry rung is SKIPPED rather
-    than failed, and what remains is still three of four conjuncts plus "this
-    repository can still see that commit". The recycled slug — the case the
-    ancestry rung exists for — cannot be in this state: ws-add creates the
-    branch, so a recycled name always resolves and always gets the full proof.
-    The wire says which rung answered: `tip` is null beside `ours`."""
-    if not isinstance(oid, str) or not OID.match(oid):
+def one_ours(main, tip, oid):
+    """The one-row proof, kept for a batch that did not answer cleanly (its answers define ours_of's). The cat-file rung stays
+    apart from the ancestry call: git's exit 128 means "could not", 1 means "no"."""
+    if not isinstance(oid, str) or not OID.fullmatch(oid) or git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
         return False
-    if git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
-        return False
-    if tip is None:
-        return True
-    return git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
+    return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
 def annotate(rows, main, tip, branch, base_short):
-    out = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        r['ours'] = is_ours(main, tip, r.get('headRefOid'))
-        out.append(r)
+    out = [r for r in rows if isinstance(r, dict)]
+    for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
+        r['ours'] = ours
     return out
 
 def bound(r, branch, base_short):
@@ -8575,6 +8575,7 @@ EOF
   # three numbers this comment carried before — 153, 175, 180 — had all
   # rotted, and nothing reds when they do.)
   echo stop-surface
+  echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -10160,14 +10161,18 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # asserted two mechanisms this file disproves — that the manifest is "the one
   # record ws-reap later reads", and that the lineage therefore survives the
   # worktree. Neither is true, and the correction is the contract:
-  #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
-  #     is four sites: the field-name list, this write, `ws-restore`'s own
+  #   - ONE FIELD IS READ BACK, AND NOTHING ELSE. `grep -n archivemanifest ccd`
+  #     is five sites: the field-name list, this write, `ws-restore`'s own
   #     `stat -c %s` of the file (for `meas.manifestBytes`, byte count only,
-  #     never the content), and its `rm -f`. `_ws_reap_eval` re-measures every
-  #     fact it needs itself. The only reader anywhere is
-  #     `server/src/registry.ts`'s `manifestBytes`,
-  #     which extracts `worktreeBytes` and nothing else. This field's audience
-  #     is a HUMAN reading an archived workspace's record.
+  #     never the content), its `rm -f`, and `_ws_gc_manifest_bytes` (D-5886),
+  #     which gives `ws-gc --fast` an archived row's size from `.worktreeBytes`
+  #     and takes it only as a whole number (anything else shows `-`).
+  #     `_ws_reap_eval` re-measures every fact it needs itself. The two readers
+  #     anywhere are that one and `server/src/registry.ts`'s `manifestBytes`,
+  #     and both extract `worktreeBytes` and nothing else — so `worktreeBytes`
+  #     keeps its meaning (the tree's bytes at archive time, `null` when
+  #     unmeasured) or both readers move with it. The rest of this field's
+  #     audience is a HUMAN reading an archived workspace's record.
   #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
   #     dot-free `$REG/<id>.<suffix>` except `archived`/`reaping`, so ws-reap
   #     step (i) takes this manifest AND the raw `.prhistory` together. The one
@@ -11556,7 +11561,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # BOUNDED, and the bound is a DEADLINE for the whole workspace rather than a
   # per-entry timeout, so a workspace with 226 ignored entries cannot cost 226
   # timeouts. Measured on this box against the tree `--ignored=matching` was
-  # chosen for (custom-tools: 226 collapsed entries, 355,392 entries beneath
+  # chosen for (project-d: 226 collapsed entries, 355,392 entries beneath
   # them): 3.4 s with one `find` per entry, 1.2 s as a single walk. The
   # performance reason for `--ignored=matching` still holds for the DISPLAY —
   # nothing here is printed, counted or sized, only matched — and sensitivity
@@ -15330,7 +15335,13 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
     return 0
   fi
 
-  local bytes age; bytes=$(_ws_gc_bytes "$wt"); age=$(_ws_gc_age "$wt")
+  # `--fast` (D-5886, #123): no per-row `du`. Every row reads `-`, which
+  # `_ws_gc_human` already renders as unmeasured; the archived rung below takes
+  # its archive manifest's figure instead. Membership is decided by the rungs
+  # below, none of which reads `bytes`, so the rows are the full run's rows.
+  local bytes age
+  if (( ${GC_FAST:-0} )); then bytes='-'; else bytes=$(_ws_gc_bytes "$wt"); fi
+  age=$(_ws_gc_age "$wt")
 
   # Anything ccd did not create is FOREIGN: reported so it is visible, never
   # pruned. Guessing at another tool's lifecycle is how a reclaimer destroys
@@ -15365,7 +15376,28 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   elif _ws_gc_dirty "$wt";                       then state=$GC_DIRTY_STATE
   else                                                state=tracked
   fi
+  if (( ${GC_FAST:-0} )) && [[ "$state" == archived ]]; then
+    bytes=$(_ws_gc_manifest_bytes "$project-$slug")   # D-5886
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
+}
+
+# D-5886 (#123): an archived workspace's size under `ws-gc --fast`, read from
+# the `worktreeBytes` its archive manifest recorded when `ws-archive` measured
+# the tree, rather than a fresh `du`. A figure from archive time, not from now.
+# `-` (unmeasured) for anything that is not a whole number there: no manifest,
+# a manifest that is not JSON, a `null` (the archive's own unmeasured value),
+# or no `jq` on the box. Never 0 in place of a reading, the rule
+# `_ws_gc_bytes` keeps. The file is read in place, the way the rungs of
+# `_ws_gc_row` test `$REG/<id>.archived` and the rest, with `_reg_get`'s own
+# guard (a regular file, never a symlink) but not through `_reg_get`: a call
+# from this context into the registry's would be one more cross-context
+# reference, which the `ccd/contexts.tsv` ratchet forbids (D-5886).
+_ws_gc_manifest_bytes() {   # id -> bytes, or '-'
+  local f="$REG/$1.archivemanifest" b
+  [[ -f "$f" && ! -L "$f" ]] || { echo '-'; return 0; }
+  b=$(jq -r '.worktreeBytes | numbers' < "$f" 2>/dev/null) || b=''
+  if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo '-'; fi
 }
 
 _ws_gc_scan() {
@@ -15481,7 +15513,7 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
 #
 # SORTED sensitive-first then bytes-first and CAPPED at ten, the same shape and
 # the same reason as `_reap_ignored_json`'s ordering: a 226-entry workspace
-# (custom-tools, measured) would otherwise bury the reclaim line, and the cap is
+# (project-d, measured) would otherwise bury the reclaim line, and the cap is
 # stated out loud rather than silently applied. The COUNT and the TOTAL are
 # never capped.
 #
@@ -15862,13 +15894,23 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
   esac
 }
 
-cmd_ws_gc() {   # [--prune]
-  local prune=0
-  case "${1:-}" in
-    '')       ;;
-    --prune)  prune=1 ;;
-    *)        die "usage: ccd ws-gc [--prune]" ;;
-  esac
+cmd_ws_gc() {   # [--prune | --fast]
+  local prune=0 a
+  # `GC_FAST` is read by `_ws_gc_row` through bash's dynamic scope, so it is
+  # declared here and always set: an exported `GC_FAST` cannot reach a run.
+  local GC_FAST=0
+  for a in "$@"; do
+    case "$a" in
+      --prune) (( ! prune )) || die "usage: ccd ws-gc [--prune | --fast]"; prune=1 ;;
+      --fast)  (( ! GC_FAST )) || die "usage: ccd ws-gc [--prune | --fast]"; GC_FAST=1 ;;
+      *)       die "usage: ccd ws-gc [--prune | --fast]" ;;
+    esac
+  done
+  # D-5887: `--fast` is a read and only a read. A prune decides each row by
+  # its own checks, never by the size column, but refusing the pair keeps
+  # that true by construction: the flag cannot change what a prune removes.
+  (( ! (prune && GC_FAST) )) \
+    || die "ws-gc --fast is read-only and never combines with --prune; run ccd ws-gc --prune on its own"
 
   local rows; rows=$(_ws_gc_scan)
   [[ -n "$rows" ]] || { echo "nothing to report — no worktrees found under $PROJECTS_ROOT"; return 0; }
@@ -15904,7 +15946,14 @@ cmd_ws_gc() {   # [--prune]
   # partial sum rendered as a figure under a sentence that says "what removing
   # all of them would free" — an affirmative total over a read that did not
   # finish, which is the class this branch has closed eleven times.
+  # `--fast` (D-5886) skips this aggregate `du` as well: on large trees it is
+  # the slowest read in the command, and the footer below says so instead.
   local total='-' tf terr trc
+  if (( GC_FAST )); then
+    echo
+    echo "no total across $n worktree$( (( n == 1 )) || echo s ) — --fast skips sizing. Archived rows show the size their archive manifest recorded; every other size is unmeasured. Run ccd ws-gc without --fast for the figures."
+    return 0
+  fi
   if (( ${#paths[@]} > 0 )); then
     tf=$(_plat_mktemp) || tf=''
     if [[ -n "$tf" ]]; then
@@ -17201,8 +17250,8 @@ _ci_held_wait() {   # id — before a supervised resume: no spawn while a live b
 }
 
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
-  # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
-  # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
+  # Claude Code rotates the active session uuid during normal operation (/clear; compaction keeps its
+  # transcript), so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
   # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
   # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
   # the registry in step means resurrection resumes where the session actually was.
@@ -17288,7 +17337,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
        && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
        && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
-      _reg_set "$id" uuid "$sid"
+      _operator_choice_promote "$id" "kept before a uuid rotation" "$sid" "$cfg"; _reg_set "$id" uuid "$sid"
       unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
     fi
   fi
@@ -20216,8 +20265,11 @@ _route_note_clear() {   # id — the applier is no longer declining, so the MARK
 # the only thing that makes the tick cheap: the record says what is WANTED and
 # this says what LANDED, so the comparison that decides whether to touch tmux at
 # all is two registry reads. It is written by the settle (from what `_spawn_start`
-# COMPOSED) and by the applier (on a read-back acknowledgement, never on the
-# send-keys alone), and by nothing else.
+# COMPOSED), the seed (`_route_apply_seed`, from the served values), `cmd_route
+# --apply`'s settle-applied fields, the applier (on a read-back acknowledgement,
+# never on the send-keys alone), the class read-back (`_route_readback`) and a
+# live UUID rotation's promotion (`_operator_choice_promote`, for exactly the
+# fields it wrote), and by nothing else.
 _route_applied_set() {   # id field value — rewrite the list with <field> replaced or appended
   local id="$1" f="$2" v="$3" cur out="" w
   local -a words=()
@@ -21096,12 +21148,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # reader that failed) or could not recognise what it read (a /model or /effort
 # command with no acknowledgement in the wording this ccd knows). A choice IS
 # lost without a line in a few cases, each named in README: a command within
-# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
-# non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
-# /model whose journal a `route --apply` keystroke opened first, a route field
-# whose mtime cannot be read, and an INTERRUPTED stop (one that died between its
-# keep, which leaves the marker, and its kill: the pane survives marked, so its
-# next stop or revival does not read again).
+# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a non-Anthropic
+# lane, a uuid that the background follow or a continuation chain moves without a promotion
+# (a pane-observed /clear does promote), an unrostered source account, a deploy-transition
+# /model whose journal a `route --apply` keystroke opened first, a route field whose mtime
+# cannot be read, and an INTERRUPTED stop (one that died between its keep, which leaves the
+# marker, and its kill: the pane survives marked, so its next stop or revival does not read again).
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last
@@ -21163,8 +21215,8 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
 }
 
 _operator_choice_read() {   # transcript journal [tail-bytes] -> the transcript reader's lines; rc != 0 the reader failed (§5.7)
-  # ONE READER, TWO CALLERS: `_operator_choice_keep` (the operator's own
-  # choice, before a stop) and `_route_readback_transcript` (the read-back's
+  # ONE READER, TWO CALLERS: `_operator_choice_promote` (the operator's own
+  # choice; the keep's and a live uuid rotation's) and `_route_readback_transcript` (the read-back's
   # second witness). The caller has already proved the file a readable regular
   # file — never `grep` on a FIFO; a missing python3 fails the pipeline, which is
   # this rc. Its lines, one per kind:
@@ -21290,11 +21342,19 @@ if ran is not None:
 }
 
 _operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f typed why="" out kind val at n field want fm shown drift=0
-  local -a sets=() kinds=()
+  local id="$1"
   [[ -f "$REG/$id.uuid" ]] || return 0
   _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (`_spawn_start`, §5.7)
-  _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
+  _operator_choice_promote "$id" "kept across a restart"
+  return 0
+}
+
+_operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv
+  local -A ackv=() acka=() ackn=() drifta=()
+  local -a sets=() kinds=()
+  [[ -f "$REG/$id.uuid" ]] || return 0
+  w=$(_reg_get "$id" wrapper); _is_anthropic_backend "$w" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
     _typed_note "$id" since
@@ -21306,6 +21366,46 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
   [[ -f "$f" && -r "$f" ]] || { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }
   command -v python3 >/dev/null 2>&1 || { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }
   out=$(_operator_choice_read "$f" "$typed") || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
+  # A LIVE ROTATION READS BOTH CONVERSATIONS, AND TIME DECIDES, PER KIND (D-4321;
+  # D-4319's existence skip is withdrawn). The tick that sees a `/clear` may run
+  # after the operator has typed a `/model` or `/effort` into the NEW conversation,
+  # so the incoming transcript can hold a kind's newest command. But a command's
+  # mere presence there is no proof it is newer: a rotation is also an in-pane
+  # `/resume` into an OLDER conversation, and its old command would then replace a
+  # newer outgoing one. So each kind (`/model` -> class, `/effort` -> effort) takes
+  # the newest ACKNOWLEDGED command in either transcript by epoch, a tie going to
+  # the incoming one, and the surviving pair is written by ONE `cmd_route` below.
+  # A drift (a command the pane refused, or acknowledged in a wording this ccd does
+  # not recognise) is TREATED as changing nothing, though it may have (the stamp
+  # below is wrong then): it never suppresses its kind's acknowledged winner, and
+  # is logged once. ONE READER: the same
+  # `_operator_choice_read` over the same journal. An incoming transcript that is
+  # absent (the ordinary case right after a `/clear`), not a readable regular file
+  # (`_ci_transcript_path` answers only a regular file), or that the reader fails
+  # on contributes no lines; the outgoing ones stand alone, as the keep's always do.
+  if [[ -n "$sid" && -n "$icfg" ]] && fin=$(_ci_transcript_path "$id" "$icfg" "$sid") && [[ -r "$fin" ]]; then
+    inc=$(_operator_choice_read "$fin" "$typed") || inc=""
+  fi
+  if [[ -z "$inc" ]]; then
+    merged="$out"   # NO INCOMING LINES: the reader's own lines, byte for byte, never a rebuild of them, so the dead-session keep is exactly the keep it always was (a drift whose timestamp runs backwards in file order is still logged)
+  else
+    while read -r kind val at n; do   # the incoming lines are LAST, so `<=` hands a tie to the incoming transcript
+      [[ "$at" =~ ^[0-9]+$ ]] || continue
+      case "$kind" in
+        model|effort)             (( ${acka[$kind]:--1} <= 10#$at )) && { ackv[$kind]=$val; acka[$kind]=$((10#$at)); ackn[$kind]=$n; } ;;
+        drift-model|drift-effort) (( ${drifta[${kind#drift-}]:--1} <= 10#$at )) && drifta[${kind#drift-}]=$((10#$at)) ;;
+      esac
+    done <<<"$out"$'\n'"$inc"
+    # The merged lines come back in the reader's own order (effort, then model, each
+    # drift after its acknowledgements). `>=`: the reader prints a drift from its
+    # acknowledgement's own second, and across two transcripts a same-second drift
+    # is logged and never suppresses. A drift older than its kind's winner is
+    # superseded by it and says nothing.
+    for kind in effort model; do [[ -n "${acka[$kind]+x}" ]] && merged+="$kind ${ackv[$kind]} ${acka[$kind]} ${ackn[$kind]}"$'\n'; done
+    for kind in effort model; do
+      [[ -n "${drifta[$kind]+x}" ]] && (( drifta[$kind] >= ${acka[$kind]:--1} )) && merged+="drift-$kind x ${drifta[$kind]} 0"$'\n'
+    done
+  fi
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
@@ -21329,10 +21429,29 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
     fi
     [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
-  done <<<"$out"
+  done <<<"$merged"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
-    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1 \
-      || for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+    if ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
+      # A LIVE PROMOTION TYPES NOTHING IT WROTE (D-4319, kept under D-4321). The
+      # supervise tick runs the applier right after `_sync_uuid`, and a promoted
+      # field pending against `routeapplied` was typed back into the live pane —
+      # `/effort`, which never reads back, every time. The newest acknowledged
+      # command is what the pane runs (wrong only if a drifted one really changed
+      # the setting, ccd typed after it with no record write, or an incoming read
+      # failed while the incoming transcript held a newer command; the next spawn
+      # heals), so exactly the fields written here are recorded applied, as an
+      # acknowledged apply records them; every other pending field is still typed.
+      # Only a live rotation (an incoming sid): a dead session's keep is followed
+      # by a spawn that composes and stamps its own. RETAINED COST: this stamp
+      # rewrites `routeapplied`, so a class already pending that the pane runs
+      # cannot be confirmed by a sidecar reading from before the rotation
+      # (`_route_readback`), and the applier may type that `/model` once.
+      if [[ -n "$sid" ]]; then
+        for kv in "${sets[@]}"; do [[ "$kv" == --set ]] || _route_applied_set "$id" "${kv%%=*}" "${kv#*=}"; done
+      fi
+    else
+      for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+    fi
   fi
   return 0
 }
@@ -21507,8 +21626,10 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # reading from the stamp's own second cannot be told from the previous
   # process's last render, and it must be strictly later. The stamp is
   # whatever last wrote `routeapplied` — a spawn, an acknowledged apply, a
-  # read-back, the seed — which is stricter than "the last spawn", and safe:
-  # it costs one more render.
+  # read-back, the seed, a live rotation's promotion — which is stricter than
+  # "the last spawn", and safe: it costs one more render. After a promotion's
+  # stamp, a reading from before the rotation cannot confirm a class that was
+  # already pending, so the applier may type that `/model` once until it renders.
   #
   # A READING OF ANOTHER CLAUDE IS NOT THIS PANE'S (review finding 10). The
   # hook names the file after the tmux SESSION, so a second interactive
@@ -22634,10 +22755,10 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
   printf '%s' "$head$what$tail$extra"
 }
 
-_resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227); with an id, the prompt is that row's composed one (D-5237)
+_resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227) and its pressure-reap opt-out; with an id, the prompt is that row's composed one (D-5237)
   local prompt="$RESUME_PROMPT"
   [[ -n "${1:-}" ]] && prompt=$(_resume_prompt_for "$1")
-  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$prompt'"
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$prompt' CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1"
   [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
   printf '%s' "$out"
 }
@@ -22830,15 +22951,21 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # its ordinary writes and cleanups could take or clobber them by accident.
 # `tmproots/` is no harder to write on purpose (TRUST, above); it is only out
 # of the session's way. A `tmproots/` that is itself a link is never
-# followed: the writer refuses it, the reader answers 2, and
-# `_ws_tmproot_remove` warns and leaves what it reaches. The writer's temp file is dot-leading INSIDE
+# followed: the writer refuses it, the reader answers 2, and so the drop
+# (`_ws_tmproot_witness_drop`) keeps what it reaches and answers unmeasured,
+# printing nothing. The writer's temp file is dot-leading INSIDE
 # `tmproots/`, never `$REG/.<x>`, so no `tmproots/*` glob sees it and
 # `_reg_purge`'s dot-prefixed inventory is unchanged. A writer that dies
 # between its `printf` and its `mv` leaves that temp file behind, and nothing
 # in this wave reaps it: a stated residue. No id names it
 # (`_ws_tmproot_id_ok` refuses every dot-leading name, at the reader, the
 # writer and `_ws_tmproot_remove`), so a collector walking `tmproots/` skips
-# or reaps dot-leading names and never takes one for an id.
+# or reaps dot-leading names and never takes one for an id, save ONE shape
+# (path-identity spec §3.6): the compare-and-drop's aside, `.<id>.drop.<pid>`,
+# composed by `_ws_tmproot_aside_path` alone. It is read for the id it is for
+# only through its exact parser `_ws_collect_aside_id` and its lister
+# `_ws_collect_asides_of`, never by a prefix, and its body only through
+# `_ws_tmproot_witness_parse`, the witness's own parser.
 #
 # WHEN. Every rc-0 answer of `_child_tmpdir` asks; the file is WRITTEN (temp
 # file, then `mv`) only when it is absent, unparseable, or its dev, ino or
@@ -22857,9 +22984,16 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # `-`. UID is the `-O` test: the leaf's owner IS this process's effective
 # uid, so `$EUID` is that owner, not a guess.
 #
-# DEATH belongs to `_ws_tmproot_witness_drop` alone (RECLAIM region), and only
-# once the leaf is PROVEN absent (`_ws_leaf_remove`, or `_ws_reclaim_absent`).
+# DEATH belongs to two compare-and-drops: the collector's own
+# (`_ws_collect_witness_cad`), and the reclaim tail's `_ws_tmproot_witness_drop`
+# (RECLAIM region; path-identity spec §3.2 and §3.3), which drops a witness only
+# on a PROVEN absence of its leaf, proven again at the drop, on the device the
+# witness records, beside no quarantine slot of the id, and only in the
+# generation it read. A drop that cannot say all of that keeps the witness.
 _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
+# A COMPARE-AND-DROP ASIDE'S NAME (path-identity spec §3.6), composed here and nowhere else: `.<id>.drop.<pid>`
+# beside the witness, <pid> the moving process's own. `ccd-id-cap.test.ts`'s census reads this spelling, braces and all.
+_ws_tmproot_aside_path() { local id="${1-}" pid="${2-}"; printf '%s' "$REG/tmproots/.${id}.drop.${pid}"; }   # id pid -> an aside's path (a path, not a decision)
 
 # THE ID A VERB MAY BIND (path-identity spec §2.4): the registry charset, read under LC_ALL=C, and never
 # dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
@@ -22893,19 +23027,23 @@ _reg_id_cap() {   # id -> 0 iff its BYTES fit _REG_ID_MAX; 1 sets _REG_ID_CAP_WH
 # dash-leading, and never dot-leading either — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
 _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it
 
-_ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
-  # THREE ANSWERS: a directory or a link planted at the name is not absent,
-  # and a `tmproots/` that is ITSELF a link is never followed: both answer 2.
-  # Every field is cleared first, so a failed read never leaves a previous
+_ws_tmproot_witness_parse() {   # path id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
+  # THE ONE WITNESS-BODY PARSER (path-identity spec §3.6). The witness at its
+  # own name, and a compare-and-drop aside at `_ws_tmproot_aside_path`'s, are
+  # read by these lines alone, so an aside "parses" exactly when it would read
+  # sound as the witness once restored. It asks no id question of its own: its
+  # callers do (`_ws_tmproot_witness_read` asks `_ws_tmproot_id_ok` first), and
+  # the body's `id=` must equal the id exactly, never as a prefix.
+  # THREE ANSWERS: a directory or a link planted at the path is not absent,
+  # and a parent directory that is ITSELF a link is never followed: both answer
+  # 2. Every field is cleared first, so a failed read never leaves a previous
   # read's values standing. The run is judged by `_child_runid_valid`, the
   # one run-id grammar, never a re-spelt pattern — and BASH_REMATCH is copied
   # before that call, whose own `=~` resets it.
-  local LC_ALL=C id="${1-}" w body="" line fd
+  local LC_ALL=C w="${1-}" id="${2-}" body="" line fd
   local -a m
   local re='^v=1 id=([A-Za-z0-9._-]+) run=([^ ]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*|-) uid=([0-9]+) at=([0-9]{13})$'
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
-  _ws_tmproot_id_ok "$id" || return 2
-  w=$(_ws_tmproot_witness_file "$id")
   [[ ! -L "${w%/*}" ]] || return 2
   [[ -e "$w" || -L "$w" ]] || return 1
   [[ -f "$w" && ! -L "$w" ]] || return 2
@@ -22921,6 +23059,15 @@ _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _W
   _WS_WIT_RUN="${m[2]}"; _WS_WIT_DEV="${m[3]}"; _WS_WIT_INO="${m[4]}"
   _WS_WIT_BTIME="${m[5]}"; _WS_WIT_UID="${m[6]}"; _WS_WIT_AT="${m[7]}"
   return 0
+}
+
+_ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
+  # The witness at its id's own name, through the one body parser above. An id
+  # no witness is named for answers 2 with every field cleared, as it always has.
+  local id="${1-}"
+  _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
+  _ws_tmproot_id_ok "$id" || return 2
+  _ws_tmproot_witness_parse "$(_ws_tmproot_witness_file "$id")" "$id"
 }
 
 _ws_tmproot_witness_write() {   # id leaf run -> 0 written or already current | 1 not written (the caller warns)
@@ -23085,12 +23232,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # BACKEND, not placement: Remote Control is Claude Code's own protocol and a
   # Codex lane cannot answer it.
   _is_anthropic_backend "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
-  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
-  # non-home-able lane the vars `_resume_env` composes are simply inert (the
-  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
-  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
-  # which only ever names a Claude Code JSONL) fails closed there regardless —
-  # so gating this line would buy nothing and cost a second home-ability check.
+  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: every
+  # supported wrapper (an external-provider shim included) execs Claude Code, so
+  # on a non-home-able lane the RESUME vars `_resume_env` composes reach it too,
+  # and `_redrive_after_spawn` measures that lane's transcript as it does any
+  # other's; its pressure-reap key is deliberately LIVE there as well, so
+  # gating this line would drop both from that lane and buy nothing at all.
   resenv=$(_resume_env "$id")   # D-5237: the prompt names a recent end's cause
   # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
   # `--model` from `class`, and the subagent floor into the SAME `env` line
@@ -24222,8 +24369,8 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
 cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
   # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
-  # the id it was born with across every swap — `claude2-expoAI-assistant` is
-  # still that id while its `wrapper` field reads `claude-dev0`. So an operator
+  # the id it was born with across every swap — `claude9-project-h` is
+  # still that id while its `wrapper` field reads `claude-lab0`. So an operator
   # reading the account off the board and typing it back MINTS A SECOND ID for
   # a session that already exists. `cmd_stop` grew this form first, for the
   # same reason, and its own comment records it.
@@ -24286,8 +24433,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
 
   # THE REGISTRY WINS OVER THE ARGUMENT, FOR THE ACCOUNT ONLY (spec §3.4).
   # `_reg_set "$id" wrapper "$wrapper"` used to be unconditional, so
-  # `ccd start claude2 expoAI-assistant` on a session auto-swap had moved to
-  # claude-dev0 rewrote the row to an account whose config dir does not hold
+  # `ccd start claude9 project-h` on a session auto-swap had moved to
+  # claude-lab0 rewrote the row to an account whose config dir does not hold
   # the transcript — the resumed session then finds no history under the very
   # account it was just told it lives on. `ccd swap` is the ONLY verb that
   # moves a session between accounts; a differing argument is a warning, and
@@ -26155,13 +26302,27 @@ _swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTER
   # the three lines was deleted in turn during the final review and the whole
   # 2585-test suite stayed green, which made this paragraph a safety claim
   # nothing defended, the finding this branch has now made four times.
-  local id="$1" parent="$2" i=0
+  #
+  # The sleep runs in the background and is WAITED on, behind a TERM trap that
+  # ends it (D-6113). `_swap_beat_stop` TERMs this subshell; a subshell killed
+  # while it sits in a FOREGROUND `sleep` dies alone and leaves the sleep
+  # running, reparented, still holding the stdout it inherited from `cmd_swap` —
+  # so anything capturing `ccd swap`'s output (the agent's execFile, a `$(…)`)
+  # waited for EOF up to SWAP_BEAT_INTERVAL after every swap. `wait` is
+  # interruptible by a trapped signal, a foreground child is not. The trap
+  # also waits on the sleep it kills, so the stamper is gone only once its
+  # sleep is. The trap is dropped on the way out so a foreground call leaves
+  # its caller's untouched.
+  local id="$1" parent="$2" i=0 s=''
+  trap '[[ -n "$s" ]] && { kill "$s"; wait "$s"; } 2>/dev/null; exit 0' TERM
   while (( i < SWAP_BEAT_MAX )); do
-    sleep "$SWAP_BEAT_INTERVAL"
-    kill -0 "$parent" 2>/dev/null || return 0
+    sleep "$SWAP_BEAT_INTERVAL" & s=$!
+    wait "$s"; s=''
+    kill -0 "$parent" 2>/dev/null || { trap - TERM; return 0; }
     _reg_set "$id" supervised "$(date +%s)"
     i=$((i + 1))
   done
+  trap - TERM
 }
 
 _swap_beat_stop() {   # pid — end the carry heartbeat. Safe on an empty/dead pid.
@@ -27981,8 +28142,8 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
-  # plan entirely (seen 2026-07-26 — custom-tools kept 8 task files under
-  # .claude-gpt while running on claude-corp with an empty list). Carry it over
+  # plan entirely (seen 2026-07-26 — project-d kept 8 task files under
+  # .claude-gpt while running on claude-acme with an empty list). Carry it over
   # with the transcript. Copy, don't move: if the swap is reverted the old lane
   # still has its copy, and a stale dir costs a few KB.
   if [[ -d "$srccfg/tasks/$uuid" ]]; then
@@ -28302,15 +28463,34 @@ _hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibern
   return 0
 }
 
+_hold_is_programme() {   # text -> 0 iff it is a programme hold: `program:<slug> wave:<n>[/<m>][ run:<id>]`, nothing else.
+  # ccd stores any hold text (`cmd_ws_hold`); the server validates the programme grammar (`HOLD_REASON_PATTERN`,
+  # `server/src/coord/rundefs.ts`). THIS is that pattern's one ccd spelling, and `hold-programme-parity.test.ts`
+  # crosses the two over one fixture list. `LC_ALL=C` keeps the bracket classes ASCII.
+  local LC_ALL=C re='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
+  [[ $1 =~ $re ]]
+}
+
+_hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run-done policy (D-6091); 1 holds.
+  # Passes ONLY when the file is a regular readable file, reads BYTE-IDENTICAL to the text the server classified
+  # (a hold rewritten between the server's pass and this act refuses), and that text is a programme hold. An
+  # operator's own hold text (anything outside the grammar), an unreadable or special file, or any doubt holds.
+  local f="$REG/$1.hold"
+  [[ -f "$f" && -r "$f" && ! -L "$f" ]] || return 1
+  _hold_is_programme "$2" || return 1
+  cmp -s -- "$f" <(printf '%s' "$2")
+}
+
 cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
   # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
   # `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)). NO VALUE AND NO POSITIONAL MAY BEGIN WITH `-`
-  # (path-identity spec §2.4): the server composes the id FIRST, so an id of `--actor` would take `--surface` as its value
-  # and leave the surface word as the id. A dash-leading value is refused with the usage line; the id passes `_reg_id_ok`.
+  # (`hibernate-refuses-a-dash-leading-id`): the server composes the id FIRST, so an id `--actor` would take `--surface`
+  # as its value, leaving the surface word as the id. A dash-led value gets the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
+  local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
   while (( $# )); do
     case "$1" in
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
@@ -28319,10 +28499,17 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
       --actor=*)   [[ ${1#--actor=} != -* ]] || die "$usage"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       --reason)    [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
       --reason=*)  [[ ${1#--reason=} != -* ]] || die "$usage"; lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      # D-6091: the programme hold the server classified, verbatim — see `_hib_hold_ok` above.
+      --hold-ok)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gh=1; lc_holdok="$2"; shift 2 ;;
+      --hold-ok=*) [[ ${1#--hold-ok=} != -* ]] || die "$usage"; lc_gh=1; lc_holdok="${1#--hold-ok=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
   set -- "${lc_args[@]}"
+  if (( lc_gh )); then
+    [[ -n "$lc_holdok" ]] || die "$usage"
+    _lc_dec_ok "$lc_holdok" || die "--hold-ok is longer than $_LC_DEC_MAX bytes"
+  fi
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -28340,7 +28527,12 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
   # ── the re-measure, cheapest first ──
   # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
-  [[ -e "$REG/$id.hold" ]] && _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  # D-6091: `--hold-ok <text>` lets ONE kind of hold pass — a programme hold the server read, classified and named
+  # verbatim (`_hib_hold_ok`). Every other hold, and every doubt, still refuses `held`.
+  if [[ -e "$REG/$id.hold" ]]; then
+    (( lc_gh )) && _hib_hold_ok "$id" "$lc_holdok" \
+      || _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  fi
   [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
   local now last
   _now_s_to now; _reg_get_to last "$id" lastswap
@@ -28578,7 +28770,7 @@ cmd_ls() {
   # ONE LINE PER CODEX LANE, driven by the roster rather than by a name in this
   # file. The previous version printed a single trailer for `gpt` and called it
   # "the gpt overflow lane", and by the time it was changed BOTH halves of that
-  # were wrong: `gpt2` had existed since 2026-09-10 and was carrying the
+  # were wrong: `gpt7` had existed since 2026-09-10 and was carrying the
   # sessions, and on 2026-09-11 both lanes became home-able, so neither is an
   # overflow lane any more — they are placement targets that a session can be
   # BORN on, ranked on usage beside every Anthropic lane.
@@ -31782,10 +31974,13 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # root for the test harness only.
   #
   # THE DEFAULT ROOT IS THE BOX'S OWN, not the child's: `${TMPDIR:-/tmp}/claude-<uid>`,
-  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`),
-  # because that is where Claude Code actually lands this scratch — under whatever
-  # TMPDIR the ccd PROCESS runs under, never the child's own `$HOME/.cc-tmp/<id>`
-  # (`_child_tmpdir`'s TMPDIR, a different variable in a different process). A bare
+  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`).
+  # Claude Code's scratch FOLLOWS the session's TMPDIR (child-reclamation ledger,
+  # Measurement (a)): a child spawned with `_child_tmpdir`'s TMPDIR keeps it under its
+  # own `$HOME/.cc-tmp/<id>/claude-<uid>/`, which dies with that root. What lands here
+  # is the scratch of a child spawned WITHOUT that TMPDIR (`_child_tmpdir`'s rc 2), under
+  # whatever TMPDIR the ccd process runs under, so this is the root to measure (D-5888).
+  # Non-child sessions (rc 1) land here too, but ws-reclaim never measures them. A bare
   # `/tmp/claude-$(id -u)` measured nothing on a box whose TMPDIR points elsewhere —
   # macOS scan, mail 2375.
   local root="${CCD_RECLAIM_RESIDUE_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}" d b
@@ -32017,7 +32212,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its eight callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its nine callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -32025,12 +32220,17 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
   # and checkout directory. The eighth is the collector's quarantine path,
   # `_ws_collect_qpath`: the quarantine maker, the record writer and the
-  # record reader all reach this function through it, never directly, so
-  # the census stays eight.
+  # record reader all reach this function through it, never directly. The
+  # ninth is the removal mount question, `_ws_removal_mounts_clear`, in its
+  # `resolve` mode only (path-identity spec §3.5), for a removal whose path
+  # may stand under a symbolic link: a caller that passes `resolve` reaches
+  # this function through it, never directly, so the census stays nine.
+  # (`_ws_leaf_remove` asks it without `resolve`; its own call here is its
+  # root's, one of the three newline sites.)
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its eight callers only. Bare captures stand elsewhere, and the ones
+  # for its nine callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
@@ -32350,33 +32550,51 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
 }
 # ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
 WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
-_WS_SMALL=''
-_ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline; 1 when it is
-  #                            not a regular file or cannot be read; 2 when it holds more than 4096 bytes
+_WS_SMALL=''; _WS_SMALL_NUL=''
+_ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline, and _WS_SMALL_NUL
+  #                            = `inner` (a NUL stands before a byte that is not NUL, CR or LF), `trailing` (every
+  #                            NUL is in the file's closing run of NUL, CR and LF bytes) or '' (it holds none); 1
+  #                            when it is not a regular file or cannot be read; 2 when it holds more than 4096
+  #                            bytes. On 1 and 2, _WS_SMALL and _WS_SMALL_NUL are both ''
   # A FILE READ AS A FILE, bounded: `-f` first (a FIFO would block), the size
   # before the bytes, and the read is the group's redirection (an unopenable file
-  # answers 1). A NUL becomes a newline, never dropped. What an INNER one means
-  # is each caller's: in the `.git` file it splits the line, unmeasured; in an
-  # admin directory's `gitdir` back-link it leaves a newline in the text that is
-  # compared with the `.git` path, so the tree is refused when that path holds no
-  # newline, accepted when the NUL sits at the offset of a newline the path does
-  # hold (a hand-crafted file: git writes no NUL), and unmeasured otherwise
-  # (the corner is the path-identity programme's). A TRAILING one is a line
-  # end each caller strips, so `gitdir: A\0` and `gitdir: A\n\0` both read as
-  # A. Git reads the second as `A\n` and fails; ccd answers measured, safely:
-  # an A inside the leaf passes before any back-link is read (removing the leaf
-  # removes all of it), and outside the leaf only a tree git back-links passes
-  # (`_ws_leaf_checkout_one` says which back-links count).
-  local f="$1" sz
-  _WS_SMALL=''
+  # answers 1). A NUL becomes a newline, never dropped, and where the NULs stood
+  # is reported beside the bytes (path-identity spec §3.6). What an INNER one
+  # means is each caller's: in the `.git` file it splits the line, unmeasured;
+  # in an admin directory's `gitdir` back-link it is refused
+  # (`_ws_leaf_checkout_one`): git never writes one, and read as a newline it
+  # would let a hand-made back-link read as a `.git` path holding a newline at
+  # its offset. A TRAILING one is a line end each caller strips, so
+  # `gitdir: A\0` and `gitdir: A\n\0` both read as A. Git reads the second as
+  # `A\n` and fails; ccd answers measured, safely: an A inside the leaf passes
+  # before any back-link is read (removing the leaf removes all of it), and
+  # outside the leaf only a tree git back-links passes (`_ws_leaf_checkout_one`
+  # says which back-links count).
+  # THE NUL MAP is the same bounded read again, each NUL read as N, each CR or
+  # LF as r and every other byte as x, so where the NULs stood is a question
+  # about a string the shell can hold (it holds no NUL): an N before an x is an
+  # inner NUL. A regex, never a two-star glob, so 4096 bytes match in linear
+  # time; its `=~` overwrites BASH_REMATCH, which no caller reads across this
+  # call. It is a SECOND read: a writer between the two can only make the map
+  # say inner (refused, safely), or miss a NUL the first read already turned
+  # into a newline, and that back-link is then compared exactly as before.
+  # A read that fails part-way leaves both globals '' (the contract above).
+  local f="$1" sz m
+  _WS_SMALL=''; _WS_SMALL_NUL=''
   [[ -f "$f" ]] || return 1
   { sz=$(LC_ALL=C wc -c < "$f"); } 2>/dev/null || return 1
   sz="${sz//[!0-9]/}"
   [[ -n "$sz" ]] || return 1
   (( 10#$sz <= 4096 )) || return 2
-  { _WS_SMALL=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr '\000' '\n'; } < "$f" && printf x); } 2>/dev/null || return 1
+  { _WS_SMALL=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr '\000' '\n'; } < "$f" && printf x); } 2>/dev/null || { _WS_SMALL=''; return 1; }
   [[ "$_WS_SMALL" == *x ]] || { _WS_SMALL=''; return 1; }
   _WS_SMALL="${_WS_SMALL%x}"
+  { m=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr -c '\000\r\n' 'x' | LC_ALL=C tr '\000\r\n' 'Nrr'; } < "$f" && printf .); } 2>/dev/null \
+    || { _WS_SMALL=''; return 1; }
+  [[ "$m" == *. ]] || { _WS_SMALL=''; return 1; }
+  m="${m%.}"
+  if [[ "$m" =~ N.*x ]]; then _WS_SMALL_NUL=inner
+  elif [[ "$m" == *N* ]]; then _WS_SMALL_NUL=trailing; fi
   return 0
 }
 _WS_CHECKOUTS_WHY=''
@@ -32449,15 +32667,18 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # of any repository — or, under the collector's alias, the pre-move spelling
   # the two conditions below admit. Anything else is a tree git records
   # elsewhere: moved here, or an admin name a later worktree recycled. "Names
-  # THIS `.git` back" is a compare of text with each NUL of the back-link read
-  # as a newline, so it is literal only for a back-link without a NUL: one
-  # whose NUL sits at the offset of a newline in the `.git` path passes
-  # (`_ws_leaf_read_small` says which cases are refused and which are not).
+  # THIS `.git` back" is a compare of text, and the reader turns each NUL into
+  # a newline, so a back-link with a NUL INSIDE the path it names is refused
+  # first (path-identity spec §3.6): git never writes one, and a hand-made one
+  # whose NUL sits at the offset of a newline in the `.git` path would read as
+  # that path. A trailing NUL is a line end, stripped with the newlines below.
   _ws_reclaim_absent "$adp/gitdir"; rc=$?
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
   _ws_leaf_read_small "$adp/gitdir" \
     || { _WS_CHECKOUTS_WHY="$adp/gitdir could not be read whole, so whose tree $adp records was never asked"; return 2; }
+  [[ "$_WS_SMALL_NUL" != inner ]] \
+    || { _WS_CHECKOUTS_WHY="$adp/gitdir holds a NUL byte inside the path it names — git never writes one, so it is not git's record of the tree at $d"; return 1; }
   rec="$_WS_SMALL"
   while [[ "$rec" == *$'\n' ]]; do rec="${rec%$'\n'}"; done
   [[ "$rec" != "$f" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
@@ -32516,9 +32737,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # directory it names resolved physically — absent refuses (git no longer
   # records the tree), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
-  # this `.git` back (literally, or by its directory's physical path; each NUL
-  # of the back-link is read as a newline, so a hand-crafted one whose NUL sits
-  # at the offset of a newline in the `.git` path passes too), and
+  # this `.git` back (literally, or by its directory's physical path; a
+  # back-link with a NUL inside the path it names is refused, since git never
+  # writes one, and a trailing NUL is a line end), and
   # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
   # outranks an unmeasured entry, whatever order the walk lists them in.
   # THE ALIAS (the collector's alone, spec §5.10): `alias` is the leaf's physical
@@ -32571,6 +32792,47 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   [[ -z "$why" ]] || return 2
   return 0
 }
+_ws_removal_mounts_clear() {   # dir [resolve] -> 0 nothing is mounted at dir or under it — on Darwin, never asked
+  #                                (path-identity spec §3.5); 2 (_WS_MOUNTS_WHY) one is, the table could not be read
+  #                                whole, or (resolve) dir could not be resolved. Never 1: every caller refuses both
+  #                                alike
+  # ONE QUESTION, ONE DEFINITION, ONE GUARD (path-identity spec §3.5). A
+  # removal that could cross a mount asks it before it acts. The device
+  # compare in `_ws_leaf_remove` and `rm --one-file-system` see only another
+  # device, so a bind mount of the leaf's own file system was crossed, and a
+  # same-uid process can make a FUSE mount in ccd's namespace. This is the
+  # collector's own question, `_ws_collect_mounts_clear`, reused and never
+  # copied: the kernel's table, read through its one seam
+  # (`_ws_collect_mountinfo`), with a mount point at or under the path
+  # compared as encoded text.
+  # - THE GUARD is the first line of code below, and the only one: Darwin has
+  #   no such table, so nothing is asked there and the caller's removal runs
+  #   as before. "Not asked" and "clear" both answer 0, and both mean
+  #   "proceed".
+  # - THE PATH is the one the removal acts on, spelled physically, because the
+  #   table writes mount points physically. `_ws_leaf_remove` hands its leaf,
+  #   physical by construction (a physical root, an id with no `/`, and no
+  #   link), so nothing here enters it: resolved, a mode-000 leaf could not be
+  #   entered, and would be kept for ever. A caller whose path may stand under
+  #   a symbolic link passes `resolve`, and the path is resolved first
+  #   (`_ws_dir_physical`); a path that cannot be resolved is never asked, and
+  #   answers 2. Bash's `pwd -P` keeps a link target's leading `//`, which
+  #   Linux reads as `/` and the table never writes, so it is collapsed,
+  #   never refused.
+  # - THE ANSWER is 0 or 2, never 1. The question's own 1 (a mount stands) and
+  #   2 (the table was not read whole) are folded HERE, so no caller can split
+  #   them or read either as a refusal: each keeps what it would have removed.
+  [[ "$CCD_OS" != darwin ]] || return 0
+  local d="${1-}"
+  if [[ -n "${2-}" ]]; then
+    _ws_dir_physical "$d" \
+      || { _WS_MOUNTS_WHY="$d cannot be resolved ($_WS_PHYS_WHY), so whether anything is mounted under it was never asked"; return 2; }
+    d="$_WS_PHYS"
+  fi
+  [[ "$d" != //[!/]* ]] || d="${d#/}"   # Linux reads `//x` as `/x`, and the kernel's table never writes `//`
+  _ws_collect_mounts_clear "$d" && return 0
+  return 2
+}
 _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
   # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
@@ -32607,7 +32869,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   #   `--one-file-system` measures from its own argument, so a mount AT the
   #   leaf (a session's own FUSE or sshfs mount in its TMPDIR) would be emptied
   #   before its rmdir failed. (A bind mount of the root's OWN file system
-  #   carries the root's device, and is not seen: the limit stated below.)
+  #   carries the root's device, so this compare cannot see one: the mount
+  #   question, below, does.)
   #   Asking the physical path means entering the
   #   leaf, so the leaf's OWN owner bits are set first (`find -P … -maxdepth 0
   #   -user … -exec chmod … {} +`: find never follows a link, though the chmod
@@ -32619,10 +32882,25 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
   #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
-  #   (`--one-file-system`; BSD's `-x` on Darwin). THE LIMIT, STATED: both
-  #   compare `st_dev` alone, so a bind mount of the SAME file system inside
-  #   the leaf is crossed (GNU rm's own documented limit); only root can make
-  #   one.
+  #   (`--one-file-system`; BSD's `-x` on Darwin). Both compare `st_dev`
+  #   alone, so `rm` by itself would cross a bind mount of the SAME file
+  #   system inside the leaf (GNU rm's own documented limit), and a same-uid
+  #   process can make a FUSE mount in ccd's namespace: on the measured box
+  #   the crossing is live, not latent (path-identity spec §3.5).
+  # - THE MOUNT QUESTION (path-identity spec §3.5) is asked TWICE, through
+  #   `_ws_removal_mounts_clear`: directly after the device compare, and
+  #   again directly before `rm`. The first comes before the owner bits, the
+  #   checkout question and the permission pass, so neither the leaf's own
+  #   mode nor anything inside a mount is written before it answers; the
+  #   second sees a mount made while those ran. A mount point at or under the
+  #   leaf in the kernel's table (of any file system, a same-device bind
+  #   included), or a table that could not be read whole, answers 2, and
+  #   nothing is removed: the tail keeps the leaf `unmeasured`, and the
+  #   collector's step 6 keeps its record and slot (`failed quarantine-kept`,
+  #   for a mount made after its step 5 asked). The leaf is handed over
+  #   physical and is never resolved there, so the question never enters it,
+  #   and a mode-000 leaf is answered as before. Darwin has no such table, and
+  #   is not asked.
   # - EVERY EXIT CODE IS READ, and the answer is a MEASUREMENT: after any
   #   removal the leaf's absence is PROVEN, and a leaf that stands again (a
   #   writer re-created it) is unmeasured, never "removed". rc 2 is not
@@ -32703,6 +32981,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
       || { _WS_LEAF_WHY="the device of $leaf or of $rroot could not be read, so whether it is a mount point was never asked"; return 2; }
     [[ "${ldev%%:*}" == "${rdev%%:*}" ]] \
       || { _WS_LEAF_WHY="$leaf is a mount point (device ${ldev%%:*}, not its root's ${rdev%%:*}) — ccd never removes a mount"; return 1; }
+    _ws_removal_mounts_clear "$leaf" \
+      || { _WS_LEAF_WHY="$_WS_MOUNTS_WHY — nothing under $leaf was removed"; return 2; }
     find -P "$leaf" -maxdepth 0 -type d -user "$me" ! -perm -u=rwx -exec chmod u+rwx {} + 2>/dev/null \
       || { _WS_LEAF_WHY="the owner bits of $leaf could not be set, so nothing under it was removed"; return 2; }
     lreal=$(cd -- "$leaf" >/dev/null 2>&1 && pwd -P) \
@@ -32715,6 +32995,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
     (( rc != 1 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 1; }
+    _ws_removal_mounts_clear "$leaf" \
+      || { _WS_LEAF_WHY="$_WS_MOUNTS_WHY — nothing under $leaf was removed"; return 2; }
     if [[ "$CCD_OS" == darwin ]]; then err=$(rm -rfx -- "$leaf" 2>&1); rc=$?
     else err=$(rm -rf --one-file-system -- "$leaf" 2>&1); rc=$?; fi
     (( rc == 0 )) \
@@ -32728,14 +33010,24 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
 # THE TEMP ROOT'S REMOVAL (spec §5.6 and §5.2): the ONE removal helper on
 # the temp root, then — on its rc 0 only, the leaf removed or PROVEN
 # absent — the leaf's witness (`_ws_tmproot_witness_drop`). Remove, prove,
-# THEN unlink the witness: a crash between the last two leaves a witness with
+# THEN drop the witness: a crash between the last two leaves a witness with
 # no leaf, which is nothing to do and is cleaned by the next call; the
 # reverse order could leave a leaf with no witness, which no collector may
 # ever take. A refusal or an unmeasured answer leaves the witness beside the
 # leaf it still describes.
+# THE ANSWER IS THE LEAF'S AND THE DROP'S (path-identity spec §3.2). A drop
+# that keeps the witness (its 1) or could not measure (its 2) makes this
+# helper answer 2, `_WS_LEAF_WHY` reading "no leaf stands, but " and the
+# drop's reason (step (6)'s own lead, true whether the leaf half removed the
+# leaf or PROVED it absent), so the tail records the temp root `unmeasured`
+# with that reason. Never 1: this helper's 1 means the leaf was refused, and
+# no leaf stands here.
 # The tail passes NO dev:ino (the row and the marker prove identity there,
-# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual);
-# a collector passes the witness's own.
+# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual).
+# The optional second argument hands an expected dev:ino through to
+# `_ws_leaf_remove`; no caller in ccd passes one: the collector removes its
+# slot's leaf through `_ws_leaf_remove` itself, and drops a witness by its
+# own compare-and-drop (`_ws_collect_witness_cad`).
 # An id no witness is named for (`_ws_tmproot_id_ok`: anything dot-leading,
 # `.`, `..` and the writer's own `.<id>.*.tmp` names among them) is refused
 # FIRST, rc 1 with `_WS_LEAF_WHY`, and nothing is asked or touched: a
@@ -32748,8 +33040,9 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
 # leaf that is gone is nothing to keep, and after the row's purge nothing
 # would ask about that id again. Those arms call the drop alone, never this
 # helper: its leaf half would remove, unprobed, a leaf re-created after the
-# absence was proven.
-_ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed-or-absent | 1 refused | 2 unmeasured; _WS_LEAF_WHY)
+# absence was proven. Either way the drop decides, by its own proofs,
+# whether the witness dies.
+_ws_tmproot_remove() {   # id [expect-devino] -> 0 the leaf removed or PROVEN absent, and its witness drop complete | 1 the leaf refused | 2 unmeasured: the leaf, or a drop that kept the witness (_WS_LEAF_WHY)
   local id="${1-}" rc=0
   _ws_tmproot_id_ok "$id" || { _WS_LEAF_WHY="'$id' is not an id a witness is named for, so nothing was touched"; return 1; }
   if [[ -n "${2-}" ]]; then
@@ -32758,28 +33051,186 @@ _ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed
     _ws_leaf_remove "$HOME/.cc-tmp" "$id"; rc=$?
   fi
   (( rc == 0 )) || return "$rc"
-  _ws_tmproot_witness_drop "$id" || :
-  return 0
+  _ws_tmproot_witness_drop "$id" && return 0
+  _WS_LEAF_WHY="no leaf stands, but $_WS_WDROP_WHY"
+  return 2
 }
-# THE WITNESS'S DEATH (spec §5.2), and nothing else: the witness file of
-# `<id>` is unlinked; the leaf it names is never looked at, so a caller drops
-# it only once that leaf is removed or PROVEN absent. A drop never fails its
-# caller's act — the act a caller reports is the leaf's: a witness that cannot
-# be unlinked is warned about, and so is a `tmproots/` that is itself a link,
-# which is never followed (the file it reaches is not one ccd wrote); both
-# answer 0. An id no witness is named for (`_ws_tmproot_id_ok`) is refused,
-# rc 1 and warned, with nothing touched.
-_ws_tmproot_witness_drop() {   # id -> 0 dropped, or warned about; 1 an id no witness is named for, nothing touched
-  local id="${1-}" w
-  _ws_tmproot_id_ok "$id" \
-    || { echo "ccd: warn: '$id' is not an id a witness is named for, so no witness was touched" >&2; return 1; }
-  w=$(_ws_tmproot_witness_file "$id")
-  if [[ -L "${w%/*}" ]]; then
-    echo "ccd: warn: $id's temp root is gone but ${w%/*} is a link, not ccd's own directory — it is never followed, so the file it reaches was left as it stands" >&2
-    return 0
+# THE WITNESS'S DEATH (path-identity spec §3.2 and §3.3, Figure 3): the
+# witness of `<id>` is dropped only on a PROVEN absence of its leaf, on the
+# device the witness records, beside no quarantine slot of the id, and only
+# in the generation this call read. Its callers are `_ws_tmproot_remove`,
+# after its leaf half answers 0, and the reclaim tail's step (6) on its kept
+# arms, once `_ws_reclaim_absent` has proven no leaf stands; both run under
+# the id's reap lock.
+# THREE ANSWERS, and every reason in `_WS_WDROP_WHY` begins "its witness was
+# kept: " and names its cause before any path, which follows in parentheses:
+#   0 complete — `_WS_WDROP` is `dropped` (exactly the generation read was
+#     unlinked) or `absent` (no witness stood, at the read or at the compare,
+#     PROVEN by `_ws_reclaim_absent`: never read off a failed test, because a
+#     `tmproots/` this process cannot search reads `-e` false);
+#   1 kept — a quarantine slot of the id stands, whether or not a record names
+#     it; a leaf stands at `~/.cc-tmp/<id>` again; a newer generation stands
+#     (or one this call did not read is stranded at a compare-and-drop aside);
+#     or the id is no witness's name, and nothing is touched;
+#   2 unmeasured — no witness was read, but its absence could not be proven;
+#     the witness does not parse (a `tmproots/` that is a link included: never
+#     followed); the physical `~/.cc-tmp` is on another device
+#     or its device cannot be read; the quarantine cannot be listed; the
+#     leaf's absence cannot be proven again; or the compare could not finish.
+# THE ORDER IS FIXED: the read, the device the witness records
+# (`_ws_collect_root_dev`), the slots (`_ws_collect_slots_of`), the leaf's
+# absence proven again (`_ws_reclaim_absent`), then the drop. The device
+# comes BEFORE the slots: with `~/.cc-tmp` deleted whole, or its volume
+# missing and its mount point standing empty, every slot under it reads
+# absent, and "no slot" would license the drop. The absence is proven again
+# HERE because the caller's proof came before this read: a leaf re-created
+# between the two keeps its witness, so "kept" always means "not proven gone".
+# TWO WAYS TO DROP. Where `mv` makes a NOREPLACE rename (`_ws_collect_mv_ok`),
+# the collector's own compare-and-drop, `_ws_collect_witness_cad`, is called
+# with the fields of THIS read: moved aside, compared, unlinked there only if
+# equal, and moved back otherwise — no window. Where it does not (Darwin, or
+# an `mv` without `--no-copy`), the witness is read a second time, all six
+# fields are compared with the first read, and only an equal one is unlinked
+# and proven gone. The window from that second read to the unlink is a stated
+# residual (`tail-drop-not-noreplace-without-mv-no-copy`): a writer that lands
+# in it loses the witness of a leaf that is not gone, which leaks that leaf
+# (nothing collects what no witness names) and never loses it.
+# IT PRINTS NOTHING: the reason reaches the journal through the caller's row.
+# The compare-and-drop warns once on stderr when it cannot move what it moved
+# aside back; that call's stderr is dropped here, and the kept reason is
+# chosen by a look at the witness's name instead — nothing there means the
+# move back failed and the generation it moved aside stands at its aside;
+# otherwise a newer generation stands at the name.
+_WS_WDROP=''; _WS_WDROP_WHY=''
+_ws_tmproot_witness_drop() {   # id -> 0 complete (_WS_WDROP dropped or absent); 1 kept; 2 unmeasured (both with _WS_WDROP_WHY)
+  local id="${1-}" w leaf rc run dev ino bt uid at
+  local _WS_WIT_DEV='' _WS_WIT_INO='' _WS_WIT_BTIME='' _WS_WIT_RUN='' _WS_WIT_UID='' _WS_WIT_AT='' _WS_CAD='' _WS_CAD_WHY=''
+  local -a _WS_QSLOTS=()
+  _WS_WDROP=''; _WS_WDROP_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_WDROP_WHY="its witness was kept: '$id' is not an id a witness is named for, so no witness was touched"; return 1; }
+  w=$(_ws_tmproot_witness_file "$id"); leaf="$HOME/.cc-tmp/$id"
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_reclaim_absent "$w" && { _WS_WDROP=absent; return 0; }   # no witness stands, PROVEN: nothing to drop
+    _WS_WDROP_WHY="its witness was kept: no witness was read at its name, and its absence could not be proven (${_WS_ABSENT_WHY:-something stands at $w})"; return 2; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: it cannot be read as ccd writes it, so the generation it names was never read ($w; a link at ${w%/*} is never followed)"; return 2; }
+  run="$_WS_WIT_RUN"; dev="$_WS_WIT_DEV"; ino="$_WS_WIT_INO"; bt="$_WS_WIT_BTIME"; uid="$_WS_WIT_UID"; at="$_WS_WIT_AT"
+  _ws_collect_root_dev "$dev" "the witness of $id" || { _WS_WDROP_WHY="its witness was kept: the physical ~/.cc-tmp was not proven on the device the witness records ($_WS_ROOTDEV_WHY)"; return 2; }
+  _ws_collect_slots_of "$id" || { _WS_WDROP_WHY="its witness was kept: the quarantine slots of the id could not be listed ($_WS_QSLOTS_WHY)"; return 2; }
+  (( ${#_WS_QSLOTS[@]} == 0 )) || { _WS_WDROP_WHY="its witness was kept: the quarantine slot ${_WS_QSLOTS[0]##*/} of $id stands, so the collector lists it"; return 1; }
+  _ws_reclaim_absent "$leaf"; rc=$?   # the absence, proven again here
+  (( rc != 1 )) || { _WS_WDROP_WHY="its witness was kept: a leaf stands at $leaf again, so the leaf it names is not proven gone"; return 1; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: the absence of the leaf could not be proven again ($_WS_ABSENT_WHY)"; return 2; }
+  if _ws_collect_mv_ok; then   # a NOREPLACE rename exists: the collector's compare-and-drop, with this read's fields
+    _ws_collect_witness_cad "$id" "$dev" "$ino" "$bt" "$run" "$at" 2>/dev/null \
+      || { _WS_WDROP_WHY="its witness was kept: the compare-and-drop could not finish, so it was never compared and dropped ($_WS_CAD_WHY)"; return 2; }
+    case "$_WS_CAD" in dropped|absent) _WS_WDROP="$_WS_CAD"; return 0 ;; esac
+    _ws_reclaim_absent "$w" && { _WS_WDROP_WHY="its witness was kept: a generation this tail did not read could not be moved back from its compare-and-drop aside, where it stands, so nothing stands at its name ($w)"; return 1; }
+    _WS_WDROP_WHY="its witness was kept: a newer generation stands at $w"; return 1
   fi
-  rm -f -- "$w" 2>/dev/null \
-    || echo "ccd: warn: $id's temp root is gone but its witness $w could not be removed — a witness with no leaf is nothing to do, and a later removal of $id cleans it" >&2
+  # NO NOREPLACE RENAME: a second read, six fields compared, then the unlink.
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_reclaim_absent "$w" && { _WS_WDROP=absent; return 0; }   # it went since the first read, PROVEN
+    _WS_WDROP_WHY="its witness was kept: on a second read no witness was read at its name, and its absence could not be proven (${_WS_ABSENT_WHY:-something stands at $w})"; return 2; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: on a second read it cannot be read as ccd writes it, so it was never dropped ($w)"; return 2; }
+  [[ "$_WS_WIT_RUN" == "$run" && "$_WS_WIT_DEV" == "$dev" && "$_WS_WIT_INO" == "$ino" && "$_WS_WIT_BTIME" == "$bt" && "$_WS_WIT_UID" == "$uid" && "$_WS_WIT_AT" == "$at" ]] \
+    || { _WS_WDROP_WHY="its witness was kept: a newer generation stands at $w"; return 1; }
+  rm -f -- "$w" 2>/dev/null || :
+  _ws_reclaim_absent "$w" || { _WS_WDROP_WHY="its witness was kept: its unlink could not be proven ($w${_WS_ABSENT_WHY:+: $_WS_ABSENT_WHY})"; return 2; }
+  _WS_WDROP=dropped; return 0
+}
+# THE COMPARE-AND-DROP ASIDE, SETTLED (path-identity spec §3.6, TR6 A). The
+# collector's compare-and-drop (`_ws_collect_witness_cad`), which the tail's
+# drop reuses, moves a witness aside to `.<id>.drop.<pid>`
+# (`_ws_tmproot_aside_path`) by one NOREPLACE rename, reads it there, then
+# unlinks it or moves it back. A SIGKILL between the rename and the unlink, or
+# a move back that fails, leaves that aside and no witness: no collector could
+# finish the id, and no tail would drop it. This settles every aside of one id
+# under the reap lock THE CALLER HOLDS (`$REG/.reap-<id>.lock`): ws-collect
+# after its pause and before its evaluation, the reclaim and expiry tail before
+# its step (6).
+# - NO WITNESS STANDS: a SOLE aside that reads as the id's witness
+#   (`_ws_tmproot_witness_parse`, the reader's own rules) is RESTORED by `link`,
+#   then a dev:ino proof, then `rm` of the aside; never by a rename. `link` is
+#   portable (the tail runs on Darwin, where `_ws_collect_mv` refuses), and it
+#   refuses a name that exists, so a witness a spawn wrote meanwhile (its
+#   writer takes no lock) is never replaced. Two or more asides, or one that
+#   does not read as the witness, are never chosen between: unmeasured.
+# - THE CRASH STATE IS SAFE: a death between the `link` and the `rm` leaves
+#   one inode under two names, an aside EQUAL to the witness, which the next
+#   settle unlinks.
+# - A WITNESS STANDS (from the start, or a writer's that won the name, or one
+#   that replaced the name after the link, which the dev:ino proof catches):
+#   an aside that IS it (one inode) or reads as it field for field (the
+#   grammar is canonical, so that is byte for byte) is redundant and goes; any
+#   other is LEFT and named, never restored over the witness and never
+#   unlinked, since it may be the generation a collector acted on.
+# It PRINTS NOTHING: it answers by rc and by _WS_ASIDE_DID and _WS_ASIDE_WHY,
+# and each caller says what a person reads. It never sets REAP_*.
+_WS_ASIDE_DID=''; _WS_ASIDE_WHY=''
+_ws_tmproot_aside_settle() {   # id -> 0 with _WS_ASIDE_DID = none | restored | unlinked | left (_WS_ASIDE_WHY names
+  #                                each aside left, and why); 2 unmeasured (_WS_ASIDE_WHY). The CALLER HOLDS the lock
+  local LC_ALL=C id="${1-}" w a rc wdi adi wf eq left=''
+  local _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT
+  local -a _WS_ASIDES=()
+  _WS_ASIDE_DID=''; _WS_ASIDE_WHY=''
+  _ws_tmproot_id_ok "$id" \
+    || { _WS_ASIDE_WHY="'$id' is not an id a witness is named for, so no aside of it was looked at"; return 2; }
+  _ws_collect_asides_of "$id" >/dev/null \
+    || { _WS_ASIDE_WHY="the compare-and-drop asides of $id could not be listed ($_WS_ASIDES_WHY), so none was settled"; return 2; }
+  (( ${#_WS_ASIDES[@]} )) || { _WS_ASIDE_DID=none; return 0; }
+  w=$(_ws_tmproot_witness_file "$id")
+  _ws_reclaim_absent "$w"; rc=$?
+  (( rc != 2 )) \
+    || { _WS_ASIDE_WHY="whether a witness of $id stands could not be asked ($_WS_ABSENT_WHY), so no aside of it was settled"; return 2; }
+  if (( rc == 0 )); then
+    (( ${#_WS_ASIDES[@]} == 1 )) \
+      || { _WS_ASIDE_WHY="${#_WS_ASIDES[@]} compare-and-drop asides of $id stand and no witness does, so which is its witness is never chosen: ${_WS_ASIDES[*]}"; return 2; }
+    a="${_WS_ASIDES[0]}"
+    _ws_tmproot_witness_parse "$a" "$id" \
+      || { _WS_ASIDE_WHY="the one compare-and-drop aside of $id does not read as its witness, so it is never restored: $a"; return 2; }
+    if link "$a" "$w" 2>/dev/null; then
+      adi=$(_plat_devino "$a" 2>/dev/null) || adi=''
+      wdi=$(_plat_devino "$w" 2>/dev/null) || wdi=''
+      if [[ "$adi" =~ ^[0-9]+:[0-9]+$ && "$adi" == "$wdi" ]]; then
+        rm -f -- "$a" 2>/dev/null || :
+        _ws_reclaim_absent "$a" \
+          || { _WS_ASIDE_WHY="the compare-and-drop aside of $id was restored as its witness, but it could not be unlinked after, so one witness stands under two names until the next settle: $a"; return 2; }
+        _WS_ASIDE_DID=restored; return 0
+      fi
+    fi
+    # THE RESTORE DID NOT TAKE: `link` refused a name a writer took first, or
+    # the name was replaced after the link. What stands there now is asked
+    # once more, and the witness-stands arm below runs ONCE.
+    _ws_reclaim_absent "$w"; rc=$?
+    (( rc == 1 )) \
+      || { _WS_ASIDE_WHY="the compare-and-drop aside of $id was not restored, and no witness is proven to stand at $w after${_WS_ABSENT_WHY:+ ($_WS_ABSENT_WHY)}: $a"; return 2; }
+  fi
+  wdi=$(_plat_devino "$w" 2>/dev/null) || wdi=''
+  [[ "$wdi" =~ ^[0-9]+:[0-9]+$ ]] || wdi=''
+  wf=''
+  if _ws_tmproot_witness_parse "$w" "$id"; then
+    wf="$_WS_WIT_RUN $_WS_WIT_DEV $_WS_WIT_INO $_WS_WIT_BTIME $_WS_WIT_UID $_WS_WIT_AT"
+  fi
+  for a in "${_WS_ASIDES[@]}"; do
+    adi=$(_plat_devino "$a" 2>/dev/null) || adi=''
+    eq=0
+    if [[ -n "$wdi" && "$adi" == "$wdi" ]]; then
+      eq=1
+    elif [[ -n "$wf" ]] && _ws_tmproot_witness_parse "$a" "$id" \
+         && [[ "$_WS_WIT_RUN $_WS_WIT_DEV $_WS_WIT_INO $_WS_WIT_BTIME $_WS_WIT_UID $_WS_WIT_AT" == "$wf" ]]; then
+      eq=1
+    fi
+    if (( eq )); then
+      rm -f -- "$a" 2>/dev/null || :
+      _ws_reclaim_absent "$a" && continue
+      left+="${left:+; }$a (the witness itself, but it could not be unlinked)"
+    else
+      left+="${left:+; }$a (not the witness that stands at $w)"
+    fi
+  done
+  [[ -n "$left" ]] || { _WS_ASIDE_DID=unlinked; return 0; }
+  _WS_ASIDE_DID=left
+  _WS_ASIDE_WHY="a compare-and-drop aside of $id was left beside its witness, never restored over it: $left"
   return 0
 }
 _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printable ASCII only (every
@@ -32861,7 +33312,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc wdrc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   # Every failure from here on is printed past a breadcrumb, for both verbs
   # (`crumb`, spec §5.6).
@@ -33112,6 +33563,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # path the lines name, and a record line can name a path outside the tree
   # altogether — `git worktree remove` without a force flag on a clean tree
   # that stands removes the TREE, not only its record (measured, both).
+  # NO FORCED REMOVAL CROSSES A MOUNT (path-identity spec §3.5). A checkout
+  # that STANDS is asked `_ws_removal_mounts_clear` directly before its
+  # `_ws_reclaim_keep_of`, and again directly before its forced removal:
+  # nothing measured says git's forced recursive delete stops at a mount,
+  # and a FUSE daemon outlives the pane kill. The helper answers a mount at
+  # or under the checkout and a table it could not read whole alike, and
+  # both fail `worktree-remove-failed` here, with the breadcrumb and the
+  # checkout standing; the pane is already down, so a mount that stays
+  # fails every retry until it is gone. `cpath` is physical by then
+  # (`_ws_reclaim_nested_proven` resolved it in this iteration), so the ask
+  # enters nothing. A checkout PROVEN gone is not asked: its arm clears a
+  # record, with no force flag, over nothing that stands. And the child's
+  # whole tree is not asked before this loop: a mount outside every nested
+  # checkout is step (4)'s to find.
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
@@ -33167,8 +33632,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this $noun pinned, so nothing further was deleted"
           return 1
         fi
+        _ws_removal_mounts_clear "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
+        _ws_removal_mounts_clear "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       elif (( rec == 0 )); then
@@ -33238,6 +33707,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # workdir also pruned, the reclaim removed the other worktree and reported
   # success; with the record standing, git's own validation refused). This is
   # the rung for that window.
+  # AND THE TREE IS ASKED THE MOUNT QUESTION (path-identity spec §3.5), as
+  # step (3) asks each standing checkout: `_ws_removal_mounts_clear` directly
+  # before its `_ws_reclaim_keep_of`, and again directly before the forced
+  # removal. Either of its answers fails `worktree-remove-failed`, with the
+  # breadcrumb and the tree standing. `$workdir` is the record's spelling,
+  # and a symlinked ancestor of it stays legal (`_ws_reclaim_owned`), while
+  # the kernel's table names the physical mount point, so the helper
+  # resolves it first (`resolve`): a standing tree that cannot be resolved
+  # is not asked, and so fails here too, before its keep. A tree PROVEN gone
+  # is not asked: step (5) clears its record with no force flag.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
       _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
@@ -33245,8 +33724,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ -d "$workdir" ]]; then
+      _ws_removal_mounts_clear "$workdir" resolve \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
         || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
+      _ws_removal_mounts_clear "$workdir" resolve \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
     elif ! _ws_reclaim_absent "$workdir"; then
@@ -33345,6 +33828,21 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     _reg_set "$id" reaping "$_WS_RCL_ACT:artifacts"
     phase=artifacts
   fi
+  # THE COMPARE-AND-DROP ASIDES, SETTLED BEFORE STEP (6) (path-identity spec
+  # §3.6): a collector that died inside its compare-and-drop, or whose move
+  # back failed, left the witness at `.<id>.drop.<pid>`, where the drop below
+  # never looks. `_ws_tmproot_aside_settle` restores a sole aside that reads as
+  # the witness, so step (6) drops it with its leaf; unlinks one that is the
+  # witness; and leaves any other. Under this verb's reap lock, and on every
+  # resume (each one reaches this line). An aside keeps no leaf, so a settle
+  # that is unmeasured, or that leaves an aside, only WARNS: it never sets
+  # `tmpRootKept`, and the collector's audit lists the aside as `aside`
+  # (`tail-aside-warns-without-keeping`).
+  if ! _ws_tmproot_aside_settle "$id"; then
+    echo "ccd: warn: $id's compare-and-drop asides were not settled: $_WS_ASIDE_WHY — the collector's audit lists them" >&2
+  elif [[ "$_WS_ASIDE_DID" == left ]]; then
+    echo "ccd: warn: $_WS_ASIDE_WHY" >&2
+  fi
   # (6) The artifacts (rule 2), each through `_ws_leaf_remove`, the ONE
   # removal helper (spec §5.6): the clips directory, then the per-session
   # temp root. A leaf the helper refuses, or could not measure, is KEPT: the
@@ -33362,14 +33860,22 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # wait after the kill delayed everything since, and this is the answer the
   # removal acts on. Nobody: the helper removes it. In use, or unmeasured (on
   # Darwin, always): the leaf is KEPT, and said — but only a leaf that STANDS
-  # is kept: over nothing, nothing is recorded. `_ws_reclaim_absent`'s three
-  # answers are read apart there: absent, PROVEN — nothing is kept, and the
-  # leaf's witness is dropped (`_ws_tmproot_witness_drop`, spec §5.2; never
-  # through `_ws_tmproot_remove`, whose leaf half would remove, unprobed, a
-  # leaf re-created since); standing — kept as the probe said; and an absence
-  # that could not be proven — kept `unmeasured`, with the absence's reason,
-  # and the witness stays. Every reason the row carries is the probe's, the
-  # absence's or the helper's, through `_ws_leaf_why_line`.
+  # is kept. `_ws_reclaim_absent`'s three answers are read apart there:
+  #   absent, PROVEN: the leaf's witness goes to `_ws_tmproot_witness_drop`
+  #     alone, never through `_ws_tmproot_remove`, whose leaf half would
+  #     remove, unprobed, a leaf re-created since. The drop takes exactly the
+  #     generation it read, on the device the witness records, beside no
+  #     quarantine slot, once it has proven the leaf absent again
+  #     (path-identity spec §3.2, §3.3). Its answer is READ, never swallowed:
+  #     a complete drop records nothing; a drop that kept the witness (rc 1)
+  #     or could not measure it (rc 2) keeps the temp root `unmeasured`, its
+  #     reason "no leaf stands, but" the drop's — no new word, and the same
+  #     answer `_ws_tmproot_remove` gives on the removal arm;
+  #   standing: kept as the probe said;
+  #   an absence that could not be proven: kept `unmeasured`, with the
+  #     absence's reason, and the witness stays.
+  # Every reason the row carries is the probe's, the absence's, the drop's or
+  # the helper's, through `_ws_leaf_why_line`.
   # A LINK OR FILE LEAF is no one's temp root (`_child_tmpdir` composes TMPDIR
   # only for a real directory), and unlinking it touches nothing it names: it
   # is never kept for its users, on any platform (spec §5.6; wave 3's
@@ -33395,13 +33901,15 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     # The kept arms: the witness goes ONLY on a proven absence, and alone (spec §5.2); a leaf that stands keeps both.
     1) _ws_reclaim_absent "$HOME/.cc-tmp/$id"; tarc=$?
        case "$tarc" in
-         0) _ws_tmproot_witness_drop "$id" || : ;;   # nothing stands there: nothing is kept
+         0) _ws_tmproot_witness_drop "$id"; wdrc=$?   # no leaf stands: its witness goes only on a COMPLETE drop
+            (( wdrc == 0 )) || { tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "no leaf stands, but $_WS_WDROP_WHY"); } ;;
          1) tmpkept=in-use; tmpwhy=$(_ws_leaf_why_line "still in use after the bounded wait — $_WS_PATH_USERS_WHY") ;;
          *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_ABSENT_WHY") ;;
        esac ;;
     *) _ws_reclaim_absent "$HOME/.cc-tmp/$id"; tarc=$?
        case "$tarc" in
-         0) _ws_tmproot_witness_drop "$id" || : ;;   # nothing stands there: nothing is kept
+         0) _ws_tmproot_witness_drop "$id"; wdrc=$?   # no leaf stands: its witness goes only on a COMPLETE drop
+            (( wdrc == 0 )) || { tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "no leaf stands, but $_WS_WDROP_WHY"); } ;;
          1) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_PATH_USERS_WHY") ;;
          *) tmpkept=unmeasured; tmpwhy=$(_ws_leaf_why_line "$_WS_ABSENT_WHY") ;;
        esac ;;
@@ -33876,7 +34384,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
 _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 refused `child`
   # RUNG 2′, ITS SECOND HALF. A marker that reads as a child, or that stands and
   # cannot be read, refuses `child` — retryable, and never this verb's: a child
-  # is the RECLAIM lane's (spec §5.3, CCR-15 R29's direction: an unreadable
+  # is the RECLAIM lane's (spec §5.3, #166 R29's direction: an unreadable
   # marker defers). Presence is the test (`-e`, and `-L` for a dangling link),
   # never the grammar: a marker this box cannot parse is still not "none".
   local id="$1"
@@ -34187,7 +34695,7 @@ sys.stdout.write(str(v))
 }
 
 _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
-  # A CRASH MAY NOT LAUNDER A REFUSAL (CCR-15 §5.6, carried). What authorised
+  # A CRASH MAY NOT LAUNDER A REFUSAL (#166 §5.6, carried). What authorised
   # this expiry is re-asserted before anything else runs: the row; the ARCHIVE
   # EPOCH — still the one the tombstone recorded when the act began, and still
   # old enough (a workspace that was returned is `not-archived`; one archived
@@ -34379,7 +34887,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
-  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # `crumb` (#166 spec §5.6), said as ws-reclaim says it (workspace lifecycle
   # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
   # so its `probe-unmeasured` below is printed past it and the server reads it
   # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
@@ -34426,7 +34934,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
       _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
       return 1
     fi
-    # THE CONSENT BINDS THE BRANCH, as a reclaim's does (CCR-15 spec §5.5;
+    # THE CONSENT BINDS THE BRANCH, as a reclaim's does (#166 spec §5.5;
     # workspace lifecycle wave 5). The token was checked against the in-lock
     # recompute, and the pin read the branch again, itself. A branch deleted
     # (or made) between the two reads would have the act go on over what the
@@ -34517,7 +35025,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     return 1
   else
     printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
-    # A TERMINAL refusal is journaled, and only a terminal one (CCR-15 §5.9's
+    # A TERMINAL refusal is journaled, and only a terminal one (#166 §5.9's
     # rule, carried): the server audits first and stops on a refusal, so this is
     # the one place it reaches the lifecycle mirror; a retryable word a pass
     # would bury the journal.
@@ -34749,6 +35257,22 @@ _ws_collect_rec_id() {   # name -> 0 with _WS_REC_ID = the id a `<id>.<ns>.<pid>
   _WS_REC_ID="$got"
 }
 
+_WS_ASIDE_ID=''   # the id `_ws_collect_aside_id` last parsed; '' after a refusal
+_ws_collect_aside_id() {   # name -> 0 with _WS_ASIDE_ID = the id a `.<id>.drop.<pid>` name is for: the leading dot and
+  #                            the trailing `.drop.<digits>` stripped, and nothing else; 1 when the name is no such name
+  # A COMPARE-AND-DROP ASIDE'S NAME (path-identity spec §3.6), the one dot-leading
+  # shape a collector reads for an id. EXACT, NEVER A PREFIX: the longest part
+  # between the leading dot and the last `.drop.<digits>` is the id, and it must
+  # itself be an id a witness is named for. The server's lane holds this grammar
+  # too, pinned equal to this body's one `re=` by a parity test.
+  local LC_ALL=C re='^\.(.+)\.drop\.([0-9]+)$' got
+  _WS_ASIDE_ID=''
+  [[ "${1-}" =~ $re ]] || return 1
+  got="${BASH_REMATCH[1]}"
+  _ws_tmproot_id_ok "$got" || return 1
+  _WS_ASIDE_ID="$got"
+}
+
 _ws_collect_qrec_dir() { printf '%s' "$REG/tmpquarantine"; }   # -> the quarantine records' directory (a path, not a decision)
 
 _WS_QPATH=''; _WS_QPATH_WHY=''
@@ -34902,6 +35426,40 @@ _ws_collect_records_of() {   # id -> 0 with _WS_QRECS = the path of every record
     _ws_collect_rec_id "${n##*/}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
     _WS_QRECS+=("$n")
     printf '%s\n' "$n"
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
+_WS_ASIDES=(); _WS_ASIDES_WHY=''
+_ws_collect_asides_of() {   # id -> 0 with _WS_ASIDES = the path of every compare-and-drop aside of id EXACTLY (none
+  #                             when tmproots/ is PROVEN absent); 2 (_WS_ASIDES_WHY) when id is no id an aside is
+  #                             named for, or tmproots/ is a link, not a directory, or could not be listed. Prints nothing
+  # AN ASIDE IS NEVER INVISIBLE, as a record is not (`_ws_collect_records_of`):
+  # an unlistable `tmproots/`, one that is a link, or a file where it should
+  # be answers 2, never "no aside". Only `.<id>.drop.<pid>` names are asked
+  # (`_ws_collect_aside_id`, exact, never a prefix): the witness itself, the
+  # writer's temp files and another id's aside are skipped.
+  local LC_ALL=C id="${1-}" dir="$REG/tmproots" outf errf err rc n
+  _WS_ASIDES=(); _WS_ASIDES_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_ASIDES_WHY="'$id' is not an id an aside is named for"; return 2; }
+  [[ ! -L "$dir" ]] || { _WS_ASIDES_WHY="$dir is a link, which is never followed, so its asides were never listed"; return 2; }
+  _ws_reclaim_absent "$dir"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_ASIDES_WHY="$_WS_ABSENT_WHY — whether an aside of $id stands was never asked"; return 2; }
+  [[ -d "$dir" ]] || { _WS_ASIDES_WHY="$dir is not a directory, so its asides were never listed"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_ASIDES_WHY="could not make a scratch file to list $dir"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_ASIDES_WHY="could not make a scratch file to list $dir"; return 2; }
+  find -P "$REG/tmproots" -mindepth 1 -maxdepth 1 -name '.*.drop.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_ASIDES_WHY="could not list $dir (find exit $rc${err:+: ${err%%$'\n'*}}), so whether an aside of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    _ws_collect_aside_id "${n##*/}" && [[ "$_WS_ASIDE_ID" == "$id" ]] || continue
+    _WS_ASIDES+=("$n")
   done < "$outf"
   rm -f "$outf"
   return 0
@@ -35163,7 +35721,7 @@ _ws_collect_floor_s() {   # -> rc 0 and the idle floor on stdout, whole seconds:
   if [[ -n "$o" ]]; then
     [[ "$o" =~ ^[0-9]+$ ]] \
       || { _WS_FLOOR_WHY="WS_COLLECT_IDLE_FLOOR_S is set and is not a whole number of seconds, so the raised floor it asks for was never read"; return 2; }
-    o="${o#"${o%%[!0]*}"}"; o="${o:-0}"
+    [[ "$o" =~ ^0*([1-9][0-9]*)?$ ]] || { _WS_FLOOR_WHY="WS_COLLECT_IDLE_FLOOR_S could not be read by its capture, so the raised floor it asks for was never read"; return 2; }; o="${BASH_REMATCH[1]:-0}"
     if (( ${#o} > 9 )); then b=999999999
     elif (( 10#$o > b )); then b=$(( 10#$o )); fi
   fi
@@ -35258,9 +35816,16 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `$REG/tmproots/<id>` (never read through a `tmproots/` that is itself a
 # link), or with at least one quarantine record of it under
 # `$REG/tmpquarantine/`, found by `_ws_collect_records_of`'s exact parse and
-# never by an `<id>.*` prefix (ids admit dots). Anything else answers
-# `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
-# for a name ccd never handed a temp root.
+# never by an `<id>.*` prefix (ids admit dots), or, with neither standing,
+# with a compare-and-drop aside `$REG/tmproots/.<id>.drop.<pid>`, found by
+# `_ws_collect_asides_of`'s exact parse (path-identity spec §3.6: a crash
+# inside the compare-and-drop leaves one and no witness). Asides that cannot
+# be listed prove no absence: unmeasured `witness`. A SOLE aside that reads
+# as the id's witness is judged AS the witness, read-only
+# (`_ws_collect_aside_judge`); two or more, or one that does not read so,
+# answer unmeasured `aside`, and only after the registry peek. Anything else
+# answers `not-witnessed` and takes NO lock: the audit never makes
+# `.reap-<name>.lock` for a name ccd never handed a temp root.
 #
 # THE LOCK. Inside the population, and only once `_ws_collect_prelock`'s
 # advisory parse lets it (path-identity spec §2.5: a reap lock is never
@@ -35322,8 +35887,10 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `quarantine`. Past those, and unless the cleanup pause stands, it is collectable
 # with a token of its own, and the verb then drops the witness and nothing else.
 # So a FRESH collection never orphans a slot in silence (spec §5.10): the resume
-# does not ask, because a record names its own slot there, and the reclaim tail's witness
-# drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
+# does not ask, because a record names its own slot there. Since path-identity W2
+# (TR4 A; path-identity spec §3.3) the reclaim tail's witness drop keeps the
+# witness beside any slot of the id too (`_ws_tmproot_witness_drop`;
+# `tail-drop-ignores-a-recordless-slot`, closed).
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
 # `collectable` MEANS a token, spelled through `_json_str` as the other audits'
@@ -35358,7 +35925,7 @@ _ws_collect_reset() {   # -> every answer the collector's evaluation sets, clear
   REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
   _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
   _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
 }
@@ -35500,8 +36067,18 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
   _ws_collect_witness_judge "$id" || return 1
+  # THE WITNESS'S NAME IN A DETAIL (path-identity spec §3.6): when the judge
+  # read a compare-and-drop aside as the witness (`_ws_collect_aside_judge`,
+  # no witness standing), each detail below that speaks of the witness — a
+  # `witness-mismatch`, a `quarantine-kept`, the device probe's — names the
+  # aside's path in its place, the one file that stands.
+  local wof="the witness of $id" wits="its witness"
+  if [[ -n "$_WS_COLLECT_ASIDE" ]]; then
+    wof="the compare-and-drop aside $_WS_COLLECT_ASIDE, read as the witness of $id,"
+    wits="the compare-and-drop aside $_WS_COLLECT_ASIDE (read as its witness)"
+  fi
   [[ "$_WS_WIT_BTIME" != - ]] \
-    || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
+    || { _ws_collect_refuse witness-mismatch "$wof records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
   _ws_reclaim_absent "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
   if (( rc == 0 )); then
@@ -35514,7 +36091,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     # names its own slot there).
     # FIRST, the absence is believed only on the device the witness carries:
     # an empty mount point is no proof that the leaf is gone.
-    _ws_collect_root_dev "$_WS_WIT_DEV" "the witness of $id" \
+    _ws_collect_root_dev "$_WS_WIT_DEV" "$wof" \
       || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
     _WS_COLLECT_LEAF=absent
     # This arm lists the quarantine's slots, so a quarantine that is a link or
@@ -35524,7 +36101,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_collect_slots_of "$id"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
     (( ${#_WS_QSLOTS[@]} == 0 )) \
-      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
+      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
       "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
@@ -35548,9 +36125,9 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_slots_of "$id"; rc=$?
   (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
   (( ${#_WS_QSLOTS[@]} == 0 )) \
-    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
+    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
-    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
+    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory $wits names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $leaf could not be read"; return 1; }
   if (( rc != 0 )); then
@@ -35560,7 +36137,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_reclaim_absent "$leaf"; rc=$?
     (( rc != 0 )) || { _ws_collect_unmeasured leaf "$leaf vanished while its identity was read — the next pass asks again"; return 1; }
     (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
-    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME its witness names — it is offered to the operator, never taken"
+    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken"
     return 1
   fi
   # OWNER WRITE, read off the leaf whose identity was just proven (spec
@@ -35732,14 +36309,58 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   REAP_VERDICT=collectable
 }
 
-_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set); 1 with `not-witnessed` (none stands)
-  #                                  or `witness-mismatch` (it is not as ccd writes it) set. Reads only; takes no lock
+_WS_COLLECT_ASIDE=''   # the aside a judge read as the witness; cleared by `_ws_collect_reset`
+_ws_collect_aside_judge() {   # id -> 0 the id's ONE aside parses as its witness (_WS_WIT_* set from it; _WS_COLLECT_ASIDE =
+  #                                its path); 1 none stands (nothing set); 2 the answer is set: unmeasured `witness` (the
+  #                                asides could not be listed) or unmeasured `aside` (two or more stand, or the one does
+  #                                not parse as a witness of the id). Reads only; takes no lock; prints nothing
+  # OPTION X (path-identity spec §3.6). A crash inside the compare-and-drop
+  # (`_ws_collect_witness_cad`) can leave the witness at its aside,
+  # `$REG/tmproots/.<id>.drop.<pid>`, with no witness standing. The server
+  # composes `ws-collect` only after two `collectable` audits with one token,
+  # so unless the audit judges such an id, nothing ever restores the aside.
+  # The token binds the witness's fields, never its file name, so a SOLE
+  # aside that parses as the id's witness (`_ws_tmproot_witness_parse`: it
+  # would read sound at the witness's own path) is judged as the witness,
+  # here, read-only. Two or more, or one that does not parse, are never
+  # chosen between: unmeasured `aside`, a per-leaf word the lane lists at
+  # once. Asides that cannot be listed prove nothing: unmeasured `witness`,
+  # as a `tmproots/` that cannot be searched is. Its callers ask it only once
+  # they have found no witness.
+  local id="$1" a
+  _WS_COLLECT_ASIDE=''
+  _ws_collect_asides_of "$id" \
+    || { _ws_collect_unmeasured witness "the compare-and-drop asides of $id could not be listed ($_WS_ASIDES_WHY), and no witness stands, so whether one of them is its witness was never asked"; return 2; }
+  (( ${#_WS_ASIDES[@]} )) || return 1
+  if (( ${#_WS_ASIDES[@]} != 1 )); then
+    _ws_collect_unmeasured aside "${#_WS_ASIDES[@]} compare-and-drop asides of $id stand and no witness does — which of them was its witness is never chosen, so none is read as it; they are listed for the operator: ${_WS_ASIDES[*]}"
+    return 2
+  fi
+  a="${_WS_ASIDES[0]}"
+  _ws_tmproot_witness_parse "$a" "$id" && { _WS_COLLECT_ASIDE="$a"; return 0; }
+  _ws_collect_unmeasured aside "the one compare-and-drop aside of $id does not read as its witness, and no witness stands — it is not read as one, and is listed for the operator: $a"
+  return 2
+}
+
+_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set) or, none standing, its sole compare-and-drop
+  #                                  aside parsed as it (_WS_COLLECT_ASIDE set too); 1 with `not-witnessed` (none stands),
+  #                                  `witness-mismatch` (it is not as ccd writes it), or the aside judge's unmeasured
+  #                                  `aside` or `witness` set. Reads only; takes no lock
   # THE FRESH RUNGS' WITNESS READ, moved here whole: `_ws_collect_eval` calls
   # it in their place, and `_ws_collect_prelock` calls it before any lock, so a
   # junk witness is answered in one set of words (path-identity spec §2.5). The
   # birth-time rung stays in the fresh rungs, under the lock.
-  local id="$1" rc
+  # OPTION X (path-identity spec §3.6): with no witness standing, the id's sole
+  # compare-and-drop aside that parses as its witness IS the witness for every
+  # rung after this one (`_ws_collect_aside_judge`), and the token those rungs
+  # mint from its fields is the one the witness itself would mint.
+  local id="$1" rc arc
   _ws_tmproot_witness_read "$id"; rc=$?
+  if (( rc == 1 )); then
+    _ws_collect_aside_judge "$id"; arc=$?
+    (( arc != 0 )) || return 0
+    (( arc != 2 )) || return 1
+  fi
   (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
   (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
 }
@@ -35770,7 +36391,9 @@ _ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and na
 _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
   #                            _WS_COLLECT_PROBE when unmeasured; _WS_COLLECT_RECORDS once the records were listed)
   #                            and no lock may be opened. ADVISORY: it grants nothing, prints nothing, and writes no
-  #                            registry, lock, journal or quarantine state (it makes and removes two scratch files)
+  #                            registry, lock, journal or quarantine state (it makes and removes up to six scratch
+  #                            files: the records listing's two, the aside judge's two before the registry peek, and
+  #                            its two again inside the witness judgement when the peek proves no row)
   # A REAP LOCK IS NEVER UNLINKED, so the first open of `$REG/.reap-<id>.lock`
   # makes a name for good (path-identity spec §2.5). The collect audit
   # (`_ws_collect_audit_contained`) and `cmd_ws_collect` ask this first, so a
@@ -35790,7 +36413,14 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
   #     fork's resume arm reads it;
   #   no record: a witness that parses opens the lock, with a birth time or
   #     none (one with none is `witness-mismatch` under the lock, as before);
-  #   a witness that does not parse: THE REGISTRY PEEK. Under the lock the
+  #   no record and NO witness: a SOLE compare-and-drop aside that parses as
+  #     the id's witness opens the lock (`_ws_collect_aside_judge`, path-identity
+  #     spec §3.6), and the locked evaluation judges it as the witness. Any
+  #     other answer of that judge is cleared (`_ws_collect_reset`) and given
+  #     again only after the peek below, so a row keeps `registered` ahead of
+  #     `aside` as it keeps it ahead of `witness-mismatch`;
+  #   a witness that does not parse, or none and no sole aside that parses:
+  #     THE REGISTRY PEEK. Under the lock the
   #     fresh rungs ask `registered` before the witness, and a row's retryable,
   #     unjournaled `registered` must not become a terminal, journaled
   #     `witness-mismatch` here. So the lock opens unless `$REG/<id>.child` and
@@ -35801,10 +36431,12 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
   #     over every field and dot family `_ws_collect_registered` reads. A lock
   #     opened there is a row's;
   #   otherwise the witness judgement answers: `not-witnessed` or
-  #     `witness-mismatch`.
+  #     `witness-mismatch`, or, with no witness standing, the aside judge's
+  #     unmeasured `aside` (two or more, or one that does not parse) or
+  #     `witness` (the asides could not be listed).
   # A judgement that reads sound on its second look met a writer between the
   # two reads: unmeasured, and the next pass asks again.
-  local id="$1" out r rc
+  local id="$1" out r rc wrc
   local -a recs=() ctl=()
   _ws_collect_reset
   _ws_collect_slug_askable "$id" || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
@@ -35821,7 +36453,15 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
     _ws_collect_unmeasured records "the quarantine record of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
     return 1
   fi
-  _ws_tmproot_witness_read "$id" && return 0
+  _ws_tmproot_witness_read "$id"; wrc=$?
+  (( wrc != 0 )) || return 0
+  if (( wrc == 1 )); then
+    _ws_collect_aside_judge "$id" && return 0
+    # Its other answers wait for the peek: the witness judgement below asks
+    # it again, and an answer left set here would outlive a lock the peek
+    # opens (the audit's `in-progress` document prints the probe word).
+    _ws_collect_reset
+  fi
   # THE LISTING CONTROL, as `_ws_collect_registered` keeps one: the one name a
   # wildcard of `$REG` must find is the directory the witness was read from.
   ctl=("$REG"/tmproot[s])
@@ -35883,6 +36523,15 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
     out=$(_ws_collect_records_of "$id"); rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; _ws_collect_audit_doc "$id"; return; }
     [[ -z "$out" ]] || inpop=1
+  fi
+  # A COMPARE-AND-DROP ASIDE puts the id in the population too (path-identity
+  # spec §3.6): a crash inside the compare-and-drop can leave one and no
+  # witness, and the pass and the fork judge a sole one that parses as the
+  # witness (`_ws_collect_aside_judge`). Asides that cannot be listed prove no
+  # absence: unmeasured, never not-witnessed.
+  if (( ! inpop )); then
+    _ws_collect_asides_of "$id" || { _ws_collect_unmeasured witness "$_WS_ASIDES_WHY — whether a compare-and-drop aside of $id stands was never asked"; _ws_collect_audit_doc "$id"; return; }
+    (( ${#_WS_ASIDES[@]} == 0 )) || inpop=1
   fi
   if (( ! inpop )); then
     _ws_collect_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
@@ -35964,7 +36613,9 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
 # gone (a human verb, or a reclaim tail that KEPT it) — is collected by this
 # verb and by nothing else, and the verb is composed by the server alone
 # (CLAUDE.md SAFETY). Its population is a WITNESSED id or a QUARANTINE RECORD
-# (spec §5.2). Its consent is `ws-audit --collect`'s token, recomputed inside
+# (spec §5.2), or, with neither standing, an id a COMPARE-AND-DROP ASIDE is
+# for, a sole one read as the witness (path-identity spec §3.6). Its consent
+# is `ws-audit --collect`'s token, recomputed inside
 # the reap lock by the same evaluation (`_ws_collect_fork`) — the witness, the
 # registry, the in-use probe, the row rule and the idle floor, or a record and
 # the phase it stands at — BEFORE anything moves. Then (spec §5.10):
@@ -36180,21 +36831,27 @@ _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 
 _WS_CAD=''; _WS_CAD_WHY=''
 _ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = dropped (it was the collected one), kept
   #                                (it is not, and is back) or absent; 2 unmeasured (_WS_CAD_WHY)
-  # COMPARE-AND-DROP (spec §5.10), never `_ws_tmproot_witness_drop`, the
-  # tail's plain unlink (spec §5.6). The witness writer replaces the file with
-  # an unlocked temp-file-then-`mv -f`, so a read-then-`rm -f` of the live name
-  # can delete a recycled spawn's FRESH witness. So the live name is moved
-  # aside by one NOREPLACE rename to a dot-leading name no reader takes for an
-  # id, the moved copy is read, and it is unlinked only when it is, field for
+  # COMPARE-AND-DROP (spec §5.10): the collector's, and since path-identity W2
+  # the reclaim and expiry tail's too where a NOREPLACE move exists
+  # (`_ws_tmproot_witness_drop` calls it with its warning silenced). The
+  # witness writer replaces the file with an unlocked temp-file-then-`mv -f`,
+  # so a read-then-`rm -f` of the live name can delete a recycled spawn's
+  # FRESH witness. So the live name is moved aside by one NOREPLACE rename to
+  # its compare-and-drop aside, `.<id>.drop.<pid>` (`_ws_tmproot_aside_path`),
+  # the moved copy is read, and it is unlinked only when it is, field for
   # field, the witness this collection acted on. Anything else is moved back.
-  local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc
+  # An aside that a crash, or a move back that fails, leaves behind is never
+  # invisible: the collector's population admits its id, and
+  # `_ws_tmproot_aside_settle` settles it under the next reap lock
+  # (path-identity spec §3.6).
+  local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc me="$BASHPID"
   _WS_CAD=''; _WS_CAD_WHY=''
   w=$(_ws_tmproot_witness_file "$id")
   [[ ! -L "${w%/*}" ]] || { _WS_CAD_WHY="${w%/*} is a link, never followed"; return 2; }
   _ws_reclaim_absent "$w"; rc=$?
   (( rc != 0 )) || { _WS_CAD=absent; return 0; }
   (( rc != 2 )) || { _WS_CAD_WHY="$_WS_ABSENT_WHY"; return 2; }
-  aside="${w%/*}/.$id.drop.$BASHPID"
+  aside=$(_ws_tmproot_aside_path "$id" "$me")   # this process's own pid, read before the composer's subshell
   _ws_reclaim_absent "$aside" || { _WS_CAD_WHY="$aside already stands, so the witness was not moved aside"; return 2; }
   _ws_collect_mv "$w" "$aside" 2>/dev/null || :
   if [[ ! -f "$aside" || -L "$aside" ]]; then
@@ -36211,8 +36868,13 @@ _ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = drop
     _WS_CAD=dropped; return 0
   fi
   _ws_collect_mv "$aside" "$w" 2>/dev/null || :
-  _ws_reclaim_absent "$aside" \
-    || echo "ccd: warn: $id's witness $w is not the one this collection acted on, and a newer one stands — the older is left at $aside, inert (no reader takes a dot-leading name for an id)" >&2
+  if ! _ws_reclaim_absent "$aside"; then
+    if [[ -e "$w" || -L "$w" ]]; then
+      echo "ccd: warn: $id's witness $w is not the one this collection acted on, and a newer one stands — the older is left at $aside, and the next settle under the reap lock leaves it beside the newer witness, warned" >&2
+    else
+      echo "ccd: warn: $id's witness $w is not the one this collection acted on, and it could not be moved back to $w — it is left at $aside, and the next settle under the reap lock restores it" >&2
+    fi
+  fi
   _WS_CAD=kept; return 0
 }
 
@@ -36274,7 +36936,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
     || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
   _ws_collect_gap witnessed "$id"
   _ws_collect_reap_temps "$id"
-  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" \
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" meas.leaf absent \
     detail "$(_ws_leaf_why_line "witness $_WS_CAD; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; no leaf stood at $HOME/.cc-tmp/$id")"
   printf '{"collected":%s,"record":null,"resumed":false,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "$_WS_CAD")"
   return 0
@@ -36304,7 +36966,7 @@ _ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10),
   _ws_collect_record_drop "$rec" \
     || { _ws_collect_keep "$id" "$rec" "$lctx" "the leaf is gone and its witness $cad, but the record could not be dropped"; return 1; }
   _ws_collect_gap dropped "$id" "$slot"
-  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" \
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" meas.leaf removed \
     detail "$(_ws_leaf_why_line "witness $cad; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; collected $slot/leaf (record ${rec##*/})")"
   printf '{"collected":%s,"record":%s,"resumed":%s,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "${rec##*/}")" \
     "$( [[ -n "$resumed" ]] && echo true || echo false )" "$(_json_str "$cad")"
@@ -36663,10 +37325,12 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local _WS_RCL_ACT=collect _WS_RCL_CRUMB=''
   # NEVER A LOCK FOR A FOREIGN NAME: the reap lock is taken only for an id in
   # the collector's population — a witness stands for it, or a record names it
-  # (spec §5.2). A `tmproots/` that is itself a link is never followed, so it
-  # puts no id in the population, and whether this one is in it was never
-  # asked: unmeasured, before the lock, as `ws-audit --collect` answers it.
-  local wf rrc=0 wrc=0
+  # (spec §5.2), or, with neither standing, a compare-and-drop aside is for it
+  # (path-identity spec §3.6). A `tmproots/` that is itself a link is never
+  # followed, so it puts no id in the population, and whether this one is in
+  # it was never asked: unmeasured, before the lock, as `ws-audit --collect`
+  # answers it.
+  local wf rrc=0 wrc=0 arc=0 why
   if [[ -L "$REG/tmproots" ]]; then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "no lock was taken, and nothing was moved or removed: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked"
@@ -36683,19 +37347,29 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     return 1
   fi
   _ws_collect_records_of "$id" >/dev/null || rrc=$?
-  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
+  # A COMPARE-AND-DROP ASIDE puts the id in the population when neither a
+  # witness nor a record does (path-identity spec §3.6): a crash inside the
+  # compare-and-drop leaves one and no witness, and `_ws_collect_prelock` and
+  # the locked evaluation judge a sole one that parses as the witness.
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then _ws_collect_asides_of "$id" || arc=$?; fi
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 && arc == 0 && ${#_WS_ASIDES[@]} == 0 )); then
     _ws_collect_refused "$id" "" not-witnessed \
       "no lock was taken, and there is nothing to collect: no witness ($wf) and no quarantine record names $id" \
       "$lc_surface" "$lc_actor" "$lc_reason"
     return 0
   fi
-  # ...and records that could not be listed, with no witness standing, never
-  # prove the id the collector's: unmeasured, BEFORE the lock, which is never
-  # opened (and so never made) for a name that may be foreign. A witness that
-  # stands puts the id in the population whatever the listing said.
-  if (( wrc == 0 && rrc != 0 )); then
-    _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
+  # ...and records or asides that could not be listed, with no witness
+  # standing, never prove the id the collector's: unmeasured, BEFORE the
+  # lock, which is never opened (and so never made) for a name that may be
+  # foreign. A witness that stands puts the id in the population whatever the
+  # listing said. ONE statement, its text chosen before it.
+  if (( wrc == 0 && (rrc != 0 || arc != 0) )); then
+    if (( rrc != 0 )); then
+      why="no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked"
+    else
+      why="no lock was taken, and nothing was moved or removed: no witness stands for $id, and its compare-and-drop asides could not be listed ($_WS_ASIDES_WHY) — the witness's path is $wf"
+    fi
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "$why")"
     return 1
   fi
   # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never
@@ -36733,7 +37407,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
 }
 
 _ws_collect_locked() {   # token id surface actor reason — everything the reap lock serialises, for a collection
-  local token="$1" id="$2" surface="$3" actor="$4" reason="$5" q rroot orig lctx rec
+  local token="$1" id="$2" surface="$3" actor="$4" reason="$5" q rroot orig lctx rec arc=0
   _ws_collect_gap locked "$id"
   # THE PAUSE, inside the lock and before the evaluation: a fresh collection,
   # a resume and a witness-only drop alike stop on it. `_ws_collect_paused` is
@@ -36742,6 +37416,14 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
     _ws_collect_refused "$id" "" paused "nothing was moved or removed: ${REAP_DETAIL-}" "$surface" "$actor" "$reason"
     return 0
   fi
+  # THE COMPARE-AND-DROP ASIDES, SETTLED HERE (path-identity spec §3.6):
+  # after the pause, so nothing moves while it stands, and before the
+  # evaluation, so the fork reads a restored witness under its own name and
+  # the token the audit minted from the aside matches (the token binds the
+  # witness's fields, never its file name). An aside left beside a witness is
+  # warned here; the settle's doubt is weighed after the fork, below.
+  _ws_tmproot_aside_settle "$id" || arc=$?
+  [[ "$arc" != 0 || "${_WS_ASIDE_DID-}" != left ]] || echo "ccd: warn: $_WS_ASIDE_WHY" >&2
   # 1 — THE CONSENT IS THE TOKEN, recomputed HERE by the one evaluation
   # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
   # record, its slot's leaf and the phase read off the disk; else the registry
@@ -36753,6 +37435,17 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   # before anything moves.
   _ws_collect_fork "$id"
   [[ -n "${REAP_VERDICT-}" ]] || { REAP_VERDICT=unmeasured; REAP_DETAIL="the collection evaluation answered no verdict for $id"; }
+  # THE SETTLE'S DOUBT BLOCKS ONLY AN ACT (path-identity spec §3.6): where the
+  # evaluation would act, it is this verb's unmeasured answer, printed by the
+  # one statement below; where the evaluation refused, its refusal keeps its
+  # place and the doubt is warned.
+  if (( arc == 2 )); then
+    if [[ "${REAP_VERDICT-}" == collectable ]]; then
+      REAP_VERDICT=unmeasured; REAP_DETAIL="nothing was moved or removed: $_WS_ASIDE_WHY"
+    else
+      echo "ccd: warn: $_WS_ASIDE_WHY" >&2
+    fi
+  fi
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
     REAP_VERDICT=state-changed
     REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"

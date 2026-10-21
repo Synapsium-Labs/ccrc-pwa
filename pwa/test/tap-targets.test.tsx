@@ -47,10 +47,11 @@ import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
-import { SessionHeader } from '../src/session/SessionHeader';
+import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
+import { renderSettings } from './settingsHost';
 import { draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk, type FakeLoaders } from './docsFixtures';
 
 const read = (...seg: string[]): string =>
@@ -79,7 +80,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // — fixtures —
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'project-d', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -89,7 +90,7 @@ const prState = (over: Partial<PrState> = {}): PrState => ({
 const wsAudit: WsAudit = {
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
   base: 'origin/main', workdir: '/w/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
   clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 1,
@@ -293,7 +294,8 @@ describe('the two rules that were already scraped still reach a real element', (
         conn: 'open',
         sessions: [
           sess({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, bucket: 'archived' }),
-          sess({ id: 'b', project: 'alpha', workspace: 'live-one', archivedAt: null }),
+          // A change just now keeps the project open (D-6088 rolls up a quiet one).
+          sess({ id: 'b', project: 'alpha', workspace: 'live-one', archivedAt: null, statusUpdatedAt: Date.now() }),
         ],
       });
     });
@@ -305,7 +307,7 @@ describe('the two rules that were already scraped still reach a real element', (
     renderFleet(<FleetScreen store={store} />);
     const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
     act(() => {
-      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
+      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom, statusUpdatedAt: Date.now() })] });
     });
     const toggle = screen.getByRole('button', { name: /released \(1\)/i });
     expect(toggle).toHaveClass('proj-released-toggle');
@@ -351,6 +353,26 @@ describe('the two rules that were already scraped still reach a real element', (
 });
 
 // — Build 7, Task 4: the mail door and its screen's own back control —
+
+describe('.settings-index-row — the Settings index, one row per section (settings Task R2b1, D-5504)', () => {
+  it('is at least 64px tall on a phone, the index row floor (spec §4.2), above the tap token', () => {
+    const rule = ruleIn(read('screens', 'settings', 'settings.css'), '.settings-index-row');
+    expect(declValue(rule, 'min-height')).toBe('max(64px,var(--tap-min))');
+    expect(stripComments(read('screens', 'settings', 'settings.css'))).not.toMatch(/@media[^{]*pointer[^{]*\{[^}]*\.settings-index-row/);
+  });
+
+  it('is the class every rendered index row carries', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    renderSettings(null);
+    const rows = screen.getAllByRole('link').filter((a) => a.hasAttribute('data-section'));
+    expect(rows).toHaveLength(5);
+    for (const row of rows) expect(row).toHaveClass('settings-index-row');
+    navigate('/');
+  });
+});
 
 describe('.mail-badge — the only door to /mail', () => {
   it('is at least one tap square, off the shared token', () => {
@@ -1092,7 +1114,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
       expect(screen.getByRole('button', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
       cleanup();
-      render(<SessionHeader session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
+      render(<SessionHeaderHost session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
         onOpenTerminal={() => {}} onBack={() => {}} onChangeModel={() => {}} onChangeEffort={() => {}}
         onMoveAccount={() => {}} onArchive={() => {}} onRestore={() => {}} onOpenHistory={() => {}}
         onReapWorkspace={() => {}} />);

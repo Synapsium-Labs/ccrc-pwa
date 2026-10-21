@@ -582,6 +582,16 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
       expect(rec.pushes).toEqual([]);
       expect(rec.warned()).toContain(degradeLine('caps written, feed archive degraded'));
     });
+  it("caps's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pushed (D-5851)", () => {
@@ -619,6 +629,16 @@ describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pu
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('stall watch settings written, feed archive degraded'));
   });
+  it("stall-watch's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never pushed (D-5851)", () => {
@@ -670,6 +690,16 @@ describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never p
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('collector setting written, feed archive degraded'));
   });
+  it("collect-lane's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recorded always, never pushed (D-5851)", () => {
@@ -734,6 +764,12 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('ask answered, feed archive degraded'));
   });
+  it("the parent's answer is the same status and bytes whether the archive lands or throws (D-5858, Task C1d)", async () => {
+    const landed = await answered(false);
+    const failed = await answered(true);
+    expect([landed.res.statusCode, landed.res.body]).toEqual([200, '{"ok":true}']);
+    expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true}']);
+  });
 });
 
 // Written natively (band 3: the approval path).
@@ -794,6 +830,15 @@ describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row
         expect(pushed, 'the ruling is never pushed').toEqual([]);
         expect(rec.warned()).toContain(degradeLine('ruling stored, feed archive degraded'));
       });
+    it('the ruling answers the same status and bytes whether the archive lands or throws (D-5858, Task C1d)', async () => {
+      const landed = await ruled(false, 'deny', false);
+      const landedAnswer = [landed.res.statusCode, landed.res.body];
+      await landed.f.close();
+      fx = undefined;
+      const failed = await ruled(true, 'deny', false);
+      expect(landedAnswer).toEqual([200, '{"ok":true,"state":"denied"}']);
+      expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true,"state":"denied"}']);
+    });
   });
 
 // ─── coord/childReclaim.ts's three writers (written natively, band 3: the destructive path) ──────────────────────────
@@ -880,7 +925,7 @@ const keptDeps = async (fail: boolean) => {
 const KEPT: ChildReclaimKeptAttention = { kind: 'kept', sessionId: A, runId: CLAIM_RUN, word: 'coordinating',
   sentence: 'kept: it has coordinated a run of its own.' };
 const LEAF: ChildReclaimLeafKept = { item: { kind: 'leaf-kept', sessionId: A, runId: CLAIM_RUN,
-  sentence: 'its leaf was kept.', at: null }, source: 1, detail: null, clipsClause: null };
+  sentence: 'its leaf was kept.', at: null }, source: 1, detail: null, clipsClause: null, foundNothing: false };
 
 describe("coord/childReclaim.ts's kept row (recordChildReclaimKeptFeed): recorded always, never pushed (D-5851)", () => {
   it('every reclaim lands in the feed: the kept row is recorded and archived whatever the presence, never pushed', async () => {
@@ -1030,11 +1075,14 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
         lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
           last: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
-          openWorkers: [], openClaimants: ['project-a-coordinator'] }),
+          openWorkers: [], openClaimants: ['project-a-coordinator'],
+          // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
+          lastPlaced: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
+            program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
+          openPlacedWorkers: [], parkedPlacedWorkers: [] }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
-        runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
       },
       runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
@@ -1045,14 +1093,14 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       turnVerdict: async () => 'idle',
       mark: async () => ({ ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR,
         restartAt: null }),
-      readAfterHours: async () => null,
       rowAtAct: async () => ({ ok: true, row: row as never }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
-    const out = await stopDonePass(deps, { retryAt: new Map() }, [row], [record], []);
+    // D-6091: a lane that already wrote its mail-only zero, so the one row here is the sleep's.
+    const out = await stopDonePass(deps, { retryAt: new Map(), mailOnly: 0 }, [row], [record], []);
     return { rec, out, argv };
   };
 
@@ -1077,3 +1125,82 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
   });
 });
 
+
+// ─── D-5859 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e; ARCH-54 (#789)) ──
+//
+// APPENDED. The executors' five writers move onto the funnel (`notice.ts`). Every row above stays as it is; these add
+// what a move could break unseen: each writer HANDED a push sink, with the operator looking and not looking, records
+// and never pushes (a funnel mode that pushes when no one looks would show here, and nowhere above for the kept, expiry
+// and dead-coordinator rows, whose rigs hand no push or only a visible presence); and a failed archive leaves the
+// reclaim executor's own result and its run's stored rows exactly as a landing archive leaves them.
+
+describe('the executors\' writers, handed a push sink: recorded whatever the presence, never pushed (D-5859)', () => {
+  const EXPIRE_ID = 'acct-a-project-a';
+  const CLAIMANT = 'acct-a-project-a-coordinator';
+  const ONE: DeadCoordinatorActOutcome = { kind: 'would-end', programmes: [{ slug: 'prog-a', runIds: [11] }] };
+  /** Sinks with a push and a presence that says `visible` for every session the rows below name. */
+  const sinks = async (visible: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-c1e-');
+    const rec = await feedRecorder(home);
+    rec.setVisible(visible ? [A, EXPIRE_ID, CLAIMANT] : []);
+    return { home, rec, deps: { coord: rec.coord, notifyLog: rec.notifyLog, presence: rec.presence, push: rec.push } };
+  };
+  /** The expiry writer's input, from the executor itself (no expire capability: `deferred` before any argv). */
+  const expiryOutcome = async (home: string, rec: FeedRecorder) => {
+    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    mkdirSync(base.cfg.registryDir, { recursive: true });
+    const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },
+      presence: rec.presence, notifyLog: rec.notifyLog };
+    return { deps, out: await expireArchived(deps, { sessionId: EXPIRE_ID, archivedAt: 1_789_000_000, expiresAt: 1_789_604_800 }) };
+  };
+
+  it.each([false, true])('the kept row and the kept-leaf row (visible %s): ring and archive, never a push', async (visible) => {
+    const { rec, deps } = await sinks(visible);
+    recordChildReclaimKeptFeed(deps, KEPT);
+    recordChildReclaimLeafKeptFeed(deps, LEAF);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'record', 'archive']);
+    expect(rec.archived.map((e) => e.title)).toEqual([CHILD_RECLAIM_KEPT_FEED_TITLE, CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it.each([false, true])("expiry's row (visible %s): ring and archive, never a push", async (visible) => {
+    const { home, rec } = await sinks(visible);
+    const { deps, out } = await expiryOutcome(home, rec);
+    const at = rec.mark();
+    // Handed a push sink: bound first, so the writer's narrower deps type admits the extra member.
+    const handed = { ...deps, push: rec.push };
+    recordExpireFeed(handed, out);
+    expect(withoutFlush(rec.since(at))).toEqual(['record', 'archive']);
+    expect(rec.archived.map((e) => [e.sessionId, e.title])).toEqual([[EXPIRE_ID, 'archived workspace cleanup deferred']]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it.each([false, true])("the dead coordinator's batch (visible %s): ring and archive, never a push", async (visible) => {
+    const { rec, deps } = await sinks(visible);
+    recordDeadCoordinatorFeed(deps, CLAIMANT, ONE, Date.UTC(2026, 9, 1));
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(rec.archived.map((e) => [e.sessionId, e.title])).toEqual([[CLAIMANT, 'dead coordinator: programme would be ended']]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it("a failed archive leaves the reclaim executor's result and its run's stored rows as a landing archive leaves them",
+    async () => {
+      const stored = async (fail: boolean) => {
+        const r = await reclaimRig(false);
+        if (fail) r.rec.archiveThrowsOn('every');
+        const out = await r.reclaim();
+        const run = r.rec.coord.run(r.runId);
+        const events = r.rec.coord.runEvents(r.runId).map(({ at: _at, ...e }) => e);
+        return { out, run: JSON.stringify(run).replace(/"(?:[a-zA-Z]*At|at|updated|created)":\d+/g, ''), events,
+          archived: r.rec.archived.length, pushes: r.rec.pushes.length };
+      };
+      const landed = await stored(false);
+      const failed = await stored(true);
+      expect([landed.archived, failed.archived], 'the premise: one archive landed, one failed').toEqual([1, 0]);
+      expect(failed.out).toEqual(landed.out);
+      expect(failed.run).toEqual(landed.run);
+      expect(failed.events).toEqual(landed.events);
+      expect([landed.pushes, failed.pushes]).toEqual([0, 0]);
+    });
+});
