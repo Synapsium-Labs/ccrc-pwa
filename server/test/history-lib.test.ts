@@ -2985,7 +2985,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(f.startsWith('rem ipsum dolor sit'), JSON.stringify(f)).toBe(true);
     expect(f).not.toContain('Zq9k');
   });
-  it('(j17) a mark the snippet\'s cut splits at its left edge is kept as written, never `]]` (D-6071, scoped review FR1-E)', () => {
+  it('(j17) a mark the snippet\'s cut splits at either edge is kept as written, never `]]` (D-6071, scoped review FR1-E)', () => {
     const idx = idxOf([]);
     const t = 'intro text. password="abc p@ss.w0rd!+/= ghi" after more words here';
     const snip = libRedact.displaySnippet(t, ['ghi'], idx);
@@ -2996,6 +2996,11 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // becomes `...[redacted] ` instead: a fail-closed difference only this assertion sees
     expect(snip.startsWith('...redacted] '), JSON.stringify(snip)).toBe(true);
     expect(snip).toBe(`...redacted] ${M} ${M}" after more words here`);
+    // the right edge (scoped review of review 721): the snippet's cut ends inside the mark `password=[redacted]` the base printed, which is kept as
+    // written. Without maskUnprinted's right mark-edge line the NAME before the split mark is a token of its own that the widened reading
+    // does not print, so it becomes `[redacted]...` instead: fail-closed, and only this assertion sees it
+    const right = libRedact.displaySnippet(`hit ${'w'.repeat(20)} password=xyz;SECRETX tail words here and more`, ['hit'], idx);
+    expect(right).toBe(`hit ${'w'.repeat(20)} password=${M}`);
     // CONTROL: the base snippet's cut does split the mark (it starts `...redacted]`)
     expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, ['ghi'], idx).startsWith('...redacted]')).toBe(true);
   });
