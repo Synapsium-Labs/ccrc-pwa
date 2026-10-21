@@ -16630,7 +16630,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   type BackupCheck = typeof BACKUP_CHECKS[number];
 
   /** A home with the given secret directories, and a stub bin holding only the named tools. */
-  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch'>; stubs?: Record<string, string>; posture?: string | 'dir' } = {}): string => {
+  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch'>; stubs?: Record<string, string>; posture?: string | 'dir'; postureLinkTo?: string } = {}): string => {
     const home = mkTmp('ccrc-doctor-a11b-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     for (const d of o.secrets ?? []) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
@@ -16641,6 +16641,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     }
     if (o.posture === 'dir') mkdirSync(join(home, '.ccrc', 'snapshot-posture'));
     else if (o.posture !== undefined) writeFileSync(join(home, '.ccrc', 'snapshot-posture'), o.posture);
+    if (o.postureLinkTo !== undefined) symlinkSync(join(home, o.postureLinkTo), join(home, '.ccrc', 'snapshot-posture'));
     return home;
   };
   const run = (home: string, check: BackupCheck, os: 'linux' | 'darwin'): Result => {
@@ -16698,6 +16699,16 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       ]);
       expect(r.code).toBe(1);
       expect(r.stdout.includes(home), 'the verdict names ~/ paths, never the home').toBe(false);
+    });
+
+    it('both directories included: the remedy is one runnable addexclusion naming both, space-separated', () => {
+      const home = box({ secrets: ['.cc-secrets', '.ccrc/auth-scratch'], stubs: { tmutil: tmutil(() => '[Included]') } });
+      const r = run(home, 'secrets-backup-excluded', 'darwin');
+      expect(lines(r.stdout)).toEqual([
+        'FAIL secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        '  remedy: run \'tmutil addexclusion ~/.cc-secrets ~/.ccrc/auth-scratch\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
+      ]);
+      expect(r.code).toBe(1);
     });
 
     it('PASSes when tmutil says every secret directory is excluded, naming each', () => {
@@ -16813,11 +16824,34 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     for (const [why, posture] of [['an unknown word', 'nightly'], ['none beside a provider image', 'none server-backups'], ['only comments', '# not answered yet\n']] as const) {
       it(`FAILs ${why}: a mistyped answer never reads as stated`, () => {
         const r = run(box({ secrets: ['.cc-secrets'], posture }), 'snapshot-posture', 'linux');
-        expect(r.stdout).toMatch(/^FAIL snapshot-posture: ~\/\.ccrc\/snapshot-posture states '.*', which is not none or a list of server-backups server-snapshots volume-snapshots$/m);
+        expect(r.stdout).toMatch(/^FAIL snapshot-posture: ~\/\.ccrc\/snapshot-posture states (nothing|\d+ words? doctor does not know), which is not none or a list of server-backups server-snapshots volume-snapshots; the line is never quoted$/m);
         expect(r.stdout).toMatch(/^ {2}remedy: write one line to ~\/\.ccrc\/snapshot-posture: /m);
         expect(r.code).toBe(1);
       });
     }
+
+    it('never prints the stated line: a token-shaped or escape-laden line FAILs counting its words, and none of it reaches stdout', () => {
+      const token = 'LANE_TOKEN=fixture-secret-value-0123456789';
+      const r = run(box({ secrets: ['.cc-secrets'], posture: `${token} \u001b[2Jcleared\n` }), 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)[0]).toBe('FAIL snapshot-posture: ~/.ccrc/snapshot-posture states 2 words doctor does not know, which is not none or a list of server-backups server-snapshots volume-snapshots; the line is never quoted');
+      expect(r.stdout.includes('fixture-secret-value'), 'the line is never echoed').toBe(false);
+      expect(r.stdout.includes('\u001b'), 'no escape byte is echoed').toBe(false);
+      expect(r.code).toBe(1);
+    });
+
+    it('refuses a symlinked answer file, even one pointing at a readable secret: FAIL, nothing of the target printed', () => {
+      const home = box({ secrets: ['.cc-secrets'] });
+      writeFileSync(join(home, '.cc-secrets', 'lane-a.env'), 'none\n');
+      const linked = box({ secrets: ['.cc-secrets'], postureLinkTo: '.cc-secrets/lane-a.env' });
+      writeFileSync(join(linked, '.cc-secrets', 'lane-a.env'), 'LANE_TOKEN=fixture-secret-value-0123456789\n');
+      const r = run(linked, 'snapshot-posture', 'linux');
+      expect(lines(r.stdout)[0]).toBe('FAIL snapshot-posture: ~/.ccrc/snapshot-posture is a symlink, not a plain file, so doctor does not read it');
+      expect(r.stdout.includes('fixture-secret-value')).toBe(false);
+      expect(r.code).toBe(1);
+      // a symlink to a file that would PASS is refused all the same: the answer lives in the file itself
+      symlinkSync(join(home, '.cc-secrets', 'lane-a.env'), join(home, '.ccrc', 'snapshot-posture'));
+      expect(lines(run(home, 'snapshot-posture', 'linux').stdout)[0]).toMatch(/^FAIL snapshot-posture: ~\/\.ccrc\/snapshot-posture is a symlink/);
+    });
 
     it('FAILs an answer path that is not a readable file', () => {
       const r = run(box({ secrets: ['.cc-secrets'], posture: 'dir' }), 'snapshot-posture', 'linux');

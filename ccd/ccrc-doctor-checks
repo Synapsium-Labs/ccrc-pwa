@@ -9563,7 +9563,7 @@ _check_secrets-backup-excluded() {
   done
   if [ "${#included[@]}" -gt 0 ]; then
     _dr_fail secrets-backup-excluded "$(_dr_join "${included[@]}") included in Time Machine backups, so every backup taken holds the lane secrets in them" \
-      "run 'tmutil addexclusion $(_dr_join "${included[@]}")' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it"
+      "run 'tmutil addexclusion ${included[*]}' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it"
     return 1
   fi
   if [ "${#unread[@]}" -gt 0 ]; then
@@ -9639,6 +9639,10 @@ _check_snapshot-posture() {
       "$how"
     return 2
   fi
+  if [ -L "$f" ]; then   # the answer lives in the file itself; a link could point at a lane secret, which doctor never opens
+    _dr_fail snapshot-posture "~/.ccrc/snapshot-posture is a symlink, not a plain file, so doctor does not read it" "$how"
+    return 1
+  fi
   if [ ! -f "$f" ] || [ ! -r "$f" ]; then
     _dr_fail snapshot-posture "~/.ccrc/snapshot-posture is not a readable file, so the stated answer cannot be read" "$how"
     return 1
@@ -9661,7 +9665,11 @@ _check_snapshot-posture() {
     esac
   done
   if [ "${#words[@]}" -eq 0 ] || [ "${#bad[@]}" -gt 0 ]; then
-    _dr_fail snapshot-posture "~/.ccrc/snapshot-posture states '${line}', which is not none or a list of $SNAPSHOT_POSTURE_WORDS" "$how"
+    # Never quote the line: the file is free text an operator may have mistyped a secret into (D-5513's backups row).
+    local said="nothing"
+    [ "${#bad[@]}" -eq 1 ] && said="1 word doctor does not know"
+    [ "${#bad[@]}" -gt 1 ] && said="${#bad[@]} words doctor does not know"
+    _dr_fail snapshot-posture "~/.ccrc/snapshot-posture states $said, which is not none or a list of $SNAPSHOT_POSTURE_WORDS; the line is never quoted" "$how"
     return 1
   fi
   seen="$(_dr_trim "$seen")"
