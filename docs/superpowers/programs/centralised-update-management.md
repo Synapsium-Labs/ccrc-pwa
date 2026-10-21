@@ -2637,6 +2637,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         Read-only; nothing deleted; the cleanup decision is the operator's. STATUS: fleet and server v0.0.536, newest
         v0.0.539, stable v0.0.502, intent dev/auto=off, backups fleet 207M/server 14050M, disk free fleet 108G/work
         volume 9G/server 18G.
+      - 19:40: mail 7749, the broker's delta projection merged (#1068, prerelease v0.0.541). Once rolled out, its slow
+        line carries `projectDelta`, `projectFull` and `deltaRows`. It asks to hear of `projectFull` above 0 on most
+        ordinary passes after the first hour, and of any `projection-delta-mismatch` log line. The probe now checks both
+        over the last hour (an ANOMALY on a mismatch line, a NOTE on most passes full); before the release it reads 0/0.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
