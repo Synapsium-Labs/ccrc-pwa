@@ -19,12 +19,14 @@ import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
 export function FleetHead(
-  { countLine, poolLag, unreadMail }: {
+  { countLine, poolLag, unreadMail, doors = true }: {
     /** The "N sessions" readout, or `null` on an empty fleet. */
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
     unreadMail: number;
+    /** False where the skin's bar holds the doors (Refined at a desk, W2 Task S4b): the readouts stay here. */
+    doors?: boolean;
   },
 ): ReactNode {
   return (
@@ -37,68 +39,72 @@ export function FleetHead(
               {poolLag}
             </span>
           )}
-          {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a
-              word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings: the Docs index
-              lists every project, so a fleet with no sessions still has docs to read. It is a plain button rather than
-              a `Door`: its box is the `.docs-door` rule in docs/docs.css (the pre-`Door` door rules, restated there),
-              which the contrast gate, the tap floor and the build gate measure; that stylesheet reaches the main one
-              through app.tsx's static import of DocsScreen. */}
-          <button
-            type="button"
-            className="docs-door"
-            aria-label="Docs: specs, plans and design notes"
-            onClick={() => navigate('/docs')}
-          >
-            <span className="docs-door-glyph" aria-hidden="true"><Icon name="file-text" /></span>
-            Docs
-          </button>
-          {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
-              target was the only one — its own comment says so — and its
-              accessible name is "account usage — open accounts": a full-width
-              readout of 5h/7d meters, which reads as DATA and not as
-              navigation. /runs, /archive and /mail each have an explicit
-              control; the screen carrying the passkey enrolment button and the
-              sign-out button had none, so the operator hunting for it on a
-              laptop never found the screen at all. The strip STAYS a door (a
-              second one costs nothing and it is where a gauge is being looked
-              at anyway); this is the one that says what it is.
+          {doors && (
+            <>
+              {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a
+                  word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings: the Docs index
+                  lists every project, so a fleet with no sessions still has docs to read. It is a plain button rather than
+                  a `Door`: its box is the `.docs-door` rule in docs/docs.css (the pre-`Door` door rules, restated there),
+                  which the contrast gate, the tap floor and the build gate measure; that stylesheet reaches the main one
+                  through app.tsx's static import of DocsScreen. */}
+              <button
+                type="button"
+                className="docs-door"
+                aria-label="Docs: specs, plans and design notes"
+                onClick={() => navigate('/docs')}
+              >
+                <span className="docs-door-glyph" aria-hidden="true"><Icon name="file-text" /></span>
+                Docs
+              </button>
+              {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
+                  target was the only one — its own comment says so — and its
+                  accessible name is "account usage — open accounts": a full-width
+                  readout of 5h/7d meters, which reads as DATA and not as
+                  navigation. /runs, /archive and /mail each have an explicit
+                  control; the screen carrying the passkey enrolment button and the
+                  sign-out button had none, so the operator hunting for it on a
+                  laptop never found the screen at all. The strip STAYS a door (a
+                  second one costs nothing and it is where a gauge is being looked
+                  at anyway); this is the one that says what it is.
 
-              A SHORT TEXT LABEL, not a lone glyph: icon-only would be exactly
-              as undiscoverable as the strip, which is the defect. The
-              accessible name names both halves of the screen — sign-in and
-              accounts — because "Account" alone is what the strip already
-              failed to communicate. */}
-          <Door
-            className="accounts-door"
-            glyph="🔑"
-            aria-label="Your sign-in and accounts"
-            onClick={() => navigate('/accounts')}
-          >
-            Account
-          </Door>
-          {/* THE DOOR TO /settings (centralised update management §13) — the
-              `.accounts-door` pattern directly above, for the argument its
-              comment makes: a glyph AND a short text label, because an
-              icon-only gear would be exactly as undiscoverable as the
-              AccountsStrip tap target that D-161 found was the only door to
-              /accounts. The accessible name says what is behind it — updates
-              and notifications — because "Settings" alone names no content;
-              it begins with the visible word, so a voice user saying what
-              they see still reaches it. Rendered unconditionally: a first-run
-              fleet with no sessions needs the screen as much as any. A fifth
-              item does not fit this group's measured width budget on a
-              phone, so the group now wraps rather than overflowing
-              (fleet.css, D-3303). */}
-          <Door
-            className="settings-door"
-            glyph={SETTINGS_GLYPH}
-            aria-label="Settings — updates and notifications"
-            onClick={() => navigate('/settings')}
-          >
-            Settings
-          </Door>
-          <MailBadge unread={unreadMail} />
-          <NotificationBell />
+                  A SHORT TEXT LABEL, not a lone glyph: icon-only would be exactly
+                  as undiscoverable as the strip, which is the defect. The
+                  accessible name names both halves of the screen — sign-in and
+                  accounts — because "Account" alone is what the strip already
+                  failed to communicate. */}
+              <Door
+                className="accounts-door"
+                glyph="🔑"
+                aria-label="Your sign-in and accounts"
+                onClick={() => navigate('/accounts')}
+              >
+                Account
+              </Door>
+              {/* THE DOOR TO /settings (centralised update management §13) — the
+                  `.accounts-door` pattern directly above, for the argument its
+                  comment makes: a glyph AND a short text label, because an
+                  icon-only gear would be exactly as undiscoverable as the
+                  AccountsStrip tap target that D-161 found was the only door to
+                  /accounts. The accessible name says what is behind it — updates
+                  and notifications — because "Settings" alone names no content;
+                  it begins with the visible word, so a voice user saying what
+                  they see still reaches it. Rendered unconditionally: a first-run
+                  fleet with no sessions needs the screen as much as any. A fifth
+                  item does not fit this group's measured width budget on a
+                  phone, so the group now wraps rather than overflowing
+                  (fleet.css, D-3303). */}
+              <Door
+                className="settings-door"
+                glyph={SETTINGS_GLYPH}
+                aria-label="Settings — updates and notifications"
+                onClick={() => navigate('/settings')}
+              >
+                Settings
+              </Door>
+              <MailBadge unread={unreadMail} />
+              <NotificationBell />
+            </>
+          )}
         </div>
     </header>
 

@@ -12,7 +12,10 @@ import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { FleetScreen } from './FleetScreen';
 import { useFleetStore } from '../stores/fleet';
 
-export function FleetColumn(): ReactNode {
+/** `barHoldsChrome`: the skin's frame holds the fleet's chrome at a desk, the head's doors in its bar and the banner
+ *  stack under it (Refined, W2 Task S4b), so the column leaves both out there; below 900 it keeps them. One instance of
+ *  each at any width, as with the accounts strip. */
+export function FleetColumn({ barHoldsChrome = false }: { barHoldsChrome?: boolean } = {}): ReactNode {
   const { path } = useLocation();
   const at = matchRoute(path);
   const selectedId = at?.route.id === 'session' ? at.param : null;
@@ -26,6 +29,8 @@ export function FleetColumn(): ReactNode {
     <FleetScreen
       selectedId={selectedId}
       showAccounts={!desktop}
+      banners={!(barHoldsChrome && desktop)}
+      headDoors={!(barHoldsChrome && desktop)}
       epoch={pools?.epoch}
       observedEpoch={pools?.observedEpoch}
     />

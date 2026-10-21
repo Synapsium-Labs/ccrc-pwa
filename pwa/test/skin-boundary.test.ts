@@ -86,7 +86,7 @@ const selectorOf = (d: Decl): string => [...d.chain].reverse().find((p) => !p.st
  *  `['TopBar.tsx']`, S11 adds `PhoneTopBar.tsx`. */
 type BarRegistry = Readonly<Record<string, string | readonly string[]>>;
 
-const BAR_MODULES: BarRegistry = { [REFINED]: 'S4b', [INSTRUMENT]: 'S9' };
+const BAR_MODULES: BarRegistry = { [REFINED]: ['AppBar.tsx'], [INSTRUMENT]: 'S9' };
 
 const RENDERS_WORDMARK = /<Wordmark\b/;
 
@@ -330,6 +330,13 @@ function plantedTree(): string {
   return dir;
 }
 
+/** A copy of the skins with one file's whole text replaced: a module that exists cannot lose a line by appending. */
+function rewritten(rel: string, text: string): string {
+  const tree = plantedTree();
+  writeFileSync(path.join(tree, SKIN_ROOT, rel), text);
+  return tree;
+}
+
 /** Append to a file in the copy (creating it), refusing a plant that changed nothing. */
 function append(tree: string, rel: string, text: string): string {
   const p = path.join(tree, SKIN_ROOT, rel);
@@ -356,26 +363,25 @@ describe('(a) each skin bar renders Wordmark (D-5094)', () => {
     expect(wordmark(REPO)).toEqual([]);
   });
   it('a listed bar module that renders no Wordmark is red', () => {
-    const tree = planted(`${REFINED}/AppBar.tsx`, 'export function AppBar() { return <div className="ref-bar" />; }');
-    expect(wordmark(tree, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx'] }))
-      .toContain(`${REFINED}/AppBar.tsx is listed as a bar module and renders no Wordmark`);
+    const tree = rewritten(`${REFINED}/AppBar.tsx`, 'export function AppBar() { return <div className="ref-bar" />; }');
+    expect(wordmark(tree)).toContain(`${REFINED}/AppBar.tsx is listed as a bar module and renders no Wordmark`);
   });
   it('a listed bar module that is missing is red', () => {
-    expect(wordmark(REPO, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx'] }))
-      .toContain(`${REFINED}/AppBar.tsx is listed as a bar module and does not exist`);
+    expect(wordmark(REPO, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx', 'PhoneHeader.tsx'] }))
+      .toContain(`${REFINED}/PhoneHeader.tsx is listed as a bar module and does not exist`);
   });
   it('a pending skin that renders Wordmark is stale', () => {
-    const tree = planted(`${REFINED}/AppBar.tsx`, 'export function AppBar() { return <Wordmark />; }');
-    expect(wordmark(tree)).toContain(`${REFINED} is pending on S4b, but AppBar.tsx renders Wordmark: the entry is stale, list the module`);
-    expect(wordmark(tree, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx'] })).toEqual([]);
+    const tree = planted(`${INSTRUMENT}/TopBar.tsx`, 'export function TopBar() { return <Wordmark />; }');
+    expect(wordmark(tree)).toContain(`${INSTRUMENT} is pending on S9, but TopBar.tsx renders Wordmark: the entry is stale, list the module`);
+    expect(wordmark(tree, { ...BAR_MODULES, [INSTRUMENT]: ['TopBar.tsx'] })).toEqual([]);
   });
   it('a Wordmark in a comment counts for nothing', () => {
-    const tree = planted(`${REFINED}/AppBar.tsx`, '// renders <Wordmark /> one day\nexport const AppBar = null;');
-    expect(wordmark(tree, { ...BAR_MODULES, [REFINED]: ['AppBar.tsx'] }))
+    const tree = rewritten(`${REFINED}/AppBar.tsx`, '// renders <Wordmark /> one day\nexport const AppBar = null;');
+    expect(wordmark(tree))
       .toContain(`${REFINED}/AppBar.tsx is listed as a bar module and renders no Wordmark`);
   });
   it('the registry and SKINS agree both ways', () => {
-    expect(wordmark(REPO, { [REFINED]: 'S4b' })).toContain(`${INSTRUMENT} has no bar entry: list its bar modules or the task that adds them`);
+    expect(wordmark(REPO, { [REFINED]: ['AppBar.tsx'] })).toContain(`${INSTRUMENT} has no bar entry: list its bar modules or the task that adds them`);
     expect(wordmark(REPO, { ...BAR_MODULES, retro: 'S99' })).toContain('the bar registry names retro, which is not a skin in SKINS');
   });
 });

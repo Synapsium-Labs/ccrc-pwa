@@ -17,6 +17,7 @@ import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner'
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
+import { unreadMailCount } from '../fleet/navBadges';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { fleetTree } from '../fleet/fleetTree';
 import { ProjectCard } from '../fleet/ProjectCard';
@@ -31,8 +32,7 @@ import { useProjectedHome } from '../fleet/useProjectedHome';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { navigate } from '../lib/router';
-import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
-import { raisesUnread } from '../lib/feed';
+import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
@@ -44,6 +44,8 @@ export function FleetScreen({
   onNewSession,
   selectedId = null,
   showAccounts = true,
+  banners = true,
+  headDoors = true,
   epoch,
   observedEpoch,
 }: {
@@ -53,6 +55,10 @@ export function FleetScreen({
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
+  /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
+  banners?: boolean;
+  /** False where the skin's bar holds the head's doors (Refined at a desk, W2 Task S4b); the readouts stay. */
+  headDoors?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -97,8 +103,6 @@ export function FleetScreen({
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
-  const notices = useStore((s) => s.notices);
-  const dismissNotice = useStore((s) => s.dismissNotice);
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
   const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
@@ -224,15 +228,10 @@ export function FleetScreen({
   // too. `null` runs: this head has never carried the runs part (the runs line below is their door).
   const countLine = fleetSummary(sessions, null).readout;
 
-  // The passkey notice's posture, read once here for the banner stack's predicate and the notice alike.
-  const passkeyStatus = usePasskeyStatus();
-
-  // The feed's unread count, through the SAME comparison the bucket chips use
-  // (seen.ts's isUnseenAt — see groupFleet.ts:30-44's pre-commitment). `acks`
-  // is already subscribed on this screen, so this costs one filter. An `interrupt` record never counts
-  // (`raisesUnread`, D-5431): it is kept in Mail as a record, but every Escape the console sends writes one.
+  // The feed's unread count: `unreadMailCount` (navBadges.ts), the one function every door that shows it reads (the
+  // tabs of W2 Task S4b too). An `interrupt` record never counts (`raisesUnread`, D-5431).
   const feed = useStore((s) => s.feed);
-  const unreadMail = feed.filter((ev) => raisesUnread(ev) && isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
+  const unreadMail = unreadMailCount(feed, acks);
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known
@@ -260,77 +259,11 @@ export function FleetScreen({
         countLine={sessions.length > 0 ? countLine : null}
         poolLag={poolLag}
         unreadMail={unreadMail}
+        doors={headDoors}
       />
-      {/* The global banners, through the one stack both shells place (W2 Task S2c, BannerStack.tsx): the first two
-          that apply in rank order, every alert, and "+n more" for the rest. Each banner stays mounted and renders
-          exactly as it did here before; `shows` is the module's own predicate. */}
-      <BannerStack
-        items={[
-          {
-            id: 'fleet-host',
-            shows: fleetHostBannerShows(fleetHealth),
-            node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
-          },
-          // The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
-          // disables while it stands. Re-polls on every Ack.
-          {
-            id: 'halt',
-            shows: haltBannerShows(updates.view),
-            node: <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />,
-          },
-          {
-            id: 'update',
-            shows: updateBannerShows(updates.view),
-            node: <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />,
-          },
-          // The substrate fault, said once (spec §4) — derived from the SAME injected store the rows render from,
-          // so the banner and the chips can never disagree about which fleet they describe.
-          { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
-          {
-            id: 'offline',
-            shows: conn === 'down',
-            node: conn === 'down' && (
-              <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
-                Reconnecting…
-              </div>
-            ),
-          },
-          // Cold start hydrated from the offline snapshot (lib/offline.ts): cards render instantly, clearly marked
-          // stale until the socket opens.
-          {
-            id: 'connecting',
-            shows: conn === 'connecting' && sessions.length > 0,
-            node: conn === 'connecting' && sessions.length > 0 && (
-              <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
-                Last known state — connecting…
-              </div>
-            ),
-          },
-          ...notices.map((n) => ({
-            id: 'notice' as const,
-            key: n.id,
-            shows: true,
-            node: (
-              <div className="notice" role="status">
-                <span className="notice-msg">{n.message}</span>
-                <button
-                  type="button"
-                  className="notice-x"
-                  aria-label="Dismiss"
-                  onClick={() => dismissNotice(n.id)}
-                >
-                  ×
-                </button>
-              </div>
-            ),
-          })),
-          // The passphrase-only notice (D-161) — renders ITSELF or nothing, from the box's own posture, so it is
-          // in the stack unconditionally: every branch below needs it, and a first-run box with zero sessions is
-          // the one most likely to have a gate armed and no passkey on it yet. Outside `showAccounts` too — that
-          // flag is about which surface owns the accounts STRIP (top bar vs fleet list), and this is not it.
-          { id: 'passkey', shows: passkeyNoticeShows(passkeyStatus), node: <PasskeyNotice status={passkeyStatus} /> },
-        ]}
-      />
+      {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
+          (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}
+      {banners && <FleetBanners />}
 
       {/* Its own poller, independent of `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
@@ -555,5 +488,94 @@ export function FleetScreen({
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
       <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
     </section>
+  );
+}
+
+/** The fleet's global banners, through the one stack both shells place (W2 Task S2c, BannerStack.tsx): the first two
+ *  that apply in rank order, every alert, and "+n more" for the rest. Each banner stays mounted and renders exactly as
+ *  it did in the fleet column; `shows` is the module's own predicate. Takes no props: it reads the shell's chrome
+ *  (D-5468), so the fleet column and a skin's frame (W2 Task S4b) place the same stack, and only one of them at a
+ *  time does. */
+export function FleetBanners(): ReactNode {
+  const chrome = useFleetChrome();
+  const useStore = chrome.store;
+  const sessions = useStore((s) => s.sessions);
+  const conn = useStore((s) => s.conn);
+  const notices = useStore((s) => s.notices);
+  const dismissNotice = useStore((s) => s.dismissNotice);
+  const fleetHealth = chrome.health;
+  const updates = chrome.updates;
+  // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every banner says so.
+  const stale = updates.view !== null && updates.failure !== null;
+  // The passkey notice's posture, read once here for the stack's predicate and the notice alike.
+  const passkeyStatus = usePasskeyStatus();
+  return (
+    <BannerStack
+      items={[
+        {
+          id: 'fleet-host',
+          shows: fleetHostBannerShows(fleetHealth),
+          node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
+        },
+        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
+        // disables while it stands. Re-polls on every Ack.
+        {
+          id: 'halt',
+          shows: haltBannerShows(updates.view),
+          node: <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />,
+        },
+        {
+          id: 'update',
+          shows: updateBannerShows(updates.view),
+          node: <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />,
+        },
+        // The substrate fault, said once (spec §4) — derived from the SAME injected store the rows render from,
+        // so the banner and the chips can never disagree about which fleet they describe.
+        { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
+        {
+          id: 'offline',
+          shows: conn === 'down',
+          node: conn === 'down' && (
+            <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
+              Reconnecting…
+            </div>
+          ),
+        },
+        // Cold start hydrated from the offline snapshot (lib/offline.ts): cards render instantly, clearly marked
+        // stale until the socket opens.
+        {
+          id: 'connecting',
+          shows: conn === 'connecting' && sessions.length > 0,
+          node: conn === 'connecting' && sessions.length > 0 && (
+            <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
+              Last known state — connecting…
+            </div>
+          ),
+        },
+        ...notices.map((n) => ({
+          id: 'notice' as const,
+          key: n.id,
+          shows: true,
+          node: (
+            <div className="notice" role="status">
+              <span className="notice-msg">{n.message}</span>
+              <button
+                type="button"
+                className="notice-x"
+                aria-label="Dismiss"
+                onClick={() => dismissNotice(n.id)}
+              >
+                ×
+              </button>
+            </div>
+          ),
+        })),
+        // The passphrase-only notice (D-161) — renders ITSELF or nothing, from the box's own posture, so it is
+        // in the stack unconditionally: every branch below needs it, and a first-run box with zero sessions is
+        // the one most likely to have a gate armed and no passkey on it yet. Outside `showAccounts` too — that
+        // flag is about which surface owns the accounts STRIP (top bar vs fleet list), and this is not it.
+        { id: 'passkey', shows: passkeyNoticeShows(passkeyStatus), node: <PasskeyNotice status={passkeyStatus} /> },
+      ]}
+    />
   );
 }

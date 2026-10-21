@@ -12,6 +12,7 @@ export const INSTRUMENT_SET: SkinSet = {
   id: INSTRUMENT,
   frameClass: 'ins-frame',
   Bar: AccountsStrip,
+  Banners: null,
   Rail: null,
   Nav: FleetColumn,
   FleetList: null,

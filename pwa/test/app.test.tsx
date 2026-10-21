@@ -438,6 +438,7 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
 
   // ONE ACCOUNTS STRIP PER WIDTH (W2 Global constraints, D-5678): the gate is split between `ShellFrame`'s
   // `desk &&` and `FleetColumn`'s `showAccounts={!desktop}`, so it is counted through App, in both skins.
+  // From W2 Task S4b Refined's bar places the compact gauges (`.accounts-compact`), the same readout in its bar form.
   for (const skin of [REFINED, INSTRUMENT]) {
     for (const desk of [true, false]) {
       it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the bar' : 'the fleet column'}`, () => {
@@ -450,7 +451,7 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           setSkin(skin);
           navigate('/');
           render(<App />);
-          const strips = document.querySelectorAll('.accounts-strip');
+          const strips = document.querySelectorAll('.accounts-strip, .accounts-compact');
           expect(strips).toHaveLength(1);
           const bar = document.querySelector('header.shell-accounts');
           const fleet = screen.getByRole('region', { name: 'Fleet' });

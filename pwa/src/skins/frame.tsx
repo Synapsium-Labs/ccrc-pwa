@@ -66,7 +66,7 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
   // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
   // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden.
   const desk = useMediaQuery(DESK_QUERY);
-  const { Bar, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
+  const { Bar, Banners, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
   // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
   // ladder or above the frame keeps it, because none of it remounts; a control
   // inside a part the switch replaced is gone, and the browser leaves focus on
@@ -89,6 +89,13 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
           <header key="bar" className="shell-accounts">
             <Bar />
           </header>
+        )}
+        {Banners !== null && desk && (
+          // Under the bar on a desk (W2 Task S4b); below 900 the fleet column places the same stack. Mounted, never
+          // CSS-hidden, so one stack is mounted at any width.
+          <div key="banners" className="shell-banners">
+            <Banners />
+          </div>
         )}
         {Rail !== null && (
           <nav key="rail" className="shell-rail" aria-label="Rail">

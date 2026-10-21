@@ -10,6 +10,7 @@ import { BANNER_ORDER, BannerStack, LOCAL_BANNERS, type BannerRank } from '../sr
 import { fleetSummary } from '../src/fleet/fleetSummary';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { COMPACT_FIT, compactDoorLabel, compactReading, overflowCount } from '../src/fleet/CompactGauges';
+import { DOOR_EVENT } from '../src/command/door';
 import { FleetHostBanner, fleetHostBannerShows } from '../src/fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../src/fleet/HaltBanner';
 import { UpdateBanner, updateBannerShows } from '../src/fleet/UpdateBanner';
@@ -257,8 +258,15 @@ describe('the compact gauges', () => {
     expect(within(door).queryByText('lane-off')).toBeNull();
     // One door: nothing inside it is a control of its own.
     expect(container.querySelectorAll('[role="link"], a, button')).toHaveLength(1);
+    // The group is the `go-accounts` door (W2 Task S4b): it asks the command layer, which navigates.
+    expect(door).toHaveAttribute('data-command', 'go-accounts');
+    const ran: string[] = [];
+    const hear = (e: Event): void => { ran.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, hear);
     fireEvent.click(door);
-    expect(location.pathname).toBe('/accounts');
+    fireEvent.keyDown(door, { key: 'Enter' });
+    window.removeEventListener(DOOR_EVENT, hear);
+    expect(ran).toEqual(['go-accounts', 'go-accounts']);
   });
 
   it('led fits more than bar; grid places every lane, two to a row, with no +n', async () => {

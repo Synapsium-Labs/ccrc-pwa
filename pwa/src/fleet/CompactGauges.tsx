@@ -11,7 +11,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
-import { navigate } from '../lib/router';
+import { commandDoor } from '../command/door';
 import { limitBand, Meter } from '@ccrc/ui';
 import './fleet.css';
 
@@ -94,12 +94,13 @@ export function CompactGauges({ compact, lanes, roster, placeholder }: {
   }, [measures, laneKey]);
 
   const more = capped + wrapped;
-  const open = (): void => navigate('/accounts');
-  // role="link" mirrors an <a> to /accounts: Enter activates, Space does not.
+  // The group is the `go-accounts` door (W2 Task S4b; the plan's door table): the command layer navigates, as the
+  // palette's "Go to Accounts" does. role="link" mirrors an <a> to /accounts: Enter activates, Space does not.
+  const door = commandDoor('go-accounts');
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    open();
+    door.onClick();
   };
   return (
     <div
@@ -108,7 +109,7 @@ export function CompactGauges({ compact, lanes, roster, placeholder }: {
       role="link"
       tabIndex={0}
       aria-label={placeholder === null ? compactDoorLabel(placed, roster) : ACCOUNTS_DOOR_LABEL}
-      onClick={open}
+      {...door}
       onKeyDown={onKeyDown}
     >
       {placeholder !== null ? (

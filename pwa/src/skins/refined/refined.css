@@ -1,8 +1,8 @@
 /* Refined's own rules (W2, D-5469): `ref-*` classes only, never a `data-skin` selector (skins.css is the one sheet
    that may select on the attribute, skin-identity (k)). Structure channel: layout, grid placement and spacing on
    tokens. Colour comes from the identity core's tokens and nothing here defines one (D-5094); every colour-bearing
-   rule added later is a `contrast.test.ts` identity. Empty in S2b: the frame's grid is still `shell.css`'s; S4b moves
-   Refined's desktop grid and the accounts top strip here. */
+   rule added later is a `contrast.test.ts` identity. S4b put Refined's desktop frame here (below); `shell.css` keeps
+   the frame-shared rules and, until S9, the interim grid and accounts strip Instrument still places. */
 
 /* W2 Task S7c (D-5471): Refined's session chrome, the short header. Layout only: every colour is the shared header's
    (`chat.css`), so nothing here is a new contrast identity. Two rows: Back, the title and the doors; then ONE chip rail
@@ -101,4 +101,102 @@
   grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   padding-top: var(--sp-1);
+}
+
+/* W2 Task S4b (D-5471; spec §5.3, Shell, laptop and wide rows): Refined's frame at a desk. Three rows: the 56px bar,
+   the banner stack spanning the frame under it, then the sidebar and the detail. The sidebar is
+   clamp(320px, 24vw, 400px), and 400 from 1600. Below 900 nothing here applies: the phone swap is `shell.css`'s,
+   shared. Layout only: the bar's ground and edge are the frame header's own (`shell.css`'s `.shell-accounts`), and its
+   inks are the primitives' utilities, so the one colour declared here is the current tab's underline. */
+@media (min-width: 900px) {
+  .app-shell.ref-frame {
+    grid-template-columns: clamp(320px, 24vw, 400px) minmax(0, 1fr);
+    grid-template-rows: 56px auto minmax(0, 1fr);
+  }
+  /* The frame's `<header>`, still named for the strip Instrument places there until S9. */
+  .ref-frame > .shell-accounts {
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    padding: 0 var(--sp-4);
+  }
+  .ref-frame > .shell-banners {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    min-width: 0;
+    padding: 0 var(--sp-4);
+  }
+  /* Room above and below only while a banner draws: every banner stays mounted in an empty slot when it does not. */
+  .ref-frame > .shell-banners:has(> .banner-slot > *, > .banner-more) {
+    padding-block: var(--sp-2);
+  }
+  .ref-frame > .shell-nav,
+  .ref-frame > .shell-detail {
+    grid-row: 3;
+  }
+}
+@media (min-width: 1600px) {
+  .app-shell.ref-frame {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
+}
+
+/* The app bar (AppBar.tsx): one row that never wraps. The wordmark, the tabs, the doors and New session keep their
+   width; the gauges take what is left and give it up first (their row wraps out of sight and says "+n",
+   CompactGauges.tsx), so at 900 nothing is clipped and nothing scrolls sideways. */
+.ref-bar {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.ref-bar-mark {
+  flex: none;
+}
+.ref-tabs {
+  display: flex;
+  flex: none;
+  align-self: stretch;
+}
+/* A tab is a `Door` the bar's full height, its underline the accent while it is the current page (F9's active state;
+   the ink is the primitive's `aria-[current=page]` utility). */
+.ref-tab {
+  height: 100%;
+  padding: 0 var(--sp-3);
+  border-radius: 0;
+  white-space: nowrap;
+}
+/* The 2px the underline takes at the foot is given back at the head, so the current tab's word does not move. */
+.ref-tab[aria-current='page'] {
+  padding-top: 2px;
+  border-bottom: 2px solid var(--accent);
+}
+/* A tab has no glyph: its word is the door. */
+.ref-tab > [aria-hidden='true']:empty {
+  display: none;
+}
+.ref-bar-gauges {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ref-bar-gauges > .accounts-compact {
+  flex: 1 1 auto;
+}
+.ref-bar-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.ref-bar-door {
+  padding: 0 var(--sp-2);
+}
+.ref-bar-new {
+  flex: none;
+  white-space: nowrap;
 }

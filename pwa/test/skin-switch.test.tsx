@@ -370,7 +370,7 @@ describe('focus after a switch is never on <body>', () => {
     // with two sets whose bars differ.
     function BarA(): ReactNode { return <button type="button">Bar A</button>; }
     function BarB(): ReactNode { return <button type="button">Bar B</button>; }
-    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Nav: null };
+    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Banners: null, Nav: null };
     const b = { ...SKIN_SETS[INSTRUMENT], Bar: BarB, Nav: null };
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('min-width: 900px'), media: q, onchange: null,
