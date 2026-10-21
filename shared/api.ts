@@ -922,6 +922,8 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
  * whose shape is genuinely unknown, which is the only thing it was ever an
  * honest answer for.
  *
+ * `cut-short`: ccrc's own read of the PRs was ended before it answered — the runner's kill or the server's wait (not GitHub)
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -939,7 +941,7 @@ export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
   | 'merge-unproven' | 'branch-drift'
-  | 'unavailable' | 'truncated';
+  | 'unavailable' | 'truncated' | 'cut-short';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -960,7 +962,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
-  unavailable: true, truncated: true,
+  unavailable: true, truncated: true, 'cut-short': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 

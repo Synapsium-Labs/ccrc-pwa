@@ -1,6 +1,7 @@
 // The Settings screen's Linear section (named workspaces S4b, design 2026-10-20 §5.1): connect a personal API key
 // so a pasted ticket shows its real title, see what the box last found out about it, check it again, disconnect.
-// Mounted on the Security page beside the Box token card; its read of GET /api/linear/connection is the Settings
+// Mounted on the Security page after the Box token card, as a `Section` card like the others (settings Task R2b2: its
+// scope, title and purpose line are `SETTINGS_CARDS.security.linear`); its read of GET /api/linear/connection is the Settings
 // frame's (`useLinearConnection`, handed down as `poll`), like Stall watch's, so this file reads nothing itself.
 //
 // Rules this file keeps, each pinned in linear-section.test.tsx:
@@ -17,12 +18,12 @@
 //   * EVERY REFUSAL IS A FIXED SENTENCE chosen by its word; the box's own text is never shown.
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { Button, Skeleton, TextInput, elapsedWords } from '@ccrc/ui';
+import { Button, Section, Skeleton, TextInput, elapsedWords } from '@ccrc/ui';
 import { isLinearKeyShape, type LinearConnectionView } from '../../../shared/linear';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import type { LinearPoll } from '../fleet/useLinearConnection';
-import { ResultLine, useResultLine } from '../fleet/settingsText';
+import { ResultLine, SETTINGS_CARDS, useResultLine } from '../fleet/settingsText';
 import { ApiError, api, apiErrorText } from '../lib/api';
 
 /** The key field's stack and the action row: named here, not copied from the passphrase step's literals. */
@@ -34,8 +35,6 @@ const ASSUME_FRESH = Infinity;
 
 /** The section's words. The state sentences are the design's table (§5.1) verbatim where it gives one. */
 export const LINEAR_TEXT = {
-  title: 'Linear',
-  purpose: 'Connect Linear so a ticket you paste into a new session shows its real title. Without it the title is read from what you paste.',
   loading: 'Reading the Linear connection…',
   unread: "Couldn't read the Linear connection. Reload to try again.",
   notConnected: "Not connected. Paste a personal API key from Linear's settings (read access is enough).",
@@ -119,8 +118,8 @@ export function linearControls(v: LinearConnectionView): { field: 'connect' | 'r
 }
 
 export function LinearSection({ poll, stepUpDeps }: { poll: LinearPoll; stepUpDeps?: StepUpDeps }): ReactNode {
-  const titleId = useId();
   const fieldId = useId();
+  const card = SETTINGS_CARDS.security.linear;
   // The last GOOD view; a failed read with none to show is the `unread` sentence.
   const view = poll.view;
   const [key, setKey] = useState('');
@@ -224,12 +223,10 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearPoll; stepUpDe
   }
 
   return (
-    <section className="settings-section" aria-labelledby={titleId} data-linear="section">
-      <h3 id={titleId} className="settings-section-title">{LINEAR_TEXT.title}</h3>
-      <p className="settings-note">{LINEAR_TEXT.purpose}</p>
+    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose} data-linear="section">
       {body}
       <ConfirmItsYou stepUp={stepUp} subject={LINEAR_TEXT.stepUpSubject} />
       <ResultLine line={result.line} />
-    </section>
+    </Section>
   );
 }

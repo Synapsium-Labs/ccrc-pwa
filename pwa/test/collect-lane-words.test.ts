@@ -181,9 +181,10 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(COLLECT_COUNT_TEXT.unmeasured).toBe('Counts are not measured yet.');
   });
 
-  it('"Pause all cleanup" names all four lanes', () => {
+  it('"Pause all cleanup" names all four lanes (the Cleanup pause card\'s purpose, settings spec §5.4)', () => {
     expect(COLLECT_PAUSE_TEXT.label).toBe('Pause all cleanup');
-    for (const lane of ['child reclamation', 'archived-workspace expiry', 'the dead-coordinator lane', 'this collector']) {
+    for (const lane of ['removing finished child workspaces', 'expiring archived workspaces', 'the dead-coordinator lane',
+      'the collector above']) {
       expect(COLLECT_PAUSE_TEXT.stops, lane).toContain(lane);
     }
     expect(Object.values(COLLECT_PAUSE_TEXT).join(' ')).not.toMatch(/Resume cleanup/);

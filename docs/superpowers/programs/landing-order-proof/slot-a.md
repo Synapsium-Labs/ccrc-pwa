@@ -1,0 +1,1 @@
+- Slot A: a one-line proof PR for the merge queue.

@@ -227,6 +227,10 @@ const CONTROLS: Record<string, string> = {
     + 'the two sheets that drew it were drawing the same button down to the '
     + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
     + 'unchanged; what is gone is the second copy of the markup.',
+  'fleet/CollectLaneSection.tsx <a> (computed)':
+    'VARIANT buttonVariants. The paused Cleanup pause card\'s one resume door, '
+    + 'a link to Runs that stands alone in the card foot, so it wears the ghost '
+    + 'button (`min-h-tap` in its base) rather than TextLink\'s inline shape.',
   'fleet/PasskeyNotice.tsx <button> passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
   'fleet/PoolList.tsx <button> pool-row': 'TOKEN. Both rows of the pool picker.',
   'fleet/ProjectCardHead.tsx <button> proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',

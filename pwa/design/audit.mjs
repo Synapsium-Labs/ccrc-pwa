@@ -1061,6 +1061,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the note above a document shown as plain text (DocPlain), a <p> in the unpainted leaf, so --bg-page, as chat's .msg-plain-note",
   },
+  // ── settings Task R2b2 (D-5503): the cards' when-line ──────────────────
+  '.settings-when': {
+    under: ['var(--bg-surface)'],
+    why: "a Settings card's when-line (\"when you would change it\"), the tertiary step under a control's notes. Every section page's cards are @ccrc/ui's Section, whose card paints --bg-surface (SECTION_CARD's bg-surface), and the line sits directly inside it; its selector names no painted ancestor",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

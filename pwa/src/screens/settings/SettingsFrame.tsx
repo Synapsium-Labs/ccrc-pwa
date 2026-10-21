@@ -3,9 +3,11 @@
 // R2c's desktop nav and R3a's master-detail, does every other width in both skins: the same pattern in the pane, the
 // column capped at `--page-max`.
 //
-//   - `/settings`: `PageScaffold` (Back to the fleet, `❯`, "Settings"), the sign-in gate's paragraph if it shows, then
+//   - `/settings`: `PageScaffold` (Back to the fleet, `❯`, "Settings"), the sign-in gate's banner if it shows, then
 //     the five index rows.
-//   - `/settings/<id>`: the gate's paragraph, then the section's page, led by its `<h2>`, with Back to the index.
+//   - `/settings/<id>`: the gate's banner, then the section's page, led by its `<h2>`, with Back to the index.
+// The banner (`SignInGateBanner`, settings Task R2b2) holds the same place in the tree in both, so moving between the
+// index and a section keeps its node, and its `role="alert"` is announced once per mount of the frame.
 //   - an unknown id (`settings-section`): the index, with "That section does not exist." above it. Nothing 404s.
 //
 // The `<h1>` is "Settings" on every route; `document.title` is "<Section> · Settings · ccrc". Opening a section moves
@@ -20,7 +22,8 @@ import { matchRoute, SETTINGS_SECTIONS, type SettingsSectionId } from '../../lib
 import { AppearanceSection } from './AppearanceSection';
 import { AutomationSection } from './AutomationSection';
 import { NotificationsSection } from './NotificationsSection';
-import { SecuritySection, UnarmedExposureBanner } from './SecuritySection';
+import { SecuritySection } from './SecuritySection';
+import { SignInGateBanner } from './SignInGateCard';
 import { indexRowOf, SettingsIndex } from './SettingsIndex';
 import { useSettingsView, type SettingsView } from './SettingsDataProvider';
 import { UpdatesSection } from './UpdatesSection';
@@ -44,7 +47,7 @@ function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsView }
     case 'notifications':
       return <NotificationsSection view={view.updates.view} reload={view.updates.reload} supported={view.push !== 'unsupported'} />;
     case 'automation': return <AutomationSection view={view} />;
-    case 'security': return <SecuritySection poll={view.updates} linear={view.linear} />;
+    case 'security': return <SecuritySection poll={view.updates} auth={view.auth} linear={view.linear} />;
   }
 }
 
@@ -75,15 +78,16 @@ export function SettingsScreen(): ReactNode {
     from.current = sectionId;
   }, [sectionId]);
 
-  const banner = view === null ? null : <UnarmedExposureBanner auth={view.auth} />;
+  // The first child of the scaffold on every route, so React keeps one banner node across the index and the sections.
+  const banner = view === null ? null : <SignInGateBanner auth={view.auth} onSecurity={sectionId === 'security'} />;
   if (section === null) {
     return (
       <PageScaffold
         title="Settings"
         back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'settings-back' }}
       >
-        {at.kind === 'unknown' && <p className="settings-note" role="status">{SETTINGS_INDEX_TEXT.notFound}</p>}
         {banner}
+        {at.kind === 'unknown' && <p className="settings-note" role="status">{SETTINGS_INDEX_TEXT.notFound}</p>}
         <SettingsIndex view={view} />
       </PageScaffold>
     );

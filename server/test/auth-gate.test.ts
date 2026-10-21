@@ -815,7 +815,7 @@ describe('the coordinator intent door: exempt from the session gate, and not for
 
   it('with the gate ARMED and the lane configured, a missing or wrong token gets the ROUTE\'s own 401 (no gate verdict), and nothing is touched', async () => {
     let applierCalls = 0;
-    const watcher = { stop: () => undefined, delegationApplier: () => { applierCalls++; return Promise.resolve(null); } };
+    const watcher = { stop: () => undefined, serverCapsSettled: async () => {}, delegationApplier: () => { applierCalls++; return Promise.resolve(null); } };
     const w = await openApp({ coord: true, watcher }); app = w.app;
     mkdirSync(path.join(w.home, '.cc-sessions'), { recursive: true });         // an EMPTY registry: a sender with no row is unknown
     const payload = { action: 'set', byId: 'demo-ws', byUuid: 'u' };
