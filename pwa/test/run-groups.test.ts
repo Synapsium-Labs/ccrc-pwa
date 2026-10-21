@@ -1,4 +1,4 @@
-// U6's model (D-5587): the board's runs grouped by what they need. A pure
+// U6's model (D-5587): the board's runs grouped by what they wait on. A pure
 // module, so every case here is data in and groups out; P5 (the board) and P9
 // (Instrument's runs split) are its readers.
 import { describe, expect, it } from 'vitest';
@@ -21,13 +21,13 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 /** Every id the groups list, in render order. */
 const ids = (g: ReturnType<typeof groupRuns>): number[] => [
-  ...g.needs.map((row) => row.run.id),
+  ...g.waiting.map((row) => row.run.id),
   ...g.running.flatMap((group) => group.runs.map((r) => r.id)),
   ...g.finished.map((r) => r.id),
 ];
 
 describe('groupRuns (D-5587)', () => {
-  it('awaiting-review leads in Needs you, whatever its programme', () => {
+  it('awaiting-review leads in Waiting, whatever its programme (D-6170)', () => {
     const active = [
       run({ id: 1, program: 'programme-a', state: 'working' }),
       run({ id: 2, program: 'programme-b', programTitle: 'Programme B', state: 'awaiting-review' }),
@@ -35,23 +35,23 @@ describe('groupRuns (D-5587)', () => {
       run({ id: 4, program: 'programme-c', programTitle: 'Programme C', wave: 2, state: 'awaiting-review' }),
     ];
     const g = groupRuns(active, []);
-    expect(g.needs.map((row) => row.run.id).sort()).toEqual([2, 4]);
-    // Each Needs-you row carries its programme's title, so the row can say whose it is.
-    expect(g.needs.find((row) => row.run.id === 2)?.title).toBe('Programme B');
-    expect(g.needs.find((row) => row.run.id === 4)?.title).toBe('Programme C');
-    // Needs you comes first in the order the board reads.
+    expect(g.waiting.map((row) => row.run.id).sort()).toEqual([2, 4]);
+    // Each Waiting row carries its programme's title, so the row can say whose it is.
+    expect(g.waiting.find((row) => row.run.id === 2)?.title).toBe('Programme B');
+    expect(g.waiting.find((row) => row.run.id === 4)?.title).toBe('Programme C');
+    // Waiting comes first in the order the board reads.
     expect(ids(g).slice(0, 2).sort()).toEqual([2, 4]);
   });
 
-  it('a failed run is in Finished, never in Needs you', () => {
+  it('a failed run is in Finished, never in Waiting', () => {
     const failed = run({ id: 5, state: 'failed', closedAt: 2_000 });
     const done = run({ id: 6, state: 'done', closedAt: 1_900 });
     const g = groupRuns([run({ id: 1 })], [failed, done]);
-    expect(g.needs).toEqual([]);
+    expect(g.waiting).toEqual([]);
     expect(g.finished.map((r) => r.id)).toEqual([5, 6]);
     // Defensively: a closed run that reached `active` anyway still files as Finished.
     const leaked = groupRuns([run({ id: 7, state: 'failed' })], []);
-    expect(leaked.needs).toEqual([]);
+    expect(leaked.waiting).toEqual([]);
     expect(leaked.running).toEqual([]);
     expect(leaked.finished.map((r) => r.id)).toEqual([7]);
   });
@@ -90,7 +90,7 @@ describe('groupRuns (D-5587)', () => {
       [run({ id: 8, state: 'done', closedAt: 6 }), run({ id: 9, state: 'failed', closedAt: 7 })],
     );
     expect(ids(raced)).toEqual([8, 9]);
-    expect(raced.needs.map((row) => row.run.id)).toEqual([8]);
+    expect(raced.waiting.map((row) => row.run.id)).toEqual([8]);
     expect(raced.running.flatMap((group) => group.runs.map((r) => r.id))).toEqual([9]);
     expect(raced.finished).toEqual([]);
   });
@@ -132,13 +132,13 @@ describe('groupRuns (D-5587)', () => {
       run({ id: 2, program: 'programme-a', programTitle: '', state: 'awaiting-review' }),
     ], []);
     expect(untitled.running[0]!.title).toBe('programme-a');
-    expect(untitled.needs[0]!.title).toBe('programme-a');
-    // A Needs-you row reads the title another run of its programme carries.
+    expect(untitled.waiting[0]!.title).toBe('programme-a');
+    // A Waiting row reads the title another run of its programme carries.
     const borrowed = groupRuns([
       run({ id: 1, program: 'programme-a', programTitle: '', state: 'awaiting-review' }),
       run({ id: 2, program: 'programme-a', programTitle: 'Programme A', state: 'working' }),
     ], []);
-    expect(borrowed.needs[0]!.title).toBe('Programme A');
+    expect(borrowed.waiting[0]!.title).toBe('Programme A');
     // A whitespace-only title is no title: the slug.
     const blank = groupRuns([run({ id: 1, program: 'programme-a', programTitle: '   ', state: 'working' })], []);
     expect(blank.running[0]!.title).toBe('programme-a');
@@ -156,26 +156,31 @@ describe('groupRuns (D-5587)', () => {
     expect(fromFinished.running[0]!.title).toBe('Programme A');
   });
 
+  it('awaiting-review is waiting, and no run state is needs', () => {
+    expect(RUN_GROUP['awaiting-review']).toBe('waiting');
+    for (const state of RUN_STATES) expect(RUN_GROUP[state] as string).not.toBe('needs');
+  });
+
   it('every RunState has a group', () => {
     expect(Object.keys(RUN_GROUP).sort()).toEqual([...RUN_STATES].sort());
     // The record's Finished states are exactly the ones isRunClosed closes (D-5650).
     for (const state of RUN_STATES) {
       expect(RUN_GROUP[state] === 'finished').toBe(isRunClosed({ state }));
     }
-    expect(RUN_GROUP['awaiting-review']).toBe('needs');
-    // awaiting-review alone is Needs you; every other open state (merging and closing included) is Running (D-5650).
+    expect(RUN_GROUP['awaiting-review']).toBe('waiting');
+    // awaiting-review alone is Waiting; every other open state (merging and closing included) is Running (D-5650, D-6170).
     for (const state of RUN_STATES) {
-      expect(RUN_GROUP[state] === 'needs').toBe(state === 'awaiting-review');
-      if (!isRunClosed({ state })) expect(RUN_GROUP[state]).toBe(state === 'awaiting-review' ? 'needs' : 'running');
+      expect(RUN_GROUP[state] === 'waiting').toBe(state === 'awaiting-review');
+      if (!isRunClosed({ state })) expect(RUN_GROUP[state]).toBe(state === 'awaiting-review' ? 'waiting' : 'running');
     }
   });
 
-  it('unknown sits under Running, never Needs you', () => {
+  it('unknown sits under Running, never Waiting', () => {
     const fromNewerBuild = { ...run({ id: 2 }), state: 'quarantined' } as unknown as RunSummary;
     const g = groupRuns([run({ id: 1, state: 'unknown' }), fromNewerBuild], []);
-    expect(g.needs).toEqual([]);
+    expect(g.waiting).toEqual([]);
     expect(g.running.flatMap((group) => group.runs.map((r) => r.id)).sort()).toEqual([1, 2]);
-    expect(RUN_GROUP.unknown satisfies 'needs' | 'running' | 'finished').toBe('running');
+    expect(RUN_GROUP.unknown satisfies 'waiting' | 'running' | 'finished').toBe('running');
     const states: RunState[] = ['unknown'];
     expect(states.map((s) => RUN_GROUP[s])).toEqual(['running']);
   });
