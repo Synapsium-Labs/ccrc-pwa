@@ -2526,6 +2526,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           05:36, so the concurrent copy likely cost the move about half a minute.
         - Server backups 10262M, 10 kept: over the probe's 10240M size line, the known growth this ledger expected.
           Free disk 21.6G.
+      - **07:30 UTC: the probe's backups ANOMALY was the known growth; the size line is now 15G. The fleet box's work
+        volume is the urgent item, outside this programme.**
+        - 06:58: `server ~/ccrc-backups is 10262M`. The count is 10 (pruned at 06:46:52), and free disk is 22G, so
+          not a fault. Each backup now carries a coord.db snapshot of about 1.4G. The probe's size backstop moves from
+          10240M to 15360M (backup kept); the count line and the 15G free-disk line stay the tripwires.
+        - The work volume, the probe's `work:` figure, holds every worktree, Claude home, package cache and the
+          Claude Code temp area. It fell from 91G free at 15:58 yesterday to 17.7G at 07:30, and 6.3G of that fell
+          in the last 32 minutes, so it is full in about 1.5 hours at that rate.
+        - Ruled out, read-only: no large or deleted-but-open file is held there by a running process. The 19
+          worktrees made in 15 h hold 7.5G, and the sized test fixtures are small.
+        - The candidates are trees too large to size in minutes: the Claude homes (about 370G in all), one other
+          project session's temp area (8,345 task files, about 10G of scratch), `.cc-tmp`, and the projects root.
+        - The standing cleanup covers only the root disk's `/tmp/cdk.out*`, so this is reported to the operator.
+          Nothing was deleted.
+        - STATUS: fleet and server v0.0.514, newest v0.0.515, stable v0.0.502, intent dev/auto=off, backups fleet
+          186M/server 10262M, disk free fleet 146G/work volume 24G (17.7G at 07:30)/server 22G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
