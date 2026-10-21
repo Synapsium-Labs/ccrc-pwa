@@ -839,7 +839,7 @@ Task C0k was issued three numbers, 6051 to 6053.
 
 ### Operator act OA-C2, defined here
 
-- **D-6178** — `growth-check-armed` (OA-C2; ARCH-01 (#526); extends D-5848 and D-6119): the operator ruled on 2026-10-21, answering "Arm the consolidation god-file growth check (OA-C2)?" with "Arm it (Recommended)". `GROWTH_ARMED` in `server/test/growth-check.test.ts` is now `true`, flipped in one commit that changes nothing else. A PR that grows a listed file by more than 40 net code lines against the merge-base fails that file's row in CI, unless the same diff adds a new file under `L1_L2_NEW_FILE_DIRS` or shrinks another listed file by at least as much. Outside CI the rows still skip with a printed notice, and the job summary drops its "reporting only" line. The open PRs measured on the day of arming are listed under OA-C2.
+- **D-6178** — `growth-check-armed` (OA-C2; ARCH-01 (#526); extends D-5848 and D-6119): the operator ruled on 2026-10-21, answering "Arm the consolidation god-file growth check (OA-C2)?" with "Arm it (Recommended)". `GROWTH_ARMED` in `server/test/growth-check.test.ts` is now `true`, flipped in one commit that changes only the constant and its doc comment. A PR that grows a listed file by more than 40 net code lines against the merge-base fails that file's row in CI, unless the same diff adds a new file under `L1_L2_NEW_FILE_DIRS` or shrinks another listed file by at least as much. Outside CI the rows still skip with a printed notice, and the job summary's first line drops its "reporting only" suffix. The open PRs measured on the day of arming are listed under OA-C2.
 
 ## Out of scope
 

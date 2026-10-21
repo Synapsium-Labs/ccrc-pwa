@@ -1,11 +1,10 @@
 // D-5848 (ARCH-01, #526; consolidation spec §5.2): the god-file growth check.
 // Net code-line growth of the listed files against the merge-base with
-// `origin/main`, one stripper per language (`growthCheck.ts`). It REPORTS: a file
-// that grew by more than GROWTH_LIMIT net code lines is printed with
-// `console.warn` and named in the `GROWTH_OVER` list, and the suite stays green
-// until the operator arms it (OA-C2), one commit that flips GROWTH_ARMED and
-// nothing else. No per-file absolute constant lives here, so two PRs in flight
-// cannot conflict on this file.
+// `origin/main`, one stripper per language (`growthCheck.ts`). It reported only
+// (`console.warn` and the `GROWTH_OVER` list) until the operator armed it on
+// 2026-10-21 (OA-C2, D-6178); a listed file that grows by more than
+// GROWTH_LIMIT net code lines now fails its row. No per-file absolute constant
+// lives here, so two PRs in flight cannot conflict on this file.
 //
 // It reads `.git` (`git merge-base`, `git show`), so the CI selector's rule 2
 // (ALWAYS) runs it on every PR without a workflow edit. Outside CI (no `CI` in
