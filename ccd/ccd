@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=70932fe4583f07d087e4d9e798de885361e58db754b1f80fd19f78e91c059870
+# ccrc:generated 1 sha256=92f61321bd4233a2e4e30c7b7ffda6518f55a6b99fa3fb0d5aa9e8225541bc3a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -387,7 +387,7 @@ _plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
-
+_plat_workdirid_pane() { case "${1-}${2-}${3-}" in *[[:cntrl:]]*|*\'*) return 0 ;; esac; case "${2-}" in */*) return 0 ;; esac; [ -n "${1-}" ] && [ -n "${2-}" ] && [ -n "${3-}" ] || return 0; local s m x='\' a1 a2 a3; a1=${1//"$x"/"$x"0134} a2=${2//"$x"/"$x"0134} a3=${3//"$x"/"$x"0134}; if [ "$CCD_OS" = darwin ]; then s='stat -f %d:%i:%B .'; m='if [ -d "$f" ] && [ ! -L "$f" ]; then rm -f "$t"; exit 0; fi; [ -L "$f" ] && rm -f "$f"; mv -f "$t" "$f" 2>/dev/null || rm -f "$t"'; else s='stat -c %d:%i:%W .'; m='mv -fT "$t" "$f" 2>/dev/null || rm -f "$t"'; fi; printf "/bin/sh -c '%s' ccd-workdirid '%s' '%s' '%s' 2>/dev/null && " 'REG=$(printf %b "$1") id=$(printf %b "$2") l=$(printf %b "$3"); p=$(pwd -P && echo .) || exit 0; p=${p%?.}; case $p in /*) ;; *) exit 0;; esac; case $p$l in *[[:cntrl:]]*) exit 0;; esac; s=$('"$s"' 2>/dev/null) || exit 0; d=${s%%:*} r=${s#*:}; n=${r%%:*} b=${r#*:}; case $d in ""|*[!0-9]*) exit 0;; esac; case $n in ""|*[!0-9]*) exit 0;; esac; case $b in 0|-1|-) b=-;; [1-9]*) case $b in *[!0-9]*) exit 0;; esac;; *) exit 0;; esac; a=$(date +%s%3N 2>/dev/null); case $a in ""|*[!0-9]*) a=$(date +%s 2>/dev/null)000;; esac; case $a in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) exit 0;; esac; t=$REG/.$id.workdirid.$$.tmp f=$REG/$id.workdirid; printf "v1\t%s:%s:%s\t%s\t%s\t%s" "$d" "$n" "$b" "$a" "$p" "$l" >"$t" || { rm -f "$t"; exit 0; }; '"$m"'; exit 0' "$a1" "$a2" "$a3"; return 0; }   # reg id logical -> the pane's brace-free entry-identity writer, or nothing (path-identity spec §4.3)
 # `cp --remove-destination` IS GNU. BSD's cp rejects the flag outright, and
 # the difference it names is not cosmetic: without it `cp` OPENS an existing
 # destination and writes through it, so a destination that is a HARDLINK to
@@ -7414,7 +7414,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
     || die "no account is available for placement any more${cls:+ for class $cls} — every lane this box knew at startup is now disabled, missing or gone from the roster${cls:+, or none of them still measures able to serve $cls and nor does the rung below it}. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled)${cls:+ or re-run without --route class=$cls}, then adopt them with: ccd start <wrapper> $project $wt"
   hw="$fresh"
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
-  _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
+  _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"; ( CDPATH= builtin cd -- "$wt" >/dev/null 2>&1 && eval "$(_plat_workdirid_pane "$REG" "$id" "$wt"):" ) || :
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
   _reg_set "$id" branch "$branch"
   _ws_seed_home "$id" "$hw"
@@ -24646,6 +24646,22 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   _reg_set "$id" wrapper "$wrapper"
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
+  # THE ENTRY FIELD'S SEED (path-identity spec §4.3; PI1 B). `$REG/<id>.workdirid` records where this session's
+  # pane entered: the device, inode and birth time of the directory `cd` reached, the time, its physical spelling,
+  # and the logical `.workdir` spelling it was given (`_ws_workdirid_read` is its one reader). Every valid line
+  # comes from ONE composer, `_plat_workdirid_pane`, which prints a brace-free `/bin/sh -c` fragment that measures
+  # `pwd -P` and the stat of the directory it stands in, refuses a control character, writes temp-then-rename into
+  # $REG, and exits 0 on every path; a `\` in its arguments rides as `\0134`, which the script decodes, so every
+  # spelling `.workdir` accepts records a valid line.
+  # Here it runs once, in a subshell that entered the workdir as the pane does
+  # (`CDPATH=` and `builtin cd`, the logical spelling), so the row carries a valid value from its first start; a
+  # seed that cannot write leaves what stood, and never stops the start. It sits after the live-pane return above,
+  # so a start that spawns nothing never rewrites a live pane's record.
+  # THE COMPOSER IS ONE LINE, in place of the platform block's blank line after `_plat_epoch_ms`, because the
+  # block lies wholly above the highest line the frozen compaction-card corpus cites, and a line added there
+  # would move every cite below it; its call sites carry its contract. `ws-add`'s seed is the same statement,
+  # appended to its `.workdir` line for the same reason.
+  ( CDPATH= builtin cd -- "$workdir" >/dev/null 2>&1 && eval "$(_plat_workdirid_pane "$REG" "$id" "$workdir"):" ) || :
   _ws_seed_home "$id" "$wrapper"
   # ── THE ROUTING RECORD: THE ARGV ALWAYS, THE DEFAULT ONLY AT A MINT ─────────
   # TWO CONDITIONS, TWO ARMS (controller ruling S4-R3). The first cut wrote
@@ -29291,6 +29307,69 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   done <<< "$listing"
   (( hit )) || return 1
   return 0
+}
+
+# THE ENTRY FIELD'S ONE READER (path-identity spec §4.3 and §4.4). `$REG/<id>.workdirid` holds one line with no
+# trailing newline, in ONE grammar, whose single definition is the regex below:
+#   valid:   v1 TAB <dev>:<ino>:<btime or -> TAB <at_ms> TAB <physical> TAB <logical>
+#   pending: v1 TAB pending TAB <at_ms> TAB - TAB <logical>
+# Every valid line comes from ONE composer, `_plat_workdirid_pane` (the platform block): the pane runs its fragment
+# after its `cd` and before its `exec`, and `start` and `ws-add` run it once to seed the row. <logical> is
+# byte-equal to the `.workdir` the writer was given, and <physical> is `pwd -P` of the directory `cd` reached. A
+# pending line is the parent's, written before a pane exists, so a pane that cannot replace it leaves a hold and
+# never the entry of an earlier process.
+# SEVEN ANSWERS, never folded, each named in _WS_WDID_STATE:
+#   0 valid: _WS_WDID_IDENT ("<dev>:<ino>:<btime|->"), _WS_WDID_AT and _WS_WDID_PHYS are set;
+#   1 legacy-absent (no name and no link), legacy-link (a link, whose target is never read), legacy-unparseable
+#     (over 8320 bytes; outside the grammar; a control character beside the four TABs; a valid line whose
+#     physical spelling is not plain; a pending line whose physical field is not `-`) and legacy-stale (its
+#     logical spelling is not LOGICAL, the row's current `.workdir`): a caller places that row as it always has,
+#     by string and by current identity (path-identity spec §4.4);
+#   2 pending (its logical spelling is LOGICAL), and unmeasured (_WS_WDID_WHY: the field is not a regular file,
+#     or it could not be opened or read): a caller holds (`workdirid-unreadable-holds`).
+# THE ORDER IS FIXED. The type comes before the open, as `_reg_read_to` orders its own, so a directory or a
+# FIFO is never opened and a link is never followed; stale is decided before pending, so a pending line from
+# another spelling reads legacy. The read is one bounded `head -c` under LC_ALL=C, `_ws_leaf_read_small`'s form:
+# a sentinel keeps a trailing newline, and each NUL is read as a newline, which the grammar refuses. BASH_REMATCH
+# is copied before anything else is tested. A read that fails after the open reads unmeasured, never legacy:
+# bash's `read` answers 1 at the end of the file and on an error alike, so it is not used, and the pipeline's
+# status under ccd's `pipefail` is what tells an error from the end. The grammar's two path groups exclude
+# every control character, the TAB included, so no second test of the body is needed. The window from
+# the type check to the open is `_reg_read_to`'s own: a FIFO swapped in there blocks the open
+# (`workdirid-fifo-swap-after-type-check`).
+# IT LIVES IN C4, BESIDE THE ROWS RUNG (`_ws_reclaim_workdir_shared`), and mirrors `_reg_read_to`'s refusals
+# rather than calling into the registry's context, so the cross-context count does not move.
+_WS_WDID_STATE=''; _WS_WDID_WHY=''; _WS_WDID_IDENT=''; _WS_WDID_AT=''; _WS_WDID_PHYS=''
+_ws_workdirid_read() {   # id logical -> 0 `valid` (_WS_WDID_IDENT "<dev>:<ino>:<btime|->", _WS_WDID_AT, _WS_WDID_PHYS);
+  #                         1 `legacy-absent` | `legacy-link` | `legacy-unparseable` | `legacy-stale`; 2 `pending`, or
+  #                         `unmeasured` (_WS_WDID_WHY: not a regular file, or could not be read). _WS_WDID_STATE always
+  #                         names the answer. Clears every global first. Prints nothing, never dies, calls nothing in C1
+  local LC_ALL=C id="${1-}" logical="${2-}" f body='' fd rc=0
+  local -a m=()
+  local re=$'^v1\t(([0-9]+):([0-9]+):([1-9][0-9]*|-)|pending)\t([0-9]{13})\t([^[:cntrl:]]+)\t(/[^[:cntrl:]]*)$'
+  _WS_WDID_STATE=''; _WS_WDID_WHY=''; _WS_WDID_IDENT=''; _WS_WDID_AT=''; _WS_WDID_PHYS=''
+  f="$REG/$id.workdirid"
+  [[ -e "$f" || -L "$f" ]] || { _WS_WDID_STATE=legacy-absent; return 1; }
+  [[ ! -L "$f" ]] || { _WS_WDID_STATE=legacy-link; return 1; }
+  [[ -f "$f" ]] || { _WS_WDID_STATE=unmeasured; _WS_WDID_WHY="the entry field $f is not a regular file, so where that session entered was never read"; return 2; }
+  { exec {fd}<"$f"; } 2>/dev/null || { _WS_WDID_STATE=unmeasured; _WS_WDID_WHY="the entry field $f could not be opened, so where that session entered was never read"; return 2; }
+  { body=$( { LC_ALL=C head -c 8321 | LC_ALL=C tr '\000' '\n'; } <&"$fd" && printf x); } 2>/dev/null || rc=$?
+  { exec {fd}<&-; } 2>/dev/null || :
+  [[ "$rc" == 0 ]] || { _WS_WDID_STATE=unmeasured; _WS_WDID_WHY="the entry field $f could not be read, so where that session entered was never read"; return 2; }
+  body="${body%x}"
+  if (( ${#body} > 8320 )) || ! [[ "$body" =~ $re ]]; then
+    _WS_WDID_STATE=legacy-unparseable; return 1
+  fi
+  m=("${BASH_REMATCH[@]}")
+  if [[ "${m[1]}" == pending ]]; then
+    [[ "${m[6]}" == - ]] || { _WS_WDID_STATE=legacy-unparseable; return 1; }
+  else
+    _ws_reclaim_plain_path "${m[6]}" || { _WS_WDID_STATE=legacy-unparseable; return 1; }
+  fi
+  [[ "${m[7]}" == "$logical" ]] || { _WS_WDID_STATE=legacy-stale; return 1; }
+  [[ "${m[1]}" != pending ]] || { _WS_WDID_STATE=pending; return 2; }
+  _WS_WDID_IDENT="${m[2]}:${m[3]}:${m[4]}"; _WS_WDID_AT="${m[5]}"; _WS_WDID_PHYS="${m[6]}"
+  _WS_WDID_STATE=valid; return 0
 }
 
 _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''

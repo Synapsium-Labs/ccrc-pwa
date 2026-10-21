@@ -14,6 +14,7 @@ _plat_btime	K
 _plat_devino	K
 _plat_bytes	K
 _plat_epoch_ms	K
+_plat_workdirid_pane	K
 _plat_cp_replace	K
 _plat_mktemp	K
 _plat_mktemp_d	K
@@ -479,6 +480,7 @@ _ws_reclaim_classify	C4
 _ws_reclaim_ignored_fail	C4
 _ws_reclaim_stash_shas	C4
 _ws_reclaim_record	C4
+_ws_workdirid_read	C4
 _ws_reclaim_workdir_shared	C4
 _ws_reclaim_recorded	C4
 _ws_reclaim_recorded_git	C4

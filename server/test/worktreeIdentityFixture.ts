@@ -4,6 +4,8 @@
 // `DARWIN_LSOF_STUB` (Task 9). FIXTURE HOME ONLY: every string here is bash that a harness snippet runs after ccd is
 // sourced, and every write lands under the harness's HOME.
 import type { PrHarness } from './ccdPrHelpers.js';
+import { writeFileSync as writeFieldFile } from 'node:fs';
+import { join as joinFieldPath } from 'node:path';
 
 /** A fake process root for the expiry's working-directory probe, read through `_ws_expire_proc_root`. Its one entry
  *  is ccd's own process (`$$`): its cwd is a link to the fixture HOME, and its parent is pid 1. So an expiry ladder,
@@ -14,11 +16,10 @@ export const FAKE_PROC_SELF =
   + ' printf \'%s (b) S 1 1 1 0\\n\' "$$" > "$HOME/fp/$$/stat";'
   + ' _ws_expire_proc_root() { printf %s "$HOME/fp"; };';
 
-/** Writes `$REG/<id>.workdirid` with exactly `body`, with no newline added. Until Task 4 builds the field it throws,
- *  so no earlier case can plant one. */
-export function writeField(h: Pick<PrHarness, 'home'>, id: string, body: string): void {
-  void h;
-  throw new Error(`writeField(${id}, ${body.length} bytes): the entry field arrives in path-identity W3 Task 4`);
+/** Writes `$REG/<id>.workdirid` exactly as given: no newline is added, so a test states every byte of the field
+ *  (path-identity W3, Task 4). It is `fs.writeFileSync` at that path, nothing more. */
+export function writeField(h: { readonly home: string }, id: string, body: string | Buffer): void {
+  writeFieldFile(joinFieldPath(h.home, '.cc-sessions', `${id}.workdirid`), body);
 }
 
 /** Forced Darwin on a LINUX host (path-identity W3). `_plat_devino`'s and `_plat_btime`'s Darwin arms run BSD
