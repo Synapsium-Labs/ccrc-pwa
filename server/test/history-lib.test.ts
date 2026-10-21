@@ -3274,6 +3274,28 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(pre.startsWith('...'), 'CONTROL v2 rewrote the head').toBe(false);
     expect(pre.startsWith(M), 'CONTROL v2 starts with a mark').toBe(true);
   });
+  it('(j28) the window\'s second reading is null where v2 rewrote nothing: a token beside a split mark\'s fragment is not masked for a reading v2 never made (D-6071, ruling r744 item 1, "keep the null rule")', () => {
+    const idx = idxOf([]);
+    const win = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    // The second reading is the tokens of the pre-round output `pre` = v2(note + text), taken over the whole string, and null where `pre` equals
+    // note + text (v2 rewrote nothing). Without the null rule the set is taken even then. The window starts inside a literal mark, so `pre` holds
+    // the mark's fragment joined to the value after it as ONE token (`redacted]` and the value), while maskUnprinted tokenises the piece between the
+    // split edge and so asks about the value alone; that token is not in the set, and the value would be masked where 8e2ff9040 (whose reading was
+    // null here too) printed it. v2 finds nothing to rewrite in the window's text `redacted]<value>`, so the reading is null and the value
+    // prints, as in the pre-round composition and in rev 3.6's base. Smallest case from 2,016 changed outputs of a split-mark search, shrunk by
+    // deleting characters until none could go, on a neutral value.
+    const V = 'ZQXRIVER41';
+    const t = `KEY: ": ${M}${V}`;
+    const [a, b] = [9, t.length];
+    expect(t.slice(0, a).endsWith(M.slice(0, 1)), 'the window starts one character into the mark').toBe(true);
+    const base = win.base(t, a, b, idx);
+    expect(win.v2(base, idx), 'the premise: v2 rewrites nothing in the window\'s text').toBe(base);
+    const out = libRedact.redactDisplayWindow(t, a, b, idx);
+    expect(out, 'the value prints, as in the pre-round composition').toBe(`${M.slice(1)}${V}`);
+    // CONTROL: rev 3.6's base door and the pre-round composition print it
+    expect(r11Holds(base, V), 'CONTROL base').toBe(true);
+    expect(r11Holds(win.v2(base, idx), V), 'CONTROL the pre-round composition').toBe(true);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.

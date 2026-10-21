@@ -2963,8 +2963,9 @@ function redactFinalTextWith(text, idx, rs) {
  *  very text the pre-round door read), the pre-round composition (review 725 F1); (3) the widened rules read the BASE READING of
  *  the margin-widened text (composedTokens), and a token of v2's output is masked unless that reading prints it and the shown text
  *  holds the same string as a token too (maskUnprinted: a token v2 joined or decoded is masked unless the shown text holds that
- *  string as a token, availability only; both doors also need the second reading, the tokens v2 prints over the text it was given:
- *  the window's v2 output (tokensOf, null where v2 rewrote nothing), the snippet's unframed cut slice (preRoundTokens). The window's
+ *  string as a token, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a
+ *  window: v2 over its text with the note; tokensOf, null where v2 rewrote nothing), or of v2 over the unframed cut slice (a
+ *  snippet; preRoundTokens). The window's
  *  was dropped as redundant in 66864b647 and came back on review 744 F2: where the cut splits a mark, the piece's tokens leave the
  *  mark's fragment out and v2's own output's tokens join it to its neighbour; an edge token keeps its whole-token decision only
  *  where v2 left the edge as the cut made it); (4) v2 then reads the result. So the door only replaces spans of the pre-round
@@ -2983,8 +2984,8 @@ const DOOR_READINGS = (() => {
   // reads it over the raw text); and `whole`, the door composeDoor returns: the base door's cut, v2 over the text it shows (a snippet's
   // is the framed base snippet), each token of that output masked unless the widened rules print it over the base reading of the
   // margin-widened text AND the shown text holds the same string as a token (composedTokens, maskUnprinted, D-6071; a joined or
-  // decoded token is masked unless the shown text holds that string), and v2's own tokens hold it (the second reading, both doors: the
-  // window's is the tokens of v2's output, tokensOf; the snippet's is v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
+  // decoded token is masked unless the shown text holds that string), and the second reading holds it (both doors: the
+  // window's is the tokens of the pre-round output itself, tokensOf; the snippet's is the tokens of v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
@@ -7765,17 +7766,17 @@ function displayWindowRead(text, from, to, idx, rs) {
  *  never its words. A token of v2's output is kept when three memberships hold: (1) the widened reading prints the same characters
  *  anywhere (relayUnion's same-characters residual, at the level of the token); (2) the shown text holds it as a token too, a
  *  deliberate rule at the string level: a token v2 JOINED or DECODED (a value a colour sequence split, an escape) is masked unless
- *  the text the cut shows holds the same string as a token (between its split-mark edges), availability only, and the display
- *  doors never hand back a masking 8e2ff9040 had; (3) the second reading, the tokens v2 prints over the text it was given: for a
- *  snippet over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more), for a window the
- *  tokens of v2's own output (tokensOf, null where v2 rewrote nothing). The window's was dropped as redundant in 66864b647 and came
+ *  the text the cut shows holds the same string as a token (between its split-mark edges), availability only, and for that joined or
+ *  decoded class the display doors never hand back a masking 8e2ff9040 had; (3) the second reading: for a snippet the tokens of v2
+ *  over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more), for a window the tokens of
+ *  the pre-round output itself, v2 over its text with the note (tokensOf, null where v2 rewrote nothing). The window's was dropped as redundant in 66864b647 and came
  *  back on review 744 F2: where the cut splits a mark, the tokens of the piece between the split edges leave the mark's fragment out,
  *  and v2's own output's tokens join it to its neighbour, so a token touching a fragment was masked by 8e2ff9040 and printed once
  *  the reading was gone. A token the cut itself split at an edge is decided by the WHOLE token of `read` around
  *  that edge, not by the fragment, and only where v2 left that edge as the cut made it: the edge token is the same token in v2's
  *  output as in `shown` (a split mark is kept as written when v2's output starts, or ends, with the cut part of it, and the fragment
  *  of a split mark is no token of `shown`). Where v2 rewrote the edge, or for an inexact window, whose text is not a slice of `read`,
- *  the edge token is decided as itself: masked unless the widened reading prints it as it stands, `shown` holds it as a token and,
+ *  the edge token is decided as itself: masked unless the widened reading prints it as it stands, `shown` holds it as a token and
  *  the second reading holds it (fail closed, availability only). The one edge where the door takes v2's rewritten
  *  text is the snippet's right edge whenever v2's output does not end with the closing `...`: the cut ended inside a value or a
  *  split mark, or in a value v2 reads glued to the `...`, and v2 takes the `...` into the mark it makes. That is safe because in
@@ -7783,7 +7784,10 @@ function displayWindowRead(text, from, to, idx, rs) {
  *  only mask; the door adds no second `...`. Nothing changes when the widened reading
  *  changes nothing; a window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left alone. Residuals: a NAME more
  *  than ENTRY_REDACT_MARGIN before the window, and a closing quote more than ENTRY_REDACT_MARGIN past its end (the value reads
- *  unquoted in `read`), are not in the margin the widened reading reads. */
+ *  unquoted in `read`), are not in the margin the widened reading reads. Two more classes print a value 8e2ff9040 masked, both ruled
+ *  exceptions to bar (c) (the plan's D-6071 gives the definitions and the figures): (i) the first reading's token-level
+ *  same-characters residual, a token the widened reading prints elsewhere in the margin text (a CONTROL, (j24)); (ii) a value in
+ *  JSON-escaped double quotes whose NAME an earlier unit's open or odd double quote swallows (a CONTROL, (j26)). */
 const UNION_TOKEN_RE = new RegExp(`${MARK_RE_SRC}|(?:(?!${MARK_RE_SRC})[^\\s"'\`,;&])+`, 'g');
 
 /** The first reading of the union (D-6071): the tokens the widened rules (CONTEXT_RULES) print over `read`, the base reading of the
@@ -7851,7 +7855,7 @@ function tokensOf(s) {
 /** `piece`, v2 over `shown` (the base door's text), with each token masked that is not kept. A token is kept when ALL of these hold:
  *  (1) the first reading (`printed`) prints it; (2) `shown` holds the same string as a token (the third membership, a deliberate
  *  rule at the string level: a token v2 joined or decoded, such as a value a colour sequence split, is masked unless `shown` also
- *  holds that string as a token, availability only); (3) `pre`, where there is one (the second reading: the snippet's preRoundTokens, the window's tokensOf over v2's output), holds it. `shown` is tokenized
+ *  holds that string as a token, availability only); (3) `pre`, where there is one (the second reading: the snippet's preRoundTokens, the window's tokensOf of the pre-round output itself), holds it. `shown` is tokenized
  *  between its split-mark edges, as `piece` is (lo, hi): the fragment of a mark the cut splits is no token, so the NAME before a split
  *  mark stays a token even where v2 completes that mark. `shown` is `d.slice(p0, p0 + shown.length)` (`d` null for an inexact window,
  *  which is not a slice of its read: no edge leniency). A token the cut at either end splits is decided by its whole token in `d`
