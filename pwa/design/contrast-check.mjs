@@ -259,8 +259,9 @@ const pairs = (T, name) => [
   [`${name} status busy text / page`, T.busyText, T.page, 4.5],
   [`${name} status done text / page`, T.doneText, T.page, 4.5],
   [`${name} status cleanup text / page`, T.cleanupText, T.page, 4.5],
-  // The lane hues were fitted on [tint, surface] only, so the page joins the
-  // --acct-* fit in the same change (D-5478).
+  // The lane hues were fitted on their tint, the surface and the row grounds,
+  // never the page, so the page joins the --acct-* fit in the same change
+  // (D-5478).
   [`${name} acct-cyan / page`, T.cyan, T.page, 4.5],
   [`${name} acct-violet / page`, T.violet, T.page, 4.5],
   [`${name} acct-blue / page`, T.blue, T.page, 4.5],
