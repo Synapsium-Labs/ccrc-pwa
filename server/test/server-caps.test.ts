@@ -14,7 +14,8 @@ import { SERVER_CAPS_FILE_MODE, SERVER_CAPS_WRITE_MS, writeServerCaps } from '..
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
-import { testDeps } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { buildServer } from '../src/server.js';
 
 const AT = 1_790_000_000;
 
@@ -190,6 +191,36 @@ describe('the watcher writes the file on its own minute beat (spec §6.1: never 
     } finally {
       chmodSync(dir, 0o700);
       warn.mockRestore();
+    }
+  });
+});
+
+describe('closing the server (landing-order wave 3c)', () => {
+  it('closing the server waits for a server-caps write a tick started (landing-order wave 3c)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const spy = vi.spyOn(FleetWatcher.prototype, 'serverCapsNow').mockImplementation(function (this: FleetWatcher) {
+      const run = held.then(() => null);
+      (this as unknown as { serverCapsRun: Promise<unknown> | null }).serverCapsRun = run;
+      void run.finally(() => { (this as unknown as { serverCapsRun: Promise<unknown> | null }).serverCapsRun = null; });
+      return run;
+    });
+    try {
+      const deps = testDeps(home);
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      const app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+      const closing = app.close().then(() => 'closed' as const);
+      const first = await Promise.race([closing, new Promise((r) => setTimeout(() => r('held'), 2000))]);
+      expect(first, 'close must not finish while the caps write is in flight').toBe('held');
+      release();
+      expect(await closing).toBe('closed');
+    } finally {
+      release?.();
+      spy.mockRestore();
     }
   });
 });

@@ -79,8 +79,10 @@ import {
   type DelegationDurabilityEdge,
   type DelegationDurableBatch,
   type DelegationProjectionPort,
+  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
+import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -2761,9 +2763,9 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
   const records = evidenceChain([1, 2, 3, 4, 5, 6].map((n) => sessionStart(n)));
   const checkpoint = recoverDelegation(null, records).state.checkpoint;
   /** Recovery's count of the evidence records, built inside the test that uses it. */
-  const countsOf = (): DelegationEvidenceIndex => {
+  const countsOf = (over: readonly DelegationJournalRecordV1[] = records): DelegationEvidenceIndex => {
     const evidence = new DelegationEvidenceIndex();
-    for (const r of records) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
+    for (const r of over) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
     return evidence;
   };
 
@@ -2772,7 +2774,8 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     const held = new Set(have);
     const calls = { project: 0, inserts: [] as number[] };
     const port: DelegationProjectionPort = {
-      project: () => { calls.project++; },
+      // a checkpoint that holds no session is the wipe (the projection deletes the events of a LEAVING session): it clears what is held
+      project: (cp) => { calls.project++; if (cp.sessions.length === 0) held.clear(); },
       insertEvents: (rows) => {
         calls.inserts.push(rows.length);
         let inserted = 0;
@@ -2781,11 +2784,11 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
       },
       eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
     };
-    return { port, calls };
+    return { port, calls, sequences: () => [...held].sort((a, b) => a - b) };
   }
-  function journalOf() {
+  function journalOf(over: readonly DelegationJournalRecordV1[] = records) {
     const seen = { passes: 0 };
-    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of records) yield r; })(); } };
+    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of over) yield r; })(); } };
   }
 
   it('skips the whole-journal pass when SQLite\'s (count, max) matches what recovery counted', async () => {
@@ -2819,6 +2822,68 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
     expect(j.seen.passes).toBe(2);
     expect(report).toMatchObject({ journalPasses: 2, fullReplay: true });
+  });
+
+  it('review 705 F1: an equal count whose max is a sequence the journal holds no evidence at reads the journal in full, with recovery\'s counts', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);                // count 6 as the journal's, max 99: the journal has no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 99 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 705 F1: the same disagreement without recovery\'s counts — the counting pass sees no evidence at the max, so the full pass runs', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal }), 'the control, SQLite in sync, only counts').toMatchObject({ journalPasses: 1, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
+    expect(j.seen.passes).toBe(3);                                       // the counting pass, the full pass, the wipe's replay
+    expect(report).toMatchObject({ journalPasses: 3, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 716 G2: a foreign max BELOW the journal\'s last (SQLite {1,2,4}, journal evidence {1,2,3,5}) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const base = evidenceChain([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const act = activityOf(recoverDelegation(null, base).state.checkpoint, X)!;
+    const lease = chainOf([leaseEntryFor(act.activityId)], 4, base[2]!.digest);                // a real lease-created record at 4: the journal holds no evidence there
+    const journalRecords = [...base, ...lease, ...evidenceChain([sessionStart(5)], 5, lease[0]!.digest)];
+    const cp = recoverDelegation(null, journalRecords).state.checkpoint;
+    const counts = countsOf(journalRecords);
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1, 2, 3 and 5').toEqual([4, 5]);
+    const control = fakeProjection([1, 2, 3, 5]);
+    const c = journalOf(journalRecords);
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint: cp, journal: c.journal, evidence: countsOf(journalRecords) }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 4]);               // count 3 as the journal's up to 4, max 4: below the journal's last, and no evidence there
+    const j = journalOf(journalRecords);
+    const report = await repairDelegationProjection({ projection: port, checkpoint: cp, journal: j.journal, evidence: countsOf(journalRecords) });
+    // the full pass inserts 3 and 5 and the foreign 4 stays, so SQLite holds five against the journal's four and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 5]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
+  });
+
+  it('review 716 G2: a foreign max at the journal\'s last + 1 (SQLite {1,2,3,4,5,7}, journal evidence 1 to 6) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const counts = countsOf();
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1 to 6').toEqual([6, 6]);
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 3, 4, 5, 7]);       // count 6 as the journal's, max 7: one past the journal's last, and no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 7 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 4, 5, 6]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
   });
 
   it('heals every drifted session in ONE journal pass, deleting them one session at a time with the loop yielded between', async () => {
@@ -3789,5 +3854,270 @@ describe('D-4658: applyAcceptedBatch applies several buckets as ONE durable appl
     // and a deduped re-application that changes a cursor is written too
     const moved = passBatches().map((b, i) => (i === 0 ? { ...b, cursor: cursorOf(PARENT, '2026101400', 400) } : b));
     expect((await dur.applyAcceptedBatch(moved)).durable).toBe(true);
+  });
+});
+
+// ── D-5836 (run 645): the lane's per-pass repair skips the rewrite when the projection is known current ───────────────────
+
+describe('D-5836 R2: every case where the per-pass repair must still take the FULL path', () => {
+  type PerPassReport = (DelegationProjectionRepairReport & { skipped?: boolean }) | null;
+  /** `repairProjection({ perPass: true })`, reached through a cast so this file is type-clean before the option exists. */
+  const perPassOf = (d: DelegationDurability): Promise<PerPassReport> =>
+    (d as unknown as { repairProjection(o?: { perPass?: boolean }): Promise<PerPassReport> }).repairProjection({ perPass: true });
+  /** The forced-full interval; the fallback keeps these rows running (and failing on their own assertions) before it is exported. */
+  const FULL_MS = ((checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'] as number | undefined) ?? 3_600_000;
+
+  interface Lane {
+    h: Harness;
+    dur: DelegationDurability;
+    /** The virtual clock the lane hands the applier as `monotonicMs` (the forced-full clock). */
+    vclock: { ms: number };
+    ctl: { failProject: number; failStats: boolean; failEdge: string | null };
+  }
+
+  /** A lane over a fixture directory: an applier opened with a controllable projection port (the port's `project` can be made to throw
+   *  once, its `eventStats` to throw) and a virtual `monotonicMs`, and one batch applied (a session and an agent's activity). */
+  async function lane(): Promise<Lane> {
+    const h = harness();
+    const vclock = { ms: 1_000_000 };
+    const ctl = { failProject: 0, failStats: false, failEdge: null as string | null };
+    const real = delegationProjectionPortOfStore(h.store);
+    const projection: DelegationProjectionPort = {
+      project: (cp) => {
+        h.log.push('project');
+        if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
+        real.project(cp);
+      },
+      insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
+      eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },
+    };
+    const over = {
+      projection, monotonicMs: () => vclock.ms,
+      onEdge: (e: DelegationDurabilityEdge, w: 'before' | 'after') => { if (ctl.failEdge === `${e}:${w}`) { ctl.failEdge = null; throw new SimulatedCrash(`${e}:${w}`); } },
+    } as unknown as Partial<DelegationDurabilityDeps>;
+    const dur = await h.open(over);
+    await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    return { h, dur, vclock, ctl };
+  }
+
+  /** One per-pass repair, with the port calls it made. */
+  async function pass(l: Lane): Promise<{ report: PerPassReport; projected: boolean }> {
+    l.h.log.length = 0;
+    const report = await perPassOf(l.dur);
+    return { report, projected: l.h.log.includes('project') };
+  }
+  /** The CONTROL: a per-pass repair that takes the short path. It runs immediately before each case's perturbation, so a case cannot
+   *  pass for the reason that the short path never exists. */
+  async function expectShort(l: Lane, label: string): Promise<void> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: a short per-pass repair makes no port project call`).toBe(false);
+    expect(r.report, `${label}: a short per-pass repair reports skipped`).toMatchObject({
+      skipped: true, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,
+      resumedAfter: Number(l.h.store.delegationEventStats().maxSequence ?? 0),
+    });
+  }
+  /** The FULL path: the port's `project` is called by the repair, and the report says it was not skipped. */
+  async function expectFull(l: Lane, label: string): Promise<PerPassReport> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: the full path calls the port's project`).toBe(true);
+    expect(r.report, `${label}: the repair completed`).not.toBeNull();
+    expect(r.report?.skipped, `${label}: the full path reports skipped:false`).toBe(false);
+    return r.report;
+  }
+  /** The lane's first per-pass repair after `open` is FULL; the second is the first control. */
+  async function settle(l: Lane): Promise<void> {
+    const first = await pass(l);
+    expect(first.projected, 'the lane\'s first per-pass repair after open takes the full path').toBe(true);
+    await expectShort(l, 'control (the second per-pass repair)');
+    expect(first.report?.skipped, 'the first per-pass repair reports skipped:false').toBe(false);
+  }
+  const stray = (l: Lane): void => {
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES ('stray', 2000, ?, 1, ?, ?, 'c', 'SessionStart', 1, '{}')`).run('0'.repeat(64), PARENT, INC);
+  };
+  const count = (l: Lane, table: string): number => Number(l.h.store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.['n']);
+
+  it('D-5836 R2: the lane\'s first per-pass repair after open is full, and the second takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+  });
+
+  it('D-5836 R2: projectionStale with no revision change — a per-pass repair whose port project throws once returns null and marks the projection stale; the next takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    const revision = l.dur.state().checkpoint.revision;
+    // the full path is reached by a count disagreement (a stray row); the port's project then throws once
+    stray(l);
+    l.ctl.failProject = 1;
+    const failed = await pass(l);
+    expect(failed.report, 'the failed repair returns null').toBeNull();
+    expect(l.dur.state().checkpoint.revision, 'the revision did not move').toBe(revision);
+    // the counts agree again, nothing drifted and no clock is due: what is left is the failed repair's own invalidation, the stale mark AND
+    // the projected revision its catch cleared beside it (D-5836's M14: either alone refuses the short path, so this row reds M10, not one term)
+    l.h.store.db.prepare("DELETE FROM delegation_events WHERE eventId = 'stray'").run();
+    await expectFull(l, 'the next per-pass repair, port healthy');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a failed application\'s projection — the next per-pass repair takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'project:before';
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.durable).toBe(true);
+    expect(out.projection.status).toBe('failed');
+    await expectFull(l, 'after a failed application');
+    expect(count(l, 'delegation_events')).toBe(3);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a conflicting application\'s projection — the next per-pass repair takes the full path and the journal wins', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES (?, 3, ?, 1, ?, ?, 'c', 'SessionEnd', 1, '{}')`).run(eid(3), '0'.repeat(64), PARENT, INC);
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.projection.status).toBe('failed');
+    const report = await expectFull(l, 'after a conflicting application');
+    expect(report?.healedSessions).toBe(1);
+    expect(l.h.store.db.prepare('SELECT eventKind FROM delegation_events WHERE eventId = ?').get(eid(3))?.['eventKind']).toBe('SessionStart');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats count disagreeing with the evidence index — the full path, which replays the missing row', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();       // count 1, max 2: only the count disagrees
+    const report = await expectFull(l, 'count disagreeing');
+    expect(report?.fullReplay).toBe(true);
+    expect(count(l, 'delegation_events')).toBe(2);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats max disagreeing with an equal count — the full path, which heals it (review 705 F1)', async () => {
+    const l = await lane();
+    await settle(l);
+    const movedId = l.h.store.db.prepare('SELECT eventId FROM delegation_events WHERE journalSequence = 2').get()?.['eventId'];
+    l.h.store.db.prepare('UPDATE delegation_events SET journalSequence = 102 WHERE journalSequence = 2').run();       // count 2 as before, max 102
+    expect(l.h.store.delegationEventStats()).toEqual({ count: 2, maxSequence: 102 });
+    const report = await expectFull(l, 'max disagreeing with an equal count');
+    // the journal holds no evidence at 102: the full replay meets the moved row's eventId on another sequence, a conflict, and heals its session
+    expect(report, 'the repair read the journal in full and healed the one session').toMatchObject({ fullReplay: true, healedSessions: 1, wipedAll: false });
+    expect(l.h.store.delegationEventStats(), 'the heal leaves the journal\'s sequences').toEqual({ count: 2, maxSequence: 2 });
+    expect(l.h.store.db.prepare('SELECT journalSequence FROM delegation_events WHERE eventId = ?').get(String(movedId))?.['journalSequence'], 'the moved row is back on its sequence').toBe(2);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: the lane\'s first per-pass repair after a recover() is full (recovery\'s own repair does not count), and the next takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair after recover()');
+    await expectShort(l, 'the second per-pass repair after recover()');
+  });
+
+  it('D-5836 R2: a recover() after a failure before the first byte (journal-write before) — the first per-pass repair after it is full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'journal-write:before';
+    await expect(l.dur.applyAccepted(batch([sessionStart(3)]))).rejects.toThrow(SimulatedCrash);
+    expect(l.dur.state().phase).toBe('reconstructing');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    expect(l.dur.state().checkpoint.appliedJournalSequence, 'nothing was journaled').toBe(2);
+    await expectFull(l, 'the first per-pass repair after the recover()');
+    await expectShort(l, 'the second per-pass repair after the recover()');
+  });
+
+  it('D-5836 R2: the forced-full period is the exported DELEGATION_REPAIR_FULL_MS, one hour', () => {
+    // The `?? 3_600_000` above keeps the other rows running before the export exists; this row is what a missing or renamed export fails.
+    const exported = (checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'];
+    expect(typeof exported, 'delegation-checkpoint.ts exports DELEGATION_REPAIR_FULL_MS').toBe('number');
+    expect(exported).toBe(3_600_000);
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — measured from the recover, not from the earlier full repair', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    // Not due measured from the recover (FULL_MS-1000 on). The clock restarts at recover()'s start and again at every successful full repair
+    // (recovery's own, then the first per-pass repair after it), so the restart at recover()'s start alone is equivalent (MrecClock survives).
+    l.vclock.ms += FULL_MS - 1000;
+    await expectFull(l, 'the first per-pass repair after the recover, FULL_MS-1000 on');
+    await expectShort(l, 'the second per-pass repair at that point');
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — a per-pass repair just past FULL_MS from the recover is a forced full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair right after the recover');
+    await expectShort(l, 'the second, right after the recover');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval counted from the recover and its full repairs (the restart at recover()\'s start is backed by the full repairs\' own)');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
+  });
+
+  it('D-5836 R2: the forced full after DELEGATION_REPAIR_FULL_MS on the virtual clock, and a full repair restarts the clock', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS');
+    await expectShort(l, 'right after the forced full');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'inside the interval, counted from the forced full');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'past the interval again');
+  });
+
+  it('D-5836 R2: out-of-band deletion of delegation_activities rows stays until the forced full, which heals it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_activities')).toBe(1);
+    l.h.store.db.prepare('DELETE FROM delegation_activities').run();
+    // the residual: a pass before the forced full is short and does not heal it
+    await expectShort(l, 'a pass after the out-of-band deletion, before the forced full');
+    expect(count(l, 'delegation_activities')).toBe(0);
+    l.vclock.ms += FULL_MS + 1000;
+    await expectFull(l, 'the forced full');
+    expect(count(l, 'delegation_activities'), 'the forced full restored the rows').toBe(1);
+  });
+
+  it('D-5836 R2: after the lane\'s first per-pass repair, a bare repairProjection() after an out-of-band delete of delegation_sessions restores it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_sessions')).toBe(1);
+    const db = l.h.store.db;
+    db.exec('PRAGMA foreign_keys = OFF');                       // the activity and event rows name the session; the delete is the out-of-band damage
+    db.prepare('DELETE FROM delegation_sessions').run();
+    db.exec('PRAGMA foreign_keys = ON');
+    expect(count(l, 'delegation_sessions')).toBe(0);
+    l.h.log.length = 0;
+    const report = await l.dur.repairProjection();
+    expect(l.h.log.includes('project'), 'a bare repair is always the full path').toBe(true);
+    expect(report).not.toBeNull();
+    expect((report as PerPassReport)?.skipped, 'a bare repair reports skipped:false').toBe(false);
+    expect(count(l, 'delegation_sessions'), 'the session row is back').toBe(1);
+  });
+
+  it('D-5836 R2: eventStats throwing on the per-pass call returns null and marks the projection stale', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failStats = true;
+    const failed = await pass(l);
+    expect(failed.report, 'a throwing eventStats is a repair failure, never a rejection').toBeNull();
+    l.ctl.failStats = false;
+    await expectFull(l, 'the next per-pass repair, eventStats healthy');
+    await expectShort(l, 'after the full repair');
   });
 });
