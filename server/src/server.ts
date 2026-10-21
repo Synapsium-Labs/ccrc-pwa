@@ -1696,8 +1696,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // land, `reloadRoster` takes it only if its fleet identity is the one the
     // server knows and its roster parses; it then replaces `cfg.roster` when the
     // answer differs from the roster in memory and, in remote mode, rewrites
-    // this box's copy from it too. So the fix that works, in both modes, is the
-    // lane's row in THIS box's accounts.json, then a restart. A codex row needs
+    // this box's copy from it too. So the fix that works, in both modes, is
+    // made in THIS box's accounts.json, then a restart. A codex row needs
     // its whole exec block, not `exec.kind` alone (`parseRoster` in
     // shared/roster.ts requires `provider` "openai", `authDir` and two ports of
     // its own), and a roster with an incomplete one stops the server at start,

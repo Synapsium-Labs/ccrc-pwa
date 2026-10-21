@@ -46,8 +46,8 @@ const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
   Object.entries(process.env).filter(([k]) => !/^(CCRC_|CCD_|MODELS_|_CCD_|BASH_ENV$|ENV$|HTTPS?_PROXY$|ALL_PROXY$)/i.test(k)));
 
 const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind lane';
-/** What a refused lane tells the operator to fix, per server mode. In both modes it is the lane's row in this box's
- *  accounts.json and a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. A codex row needs
+/** What a refused lane tells the operator to fix, per server mode. In both modes the fix is made in this box's
+ *  accounts.json, then a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. A codex row needs
  *  its whole exec block, and the server refuses a roster with an incomplete one at start, so remote mode copies the
  *  fleet box's whole accounts.json over this box's (this box's file is a copy that a later roster answer replaces
  *  wholesale, and a row copied alone can still stop the restart: a second row with the same id, or a port the fleet box

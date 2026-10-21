@@ -3741,7 +3741,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     opEnv({ CCRC_MODELS_NOW: NOW }, 'advance-backfill', '--file', rosterPath(), '--id', 'lane-a');
   const opusOf = (): ClassAdvance => laneAdvance().classes.opus;
   const env = (): Record<string, string> => settingsOf(STEP_SETTINGS).env;
-  /** `advanceCommitOp`'s own source, for the two order pins no fixture can stop between two writes. */
+  /** `advanceCommitOp`'s own source, for the order pin no fixture can stop between two writes. */
   const commitSource = (): string => {
     const src = fs.readFileSync(OP, 'utf8');
     const start = src.indexOf('function advanceCommitOp(');
