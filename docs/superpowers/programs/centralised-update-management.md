@@ -2604,6 +2604,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 14:55: the work volume ANOMALY, recovering: 12.5G free, so above `ws-add`'s 10G line again. Nothing deleted.
         STATUS: fleet and server v0.0.531, newest v0.0.534, stable v0.0.502, intent dev/auto=off, backups fleet
         187M/server 11752M, disk free fleet 75G/work volume 13G/server 20G.
+      - **15:00 UTC: soak day 3 (mail 7687); the server's 15G line is about a day away at the tap pace.**
+        - Server free disk 19,888M, down 5.5G in 24 h. coord.db 1,008M (1.90x) with a 79M WAL. delegation_events 781M
+          in 280,308 rows, about 5,519 an hour. The journal is 603M and the checkpoint 89.4M (2.66x).
+        - Backups 11,752M: the ten kept run from 879M to 1,589M, over 8 taps in the day.
+        - The line is 4.9G away. That is about five or six taps (around 2026-10-22 15:00), or about five days with no
+          taps, and the rate is rising. Under 15G the operator decides again.
+        - The mail corrects two earlier figures: 7528's "two to three days", and 7530's flush range (8.8 to 11.0 s).
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
