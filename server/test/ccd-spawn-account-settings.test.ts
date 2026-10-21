@@ -186,3 +186,10 @@ describe('the composer fails open for the spawn (D-6202; the operator\'s Q8 ruli
     }
   });
 });
+
+describe('SETTINGS_UNION_JQ joins both permission arrays (D-6202)', () => {
+  it('two sides carrying `permissions.allow` merge to the first-seen union, and `deny` the same, where plain `*` would keep only the right side', () => {
+    const out = h.sh(`jq -c -n '[{"a":1,"permissions":{"allow":["r1","r2"],"deny":["d1"]}},{"b":2,"permissions":{"allow":["r2","r3"],"deny":["d2","d1"]}}]' | jq -c "$SETTINGS_UNION_JQ"`);
+    expect(JSON.parse(out)).toEqual({ a: 1, b: 2, permissions: { allow: ['r1', 'r2', 'r3'], deny: ['d1', 'd2'] } });
+  });
+});

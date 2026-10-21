@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7d147fda697aa0243776ef86962485ed7932abd07e515fe7ffef1512b31188d7
+# ccrc:generated 1 sha256=94743fca52e913a6d086a6182326901fce7456252fa5ba48333fc45ba1e4193e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22945,7 +22945,7 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # IT FAILS OPEN FOR THE SPAWN: this composer is on every swap's path (the
 # restart at the end of `cmd_swap` spawns here), so a missing, unreadable,
 # symlinked or non-JSON file, or a failed merge, spawns the row without the
-# account rules and warns once. It never refuses or delays a spawn, so a
+# account rules and warns (on each such spawn). It never refuses or delays a spawn, so a
 # broken file never strands a session mid-move (the operator's Q8 ruling of
 # 2026-10-19); the session hook's account arm still runs on such a session.
 ACCOUNT_DENY_SETTINGS="$REG/account-deny.settings.json"
