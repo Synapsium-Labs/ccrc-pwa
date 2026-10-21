@@ -200,7 +200,7 @@ describe('a workdir under `/proc` is refused where it is written and unplaced wh
     fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
     fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
   };
-  const UNPROC = 'name a workdir under /proc, which names whatever the reading process\'s own cwd or descriptors are, so ccd cannot place them against this child';
+  const UNPROC = 'name a workdir under /proc, or one reached through a link into /proc, which names whatever the reading process\'s own cwd or descriptors are, so ccd cannot place them against this child';
 
   it('an OTHER row under /proc is unmeasured — never reclaimable — however many slashes open it', () => {
     makeChild(h);

@@ -64,6 +64,16 @@ const KEEP_LOG = 'eval "_t_keep_real()$(declare -f _ws_reclaim_keep_of | tail -n
 /** `_ws_removal_mounts_clear`, wrapped: logs `<dir>|<mode>` to `$HOME/ask-calls`, then asks the real one. */
 const ASK_LOG = 'eval "_t_ask_real()$(declare -f _ws_removal_mounts_clear | tail -n +2)";'
   + ' _ws_removal_mounts_clear() { printf \'%s|%s\\n\' "$1" "${2-}" >> "$HOME/ask-calls"; _t_ask_real "$@"; };';
+/** `_ws_removal_mounts_clear`, wrapped: directly before its `nth` call for the path spelled `spelling`, a mount at `p`
+ *  (`MOUNT_LINE`) is appended to the faked table, then the real one is asked. Since path-identity W3 the rows rung
+ *  reads the same table at the verb's in-lock recompute and at the tail's owned call, and holds the child there, so a
+ *  mount planted before the verb is caught before any of these asks (`w2-mount-asks-shadowed-by-the-reask`). A case
+ *  that pins one of the tail's own asks plants its mount at that ask. With `ASK_LOG`, it goes first, so `ASK_LOG`
+ *  wraps it and logs each call once. */
+const MOUNT_AT_ASK = (spelling: string, p: string, nth: number): string =>
+  'eval "_t_at_ask_real()$(declare -f _ws_removal_mounts_clear | tail -n +2)";'
+  + ` _ws_removal_mounts_clear() { if [[ "$1" == '${spelling}' ]]; then _T_AT_ASK_N=$(( \${_T_AT_ASK_N:-0} + 1 ));`
+  + ` (( _T_AT_ASK_N != ${nth} )) || printf '%s\\n' '${MOUNT_LINE(p)}' >> "$HOME/mountinfo"; fi; _t_at_ask_real "$@"; };`;
 /** `_ws_dir_physical` failing for the mount helper's `resolve` only: every other caller asks the real one. */
 const PHYS_FAILS_AT_THE_ASK = 'eval "_t_phys_real()$(declare -f _ws_dir_physical | tail -n +2)";'
   + ' _ws_dir_physical() { if [[ "${FUNCNAME[1]-}" == _ws_removal_mounts_clear ]]; then'
@@ -116,8 +126,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     const inner = nested(c);
     const realInner = fs.realpathSync(inner);
     realMounts(h);
-    mountAt(path.join(realInner, 'mnt'));
-    const r = childReclaimVerb(h, reclaimToken(), { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(realInner, path.join(realInner, 'mnt'), 1)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays at the step that failed').toBe('reclaim:children');
@@ -148,8 +157,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     const c = makeChild(h);
     const wd = workdirOf(CHILD_ID);
     realMounts(h);
-    mountAt(path.join(fs.realpathSync(c.wt), 'sub'));
-    const r = childReclaimVerb(h, reclaimToken(), { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(fs.realpathSync(c.wt), 'sub'), 1)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping'), 'step 3 completed; step 4 failed').toBe('reclaim:worktree');
@@ -180,8 +188,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     expect(fs.realpathSync(wd), 'the CONTROL: the record’s spelling is not the physical one').not.toBe(wd);
     const tok = reclaimToken();
     realMounts(h);
-    mountAt(path.join(fs.realpathSync(c.wt), 'sub'));
-    const r = childReclaimVerb(h, tok, { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, tok, { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(fs.realpathSync(c.wt), 'sub'), 1)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:worktree');
@@ -196,8 +203,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     interrupted(c, 'worktree');
     const tok = resumeToken('worktree');
     realMounts(h);
-    mountAt(path.join(fs.realpathSync(c.wt), 'sub'));
-    const r = childReclaimVerb(h, tok, { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, tok, { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(fs.realpathSync(c.wt), 'sub'), 1)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
@@ -230,8 +236,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
       'the CONTROL: bash keeps the link target’s leading `//`').toBe(`/${real}`);
     const tok = reclaimToken();
     realMounts(h);
-    mountAt(path.join(real, 'sub'));
-    const r = childReclaimVerb(h, tok, { pre: `${LINUX_PRE} ${ASK_LOG}` });
+    const r = childReclaimVerb(h, tok, { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(real, 'sub'), 1)} ${ASK_LOG}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:worktree');
@@ -247,8 +252,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     const tok = expireToken(h);
     expect(tok, 'the CONTROL: the expiry ladder passes').toMatch(/^[0-9a-f]{64}$/);
     realMounts(h);
-    mountAt(path.join(fs.realpathSync(a.wt), 'sub'));
-    const r = expireVerb(h, tok, { pre: LINUX_PRE });
+    const r = expireVerb(h, tok, { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(fs.realpathSync(a.wt), 'sub'), 1)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stays at the step that failed').toBe('expire:worktree');

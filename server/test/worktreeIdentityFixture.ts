@@ -28,3 +28,24 @@ export function writeField(h: Pick<PrHarness, 'home'>, id: string, body: string)
  *  `declare -f`, so it carries this shim too. Tasks 8, 10 and 11 read it by name. */
 export const DARWIN_IDENT_SHIMS = process.platform === 'darwin' ? ''
   : '_plat_devino() { stat -c \'%d:%i\' "$@"; }; _plat_btime() { stat -c %W "$@"; };';
+
+/** `_ws_reclaim_resolve`, wrapped (path-identity W3, Task 3; R10): a spelling AT or UNDER `prefix` answers itself,
+ *  basis `complete`, as `pwd -P` answers on a real bind mount, and every other spelling asks the real resolver. With
+ *  `prefix` a symbolic link into a tree, the identity walk's `stat`, which follows links, meets that tree's device and
+ *  inode through it, as it would through a real bind. `prefix` is spelled for bash inside double quotes, so a
+ *  `$HOME/…` prefix expands in the snippet. */
+export const BIND_STANDIN = (prefix: string): string =>
+  'eval "_t_bind_real()$(declare -f _ws_reclaim_resolve | tail -n +2)";'
+  + ` _ws_reclaim_resolve() { case "$1" in "${prefix}"|"${prefix}"/*) _WS_RESOLVED="$1"; _WS_RESOLVE_BASIS=complete; return 0 ;; esac;`
+  + ' _t_bind_real "$@"; };';
+
+/** `_ws_reclaim_idwalk`, wrapped (path-identity W3, Task 3): each call appends ONE line to `$HOME/walk-calls`, `walk`
+ *  and then one `<kind><index>` token per request it was given, in request order (`walk T0 M0 P0 A0`; a call given no
+ *  request is `walk`), and hands the same requests to the real walk. A request carries a path; the line never does. */
+export const walkSpy =
+  'eval "_t_walk_real()$(declare -f _ws_reclaim_idwalk | tail -n +2)";'
+  + ' _ws_reclaim_idwalk() { local _t_q _t_r _t_k="" _t_tab=$\'\\t\'; local -a _t_qs=();'
+  + ' while IFS= read -r -d \'\' _t_q; do _t_qs+=("$_t_q"); _t_r="${_t_q#*"$_t_tab"}";'
+  + ' _t_k+=" ${_t_q%%"$_t_tab"*}${_t_r%%"$_t_tab"*}"; done;'
+  + ' printf \'walk%s\\n\' "$_t_k" >> "$HOME/walk-calls";'
+  + ' _t_walk_real "$@" < <(for _t_q in ${_t_qs[@]+"${_t_qs[@]}"}; do printf \'%s\\0\' "$_t_q"; done); };';

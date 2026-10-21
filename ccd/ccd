@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e8b6c46dba5b14e9fc4b3cdd0ffc5b85781bab5b82d2ebd3c34cdf1c0f116baf
+# ccrc:generated 1 sha256=70932fe4583f07d087e4d9e798de885361e58db754b1f80fd19f78e91c059870
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29304,7 +29304,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
-  #                                 opens with `//`, lies under `/proc`, cannot be resolved (a directory
+  #                                 opens with `//`, lies under `/proc` or is reached through a link
+  #                                 into it, cannot be resolved (a directory
   #                                 or link on it cannot be entered or followed, a `..` in it cannot be
   #                                 placed, or it holds a control character), resolves only with
   #                                 a basis other than `complete` (the rest re-attached as text below
@@ -29312,7 +29313,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 to a path opening with `//`, or the child's own
   #                                 workdir resolves to one or cannot be resolved (the row cannot be
   #                                 placed), or a leaf's absence cannot be proven or a standing
-  #                                 directory leaf's root cannot be resolved — every case after
+  #                                 directory leaf's root cannot be resolved, or the one identity walk
+  #                                 (`_ws_reclaim_idwalk`) did not answer for a row, the child or a
+  #                                 standing leaf, or a mount stands at or under the child, a root of
+  #                                 its file system lies there, or the mount table cannot place it —
+  #                                 every case after
   #                                 the listing only when the same pass found no SHARED, NESTED or THROUGH
   #                                 row, which outranks it; a row's value is never printed, only its id
   # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
@@ -29475,8 +29480,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # a link stood ends the hold unsafely: it
   # re-points the spelling by replacement. And `complete` places the
   # SPELLING as it reads now, not the session: an alias re-pointed after the
-  # session entered through it, or a bind-mount spelling, also resolves
-  # complete and outside (pre-existing; left to a follow-up).
+  # session entered through it also resolves complete and outside, and only
+  # an entry identity the session itself recorded can answer that
+  # (path-identity spec §4.3); a row with none is placed as its spelling reads
+  # now. A bind-mount spelling resolves complete too, and the device-and-inode
+  # arm below places it (path-identity spec §4.5).
   #
   # UNLESS GIT OR CCD RECORDED WHAT BECAME OF IT (spec §5.5): a second
   # placement basis, `recorded`, beside `complete`, for a row whose workdir is
@@ -29510,14 +29518,62 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # root cannot be resolved or resolves to `//`, is collected and decided
   # after the loop — unmeasured, never "no row inside it" — and, like every
   # other not-asked arm, outranked by a SHARED, NESTED or THROUGH row.
+  #
+  # AND BY DEVICE AND INODE, BESIDE THE STRINGS (path-identity spec §4.5 and
+  # §4.8; PI3 B, PI6 M4). A string says where a spelling reads now, and a bind
+  # mount or a link gives one directory two spellings that share no prefix. So
+  # every row whose spelling resolved `complete` is also placed by the device
+  # and inode of each directory on its resolved path, from `/` down: a row
+  # whose path IS the child's tree is SHARED, and one with the child's tree, or
+  # a standing directory leaf, above it is NESTED — the strings' own words, and
+  # no new one. The child is a target only when its own spelling resolved
+  # `complete` and its tree stands: a vanished child is the eval's vanished
+  # fork, unchanged, and the collector's moved leaf has nothing here to ask.
+  # EVERY ROW SPELLED ABSOLUTE IS ALSO WALKED FOR A LINK INTO `/proc` (m1): a
+  # link whose raw target is `/proc` behind any number of `/`, or a walk whose
+  # physical position enters `/proc` through a relative one, names the reading
+  # process's own cwd exactly as the literal row above does, and is collected
+  # with it (`unproc`). AND THE CHILD'S TREE IS HELD WHERE A MOUNT COULD GIVE IT
+  # ANOTHER SPELLING: a mount point at or under it, a mount of its file system
+  # whose root lies at or under its device-relative path (`//deleted`
+  # included), or a table that cannot place it (empty, unreadable, malformed,
+  # or a containing line whose `major:minor` is not the child's device) is
+  # collected (`unmount`), unmeasured and never "no row". The table is read
+  # through the collector's one seam, by this walk as its declared second
+  # reader; `_ws_collect_mounts_clear` is the first. Every answer only ADDS: a
+  # placement, or a not-asked arm decided after the loop and outranked by any
+  # SHARED, NESTED or THROUGH row. Nothing the walk answers removes a row from
+  # any bucket.
+  #
+  # ONE WALK, BOUNDED (path-identity spec §4.9; PI8 B2). The targets, every
+  # row's ancestry and link walk, and the mount table are asked in ONE
+  # `_ws_reclaim_idwalk` call per pass, under `WS_RECLAIM_WALK_S`, and its maps
+  # live for this call only. A walk that did not finish, failed or answered
+  # short, and any row, target or leaf it could not answer for, is collected
+  # (`unwalk`), never "no row". On Darwin no table is asked (one line below), so
+  # the ancestry arm stands alone there. THE WALK FOLLOWS LINKS (`stat`), as
+  # the kernel does for a process entering the spelling, which leaves four
+  # things to judgement, stated here: a real bind answers its source's device
+  # and inode for every path below it, a bind from another file system
+  # included; `pwd -P` and `/proc/<pid>/cwd` read the bind's spelling in this
+  # process's mount namespace, the one the verbs run in; mountinfo's field 3
+  # equals `stat`'s major:minor on the fleet's file systems (measured on the
+  # fleet box before this was built; where it does not, the device check
+  # answers unmeasured); and a link that appears after the resolve is walked as
+  # the namespace reads it now, which can only add. The gone-row recovery's git
+  # reads (its two arms) are outside the walk and have no bound of their own
+  # (`rows-rung-git-reads-unbounded`).
   local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unproc='' unres=''
   local llit lhit lw lr k unleaf=''
   local -a lspell=() lres=()
+  local minebasis='' mi='' mreq=0 nbt=0 jb t0='' ri hk hi hw ha hrest q unwalk='' unmount=''
+  local -a rid=() req=()
+  local _WS_IDWALK_OUT='' _WS_IDWALK_WHY=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
   if _ws_reclaim_resolve "$wd"; then
-    mine="$_WS_RESOLVED"
+    mine="$_WS_RESOLVED"; minebasis="$_WS_RESOLVE_BASIS"
     [[ "$mine" != //[!/]* ]] \
       || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
   else
@@ -29539,6 +29595,24 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     fi
     lspell+=("$lw"); lres+=("$lr")
   done
+  # THE WALK'S TARGETS AND ITS TABLE, asked first (path-identity spec §4.5).
+  # The child is target 0 only when its own spelling resolved `complete` and
+  # its tree stands. Bash's `pwd -P` keeps a link target's leading `//`, which
+  # Linux reads as `/` and the table never writes, so it is collapsed. Each
+  # standing directory leaf is target 1 or 2. The table is asked only with
+  # target 0; a seam that names no table holds the child, never "no mount".
+  if [[ "$minebasis" == complete && -d "$mine" ]]; then
+    t0="$mine"; [[ "$t0" != //[!/]* ]] || t0="${t0#/}"
+    req+=("T"$'\t'0$'\t'"$t0")
+    [[ "$CCD_OS" == darwin ]] || mreq=1   # Darwin keeps no mount table: the ancestry arm stands alone there
+    if (( mreq )); then
+      mi=$(_ws_collect_mountinfo)
+      if [[ -n "$mi" ]]; then req+=("M"$'\t'0$'\t'"$mi"); else unmount=unreadable; fi
+    fi
+  fi
+  for (( k = 0; k < ${#lres[@]}; k++ )); do
+    [[ -z "${lres[k]}" ]] || req+=("T"$'\t'"$(( k + 1 ))"$'\t'"${lres[k]}")
+  done
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     o="${n##*/}"; o="${o%.workdir}"
@@ -29546,16 +29620,19 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     w=$(_reg_read "$o" workdir); rc=$?
     (( rc == 1 )) && continue   # gone between the listing and the read
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
+    ri=${#rid[@]}; rid+=("$o")   # this row's index in the identity walk's requests and answers
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
     # but `/proc/self/cwd/<rel>` names each reader's own cwd, as a relative
     # spelling does (`cmd_start` refuses one), so it is unplaced exactly as a
     # relative row is — collected, and decided after the loop.
     [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; continue; }
+    req+=("P"$'\t'"$ri"$'\t'"$w")   # m1: the spelling's links, walked for one into /proc
     wr=''; rok=0; basis=''
     _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
     basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
     [[ -n "$wr" ]] || rok=0
+    [[ "$basis" != complete || -z "$wr" ]] || req+=("A"$'\t'"$ri"$'\t'"$wr")   # ancestry of where it reads now
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     llit=0
     for lw in ${lspell[@]+"${lspell[@]}"}; do [[ "$w" == "$lw" || "$w" == "${lw%/}/"* ]] && llit=1; done
@@ -29596,6 +29673,56 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       (( ! lhit )) || _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o"
     fi
   done <<< "$names"
+  # THE ONE WALK, and its answers, which only ever ADD (pass B). A walk that
+  # did not answer is collected whole; a row, target or leaf it could not
+  # answer for is collected by name. A row a string arm already placed is not
+  # placed twice.
+  _ws_reclaim_idwalk "$mi" < <(for q in ${req[@]+"${req[@]}"}; do printf '%s\0' "$q"; done); rc=$?
+  (( rc == 0 )) || unwalk="any row ($_WS_IDWALK_WHY)"
+  # THE REPLY IS MATCHED WITH THIS PASS'S OWN LIST (path-identity spec §4.9).
+  # The walk matches its reply with the requests it READ, and a request stream
+  # cut short reads to it as a clean end of file, so it can answer a shorter
+  # list whole. So a walk that answered 0 is matched here too: before its
+  # `end`, one line per element of `req`, in order, naming that request's kind
+  # and index, then one `B <j>` line per birth-time path the call above hands
+  # it (`nbt`), in order. Any other reply is a list the walk was not given
+  # whole, and answers for no row.
+  if (( rc == 0 )); then
+    k=0; jb=0
+    while read -r hk hi hrest; do
+      [[ "$hk" != end ]] || break
+      if [[ "$hk" == B ]]; then
+        (( k == ${#req[@]} )) && [[ "$hi" == "$jb" ]] || { k=-1; break; }
+        jb=$(( jb + 1 )); continue
+      fi
+      q="${req[k]-}"; hw="${q#*$'\t'}"
+      (( jb == 0 )) && [[ -n "$q" && "$hk" == "${q%%$'\t'*}" && "$hi" == "${hw%%$'\t'*}" ]] || { k=-1; break; }
+      k=$(( k + 1 ))
+    done <<< "$_WS_IDWALK_OUT"
+    (( k == ${#req[@]} && jb == nbt )) || { _WS_IDWALK_WHY="the walk answered a request list it was not given whole"; unwalk="any row ($_WS_IDWALK_WHY)"; rc=2; }
+  fi
+  if (( rc == 0 )); then
+    while read -r hk hi hw ha hrest; do
+      o=''
+      [[ "$hi" =~ ^[0-9]+$ ]] && o="${rid[hi]-}"
+      case "$hk $hw" in
+        "A ok")
+          case ", $_WS_SHARED_ROWS, $_WS_NESTED_ROWS, $_WS_THROUGH_ROWS, " in
+            *", $o, "*) : ;;
+            *) case "$hrest" in
+                 eq:0) _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o" ;;
+                 in:0|eq:[12]|in:[12]) _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o" ;;
+               esac ;;
+          esac ;;
+        "A gone"|"A un"|"P un") unwalk+="${unwalk:+, }row $o (${ha:-gone})" ;;
+        "P proc") unproc+="${unproc:+, }$o" ;;
+        "T gone"|"T un")
+          if [[ "$hi" == 0 ]]; then unwalk+="${unwalk:+, }$id's own tree (${ha:-gone})"
+          else unwalk+="${unwalk:+, }a leaf of $id (${ha:-gone})"; fi ;;
+        "M hold"|"M un") unmount="$ha" ;;
+      esac
+    done <<< "$_WS_IDWALK_OUT"
+  fi
   [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
   [[ -z "$unmine" ]] \
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
@@ -29603,11 +29730,15 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
   [[ -z "$unproc" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, or one reached through a link into /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unleaf" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a leaf the act removes with $id cannot be measured ($unleaf), so whether a registry row lies at, inside or through it was never asked — make it searchable, or restore its root"
   [[ -z "$unres" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
+  [[ -z "$unwalk" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }the identity walk of the registry rows did not answer for $unwalk, so whether a row lies at, inside or through $id's tree by device and inode, or a mount stands under it, was never asked — retry"
+  [[ -z "$unmount" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a mount stands at or under $id's tree, or one of its file system's roots lies at or under it ($unmount), or the mount table could not place it, so ccd cannot prove which tree a removal would take — unmount it, or retry once it is gone"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
@@ -36282,14 +36413,16 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # reads anything, and so does a box whose `mv` has no `--no-copy` (`mv`): the
 # verb's move is one `renameat2(RENAME_NOREPLACE)` or nothing.
 #
-# BOUNDED, AND INSIDE THE RUNNER'S ROW BUT FOR THE ROW PASS. The fresh rungs can
-# spend, in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the
-# in-use probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
-# `REAP_SCAN_SECONDS` (30 s). A probe that reaches its bound ends the audit, so
+# BOUNDED, AND INSIDE THE RUNNER'S ROW BUT FOR THE ROW PASS'S GIT READS. The
+# fresh rungs can spend, in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S`
+# (30 s), the in-use probe's `WS_PATH_USERS_SCAN_S` (10 s), the checkout scan's
+# `REAP_SCAN_SECONDS` (30 s) and the row pass's identity walk's
+# `WS_RECLAIM_WALK_S` (5 s). A probe that reaches its bound ends the audit, so
 # ONE `_plat_timeout` TERM-to-KILL grace is paid (`CCD_TIMEOUT_KILL_AFTER`, 3 s
-# by default, at most 8 s): about 73 s, or 78 s at the widest grace, against
+# by default, at most 8 s): about 78 s, or 83 s at the widest grace, against
 # ws-audit's 90 s runner row (`collect-audit-budget.test.ts` holds the sum). The
-# row pass has no bound of its own; a runner that kills the audit there gets no
+# row pass's git reads of a gone row's repository have no bound of their own
+# (`rows-rung-git-reads-unbounded`); a runner that kills the audit there gets no
 # document, which the server reads as a failed audit and retries: it fails closed.
 _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
 _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''

@@ -277,7 +277,7 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
   it('a table that cannot be read: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
     const r = collectVerb(h, collectToken(h),
-      { pre: `_ws_collect_mountinfo() { printf '%s' "$HOME/no-such-table"; }; ${MOUNTS_WHY}` });
+      { pre: `${MOUNTS_WHY} ${gapAt('moved', '_ws_collect_mountinfo() { printf \'%s\' "$HOME/no-such-table"; }')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
     const whys = linesOf(h, 'mounts-why');
     expect(whys, '(e) answered: the table could not be read').toEqual([expect.stringMatching(new RegExp(
