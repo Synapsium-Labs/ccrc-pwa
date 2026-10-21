@@ -8,7 +8,7 @@
 // Ink is `:root` and answers to no attribute, so its card stamps none; Follow the system is not a palette and stamps
 // none either (both draw the page's own palette; see the PR's departure note). Each card is a `Radio` (the label is
 // the 44px target; its input is the group's one tab stop), its note in the card's `title` and, on a phone, under the
-// grid for the checked card only; a wide column shows every card's note (settings.css's container query).
+// grid for the checked card only; a column of 480 or more shows every card's note (settings.css's container query).
 //
 // ONE RADIO GROUP, AND THE KEYS ARE OURS. `role="radiogroup"` names the set "Theme". The arrow keys move the choice
 // here, and `preventDefault` keeps the browser's own radio arrowing from moving it a second time: one press is one

@@ -77,9 +77,9 @@
    name and note are the palette's own primary and secondary inks on its own surface (or, checked, its own accent
    tint), the pairs design/contrast-check.mjs gates in every palette. The card sets its own `color` because an
    inherited colour is the parent's computed value, not a re-read of the card's tokens.
-   Phone (the column under 560): 3 columns of compact cards, the chips and a one-line name, the note in the card's
-   `title` and under the grid for the checked card. From 560: 160px-minimum cards, 100px tall, with every card's note,
-   4 to 5 per row in the 688 to 960 reading column. A container query, so the pane width decides, not the window.
+   Phone (the column under 480): 3 columns of compact cards, the chips and the name, the note in the card's `title` and
+   under the grid for the checked card. From 480: 150px-minimum cards (about 160 wide), 100px tall, with every card's
+   note, 4 to 5 per row in the 688 to 960 reading column. A container query, so the pane width decides, not the window.
    Selected is tint plus rail plus a check glyph (F9's idiom), never colour alone. */
 .settings-palettes-wrap {
   container-type: inline-size;
@@ -136,10 +136,9 @@
 .settings-palette-chip-attention { background: var(--status-attention); }
 .settings-palette-chip-dead { background: var(--status-dead); }
 .settings-palette-text { display: grid; gap: 2px; min-width: 0; }
+/* A name is never cut: on a phone a long one ("Catppuccin Mocha") takes a second line and its row grows with it. */
 .settings-palette-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
 }
@@ -158,8 +157,8 @@
 }
 .settings-palette[data-active='true'] .settings-palette-check { color: var(--ink-primary); }
 .settings-palette-current { margin: 0; overflow-wrap: anywhere; }
-@container (min-width: 560px) {
-  .settings-palettes { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+@container (min-width: 480px) {
+  .settings-palettes { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .settings-palette-hit { min-height: 100px; }
   .settings-palette-name { font-size: var(--fs-ui); }
   .settings-palette-note { display: block; overflow-wrap: anywhere; }
