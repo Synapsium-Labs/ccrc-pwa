@@ -18,7 +18,7 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 const media = (matches: boolean) => ({ matches, addEventListener: () => {} });
 
 beforeEach(() => { localStorage.clear(); document.documentElement.removeAttribute('data-theme'); initTheme(media(false)); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 
 // The Theme fieldset (the Switch theme door) holds the cards' one radiogroup.
 const theme = (): HTMLElement => screen.getByRole('group', { name: 'Theme' });
@@ -93,8 +93,15 @@ describe('the Theme preview grid', () => {
   });
 
   it('arrow keys move the choice and write it once', () => {
+    // A counting store, stubbed in whole: which Storage `localStorage` is depends on the Node version (jsdom's, whose
+    // methods an instance spy does not reliably intercept, or setup.ts's in-memory shim), so a spy is not portable.
+    const items = new Map<string, string>();
+    const set = vi.fn((k: string, v: string) => { items.set(k, String(v)); });
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => items.get(k) ?? null, setItem: set, removeItem: (k: string) => { items.delete(k); },
+      clear: () => items.clear(), key: () => null, get length() { return items.size; },
+    });
     render(<AppearanceSection />);
-    const set = vi.spyOn(localStorage, 'setItem');
     // `false` is a cancelled event: the browser's own radio arrowing must not move the choice a second time.
     expect(fireEvent.keyDown(radios()[0]!, { key: 'ArrowRight' })).toBe(false);
     expect(document.documentElement.getAttribute('data-theme')).toBeNull(); // Phosphor & Ink is :root
