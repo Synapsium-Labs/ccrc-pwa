@@ -2991,8 +2991,27 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const snip = libRedact.displaySnippet(t, ['ghi'], idx);
     expect(snip).not.toContain(']]');
     expect(snip).not.toContain('w0rd');
+    // the exact edge (review 721 F7): the cut splits the base's mark, `...[redacted] ...` -> `...redacted] `, and it is kept as written. Without the
+    // mark branch (splitAt, maskUnprinted's `lo`) the fragment is a token of its own that the widened reading does not print, so it
+    // becomes `...[redacted] ` instead: a fail-closed difference only this assertion sees
+    expect(snip.startsWith('...redacted] '), JSON.stringify(snip)).toBe(true);
+    expect(snip).toBe(`...redacted] ${M} ${M}" after more words here`);
     // CONTROL: the base snippet's cut does split the mark (it starts `...redacted]`)
     expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, ['ghi'], idx).startsWith('...redacted]')).toBe(true);
+  });
+  it('(j19) a lead drop that moves where the window starts in its reading: a token run across the margin before a widened value, so the cut edge is decided at the right place (D-6071, review 721 F6)', () => {
+    const idx = idxOf([]);
+    // the window starts inside a 70,000-character token run, so leadCut drops the run's rest from what the base cut shows; the text then
+    // starts further on in the reading, at `at` (`ds += n - out.length`), and a wrong `at` decides the cut edge on the wrong tokens
+    const t = `${'A'.repeat(70_000)}BCD see foo and bar seemore; password="x wordy SECRETVALUEXYZ" after words`;
+    const to = t.indexOf('SECRETVALUEXYZ') + 2;
+    const win = libRedact.redactDisplayWindow(t, 69_993, to, idx);
+    expect(win, 'no piece of the value prints').not.toContain('wordy');
+    expect(win).not.toContain('SE');
+    expect(win).toBe(` see foo and bar seemore; password=${M} ${M} ${M}`);
+    // CONTROL: the whole-text door masks the value, and rev 3.6's base door prints a piece of it
+    expect(libRedact.redactForDisplay(t, idx)).toContain(`password="${M}"`);
+    expect(libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!.base(t, 69_993, to, idx)).toContain('wordy SE');
   });
   it('(j18) a value the pre-round composition masked stays masked: a first widened value that swallows the second NAME and ends before the second value (D-6071, review 721 item 1)', () => {
     const idx = idxOf([]);
