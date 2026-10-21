@@ -251,7 +251,9 @@ function scopeText(file: string, name: string): string | null {
 
 interface GateHome { readonly file: string; readonly scope: string; readonly re: RegExp }
 
-const EXPIRY_STEP_0 = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED[\s\S]*?capSupported\(deps\.fleetState, EXPIRE_CAP\)/;
+/** The id check, then the capability in either form (D-5866, Task C1k): `capSupported(deps.fleetState, EXPIRE_CAP)`
+ *  or `ccdCan(deps.fleetState, 'wsExpire')`. */
+const EXPIRY_STEP_0 = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED[\s\S]*?(?:capSupported\(deps\.fleetState, EXPIRE_CAP\)|ccdCan\(deps\.fleetState, 'wsExpire'\))/;
 
 /** Where each check is written, and its text (spec §2.3). */
 const GATES = {
@@ -630,6 +632,14 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
     expect([...readChecked].sort(), 'every READ_ABOVE and DECIDED_ABOVE pin was exercised by a call')
       .toEqual([...Object.keys(READ_ABOVE), ...Object.keys(DECIDED_ABOVE)].sort());
+  });
+
+  it('CONTROL: the expiry step-0 pin reads the capability in either form, and not another row or token (D-5866)', () => {
+    const head = '  if (!isRegistryId(sessionId)) return answer({ kind: \'composition\', detail: EXPIRE_ID_REFUSED });\n';
+    expect(head + '  if (!capSupported(deps.fleetState, EXPIRE_CAP)) {').toMatch(EXPIRY_STEP_0);
+    expect(head + "  if (!ccdCan(deps.fleetState, 'wsExpire')) {").toMatch(EXPIRY_STEP_0);
+    expect(head + "  if (!ccdCan(deps.fleetState, 'wsExpireAudit')) {").not.toMatch(EXPIRY_STEP_0);
+    expect(head + '  if (!capSupported(deps.fleetState, RECLAIM_CAP)) {').not.toMatch(EXPIRY_STEP_0);
   });
 
   it('CONTROL: the scan sees a call, and ignores a comment, a string and a definition', () => {

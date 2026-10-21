@@ -39,6 +39,8 @@ import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
+// D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
+import { ccdCan } from './ccdargv.js';
 import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter,
   type InterruptVerdict, type SendDeps,
@@ -2095,7 +2097,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    if (!ccdCan(deps.fleetState, 'routeApply')) return reply.code(501).send({ ok: false, error: 'unsupported' });
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
@@ -2935,7 +2937,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const argv = body.pool === null
       ? CCD_ARGV.projectPoolClear(project)
       : CCD_ARGV.projectPoolSet(project, body.pool);
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, body.pool === null ? 'projectPoolClear' : 'projectPoolSet')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(argv);
@@ -3578,7 +3580,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // either is built — a branch returning a bare `{}` with no `pr` key is the
     // silence §2 forbids, and the client would render it as "no control" rather
     // than "we could not look".
-    if (!verbSupported(deps.fleetState, argv)) return unknownView('unsupported');
+    if (!ccdCan(deps.fleetState, 'prStateSession')) return unknownView('unsupported');
     const res = await deps.runCcd(argv);
     if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
@@ -3600,7 +3602,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // from inside the queue callback returns a FastifyReply, which has no `ok`,
     // so the old `'ok' in res` guard fell through and reply.code(502).send()
     // ran after send() had already fired — FST_ERR_REP_ALREADY_SENT.
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'prOpen')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     // Through the per-session queue, so it serialises with every other write.
@@ -3690,7 +3692,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
       // own `[[ -d $workdir ]]` refusal measures it there (`ArchiveMeasure.worktree`).
       worktree: rec.workspace === null ? 'present' : worktreeOf(await deps.io.statMeasured(rec.workdir)),
-      verbSupported: archiveArgv === null || verbSupported(deps.fleetState, archiveArgv),
+      verbSupported: archiveArgv === null || ccdCan(deps.fleetState, 'wsArchive'),
     };
     const coord = deps.coord;
     const plan = coord === undefined
@@ -3754,7 +3756,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const argv = CCD_ARGV.wsRestore(id, pwaDec(req));
     // Same generation, same skew, same answer as `/archive` above.
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'wsRestore')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     return runCcdOr502(reply, argv);
@@ -3765,7 +3767,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const argv = CCD_ARGV.forget(id);
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'forget')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     // Every gate that decides the removal — not a workspace, not held, not
@@ -3839,7 +3841,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const argv = CCD_ARGV.wsHold(id, body.reason, pwaDec(req));
     // Same verb generation and same skew answer as `/archive`/`/restore`
     // above — ws-hold/ws-release ship in the same branch that added them.
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'wsHold')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     return runCcdOr502(reply, argv);
@@ -3851,7 +3853,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const argv = CCD_ARGV.wsRelease(id, pwaDec(req));
     // Same generation, same skew, same answer as `/hold` above.
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'wsRelease')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     return runCcdOr502(reply, argv);
@@ -3884,7 +3886,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ungated one it has not been told
     // about, so the next omission breaks a test instead of being asserted away
     // by a comment.
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'wsAudit')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(argv);
@@ -3904,7 +3906,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const argv = CCD_ARGV.wsReap(body.expect, id);
-    if (!verbSupported(deps.fleetState, argv)) {
+    if (!ccdCan(deps.fleetState, 'wsReap')) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));

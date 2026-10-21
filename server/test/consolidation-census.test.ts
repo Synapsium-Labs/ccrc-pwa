@@ -14,6 +14,7 @@ import {
   feedRecordCallSites, reclaimPauseParseSites, markerDefinitions, markerLiteralFiles, filesNaming,
   runCcdOldFoldSites, RAN_NARROW_WINDOW, type CensusSite,
 } from './consolidationCensus.js';
+import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -75,11 +76,12 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
   });
 
   // D-5857 (Task C1c): pushOne's archive write moved into the funnel (`notice.ts` `notify`), so the real-tree anchor
-  // follows it there; the row's other halves are unchanged.
+  // follows it there; the row's other halves are unchanged. D-5860 (Task C1f): the write also passes the notice's
+  // once-only key when it has one, so the anchor matches the call's first two arguments.
   it("REAL: it finds the funnel's archive write in notice.ts, and every site is a call", () => {
     const sites = feedRecordCallSites();
     show('feedRecordCallSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev\)/.test(s.text)),
+    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev[,)]/.test(s.text)),
       "the funnel's archive write is not among the sites").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brecordFeedEvent\s*\(/);
     expect(files(sites)).not.toContain('server/src/coord/store.ts');
@@ -189,5 +191,62 @@ describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrow
     // A query that silently matched nothing would read as "step 2 is done": the swap route is a known old-fold site.
     expect(sites.some((s) => s.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brunCcd\s*\(/);
+  });
+});
+
+// D-5866 (Task C1k; ARCH-71 #806). The capability census: every verb, flag and precondition question, tagged from
+// `CCD_CAN`, never from a list.
+describe('capabilityChoiceSites: verbSupported(, capSupported( and ccdCan( calls under server/src, tagged (D-5866)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-caps-'));
+    const at = (rel: string, body: string): void => {
+      const p = path.join(tree, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    };
+    at('server/src/ccdargv.ts', 'export function ccdCan(state, row) { return capSupported(state, row); }\n');
+    at('server/src/lane.ts', [
+      'export function lane(s: S, argv: A, ask: Q): void {',
+      "  if (!ccdCan(s, 'wsArchive')) return;",                                    // 2: verb
+      '  if (!verbSupported(s, argv)) return;',                                     // 3: verb
+      '  if (!capSupported(s, EXPIRE_CAP)) return;',                                // 4: verb (a row's token)
+      "  if (!ccdCan(s, 'wsCollect') || !capSupported(s, RECLAIM_PAUSE_CAP)) return;", // 5: verb, verb-precondition
+      '  if (!capSupported(s, RECLAIM_PAUSE_CAP)) return;',                         // 6: verb (its own route)
+      '  const f = capSupported(s, POOLS_CAP);',                                    // 7: flag
+      '  if (!capSupported(s, ask.cap)) return;',                                   // 8: flag, unresolved
+      "  const g = capSupported(s, 'stop-surface');",                               // 9: flag, a literal
+      '  // capSupported(s, EXPIRE_CAP) named in a comment',                        // 10: prose
+      '  const m = { verbSupported: true };',                                       // 11: a key, not a call
+      '}',
+    ].join('\n'));
+    at('server/src/hibernateSweep.ts', 'export const p = (a: A) => verbSupported(a.fleetState, argv);\n');
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: each form and tag, and never a comment, a key or the defining file', async () => {
+    expect((await capabilityChoiceSites(tree)).map((x) => [x.file.replace('server/src/', ''), x.line, x.form, x.token, x.tag]))
+      .toEqual([
+        ['hibernateSweep.ts', 1, 'verbSupported', null, 'w4-held'],
+        ['lane.ts', 2, 'ccdCan', null, 'verb'],
+        ['lane.ts', 3, 'verbSupported', null, 'verb'],
+        ['lane.ts', 4, 'capSupported', 'expire-v1', 'verb'],
+        ['lane.ts', 5, 'ccdCan', null, 'verb'],
+        ['lane.ts', 5, 'capSupported', 'reclaim-pause-v1', 'verb-precondition'],
+        ['lane.ts', 6, 'capSupported', 'reclaim-pause-v1', 'verb'],
+        ['lane.ts', 7, 'capSupported', 'pools-v1', 'flag'],
+        ['lane.ts', 8, 'capSupported', null, 'flag'],
+        ['lane.ts', 9, 'capSupported', 'stop-surface', 'flag'],
+      ]);
+  });
+
+  it('REAL: every tag is seen, and the W4 files hold the only verbSupported( calls outside the deferred watch.ts', async () => {
+    const sites = await capabilityChoiceSites();
+    for (const tag of ['verb', 'verb-precondition', 'flag', 'w4-held'] as const) {
+      show(`capabilityChoiceSites ${tag}`, sites.filter((x) => x.tag === tag));
+      expect(sites.some((x) => x.tag === tag), `no ${tag} site found`).toBe(true);
+    }
+    expect(sites.filter((x) => x.tag === 'w4-held').every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(sites.some((x) => x.form === 'ccdCan'), 'no ccdCan( site found').toBe(true);
   });
 });

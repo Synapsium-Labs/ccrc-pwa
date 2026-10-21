@@ -104,8 +104,9 @@ export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHead
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';
 // `Prose` is the one composite that renders no tree of its own: what makes
-// prose prose is seventy-six rules, and the app still owns the react-markdown
-// map that decides which element each token becomes.
+// prose prose is rules (the seventy-six that moved, and the list markers
+// since), and the app still owns the react-markdown map that decides which
+// element each token becomes.
 export { Prose, PROSE } from './components/prose';
 
 // — themes —
