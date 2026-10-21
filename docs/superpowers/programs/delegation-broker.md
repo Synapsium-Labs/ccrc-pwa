@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299` |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 (run 740) dispatched 2026-10-21 |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -1082,6 +1082,210 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   - Its last full run (39156998467) is red only on ccd-docs-tree "row 64" on its latest attempt, a main-red (main's
     daily 39093762060). ccd-docs-index was red on attempt 1 and passed on re-run. `main`'s macOS reds and the flaky
     R111 can still fail a stable promotion's `full-suite`.
+- **2026-10-19 — the soak's first freeze (operator rulings "Fix first, then soak" and "can you urgently fix the
+  freeze").** The soak watcher, `ccrc-pwa-bright-river`, found the server's event loop blocked about 15 to 22 s every
+  60 to 72 s, CPU-bound (6586).
+  - The coordinator's read-only diagnosis: reconcile's rung-4 correlation re-derives each listing window's delta per
+    census tree and per same-repository window, with no await between. Not the journal, so compaction would not help.
+    The whole-table flush and repair projections were a second, smaller term, not in the ruling.
+  - Ruled by the operator, "Fix first, then soak": a follow-up reads each window's delta once per pass, verdicts
+    unchanged (an equivalence digest, and a cost pin red at `main`), no yield, and the soak starts on the release
+    carrying it. The operator then asked "can you urgently fix the freeze" and "Can you also fix" the restart
+    multiplier: the restart cost rode the run, and the restart verdict effect went to wave 4's list.
+- **2026-10-19 — follow-up 2 dispatched.** Run 627 (block D-5604..D-5607) went to `ccrc-pwa-plain-prairie`
+  (`ws/plain-prairie`) at 04:32Z, brief 6603. A pre-dispatch check then found that the delta memo alone left 1.9 to 10
+  s, because each held window's span was re-parsed per candidate; the coordinator ruled that a span memo is inside
+  "computed once per pass" (amendment 6605, recorded in D-5604).
+- **2026-10-19 — review 628 (`ccrc-pwa-soft-mesa`, at `87e169396`).** Wave-done 6609: the steady shapes fell from
+  9.9-41.7 s on `main` to 0.34-0.97 s, and the restart shape at 300 trees from 3.1 s to 1.15 s. Panel complete: 7
+  confirmed, 3 refuted, 0 unexamined. 9 findings, all minor.
+  - F1 (the lookup index unguarded: mutants M14 and M15 survive) and F8 (the memos go stale if a caller changes a
+    handed-over list; no shipped caller does) went to the next run, as D-5642's R1 and D-5643, with the doc fixes
+    F2-F5 and F7. F6, the bench script outside the tree, was as briefed.
+  - F9 needed a ruling: restart cost is linear in fleet-wide census trees, about 4 ms a tree (1.49 s at the fleet
+    box's 367, past 2 s near 500), so "reduced, not bounded". Put to the operator (below).
+- **2026-10-19 — #681 merged.** By admin merge at 06:39:09Z as `c44bea401`, a squash of `87e169396`, after a green
+  probe merge onto `main` `b5c7b4ea7`. Run 627 closed `done`; prerelease `v0.0.328` (since promoted to stable).
+  D-5604 is defined; D-5605, D-5606 and D-5607 are unused. Live on `v0.0.331` (6628) the block fell from 14-15 s to
+  about 5.6 s every ~67 s, against a bench that predicted 1 to 1.5 s.
+- **2026-10-19 — follow-up 3 dispatched (operator ruling "Bound it before soak").** On review 628 F9: a third
+  follow-up builds the pass-wide work once per pass, so it no longer scales with checkouts times listings, and carries
+  review 628's minors; projections declined; the soak starts on the release carrying it. Run 629 (block
+  D-5642..D-5645) went to `ccrc-pwa-clear-summit` at 09:24Z, brief 6622, with run 561's consent (6618) to edit
+  `watch.ts`'s window builders and reconcile unclaimed.
+- **2026-10-19 — follow-up 4 dispatched (operator ruling "Timing line + 629").** Land 629 after review; beside it, a
+  small run writes one log line per pass, only when a pass blocks over 1 s, with per-phase times and no behaviour
+  change; the soak starts once the block is small or the operator accepts. Run 632 (block D-5692..D-5694) went to
+  `ccrc-pwa-plain-mesa` at 11:31Z, brief 6642, with consent 6639; its pre-dispatch check replaced the planned trigger
+  with `block`, the sum of the non-read phases.
+- **2026-10-19 — review 631 (`ccrc-pwa-still-hollow`, at `eaaf4527f`).** Wave-done 6635: at 734 trees every shape ran
+  0.20-0.96 s, against 2.43-3.30 s on `main`. But the live mix gave 0.58 s on `main` in the bench against 4 to 5 s
+  live, so the live remainder was not modelled. Panel complete: 6 confirmed, 6 refuted. 1 important, 6 minor.
+  - F1 (important): the field-free forms of M14 and M15 survive every row. Ruled in fix round 1 (6646): an R1 "unlost"
+    shape; F4, a source-text pin that reconcile calls `delegationPassWindowsOf`; F2, F3 and F5-F7 wording only. The
+    control mutant MC3 gets no row and is D-5642's residual (7).
+  - The review's reading of the live gap, unmeasured: the per-pass full repair projection first. The coordinator
+    corrected its earlier mail to the soak watcher (6647): the lead is the repair, and run 632's line settles it.
+- **2026-10-19 — reviews 634 (`ccrc-pwa-soft-summit`, at `038c26b69`) and 635 (`ccrc-pwa-calm-meadow`, at
+  `823fa0220`).** Both panels complete.
+  - 634 F1 (important): shape (v) relies on, and does not pin, the partition's identity path, an equivalent mutant;
+    F2: the call row's title overclaims. Ruled in fix round 2 (6694): say "relies on", add a third limit to D-5642,
+    and pin `listingWindows: windows` in the call row, with mutant M28 red against it.
+  - 635 F1 (important): the row pins only the text `listingWindows: windows`, so two copies stay green. Ruled in fix
+    round 3 (6738), the coordinator's own option: stop extending the text pin and guard copies by behaviour, row
+    D-5643 R2 (one frozen list across a census pass's calls).
+- **2026-10-19 — review 638 (`ccrc-pwa-amber-basin`, at `ea9c985fc`).** Panel complete, with every mutant run on whole
+  files. 2 minor findings: F1, a frozen copy shared by every tree stays green (equivalent for the memos), so R2's
+  comment and D-5643 overclaim; F2, a missing comma in D-5643. Ruled: accepted as wording only, to wave 4's list, and
+  land.
+- **2026-10-19 — #698 merged.** By admin merge at 18:03:38Z as `da2610662`, a squash of `ea9c985fc`, after a green
+  probe onto `main` `4de245a72`. Run 629 closed `done`; prerelease `v0.0.358`. D-5642 and D-5643 are defined; D-5644
+  and D-5645 are unused. Landing mail 6779 released run 632's hold.
+- **2026-10-19 — review 642 (`ccrc-pwa-warm-cove`, at `d79c3ff85`).** Run 632 had held at a green status (6702, hold
+  6703) until #698 landed, then merged `main` keeping #698's call and both freezes (`6457fcb64`) and wrote its plan
+  block (wave-done 6801). Panel complete on its first run: 6 confirmed, 3 refuted. 7 minor findings, no behaviour
+  change.
+  - The pre-dispatch check found a gap in the coordinator's own task text: `readMetas` counts as a read but awaits
+    checkpoint replacements, so a multi-second block there writes no line. The review's item 2 found that owners, open
+    and recover can hide one too.
+  - Ruled: land #711 now, no fix round. F1-F4 (the verdict-kind typing, the formatter's small bound, an
+    orphaned docblock, a cut's dropped late rewrites) to wave 4's list. F6 (no row pins the throw and not-ready paths,
+    MX1 and MX2) waived, since it costs a diagnostic line only, and routed to the next dispatched run, where it became
+    D-5832 R4. F7 (a workspace slug in a merge subject) is not private, but the squash body drops it. The reading rule
+    (no line does not mean outside the lane; an awaited phase can hold another's time) went into the coordinator's
+    docs PR before rollout.
+- **2026-10-19 — #711 and #736 merged.** #711 by admin merge at 19:44:40Z as `2f7e88cdd`, a squash of `d79c3ff85`; run
+  632 closed `done`; prerelease `v0.0.360`. D-5692 and D-5693 are defined; D-5694 is unused. The docs PR #736 at
+  20:04:33Z as `2e0dd3ede`; prerelease `v0.0.361`. Mail 6809 told the soak watcher how to read the line.
+- **2026-10-19 — the slow line's first live read (6833) and the operator's ruling "Measure and cut, then soak".** On
+  `v0.0.361`, 19 passes about 66 s apart: block mean 4,263 ms (1,908-9,319). Flush was the largest block phase on
+  every pass (mean 3,134 ms). By the coordinator's reading of the code, about 1.8 to 2 s of that is fixed
+  loop-blocking, and the per-event slope is mostly O5's awaited fsync per record. The repair was a second full
+  synchronous projection every pass (0.65-0.92 s).
+  - Ruled (21:15Z): measure CPU and loop stall per phase; safe cuts (no copy of the activity-id map per activity, no
+    attempts write when nothing is new, yield between phases); the repair skips its rewrite when the projection is
+    known current, with a full repair forced about hourly; O5 untouched. Estimate: "about 1-1.6 s less blocking a
+    pass, and no single stall much over 1 s". The soak starts on the release that carries it. Declined: measure only,
+    a delta projection, accept and soak.
+- **2026-10-19 — follow-up 5 dispatched.** Run 645 (block D-5832..D-5837) went to `ccrc-pwa-still-hollow` at 22:16Z,
+  brief 6876, with run 561's consent (6848, and 6868 for the `perf_hooks` import, which 7082 later restated exactly)
+  to edit `watch.ts`'s lane unclaimed.
+- **2026-10-20 — review 677 (`ccrc-pwa-clear-prairie`, at `bdc3baebb`).** Wave-done 7028 reported `suite: red`,
+  shallow: two census rows pinned one `setInterval(` in `watch.ts`, ruled (7006) to keep D-5832's sampler and count
+  exactly two. So the worker's route rose from effort high to xhigh. Panel complete: 8 confirmed, 3 refuted. 13
+  findings: F1 important by the panel (the reviewer rates it minor), the rest minor or nit.
+  - The reproduce lens ran vitest outside the mandatory memory-capped scope. Reported to the operator; that panel is
+    not recorded as fully protocol-compliant.
+  - Ruled in fix round 1 (7088): F5, a production CPU-source row that the MCPUthread mutant reds (a real gap); F3 and
+    F6, new rows (a virtual-clock row; one row for each R109 exit); F4, the attempts rows pin set, revision and
+    canonical bytes; F1, F2, F8-F10 and F12, wording; F13, the sampler's restart after `close()` (test-only), to wave
+    4's list. The final head needs PR CI and a green non-advisory full run, renewed on every head change.
+- **2026-10-20 — #929's ratchet, and a review that would not dispatch.** #929 (D-5854) capped `watch.ts`'s literal
+  source pins at 114, and #832's two by-name pins made 116. Ruled (7148): never raise the ceiling or weaken the
+  census; hold for a symbol-keyed form.
+  - Review 687 was refused at the daily dispatch cap. A re-dispatch after the operator's "finish the work please"
+    timed out with a workspace minted and no session bound, so the coordinator did not retry. The operator ruled "You
+    abandon it for me", and run 687 closed `failed`.
+- **2026-10-20 — review 705 (in the coordinator's session, at `696d5d64d`).** Run 705 was refused at the daily cap
+  too, and the operator directed the review into the coordinator's own session ("or you do it in this session", then
+  "in this workspace I mean"). Its report says "Not a dispatched review run". Run 705 was abandoned.
+  - Panel complete: 7 confirmed, all minor, 3 refuted; the whole-branch pass answered 9 of 9. Containment was by gated
+    shims ("Launch now with gaps"); the contract's reach to every agent is unverified.
+  - F6 (important, whole-branch, measured): the branch could not land on current `main`, where #929's ratchet reads
+    116 > 114. F1: a max-only drift that never heals. And the "no single stall much over 1 s" estimate fails at a 33.6
+    MB checkpoint.
+  - Ruled by the operator, "Land, then bring delta projection forward": fix round 2, re-review and land run 645, then
+    the delta projection as the next follow-up, ahead of the soak and wave 4. The soak does not start on 645's
+    release.
+- **2026-10-20 — fix round 2 (7299) and review 716 (in the coordinator's session, at `34cb5e962`).** The round merged
+  `main` (after #722), keyed the two sampler pins by symbol, so `watch.ts`'s literal-pin count stays within #929's
+  114 with no ceiling raise, kept the literal `setInterval(` total-of-two pin, and fixed F1 red-first under D-5836.
+  Run 716 was refused at the daily cap, and the operator answered "Review here again".
+  - Panel complete: 7 confirmed, 0 refuted. No production defect. G1 (important): D-5836's "every other repair keeps
+    today's full path" was now false; G2, two recovery mutants survived; G3, the `close()` comments were false (no
+    production code calls it). Ruled in fix round 3 (7412): G1-G6 fixed, G7 and G8 nothing owed. Run 716 abandoned.
+- **2026-10-21 — review 723 (`ccrc-pwa-swift-harbor`, at `8318dd455`).** A narrow review of fix round 3's five commits
+  against G1-G8. Panel complete: 4 confirmed, 1 refuted, 2 distinct minor findings, no production defect. H1: the R6
+  titles lost a space and a clause has no verb. H2: the plan's "2 of 80" is ambiguous. Ruled: the wave is accepted,
+  and H1 and H2 are carried into the delta-projection run.
+- **2026-10-20 to 2026-10-21 — run 645's CI attributions.** The landing condition (7412): PR CI green and every
+  non-advisory leg of a full run green; a red only on advisory macOS does not block.
+  - Fix rounds 1 and 2: every Linux leg green, round 2's after one re-run of session-hook's "AMBIGUOUS run forks" row;
+    macOS red on session-hook's p95 budget and on `history-replay` (fixed on `main` by #1032).
+  - Fix round 3: the PR run red on session-hook's p95, a listed load flake, green on re-run. The full run red on
+    `delegation-spool.test.ts` "lines near the small cap do not interleave" (11 of 12 lines), unlisted, green alone 3
+    of 3 and on re-run. Its cause is not identified: an open item the programme owns, beside D-5436, and no #832
+    blocker.
+- **2026-10-21 — #832 merged.** `gh pr merge 832 --squash --admin --match-head-commit 8318dd455…` merged it at
+  01:55:27Z as `69aac52f5`. Run 645 closed `done`; prerelease `v0.0.506`. D-5832..D-5836 are defined; D-5837 is
+  unused.
+  - Live on `v0.0.508` (7528): block mean 38.5 s down to 15.9 s, the repair skipped on 13 of 15 passes, but `stallMax`
+    mean 7.8 s (max 15.4 s), against the coordinator's estimate of about 3 s, which was low. Activities stood at 82,141.
+- **2026-10-21 — follow-up 6 dispatched (operator rulings "Delta alone + measuring", "Count check per delta" and
+  "Additions/updates only").** Run 728 (block D-6162..D-6169) went to `ccrc-pwa-quiet-meadow` at 06:07Z, brief noting
+  #1058's growth check: a pure diff of the last projected checkpoint against the next, with new timing keys; each
+  delta checks the five tables' row counts; any row leaving, or any lease change, falls back to the full rewrite
+  inside the same call. Declined for this run: an incremental encode, a split hourly repair, a full read-back per
+  delta, and general deletes.
+- **2026-10-21 — checkpoint growth, measured.** The 14-15 s stalls were exactly the attempt-filing passes (7530). A
+  bounding design pass found a defect, not an identity leak: the hook's `contains("worktree")` matches every path
+  under a worktrees directory, so the fold opens a permanent `bash-worktree` activity for every listing-carrying Bash
+  call.
+  - Measured on copies (7561, 7598): 84,302 activities, 90.4% of them `bash-worktree`; 98.8% of listed Bash Pre/Post
+    pairs never changed the listing; checkpoint 70.8 MB; one decision key holding 337 of 379 attempts; every workflow
+    row active (370, then 386); 7,732 identity-candidate holds from start-less SubagentStops, none ever named later.
+  - An attempt-filing pass stalled 19.0 s at 12:58Z, covering a /health miss answered on retry 20 s later; attempts
+    grew about 20 an hour. The lane has no kill switch, and the growth predates every recent build.
+- **2026-10-21 — the growth-fix rulings (operator).** Each label with its decision:
+  - "Open only on a change" (fold rule A): a Bash call opens an activity only when its worktree listing changed, or
+    exactly one of its PreToolUse and PostToolUse carries a listing; the hook is unchanged; spec §5.2 is amended.
+  - "Retire that class": a narrow O4 amendment (Carried constraints below), which must ship with fold rule A.
+  - "Separate follow-up now": a small run after run 728 and before wave 4, for the attempt re-filing, workflow runs
+    that never end, and start-less stop candidates that never age out.
+  - "Ask the soak watcher": measure first, on copies (7561, then 7598).
+  - "1 hour": a listing-carrying Bash PreToolUse waits at most 1 h of journal time for its PostToolUse.
+  - "48 hours": a start-less stop candidate ages out after 48 h (about 2,047 of 7,732 at the first boot).
+  - "Collapse to one": attempts on file that repeat one decision collapse to the earliest row of each key.
+  - "Accept and document": after a rollback past the change, an older build's recovery refuses and the lane stays
+    `reconstructing` until roll-forward. The journal and checkpoint lose nothing; a rollback longer than the 24 h
+    spool read horizon loses that span's delegation evidence, as any lane outage does.
+  - "Split: attempt fix first": after the 19 s stall, the attempt key and the collapse ship as their own run once run
+    728 merges, and the rest follows as a separate run on top.
+  - Settled by the coordinator, not ruled: the stale active old-rule Bash rows (about 1,400) are not retired, since
+    wave 4's `unknown` writer owns them; a call with no listing on either side opens nothing.
+- **2026-10-21 — D-6163 and D-6164.** The allocator issued both to run 728 at 01:57Z, and #1054 (named workspaces)
+  then defined both on `main` for its own matter. The worker skipped them (7669), took D-6162 and D-6165..D-6168 in
+  order, and the coordinator accepted. D-6168 is a departure: #1058's growth check, armed after the task text was
+  written, measured `store.ts` at +66 net code lines against 40, so the pre-BEGIN checks moved into one exported pure
+  helper in `delegation-model.ts`, `prepareDelegationProjectionChanges`, leaving `store.ts` at +38 (and `watch.ts` at
+  +10).
+- **2026-10-21 — review 758 (`ccrc-pwa-bright-mesa`, at `bda4dabba`).** Wave-done 7711 reported `suite: red` on
+  session-hook's p95 row (172 then 168 ms against 150), in a file the branch does not touch. A check attributed it to
+  load (it failed on six earlier full runs), with no routing rung. Bench at 50k activities: projection step 1,262 ms
+  on `main`, 169 at the tip; rows written 50,583 against 130. Panel complete: 5 findings, all refuted; the reviewer's
+  own two are minor. typecheck-tests was not run at the disk floor.
+  - F1: the R2 helper `pass()` reads only the `project` label, so `expectShort` cannot see a `projectChanged` call.
+    Ruled real and minor, no fix round: carried into run 740 as one line with a mutant.
+  - F2: R111 red once in a full-file run at load 9, green on re-run and 5 of 5 alone. Ruled a load flake (green in CI,
+    unchanged since #448, no CI failure in the last 40 runs), consistent with R111's place on wave 4's list.
+  - Q3, D-6168's second copy of the pre-BEGIN checks beside the frozen full path: accepted until the full path next
+    changes. R15's twin parity reds any divergence.
+  - Q6, five older slow-line keys dropping at `Number.MAX_SAFE_INTEGER`: accepted. Nothing drops at 7-digit values,
+    and the rest-run re-measures the bound. Ruled clean with carried items.
+- **2026-10-21 — #1068 merged, through the merge queue.** `main` gained a merge queue at 07:07Z, so `gh pr merge 1068
+  --match-head-commit bda4dabba…` queued it, and it merged at 19:40:04Z as `7da6498a7`. Run 728 closed `done`;
+  prerelease `v0.0.541`. D-6162 and D-6165..D-6168 are defined; D-6169 is unused.
+  - Live on `v0.0.541` (7767): no mismatch line, and `projectFull` 0 on all 18 passes. Ordinary passes blocked 6.2-8.5
+    s (15.8 s before); attempt-filing passes 29-31 s (43-45 s before), their mid stall still 21-23 s until run 740
+    lands. A second /health miss at 19:58Z sat between two attempt-filing passes stalling 21.1-21.2 s (7755).
+  - The server box had 17 GB free after the move's backup, about 2 GB above the operator's 15 GB line; each tap adds a
+    backup of about 1.6-1.7 GB.
+- **2026-10-21 — follow-up 7 dispatched.** Run 740 (twelve numbers issued at run-open) went to `ccrc-pwa-clear-basin`
+  at 19:45Z, from `7da6498a7`: attempts keyed on the decision, not its evidence; the collapse in the upkeep phase; the
+  re-pins; review 758's F1. Run 728's bench had drained the fleet box's shared volume to 2.25 GiB free (7673), so
+  benches stop under 30 GiB free (7679). Ask 73 on disk was answered "Proceed except the bench" with a 10 GiB floor,
+  lowered for run 740 alone at about 20:25Z to 3 GiB with all scratch on the root disk, because run 740 fixes the live
+  stall. Its PR is #1097.
 
 ## Carried constraints
 
@@ -1162,6 +1366,17 @@ one blocks its owning durability task rather than licensing a weaker fallback.
 4. **Immutable mapping (O4).** The checkpoint persists `(parent id, parent incarnation, source kind, upstream id)` to
    the selected activity id. The hash input names the accepted retained naming record’s `journalId`, not its raw envelope
    `eventId`. Recovery restores that exact id and never hashes a later event because the selected event was pruned.
+
+   *Amended 2026-10-21 (operator ruling "Retire that class").* O4's text above stands as approved. It takes effect with
+   the run that ships fold rule A ("Open only on a change", spec §5.2), in the same PR, never without it. One class of
+   entry may then leave the immutable mapping: an ended `bash-worktree` activity, named by no lease and no lineage
+   edge, whose call's PreToolUse and PostToolUse listings are equal. Its row and its natural-key entry leave the
+   checkpoint together, through a dedicated retirement door on the durable applier, never through the checkpoint-only
+   change door, whose O4 guard is unchanged: once for the stock, then at each hourly retention slot. Under fold rule A
+   no retained record naming such a key is a qualifying join, so recovery never re-derives or refuses it, and nothing
+   re-mints. Its journal records are kept as evidence. Agent and workflow mappings stay immutable, and general
+   retirement remains wave 4's.
+
 5. **Durable application (O5).** Apply in order: append one complete journal record; fsync the journal; build next
    state; write and fsync a checkpoint temp in the same directory; atomic rename; fsync the parent directory; only
    then repair/commit `coord.db`. A positive meta has no journal event and becomes durable through the same checkpoint
@@ -1207,6 +1422,31 @@ These are plan refinements and proposed implementation decisions under the appro
 change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
+
+**Wave 3's remaining follow-ups (2026-10-21).** By the operator's "Split: attempt fix first", two runs remain, and the
+soak has not started: it did not start on #832's or #1068's release, and when it starts is the operator's.
+- Run 740 (follow-up 7, `ccrc-pwa-clear-basin`, PR #1097): attempts keyed on the decision, not its evidence; the
+  repeated attempts on file collapsed to the earliest of each key; the re-pins; review 758's F1. No new port member,
+  store method, checkpoint key, migration or slow-line key.
+- The rest-run (follow-up 7b, "the checkpoint stops growing"): fold rule A, the zero-delta retirement (the O4
+  amendment above, in the same PR), workflow runs ending on their task notification, start-less stop candidates
+  ageing out at 48 h, three slow-line keys, and the document corrections. It is dispatched after run 740 merges,
+  based on that `main`, with its own block of ten numbers.
+- Added to wave 4's list since #597:
+  - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
+  - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
+  - MC3, D-5642's residual (7), with no row; review 638's wording (a frozen shared copy stays green; D-5643's comma);
+  - review 642 F1-F4: the verdict-kind typing, the formatter's bound, the orphaned docblock, a cut's dropped rewrites;
+  - the sampler's restart after `close()`, test-only (review 677 F13);
+  - from run 645's out-of-scope list: O5's fsync per record (group commit), a cheaper canonical encode, the no-op
+    compare's two encodes, and the owners' reads with bounded concurrency;
+  - compaction never prunes a Bash call's PreToolUse while keeping its PostToolUse, and holds an active workflow
+    run's launch record; the stale active old-rule Bash rows go to the `unknown` writer.
+- R111 (on wave 4's list since review 578): if it reds again before then, its 20 ms real-time wait becomes a
+  condition-based wait, as its own small fix, not run 740's (review 758 F2).
+- Due whenever `projectDelegationCheckpoint` next must change, on no run yet: D-6168's consolidation, where the full
+  projection calls the shared pre-BEGIN helper (review 758 Q3).
+- Open and owned by the programme, on no run: the `delegation-spool` small-cap interleave red on Linux CI.
 
 **Wave 3 merged on 2026-10-18.** #448 landed at 03:04:32Z as `46c50a9a4`, after reviews 518, 533, 544, 556, 563, 578
 and 583 (decisions above). Run 360 closed `done`, and the prerelease `v0.0.258` carries the wave.
@@ -1257,8 +1497,9 @@ and 583 (decisions above). Run 360 closed `done`, and the prerelease `v0.0.258` 
       bounds bullet (review 617 F3).
 
 Rollout and the seven-day soak are the operator's acts, by the plan's "Rollout and Verification" steps 1–9. They run
-on `v0.0.299` or later, which carries #597, under the disk watch the decisions above record. `v0.0.299` is a
-prerelease, so the rollout is `ccrc rollout --to v0.0.299` unless it is promoted to stable first.
+on a release the operator names: by the rulings recorded since 2026-10-19, not on `v0.0.299`, #832's or #1068's
+release, and not before wave 3's remaining follow-ups (Next-wave brief, above), under the disk watch the decisions
+above record. A prerelease is rolled out with `ccrc rollout --to <tag>`.
 
 **Review 334 accepted wave 2 at its exact tip; wave 2 merged on 2026-10-13** (the decisions above record how). Reviewer `ccrc-pwa-keen-summit` accepted
 `e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report
