@@ -177,6 +177,8 @@ describe('the top bar', () => {
     // The session header's own words: its project, then the workspace's label.
     expect(crumbs()).toEqual([title('fleet'), 'project-a', 'quiet-basin']);
     expect(topBar().querySelector('.ins-crumb:last-child')).toHaveAttribute('aria-current', 'page');
+    // A crumb the bar cuts short (the overflow order gives crumbs up first) still shows its whole word on hover.
+    for (const c of topBar().querySelectorAll('.ins-crumb')) expect(c).toHaveAttribute('title', c.textContent ?? '');
     cleanup();
     mount(`/s/${S.id}`);
     expect(crumbs()).toEqual([title('fleet'), 'project-a']);

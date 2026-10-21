@@ -30,7 +30,7 @@ export function TopBar(): ReactNode {
       <Wordmark className="ins-wordmark" />
       <ol className="ins-crumbs" aria-label="Breadcrumb">
         {crumbs.map((c, i) => (
-          <li key={i} className="ins-crumb" aria-current={i === crumbs.length - 1 ? 'page' : undefined}>{c}</li>
+          <li key={i} className="ins-crumb" title={c} aria-current={i === crumbs.length - 1 ? 'page' : undefined}>{c}</li>
         ))}
       </ol>
       <BareRow className="ins-command" aria-label={COMMAND_FIELD_WORDS} {...commandDoor('open-palette')}>
