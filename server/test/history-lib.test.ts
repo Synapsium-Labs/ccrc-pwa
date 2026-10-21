@@ -3058,6 +3058,79 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(r11Holds(snip, 'SECRETXQ2Z'), `CONTROL snippet of ${JSON.stringify(t)}`).toBe(false);
     }
   });
+  it('(j20) a value of two or three words that the pre-round composition masked stays masked when each word recurs in the shown window: the worked example, a ;-, a ,-, an unclosed-quote and an odd-quote first pair, a value in escaped quotes, through both doors (D-6071, review 725 F1)', () => {
+    const idx = idxOf([]);
+    const [A, B, C] = ['ZQXRIVER41', 'ZQXSTONE17', 'ZQXMAPLE63'];
+    const winR = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    const snipR = libRedact.redactDoorReadings(libRedact.displaySnippet)!;
+    const printed: string[] = [];
+    const checkWindow = (name: string, t: string, from: number, to: number, value: string): void => {
+      const out = libRedact.redactDisplayWindow(t, from, to, idx);
+      if (r11Holds(out, value)) printed.push(`${name}: redactDisplayWindow prints the value: ${JSON.stringify(out)}`);
+      // CONTROL: rev 3.6's base door prints it, and the pre-round composition (v2 over the base door's text) masks it, so a print is a leak
+      expect(r11Holds(winR.base(t, from, to, idx), value), `${name}: CONTROL base window`).toBe(true);
+      expect(r11Holds(winR.v2(winR.base(t, from, to, idx), idx), value), `${name}: CONTROL the pre-round composition`).toBe(false);
+    };
+    const checkSnippet = (name: string, t: string, terms: string[], value: string): void => {
+      const out = libRedact.displaySnippet(t, terms, idx);
+      if (r11Holds(out, value)) printed.push(`${name}: displaySnippet prints the value: ${JSON.stringify(out)}`);
+      expect(r11Holds(snipR.base(t, terms, idx), value), `${name}: CONTROL base snippet`).toBe(true);
+      expect(r11Holds(snipR.v2(snipR.base(t, terms, idx), idx), value), `${name}: CONTROL the pre-round composition`).toBe(false);
+    };
+    // D-6071's worked example: the value `ZQXWORDA ZQXWORDB` starts at offset 47 of this 109-character text, and each word recurs after it.
+    // It prints at starts 1-39 with ends 83-139; with a 12-character prefix it is the plan's window [51,131) (review 725 F3)
+    const worked = String.raw`password="]SECRETX1Z river stone end; ,token=\"ZQXWORDA ZQXWORDB\" zqxpost ZQXWORDA lamp ZQXWORDB after words`;
+    expect(worked.length).toBe(109);
+    expect(worked.indexOf('ZQXWORDA')).toBe(47);
+    checkWindow('worked example [20,100)', worked, 20, 100, 'ZQXWORDA ZQXWORDB');
+    checkWindow('worked example, 12-character prefix, [51,131)', `intro words ${worked}`, 51, 131, 'ZQXWORDA ZQXWORDB');
+    const tail = (v: string[]): string => `\\" zqxpost ${v[0]} lamp ${v.slice(1).join(' ')} after words`;
+    const firsts: Record<string, string> = {
+      oddQuote: String.raw`intro words password="]SECRETX1Z river stone end; ,token=`,
+      unclosedQuote: String.raw`intro words password="SECRETX1Z river stone token=`,
+      semicolon: String.raw`intro words password=SECRETX1Z;token=`,
+      comma: String.raw`intro words password=SECRETX1Z,token=`,
+    };
+    for (const [name, head] of Object.entries(firsts)) {
+      for (const words of [[A, B], [A, B, C]]) {
+        const value = words.join(' ');
+        const t = `${head}\\"${value}${tail(words)}`;
+        const from = t.indexOf('token');
+        checkWindow(`${name}, ${words.length} words`, t, from, t.indexOf(' after'), value);
+        if (words.length === 2) checkSnippet(`${name}, ${words.length} words`, t, [A], value);
+      }
+    }
+    // every word of a three-word value in escaped quotes recurs in the snippet's text, which is cut 24 characters before its hit and 40 after
+    const three = String.raw`intro words password="]SECRETX1Z end; ,token=\"${A} ${B} ${C}\" x ${A} lamp ${B} ${C}`;
+    checkSnippet('escaped quotes, 3 words', three, [A], `${A} ${B} ${C}`);
+    checkWindow('escaped quotes, 3 words', three, three.indexOf('token'), three.length, `${A} ${B} ${C}`);
+    expect(printed, `${printed.length} prints`).toEqual([]);
+  });
+  it('(j21) a cut edge keeps its whole-token decision only where v2 left that edge as the cut made it: a rewritten edge is decided as itself (D-6071, review 725 F1)', () => {
+    const idx = idxOf([]);
+    const win = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    const snip = libRedact.redactDoorReadings(libRedact.displaySnippet)!;
+    // left token: the window starts inside `1api_key=\` (the widened reading prints that whole token), and v2 reads `api_key=\"ZQXC3\` as
+    // a NAME and its value, so the edge token of its output, `api_key=`, is no longer the cut's `api_key=\`. Decided by the whole token
+    // it would be kept, a NAME the widened reading never printed as it stands; decided as itself it is masked
+    const left = String.raw`intro secret=\"ZQXA1 ZQXB2\" and 1api_key=\"ZQXC3\" tail words more`;
+    expect(libRedact.redactDisplayWindow(left, 34, 50, idx)).toBe(`${M}${M}`);
+    // CONTROL: the pre-round composition (v2 over the base door's text) prints that NAME
+    expect(win.v2(win.base(left, 34, 50, idx), idx)).toBe(`api_key=${M}`);
+    // right mark: the snippet's cut ends inside the mark the base printed (`token=[redac`) and v2 reads that fragment and the closing `...` as one
+    // value, so its output ends `[redacted]`, not in the cut's `[redac`. Kept as written by position, the mark's cut part is taken from
+    // the wrong end of v2's output and a piece of the mark is left ahead of `]` (`[redacted]acted]`)
+    const right = String.raw`intro words password="]SECRETX1Z end; ,token=\"ZQXRIVER41 ZQXSTONE17\" zqxpost ZQXRIVER41 lamp ZQXSTONE17 after words`;
+    expect(snip.base(right, ['words'], idx).endsWith('token=[redac...')).toBe(true);
+    expect(snip.v2(snip.base(right, ['words'], idx), idx).endsWith(`token=${M}`)).toBe(true);
+    expect(libRedact.displaySnippet(right, ['words'], idx)).toBe(`intro words password=${M} ${M}; ,${M}${M}`);
+    // right token: the snippet ends inside `\x1b[32ma.md\x1b[0m`, whose output token is `a.md`, no longer the cut's `a.md\x1b[`. Decided by the
+    // whole token (which holds the sequence the widened reading removes) it would be masked; decided as itself it prints, as it does in the
+    // pre-round composition
+    const rightToken = 'PASSWORD=ZQXA1 then p\x1b[32massword=&x ZQXB2 file \x1b[32ma.md\x1b[0m ok';
+    expect(libRedact.displaySnippet(rightToken, ['then'], idx)).toBe(`PASSWORD=${M} then password=${M} ZQXB2 file a.md...`);
+    expect(snip.v2(snip.base(rightToken, ['then'], idx), idx)).toBe(`PASSWORD=${M} then password=${M} ZQXB2 file a.md...`);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.

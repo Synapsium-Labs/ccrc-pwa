@@ -313,9 +313,10 @@ export const RELAY_LOOKBEHIND_BYTES: 16384;
 export function redactAfter(lookBehind: string, text: string, idx: PairIndex): { emit: string; keep: string };
 /** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
  *  rules over the base reading's output (`v2`); null for any other function. A display window's and a snippet's also carry
- *  `whole`, the door they return, answering `{ base, out }` from one read (D-6071): (1) the cut stays the base door's; (2) the
- *  widened rules read the base reading of the margin-widened text; (3) only the tokens of the shown window that this reading no
- *  longer prints, or that `v2` over the base door's shown text no longer prints, are masked; (4) `v2` then reads the result.
+ *  `whole`, the door they return, answering `{ base, out }` from one read (D-6071): (1) the cut stays the base door's; (2) `v2` reads
+ *  the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text), the pre-round composition;
+ *  (3) the tokens of that output which the widened rules, read over the base reading of the margin-widened text, no longer print are
+ *  masked; (4) `v2` then reads the result. So the door only replaces spans of the pre-round composition's output with marks.
  *  A test seam:
  *  no shipped file calls it. */
 export function redactDoorReadings(door: (...args: never[]) => unknown):
