@@ -407,9 +407,11 @@ through your own server. What does leave the box, all of it on your behalf:
   A ChatGPT/Codex lane adds a third, `ccrc-codex-usage@<id>.timer`: every 15 minutes it sends
   the Codex backend one minimal request ("reply ok", to the lane's haiku-class model) with that
   lane's own token, to read the usage headers on the answer. And `ccrc-models.timer` (or a hand `ccrc models refresh`)
-  sends one fixed request before it moves a class of such a lane to a newer model: a user turn that reads "Reply with
-  the single word OK." (at most 512 tokens, streamed, at the model's lowest effort level) through the lane's own shim
-  and LiteLLM, on the lane's own sign-in, with no session data (`CCRC_MODELS_ADVANCE_BUDGET_S=0` stops it).
+  sends the Codex backend, through the lane's own shim and LiteLLM tier and on the lane's own sign-in, one fixed
+  request for each class it would move to a new model, and again on each run while that request is refused: a user
+  turn that reads "Reply with the single word OK." (at most 512 tokens, streamed, at the lowest effort level the model
+  lists), with no session data (see "Turning the step off" in
+  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where `CCRC_MODELS_ADVANCE_BUDGET_S=0` must be set).
 - **Only if you set them up** — DuckDNS and an ACME CA, as `ccrc expose` uses them (DuckDNS
   for its `duckdns` arm, the CA for `duckdns` and `byo`, neither for `ip`); your browser's
   push service once VAPID keys are set (each notification is encrypted to the
@@ -1949,23 +1951,28 @@ carries each class's recent moves, and `ccrc codex status <id>` shows each tier'
 unclassified, with no recent move, is the sign of a lane that keeps waiting. To keep a class where it is whatever
 arrives, hold it.
 
-**Refusals, waits and a cut-short move.** A canary that the lane answers with an error, or with a 200 that ends, or
-passes its read cap, without text, is refused: the class stays where it is, the failure is recorded in the advance
-file, and one push says so, not one a run; the refresh unit stays green and the next run retries. A canary that cannot
-tell yet is not a refusal, and the class waits with no history entry and no push: the lane's shim does not answer its
-probe in time, the request gets no answer before the canary's deadline (90 seconds by default), a 200 is still
-streaming without text when that deadline passes, or the canary refuses an argument it cannot carry (`unavailable`, as
-above). A move whose re-materialise fails is recorded as a failure and pushed the same way, and the step writes the old
-registry back and re-materialises it. If that re-materialise fails too, the lane's files may no longer match its
-registry; if the old registry cannot be written back at all, it still names the new model and the step keeps its
-intent. In both of those cases that lane's entry in the refresh's JSON answer is `ok: false` and the run exits 1. In
-the first, fix what the failure named: the next refresh, or any models verb on the lane, re-materialises it, and until
-then `show` names a settings drift and doctor's `codex` check FAILs a stale `lane.json`. In the second, the failure has
-been recorded and pushed while `show` lists the new model: the next refresh or models verb on that lane records the
-move as landed, and `revert <class>` then puts the old model back and holds it (a plain `hold` would hold the new one).
-A move that a stopped refresh cut short is recorded, and pushed, by whichever comes first: the next refresh whose step
-reaches that lane's backfill, or the lane's next `hold`, `release`, `revert` or `set-class`. A `set-class` stopped after
-it wrote the registry is recorded the same way, as the hand change it was, and sends no push.
+**Refusals, waits and a cut-short move.** A canary that the lane answers with an error (except the shim's 502 below), or
+with a 200 that ends, or passes its read cap, without text, is refused: the class stays where it is, the failure is
+recorded in the advance file, and one push says so, not one a run; the refresh unit stays green and the next run
+retries. A canary that cannot tell yet is not a refusal, and the class waits with no history entry and no push: the
+lane's shim does not answer its probe in time, its port refuses the connection, it answers 502 after waiting out a
+refused connection to the gateway, the request gets no answer before the canary's deadline (90 seconds by default), a
+200 is still streaming without text when that deadline passes, or the canary refuses an argument it cannot carry
+(`unavailable`, as above). A move whose re-materialise fails is recorded as a failure and pushed the same way, and the
+step writes the old registry back and re-materialises it. If that re-materialise fails too, the lane's files may no
+longer match its registry; if the old registry cannot be written back at all, it still names the new model and the step
+keeps its intent. In both of those cases that lane's entry in the refresh's JSON answer is `ok: false` and the run exits
+1. In the first, fix what the failure named. The next refresh whose probe succeeds re-materialises the lane, as does any
+models verb that writes the registry or a window (`set-class`, `set-effort`, `set-subagent`, `set-window`,
+`clear-window`, `discovery`, `revert`), but not `hold`, `release` or `show`. Until then, each refresh's entry for the
+lane stays `ok: false` with the reason, and `show --json` carries the failed move; `show` names a settings drift only
+when `settings.json` is the file left behind. In the second, the failure has been recorded and pushed while `show` lists
+the new model: the next refresh whose step reaches its backfill, or the lane's next `hold`, `release`, `revert` or
+`set-class`, records the move as landed; `revert <class>` records it itself and then puts the old model back and holds
+it (a plain `hold` would hold the new one). A move that a stopped refresh cut short is recorded, and pushed, by
+whichever comes first: the next refresh whose step reaches that lane's backfill, or the lane's next `hold`, `release`,
+`revert` or `set-class`. A `set-class` stopped after it wrote the registry is recorded the same way, as the hand change
+it was, and sends no push.
 
 **The push.** It is requested through the box's `notify.sh` hook, called with `--push`, which asks the server for a phone
 push as well as the banner in an open console. A phone push also needs the push setup the console already needs
