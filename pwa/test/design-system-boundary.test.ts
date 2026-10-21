@@ -398,6 +398,9 @@ export const NOT_A_SKIN: Record<string, string> = {
     + "(docs/DocMarkdown.tsx): the native Docs reader spec (2026-10-01, sections 4.4 and 4.12) makes a "
     + "document body an <article>, a landmark `Prose`'s <div> cannot render, so the body wears prose's "
     + "look through the hook class `Prose` itself exports it for; chat's MessageBubble uses <Prose>.",
+  COMMAND_KEY:
+    "a key glyph, not a class: `KeyHint`'s spelling of the command key, which draws it as the `command` "
+    + "icon. A key hint outside the palette passes it to `<KeyHint>` (Instrument's command field, W2 Task S9).",
 };
 
 /** `{CONSTANT: owning component}` for every class-string constant `@ccrc/ui`

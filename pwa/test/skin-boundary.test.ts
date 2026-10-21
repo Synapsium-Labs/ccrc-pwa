@@ -86,7 +86,7 @@ const selectorOf = (d: Decl): string => [...d.chain].reverse().find((p) => !p.st
  *  `['TopBar.tsx']`, S11 adds `PhoneTopBar.tsx`. */
 type BarRegistry = Readonly<Record<string, string | readonly string[]>>;
 
-const BAR_MODULES: BarRegistry = { [REFINED]: 'S4b', [INSTRUMENT]: 'S9' };
+const BAR_MODULES: BarRegistry = { [REFINED]: 'S4b', [INSTRUMENT]: ['TopBar.tsx'] };
 
 const RENDERS_WORDMARK = /<Wordmark\b/;
 

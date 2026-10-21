@@ -100,6 +100,28 @@ export const ICONS = {
     ['path', { d: 'M18 6 6 18' }],
     ['path', { d: 'm6 6 12 12' }],
   ],
+  'layout-list': [
+    ['rect', { width: '7', height: '7', x: '3', y: '3', rx: '1' }],
+    ['rect', { width: '7', height: '7', x: '3', y: '14', rx: '1' }],
+    ['path', { d: 'M14 4h7' }],
+    ['path', { d: 'M14 9h7' }],
+    ['path', { d: 'M14 15h7' }],
+    ['path', { d: 'M14 20h7' }],
+  ],
+  workflow: [
+    ['rect', { width: '8', height: '8', x: '3', y: '3', rx: '2' }],
+    ['path', { d: 'M7 11v4a2 2 0 0 0 2 2h4' }],
+    ['rect', { width: '8', height: '8', x: '13', y: '13', rx: '2' }],
+  ],
+  archive: [
+    ['rect', { width: '20', height: '5', x: '2', y: '3', rx: '1' }],
+    ['path', { d: 'M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8' }],
+    ['path', { d: 'M10 12h4' }],
+  ],
+  plus: [
+    ['path', { d: 'M5 12h14' }],
+    ['path', { d: 'M12 5v14' }],
+  ],
 } as const satisfies Readonly<Record<string, readonly IconNode[]>>;
 
 export type IconName = keyof typeof ICONS;

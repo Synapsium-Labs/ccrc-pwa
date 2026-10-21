@@ -1158,7 +1158,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
-      'src/skins/instrument/instrument.css', // W2 Task S2b: header-only until S9
+      'src/skins/instrument/instrument.css', // Instrument's shell (W2 Task S9, D-5472): the rail's tooltip is self-grounded
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
       'src/styles/base.css',
       'src/styles/shell.css',
@@ -1172,8 +1172,9 @@ describe('every stylesheet under src/ is audited', () => {
   // each with only its header, so the element guard has a sheet to find in
   // each skin; S4b and S9 fill them). Exact, both ways: a listed sheet that
   // gains a rule leaves this list, and is then held to the vacuity check.
-  // refined.css left this list with its first rules (W2 Task S7c, the session chrome; layout only).
-  const HEADER_ONLY = ['src/skins/instrument/instrument.css'];
+  // refined.css left this list with its first rules (W2 Task S7c, the session chrome; layout only), and
+  // instrument.css with its (W2 Task S9, the shell). The case stays for the next skin's sheet.
+  const HEADER_ONLY: string[] = [];
 
   it.each(stylesheets(ROOT).filter((rel) => !HEADER_ONLY.includes(rel)))('parses rules out of %s', (rel) => {
     expect(rulesOf(ROOT, rel).length).toBeGreaterThan(0);
