@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f390a469d352f8497e1b644c48921240891c10db6601935bf27191c9c9e2a8ae
+# ccrc:generated 1 sha256=00d16b93b1fd16c29e446bf8f22558c00352a4348f743a610a5bdb92cd729529
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17250,8 +17250,8 @@ _ci_held_wait() {   # id — before a supervised resume: no spawn while a live b
 }
 
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
-  # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
-  # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
+  # Claude Code rotates the active session uuid during normal operation (/clear; compaction keeps its
+  # transcript), so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
   # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
   # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
   # the registry in step means resurrection resumes where the session actually was.
@@ -17337,7 +17337,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
        && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
        && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
-      _reg_set "$id" uuid "$sid"
+      _operator_choice_promote "$id" "kept before a uuid rotation" "$sid" "$cfg"; _reg_set "$id" uuid "$sid"
       unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
     fi
   fi
@@ -20265,8 +20265,11 @@ _route_note_clear() {   # id — the applier is no longer declining, so the MARK
 # the only thing that makes the tick cheap: the record says what is WANTED and
 # this says what LANDED, so the comparison that decides whether to touch tmux at
 # all is two registry reads. It is written by the settle (from what `_spawn_start`
-# COMPOSED) and by the applier (on a read-back acknowledgement, never on the
-# send-keys alone), and by nothing else.
+# COMPOSED), the seed (`_route_apply_seed`, from the served values), `cmd_route
+# --apply`'s settle-applied fields, the applier (on a read-back acknowledgement,
+# never on the send-keys alone), the class read-back (`_route_readback`) and a
+# live UUID rotation's promotion (`_operator_choice_promote`, for exactly the
+# fields it wrote), and by nothing else.
 _route_applied_set() {   # id field value — rewrite the list with <field> replaced or appended
   local id="$1" f="$2" v="$3" cur out="" w
   local -a words=()
@@ -21145,12 +21148,12 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # reader that failed) or could not recognise what it read (a /model or /effort
 # command with no acknowledgement in the wording this ccd knows). A choice IS
 # lost without a line in a few cases, each named in README: a command within
-# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
-# non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
-# /model whose journal a `route --apply` keystroke opened first, a route field
-# whose mtime cannot be read, and an INTERRUPTED stop (one that died between its
-# keep, which leaves the marker, and its kill: the pane survives marked, so its
-# next stop or revival does not read again).
+# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a non-Anthropic
+# lane, a uuid that the background follow or a continuation chain moves without a promotion
+# (a pane-observed /clear does promote), an unrostered source account, a deploy-transition
+# /model whose journal a `route --apply` keystroke opened first, a route field whose mtime
+# cannot be read, and an INTERRUPTED stop (one that died between its keep, which leaves the
+# marker, and its kill: the pane survives marked, so its next stop or revival does not read again).
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last
@@ -21212,8 +21215,8 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
 }
 
 _operator_choice_read() {   # transcript journal [tail-bytes] -> the transcript reader's lines; rc != 0 the reader failed (§5.7)
-  # ONE READER, TWO CALLERS: `_operator_choice_keep` (the operator's own
-  # choice, before a stop) and `_route_readback_transcript` (the read-back's
+  # ONE READER, TWO CALLERS: `_operator_choice_promote` (the operator's own
+  # choice; the keep's and a live uuid rotation's) and `_route_readback_transcript` (the read-back's
   # second witness). The caller has already proved the file a readable regular
   # file — never `grep` on a FIFO; a missing python3 fails the pipeline, which is
   # this rc. Its lines, one per kind:
@@ -21339,11 +21342,19 @@ if ran is not None:
 }
 
 _operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f typed why="" out kind val at n field want fm shown drift=0
-  local -a sets=() kinds=()
+  local id="$1"
   [[ -f "$REG/$id.uuid" ]] || return 0
   _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (`_spawn_start`, §5.7)
-  _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
+  _operator_choice_promote "$id" "kept across a restart"
+  return 0
+}
+
+_operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv
+  local -A ackv=() acka=() ackn=() drifta=()
+  local -a sets=() kinds=()
+  [[ -f "$REG/$id.uuid" ]] || return 0
+  w=$(_reg_get "$id" wrapper); _is_anthropic_backend "$w" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
     _typed_note "$id" since
@@ -21355,6 +21366,46 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
   [[ -f "$f" && -r "$f" ]] || { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }
   command -v python3 >/dev/null 2>&1 || { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }
   out=$(_operator_choice_read "$f" "$typed") || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
+  # A LIVE ROTATION READS BOTH CONVERSATIONS, AND TIME DECIDES, PER KIND (D-4321;
+  # D-4319's existence skip is withdrawn). The tick that sees a `/clear` may run
+  # after the operator has typed a `/model` or `/effort` into the NEW conversation,
+  # so the incoming transcript can hold a kind's newest command. But a command's
+  # mere presence there is no proof it is newer: a rotation is also an in-pane
+  # `/resume` into an OLDER conversation, and its old command would then replace a
+  # newer outgoing one. So each kind (`/model` -> class, `/effort` -> effort) takes
+  # the newest ACKNOWLEDGED command in either transcript by epoch, a tie going to
+  # the incoming one, and the surviving pair is written by ONE `cmd_route` below.
+  # A drift (a command the pane refused, or acknowledged in a wording this ccd does
+  # not recognise) is TREATED as changing nothing, though it may have (the stamp
+  # below is wrong then): it never suppresses its kind's acknowledged winner, and
+  # is logged once. ONE READER: the same
+  # `_operator_choice_read` over the same journal. An incoming transcript that is
+  # absent (the ordinary case right after a `/clear`), not a readable regular file
+  # (`_ci_transcript_path` answers only a regular file), or that the reader fails
+  # on contributes no lines; the outgoing ones stand alone, as the keep's always do.
+  if [[ -n "$sid" && -n "$icfg" ]] && fin=$(_ci_transcript_path "$id" "$icfg" "$sid") && [[ -r "$fin" ]]; then
+    inc=$(_operator_choice_read "$fin" "$typed") || inc=""
+  fi
+  if [[ -z "$inc" ]]; then
+    merged="$out"   # NO INCOMING LINES: the reader's own lines, byte for byte, never a rebuild of them, so the dead-session keep is exactly the keep it always was (a drift whose timestamp runs backwards in file order is still logged)
+  else
+    while read -r kind val at n; do   # the incoming lines are LAST, so `<=` hands a tie to the incoming transcript
+      [[ "$at" =~ ^[0-9]+$ ]] || continue
+      case "$kind" in
+        model|effort)             (( ${acka[$kind]:--1} <= 10#$at )) && { ackv[$kind]=$val; acka[$kind]=$((10#$at)); ackn[$kind]=$n; } ;;
+        drift-model|drift-effort) (( ${drifta[${kind#drift-}]:--1} <= 10#$at )) && drifta[${kind#drift-}]=$((10#$at)) ;;
+      esac
+    done <<<"$out"$'\n'"$inc"
+    # The merged lines come back in the reader's own order (effort, then model, each
+    # drift after its acknowledgements). `>=`: the reader prints a drift from its
+    # acknowledgement's own second, and across two transcripts a same-second drift
+    # is logged and never suppresses. A drift older than its kind's winner is
+    # superseded by it and says nothing.
+    for kind in effort model; do [[ -n "${acka[$kind]+x}" ]] && merged+="$kind ${ackv[$kind]} ${acka[$kind]} ${ackn[$kind]}"$'\n'; done
+    for kind in effort model; do
+      [[ -n "${drifta[$kind]+x}" ]] && (( drifta[$kind] >= ${acka[$kind]:--1} )) && merged+="drift-$kind x ${drifta[$kind]} 0"$'\n'
+    done
+  fi
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
@@ -21378,10 +21429,29 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
     fi
     [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
-  done <<<"$out"
+  done <<<"$merged"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
-    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1 \
-      || for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+    if ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
+      # A LIVE PROMOTION TYPES NOTHING IT WROTE (D-4319, kept under D-4321). The
+      # supervise tick runs the applier right after `_sync_uuid`, and a promoted
+      # field pending against `routeapplied` was typed back into the live pane —
+      # `/effort`, which never reads back, every time. The newest acknowledged
+      # command is what the pane runs (wrong only if a drifted one really changed
+      # the setting, ccd typed after it with no record write, or an incoming read
+      # failed while the incoming transcript held a newer command; the next spawn
+      # heals), so exactly the fields written here are recorded applied, as an
+      # acknowledged apply records them; every other pending field is still typed.
+      # Only a live rotation (an incoming sid): a dead session's keep is followed
+      # by a spawn that composes and stamps its own. RETAINED COST: this stamp
+      # rewrites `routeapplied`, so a class already pending that the pane runs
+      # cannot be confirmed by a sidecar reading from before the rotation
+      # (`_route_readback`), and the applier may type that `/model` once.
+      if [[ -n "$sid" ]]; then
+        for kv in "${sets[@]}"; do [[ "$kv" == --set ]] || _route_applied_set "$id" "${kv%%=*}" "${kv#*=}"; done
+      fi
+    else
+      for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+    fi
   fi
   return 0
 }
@@ -21556,8 +21626,10 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # reading from the stamp's own second cannot be told from the previous
   # process's last render, and it must be strictly later. The stamp is
   # whatever last wrote `routeapplied` — a spawn, an acknowledged apply, a
-  # read-back, the seed — which is stricter than "the last spawn", and safe:
-  # it costs one more render.
+  # read-back, the seed, a live rotation's promotion — which is stricter than
+  # "the last spawn", and safe: it costs one more render. After a promotion's
+  # stamp, a reading from before the rotation cannot confirm a class that was
+  # already pending, so the applier may type that `/model` once until it renders.
   #
   # A READING OF ANOTHER CLAUDE IS NOT THIS PANE'S (review finding 10). The
   # hook names the file after the tmux SESSION, so a second interactive
@@ -22683,10 +22755,10 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
   printf '%s' "$head$what$tail$extra"
 }
 
-_resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227); with an id, the prompt is that row's composed one (D-5237)
+_resume_env() {   # [id] -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227) and its pressure-reap opt-out; with an id, the prompt is that row's composed one (D-5237)
   local prompt="$RESUME_PROMPT"
   [[ -n "${1:-}" ]] && prompt=$(_resume_prompt_for "$1")
-  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$prompt'"
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$prompt' CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1"
   [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
   printf '%s' "$out"
 }
@@ -23160,12 +23232,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # BACKEND, not placement: Remote Control is Claude Code's own protocol and a
   # Codex lane cannot answer it.
   _is_anthropic_backend "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
-  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
-  # non-home-able lane the vars `_resume_env` composes are simply inert (the
-  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
-  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
-  # which only ever names a Claude Code JSONL) fails closed there regardless —
-  # so gating this line would buy nothing and cost a second home-ability check.
+  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: every
+  # supported wrapper (an external-provider shim included) execs Claude Code, so
+  # on a non-home-able lane the RESUME vars `_resume_env` composes reach it too,
+  # and `_redrive_after_spawn` measures that lane's transcript as it does any
+  # other's; its pressure-reap key is deliberately LIVE there as well, so
+  # gating this line would drop both from that lane and buy nothing at all.
   resenv=$(_resume_env "$id")   # D-5237: the prompt names a recent end's cause
   # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
   # `--model` from `class`, and the subagent floor into the SAME `env` line
