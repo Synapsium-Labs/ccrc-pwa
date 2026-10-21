@@ -1,6 +1,6 @@
 # Auto-swap reliability (design)
 
-**Status:** rev 0 (2026-10-21). Written after a read-only investigation and the operator's ruling of the same day, which accepted every recommended decision D1 to D7 (§6, the decision log). It defines no D-numbers; the W1/W2 plan (`docs/superpowers/plans/2026-10-21-auto-swap-reliability-w1-w2.md`) defines D-6180 to D-6185.
+**Status:** rev 1 (2026-10-21; rev 0 plus three read-only reviews, each finding and its outcome in the plan's Review log). Written after a read-only investigation and the operator's ruling of the same day, which accepted every recommended decision D1 to D7 (§6, the decision log). It defines no D-numbers; the W1/W2 plan (`docs/superpowers/plans/2026-10-21-auto-swap-reliability-w1-w2.md`) defines D-6180 to D-6185.
 
 **The request (operator, 2026-10-20, verbatim):**
 
@@ -10,7 +10,7 @@
 
 > "Accept all recommended (Recommended)"
 
-- **Citations** are to `origin/main` `d8cd47658` (session continuity wave 4b, #435, merged 2026-10-21). They name a function, constant or file in `ccd/ccd` or `ccd/ccd-telemetry-keepalive`; this document cites no line numbers. The investigation read `41a08beb0`; every symbol below was re-measured on `d8cd47658`.
+- **Citations** are to `origin/main` `d8cd47658` (session continuity wave 4b, #435, merged 2026-10-21); #1038, merged after it (`27755979e`), touches only `_plat_timeout` in `ccd/ccd`, so every citation holds there. They name a function, constant or file in `ccd/ccd` or `ccd/ccd-telemetry-keepalive`; this document cites no line numbers. The investigation read `41a08beb0`; every symbol below was re-measured on `d8cd47658`.
 - **Measurements** come from three read-only inventories of 2026-10-20 (the code path; the fleet evidence over 2026-10-13 to 2026-10-20 from the swap log, the registry, the limits files and the lifecycle journal; the prior decisions), a synthesis, and an adversarial verification that refuted two of the synthesis's framings (§2.1, §2.6). **[M]** marks a measured figure, **[I]** an inferred one, **[open]** a fact not yet measured. Accounts, lanes and sessions are never named: "an Anthropic account", "a non-Anthropic lane such as a GPT-backed lane", "account-a".
 
 **Date:** 2026-10-21 · **Branch:** `docs/auto-swap-reliability` (cut from `origin/main` `d8cd47658`) · **Issues:** #199 (no revival on another account), #382 (an auto-swap off switch, open), #998 (a stale pool lease fails shut), #684 (auto-swap is never blocked, documented), #1050 (open: an affinity swap waits while the session has background work)
@@ -37,7 +37,7 @@
   5. **Silent stand-downs.** 2 of about 18 workspace limit events were never acted on (41 min and 2 h 48 m) and wrote no log line; six verdicts and five gates return silently.
   6. **No revival on another account** for stopped, hibernated or failed-unit sessions, by ruling (#199). 0 cases measured.
 - **The design (§3), one ruling each:** D5 logs every silent stand-down (first, so the rest is observable); D4 makes pins expire and never hold a session at the ceiling; D3 lets the return home take an ENDED window as servable, staggered per home account; D1 ranks non-Anthropic lanes after every Anthropic account with room (overflow only); D2 moves a session on a non-Anthropic lane sideways to an Anthropic account with **measured** room; D7 makes the keepalive produce a real measurement; D6 keeps "no revival" as it is.
-- **Nothing is blocked.** Every change orders, logs or ends a stand-down; none adds a refusal to the swap path, delays a rescue, or touches `_swap_idle_gate`'s verdict table. Each change that alters a swap decision has its own off marker in the registry, read by ccd with the server down (§7).
+- **Nothing is blocked.** Every change orders, logs or ends a stand-down; none adds a refusal to the swap path, delays a rescue or a ceiling-leave, or touches `_swap_idle_gate`'s verdict table. The only new waits (§3.1) space non-forced moves while the session's account still serves, and fail open. Each change that alters a swap decision has its own off marker in the registry, read by ccd with the server down (§7).
 - **Waves (§5):** W1 = D5, D4, D3, D1, one PR each, in that order. W2 = D2, D7.
 
 ## 1. The problem in numbers
@@ -102,7 +102,7 @@ The only automatic switch is `_auto_swap_check`, called by `cmd_supervise`'s loo
 - **The amplifier.** `_limit_field_to` reads a window whose `ResetAt` has passed, or whose file is older than 5 h (five) or 7 d (seven), as unknown; `_limit_score` then answers "", which ranks at 100. An idle Anthropic account, the one with the most room, therefore ranks worst. Nothing refreshes it (§2.7).
 - **Refuted fix, recorded:** "score on seven when five has ended" (the symmetry quick win) would have changed no choice in the window, and contradicts `_limit_score`'s own documented rule that one known half bounds the truth only from below. It is dropped.
 - **Also measured:** for a class-tagged session (75 of 77 sessions carry `opus`), pass 1 of the loop **skips** any candidate whose seven-day window has ended (`_class_gate` rc 2 → `unmeas++`, `continue`); it is not ranked last, it is invisible. If any other candidate is servable, the skipped ones are never considered.
-- **Bursts leak.** The rescue's spread rule (`RESCUE_SPREAD_WINDOW`, 600 s) pushes later rescues in a burst off targets that earlier rescues took; with the asymmetry, the next-best target is a GPT-backed lane. In one burst of 7 rescues from one account, 3 went to a GPT-backed lane [M].
+- **Bursts leak.** The rescue's spread rule (`RESCUE_SPREAD_WINDOW`, 600 s) pushes later rescues in a burst off targets that earlier rescues took: `_rescue_target`'s spread pass re-calls `_swap_target` with the recent targets in `SWAP_TARGET_SKIP` and takes any rc 0 answer. Once the Anthropic accounts with room are all recent, the next-best target is a GPT-backed lane, whatever the ranking. In one burst of 7 rescues from one account, 3 went to a GPT-backed lane [M].
 
 ### 2.2 Cause 2: the return home freezes on an ended window
 
@@ -115,7 +115,7 @@ The only automatic switch is `_auto_swap_check`, called by `cmd_supervise`'s loo
 ### 2.3 Cause 3: no sideways move while home stays blocked
 
 - **Where:** `_swap_target`'s same branch. When home fails `_avail` (a weekly block reads 99) and `_avail cur` plus `_class_gate cur` pass, it returns 0 with no output: stay put. The candidate loop runs only when forced or when `cur` fails.
-- **Measured:** 4 of the 8 manual corrections moved a session off a GPT-backed lane to another Anthropic account while home sat at 99% weekly; one of those Anthropic accounts read five 42 and seven 32 at the time of the rescue that had chosen the GPT-backed lane [M].
+- **Measured:** 4 of the 8 manual corrections moved a session off a GPT-backed lane to another Anthropic account while home sat at 99% weekly; one of those Anthropic accounts read five 42 and seven 32 at the time of the investigation [M]; its figure at the rescue is not recorded [open].
 - **Note:** the registry examples first cited for this cause are stopped sessions (verification); the live examples are the manual moves.
 
 ### 2.4 Cause 4: pins switch the return home off with no end
@@ -133,12 +133,12 @@ Places where a session the transcript says is limited is not moved, and nothing 
 |---|---|---|
 | `SWAP_COOLDOWN` after `lastswap` | returns before detection | no |
 | `SWAPBLOCK_COOLDOWN` after a refusal | returns before detection | no (the refusal itself was) |
-| `_session_hard_blocked` → `HARD_BLOCK_NO=unmeasurable` | no verdict on a narrow pane | no (the tick's own narrow note is floored at 30 min) |
+| `_pane_measurable` (the tick's narrow-pane return; `HARD_BLOCK_NO=unmeasurable` is not reachable from the tick, which returns first) | no verdict on a narrow pane | floored at 30 min by `_pane_narrow_note`, with no evidence |
 | `HARD_BLOCK_NO=carried-in` | a banner older than this process and the last swap | no |
 | `HARD_BLOCK_NO=running` / `stalepress` | mid-turn, or a stale press within its grace | no |
 | `HARD_BLOCK_NO=negative` | the cached transcript verdict says no; a carried-in transcript row also caches as `negative` | no |
 | `HARD_BLOCK_NO=draft` | `_pane_box_has_content` sees text in the input box | no |
-| the rescue's `_avail "$target" \|\| return 0` | a target chosen, then dropped | no |
+| the shared `_avail "$target" \|\| return 0` (rescue and affinity, before the `hard_blocked` split) | a target chosen, then dropped | no |
 | the affinity arm's `.hold`, `.woke` cooldown, `_swap_idle_gate` | a move ccd wanted, not made | no |
 | `_tick_undecidable` | rc 2 to 5 | once per episode, never again |
 
@@ -155,6 +155,8 @@ Places where a session the transcript says is limited is not moved, and nothing 
 
 - **Where:** `ccd/ccd-telemetry-keepalive`. Its turn is `<wrapper> -p <prompt> --output-format json`. A `-p` turn renders no statusline, and the only writer of `~/.cc-limits/<account>.json` is `ccd/statusline-command.sh` (from the statusline input's `rate_limits`). The turn exits 0 and the limits file does not move: `no-render`, counted as a failure, backed off up to 24 h.
 - **And it skips accounts it should measure:** `_ka_session_on` treats a session with a supervisor heartbeat under `KA_SESSION_FRESH` (120 s) as occupied, and every supervised session heartbeats, idle or not. An idle session renders no statusline either, so its account goes unmeasured.
+- **Why it skips them, as written:** the script's header refuses "a turn on an account a registered session is sitting on — two `claude` processes under one CLAUDE_CONFIG_DIR is a hazard this script will not take", and `_ka_session_on`'s rationale says the heartbeat half also covers `restarting` (a dead pane whose supervisor is about to respawn `claude`). The skip is a deliberate safety rule, not an oversight; any change to it must answer that hazard (§3.7).
+- **And a `-p` turn carries no figures today:** `--output-format json` returns only the final result object, and this repo's account-health work records that the read-only usage endpoint answers 403 for setup tokens. Whether a streamed `-p` turn carries both windows is not measured [open].
 - **Measured:** 0 `refreshed` outcomes; one account had an rc 0 turn and its limits file was still 14.4 h old [M].
 - **What it feeds:** cause 1's amplifier (idle accounts rank 100) and cause 2's deadlock (home stays unmeasured).
 
@@ -189,77 +191,87 @@ Every rule below changes one decision in ccd, at the place §2 names, and keeps 
 
 **What no rule here changes:** detection (`_session_hard_blocked`'s verdicts and the pane regexes, D-2364); the rescue's act-time gate (`_swap_rescue_act_gate`); `_rescue_policy`'s waits; `_swap_idle_gate`'s verdict table (consolidation §7's pin; #1050 is its own change); `_avail`'s eligibility, unknown read as free; `_limit_score`'s rule; `cmd_swap`'s carry and refusal set; `_pool_ok`, `_account_ok` and the crossing record; new-session placement (`_ws_least_loaded`, `_place_for_class`, the server's `projectHome`, K15's parity pin).
 
-### 3.1 The per-home stagger, shared by D4, D3 and D2
+### 3.1 The affinity guards, shared by D4, D3 and D2: a per-account and a fleet-wide stagger, and the draft
 
-A non-forced move that brings sessions back to one account at once is the only new herd risk in this design (§2.2). One helper guards it:
+A non-forced move that brings sessions back at once is the only new herd risk in this design (§2.2), and the new moves land on idle sessions, where a half-typed message is most likely. The guards apply to one class of move only.
 
-- **The rule:** an affinity move (never a rescue) whose target is a given account is taken only when no other affinity move onto that account was dispatched in the last `HOME_RETURN_SPACING` seconds. The plan sets it at 180 s, above `SWAP_JITTER` (120 s), so two dispatched moves onto one account never run inside one jitter window.
-- **Atomic across supervisors:** each session has its own supervisor process, so the slot is an exclusive create (one file per target account and spacing bucket in the registry; exactly one tick wins a bucket). A tick that loses writes nothing and tries again on a later tick; the session stays on a working account meanwhile.
-- **What it never does:** delay or refuse a rescue (a hard-blocked session never reads it), refuse a manual swap, or touch `cmd_swap`. It orders automatic arrivals; it blocks no switch.
-- **Bound:** N sessions waiting on one home's reset go home over N × 180 s (four sessions: 12 minutes), each through the idle gate as today.
+- **Which moves:** a non-forced move while `cur` still serves: the return home (D4's pin-expiry release, D3's ended window, today's return), and the sideways move (D2). In ccd's words, `cur_serves` holds: `_avail` passes on `cur`, `_class_gate` on `cur` answers rc 0, the move is not `auto-pool`, and the session is not hard-blocked. **Never a rescue, never a ceiling-leave**: a session whose `cur` fails `_avail` pays overage on every turn while it waits, so a leave is never delayed (switching is never blocked).
+- **The per-account slot:** such a move onto a given account is taken only when no other such move onto that account was granted in the last `HOME_RETURN_SPACING` seconds (180 s, above `SWAP_JITTER`'s 120 s, so two moves onto one account never run inside one jitter window). The slot is one file per target holding the last grant's epoch, read and written under ccd's existing `flock` primitive; the test is `now − last ≥ HOME_RETURN_SPACING`, a sliding rule, so no two grants are ever closer than the spacing.
+- **The fleet-wide slot:** beside it, one fleet-wide file under the same lock, `AFFINITY_FLEET_SPACING` (30 s: at most two such dispatches a minute across the fleet), taken only after the per-account slot is won. It bounds the cross-account burst: a deploy that makes every frozen or parked session eligible at once, legacy pins expiring together, or a keepalive pass that measures several homes in one minute.
+- **The draft:** after `_swap_idle_gate` passes, such a move stands down when `_pane_box_has_content` sees text in the input box (one `capture-pane -e`, on the dispatch path only). `_swap_idle_gate`'s verdict table is unchanged (consolidation §7). A draft typed during the jitter, at the act, is an operator question that goes with #1050's change to the idle gate (§5.3).
+- **Atomic across supervisors, and fail open:** each session has its own supervisor process, so the slots are taken under the lock. A tick that loses writes D5's floored `stand-down stagger` and tries again later; the session stays on a working account meanwhile. If the lock or the write fails with anything other than "held" (a full volume, a missing directory), the move is taken and one floored `stand-down stagger-unwritable` line is written: a broken slot never freezes the return home.
+- **What it never does:** delay or refuse a rescue or a ceiling-leave (neither reads the slots), refuse a manual swap, or touch `cmd_swap`. It orders automatic arrivals; it blocks no switch.
+- **Bound:** N waiting moves leave over at least N × `AFFINITY_FLEET_SPACING` fleet-wide, and over at least N × `HOME_RETURN_SPACING` onto one account (four sessions on one home: 12 minutes), each through the idle gate as today.
+- **Off marker:** `$REG/swap-stagger-off` restores today's undelayed dispatch (both slots and the draft stand-down).
 
 ### 3.2 D5: log every silent stand-down (first)
 
-**The rule.** Each site in §2.5's table writes **one swap-log line per episode**, re-logged at a floor, when there is evidence of a limit; nothing else changes.
+**The rule.** Each site in §2.5's table, except `negative`, writes **one swap-log line per episode**, re-logged at a floor, when its trigger holds; nothing else changes.
 
-- **One line form:** `stand-down <id>: <reason> [evidence=<pane|banner|transcript|carried-in|none>] [banner-outside-tail=<yes|no>]`, with the reason one of `cooldown`, `swapblocked`, `unmeasurable`, `carried-in`, `running`, `stalepress`, `draft`, `target-unavailable`, `hold`, `woke`, `idle-gate`. An episode is keyed on the reason word in a registry field beside `.tickstuck`; a decided tick clears it, as `_tick_decided` clears `.tickstuck`.
-- **Evidence, cheaply:** on a silent-exit path only (never on the steady-state tick), at most once per floor per session, ccd asks the transcript arm (`_limit_dated`) whether the newest real row is a limit row of this process (`transcript`), an older one (`carried-in`) or neither (`none`). A cooldown or stand-down with `evidence=none` and no pane evidence writes nothing: the log stays about limits.
-- **The dialog hypothesis:** on the same floored path, `banner-outside-tail` says whether `_pane_hard_blocked` or `_pane_limit_banner` match the **whole** visible pane while they did not match its `tail -8`. That answers §2.5's fingerprint directly.
-- **The transcript cache:** a fresh scan that finds a carried-in row (`_limit_dated` rc 3) records `carried-in` as the stand-down reason instead of `negative`; the cached verdict's value (0) and its reuse are unchanged.
+- **One line form:** `stand-down <id>: <reason> [evidence=<pane|banner|transcript|carried-in|none>] [banner-outside-tail=<yes|no>]`, with the reason one of `cooldown`, `swapblocked`, `carried-in`, `running`, `stalepress`, `draft`, `target-unavailable`, `hold`, `woke`, `idle-gate`, `stagger`, `stagger-unwritable`. `negative` is not logged: it carries no limit evidence, and its carried-in case is relabelled `carried-in` (below). The narrow pane keeps its own line, `_pane_narrow_note`, which gains the `evidence=` word.
+- **Two triggers, by arm.** Limit-arm sites (the two cooldowns, the `HARD_BLOCK_NO` words, `target-unavailable` when `hard_blocked` is set) log only with evidence other than `none`; at the cooldown and `swapblocked` sites only `transcript` counts. Affinity-arm sites (`.hold`, `.woke`, the idle gate, the stagger, `target-unavailable` on the affinity path) log only when ccd had a target other than `cur`, the condition `pin-hold` uses; evidence is not asked.
+- **The episode:** keyed on the reason word in a registry field `standdown` (`<epoch> <reason>`). It is **not** cleared by `_tick_decided`, which runs on the very cooldown and policy returns that write these lines. It ends when the reason word changes or when a tick reaches `_dispatch_swap`; it is re-logged once older than the floor. `.tickstuck` keeps `_tick_decided`. The steady-state tick writes nothing.
+- **Evidence, cheaply:** on a limit-arm silent exit only (never on the steady-state tick, never on `running`, which has its own answer), ccd asks the transcript reader `_limit_read` (cached by the transcript's date, and writing no `carried-in` note, unlike `_limit_dated`) whether the newest real row is a limit row of this process (`transcript`), an older one (`carried-in`) or neither (`none`). The answer, `none` included, is cached in its own field `standdownprobe` (`<epoch> <answer>`) for `TRANSCRIPT_ARM_INTERVAL`, so a limit that arrives five minutes into a cooldown is logged within 30 s, and the probe runs at most once per interval per session. Only the log line is floored.
+- **The dialog hypothesis:** on the same path, once per episode, `banner-outside-tail` says whether `_pane_hard_blocked` or `_pane_limit_banner` match the **whole** visible pane while they did not match its `tail -8`. The tick keeps no whole-pane capture (its read is `capture-pane … | tail -8` in one pipeline), so this is the draft check's `-p -e` capture where `_session_hard_blocked` already made it, otherwise one extra `capture-pane -p` on this floored path only, counted in the budget (§4). That answers §2.5's fingerprint directly.
+- **The transcript cache:** a fresh scan that finds a carried-in row (`_limit_dated` rc 3) records `carried-in` as the stand-down reason instead of `negative`; the cached verdict's value (0) and its reuse are unchanged. `cmd_swap`'s act-time rescue gate already handles `negative|carried-in` in one arm, so the cancel and its restore are unchanged; only the `rescue-cancel` line's word changes.
 - **`tick-undecidable` gains a re-log floor:** the same field is logged again once the episode is older than the floor, with its age, so a frozen session stays visible in the swap log and the PWA's swap history.
-- **The affinity arm's silent exits** (`.hold`, `.woke`, `_swap_idle_gate`) log only when ccd had a target other than `cur`, the same condition `pin-hold` uses.
-- **The decision lines gain one word:** `auto-rescue` and `auto-home` lines end with `lane=anthropic|overflow` (from `_is_anthropic_backend` on the target), so §8 counts landings without re-deriving the roster. The measurement scripts' `auto-rescue` pattern already accepts a suffix.
-- **Floors:** `COMPACT_NOTE_FLOOR` (1800 s), by reference, never a second literal.
-- **What it does not change:** no decision. It is not behind a marker: switching it off would only hide lines. The steady-state tick gains no fork (the tick-diet budget fixtures pin it).
+- **The decision lines gain one word:** `auto-rescue` and `auto-home` lines end with `lane=anthropic|other` (`anthropic` when `_is_anthropic_backend` holds for the target, `other` otherwise; "other" is not `_swap_target`'s non-home-able "overflow" bracket), so §8 counts landings without re-deriving the roster. The measurement scripts' `auto-rescue` pattern already accepts a suffix.
+- **Floors:** `COMPACT_NOTE_FLOOR` (1800 s) for the lines, `TRANSCRIPT_ARM_INTERVAL` (30 s) for the probe, by reference, never a second literal.
+- **What it does not change:** no decision. It is not behind a marker: switching it off would only hide lines. The steady-state tick gains no fork (the tick-diet budget fixtures pin it); the `busy`, `cooldown` and `narrow` fixtures, which are these silent exits, gain at most one probe per `TRANSCRIPT_ARM_INTERVAL`, and each PR names their measured delta.
 - **Then:** the narrow-pane gate (`_pane_measurable` suppressing the rescue) is decided by the operator only after a measured period of these lines (§6, D5's second half). Nothing here changes it.
 
 ### 3.3 D4: a manual pin expires, and never holds a session at the ceiling
 
 **The rule.**
-- **What `cmd_swap` records:** on the operator path, the pin records the account it names **and an expiry**: the next reset of the home window that was blocked when the pin was set (the later `ResetAt` of the home windows at or above `SWAP_CEILING`, read by `_limit_field_to`'s source), bounded by the set time plus 24 h; when no home window was blocked (a deliberate move while home served, or a pin set on home itself), the set time plus 24 h. The reading of "or after 24 h" as "whichever comes first" is recorded in §6.1; it loses nothing, because an expired pin hands the session to the affinity arm, which returns home only when home serves.
-- **When a pin ends:** `_swap_pin_tick` ends a pin whose expiry has passed (`pin-expired <id>: pinned to <account> until <reset|24h>`), as it ends one the truth has left (D-3099).
-- **A pin from before this change** (the account name alone) is given the set time plus 24 h from the first tick that reads it, and rewritten in the new form. The 17 standing pins therefore expire about a day after the release reaches each supervisor, and §3.1's stagger spaces their returns home.
-- **The ceiling:** `_swap_pinned` no longer stands the affinity arm down when the pinned account fails `_avail` (a window at or above `SWAP_CEILING`, the condition the ceiling-leave itself reads). The ruling names the 5-hour ceiling; `_avail` is the predicate the ceiling-leave already uses for both windows, so the rule covers the 5-hour case and adds no third predicate. The pin itself stays; when the account recovers, it holds again until it expires.
+- **What `cmd_swap` records:** on the operator path, the pin `$REG/<id>.swappin` stays **byte-identical** (the account name alone), and a separate registry field `swappinexp` records its expiry as `<epoch> <reset|ttl>`: the next reset of the home window that was blocked when the pin was set (the later raw `ResetAt` of the home windows at or above `SWAP_CEILING`, read by a raw reset reader over `_limit_field_to`'s source, since `_limit_field_to` blanks a passed reset), bounded by the set time plus 24 h; when no home window was blocked (a deliberate move while home served, or a pin set on home itself), the set time plus 24 h. Keeping the pin's value means every older reader (`_swap_pinned` and `_swap_pin_tick` compare the whole value), a supervisor still on the older code during a deploy, and a revert all keep holding new pins; a revert leaves only a stray field. The reading of "or after 24 h" as "whichever comes first" is recorded in §6.1; it loses nothing, because an expired pin hands the session to the affinity arm, which returns home only when home serves.
+- **When a pin ends:** `_swap_pin_tick` ends a pin whose expiry has passed (`pin-expired <id>: pinned to <account> until <reset|ttl>`), as it ends one the truth has left (D-3099). Every site that removes the pin removes `swappinexp` with it: `_swap_pin_tick`, `cmd_swap`'s automatic-path clear, and `cmd_prefer`'s "an explicit home supersedes a pin" clear.
+- **A pin from before this change** (no `swappinexp`) is given an expiry on the first tick that reads it: that time plus 24 h plus an offset from 0 to 24 h derived deterministically from the session id (a hash computed in bash). The deploy sweep restarts every supervisor on one tick, so without the offset all 17 standing pins would expire on one tick a day later, onto many homes at once; with it their releases spread over a further day, and §3.1's fleet-wide slot spaces any that still meet.
+- **The ceiling:** `_swap_pinned` no longer stands the affinity arm down when the pinned account fails `_avail` (a window at or above `SWAP_CEILING`, the condition the ceiling-leave itself reads). The ruling names the 5-hour ceiling; `_avail` is the predicate the ceiling-leave already uses for both windows, so the rule covers the 5-hour case and adds no third predicate. The ceiling-leave then runs; landing elsewhere ends the pin (D-3097's automatic clear); if no account can take the session, the pin holds again once its account recovers, until it expires.
 - **What it does not change:** who mints a pin (D-3097: the operator path only); the rescue's place above the pin; the floored `pin-hold` note (D-3098); a pin ending when the session leaves the account (D-3099).
-- **Off marker:** `$REG/swap-pin-expiry-off` restores today's pin (no expiry; held at the ceiling). The expiry field is still written, so switching back on needs no rewrite.
+- **Off marker:** `$REG/swap-pin-expiry-off` restores today's pin (no expiry; held at the ceiling) by ignoring `swappinexp`. The field is still written, so switching back on needs no rewrite.
 
 ### 3.4 D3: the return home takes an ENDED window as servable, staggered per home
 
 **The rule.**
 - **Where:** `_swap_target`'s non-forced branch for a session not on home, at the home-recovered gate only. When `_class_gate home <class>` answers rc 2 **and** the cause is an ended window, the gate reads it as servable and returns home.
-- **"Ended":** home's limits file carries a seven-day figure whose `sevenResetAt` has passed (a new read-only helper over `_limit_field_to`'s source, one definition). Nothing else counts: a missing file or field, a figure stale by age, and the fable share's staleness (`_serviceable`'s `stale`) keep rc 5 as today.
+- **"Ended":** home's limits file carries a seven-day figure whose `sevenResetAt` has passed (a read-only helper built on D4's raw reset reader, one definition). Nothing else counts: a missing file or field, a figure stale by age, and the fable share's staleness (`_serviceable`'s `stale`) keep rc 5 as today.
 - **Why it is safe:** a window that has reset is, by definition, at or near 0; if the guess is wrong (home was used from elsewhere), the session hits a real limit on home, and the rescue arm evacuates it as it does any limit. This is home-affinity: the session goes where it belongs as soon as its home can serve.
-- **The herd guard:** the move is an affinity move, so it passes `_swap_idle_gate`, `SWAP_JITTER` and §3.1's per-home stagger. Four sessions frozen on one home's reset second go home over about 12 minutes, one at a time.
-- **What it does not change:** the forced (rescue) path, which keeps rc 5 when no candidate is servable and one is unmeasured; the stay-at-home branch (rc 5 there means "stay", which is what happens); the rescue loop's pass-1 skip of seven-ended candidates (§2.1; a separate question for the operator once D5's lines and D1's landings are measured, §5.3).
+- **No ping-pong:** the ended reading applies only when home is not in the session's no-bounce list (`_rescue_history`'s `RESCUE_SKIP_LEFT`: accounts it left blocked within `RESCUE_CHAIN_WINDOW`). A home whose file still reads "ended" after the session hit a real limit there (a limit that wrote no statusline row, a spend limit, use from outside the fleet) keeps rc 5, today's answer, until the window passes; without this the session would bounce home and back every `SWAP_COOLDOWN`. One record, reused.
+- **The herd guard:** the move is a return home while `cur` serves, so it passes `_swap_idle_gate`, `SWAP_JITTER` and §3.1's guards. Four sessions frozen on one home's reset second go home over about 12 minutes, one at a time.
+- **What it does not change:** the forced (rescue) path, which keeps rc 5 when no candidate is servable and one is unmeasured; the stay-at-home branch (rc 5 there means "stay", which is what happens). The rescue loop's pass-1 skip of seven-ended candidates is D1's (§3.5), not D3's.
 - **Off marker:** `$REG/swap-home-ended-off` restores rc 5.
 
 ### 3.5 D1: non-Anthropic lanes are overflow only
 
 **The rule.** In `_swap_target`'s candidate loop, home-able candidates rank in two buckets: first every **Anthropic** candidate (`_is_anthropic_backend`) that is not auth-dead, lowest `_limit_score` first (unmeasured 100, as today); then every other home-able candidate (non-Anthropic lanes and auth-dead accounts), lowest score first (auth-dead 101, as today). Non-home-able candidates (`obest`) stay last. The rule is the same for both passes (class and the degraded class).
 
-- **"With room"** is `_avail`, as the ruling's word and today's eligibility read it: a candidate that reached the ranking already passed `_pool_ok`, `_account_ok`, `_avail` and `_class_gate`. An Anthropic account with an unmeasured score ranks ahead of a GPT-backed lane. That is deliberate: the unmeasured Anthropic accounts are the idle ones (§2.1), and the alternative (only measured accounts beat a GPT-backed lane) would keep most of the magnet until D7 lands. If the guess is wrong, a second rescue follows, bounded by the chain rule (`RESCUE_CHAIN_COUNT`, 3 an hour) and the no-bounce skip (`RESCUE_CHAIN_WINDOW`).
-- **What it reaches:** the rescue (`_rescue_target`, its spread and no-bounce passes included, so a burst spreads across Anthropic accounts before it overflows) and the ceiling-leave (the same loop, forced by `cur` failing).
+- **"With room"** is `_avail`, as the ruling's word and today's eligibility read it: a candidate that reached the ranking already passed `_pool_ok`, `_account_ok`, `_avail` and `_class_gate`. An Anthropic account with an unmeasured score ranks ahead of a GPT-backed lane. That is deliberate: the unmeasured Anthropic accounts are the idle ones (§2.1), and the alternative (only measured accounts beat a GPT-backed lane) would keep most of the magnet until D7 lands. If the guess is wrong on a rescue, a second rescue follows, bounded by the chain rule (`RESCUE_CHAIN_COUNT`, 3 an hour) and the no-bounce skip (`RESCUE_CHAIN_WINDOW`). The ceiling-leave has its own bound, not the chain rule: one hop per `SWAP_COOLDOWN`, each landing then measured by the session itself.
+- **Pass 1's seven-ended skip, within the same reading.** For a class-tagged session (75 of 77), pass 1 skips a candidate whose class gate answers rc 2 (§2.1), so an idle Anthropic account whose seven-day window has ended would never count as having room while a GPT-backed lane with a measured seven passes. Such an account passes `_avail`, so under the reading above it has room: in pass 1 an **Anthropic** candidate whose rc 2 comes from an ended seven-day window (D3's helper), for a non-`fable` class, is ranked in the Anthropic bucket at score 100 instead of skipped. Every other rc 2 (a missing file, a stale figure, a fable share) still skips. It is recorded in §6.1 for the operator to overturn; the same marker restores the skip.
+- **Bursts:** `_rescue_target`'s spread pass takes its answer only when `_is_anthropic_backend` holds for it, or when the unspread answer is itself not Anthropic; otherwise it falls through to the unspread answer. A burst then reuses an Anthropic account with room before it overflows, rather than preferring a GPT-backed lane over a recently taken Anthropic account.
+- **What it reaches:** the rescue (`_rescue_target`, its spread and no-bounce passes included) and the ceiling-leave (the same loop, forced by `cur` failing).
 - **The fallback when the roster cannot say:** `_is_anthropic_backend` reads `CCRC_ANTHROPIC_BACKEND`; when the array is not declared (an older roster projection), it falls back to `_is_home_able`, so every home-able lane reads as Anthropic and the ranking is today's. `ccrc doctor` already warns on that projection. No new reader.
 - **What it does not change:** eligibility (a GPT-backed lane with room is still taken when no Anthropic account has room: switching is never blocked); the stamp that marks a non-Anthropic lane blocked after a rescue off it; `_limit_score`; new-session placement.
-- **Off marker:** `$REG/swap-overflow-rank-off` restores one bucket.
+- **Off marker:** `$REG/swap-overflow-rank-off` restores one bucket, pass 1's skip and the spread pass's first answer.
 
 ### 3.6 D2: a session on a non-Anthropic lane moves sideways to an Anthropic account with measured room (W2)
 
 **The rule.** In `_swap_target`'s non-forced branch for a session not on home, after the home-recovered gate fails and before "cur still works: stay put": when `cur` is not an Anthropic backend (and `CCRC_ANTHROPIC_BACKEND` is declared), choose the Anthropic home-able candidate with **measured** room and return it. Otherwise stay put, as today.
 
-- **Measured room:** `_limit_score` is not empty (both windows known) and below `SWAP_CEILING`; and the candidate passes every gate the loop applies (`SWAP_TARGET_SKIP`, `_pool_ok` against the project's pool state, `_account_ok`, `_avail`, not auth-dead, `_class_gate` rc 0, never rc 2). Lowest score first. One shared candidate predicate with the loop, so the two cannot drift.
+- **Measured room:** `_limit_score` is not empty (both windows known) and at most `SIDEWAYS_MAX_SCORE` (80: it leaves at least `SWAP_CEILING` − 80 points before a ceiling-leave would undo the move; a candidate at 95 would cross 98 within a turn or two and cost two restarts for no lasting room); and the candidate passes every gate the loop applies (`SWAP_TARGET_SKIP`, `_pool_ok` against the project's pool state, `_account_ok`, `_avail`, not auth-dead, `_class_gate` rc 0, never rc 2). Lowest score first. One shared candidate predicate with the loop, so the two cannot drift.
 - **Home affinity:** `.home` is not changed. Once the session is on an Anthropic account the branch no longer applies, so it does not bounce between Anthropic accounts; when home serves again, the existing return home fires (with D3's ended-window reading and the stagger).
 - **Pools:** `_pool_ok` is the boundary, unchanged; a candidate outside the project's pool is never offered; the crossing rules apply as in the loop.
-- **The act:** it is an affinity move: the pin (as D4 leaves it), `.hold`, the `.woke` cooldown, `_swap_idle_gate`, `SWAP_JITTER` and §3.1's stagger (keyed on the target) all apply. Its swap-log verb is `auto-sideways`; `deploy/measure-working-state.py`'s `DECISION_VERBS` gains it.
+- **Telling it apart:** `_swap_target`'s new branch answers rc 7 ("a name, sideways"), which `_rescue_target` passes through and `_auto_swap_check` maps to rc 0 with the verb `auto-sideways`, before its undecidable branch, as it maps rc 6. A ceiling-leave or pool leave to a non-home account keeps `auto-home`/`auto-pool`: a flag set inside `_swap_target` could not tell them apart, because the tick reads its answer through a command substitution.
+- **The act:** it is an affinity move: the pin (as D4 leaves it), `.hold`, the `.woke` cooldown, `_swap_idle_gate`, `SWAP_JITTER` and §3.1's guards (keyed on the target) all apply. The dispatch keeps `CCD_SWAP_ARM=affinity`, so the act-time re-check in `cmd_swap` (D-5240: `_swap_idle_gate` again after the jitter, a requeue if busy) applies unchanged; its cause rides a separate dispatch word, `CCD_SWAP_WHY=sideways`, read only by `_swap_end_cause` (`swap-auto-sideways`) and `_resume_prompt_for`. No new `CCD_SWAP_ARM` value exists. Its swap-log verb is `auto-sideways`; `deploy/measure-working-state.py` gains it in `DECISION_VERBS` and a `sideways` kind, and `shared/api.ts`'s end-cause map gains one additive word, `swap-auto-sideways` (server lane, deployed after the agent lane).
 - **The cost, stated:** an episode costs up to two restarts (sideways, then home), each at an idle turn boundary. The operator already pays both today, by hand.
 - **Off marker:** `$REG/swap-sideways-off`.
 
 ### 3.7 D7: the keepalive produces a real measurement (W2)
 
 **The rule.**
-- **Occupancy:** `_ka_session_on` no longer counts a supervisor heartbeat as occupied. An account counts as occupied only when a session on it is mid-turn (its status reads busy), because only a turn renders a statusline. The live-pane-without-heartbeat answer and the fail-shut unmeasurable answer are unchanged.
-- **The measurement:** a keepalive turn must end with the account's limits file advanced through the one writer, `statusline-command.sh`. Step 0 of the task measures which of three sources does this, smallest first: (a) a field of the `-p` JSON result that carries the rate-limit windows, fed to the writer; (b) the statusline command run against the turn's own output; (c) a short interactive turn on a private tmux socket (never the fleet's server) with the statusline configured, ended after the first write. A source that cannot produce `rate_limits` is not used; the census says `no-render` as today.
-- **No herd:** the keepalive keeps its lock, its one-account-at-a-time pass, its per-account backoff and `CCRC_KEEPALIVE_FRESH`; no supervisor is touched; the credential handling (never in argv, never echoed) is unchanged.
+- **The measurement comes first.** A keepalive turn must end with the account's limits file advanced through the one writer, `statusline-command.sh`, which needs `rate_limits.five_hour` and `rate_limits.seven_day` (utilisation and reset) as input. One operator-measured yes/no decides the source: on one idle setup-token lane, does `-p --output-format stream-json --verbose` emit a rate-limit event carrying utilisation and a reset epoch for **both** windows? If yes, the keepalive builds `{"rate_limits":{"five_hour":{…},"seven_day":{…}}}` from that event and pipes it to `statusline-command.sh` under the account's `CLAUDE_CONFIG_DIR` (still one writer). If no, D7's measurement is parked under a departure, and a short interactive turn (a full Claude Code start per account: hooks, onboarding and trust prompts) goes back to the operator as its own design question. Running the statusline command against a `-p` turn's output is not a source (that output has no `rate_limits`), and the read-only usage endpoint is ruled out (403 for setup tokens, §2.7).
+- **Occupancy, and the one-config-dir hazard.** The keepalive refuses a second `claude` under one `CLAUDE_CONFIG_DIR` (§2.7). D7's "a heartbeat is never occupied" meets that refusal, so the rule is: an account is occupied iff some session on it is mid-turn (a parity copy of `_ws_status`'s busy reading, pinned by the freshness-parity suite), or its pane is dead while its heartbeat is fresh (`restarting`: `claude` is about to respawn), or liveness is unmeasurable (fail shut). A live idle pane, supervised or not, reads clear **only** after the task's Step 0 has measured that a turn beside an idle interactive session under one config dir is safe (credential refresh and rotation on setup-token lanes; the shared config and history files; how many fleet sessions already share a config dir), the operator has confirmed it, and the keepalive's header rule is amended in the same commit. Until then every live pane stays occupied, as today.
+- **They land together or not at all.** The occupancy change adds turns; without a source that yields `rate_limits` those turns would end `no-render`, spend with no measurement. So neither behaviour commit lands without the other.
+- **No herd:** the keepalive keeps its lock, its one-account-at-a-time pass, its per-account backoff and `CCRC_KEEPALIVE_FRESH`; no supervisor is touched; the credential handling (never in argv, never echoed) is unchanged. A pass that measures several homes in one minute makes their sessions eligible together; §3.1's fleet-wide slot spaces them.
 - **Off switch:** the keepalive's existing pass-level switches. The occupancy change has its own off marker, `$REG/keepalive-heartbeat-occupied`, restoring the heartbeat rule.
 
 ### 3.8 D6: no revival on another account, kept
@@ -282,19 +294,19 @@ A non-forced move that brings sessions back to one account at once is the only n
 | This design | Owner (consolidation spec) | Reuses | New |
 |---|---|---|---|
 | D5 stand-down lines | ccd's tick, which stays bash (§5.13); the swap log is ccd's | `_tick_undecidable`'s episode shape, `_pane_narrow_note`'s floor, `_limit_dated`, `_pane_hard_blocked`, `_pane_limit_banner` | one note helper and its episode field; a re-log floor |
-| D4 pin expiry | ccd's swap path (§7's pin covers its refusal set; unchanged) | D-3097 to D-3099, `_swap_pin_tick`, `_avail` | an expiry in the pin's value |
-| D3 ended window | K15: `_swap_target` stays ccd's | `_class_gate`, `_serviceable`, `_limit_field_to`'s source | one read-only "window ended" helper |
-| D1 overflow ranking | K15: `_swap_target`'s walk; `_limit_score` is the shared score and is not edited | `_is_anthropic_backend` (its roster fallback) | a second bucket in the loop |
-| D2 sideways | K15, the same walk | the loop's gates, as one predicate | one branch in the non-forced arm; the `auto-sideways` word |
-| Stagger | ccd's swap path | ccd's registry and its atomic-create idiom | one helper |
+| D4 pin expiry | ccd's swap path (§7's pin covers its refusal set; unchanged) | D-3097 to D-3099, `_swap_pin_tick`, `_avail`, `_limit_pick_to` | a `swappinexp` field beside an unchanged pin; one raw reset reader |
+| D3 ended window | K15: `_swap_target` stays ccd's | `_class_gate`, `_serviceable`, D4's raw reset reader, `_rescue_history` | one read-only "window ended" helper |
+| D1 overflow ranking | K15: `_swap_target`'s walk; `_limit_score` is the shared score and is not edited | `_is_anthropic_backend` (its roster fallback), D3's helper | a second bucket in the loop; the spread pass's Anthropic preference |
+| D2 sideways | K15, the same walk | the loop's gates, as one predicate | one branch in the non-forced arm (rc 7); `auto-sideways`; `CCD_SWAP_WHY` |
+| Affinity guards | ccd's swap path | ccd's registry, its `flock` primitive, `_pane_box_has_content` | one helper, two slots, the draft stand-down |
 | D7 keepalive | the keepalive (a systemd timer; K11: timers stay systemd) | the writer `statusline-command.sh`, the census | the occupancy rule; the measured source |
-| Off markers | K12's box markers ("readable with the server down") | the `reclaim-paused` idiom (`-e`/`-L` test) | five marker names |
+| Off markers | K12's box markers ("readable with the server down") | the `reclaim-paused` idiom (`-e`/`-L` test) | six marker names |
 
-- **Consolidation §7, held:** no rule adds a gate, refusal, node call or server dependency to `_auto_swap_check`, `_swap_idle_gate`, `_swap_target`, the pool grammar, the strand path, `cmd_swap`, `swap-self` or the swap routes. Each changes **which** account a non-blocked move picks, **when** a pin stands, or **what** is logged; the swap path's refusal set and `_swap_idle_gate`'s verdict table are unchanged, and each PR's characterization pins prove it.
+- **Consolidation §7, held:** no rule adds a refusal, node call or server dependency to `_auto_swap_check`, `_swap_idle_gate`, `_swap_target`, the pool grammar, the strand path, `cmd_swap`, `swap-self` or the swap routes, and no rule adds a gate to the rescue or the ceiling-leave. The only new waits are §3.1's affinity guards, which order non-forced moves while `cur` still serves, have their own off marker, and fail open. Each rule changes **which** account a non-blocked move picks, **when** a pin stands or a return is taken, or **what** is logged; the swap path's refusal set and `_swap_idle_gate`'s verdict table are unchanged, and each PR's characterization pins prove it.
 - **K8 (the pane grammar):** D5 adds no pattern; it reuses `_pane_hard_blocked` and `_pane_limit_banner` over a wider capture. If D5's lines confirm the dialog hypothesis, the fix is a K8 corpus row plus a detection change, a later ruling.
 - **K3/K4:** `_swap_idle_gate` stays out of both; D2 calls it as is. #1050 (open) adds a background-work wait to it; D2 rebases onto it when it lands.
-- **Lanes:** W1 and D2 are **ccd only** (`ccd/ccd`, its tests, `deploy/measure-working-state.py`'s verb list); D7 is the keepalive script and its tests. No server, agent or PWA byte; no `FLEET_PROTO` bump; no restart or roll is added. Every release deploys agent lane first.
-- **The tick budget:** the steady-state tick (no stand-down, no move) gains no fork in any wave; `ccd-tick-budget.test.ts` holds it.
+- **Lanes:** W1 is **ccd only** (`ccd/ccd` and its tests). D2 is ccd plus `deploy/measure-working-state.py`'s verb list and kind, and one additive end-cause word, `swap-auto-sideways`, in `shared/api.ts` (server lane, deployed after the agent lane). D7 is the keepalive script and its tests. No other server, agent or PWA byte; no `FLEET_PROTO` bump; no restart or roll is added. Every release deploys agent lane first.
+- **The tick budget:** the steady-state tick (no stand-down, no move) gains no fork in any wave; `ccd-tick-budget.test.ts` holds it. D5's silent-exit fixtures (`busy`, `cooldown`, `narrow`) gain at most one probe per `TRANSCRIPT_ARM_INTERVAL` and the floored whole-pane capture, each delta measured and named in the PR body.
 
 ## 5. Waves
 
@@ -303,20 +315,22 @@ Every PR lands its characterization pins of today's swap decisions first, keeps 
 ### 5.1 W1: observe, then unfreeze, then re-rank (four PRs, in this order)
 
 1. **D5, stand-down logging.** Smallest and safest: no decision changes. It goes first so every later change is observable, and so the operator's narrow-pane decision rests on counts.
-2. **D4, pin expiry and the ceiling.** Local to the pin. Lands the §3.1 stagger, which D4 needs first (the 17 standing pins expire within a day of each other).
-3. **D3, the ended window.** One gate, one helper, reusing the stagger.
+2. **D4, pin expiry and the ceiling.** Local to the pin. Lands §3.1's guards, which D4 needs first: the deploy sweep reads every legacy pin on one tick, so without the hashed offset and the fleet-wide slot all 17 would release on one tick a day later.
+3. **D3, the ended window.** One gate, one helper, reusing the guards and the no-bounce record.
 4. **D1, overflow ranking.** The widest change (every rescue and ceiling-leave), last, with D5's `lane=` word already counting its baseline.
 
 ### 5.2 W2: move and measure
 
 5. **D2, the sideways move.** After D1, so a sideways move and a rescue rank Anthropic accounts the same way; after #1050 if it is open.
-6. **D7, the keepalive's measurement.** Independent of D2's files. It makes D2's "measured room" and D3's home figure available more often, so it may land first if ready.
+6. **D7, the keepalive's measurement.** Independent of D2's files. It makes D2's "measured room" and D3's home figure available more often, so it may land first if ready. Its first step is one operator measurement (§3.7); with a "no", the measurement is parked and nothing in D7 lands.
 
 ### 5.3 After W2: the operator's next questions (not ruled here)
 
-- The narrow-pane gate (D5's second half), from D5's `unmeasurable` lines with evidence.
-- The rescue loop's pass-1 skip of seven-ended candidates (§2.1), from D1's landings and D5's lines.
+- The narrow-pane gate (D5's second half), from `_pane_narrow_note`'s lines with evidence.
 - The rate-limit dialog (§2.5), from `banner-outside-tail` counts; a detection change is a K8 row.
+- A draft typed during the jitter, at the act (§3.1): whether `cmd_swap`'s act-time affinity re-check should also stand down on a draft, decided with #1050's change to the idle gate.
+- D7's interactive source, if the stream-json measurement answers no (§3.7).
+- Whether a turn beside an idle interactive session under one config dir is acceptable (§3.7), from D7's Step 0.
 
 ### 5.4 Sequencing at a glance
 
@@ -378,23 +392,34 @@ All seven were ruled on 2026-10-21; each took its recommended option. The option
 **Readings this design records** (each is the plan's to apply, and the operator's to overturn):
 - D4's "(or after 24 h)" is read as "whichever comes first" (§3.3).
 - D4's "at its 5-hour ceiling" is applied through `_avail`, the ceiling-leave's own predicate, which covers both windows (§3.3).
-- D1's "with room" is `_avail`, so an unmeasured Anthropic account counts (§3.5); D2's "measured room" is both windows known and below the ceiling (§3.6).
+- D1's "with room" is `_avail`, so an unmeasured Anthropic account counts (§3.5); for a class-tagged session, an Anthropic account whose seven-day window has ended is ranked (at 100) in pass 1 rather than skipped, so it counts too; and the spread pass never prefers a non-Anthropic lane over a recently taken Anthropic account with room (§3.5).
+- D2's "measured room" is both windows known and a score at most `SIDEWAYS_MAX_SCORE` (80), not merely below the ceiling (§3.6).
+- D3's ended window is not read as servable for a home the session left blocked within `RESCUE_CHAIN_WINDOW` (§3.4).
+- D4's pin is kept unchanged and its expiry lives in a separate field, so a revert or a mixed-version deploy never drops a pin (§3.3); a legacy pin's expiry is spread by a hashed offset (§3.3).
+- The ruling's "no herd" is applied to the new affinity moves through §3.1's per-account and fleet-wide slots and the draft stand-down; ceiling-leaves and rescues are exempt because switching is never blocked.
+- D7's "a heartbeat is never occupied" meets the keepalive's refusal of a second `claude` under one `CLAUDE_CONFIG_DIR`. The design keeps every live pane and every restarting row occupied until D7's Step 0 measures that a concurrent turn beside an idle interactive session under one config dir is safe (credential refresh and the shared config and history files) and the operator confirms it; the occupancy commit is gated on that measurement and lands only together with a source that yields `rate_limits` (§3.7).
 - The ruling's first wave is "D5 + D4 + D3 + D1, each its own PR, red-first, switching never blocked"; §5.1 orders them smallest and safest first.
 
 ## 7. Risks and rollback
 
 | Risk | Guard | Rollback without a deploy | Rollback |
 |---|---|---|---|
-| A log flood from D5 | one line per episode; the floor; only with limit evidence; no line on the steady-state tick | — (lines only) | revert D5 |
-| D5 slows the tick | the evidence probe runs only on a silent exit, once per floor per session; the tick-budget fixtures | — | revert D5 |
-| A return-home herd at a reset second or a pin-expiry wave | §3.1's per-account stagger (180 s, exclusive create), `_swap_idle_gate`, `SWAP_JITTER` | `swap-home-ended-off`, `swap-pin-expiry-off` | revert D3 / D4 |
+| A log flood from D5 | one line per episode, not cleared by `_tick_decided`; the floor; only with a trigger; no line on the steady-state tick | — (lines only) | revert D5 |
+| D5 slows the tick | the evidence probe runs only on a limit-arm silent exit, its answer cached for `TRANSCRIPT_ARM_INTERVAL` whatever it is; the tick-budget fixtures, deltas named | — | revert D5 |
+| A return-home herd at a reset second, a pin-expiry wave, or a deploy that makes many sessions eligible | §3.1's per-account slot (180 s) and fleet-wide slot (30 s) under the lock; the legacy pins' hashed offset; `_swap_idle_gate`, `SWAP_JITTER` | `swap-home-ended-off`, `swap-pin-expiry-off` (removing a marker is itself spaced by the fleet slot) | revert D3 / D4 |
+| The stagger freezes the return home (a full volume) | it fails open, with one `stagger-unwritable` line | `swap-stagger-off` | revert D4's stagger commit |
+| An affinity move kills a draft | the draft stand-down after the idle gate (§3.1) | `swap-stagger-off` | revert D4 |
 | D3 sends a session home to a real limit | the rescue arm evacuates on detection; the chain rule | `swap-home-ended-off` | revert D3 |
-| D1 lands a rescue on an Anthropic account near its 5-hour ceiling | `RESCUE_CHAIN_COUNT`, the no-bounce skip, the spread rule | `swap-overflow-rank-off` | revert D1 |
+| D3 returns a session to a home it just left blocked | the no-bounce list (`RESCUE_SKIP_LEFT`) keeps rc 5 for `RESCUE_CHAIN_WINDOW` | `swap-home-ended-off` | revert D3 |
+| D1 lands a rescue on an Anthropic account near its 5-hour ceiling | `RESCUE_CHAIN_COUNT`, the no-bounce skip, the spread rule; a ceiling-leave's own bound is one hop per `SWAP_COOLDOWN` | `swap-overflow-rank-off` | revert D1 |
 | D1 misreads a GPT-backed lane as Anthropic | `_is_anthropic_backend` reads the roster projection; an older projection falls back to today's ranking, and `ccrc doctor` warns | — | — |
-| D2 bounces a session | the branch applies only on a non-Anthropic `cur`; once on an Anthropic account it never fires again; measured room only; the stagger | `swap-sideways-off` | revert D2 |
+| D2 bounces a session | the branch applies only on a non-Anthropic `cur`; once on an Anthropic account it never fires again; measured room at most `SIDEWAYS_MAX_SCORE`; the guards | `swap-sideways-off` | revert D2 |
+| D2 stops a session that turned busy during the jitter | the dispatch keeps `CCD_SWAP_ARM=affinity`, so `cmd_swap`'s act-time idle re-check (D-5240) requeues it | `swap-sideways-off` | revert D2 |
+| D4 releases every pin at once after a revert or mid-deploy | the pin's value is unchanged; the expiry is a separate field older readers ignore | `swap-pin-expiry-off` | revert D4 (the field stays, unread) |
 | D2 crosses a pool | `_pool_ok` and the crossing rules, one shared predicate with the loop | `swap-sideways-off` | revert D2 |
 | D4 drops an operator's deliberate choice too soon | expiry at the blocked window's reset; the session then returns home only when home serves; the operator can pin again | `swap-pin-expiry-off` | revert D4 |
-| D7 spends more per account | the keepalive's lock, backoff, `CCRC_KEEPALIVE_FRESH`, one account at a time; only idle accounts are turned | the keepalive's pass switches; `keepalive-heartbeat-occupied` | revert D7 |
+| D7 spends more per account | the keepalive's lock, backoff, `CCRC_KEEPALIVE_FRESH`, one account at a time; the occupancy change lands only with a source that yields `rate_limits` | the keepalive's pass switches; `keepalive-heartbeat-occupied` | revert D7 |
+| D7 runs a second `claude` under one config dir | live panes and restarting rows stay occupied until Step 0's concurrency measurement passes and the operator confirms | `keepalive-heartbeat-occupied` | revert D7 |
 | Any change blocks a switch | none adds a refusal, a wait on a rescue, or a gate on `cmd_swap`; the characterization pins over the swap path's refusal set and `_swap_idle_gate`'s verdict table | the markers | revert |
 
 **Markers.** Each off marker is an empty file in the registry directory, read by ccd with the `-e`/`-L` test the `reclaim-paused` reads use, on the tick, with the server down. Writing or removing one is an operator act on the box (the ccrc SAFETY rules forbid it to sessions). With no marker, the ruled behaviour is on.
@@ -409,7 +434,7 @@ Measured on the box before W1 and after each PR's deploy, with the same queries 
 |---|---|---|---|
 | Manual swaps a week (a `swap` line with no `dispatch` before it) | 15, plus 3 unattributed | ≤ 6 | ≤ 3 |
 | Of those, corrections off a non-Anthropic lane | 8 | ≤ 2 | 0 |
-| Automatic moves landing on a non-Anthropic lane (`lane=overflow`) | 30 of 52 | only when no Anthropic account had room | same |
+| Automatic moves landing on a non-Anthropic lane (`lane=other`) | 30 of 52 | only when no Anthropic account passed the gates (an ended seven-day window counting as passing, §3.5) | same |
 | Sessions parked on a non-Anthropic lane, and for how long (live, supervised) | parks of 1.9 h to 4.4 days | none longer than one weekly block of home | none longer than one idle turn boundary after an Anthropic account has measured room |
 | `classwindow` undecidable episodes on a return home | 25 lines; parks of about 10 h and 24 h | ≤ 1 per home reset, ended within the stagger | same |
 | Pins standing; `pin-hold` lines a week | 17; about 1,290 | pins ≤ the week's manual swaps; none older than 24 h; none held at the ceiling | same |
@@ -422,3 +447,5 @@ Measured on the box before W1 and after each PR's deploy, with the same queries 
 ## Review log
 
 **rev 0 (2026-10-21).** Written from the three inventories, the synthesis and the adversarial verification, after the operator's ruling; every symbol re-measured on `d8cd47658`.
+
+**rev 1 (2026-10-21).** Three read-only reviews of rev 0 (a ccd-code review, a swap-safety review, a feasibility and gates review) found 7 high, 21 medium and 15 low defects, many shared. Every finding and its outcome is in the plan's Review log. The design changes: D2 keeps the `affinity` arm and carries its cause in `CCD_SWAP_WHY`, and is told apart by rc 7 (§3.6); the pin is unchanged and its expiry is a separate field, legacy expiries hashed apart (§3.3); the stagger becomes a sliding per-account slot plus a fleet-wide slot under the lock, fails open, applies only while `cur` serves, carries a draft stand-down and has its own marker (§3.1); D5's episode is not cleared by `_tick_decided`, its probe is cached whatever it answers, and its triggers are split by arm (§3.2); D3 honours the no-bounce list (§3.4); D1 ranks seven-ended Anthropic candidates in pass 1 and fixes the spread pass's leak (§3.5); D2's room is capped at `SIDEWAYS_MAX_SCORE` (§3.6); D7 names the one-config-dir hazard, keeps live panes occupied until it is measured, takes one stream-json yes/no as its source, and lands both halves together or not at all (§3.7). Symbols re-checked on `27755979e`.
