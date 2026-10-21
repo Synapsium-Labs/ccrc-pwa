@@ -150,20 +150,20 @@ describe('integration finding 7 — one reason vocabulary', () => {
   // compiler is not watching.
 
   it('derives the runtime list from the union rather than restating it', () => {
-    // Twelve. The tenth was `branch-drift`, added when the PR poller stopped
+    // Thirteen. The tenth was `branch-drift`, added when the PR poller stopped
     // asserting a phase for a workspace whose registry and worktree record name
     // different branches (D-178); the eleventh and twelfth are `unavailable`
     // and `truncated`, split off `error` on 2026-08-26 once a 5xx from
     // api.github.com and a body that stopped mid-stream were measured as two
     // distinct, repeatable faults that `error` was describing with one sentence
-    // about a third thing. Every one of them is recognised by the predicate
-    // that both validators now use. If `PR_REASONS` were ever hand-written back
-    // into an array this still passes — which is why the source scan below
-    // exists — but a DERIVED list that has gone out of step with the union is
-    // impossible to construct, and that is the point being recorded. The
-    // literal count is the ONE thing here that a new member touches,
+    // about a third thing; the thirteenth is `cut-short`, split off
+    // `agent-down` in landing-order wave 3c once a read ended by a deadline was
+    // measured as a slow lane, not a dead one. Each is recognised by the
+    // predicate both validators use. A hand-written list would still pass (the
+    // source scan below exists for that); a DERIVED list out of step with the
+    // union cannot be built. The count is the ONE thing a new member touches,
     // deliberately: it is what makes adding one a decision.
-    expect(PR_REASONS).toHaveLength(12);
+    expect(PR_REASONS).toHaveLength(13);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);

@@ -333,6 +333,7 @@ _model_family_class	C1
 _model_class_of	C1
 _operator_choice_read	C3
 _operator_choice_keep	C3
+_operator_choice_promote	C3
 _operator_choice_unmark	C3
 _operator_choice_say	C3
 _route_apply_now	C3

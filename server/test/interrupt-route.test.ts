@@ -99,7 +99,7 @@ const box = async (b: Box) => {
   const guarded = guardRunner(run);
   const cfg = loadConfig({ CCRC_HOME: home });
   const watcher = { currentPending: () => new Set(b.pending ?? []), currentStatuslines: () => new Map(),
-    stop: () => {} } as unknown as FleetWatcher;
+    stop: () => {}, serverCapsSettled: async () => {} } as unknown as FleetWatcher;
   // D-5237: a real feed ring, and a push spy that must never be called — an interrupt is recorded, never pushed.
   const notifyLog = new NotifyLog(path.join(home, 'notify-log.json'));
   await notifyLog.load();

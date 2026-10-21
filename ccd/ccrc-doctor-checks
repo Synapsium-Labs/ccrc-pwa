@@ -7540,9 +7540,11 @@ _check_model-default() {
 # `dead` line per dead ccd pane scope (first seen dead on the sweep's
 # boot-relative clock, verdict, why, server, processes and their pids, memory,
 # sockets, its oldest process, the scope's own age — the header's `up=` dates
-# the two clocks) and an `old` line per process older than a day in
+# the two clocks), a `carry` line per scope the tick could not measure (a reason,
+# a scope-level state `dead|live|unknown`, and a bounded prior clock pair or
+# `none`), and an `old` line per process older than a day in
 # a LIVE pane scope that is neither the pane's own process nor one of its Claude
-# Code's MCP servers. This check lists both, and asks nothing of systemd or
+# Code's MCP servers. This check lists all three, and asks nothing of systemd or
 # /proc itself: two readers deriving "dead" twice is how they come to disagree,
 # and the sweep's verdict is the one its stop acts on. Appended at the END of
 # this file, for `_check_timeout`'s reason (lines above are cited by number).
@@ -7552,6 +7554,17 @@ _check_model-default() {
 # scope, then stop it, or move a service a session still needs into a unit of
 # its own. The sweep itself stops only an INERT scope, and only once the
 # operator has armed it; the record's header says which mode it ran in.
+#
+# THREE ROW KINDS, THREE REMEDIES. The WHOLE record is validated before any
+# remedy is chosen. A line no shape reads (or a carry whose state contradicts its
+# reason, or whose clock is half a pair) means NONE of the record is safe to
+# interpret: the only advice is to let the sweep rewrite it, never to stop a
+# unit. A measured `dead`/`old` row gets the read-then-stop advice, scoped to
+# those measured rows. A `dead` or `unknown` carry gets measurement advice (the
+# sweep re-measures it next tick), never stop advice. A `live` carry (the hop cap)
+# qualifies an otherwise clean PASS, since that scope's processes were not read.
+# A record dated in the future is no current measurement either. Nothing here
+# stops a unit.
 #
 # TWO HALVES OF THE TIMER'S HEALTH. `_check_services` asks whether
 # `ccd-scope-sweep.timer` is active (it is in `known`); this check asks whether
@@ -7563,12 +7576,15 @@ _check_model-default() {
 # it then rewrites nothing, so its record ages by design — never a stopped timer).
 # CCRC_SCOPE_SWEEP_STATE is the test seam, CCRC_CADDY_SYSTEM_FILE's shape.
 _check_scope-sweep() {
-  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale
-  local -a found=()
+  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale nc_dead=0 nc_live=0 nc_unknown=0
+  local -a found=() carry_detail=()
   # Every number this function does ARITHMETIC on is bounded here: a leading zero is an octal error that would abort the check
   # inside `$( … )` (doctor then FAILs it: no verdict line), and an unbounded digit run wraps. The writer re-reads `first=` with the
   # same bound. Each is ONE capture group, so the group numbers below do not move. A line that fails them is counted, never dropped.
   local N='(0|[1-9][0-9]{0,15})' M='(0|[1-9][0-9]{0,15}|\?)' O='(-1|0|[1-9][0-9]{0,15})'
+  local POS='([1-9][0-9]{0,15})' CPU='(0|[1-9][0-9]{0,19})'
+  local F='(none|[1-9][0-9]{0,15})' C='(none|0|[1-9][0-9]{0,19})'
+  local CW='(unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)'
   if [ "${CCD_OS:-linux}" = darwin ]; then
     _dr_skip scope-sweep "pane scopes are a Linux mechanism — no sweep runs on this box"; return 3
   fi
@@ -7593,6 +7609,11 @@ _check_scope-sweep() {
   tick=${BASH_REMATCH[1]} up=${BASH_REMATCH[2]} mode=${BASH_REMATCH[3]}
   now=$(date +%s); age=$(( now - tick ))
   stale=${CCRC_SCOPE_SWEEP_STALE_S:-300}; [[ "$stale" =~ ^[1-9][0-9]{0,8}$ ]] || stale=300   # a non-number would abort the arithmetic below
+  if (( age < 0 )); then
+    _dr_warn scope-sweep "the verdict record is dated in the future, so it is not a current measurement" \
+      "check the box clock; let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
+    return 2
+  fi
   if (( age > stale )); then
     _dr_warn scope-sweep "the verdict record is ${age}s old — the sweep runs every minute, so it has stopped, and its dead-scope report is stale" \
       "systemctl --user status ccd-scope-sweep.timer ccd-scope-sweep.service; journalctl --user -u ccd-scope-sweep.service"
@@ -7600,30 +7621,57 @@ _check_scope-sweep() {
   fi
   while IFS= read -r line; do
     ln=$((ln + 1)); [ "$ln" -eq 1 ] && continue   # the header, read above
-    if [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=${N}\ .*verdict=([a-z-]+)\ why=([^ ]+)\ server=([a-z]+)\ procs=([0-9]+)\ mem=${M}\ sockets=([0-9]+)\ youngest=-?[0-9]+\ oldest=${O}\ age=${N}\ pids=([0-9,]+)$ ]]; then
+    if [[ "$line" =~ ^dead\ (tmux-spawn-[^[:space:]]+\.scope)\ first=${POS}\ cpu0=${CPU}\ verdict=(report|would-stop|held|stopped|stop-failed)\ why=([a-z0-9-]+(,[a-z0-9-]+)*)\ server=(gone|ccd|reused)\ procs=${POS}\ mem=${M}\ sockets=${N}\ youngest=${O}\ oldest=${O}\ age=${N}\ pids=([1-9][0-9]*(,[1-9][0-9]*)*)$ ]]; then
       local -a m=("${BASH_REMATCH[@]}")   # copied first: the `=~` below overwrites BASH_REMATCH
-      n=${m[7]}; [[ "$n" =~ ^[0-9]+$ ]] && n="$(( n / 1048576 )) MiB"
-      found+=("${m[1]} dead $(( (up - m[2]) / 60 )) min, the scope $(( m[10] / 3600 )) h old, its oldest process $(( m[9] / 3600 )) h: ${m[6]} process(es) (pids ${m[11]}), $n, ${m[8]} socket(s), its server ${m[5]}, ${m[3]} (${m[4]})")
+      # 1 unit, 2 first, 3 CPU, 4 verdict, 5 why, 6 final why suffix,
+      # 7 server, 8 procs, 9 mem, 10 sockets, 11 youngest, 12 oldest,
+      # 13 age, 14 pids, 15 final pid suffix. Only bounded values enter arithmetic.
+      n=${m[9]}; [[ "$n" =~ ^[0-9]+$ ]] && n="$(( n / 1048576 )) MiB"
+      found+=("${m[1]} dead $(( (up - m[2]) / 60 )) min, the scope $(( m[13] / 3600 )) h old, its oldest process $(( m[12] / 3600 )) h: ${m[8]} process(es) (pids ${m[14]}), $n, ${m[10]} socket(s), its server ${m[7]}, ${m[4]} (${m[5]})")
       nd=$((nd + 1))
-    elif [[ "$line" =~ ^old\ (tmux-spawn-[^ ]+\.scope)\ pid=([0-9]+)\ age=${N}\ comm=([^ ]*)$ ]]; then
+    elif [[ "$line" =~ ^old\ (tmux-spawn-[^[:space:]]+\.scope)\ pid=${POS}\ age=${N}\ comm=([^[:space:]]*)$ ]]; then
       found+=("${BASH_REMATCH[1]} live: pid ${BASH_REMATCH[2]} (${BASH_REMATCH[4]}) running $(( BASH_REMATCH[3] / 3600 )) h")
       no=$((no + 1))
+    elif [[ "$line" =~ ^carry\ (tmux-spawn-[^[:space:]]+\.scope)\ state=(dead|live|unknown)\ first=${F}\ cpu0=${C}\ why=${CW}$ ]]; then
+      local -a c=("${BASH_REMATCH[@]}")   # 1 unit, 2 state, 3 first, 4 cpu0, 5 why
+      if [[ ("${c[3]}" == none && "${c[4]}" != none) || ("${c[3]}" != none && "${c[4]}" == none) ]]; then bad=$((bad + 1)); continue; fi
+      case "${c[2]}:${c[5]}" in
+        unknown:unit-show|unknown:description|unknown:control-group|unknown:cpu|unknown:scope-start|unknown:procs|unknown:cgroup-dir|unknown:child-cgroup|unknown:server-stat|unknown:server-comm|unknown:tmux-unknown) nc_unknown=$((nc_unknown + 1)) ;;
+        live:parent-hop-cap) nc_live=$((nc_live + 1)) ;;
+        dead:socket-tables|dead:socket-fd|dead:box-stat) nc_dead=$((nc_dead + 1)) ;;
+        *) bad=$((bad + 1)); continue ;;
+      esac
+      carry_detail+=("${c[1]} ${c[2]} (${c[5]})")
     elif [ -n "$line" ]; then
-      bad=$((bad + 1))   # a line under a good header that neither shape reads: said, never PASSed over
+      bad=$((bad + 1))   # a line under a good header that no shape reads: said, never PASSed over
     fi
   done < "$rec"
-  (( bad )) && found+=("$bad line(s) it cannot read")
-  if [ "${#found[@]}" -eq 0 ]; then
-    # "the sweep could measure": a dead scope it could NEVER measure (never seen measurable) gets no line in the record, so an
-    # unqualified "no dead pane scope" could be false.
-    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
-    return 0
+  if (( bad )); then
+    _dr_warn scope-sweep "the verdict record at $rec has $bad line(s) it cannot read, so none of its scope verdicts is safe to interpret" \
+      "let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
+    return 2
   fi
-  local detail="" x
-  for x in "${found[@]}"; do detail="${detail}${detail:+; }${x}"; done
-  _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode): $detail" \
-    "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; a service a session still needs is moved into a unit of its own (systemd-run --user --unit …); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed"
-  return 2
+  local detail="" x carries="${carry_detail[*]}"
+  if (( nd || no )); then
+    for x in "${found[@]}"; do detail="${detail}${detail:+; }$x"; done
+    [[ -z "$carries" ]] || detail="$detail; carried unmeasured: $carries"
+    _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode): $detail" \
+      "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; stop advice applies only to the measured dead rows, never to a carry. A service a session still needs is moved into a unit of its own (systemd-run --user --unit ...); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed"
+    return 2
+  fi
+  if (( nc_dead || nc_unknown )); then
+    _dr_warn scope-sweep "$nc_dead dead and $nc_unknown unknown pane scope(s) were carried unmeasured: $carries" \
+      "let the sweep rewrite the measurement: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
+    return 2
+  fi
+  if (( nc_live )); then
+    # "the sweep could measure": a scope it could NEVER measure carries a clockless row, and a live scope carried at the
+    # hop cap was not read, so an unqualified PASS would claim a reading the sweep did not make.
+    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in measured live ones, excluding $nc_live live pane scope(s) carried unmeasured ($carries) (the sweep's record, ${age}s old, mode $mode)"
+  else
+    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
+  fi
+  return 0
 }
 
 # ── history: the session-history store ────────────────────────────────────
