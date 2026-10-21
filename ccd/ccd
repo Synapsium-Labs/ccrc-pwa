@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f68518c1a9e86b88a58de5d7b05c2d05ee2787b58e75853c30b3e3ea31b2a410
+# ccrc:generated 1 sha256=c6ea4207f7d24d513443b8aa0805029fc050d13ab1d1ab6780e7410e911644ee
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29077,6 +29077,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   #                           A fingerprint input (`branchState=`): a read that did not run mints no token
   RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""   # `_ws_reclaim_record`'s answer for the last path asked
   RECLAIM_REC_MAIN=0        # 1 = that record is the project's MAIN worktree (git lists it first)
+  _WS_REC_WHY=''            # `_ws_reclaim_record`'s reason for its last rc 2 ('' = none)
   RECLAIM_STATUSDIGEST=""   # sha256 of the child's `status --porcelain=v1 -z --untracked-files=all`
   RECLAIM_SECRETS=()        # secret-shaped untracked AND ignored paths — never staged, recorded by path
   RECLAIM_HIDDEN=()         # hidden-flag edits (`_ws_reclaim_hidden`), nested ones as <checkout>/<path>
@@ -29345,11 +29346,15 @@ _ws_reclaim_stash_shas() {   # main branch -> the stash commits attributed to br
   return 0
 }
 
+_WS_REC_WHY=''
 _ws_reclaim_record() {   # main path -> git's worktree record for path, read from $main ONCE: rc 0 with
   #                           RECLAIM_REC_BRANCH ('' = detached) and RECLAIM_REC_HEAD set, and
   #                           RECLAIM_REC_PRUNABLE=1 when git marks that stanza `prunable` (spec §5.5's
   #                           git-record arm reads it); rc 1 when $main
-  #                           records no worktree at path; rc 2 when the list could not be READ
+  #                           records no worktree at path; rc 2 (_WS_REC_WHY) when the list could not be READ,
+  #                           or when, the tree at path standing and git's main record not naming it, a
+  #                           record other than the main one and the string-matched one names it by device
+  #                           and inode (path-identity spec §4.8)
   # `_ws_wt_branch`'s matching (the path as given, or resolved through
   # `_ws_realpath`, so a symlinked ancestor cannot hide a record), with the one
   # distinction it folds: its exit 1 is both "no record" and "the list failed",
@@ -29361,21 +29366,57 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # from, and the tail clears that record. And it says whether the record hit
   # is the MAIN worktree's (RECLAIM_REC_MAIN=1): `worktree list` always prints
   # the main worktree's stanza first, and no child is ever that checkout.
-  local main="$1" path="$2" real line listing m=0 hit=0 n=0
-  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0
-  listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 2
+  # IDENTITY ONLY REFUSES HERE (path-identity spec §4.8, PI10 O2). A hit is read
+  # off the strings alone, and it GRANTS: at the ladder it passes the terminal
+  # `no-worktree-record` and names the branch, and in `_ws_reclaim_owned` it
+  # passes a standing tree, so an `-ef` hit would grant wherever git records a
+  # tree under another spelling. Device and inode therefore never set a hit, a
+  # stanza, or a value read from one. Once the strings are read, and only while
+  # the tree at path stands (`-d`), each stanza path git listed, but the one the
+  # strings matched, is compared with it by `-ef`: git's FIRST stanza, the main
+  # checkout, sets RECLAIM_REC_MAIN=1; any other answers 2, because two records
+  # name one tree, or its only record names it under another spelling, so which
+  # record is its own was never settled. Once git's main stanza names the tree,
+  # by its string or by `-ef`, no later stanza is asked: the tree IS the main
+  # checkout, so the ladder's terminal refusal and the owned check's proof stand
+  # rather than weaken to "never settled". A stanza that cannot be stat'd (a
+  # prunable record, or a locked one on a disk that is not mounted) matches
+  # nothing, so a sibling's gone tree never holds this one; and a path that does
+  # not stand asks nothing (the gone-row arms, the vanished arm and the tail's
+  # step 5 ask only of a proven absence). Every rc 2 sets _WS_REC_WHY: the list
+  # failure's reads "could not read $main's worktree list", which its three
+  # callers continue as they always have.
+  local main="$1" path="$2" real line listing m=0 hit=0 n=0 hitn=0 k
+  local -a wts=()
+  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; _WS_REC_WHY=''
+  listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) \
+    || { _WS_REC_WHY="could not read $main's worktree list"; return 2; }
   real=$(_ws_realpath "$path")
   while IFS= read -r line; do
     case "$line" in
-      "worktree "*) m=0; n=$(( n + 1 ))
+      "worktree "*) m=0; n=$(( n + 1 )); wts+=("${line#worktree }")
                     if [[ "${line#worktree }" == "$real" || "${line#worktree }" == "$path" ]]; then
-                      m=1; hit=1; (( n == 1 )) && RECLAIM_REC_MAIN=1
+                      m=1; hit=1; hitn=$n; (( n == 1 )) && RECLAIM_REC_MAIN=1
                     fi ;;
       "HEAD "*)     (( m )) && RECLAIM_REC_HEAD="${line#HEAD }" ;;
       "branch "*)   (( m )) && RECLAIM_REC_BRANCH="${line#branch refs/heads/}" ;;
       prunable|"prunable "*) (( m )) && RECLAIM_REC_PRUNABLE=1 ;;
     esac
   done <<< "$listing"
+  if [[ -d "$path" ]]; then   # identity is asked only of a tree that stands
+    for (( k = 1; k <= ${#wts[@]}; k++ )); do
+      (( k != hitn )) || continue                            # the stanza the strings matched: already read
+      [[ "${wts[k-1]}" -ef "$path" ]] || continue            # another tree, or a path that cannot be stat'd
+      if (( k == 1 )); then RECLAIM_REC_MAIN=1; continue; fi # git's main checkout, under another spelling
+      (( ! RECLAIM_REC_MAIN )) || continue                   # the tree IS the main checkout: that refusal stands
+      if (( hit )); then
+        _WS_REC_WHY="two of $main's worktree records name the tree at $path, so which one is its record was never settled"
+      else
+        _WS_REC_WHY="$main's worktree records name the tree at $path only under another spelling, so which one is its record was never settled"
+      fi
+      return 2   # identity only refuses: never a hit
+    done
+  fi
   (( hit )) || return 1
   return 0
 }
@@ -29592,7 +29633,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # the child's own (`mine`) from another: a classifier that said "resolvable"
   # while the compared path came from an ambient `cd` placed the row wherever
   # `set -P` or an imported `cd` sent it (measured: reclaimable, a live row
-  # at the child's own path). No `_ws_realpath` answer is read here. A child
+  # at the child's own path). No `_ws_realpath` answer places a row or the
+  # child here: a gone row's arms (`_ws_reclaim_recorded`) read one only through
+  # `_ws_reclaim_record`'s string match, where device and inode may only refuse
+  # (path-identity spec §4.8). A child
   # whose own workdir cannot be resolved has no canonical to compare with, so
   # every row not literally at or below it is collected as for a `//` child
   # (`unmine`) — never compared with a fallback; with no such row there is
@@ -30135,7 +30179,7 @@ _ws_reclaim_recorded_git() {   # id workdir -> rc 0 with _WS_RECORDED_G when git
   # a caller read from `_ws_reclaim_record` before it.
   local o="$1" w="$2" parent project main e g='' n=0 rc
   local -a _WS_LOGS=()
-  local _WS_KEEP_WHY='' RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  local _WS_KEEP_WHY='' RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY=''
   parent="${w%/*}"
   [[ -n "$parent" ]] || return 1
   _ws_reclaim_resolve "$parent" || return 1
@@ -30178,7 +30222,7 @@ _ws_reclaim_recorded_crumb() {   # id workdir -> rc 0 when the row's own breadcr
   # tombstone's one reader), a worktree list git could not give, or an admin
   # entry `_ws_reclaim_log_of` could not read. The record's globals, and the
   # reader's, are shadowed here, as in the git arm.
-  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc e RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0
+  local o="$1" w="$2" crumb tomb tuuid twd ruuid tworktree need=0 project rc e RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY=''
   local -a _WS_LOGS=()
   local _WS_KEEP_WHY=''
   crumb=$(_reg_read "$o" reaping) || return 1
@@ -30363,7 +30407,10 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # (`unset` then fails, and the function stays); and a function imported for
   # a command called OUTSIDE this subshell (`_ws_reclaim_absent`'s `dirname`
   # and `stat` among them). `_ws_realpath`, which other verbs use, is not
-  # edited, and nothing on this path reads it. `-d` is false on EACCES as on
+  # edited, and no placement on this path reads it: `_ws_reclaim_record` matches
+  # its answer as one of two strings, and the ladder's and `_ws_reclaim_owned`'s
+  # main-checkout compares read it beside a compare of device and inode, which
+  # may only refuse (path-identity spec §4.8). `-d` is false on EACCES as on
   # ENOENT, so a component that stands but cannot be followed (a link across
   # an unsearchable directory, or one that cannot be looked at) stops the
   # walk as if it were missing and fails the absence proof. Never resolvable:
@@ -31218,7 +31265,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     || { _ws_reclaim_unmeasured "could not resolve the repository of $main"; return 1; }
   _ws_reclaim_record "$main" "$workdir"; rc=$?
   (( rc == 2 )) \
-    && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git records $workdir was never asked"; return 1; }
+    && { _ws_reclaim_unmeasured "$_WS_REC_WHY, so whether git records $workdir was never asked"; return 1; }
   if common=$(_ws_common_dir "$workdir"); then
     [[ "$common" == "$mainreal" ]] \
       || { _reap_refuse containment-unproven "$workdir belongs to $common, not $mainreal — another repository's work cannot be pinned into this one"; return 1; }
@@ -31240,14 +31287,21 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # would pin the project's own checkout and hand the tail its branch's
   # name; no child is ever the main worktree. The vanished arm
   # cannot reach this: `$main` was just resolved, so it exists, and a canonical
-  # path that does not exist resolves to no path that does. Asked TWICE: git's
-  # first stanza, and the resolved (`pwd -P`) path against `$main`'s — a project
-  # directory that is itself a LINKED worktree is not the first stanza, and a
-  # row naming it is still the project's own checkout, never a child.
+  # path that does not exist resolves to no path that does. Asked THREE times:
+  # git's first stanza, by its string or by device and inode
+  # (`_ws_reclaim_record`); the resolved (`pwd -P`) path against `$main`'s — a
+  # project directory that is itself a LINKED worktree is not the first stanza,
+  # and a row naming it is still the project's own checkout, never a child; and
+  # the two directories' device and inode (`-ef`, path-identity spec §4.8),
+  # because `_ws_realpath` answers its input when its `cd` fails and a bind
+  # spelling resolves to itself. `-ef` only refuses: a stat that fails answers
+  # false, and the rungs below still ask.
   (( ! RECLAIM_REC_MAIN )) \
     || { _reap_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
   [[ "$(_ws_realpath "$workdir")" != "$(_ws_realpath "$main")" ]] \
     || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, not a workspace of $id"; return 1; }
+  [[ ! "$workdir" -ef "$main" ]] \
+    || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"; return 1; }
   # AND THE TREE'S GIT DIRECTORY IS GIT'S OWN RECORD OF IT (spec §5.5, rung 9
   # asked of the child itself) — `_ws_reclaim_gitdir_own` says why.
   _ws_reclaim_gitdir_own "$workdir" "$mainreal"; rc=$?
@@ -31440,7 +31494,7 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
     || { _ws_reclaim_unmeasured "could not resolve the repository of $main"; return 1; }
   _ws_reclaim_record "$main" "$workdir"; rec=$?
   (( rec == 2 )) \
-    && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
+    && { _ws_reclaim_unmeasured "$_WS_REC_WHY, so whether git still records $workdir was never asked"; return 1; }
   # "No record" is an INPUT here (`record=1`), and with it the pin keeps no
   # HEAD of git's record — so it is believed only once git's admin entries are
   # read (`_ws_reclaim_no_record`), exactly as on the present arm, its reason
@@ -32933,10 +32987,12 @@ _ws_reclaim_fail() {   # id lctx token detail [k v]... -> journals a post-start 
   return 1
 }
 
-_WS_OWNED_WHY=''
-_ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still provably the child's own;
-  #                          1 (_WS_OWNED_WHY) when it is PROVEN not to be; 2 (_WS_OWNED_WHY) when
-  #                          that could not be asked
+_WS_OWNED_WHY=''; _WS_OWNED_MAINID=''; _WS_OWNED_WDID=''
+_ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still provably the child's own,
+  #                          with its identities kept: _WS_OWNED_MAINID ($main's) and _WS_OWNED_WDID (the
+  #                          tree's, '' when it does not stand), each cleared first and set once measured
+  #                          (path-identity spec §4.8); 1 (_WS_OWNED_WHY) when it is PROVEN not to be;
+  #                          2 (_WS_OWNED_WHY) when that could not be asked
   # THE LADDER'S IDENTITY RUNGS, RE-ASKED AT REMOVAL TIME (spec §5.5, rung 9
   # asked of the path), on the fresh arm AND every resumed one: the resumed arm
   # has no ladder in front of it, and on every arm the tree stands until the
@@ -32944,8 +33000,10 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # follow the link it asks about); a LEAF that is not a link (a symlinked
   # ancestor stays legal); git's record of it, read from $main — a list that
   # could not be read asked nothing, and a tree that stands with no record is
-  # not PROVEN one of $main's worktrees; not the MAIN checkout, asked twice (git's
-  # first stanza, and the resolved path against $main's); and no OTHER registry
+  # not PROVEN one of $main's worktrees; not the MAIN checkout, asked three times
+  # (git's first stanza, by its string or by device and inode; the resolved path
+  # against $main's; and, last, the two directories' device and inode); and no
+  # OTHER registry
   # row naming it or rooted inside it, literally or resolved, nor at, inside or
   # through its clips directory or temp root (spec §5.5, §5.6) — an unlistable
   # registry, or a leaf that cannot be measured, asked nothing; and, where a
@@ -32962,13 +33020,25 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # inside it. A retry meets the same proof until that tree or row is moved or
   # removed. 2 is a question that could not be asked, which a retry may answer.
   # So nothing that was not asked is ever folded into 1: an unprovable absence,
-  # an unreadable worktree list, a registry that could not be asked, a scan that
+  # an unreadable worktree list or one that did not settle which record is the
+  # tree's, an identity that could not be measured, a registry that could not be asked, a scan that
   # failed, and `_ws_reclaim_moved_check`'s own 2 — or any answer it never
   # gives — are all 2. So is a tree that stands with no worktree record: git's
   # list silently omits a record whose `gitdir` it cannot read (spec §5.5, rung
   # 8), so "no record" there is no proof.
+  #
+  # THE PROJECT DIRECTORY BY DEVICE AND INODE, ASKED LAST (path-identity spec
+  # §4.8, PI10 O2). The resolved-path compare reads `_ws_realpath`, which
+  # answers its input when its `cd` fails, and a bind spelling resolves to
+  # itself. So, after every proof above, which a measure that fails must never
+  # pre-empt, the identity of $main (`_ws_path_ident` with `follow`, as `git -C`
+  # follows it) and, while the tree stands, the tree's own (its leaf never
+  # followed) are measured. Equal devices and inodes are a PROOF (1): the tree
+  # is the project directory under another spelling. Birth times are not
+  # compared: both are read at one instant, and one inode has one. A measure
+  # that fails is 2, never 1 and never a pass.
   local id="$1" wd="$2" main="$3" rc nested
-  _WS_OWNED_WHY=''
+  _WS_OWNED_WHY=''; _WS_OWNED_MAINID=''; _WS_OWNED_WDID=''
   _ws_reclaim_plain_path "$wd" \
     || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
   [[ ! -L "$wd" ]] || { _WS_OWNED_WHY="$wd is a symbolic link — ccd never follows a link to a tree it would pin or remove"; return 1; }
@@ -32976,7 +33046,7 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 2; }
   [[ ! -e "$wd" || -d "$wd" ]] || { _WS_OWNED_WHY="something that is not a directory stands at $wd"; return 1; }
   _ws_reclaim_record "$main" "$wd"; rc=$?
-  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 2; }
+  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_REC_WHY, so whether git records $wd was never asked"; return 2; }
   [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 2; }
   (( ! RECLAIM_REC_MAIN )) || { _WS_OWNED_WHY="$wd is $main's main checkout"; return 1; }
   [[ "$(_ws_realpath "$wd")" != "$(_ws_realpath "$main")" ]] || { _WS_OWNED_WHY="$wd is the project directory $main itself"; return 1; }
@@ -32998,6 +33068,16 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
       1) _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1 ;;
       *) _WS_OWNED_WHY="${_WS_MOVED_WHY:-the moved-tree check answered $rc, an answer it never gives, so whether the tree of a gone row was moved inside $wd was never asked}"; return 2 ;;
     esac
+  fi
+  _ws_path_ident "$main" follow \
+    || { _WS_OWNED_WHY="the identity of the project directory $main could not be measured (${_WS_IDENT_WHY:-$_WS_IDENT_KIND}), so whether $wd is that directory under another spelling was never asked"; return 2; }
+  _WS_OWNED_MAINID="$_WS_IDENT"
+  if [[ -d "$wd" ]]; then
+    _ws_path_ident "$wd" \
+      || { _WS_OWNED_WHY="the identity of the tree at $wd could not be measured (${_WS_IDENT_WHY:-$_WS_IDENT_KIND}), so whether it is the project directory $main under another spelling was never asked"; return 2; }
+    _WS_OWNED_WDID="$_WS_IDENT"
+    [[ "${_WS_OWNED_WDID%:*}" != "${_WS_OWNED_MAINID%:*}" ]] \
+      || { _WS_OWNED_WHY="$wd is the project directory $main itself, under another spelling"; return 1; }
   fi
   return 0
 }

@@ -22,6 +22,7 @@ import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { EXP_BRANCH, EXP_ID, expireToken, expireVerb, makeArchived } from './wsExpireFixture.js';
 import { MOUNTS_SEAM, realMounts } from './wsCollectFixture.js';
+import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-reclaim-tail-mounts-'); });
@@ -79,7 +80,7 @@ const PHYS_FAILS_AT_THE_ASK = 'eval "_t_phys_real()$(declare -f _ws_dir_physical
   + ' _ws_dir_physical() { if [[ "${FUNCNAME[1]-}" == _ws_removal_mounts_clear ]]; then'
   + ' _WS_PHYS=""; _WS_PHYS_WHY="stub: $1 could not be entered"; return 1; fi; _t_phys_real "$@"; };';
 const LINUX_PRE = `${MOUNTS_SEAM} ${NOBODY} ${KEEP_LOG}`;
-const DARWIN_PRE = `CCD_OS=darwin; ${POISON} ${ASK_LOG}`;
+const DARWIN_PRE = `CCD_OS=darwin; ${DARWIN_IDENT_SHIMS} ${POISON} ${ASK_LOG}`;
 
 /** How many times the helper was asked of `spelling` in `mode` ('' or 'resolve'). */
 const asked = (spelling: string, mode = ''): number =>
