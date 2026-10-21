@@ -10528,3 +10528,83 @@ describe('stampAtOrBefore: the newest stamped row at or before an index (W2-D33;
     expect(l.stampAtOrBefore(R(7n), 0)).toBe(7);
   });
 });
+
+// ── W2-1 Task 2: the shared names (W2-D29's paths, W2-D30's constants, W2-D17's predicate; W2-D10) ─────────────────
+// historyPaths names the recall-off directory and the headless-on switch, so recallOffPath joins one id onto
+// recallOffDir and RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs (W2-D29, first bullet). The
+// presence record's meta prefix and its two chosen bounds are lib's (W2-D30). isSyntheticModel is the one
+// angle-bracket test: backendOf reads it and deploy/history-gate.mjs imports it (W2-D17). The store schema does not
+// move (W2-D10): the presence record is meta rows.
+describe('W2-1 Task 2: the recall-off paths, the presence constants and isSyntheticModel', () => {
+  const LIB_SRC = (): string => readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8');
+  /** Comment lines dropped, so a sentence about a name is never counted as code. */
+  const codeOf = (text: string): string[] => text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+
+  it('historyPaths gains recallOffDir under the root and headlessOn from SWITCHES, and recallOffPath is recallOffDir/<id> (W2-D29)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const p = lib.historyPaths('/home/u');
+    expect(p.recallOffDir).toBe(`${p.root}/${lib.RECALL_OFF_DIR}`);
+    expect(p.recallOffDir).toBe('/home/u/.ccrc/history/recall-off');
+    expect(p.headlessOn).toBe(`/home/u/${lib.SWITCHES.headlessOn}`);
+    expect(lib.recallOffPath('/home/u', 'demo-a')).toBe(`${p.recallOffDir}/demo-a`);
+    expect(lib.historyPaths('/home/u/').recallOffDir, 'a trailing slash on HOME changes nothing').toBe(p.recallOffDir);
+    expect(() => lib.recallOffPath('/home/u', '../x'), 'the id is still checked before a path is formed (C66)').toThrow(TypeError);
+  });
+
+  it('RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs, historyPaths\' recallOffDir, and recallOffPath reads it (W2-D29)', () => {
+    const code = codeOf(LIB_SRC());
+    expect(code.filter((l) => l.includes('${RECALL_OFF_DIR}')).map((l) => l.trim())).toEqual(['recallOffDir: `${root}/${RECALL_OFF_DIR}`,']);
+    expect(code.filter((l) => l.includes('historyPaths(home).recallOffDir}/${id}')), 'recallOffPath joins the id onto recallOffDir').toHaveLength(1);
+  });
+
+  it('the presence record\'s meta prefix and its two chosen bounds are W2-D30\'s', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.RECALL_OFF_META).toBe('recall_off:');
+    expect(lib.RECALL_OFF_GAP_MS).toBe(600_000);
+    expect(lib.RECALL_OFF_SCAN_MAX).toBe(4096);
+  });
+
+  // [label, model, synthetic]: an angle-bracketed name only. A null or empty model is not synthetic: that row stays a
+  // turn (W2-D17).
+  const SYNTHETIC: Array<[string, unknown, boolean]> = [
+    ['<synthetic>', '<synthetic>', true],
+    ['an empty pair of brackets', '<>', true],
+    ['an angle-bracketed phrase', '<a notice from the harness>', true],
+    ['a bare <', '<', false],
+    ['a bare >', '>', false],
+    ['an open bracket only', '<synthetic', false],
+    ['a close bracket only', 'synthetic>', false],
+    ['a leading space', ' <synthetic>', false],
+    ['a trailing space', '<synthetic> ', false],
+    ['empty', '', false],
+    ['null', null, false],
+    ['undefined', undefined, false],
+    ['a number', 7, false],
+    ['a claude name', 'claude-fixture-4', false],
+    ['another name', 'gpt-fixture-5', false],
+  ];
+  it.each(SYNTHETIC)('isSyntheticModel: %s', async (_label, model, want) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.isSyntheticModel(model)).toBe(want);
+  });
+
+  it('backendOf reads isSyntheticModel for its unknown, and its body spells no angle-bracket test of its own (W2-D17)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const [label, model, synthetic] of SYNTHETIC) {
+      if (synthetic) expect(lib.backendOf(model as string), label).toBe('unknown');
+    }
+    expect(lib.backendOf('claude-fixture-4'), 'CONTROL: a claude name is still anthropic').toBe('anthropic');
+    expect(lib.backendOf('<claude-fixture-4>'), 'an angle-bracketed claude name is synthetic first').toBe('unknown');
+    const src = LIB_SRC();
+    const at = src.indexOf('export function backendOf(model) {');
+    expect(at, 'backendOf is declared as the base declares it').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    expect(body).toContain('isSyntheticModel(model)');
+    expect(body).not.toMatch(/startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/);
+  });
+
+  it('W2-D10: the store schema stays at version 2 through W2 (the presence record is meta rows, never a table)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.SCHEMA_VERSION).toBe(2);
+  });
+});

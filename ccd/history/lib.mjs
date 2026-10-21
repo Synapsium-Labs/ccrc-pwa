@@ -412,8 +412,10 @@ export function readBoxEnvValue(text, key) {
 
 // ── every path the history code forms (§5.2) ──────────────────────────────
 /** Absolute paths under one HOME, joined with '/' (no `node:path` in L1).
- *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL or SWITCHES — never a
- *  second spelling. `journalFile` is SQLite's rollback journal beside the DB
+ *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL, SWITCHES or
+ *  RECALL_OFF_DIR — never a second spelling; `recallOffDir` is the one place
+ *  RECALL_OFF_DIR is joined onto a path (W2-D29). `journalFile` is SQLite's
+ *  rollback journal beside the DB
  *  (`history.db-journal`), NOT the history journal: that is `journalDir`. */
 export function historyPaths(home) {
   const h = String(home).replace(/\/+$/, '');
@@ -438,9 +440,11 @@ export function historyPaths(home) {
     op: `${root}/op`,
     pass: `${root}/pass`,
     passDied: `${root}/pass-died`,
+    recallOffDir: `${root}/${RECALL_OFF_DIR}`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
+    headlessOn: `${h}/${SWITCHES.headlessOn}`,
     ccrcEnv: `${h}/.ccrc/ccrc.env`,
     accountsSh: `${h}/.ccrc/accounts.sh`,
     reg: `${h}/.cc-sessions`,
@@ -1515,14 +1519,23 @@ export function variantCauseOf(a, b) {
   return sanitized > 0 ? 'ccd-sanitize' : 'unknown';
 }
 
+/** Whether a row's model name is Claude Code's own notice rather than any
+ *  backend's output: an angle-bracketed name (`<synthetic>`). NULL, empty and
+ *  every other name are not, so a row with no model stays a turn. The one
+ *  predicate (W2-D17): backendOf reads it for `unknown`, and
+ *  deploy/history-gate.mjs's turnsOf imports it to drop such rows. */
+export function isSyntheticModel(model) {
+  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');
+}
+
 /** A row's backend, from its model name alone (§6.2, `BACKENDS`). A name
  *  starting `claude` is `anthropic`; NULL, empty, or angle-bracketed
- *  (`<synthetic>`: Claude Code's own notices, no backend's output) is
+ *  (`<synthetic>`, isSyntheticModel: Claude Code's own notices) is
  *  `unknown`; any other name is `other`. Nothing is read from the roster.
  *  D-4196 */
 export function backendOf(model) {
   if (typeof model !== 'string' || model === '') return 'unknown';
-  if (model.startsWith('<') && model.endsWith('>')) return 'unknown';
+  if (isSyntheticModel(model)) return 'unknown';
   return model.startsWith('claude') ? 'anthropic' : 'other';
 }
 
@@ -4143,6 +4156,22 @@ export const HISTORY_NODE_ID_RE = /^[LN][0-9a-f]{20}$/;
  *  per-id files (§9.7). Spelled once; the W2 verb writes it, B2 only reads. */
 export const RECALL_OFF_DIR = 'recall-off';
 
+/** The recall-off presence record's meta-key prefix (W2-D30): its `state:<id>`,
+ *  `seen_ms`, `change:<ts_ms>:<id>` and `gap:<ts_ms>` rows are keyed under it in
+ *  the store's `meta` table, so the record needs no schema change (W2-D10). The
+ *  sweep writes them, status reads them, deploy/history-gate.mjs's
+ *  changedFamilies parses them and deploy/measure-history.py emits them raw.
+ *  Spelled once, here; measure-history.py's twin is held equal to it by
+ *  measure-history.test.ts (W2-D23). */
+export const RECALL_OFF_META = 'recall_off:';
+/** When the time since the presence record's last observation exceeds this,
+ *  the tick writes a gap row (W2-D30, chosen). */
+export const RECALL_OFF_GAP_MS = 10 * 60 * 1000;
+/** The most `recall-off/` entries one tick's scan reads (W2-D30, chosen): the
+ *  counted iteration stops there, and a capped directory writes nothing and
+ *  does not advance the record's seen time. */
+export const RECALL_OFF_SCAN_MAX = 4096;
+
 /** `tmux display-message` prints `#S`; ccd names every session `cc-<id>`, and
  *  the hook requires the same prefix (spec §8.2). decideOpGate's pane test
  *  spells the prefix too, for a different decision (an irreversible form). */
@@ -4328,10 +4357,10 @@ function validNodeId(id) {
 
 /** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
  *  path exists, so `../x` can never name a file outside the store
- *  (D-4170, C66). */
+ *  (D-4170, C66). The directory is historyPaths' recallOffDir (W2-D29). */
 export function recallOffPath(home, id) {
   if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
-  return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
+  return `${historyPaths(home).recallOffDir}/${id}`;
 }
 
 /** Whether `recall-off/<id>` holds this family (§9.7,

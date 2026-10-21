@@ -5298,7 +5298,9 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): the check after a bind's bounds and stop words; EXPORT_BIND_BATCH moved here from sweep.mjs.
     'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
     // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
-    'SEGMENT_HEADER_BYTES'] as const;
+    'SEGMENT_HEADER_BYTES',
+    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, which sweep.mjs, cli.mjs and the gate read.
+    'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5381,12 +5383,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
   });
 
-  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP, REDACT_SOURCES_META and RECALL_OFF_META are quoted once, at their declaration (H-149)', async () => {
     // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
     // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
     const l = await lib();
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META', 'RECALL_OFF_META'] as const) {
       const value = l[name];
       expect(typeof value, `${name} is a string`).toBe('string');
       const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
@@ -8371,5 +8373,37 @@ describe('ccrc history: the deploy lane exports are each defined once (W2-D33; W
     expect(text, 'expandEntryText is gone or its signature moved').not.toBe('');
     expect(text).toContain('expandEntryBody(rc, e)');
     expect(text, 'expandEntryText decodes no blob of its own').not.toMatch(/\bexpandBlob\(|\bexpandParse\(/);
+  });
+});
+
+// CCRC HISTORY W2-1 TASK 2 (W2-D17): isSyntheticModel is the one angle-bracket model test. APPENDED, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line. O14's `declares` reads const,
+// let and var only, so a function needs its own scan: lib.mjs declares it and no other .mjs under ccd/history, deploy
+// or shared does, and the angle-bracket test it holds is spelled on one code line of that corpus, its own.
+describe('ccrc history W2-1 Task 2: isSyntheticModel is declared once, in lib.mjs, and holds the one angle-bracket test (W2-D17)', () => {
+  const CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declaresFn = (name: string): RegExp =>
+    new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:(?:async\\s+)?function\\*?\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`);
+  const ANGLE_TEST = /startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/;
+
+  it('CONTROL: the corpus holds lib.mjs and the gate, and the two patterns see what they look for and nothing else', () => {
+    expect(CORPUS.map(rel)).toEqual(expect.arrayContaining(['ccd/history/lib.mjs', 'deploy/history-gate.mjs']));
+    expect(declaresFn('isSyntheticModel').test('export function isSyntheticModel(model) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('function isSyntheticModel(m) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test("const isSyntheticModel = (m) => m === '<x>';")).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('    if (isSyntheticModel(row[5])) continue;')).toBe(false);
+    expect(declaresFn('isSyntheticModel').test("import { EXIT, isSyntheticModel } from '../ccd/history/lib.mjs';")).toBe(false);
+    expect(ANGLE_TEST.test("  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');")).toBe(true);
+    expect(ANGLE_TEST.test("  if (leadText(content).trimStart().startsWith('<local-command-stdout>')) return 'harness';")).toBe(false);
+  });
+
+  it('lib.mjs is the one file of the corpus that declares isSyntheticModel', () => {
+    expect(CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declaresFn('isSyntheticModel').test(l))).map(rel).sort())
+      .toEqual(['ccd/history/lib.mjs']);
+  });
+
+  it('the angle-bracket model test is spelled on one code line of the corpus, the return of lib.mjs\'s isSyntheticModel', () => {
+    const hits = CORPUS.flatMap((f) => stallCode(f).split('\n').filter((l) => ANGLE_TEST.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits).toEqual(["ccd/history/lib.mjs: return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');"]);
   });
 });

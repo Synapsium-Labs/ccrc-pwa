@@ -33,7 +33,7 @@ interface BoundaryReport { boundary_uuid: string; ts_ms: number; copies: Copy[] 
 interface FamilyReport {
   ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: CallRow[]; boundaries: BoundaryReport[];
 }
-interface W2 { row_cap: number; window_start_ms: number; window_end_ms: number; families: FamilyReport[] }
+interface W2 { row_cap: number; window_start_ms: number; window_end_ms: number; families: FamilyReport[]; recall_off: Array<[k: string, v: string]> }
 interface Report {
   store_id: string | null; user_version: number; script_sha256: string; counters: Record<string, number>; w1b_lag_p95_ms: number | null;
   w1c_duplicate_entries: number; w1f_grep_p95_ms: number | null; w2: W2 | null;
@@ -219,7 +219,7 @@ describe('measure-history.py: the named queries over planted rows (O52)', () => 
     expect(f.b1).toBe('e-3');
     expect(f.b2).toBe('e-17');
     // w2 echoes the window it was run over (W2-D13, amended), so assembleReports can refuse a report whose window is not the record's.
-    expect(rep.w2).toEqual({ row_cap: 400, window_start_ms: 1500, window_end_ms: 6000, families: [{
+    expect(rep.w2).toEqual({ row_cap: 400, window_start_ms: 1500, window_end_ms: 6000, recall_off: [], families: [{
       ccrc_id: 'demo-a', generation: G1, found: true, merged_generations: [''],
       calls: [[1999, 0, 'expand'], [2500, 0, 'expand'], [3900, 0, 'describe'], [3950, 0, 'expand'], [5200, 0, 'expand']],
       boundaries: [
@@ -1020,7 +1020,7 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
     expect(specs).toContain(LIB_SPEC);
     for (const s of specs) expect(['node:crypto', LIB_SPEC], s).toContain(s);
     expect(gateSrc()).toContain(
-      "import { EXIT, UUID_RE, canonicalJson, pickHoldingCopy, producerOf, sha256Hex } from '../ccd/history/lib.mjs';");
+      "import { EXIT, RECALL_OFF_META, UUID_RE, canonicalJson, isSyntheticModel, pickHoldingCopy, producerOf, sha256Hex } from '../ccd/history/lib.mjs';");
   });
 
   it.each(FORBIDDEN)('the gate source never spells %s (comments and strings included)', (word, re) => {
@@ -2034,8 +2034,8 @@ describe('W2-3 Task 4: the census and the active rule', () => {
 // Pure: every report, record and meta row below is a literal built in this describe, so no store and no python run.
 // The windows come from Task 3's buildWindows: a "measured" boundary's one copy holds two assistant turns and no
 // next boundary, so its window ends inclusive at the copy's last timed row; an "unmeasured" boundary's copy has no
-// timed row (W2-D14). The presence record's keys are W2-D30's grammar, spelled here as text: the gate's prefix is
-// module-local and temporary until W2-1 (W2-D23).
+// timed row (W2-D14). The presence record's keys are W2-D30's grammar, spelled here as text: since W2-1 the gate
+// reads lib's RECALL_OFF_META, and this describe never reads the binding (W2-D23).
 import * as gateT5 from '../../deploy/history-gate.mjs';
 
 describe('W2-3 Task 5: changed families and the assembled reports', () => {
@@ -2270,7 +2270,7 @@ describe('W2-3 Task 5: changed families and the assembled reports', () => {
     }
   });
 
-  it('the temporary recall_off: prefix is module-local: the gate exports no binding of it for another module to read', () => {
+  it('the presence prefix is lib\'s RECALL_OFF_META: the gate re-exports no binding of it for another module to read', () => {
     expect(Object.keys(gateT5).filter((n) => /RECALL_OFF/.test(n))).toEqual([]);
   });
 
@@ -5807,6 +5807,78 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         expect(verdict(d), 'and nothing else is refused').toEqual([]);
         expect(verdict(final(d), chainOf(d)), 'the final carries it unchanged').toEqual([]);
       });
+    });
+  });
+});
+
+// ── W2-1 Task 2: the gate reads lib's names, and the instrument's prefix is lib's (W2-D17, W2-D23, W2-D11) ─────────
+// W2-3 left two spellings module-local and temporary in deploy/history-gate.mjs, and W2-1 rewires both to lib.mjs:
+// turnsOf drops a row through lib's isSyntheticModel, and parseRecallOffRow reads keys under lib's RECALL_OFF_META.
+// The instrument emits the presence record's raw meta rows as w2.recall_off. It spells the prefix once, as the twin
+// of lib's constant, and the two are held equal here, so a changed copy on either side reds. Fixture HOMEs only.
+import * as gateW21 from '../../deploy/history-gate.mjs';
+import * as libW21 from '../../ccd/history/lib.mjs';
+
+describe('W2-1 Task 2: the gate reads lib\'s names, and the instrument\'s prefix is lib\'s', () => {
+  const GATE = path.join(ROOT, 'deploy', 'history-gate.mjs');
+  /** Comment lines dropped, so a sentence about a name is never counted as code. */
+  const codeOf = (text: string): string[] => text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+  /** A spelling of the presence prefix, and an angle-bracket model test, as a code line could hold either. */
+  const PREFIX_LITERAL = /['"`]recall_off:/;
+  const ANGLE_TEST = /startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/;
+
+  it('CONTROL: the two patterns see the base gate\'s two temporary lines, and not the import or the calls that replace them', () => {
+    expect(PREFIX_LITERAL.test("const RECALL_OFF_PREFIX_LOCAL = 'recall_off:';")).toBe(true);
+    expect(ANGLE_TEST.test("  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');")).toBe(true);
+    expect(PREFIX_LITERAL.test("import { EXIT, RECALL_OFF_META, UUID_RE } from '../ccd/history/lib.mjs';")).toBe(false);
+    expect(PREFIX_LITERAL.test("  if (typeof k !== 'string' || !k.startsWith(RECALL_OFF_META)) return { kind: 'other' };")).toBe(false);
+    expect(ANGLE_TEST.test('    if (isSyntheticModel(row[5])) continue;')).toBe(false);
+  });
+
+  it('the gate\'s code spells neither the presence prefix nor an angle-bracket model test: both are lib\'s (W2-D17, W2-D23)', () => {
+    const hits = codeOf(readFileSync(GATE, 'utf8')).filter((l) => PREFIX_LITERAL.test(l) || ANGLE_TEST.test(l)).map((l) => l.trim());
+    expect(hits).toEqual([]);
+  });
+
+  it('the instrument\'s RECALL_OFF_META is lib\'s: measure-history.py assigns it once and spells the value nowhere else (W2-D23\'s twin)', () => {
+    expect(typeof libW21.RECALL_OFF_META, 'lib exports the prefix').toBe('string');
+    const src = readFileSync(SCRIPT, 'utf8');
+    const assigned = [...src.matchAll(/^RECALL_OFF_META = '([^'\n]*)'$/gm)].map((m) => m[1]);
+    expect(assigned, 'one module-level assignment, equal to lib\'s value').toEqual([libW21.RECALL_OFF_META]);
+    expect(src.split(libW21.RECALL_OFF_META).length - 1, 'the value is spelled once, on that line').toBe(1);
+  });
+
+  it('w2.recall_off is every meta row under RECALL_OFF_META, raw and ordered by key, and changedFamilies reads it as emitted (W2-D23)', () => {
+    const f = plantedStore();
+    const P = libW21.RECALL_OFF_META;
+    // A change row in Task 4's grammar (from and to are state objects; a from of 'unobserved' carries prev_seen_ms null).
+    const change = JSON.stringify({ from: { s: 'unreadable', v: null }, to: { s: 'value', v: G1 }, prev_seen_ms: 3000 });
+    const gap = JSON.stringify({ from: 1000, to: 2500 });
+    const state = JSON.stringify({ s: 'value', v: G1 });
+    const db = new DatabaseSync(f.db);
+    try {
+      const put = db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)');
+      put.run(`${P}state:demo-a`, state);
+      put.run(`${P}seen_ms`, '5500');
+      put.run(`${P}change:4000:demo-a`, change);
+      put.run(`${P}gap:2500`, gap);
+      // CONTROL rows: no key below begins with the prefix. LIKE would take the first two (its _ is a wildcard and it
+      // ignores case); a prefix test without the colon would take the third.
+      put.run('recallXoff:change:4000:demo-a', change);
+      put.run('RECALL_OFF:gap:2500', gap);
+      put.run('recall_off', 'no colon');
+    } finally {
+      db.close();
+    }
+    const rep = report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000',
+      '--row-cap', '400']);
+    const rows = rep.w2!.recall_off;
+    expect(rows).toEqual([[`${P}change:4000:demo-a`, change], [`${P}gap:2500`, gap], [`${P}seen_ms`, '5500'], [`${P}state:demo-a`, state]]);
+    const got = gateW21.changedFamilies(rows.map(([k, v]) => ({ store_id: rep.store_id!, k, v })), { start_ms: 1500, end_ms: 6000 },
+      [{ store_id: f.storeId, ccrc_id: 'demo-a', generation: G1 }]);
+    expect(got).toEqual({
+      changed: [gateW21.familyKey(f.storeId, 'demo-a', G1)],
+      gaps: [{ store_id: f.storeId, ts_ms: 2500, from: 1000, to: 2500 }],
     });
   });
 });

@@ -122,6 +122,8 @@ export interface HistoryPaths {
   readonly journalFile: string;
   readonly backups: string; readonly storeId: string; readonly pending: string; readonly writer: string;
   readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
+  /** W2-D29: the headless-on switch (SWITCHES.headlessOn) and the recall-off directory (RECALL_OFF_DIR under the root). */
+  readonly headlessOn: string; readonly recallOffDir: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -272,6 +274,7 @@ export function isHistoryCommand(command: string): boolean;
 export function provenanceOf(row: Record<string, unknown>, ctx: { pairedToolUse: null | { name: string; command?: string } }): Provenance;
 export function ftsTextOf(body: unknown, kind: 'entry' | 'sidecar'): string;
 export function variantCauseOf(a: unknown, b: unknown): 'ccd-sanitize' | 'unknown';
+export function isSyntheticModel(model: unknown): boolean;
 export function backendOf(model: string | null | undefined): Backend;
 export function producerOf(modelsAfterSummary: readonly (string | null)[]): Backend;
 export function producerOfCopy(rows: readonly { type: string; model: string | null }[], summaryIndex: number): Backend;
@@ -508,6 +511,9 @@ export const SCOPE_KINDS: readonly ['family', 'project', 'workspace'];
 export const NODE_ID_DISPLAY_MIN: 6;
 export const HISTORY_NODE_ID_RE: RegExp;
 export const RECALL_OFF_DIR: 'recall-off';
+export const RECALL_OFF_META: 'recall_off:';
+export const RECALL_OFF_GAP_MS: number;
+export const RECALL_OFF_SCAN_MAX: number;
 export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
