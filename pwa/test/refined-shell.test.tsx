@@ -14,7 +14,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { REFINED } from '@ccrc/ui';
-import type { NotifyEvent } from '../../shared/api';
+import { declaredValues } from './cssRule';
+import type { NotifyEvent, RunSummary } from '../../shared/api';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -156,6 +157,17 @@ describe('the app bar (W2 Task S4b)', () => {
     expect(within(primary()).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
   });
 
+  it("the Runs badge counts the open runs only, and says nothing before the first runs frame", () => {
+    atWidth(1280);
+    render(<App />);
+    // Before any runs frame "no runs" is not yet known: the tab is plain.
+    expect(within(primary()).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+    const open = { id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary;
+    const closed = { id: 2, program: 'p', state: 'done', closedAt: 1 } as unknown as RunSummary;
+    act(() => useFleetStore.setState({ runs: [open, closed], runsFrameSeen: true }));
+    expect(within(primary()).getByRole('button', { name: 'Runs, 1 active' })).toBeInTheDocument();
+  });
+
   it('New session opens the fleet flow\'s sheet; search opens the palette', () => {
     atWidth(1280);
     render(<App />);
@@ -222,5 +234,17 @@ describe("Refined's frame (refined.css)", () => {
     expect(block('(min-width: 900px)')).toMatch(/grid-template-columns:\s*clamp\(320px, 24vw, 400px\) minmax\(0, 1fr\);/);
     expect(block('(min-width: 900px)')).toMatch(/grid-template-rows:\s*56px auto minmax\(0, 1fr\);/);
     expect(block('(min-width: 1600px)')).toMatch(/grid-template-columns:\s*400px minmax\(0, 1fr\);/);
+  });
+  // The tab is the bar's full height, so a ring drawn OUTSIDE it (Door's FOCUS_RING, offset 2px) loses its top edge
+  // off the top of the page and its bottom edge under the banners and the sidebar row: a keyboard user sees two side
+  // lines and no box. The ring is drawn inside the tab instead (the inset-ring precedent in fleet.css).
+  it("a focused tab's ring is drawn inside the tab, so the bar's edges cannot cut it", () => {
+    const offsets = declaredValues(css, '.ref-tab:focus-visible', 'outline-offset');
+    expect(offsets.length, 'refined.css sets the tab ring\'s offset').toBeGreaterThan(0);
+    for (const v of offsets) {
+      const px = /^(-?[\d.]+)px$/.exec(v);
+      expect(px, v).not.toBeNull();
+      expect(Number(px![1]), 'the offset takes the 2px ring wholly inside the tab').toBeLessThanOrEqual(-2);
+    }
   });
 });

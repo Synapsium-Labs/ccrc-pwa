@@ -175,6 +175,11 @@
   padding-top: 2px;
   border-bottom: 2px solid var(--accent);
 }
+/* The keyboard's ring, inside the tab: the tab is the bar's full height, so Door's ring 2px outside it lost its top
+   edge off the page and its bottom edge under the banners and the sidebar row (the inset-ring precedent, fleet.css). */
+.ref-tab:focus-visible {
+  outline-offset: -2px;
+}
 /* A tab has no glyph: its word is the door. */
 .ref-tab > [aria-hidden='true']:empty {
   display: none;
