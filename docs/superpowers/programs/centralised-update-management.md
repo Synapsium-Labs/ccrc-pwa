@@ -2450,6 +2450,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 22:55: run 39506481859 has no red job yet; test-macos 2/4 to 4/4 are still running. STATUS: fleet and server
         v0.0.493, newest v0.0.504, stable v0.0.328, intent dev/auto=off, backups fleet 185M/server 8951M, disk free
         fleet 188G/work volume 59G/server 23G, no anomalies.
+      - **23:55 UTC: run 39506481859 red on one macOS timing case; its job is re-run once.**
+        - Every Linux leg and three of four macOS shards are green. test-macos 3/4 (job 118916734920) failed one case
+          of 8792, `ccd-spawn-split.test.ts`'s "a second ws-add in the SAME process is not refused". `ccd` could not
+          take the fixture HOME's `.compactions.lock` within its 5 s wait, on a shard that ran 1903 s.
+        - The shard log's `PermissionError` on a `.prnumber` file is not it: that path is `ccd-pr-state.test.ts`'s
+          own fixture, whose case "never advances prphase past a prnumber write that did not happen" fails the write
+          on purpose.
+        - Ruled a load/timing flake. The file passed on macOS in the last two full runs (job 118797921439 at
+          `e99d6ec72`, and run 39489945328 at `9fb98375a`), and an earlier wave's record names `ccd-spawn-split` red
+          under load. One re-run of the failed job (job 118956334431), with `full-suite` after it. If both are green, I
+          fast-forward `stable` to `47f95987c`.
+        - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
+          185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
