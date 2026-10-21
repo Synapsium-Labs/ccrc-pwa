@@ -3405,3 +3405,69 @@ button.proj-card-pool::before {
   .fit-full { display: inline; }
   .fit-short { display: none; }
 }
+
+/* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays
+   sticky against the fleet column, and a fleet with two banners or fewer lays out as it did before the stack. A
+   folded slot is `hidden`; the attribute selector is needed because `display: contents` would beat the UA's
+   `[hidden]` rule. */
+.banner-slot { display: contents; }
+.banner-slot[hidden] { display: none; }
+/* "+n more" sits under the banners it folds, at the end of the row. */
+.banner-more {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-2);
+}
+
+/* The compact gauges (W2 Task S2c, CompactGauges.tsx): one group, one door to /accounts, on the tap floor like the
+   full strip. Layout only: the name's ink is its lane hue, the meter paints itself (meter.tsx). In `bar` and `led`
+   the lanes are one row, one line tall, that wraps and clips: a gauge that does not fit whole wraps out of sight (the
+   door counts it into "+n"), so no gauge shrinks under its floor or paints over its neighbour. */
+.accounts-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: var(--tap-min);
+  overflow: hidden;
+  cursor: pointer;
+}
+.accounts-compact-lanes {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--sp-3);
+  min-width: 0;
+  height: 1.5em;
+  overflow: hidden;
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+}
+.accounts-compact[data-compact='grid'] .accounts-compact-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  height: auto;
+}
+.accounts-compact-gauge {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 1.5em;
+  min-width: 0;
+}
+/* The floor in `bar` and `led`: a 6ch name, the 40px meter, a 5ch reading ("reset"). A name past 12ch truncates, so
+   a gauge's natural width is bounded and one long name never wraps the rest out. */
+.accounts-compact:not([data-compact='grid']) .accounts-compact-gauge {
+  min-width: calc(6ch + 40px + 5ch + 2 * var(--sp-1));
+}
+.accounts-compact-name { max-width: 12ch; }
+.accounts-compact-pct,
+.accounts-compact-more {
+  flex: none;
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.accounts-compact-pct { min-width: 5ch; }
