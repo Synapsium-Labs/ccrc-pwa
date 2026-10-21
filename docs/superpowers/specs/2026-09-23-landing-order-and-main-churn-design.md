@@ -224,7 +224,11 @@ and the class of act that opened the livelock window.
   within the 70% of it that `pr-timeout-budget.test.ts` allows across the two languages. The map is keyed by the
   verb, so `--session` rises with `--project` (ruled 2026-09-24); child reclamation's close gate reads it up to
   twice inside `coordMutex`, so a close's worst case is about 50 s against its 30 s client timeout — accepted by
-  the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s.
+  the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s. (Amended 2026-10-21,
+  wave 3d: GitHub records a removal with reason `merged` at every successful queue merge, at or one second before
+  the PR reads MERGED, so the add is never a landed PR's last act. The query also reads the removal's `reason`. A
+  removal with reason `merged` reads `landed`, whether the PR still reads open or already reads merged; any other
+  reason, or none, keeps the answers above. The reason chooses the word and never reaches the line.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
   name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
@@ -238,7 +242,10 @@ and the class of act that opened the livelock window.
   mailed too, and answered by the ordinary proof and close. The recipient is the open run the close itself would
   keep (`survivorOf`). Both notices need that run to be open, so on a native-queue project the producer lands
   before it closes (clause 15). A PR whose enqueue only ARMED auto-merge (below) reads `none` and gets no notice:
-  the coordinator's read-back of the queue entry catches it. (Amended 2026-09-29.)
+  the coordinator's read-back of the queue entry catches it. (Amended 2026-09-29.) (Amended 2026-10-21, wave 3d: a
+  dequeue is a removal for any reason but `merged`, and `failed_checks`, `manual` and `merge_conflict` were all
+  observed. It is announced on the first sweep that reads it. A removal with reason `merged` is the landing: it
+  announces nothing, and the `merged:#<n>` mail still comes from the PR's merged phase.)
 - **The merge gate becomes a mechanism.** Setting the approval count to zero means any session holding the
   fleet's login could land with a plain `gh pr merge`. So `session-hook.sh`'s PreToolUse arm DENIES `gh pr merge`
   in any session whose hold names a programme wave, a worker's or a reviewer's (`CCRC_HOLD_WAVE_RE`, the hook's
@@ -281,7 +288,8 @@ the proof halts and the operator decides then — clause 15 forbids a coordinato
    event and one prerelease per merge; if a group lands several commits in one push, keep group size and
    concurrency at 1 or make release-main tag every commit in the pushed range; confirm `ours_of` still binds
    after a queue merge; measure whether GitHub records a removal event on a successful queue merge (if it does,
-   a queue-merged PR reads `none`, not `landed`); measure that gh's enqueue binds `--match-head-commit` (a
+   a queue-merged PR reads `none`, not `landed` — measured yes on 2026-10-21, and wave 3d makes that removal read
+   `landed`); measure that gh's enqueue binds `--match-head-commit` (a
    deliberately wrong sha is refused and nothing is queued); measure the armed path — an enqueue whose required
    checks have not passed arms auto-merge and queues nothing — and whether an armed request survives a push by the
    fleet's login (amended 2026-09-29);
@@ -441,7 +449,7 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`) and any workspace carrying the child marker, and on `--admin` and `gh api` merge calls (REST and GraphQL) for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
 | `server/src/remote/runner.ts`, `server/src/coord/{childSpent,routes,close}.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts; the four comments that stated 20 s (two in `childSpent.ts`, `routes.ts`'s rule-3 gate, `childGateAtClose`'s) say 25 s |
-| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `server/src/coord/store.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the landing lane: the dequeue feed event and mail, and the merged notice, with two durable "already told" reads (`hasMailWithSubject`, `hasFeedEvent`); the `operator` sender's gloss; `NotifyEvent` kind `queue` |
+| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `server/src/coord/store.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the landing lane: the dequeue feed event and mail, and the merged notice, with two durable "already told" reads (`hasMailWithSubject`, `hasNotice`); the merged lane's `merged` feed record kept once per workspace and PR across a restart while its row is archived (`hasNotice`, wave 3d); the `operator` sender's gloss; `NotifyEvent` kind `queue` |
 | `deploy/measure-landing.py` (new, read-only) | §10's instrument |
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
