@@ -1467,8 +1467,9 @@ export type DelegationMetaOutcome =
   | { kind: 'already-open'; activityId: string }
   | { kind: 'waiting-for-evidence' };
 
-/** A change only the checkpoint may make: intent, attempts, positive meta, interval upkeep. It may not move the applied position,
- *  remove a session, or add or alter a lease or a lease's lineage (only the journal creates leases). */
+/** A change only the checkpoint may make: intent, attempts (filing one, and collapsing rows that repeat one decision, D-6191), positive meta,
+ *  interval upkeep. It may not move the applied position, remove a session, or add or alter a lease or a lease's lineage (only the
+ *  journal creates leases). */
 export type DelegationCheckpointChange = (checkpoint: DelegationCheckpointV1) => DeepReadonly<DelegationCheckpointV1>;
 
 const nowInstant = (ms: number): string => formatDelegationInstant(ms);

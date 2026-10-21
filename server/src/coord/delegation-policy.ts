@@ -7,8 +7,10 @@
 // write a carrier, mint a token or delete; the union has no member that could.
 //
 // THIS MODULE IS L1. It imports the pure model and the pure correlation module and nothing else: no filesystem, no store, no
-// randomness. The one hash it takes (an attempt's ID) is the model's own SHA-256 over canonical JSON, so the same decision always
-// has the same ID and a pass that sees it again can tell it is already recorded.
+// randomness. The one hash it takes (an attempt's ID) is the model's own SHA-256 over canonical JSON of the DECISION: parent,
+// incarnation, tree, path, rung, verdict and reason (`delegationAttemptKeyOf`), never its evidence. So the same decision seen again, with
+// more witnesses, is already recorded. Policy deduplicates by that key, so a row filed under the earlier, evidence-hashed ID still counts
+// (D-6190).
 //
 // WHAT EACH VERDICT BECOMES
 //   run-child-owned   -> `record-run-child-owned` ONLY. The existing run/child model owns the tree; it is never a lease (W3-M63).
@@ -275,8 +277,9 @@ function parentsNamedBy(ground: Ground, evidence: readonly string[]): { parentId
   return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, parent]) => parent);
 }
 
-/** One attempt row. Its ID is the hash of what was decided and about whom, with NO clock, so the same decision seen again is the same
- *  row; the domain tag is a hash input, not a code. */
+/** One attempt row. Its ID is the hash of the decision's key with NO clock and NO evidence, so the same decision seen again is the same
+ *  row, however its evidence has grown. The evidence is recorded on the row as it stood at the first filing; the domain tag is a hash
+ *  input, not a code (D-6190). */
 function attemptOf(
   ground: Ground,
   parent: { parentId: string; parentIncarnation: string },

@@ -172,7 +172,7 @@ One `coord.db` migration (wave 2) creates every table; later waves ship code onl
 | Table | Holds |
 |---|---|
 | `delegation_sessions` | per session: explicit intent, effective identity, basis, the (ccd id → Claude session UUIDs) history observed in its spool |
-| `delegation_attempts` | correlation attempts: inputs, rung reached, verdict, evidence ids |
+| `delegation_attempts` | correlation attempts, one row per decision: parent (id + incarnation), tree (project, admin record, canonical path), rung reached, verdict and reason. The row records the evidence ids of its first filing; evidence that grows after it was filed files nothing (amended 2026-10-21, D-6190) |
 | `delegation_activities` | activity id, parent, source kind, upstream ids, display metadata, execution state |
 | `delegation_leases` | lease id + generation, parent (id + incarnation), activity, project, admin record, canonical path, creation base, source, disposition, clocks, cleanup population, cleanup evidence, carrier generation seen |
 | `delegation_lineage` | open/closed edges parent → activity / lease / run, with close reason |
