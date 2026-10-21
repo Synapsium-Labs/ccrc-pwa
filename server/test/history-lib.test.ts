@@ -3078,7 +3078,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(r11Holds(snipR.v2(snipR.base(t, terms, idx), idx), value), `${name}: CONTROL the pre-round composition`).toBe(false);
     };
     // D-6071's worked example: the value `ZQXWORDA ZQXWORDB` starts at offset 47 of this 109-character text, and each word recurs after it.
-    // It prints at starts 1-39 with ends 83-139; with a 12-character prefix it is the plan's window [51,131) (review 725 F3)
+    // It prints at starts 1-39 with ends 83-139; behind a 12-character prefix the same window is [51,131) (review 725 F3)
     const worked = String.raw`password="]SECRETX1Z river stone end; ,token=\"ZQXWORDA ZQXWORDB\" zqxpost ZQXWORDA lamp ZQXWORDB after words`;
     expect(worked.length).toBe(109);
     expect(worked.indexOf('ZQXWORDA')).toBe(47);

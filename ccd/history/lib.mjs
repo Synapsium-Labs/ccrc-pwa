@@ -2963,7 +2963,10 @@ function redactFinalTextWith(text, idx, rs) {
  *  very text the pre-round door read), the pre-round composition (review 725 F1); (3) the widened rules read the BASE READING of
  *  the margin-widened text (composedTokens), and a token of v2's output is masked unless that reading prints it and the shown text
  *  holds the same string as a token too (maskUnprinted: a token v2 joined or decoded is masked unless the shown text holds that
- *  string as a token, availability only; a snippet also needs preRoundTokens; an edge token keeps its whole-token decision only
+ *  string as a token, availability only; both doors also need the second reading, the tokens v2 prints over the text it was given:
+ *  the window's v2 output (tokensOf, null where v2 rewrote nothing), the snippet's unframed cut slice (preRoundTokens). The window's
+ *  was dropped as redundant in 66864b647 and came back on review 744 F2: where the cut splits a mark, the piece's tokens leave the
+ *  mark's fragment out and v2's own output's tokens join it to its neighbour; an edge token keeps its whole-token decision only
  *  where v2 left the edge as the cut made it); (4) v2 then reads the result. So the door only replaces spans of the pre-round
  *  composition's output with marks. The door is v2(base) in three cases: a window of the whole text through redactDisplayWindow
  *  (displayWindow's step 0), a window or snippet whose margin text is not read (longer than DISPLAY_WINDOW_MAX), and any window or
@@ -2980,8 +2983,8 @@ const DOOR_READINGS = (() => {
   // reads it over the raw text); and `whole`, the door composeDoor returns: the base door's cut, v2 over the text it shows (a snippet's
   // is the framed base snippet), each token of that output masked unless the widened rules print it over the base reading of the
   // margin-widened text AND the shown text holds the same string as a token (composedTokens, maskUnprinted, D-6071; a joined or
-  // decoded token is masked unless the shown text holds that string), and, for a snippet, v2 over the unframed cut slice prints it
-  // (preRoundTokens), then v2 over that, as before. It is v2(base) where no margin is read or the widened reading changes nothing.
+  // decoded token is masked unless the shown text holds that string), and v2's own tokens hold it (the second reading, both doors: the
+  // window's is the tokens of v2's output, tokensOf; the snippet's is v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
@@ -7763,14 +7766,17 @@ function displayWindowRead(text, from, to, idx, rs) {
  *  anywhere (relayUnion's same-characters residual, at the level of the token); (2) the shown text holds it as a token too, a
  *  deliberate rule at the string level: a token v2 JOINED or DECODED (a value a colour sequence split, an escape) is masked unless
  *  the text the cut shows holds the same string as a token (between its split-mark edges), availability only, and the display
- *  doors never hand back a masking 8e2ff9040 had; (3) for a snippet, the
- *  tokens v2 prints over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more; the window
- *  door has none, as its tokens are v2's own). A token the cut itself split at an edge is decided by the WHOLE token of `read` around
+ *  doors never hand back a masking 8e2ff9040 had; (3) the second reading, the tokens v2 prints over the text it was given: for a
+ *  snippet over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more), for a window the
+ *  tokens of v2's own output (tokensOf, null where v2 rewrote nothing). The window's was dropped as redundant in 66864b647 and came
+ *  back on review 744 F2: where the cut splits a mark, the tokens of the piece between the split edges leave the mark's fragment out,
+ *  and v2's own output's tokens join it to its neighbour, so a token touching a fragment was masked by 8e2ff9040 and printed once
+ *  the reading was gone. A token the cut itself split at an edge is decided by the WHOLE token of `read` around
  *  that edge, not by the fragment, and only where v2 left that edge as the cut made it: the edge token is the same token in v2's
  *  output as in `shown` (a split mark is kept as written when v2's output starts, or ends, with the cut part of it, and the fragment
  *  of a split mark is no token of `shown`). Where v2 rewrote the edge, or for an inexact window, whose text is not a slice of `read`,
  *  the edge token is decided as itself: masked unless the widened reading prints it as it stands, `shown` holds it as a token and,
- *  for a snippet, the second reading prints it (fail closed, availability only). The one edge where the door takes v2's rewritten
+ *  the second reading holds it (fail closed, availability only). The one edge where the door takes v2's rewritten
  *  text is the snippet's right edge whenever v2's output does not end with the closing `...`: the cut ended inside a value or a
  *  split mark, or in a value v2 reads glued to the `...`, and v2 takes the `...` into the mark it makes. That is safe because in
  *  every such case v2's output ends in a mark (measured: 547, 550 and 666 cases over three seeds, all ending in one), which can
@@ -7825,10 +7831,11 @@ function edgeTokens(s) {
   return { head: head === null ? null : head[0], last };
 }
 
-/** The snippet door's second reading (D-6071, review 721 item 1; review 725 F1's amendment keeps it for the snippet only): the tokens
- *  v2 prints over `slice`, the unframed cut slice of the base window text, as 8e2ff9040 defined it. The window door has none: its
- *  tokens are the tokens of v2's own output, so the reading is redundant there (measured: 0 outputs change). Over the snippet it
- *  changes a few outputs, and only by masking more, so it stays. null when v2 changes nothing: it then masks nothing. */
+/** The snippet door's second reading (D-6071, review 721 item 1): the tokens v2 prints over `slice`, the unframed cut slice of the base
+ *  window text, as 8e2ff9040 defined it. It changes a few snippet outputs, and only by masking more. null when v2 changes nothing: it
+ *  then masks nothing. The window door's second reading is tokensOf(v2's own output) (composedWindow): it was dropped as redundant in
+ *  66864b647 (0 outputs changed, but none of the measured windows split a mark) and restored on review 744 F2, where a cut that splits
+ *  a mark leaves the mark's fragment out of the piece's tokens. */
 function preRoundTokens(slice, idx) {
   const v2 = redactForDisplayWith(slice, idx, CONTEXT_RULES);
   return v2 === slice ? null : tokensOf(v2);
@@ -7844,7 +7851,7 @@ function tokensOf(s) {
 /** `piece`, v2 over `shown` (the base door's text), with each token masked that is not kept. A token is kept when ALL of these hold:
  *  (1) the first reading (`printed`) prints it; (2) `shown` holds the same string as a token (the third membership, a deliberate
  *  rule at the string level: a token v2 joined or decoded, such as a value a colour sequence split, is masked unless `shown` also
- *  holds that string as a token, availability only); (3) `pre`, where there is one (the snippet's second reading, preRoundTokens), holds it. `shown` is tokenized
+ *  holds that string as a token, availability only); (3) `pre`, where there is one (the second reading: the snippet's preRoundTokens, the window's tokensOf over v2's output), holds it. `shown` is tokenized
  *  between its split-mark edges, as `piece` is (lo, hi): the fragment of a mark the cut splits is no token, so the NAME before a split
  *  mark stays a token even where v2 completes that mark. `shown` is `d.slice(p0, p0 + shown.length)` (`d` null for an inexact window,
  *  which is not a slice of its read: no edge leniency). A token the cut at either end splits is decided by its whole token in `d`
@@ -7896,8 +7903,9 @@ export function redactDisplayWindow(text, from, to, idx) {
 
 /** A display window composed (D-6071; review 725 F1): v2 over the base window as the base door shows it (its text, with the inexact
  *  note ahead of an inexact one), the pre-round composition; then each token of that output replaced by the mark unless the
- *  widened reading of the window's margin-widened text prints it AND the window's own text holds it as a token (maskUnprinted;
- *  an edge token keeps its whole-token decision only where v2 left the edge as it was). v2 reads the result last, in
+ *  widened reading of the window's margin-widened text prints it AND the window's own text holds it as a token AND the tokens of that
+ *  very v2 output hold it (the second reading, null where v2 rewrote nothing; maskUnprinted; an edge token keeps its whole-token
+ *  decision only where v2 left the edge as it was). v2 reads the result last, in
  *  DOOR_READINGS. If v2 rewrote the inexact note, the text is one mark. A window of the whole text is redactForDisplay's reading
  *  and is left to v2. */
 function composedWindow(w, idx) {
