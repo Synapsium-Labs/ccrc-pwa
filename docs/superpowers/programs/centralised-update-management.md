@@ -2505,7 +2505,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           at yesterday's pace. Mail 7528 said two to three days; the soak mail corrects it.
         - STATUS: fleet and server v0.0.508, newest v0.0.509, stable v0.0.502, intent dev/auto=off, backups fleet
           186M/server 9613M, disk free fleet 159G/work volume 28G/server 22G, no anomalies.
-        - 06:05: mails 7529 and 7530. The broker's coordinator asked for the 15 lines whole. They went as a numbers-only
+        - 06:00: mails 7529 and 7530. The broker's coordinator asked for the 15 lines whole. They went as a numbers-only
           artifact, kept with the earlier slow lines and their checksums. The 15.4 s stall is `stallMid` on a pass that
           is not hourly (`repairSkipped=1`, `rewrites=2`), and four passes share that shape. On ordinary passes,
           `stallFlush` tracks `rewrite`. Its next follow-up, run 728 (the delta projection), removes flush's full rewrite.
