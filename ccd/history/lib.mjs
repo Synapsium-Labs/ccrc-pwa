@@ -2958,8 +2958,11 @@ function redactFinalTextWith(text, idx, rs) {
  *  which the base reading already took, and decoded again a JSON string held inside a JSON string would be indexed at its
  *  second level whether or not anything there is masked (D-4343's rule keeps a deeper level only when it masks something).
  *  A display window's or a snippet's v2 reading is redactForDisplay's reading of its base output. The door they return is not
- *  v2(base): `whole` reads the widened rules over the margin-widened text before the cut, so a NAME the cut removed still masks
- *  its value's tail (composedTokens and maskUnprinted, D-6071, review 711 F1). On a window of the whole text it is v2(base) (displayWindow's step 0).
+ *  v2(base), so a NAME the cut removed still masks its value's tail (D-6071, review 711 F1). `whole`: (1) the cut stays the base
+ *  door's; (2) the widened rules read the BASE READING of the margin-widened text (composedTokens); (3) only the tokens of the
+ *  shown window that this reading no longer prints, or that v2 over the base door's shown text no longer prints, are masked
+ *  (maskUnprinted, preRoundTokens); (4) v2 then reads the result. Only a window of the whole text through redactDisplayWindow
+ *  is v2(base) (displayWindow's step 0); a whole-text snippet is not.
  *  `whole` answers `{ base, out }` from one read, so composeDoor's base is not computed twice.
  *  nodeIndexTexts, the --regex child, the node fields and the relay read these doors, so they are composed through them. */
 const DOOR_READINGS = (() => {
@@ -2969,8 +2972,9 @@ const DOOR_READINGS = (() => {
   });
   const shown = (out, idx, rs) => redactForDisplayWith(out, idx, rs);
   // A display window or snippet: its base is rev 3.6's door; its v2 is redactForDisplay's reading of that output (the (j10) CONTROL
-  // reads it over the raw text); and `whole`, the door composeDoor returns, is the base door with the widened rules read over the
-  // margin-widened text BEFORE the cut (composedTokens, D-6071), then v2 over that, as before.
+  // reads it over the raw text); and `whole`, the door composeDoor returns: the base door's cut, the widened rules read over the base
+  // reading of the margin-widened text (composedTokens, D-6071), the tokens of the shown window that this reading and the pre-round
+  // composition no longer print masked (maskUnprinted), then v2 over that, as before.
   const display = (impl) => Object.freeze({
     base: (...args) => impl(...args, BASE_RULES),
     v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
@@ -7746,8 +7750,8 @@ function displayWindowRead(text, from, to, idx, rs) {
  *  A token (UNION_TOKEN_RE) is a mark, or a maximal run of characters that are neither whitespace nor one of `"`, `'`, `` ` ``,
  *  `,`, `;` and `&` (TOKEN_BREAK_RE's sense) and hold no mark, so a word in any script, and the punctuation of a value, are
  *  masked with it. What can still print between tokens is whitespace and those six break characters: a value's separators,
- *  never its words. A token is kept when the widened reading prints the same characters anywhere (relayUnion's
- *  same-characters residual). A token the cut itself split at an edge is decided by the WHOLE token of `read` around that
+ *  never its words. A token is kept when the widened reading AND the pre-round reading (preRoundTokens) both print the same characters
+ *  anywhere (relayUnion's same-characters residual). A token the cut itself split at an edge is decided by the WHOLE token of `read` around that
  *  edge, not by the fragment: kept only when that token is printed (a split mark is kept as written); an inexact window, whose
  *  text is not a slice of `read`, has no edge leniency. A token with an ANSI sequence the widened reading joined or decoded is
  *  absent from it, so it is masked: over-masking, never a leak. Nothing changes when the widened reading changes nothing; a
