@@ -2474,6 +2474,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - The probe's NOTE again at about 00:58: `/health` silent for 5 s, then v0.0.493 on the retry, the fifth today.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.502, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 43G/server 23G, no anomalies.
+      - 01:55: mail 7488, the broker's measure-and-cut follow-up merged (#832, `69aac52f5`). Once rolled out, its
+        slow-pass line adds per-phase CPU and measured event-loop stalls (`stallMax`, `stallP99`); the reading rule
+        is in the broker's wave-3 plan. The soak does not restart on it: by the operator's ruling the delta
+        projection comes first. The hourly probe and the disk watch continue as they are. One thing to watch: if live
+        data shows fewer spool lines than hook events for one session, tell the broker's coordinator. A CI row lost
+        one line in twelve once, and it is unexplained.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
