@@ -156,6 +156,10 @@ describe('groupRuns (D-5587)', () => {
     expect(fromFinished.running[0]!.title).toBe('Programme A');
   });
 
+  it("today: awaiting-review is needs (D-5587's map row, before D-6170)", () => {
+    expect(RUN_GROUP['awaiting-review']).toBe('needs');
+  });
+
   it('every RunState has a group', () => {
     expect(Object.keys(RUN_GROUP).sort()).toEqual([...RUN_STATES].sort());
     // The record's Finished states are exactly the ones isRunClosed closes (D-5650).
