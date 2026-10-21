@@ -10,8 +10,8 @@
 // The rules it keeps:
 // - THE GATE comes first, inside each of the two functions that build a docs argv (`readDocs`, `fetchDocs`), and both
 //   of its answers are decided before any exec. `verb-gate.test.ts` reads the nearest enclosing function of every
-//   `CCD_ARGV.docs*(` call for a literal `capSupported(`, which is why one shared gate helper would read as ungated
-//   (refinement (c)), and why each function head stays on one line with a named return type.
+//   `CCD_ARGV.docs*(` call for a `ccdCan(` naming that call's own row (D-5866), which is why one shared gate helper
+//   would read as ungated (refinement (c)), and why each function head stays on one line with a named return type.
 // - IT NEVER NARROWS a distinction it received. The checks run in section 2 (b)'s order and the first match wins.
 //   ccd's words and every context key ride through verbatim: absent stays absent and `null` stays `null` (D-4157's
 //   `unwalked`, D-4158's `lockAgeMs`, contract F4's `branch`). A word outside ccd's set is `unknown-failure {word}`,
@@ -27,7 +27,7 @@
 // here can recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
 // wave's lever is the runner budget invariant that `docs-budget.test.ts` holds, so the agent never kills ccd first).
 import { createHash } from 'node:crypto';
-import { CCD_ARGV, DOCS_CAP, capSupported } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
@@ -110,13 +110,17 @@ function stderrHeadOf(s: string): string {
  * gate lines are section 2 (a)'s, literally, and both answers are decided before any exec:
  * - no list, or a list without the token `caps`, measured nothing (an agent whose boot read of `ccd caps` failed
  *   seeds `[]`): `caps-unknown` (C1);
- * - a measured list without `docs-v1`: `unsupported`. `capSupported`, never `verbSupported`: a box can echo the four
- *   verb names without the token, and `verbSupported` would permit it.
+ * - a measured list without `docs-v1`: `unsupported`. Asked as `ccdCan` of the call's own row (D-5866), whose token is
+ *   `docs-v1` and which refuses on no evidence: a box can echo the four verb names without the token, and
+ *   `verbSupported` would permit it.
  */
 async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan> {
   const verbs = deps.fleetState?.ccdVerbs ?? null;
   if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
-  if (!capSupported(deps.fleetState, DOCS_CAP)) return fail('unsupported');
+  const can = ccdCan(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'
+    : call.verb === 'docs-tree' ? 'docsTree'
+      : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
+  if (!can) return fail('unsupported');
   switch (call.verb) {
     case 'docs-index':
       return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };
@@ -141,7 +145,7 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
 async function fetchDocs(deps: CcdDocsDeps, project: string, branch: string | null): Promise<DocsRan> {
   const verbs = deps.fleetState?.ccdVerbs ?? null;
   if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
-  if (!capSupported(deps.fleetState, DOCS_CAP)) return fail('unsupported');
+  if (!ccdCan(deps.fleetState, 'docsFetch')) return fail('unsupported');
   return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };
 }
 

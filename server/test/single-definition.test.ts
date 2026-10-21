@@ -5773,10 +5773,14 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
   /** D-5866 (Task C1k): `CCD_CAN`'s own entry for the row, a NAME keyed to its capability token, which builds and
    *  calls nothing. It is excepted in `ccdargv.ts` alone, on its own line, and held to exactly one such line below. */
   const CAN_ENTRY = /^\s*docsFetch: capRow\(DOCS_CAP\),\s*$/;
+  /** D-5866: the adapter's own gate, `ccdCan(deps.fleetState, 'docsFetch')`, ASKS by the row's name and builds
+   *  nothing. It is excepted in the adapter alone, on its own line, and held to exactly one such line below. */
+  const CAN_ASK = /^\s*if \(!ccdCan\(deps\.fleetState, 'docsFetch'\)\) return fail\('unsupported'\);\s*$/;
   /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
   const docsFetchLines = (files: readonly Text[]): string[] =>
     files.flatMap(([n, t]) => stallCodeText(t).split('\n')
-      .filter((l) => DOCS_FETCH_ID.test(l) && !(n === ARGV && CAN_ENTRY.test(l))).map(() => n));
+      .filter((l) => DOCS_FETCH_ID.test(l) && !(n === ARGV && CAN_ENTRY.test(l)) && !(n === SOURCE && CAN_ASK.test(l)))
+      .map(() => n));
   /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
   const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
   /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
@@ -5815,6 +5819,12 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
       .toBe(before + 1);
     expect(docsFetchLines(plantedIn(ARGV, '  docsFetch: (p, b) => CCD_ARGV.docsFetch(p, b),')).length, 'another line counts')
       .toBe(before + 1);
+    const sourceText = LIVE.find(([n]) => n === SOURCE)![1];
+    expect(stallCodeText(sourceText).split('\n').filter((l) => CAN_ASK.test(l)), 'the adapter asks once').toHaveLength(1);
+    expect(docsFetchLines(plantedIn(ARGV, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return fail('unsupported');")).length,
+      'the ask counts outside the adapter').toBe(before + 1);
+    expect(docsFetchLines(plantedIn(SOURCE, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return run(CCD_ARGV.docsFetch(p, b));"))
+      .length, 'a line that asks AND calls counts').toBe(before + 1);
   });
 
   it('CONTROL: a keyof-typeof type query is not an escape; a bare typeof or a value use still is (D-5866)', () => {
