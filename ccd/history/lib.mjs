@@ -7831,10 +7831,14 @@ function edgeTokens(s) {
  *  changes a few outputs, and only by masking more, so it stays. null when v2 changes nothing: it then masks nothing. */
 function preRoundTokens(slice, idx) {
   const v2 = redactForDisplayWith(slice, idx, CONTEXT_RULES);
-  if (v2 === slice) return null;
-  const pre = new Set();
-  for (const m of v2.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) pre.add(m[0]);
-  return pre;
+  return v2 === slice ? null : tokensOf(v2);
+}
+
+/** The tokens of `s` (UNION_TOKEN_RE) other than the mark, as a set: the second reading's membership (preRoundTokens, composedWindow). */
+function tokensOf(s) {
+  const tokens = new Set();
+  for (const m of s.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) tokens.add(m[0]);
+  return tokens;
 }
 
 /** `piece`, v2 over `shown` (the base door's text), with each token masked that is not kept. A token is kept when ALL of these hold:
@@ -7902,7 +7906,9 @@ function composedWindow(w, idx) {
   const note = w.exact ? '' : `${DISPLAY_INEXACT_NOTE}\n`;
   const pre = redactForDisplayWith(`${note}${w.text}`, idx, CONTEXT_RULES);
   if (!pre.startsWith(note)) return { ...w, text: REDACTED_MARK };
-  return { ...w, text: maskUnprinted(pre.slice(note.length), w.text, printed, w.at === undefined ? null : w.read, w.at ?? 0) };
+  // the second reading: the tokens of v2's own output, `pre` whole (a mark fragment stays joined to its neighbour); null where v2 rewrote nothing
+  const second = pre === `${note}${w.text}` ? null : tokensOf(pre);
+  return { ...w, text: maskUnprinted(pre.slice(note.length), w.text, printed, w.at === undefined ? null : w.read, w.at ?? 0, second) };
 }
 
 /** redactDisplayWindow's body over one rule set (R11). With `composed` it answers `{ base, out }`: the base door's text and

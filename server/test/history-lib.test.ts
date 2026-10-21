@@ -3198,6 +3198,32 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const tw = libRedact.redactDisplayWindow(twin.t, twin.a, twin.b, idx);
     for (const w of ['ZQXTABLE75', 'ZQXGREEN51']) expect(r11Holds(tw, w), `the margin-blanked twin prints ${w}: ${JSON.stringify(tw)}`).toBe(false);
   });
+  it('(j25) a window whose cut splits a mark at BOTH edges masks the values beside the fragments: the second reading is v2\'s own output\'s tokens, so a token joined to a split mark stays masked (D-6071, review 744 F2)', () => {
+    const idx = idxOf([]);
+    const win = libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!;
+    // A literal mark sits just before the first value and another just after the last, and the window starts inside the first and ends inside
+    // the second (a cut that splits a mark at the left edge and at the right). maskUnprinted tokenises the piece between those two edges, so a
+    // token that touches a mark's fragment is a token of the piece only if the fragment is left out; the pre-round output's own tokens join
+    // the fragment to its neighbour, and a token of that joined spelling is what v2 masked. The window's second reading (8e2ff9040's, dropped
+    // in 66864b647 as redundant, and restored by review 744 F2) is those tokens: `pre`'s, taken over the whole string v2 returned. The text is
+    // from r11Corpus's seed 0x5746, rebuilt on neutral markers at the lengths of the planted values; the window is [22, 182) of 192 characters.
+    const V = ['SECRETXznq1', 'SECRETXznr1', 'SECRETXzns1', 'SECRETXznt1', 'SECRETXznu1', 'SECRETXznv1'];
+    const t = `{"token":\n"secret": "${M}${V[0]}"}\\"token="${V[1]}"'TOKEN=\\"${V[2]}\\"]Authorization: Bearer ${V[3]}\\nAuthorization: Bearer ${V[4]}(\\"token\\": \\"${V[5]}${M};`;
+    expect(t.length, 'the text').toBe(192);
+    const [a, b] = [22, 182];
+    const [m0, m1] = [t.indexOf(M), t.lastIndexOf(M)];
+    expect(m0 < a && a < m0 + M.length, 'the window starts inside the first mark').toBe(true);
+    expect(m1 < b && b < m1 + M.length, 'the window ends inside the last mark').toBe(true);
+    const out = libRedact.redactDisplayWindow(t, a, b, idx);
+    const printed = [V[0], V[5]].filter((v) => r11Holds(out, v));
+    expect(printed, `the window prints ${printed.join(', ')}: ${JSON.stringify(out)}`).toEqual([]);
+    // CONTROL: rev 3.6's base door and the pre-round composition (v2 over the base door's text) print both values, as 8e2ff9040 masked them
+    const base = win.base(t, a, b, idx);
+    for (const v of [V[0], V[5]]) {
+      expect(r11Holds(base, v), `CONTROL base prints ${v}`).toBe(true);
+      expect(r11Holds(win.v2(base, idx), v), `CONTROL the pre-round composition prints ${v}`).toBe(true);
+    }
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
