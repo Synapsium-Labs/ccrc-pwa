@@ -2611,6 +2611,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - The line is 4.9G away. That is about five or six taps (around 2026-10-22 15:00), or about five days with no
           taps, and the rate is rising. Under 15G the operator decides again.
         - The mail corrects two earlier figures: 7528's "two to three days", and 7530's flush range (8.8 to 11.0 s).
+      - 15:55: both boxes on v0.0.533 (#1085) by the operator's tap, clean. Fleet 15:03:22 to 15:04:45, server 15:05:45
+        to 15:09:00 (`ccrc.service` restarted 15:07:37). Both `done`, `from: pwa`, gates passed, doctor 0 failed on both.
+        Server backups 12504M, the newest 1630M. Server free disk is 19,100M (-788M since 15:00), so the 15G line is
+        4.1G away. The work volume is back to 15.3G. STATUS: fleet and server v0.0.533, newest v0.0.536, stable
+        v0.0.502, intent dev/auto=off, backups fleet 188M/server 12504M, disk free fleet 77G/work volume 15G/server
+        19G, no anomalies.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
