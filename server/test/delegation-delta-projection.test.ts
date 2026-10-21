@@ -408,7 +408,7 @@ describe('R8 / R9 / R10: the store half of the compare-and-swap and the count tr
 
 // ── R15: refusal parity ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-describe('R15: every checkpoint the full path refuses is refused by the delta with the same code, SQLite unchanged and no BEGIN', () => {
+describe('R15: every checkpoint the full path refuses is refused by the delta with the same code and message, SQLite unchanged and no BEGIN', () => {
   const lease0 = (cp: DelegationCheckpointV1, f: (l: DelegationLeaseRow) => DelegationLeaseRow): DelegationCheckpointV1 =>
     ({ ...cp, leases: [f(cp.leases[0]!), ...cp.leases.slice(1)] });
   const withoutOpening = (cp: DelegationCheckpointV1, f: (n: DelegationLineageRow) => DelegationLineageRow | null): DelegationCheckpointV1 => {
@@ -441,6 +441,21 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     ['a malformed instant', (cp) => ({ ...cp, sessions: [{ ...cp.sessions[0]!, firstObservedAt: '2026-10-14 00:00:00' }, ...cp.sessions.slice(1)] }), 'bad-instant'],
     ['(i) a lower applied position with the leases shared by reference', (cp) => ({ ...cp, appliedJournalSequence: 3 }), 'lease-without-journal-entry'],
   ];
+  /** What the FULL path throws for `next` on a twin of the world (a fresh store, the same prior projected), so the delta is held to the
+   *  full path's own code and message and not only to the codes typed in this file. */
+  const fullPathRefusal = (next: DelegationCheckpointV1, foreignKeysOff = false): DelegationModelError => {
+    const twin = openWorld();
+    if (foreignKeysOff) twin.raw.exec('PRAGMA foreign_keys = OFF');
+    let thrown: unknown;
+    try { twin.s.projectDelegationCheckpoint(next); } catch (e) { thrown = e; }
+    expect(thrown, 'the full path refuses this checkpoint too').toBeInstanceOf(DelegationModelError);
+    return thrown as DelegationModelError;
+  };
+  const sameRefusal = (delta: unknown, full: DelegationModelError): void => {
+    expect(delta, 'the delta refuses with a DelegationModelError').toBeInstanceOf(DelegationModelError);
+    expect((delta as DelegationModelError).code, 'the same code as the full path').toBe(full.code);
+    expect((delta as DelegationModelError).message, 'the same message as the full path').toBe(full.message);
+  };
   it.each(cases)('R15: %s is refused with the full path’s code', (_label, make, code) => {
     const w = openWorld();
     const before = dumpAll(w.raw);
@@ -449,6 +464,12 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     expect(dumpAll(w.raw), 'nothing written').toEqual(before);
     expect(beginsOf(w.t), 'refused before BEGIN').toEqual([]);
     expect(w.t.log, 'no delegation statement ran').toEqual([]);
+    // in addition to the fixed code above: the twin's full path says the same, word for word
+    const full = fullPathRefusal(next);
+    expect(full.code, 'the full path\'s code is the fixed one').toBe(code);
+    let thrown: unknown;
+    try { changes(w.s, w.prior, next); } catch (e) { thrown = e; }
+    sameRefusal(thrown, full);
   });
 
   it('R15 (ii): foreign keys off, run as an APPLICABLE delta (fixture 0 to fixture 1 share every lease and lease-owned lineage row), is refused foreign-keys-off before BEGIN', () => {
@@ -462,6 +483,9 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
       expect(dumpAll(w.raw)).toEqual(before);
       expect(beginsOf(w.t)).toEqual([]);
       expect(w.t.log).toEqual([]);
+      let thrown: unknown;
+      try { changes(w.s, w.prior, next); } catch (e) { thrown = e; }
+      sameRefusal(thrown, fullPathRefusal(next, true));
     } finally {
       w.raw.exec('PRAGMA foreign_keys = ON');
     }
