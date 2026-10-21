@@ -10534,18 +10534,19 @@ class DelegationLane {
     this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
-  /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
+  /** D-5692: the applier's open options with the projection port's four calls timed (`rewritten`); the port itself is called as before. The
    *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
   private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
     const port = deps.projection;
     if (port === null) return deps;
     return { ...deps, projection: {
       project: (cp) => this.rewritten(() => port.project(cp), 1, 0),
+      projectChanged: (prior, next) => this.rewritten(() => port.projectChanged(prior, next), 1, 0),
       insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
       eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
     } };
   }
-  /** D-5692: times one call of the coordination store's port (`project`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+  /** D-5692: times one call of the coordination store's port (`project`, `projectChanged`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
    *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
    *  which holds it too, so it is never summed into `block`. */
   private rewritten<T>(fn: () => T, projects: number, events: number): T {
@@ -10836,6 +10837,7 @@ class DelegationLane {
             dir: this.deps.cfg.ccrcDir,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
+              projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
             },

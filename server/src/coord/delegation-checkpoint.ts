@@ -63,6 +63,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationEventRow,
   type DelegationInsertEventsResult,
+  type DelegationProjectChangesResult,
   type DelegationIntervalState,
   type DelegationJournalEntryV1,
   type DelegationJournalRecordV1,
@@ -1228,16 +1229,24 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
 /**
  * What the applier needs of `coord.db`, as a port. Every call is the synchronous store; nothing is awaited inside one.
  *
- * The PRODUCTION port is three `CoordStore` methods, one per member (this module may not reach around the store for its handle:
+ * The PRODUCTION port is four `CoordStore` methods, one per member (this module may not reach around the store for its handle:
  * the coord ring, pinned by `single-definition.test.ts`, so the store is the only thing that holds it):
  *   - `project(cp)`        is `store.projectDelegationCheckpoint(cp)` (the five non-event tables, one transaction);
+ *   - `projectChanged(prior, next)` is `store.projectDelegationCheckpointChanges(prior, next)`: the rows that changed between the two
+ *                           checkpoints, written by compare-and-swap in one transaction, or the FULL projection inside the same call
+ *                           when the pure diff does not apply (it answers which, as `{ mode: 'delta', rows }` or `{ mode: 'full' }`).
+ *                           The applier calls it only while its witness holds (see `projectLocked`); every repair keeps `project`;
  *   - `insertEvents(rows)` is `store.insertDelegationEvents(rows)` (ONE transaction; a conflict is reported, never thrown, and
  *                           does not stop the rows after it);
  *   - `eventStats()`       is `store.delegationEventStats()` (`COUNT(*)` and `MAX(journalSequence)` of `delegation_events`).
- * The wiring is three one-line adapters, which `delegation-recovery.test.ts` builds and runs against the real store.
+ * The wiring is four one-line adapters, which `delegation-recovery.test.ts` builds and runs against the real store.
  */
 export interface DelegationProjectionPort {
   project(checkpoint: DelegationCheckpointV1): void;
+  /** The rows of `next` that differ from `prior`, written in one transaction (or the full projection, answered as `mode: 'full'`). A refusal
+   *  throws, as `project` does; the applier then marks the projection stale and the next application repairs it in full. REQUIRED, so a
+   *  port that forgets it is a compile error rather than a silent fall back to the full write. */
+  projectChanged(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult;
   /** ONE transaction for the whole list. A conflict is reported, not thrown, and does not abort the others. */
   insertEvents(rows: readonly DelegationEventRow[]): DelegationInsertEventsResult;
   eventStats(): { count: number; maxSequence: number | null };
@@ -1493,6 +1502,12 @@ export class DelegationDurability {
   /** D-5836: the checkpoint revision the projection was last made to say (a successful `projectLocked` or full `repairLocked`), or null
    *  when that is unknown. Cleared wherever `projectionStale` is set and at the start of every `recover()`. */
   private projectedRevision: number | null = null;
+  /** Cumulative since construction (never reset, no clock): the whole-checkpoint canonical encodes `commitLocked` made (the no-op compare's
+   *  two, `encodeDelegationCheckpoint`'s one, `verifyDecodable`'s re-encode), the checkpoint-file encodes at the write point, and the byte
+   *  length of the last of those. Read through `commitMeasures()`; counted where the work happens, so a commit that throws later keeps what it spent. */
+  private measuredEncodes = 0;
+  private measuredWrites = 0;
+  private measuredBytes: number | null = null;
   /** D-5836: true once the lane's per-pass repair has been called since the last `recover()` (`open` included); the first one is always full. It is set before the try, so a failed call sets it too, which is safe because a failure marks the projection stale. */
   private perPassSeen = false;
   /** D-5836: the forced-full clock's reading at the last successful full repair, or at the last `recover()`. */
@@ -1526,6 +1541,20 @@ export class DelegationDurability {
 
   /** The last DURABLE state (or the best decoded one while `reconstructing`). */
   state(): DeepReadonly<DelegationRecoveryState> { return this.current; }
+
+  /**
+   * What the commits so far cost, CUMULATIVE since construction (a pass's figure is the difference of two readings; this reads no clock):
+   *   - `encodes`: the whole-checkpoint canonical encodes `commitLocked` made: 2 when the no-op compare ran (only when the application did
+   *     not append), 1 for `encodeDelegationCheckpoint` at the write point, 1 when `verifyDecodable` re-encoded inside the strict decoder.
+   *     NOT counted: row and codec encodes, journal-record encodes, and `applyCheckpointChange`'s `leaseState` compare;
+   *   - `writes`: how many commits reached the write point (`encodeDelegationCheckpoint` calls);
+   *   - `cpBytes`: `bytes.length` of the last of those (the canonical JSON plus its final LF: the bytes written), null before any.
+   * Counted where the work happens, so a commit that throws later (a failed edge, a refused decode) still counted its encodes. A no-op
+   * flush (skipped before the write point) therefore advances `encodes` by 2 and `writes` and `cpBytes` not at all.
+   */
+  commitMeasures(): { encodes: number; writes: number; cpBytes: number | null } {
+    return { encodes: this.measuredEncodes, writes: this.measuredWrites, cpBytes: this.measuredBytes };
+  }
   failure(): DelegationDurabilityFailure | null { return this.failureNow; }
   /** The last torn journal tail this process healed, or null: when, how many bytes, and where they are kept (D-4655). A heal is a
    *  measurement, never a failure, and never makes the applier unhealthy by itself. */
@@ -1725,8 +1754,10 @@ export class DelegationDurability {
    * always the FULL repair. The lane's per-pass call (`perPass: true`, D-5836) is a no-op report (`skipped: true`) when the projection is
    * KNOWN current: the lane has repaired once since the last `recover()`, nothing is stale or drifted, the last projection was of this
    * checkpoint revision, SQLite's `(count, max)` equal the evidence index's, and the hourly forced full (`DELEGATION_REPAIR_FULL_MS`) is
-   * not due; any one failing makes it the full repair. The residual: damage to the five non-event tables made out of band heals at the
-   * next projecting application or the forced full, not at the next pass.
+   * not due; any one failing makes it the full repair. The residual, WIDENED by the delta projection: out-of-band VALUE drift on a row no
+   * delta touches, with every count equal, survives the applications that follow (each writes only the rows it changed); it heals at the
+   * hourly forced full or at recovery, no longer at the next application that projects, and never at the next pass. Out-of-band inserts
+   * and deletes of rows trip the delta's count check at once (the delta refuses, the projection goes stale, the next repair is full).
    */
   repairProjection(opts?: { perPass?: boolean }): Promise<DelegationProjectionRepairReport | null> {
     const perPass = opts?.perPass === true;
@@ -2066,12 +2097,19 @@ export class DelegationDurability {
     // from the caller's word (the items it handed over may all dedupe away). And a skip can only ever cause a write, never suppress one:
     // a change that replaces or removes rows without appending always runs the compare.
     const appends = checkpoint.appliedJournalSequence !== prior.appliedJournalSequence;
+    if (!appends) this.measuredEncodes += 2;
     const sameAsPrior = !appends && canonicalDelegationJson({ ...checkpoint, revision: 0 }) === canonicalDelegationJson({ ...prior, revision: 0 });
     if (plan.records.length === 0 && sameAsPrior && !args.force) {
       return { state: this.current, appended: [], skipped: plan.skipped, openedActivities: [], durable: false, projection: { status: 'unprojected' } };
     }
+    this.measuredEncodes += 1;
     const bytes = encodeDelegationCheckpoint(checkpoint);
-    if (args.verifyDecodable === true) decodeDelegationCheckpoint(bytes);
+    this.measuredWrites += 1;
+    this.measuredBytes = bytes.length;
+    if (args.verifyDecodable === true) {
+      this.measuredEncodes += 1;                           // the strict decoder re-encodes the checkpoint it read, to prove it canonical
+      decodeDelegationCheckpoint(bytes);
+    }
     next.revision = checkpoint.revision;
 
     try {
@@ -2095,7 +2133,7 @@ export class DelegationDurability {
     for (const r of plan.records) if (r.entry.kind === 'evidence-accepted') this.eventIds.add(r.entry.event.eventId);
     this.evidence.extend(evidenceSequences);
     const rows = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map(delegationEventRowOfRecord);
-    const projection: DelegationApplyOutcome['projection'] = args.project === false ? { status: 'unprojected' } : await this.projectLocked(checkpoint, rows);
+    const projection: DelegationApplyOutcome['projection'] = args.project === false ? { status: 'unprojected' } : await this.projectLocked(prior, checkpoint, rows);
     return {
       state: this.current, appended: plan.records, skipped: plan.skipped,
       openedActivities: checkpoint.activities.filter((a) => !before.has(a.activityId)), durable: true, projection,
@@ -2120,8 +2158,24 @@ export class DelegationDurability {
     await this.edge('directory-fsync', () => this.port.fsyncDir(this.deps.dir));
   }
 
-  /** O5 step 8. Never throws: SQLite is repairable output, so a failure here marks it stale and the next application repairs it. */
-  private async projectLocked(checkpoint: DelegationCheckpointV1, rows: readonly DelegationEventRow[]): Promise<DelegationApplyOutcome['projection']> {
+  /**
+   * O5 step 8. Never throws: SQLite is repairable output, so a failure here marks it stale and the next application repairs it.
+   *
+   * THE WITNESS. After the stale branch (kept first, exactly as it was), the projection is written as the ROWS THAT CHANGED
+   * (`projectChanged(prior, checkpoint)`) when `projectedRevision === prior.revision`, that is, when the last thing this applier made the
+   * projection say was the checkpoint this one replaces; otherwise as the whole checkpoint (`project`). Two facts make the witness
+   * enough, so that once the stale branch has passed it always holds and the `project` arm is defensive:
+   *   - stale implies a null witness: every site that sets `projectionStale = true` also nulls `projectedRevision` (`repairLocked`'s catch,
+   *     the conflict arm and the catch below), and `projectedRevision` is set only after a successful full repair (which clears stale
+   *     first) or by the non-stale arm below;
+   *   - `recover()` resolves its own clear of the witness: it either reaches `repairLocked()`, which sets the witness or marks the
+   *     projection stale, or it returns with `failureNow` set, and then `requireReady` refuses every `commitLocked` caller until a
+   *     `recover()` succeeds.
+   * The delta runs inside the existing `project` edge (no edge is added), before `insertEvents`; a store refusal inside it lands in the
+   * catch below like any other failure: stale, and the next application's full repair heals it. Repairs (`repairDelegationProjection`,
+   * the per-session heal, the wipe, recovery's, the bare `repairProjection()`) stay full.
+   */
+  private async projectLocked(prior: DelegationCheckpointV1, checkpoint: DelegationCheckpointV1, rows: readonly DelegationEventRow[]): Promise<DelegationApplyOutcome['projection']> {
     const projection = this.deps.projection;
     if (projection === null) return { status: 'unprojected' };
     try {
@@ -2131,7 +2185,8 @@ export class DelegationDurability {
           if (this.projectionStale) throw new Error('the projection repair did not complete');
           return;
         }
-        projection.project(checkpoint);
+        if (this.projectedRevision === prior.revision) projection.projectChanged(prior, checkpoint);
+        else projection.project(checkpoint);
         const r = projection.insertEvents(rows);
         if (r.conflicts.length > 0) {
           for (const c of r.conflicts) this.drifted.set(JSON.stringify([c.sessionId, c.parentIncarnation]), { sessionId: c.sessionId, incarnation: c.parentIncarnation });
