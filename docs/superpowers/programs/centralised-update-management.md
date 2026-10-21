@@ -2550,6 +2550,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           is ever started later.
         - The one lease is an agent's.
         - The work volume read 16.8G free at 07:36, about 14G an hour.
+      - **08:25 UTC: probe ANOMALY, the fleet work volume at 14G (`ws-add` refuses below 10G); read-only, no cleanup.**
+        - Not this programme's mechanism: both boxes are on v0.0.514 and `done`, and the server has 22G free.
+        - Free space on the work volume: 13.5G at 07:58, 12.7G at 08:15 (114M a minute), 12.6G at 08:24. The rate
+          fell from about 14G an hour at 07:30 to about 1G an hour.
+        - The largest single item: one directory in another ccrc programme's coordinator session transcript folder,
+          29.6G since 00:57 today and not growing. That session was mailed (7626) to trim it if it no longer needs it.
+        - No process holds a growing file open on the volume, so the rest is many new files. The scans that could
+          name them time out on this box.
+        - The standing cleanup (`/tmp/cdk.out*`) is on the root disk, which has 132G free, so it does not apply.
+        - STATUS: fleet and server v0.0.514, newest v0.0.518, stable v0.0.502, intent dev/auto=off, backups fleet
+          186M/server 10262M, disk free fleet 134G/work volume 14G (12.6G at 08:24)/server 22G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
