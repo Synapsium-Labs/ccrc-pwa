@@ -31,7 +31,7 @@
 // honest answer, and `finished` is the one `isRunClosed` already gives them.
 // `run-groups.test.ts` holds the record and `isRunClosed` to the same line.
 import type { RunState, RunSummary } from '../../../shared/api';
-import { programWave, runState, runsByProgram } from './runWords';
+import { programWave, programmeTitle, runState, runsByProgram } from './runWords';
 
 export type RunGroup = 'needs' | 'running' | 'finished';
 
@@ -72,25 +72,13 @@ export interface RunGroups {
   readonly finished: readonly RunSummary[];
 }
 
-/** A programme's title: the first non-empty `programTitle` any of its runs
- *  carries, else the slug. */
-function titlesOf(runs: readonly RunSummary[]): Map<string, string> {
-  const titles = new Map<string, string>();
-  for (const run of runs) {
-    if (!titles.has(run.program) && typeof run.programTitle === 'string' && run.programTitle.trim() !== '') {
-      titles.set(run.program, run.programTitle);
-    }
-  }
-  return titles;
-}
-
 /** The board's groups. `active` and `finished` are the board's own two lists
  *  (`RunsScreen.tsx`): `finished` keeps its order and its source (the cold
  *  read), so its honesty about a failed read stays the caller's. A run is
  *  listed once, by id, in the first group that claims it. */
 export function groupRuns(active: readonly RunSummary[], finished: readonly RunSummary[]): RunGroups {
-  const titles = titlesOf([...active, ...finished]);
-  const titleOf = (program: string): string => titles.get(program) ?? program;
+  const all = [...active, ...finished];
+  const titleOf = (program: string): string => programmeTitle(program, all);
   const seen = new Set<number>();
   const once = (run: RunSummary): boolean => {
     if (seen.has(run.id)) return false;

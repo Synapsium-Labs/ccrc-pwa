@@ -869,6 +869,28 @@ export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): strin
   ` · ${r.kind === 'review' ? `review of wave ${r.wave}`
     : r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`}`;
 
+/** A programme's title in words (D-6170): the first non-blank `programTitle`
+ *  any of `runs` carries for `program`, else the slug. A whitespace-only title
+ *  is no title. The one reader: the ledger's group head, `runRowName` and
+ *  `groupRuns` all ask it. */
+export const programmeTitle = (
+  program: string,
+  runs: readonly { program: string; programTitle?: string | null }[],
+): string => {
+  for (const r of runs) {
+    if (r.program === program && typeof r.programTitle === 'string' && r.programTitle.trim() !== '') return r.programTitle;
+  }
+  return program;
+};
+
+/** A ledger row's name (D-6170, spec §5 W0): the programme's title and the
+ *  wave in words — `Programme A · wave 3 of 5`, or `Programme A · review of
+ *  wave 5` on a review run, the review said once by `programmeWaveTail`. Never
+ *  a workspace, a branch or a run number: those stay in the row's title and the
+ *  controls' accessible names (D-5589). */
+export const runRowName = (run: NonNullable<ChildRunContext['run']>): string =>
+  `${programmeTitle(run.program, [run])}${programmeWaveTail(run)}`;
+
 /** The plain-language sentence for a row an active run names (the label's and
  *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
  *  for a workspace the run minted. */
