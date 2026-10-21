@@ -103,6 +103,28 @@
   padding-top: var(--sp-1);
 }
 
+/* W2 Task S8 (D-5474): Refined's inspector rail. The frame mounts the `<aside aria-label="Inspector">` in every width;
+   `InspectorRail` fills it only at >=1600 on a session route, so an EMPTY aside takes no cell and no track. A filled
+   one is a third, 320 column right of the reading column, from under the banners to the foot, and scrolls itself. The
+   first two tracks are Refined's own (S4b's grid below: a 400 sidebar from 1600), and the rail sits in S4b's third row.
+   The edge reuses the bar's own (`shell.css`'s `.shell-accounts` border), so nothing here is a new contrast identity. */
+.ref-frame > .shell-inspector:empty {
+  display: none;
+}
+@media (min-width: 1600px) {
+  .ref-frame:has(> .shell-inspector:not(:empty)) {
+    grid-template-columns: 400px minmax(0, 1fr) 320px;
+  }
+  .ref-frame > .shell-inspector:not(:empty) {
+    grid-column: 3;
+    grid-row: 3;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-left: 1px solid var(--edge-subtle);
+  }
+}
+
 /* W2 Task S4b (D-5471; spec §5.3, Shell, laptop and wide rows): Refined's frame at a desk. Three rows: the 56px bar,
    the banner stack spanning the frame under it, then the sidebar and the detail. The sidebar is
    clamp(320px, 24vw, 400px), and 400 from 1600. Below 900 nothing here applies: the phone swap is `shell.css`'s,

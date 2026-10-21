@@ -18,7 +18,7 @@ import {
 import {
   DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, childReclaimChip, childReclaimGone,
   childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
-  resumeNote, runKindChip, runWarnings, runItems, runState,
+  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
@@ -136,7 +136,9 @@ export function RunRow({
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
       <span className="run-state">{RUN_WORD[state]}</span>
-      <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
+      {/* D-6170: the name is the programme's title and wave in words, never a
+          workspace, a branch or a run number — those ride the row's `title`. */}
+      <span className="run-name">{runRowName(run)}</span>
       <span className="run-project">{run.project}</span>
       {crossing !== null && (
         <span className="run-crossing" data-home={crossing.home} title={crossing.title}>
@@ -244,11 +246,16 @@ export function RunRow({
   // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
   // whole row body in `<button className="run-open">`, and a `<button>`
   // inside a `<button>` is invalid HTML and unreachable to a screen reader.
-  // It renders on EVERY row, including the inert (no-session) one just below
+  // It renders on every OPEN row, including the inert (no-session) one just below
   // — an inert row is exactly the wedge shape (`ambiguous-dispatch`, a
   // `planned` run with no session) this control exists to release
   // (`abandon-sheet.test.tsx`'s own pin on that case).
-  const abandonButton = (
+  //
+  // D-6170 (G5 (a)): drawn on OPEN rows only. A closed run has nothing left to
+  // release, and a door on every finished row invites the act the runs page
+  // exists to make rare. A `planned` run with no session is open, so the
+  // wedge door above stands (D-282).
+  const abandonButton = isRunClosed(run) ? null : (
     <button
       type="button"
       className="run-abandon"
@@ -333,10 +340,14 @@ export function RunRow({
   // "stops offering to open its session"). It gets the same inert row, for the
   // same reason. `resumeButton` and `abandonButton` keep their place: neither
   // is about the worker's session.
+  // D-6170 keeps D-5589's id rule: the run number and the workspace (else the
+  // branch) live in the row's title and the controls' accessible names only.
+  const where = run.workspace ?? run.branch;
+  const rowTitle = where === null ? `run ${run.id}` : `run ${run.id} · ${where}`;
   return run.sessionId === null || childReclaimGone(reclaim)
-    ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
+    ? <li className="run-row" data-inert="true" title={rowTitle}>{body}{resumeButton}{abandonButton}</li>
     : (
-      <li className="run-row">
+      <li className="run-row" title={rowTitle}>
         <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
           {body}
         </button>

@@ -121,6 +121,41 @@ describe('the platform block is one definition, spelled in two files', () => {
       }
     }
   });
+
+  it('holds the strict deadline question in the owner: two neighbours of _plat_timeout, no second detector (plan W2 Task 11)', () => {
+    // `_plat_timeout_capability` and `_plat_timeout_strict` are the advance step's way to ask whether the selected
+    // utility escalates, and to refuse to run automatic work where it does not. They are NEIGHBOURS in the block
+    // (the body of `_plat_timeout` is byte-pinned against two more copies), so the question stays with its owner by
+    // construction, and this is where that is held: the one `-k` probe's bytes are spelled once per file, the
+    // neighbours name neither `timeout` nor `gtimeout`, nor run a probe of their own, and the strict one hands the
+    // program to `_plat_timeout` itself. No kill-by-pid watcher can join them either.
+    const code = (fn: string, src: string): string => {
+      const at = src.indexOf(`\n${fn}() {`);
+      expect(at, `${fn} is missing`).toBeGreaterThan(-1);
+      const body = src.slice(at + 1, src.indexOf('\n}\n', at) + 2);
+      return body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    };
+    for (const [name, src] of [['ccd', ccd], ['ccrc', ccrc]] as const) {
+      const start = src.indexOf('# ── THE PLATFORM LAYER');
+      const end = src.indexOf('# ── END PLATFORM LAYER');
+      const block = src.slice(start, end);
+      // Code lines only: the probe's comments quote its bytes too.
+      const blockCode = block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      expect(blockCode.split('\n').filter((l) => l.includes('ccd-k-ok')).length,
+        `${name}: the -k probe is spelled on more than one line`).toBe(1);
+      const cap = code('_plat_timeout_capability', src);
+      const strict = code('_plat_timeout_strict', src);
+      for (const fn of [cap, strict]) {
+        expect(fn, `${name}: a strict neighbour names a deadline binary`).not.toMatch(/\b(?:g?timeout)\s/);
+        expect(fn, `${name}: a strict neighbour signals by pid`).not.toMatch(/\bkill\b/);
+        expect(fn, `${name}: a strict neighbour runs a probe of its own`).not.toMatch(/\b-k\s+\d/);
+      }
+      expect(cap, `${name}: the capability is not re-proved through _plat_timeout`).toMatch(/\bunset _CCD_TIMEOUT_K\b[\s\S]*\b_plat_timeout 1 true\b/);
+      expect(strict, `${name}: the strict call does not hand the program to _plat_timeout`).toMatch(/^\s*_plat_timeout "\$@"$/m);
+      expect(block, `${name}: an inherited capability is not discarded at source time`)
+        .toMatch(/^unset CCD_TIMEOUT_CAPABILITY _CCD_TIMEOUT_PROVED_PATH$/m);
+    }
+  });
 });
 
 describe('no call site outside the platform block runs a GNU-only command bare', () => {

@@ -10,7 +10,7 @@ import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
-import type { AccountsConnect, LaneWire } from '../../../shared/api';
+import type { AccountsConnect, AccountUsage, LaneWire } from '../../../shared/api';
 
 export interface FleetNotice {
   id: number;
@@ -46,6 +46,10 @@ export interface FleetState {
   lanes: Readonly<Record<string, LaneWire>> | null;
   /** `GET /api/accounts`'s `connect`, on the same terms as `lanes`. */
   accountsConnect: AccountsConnect | null;
+  /** `GET /api/accounts`'s `accounts`, the usage readings, from the same read (W2 Task S8, D-5474: the inspector's lane
+   *  meter reads a session's lane here, so a session route needs no poll of its own). `null` until an answer carries
+   *  an array; a malformed answer keeps the last good one, as `roster` does. Never in the offline snapshot. */
+  usage: readonly AccountUsage[] | null;
   /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
    *  landed in `roster`, `lanes` and `accountsConnect`. Silent on failure, as the poll is. */
   refreshAccounts(): Promise<void>;
@@ -340,6 +344,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         lanes: isRecord(r.lanes) ? r.lanes! : null,
         accountsConnect: isRecord(r.connect) ? r.connect! : null,
       });
+      if (Array.isArray(r.accounts)) set({ usage: r.accounts });
       // Preserves the last good roster on a malformed response — never
       // clobbers it with `[]` (fix round 1, finding 5): a transient bad
       // read must not un-teach every consumer the account labels it
@@ -378,6 +383,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // Never hydrated: the snapshot holds no lane, by design (G15).
       lanes: null,
       accountsConnect: null,
+      usage: null,
       refreshAccounts: readAccounts,
 
       connect() {

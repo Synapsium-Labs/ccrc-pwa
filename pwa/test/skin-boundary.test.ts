@@ -86,7 +86,7 @@ const selectorOf = (d: Decl): string => [...d.chain].reverse().find((p) => !p.st
  *  `['TopBar.tsx']`, S11 adds `PhoneTopBar.tsx`. */
 type BarRegistry = Readonly<Record<string, string | readonly string[]>>;
 
-const BAR_MODULES: BarRegistry = { [REFINED]: ['AppBar.tsx'], [INSTRUMENT]: 'S9' };
+const BAR_MODULES: BarRegistry = { [REFINED]: ['AppBar.tsx'], [INSTRUMENT]: ['TopBar.tsx'] };
 
 const RENDERS_WORDMARK = /<Wordmark\b/;
 
@@ -371,9 +371,10 @@ describe('(a) each skin bar renders Wordmark (D-5094)', () => {
       .toContain(`${REFINED}/PhoneHeader.tsx is listed as a bar module and does not exist`);
   });
   it('a pending skin that renders Wordmark is stale', () => {
-    const tree = planted(`${INSTRUMENT}/TopBar.tsx`, 'export function TopBar() { return <Wordmark />; }');
-    expect(wordmark(tree)).toContain(`${INSTRUMENT} is pending on S9, but TopBar.tsx renders Wordmark: the entry is stale, list the module`);
-    expect(wordmark(tree, { ...BAR_MODULES, [INSTRUMENT]: ['TopBar.tsx'] })).toEqual([]);
+    // Both skins list their bars now (S4b, S9), so the case pends one in the registry against the real tree.
+    expect(wordmark(REPO, { ...BAR_MODULES, [INSTRUMENT]: 'S9' }))
+      .toContain(`${INSTRUMENT} is pending on S9, but TopBar.tsx renders Wordmark: the entry is stale, list the module`);
+    expect(wordmark(REPO, BAR_MODULES)).toEqual([]);
   });
   it('a Wordmark in a comment counts for nothing', () => {
     const tree = rewritten(`${REFINED}/AppBar.tsx`, '// renders <Wordmark /> one day\nexport const AppBar = null;');

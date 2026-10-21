@@ -253,6 +253,11 @@ const CONTROLS: Record<string, string> = {
     + 'then `.skip-link:focus` declares the floor. Its first focusable element, so a keyboard reaches it first.',
   'skins/refined/TranscriptRow.tsx <button> ref-tool-group-row':
     "TOKEN. Refined's grouped tool row (W2 Task S13b, D-5475): the whole line is the disclosure that opens the run.",
+  'inspector/HistorySection.tsx <button> insp-link':
+    "TOKEN. The inspector's door to the session's history (W2 Task S8, D-5474): `.insp-link` declares the floor.",
+  'inspector/RoutingSection.tsx <button> (computed)':
+    'SELECTOR .insp-routing-row button. The inspector\'s model and effort chips (W2 Task S8, D-5474): the header\'s '
+    + '`metaChipTone()` doors, which the rail has the room to raise to the floor the header\'s chips are ruled under.',
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',

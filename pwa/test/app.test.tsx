@@ -451,6 +451,7 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           setSkin(skin);
           navigate('/');
           render(<App />);
+          // The full strip, or the compact gauges a bar places (Instrument's LED meters, W2 Task S9): one either way.
           const strips = document.querySelectorAll('.accounts-strip, .accounts-compact');
           expect(strips).toHaveLength(1);
           const bar = document.querySelector('header.shell-accounts');

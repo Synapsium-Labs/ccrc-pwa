@@ -64,7 +64,8 @@ export interface ShellFrameProps {
 
 export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps): ReactNode {
   // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
-  // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden.
+  // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The rail and
+  // the status bar are desk parts too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
   const desk = useMediaQuery(DESK_QUERY);
   const { Bar, Banners, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
   // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
@@ -97,8 +98,8 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
             <Banners />
           </div>
         )}
-        {Rail !== null && (
-          <nav key="rail" className="shell-rail" aria-label="Rail">
+        {Rail !== null && desk && (
+          <nav key="rail" className="shell-rail" aria-label="Primary">
             <Rail />
           </nav>
         )}
@@ -116,7 +117,7 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
             <Inspector />
           </aside>
         )}
-        {StatusBar !== null && (
+        {StatusBar !== null && desk && (
           <footer key="status" className="shell-status">
             <StatusBar />
           </footer>

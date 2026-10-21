@@ -66,3 +66,14 @@ export function matchRoute(path: string): RouteMatch | null {
   }
   return null;
 }
+
+/** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
+ *  under Fleet (its breadcrumb reads "Fleet › …"). Null for a path outside the table and for a route that is no
+ *  place's page (the digest). Read by the rail's current item and the breadcrumb (W2 Task S9, D-5472), so the two
+ *  never disagree about where a page sits. */
+export function topRouteOf(path: string): Route | null {
+  const at = matchRoute(path);
+  if (at?.route.top === true) return at.route;
+  if (at?.route.id === 'session') return ROUTES.find((r) => r.id === 'fleet') ?? null;
+  return ROUTES.find((r) => r.top && r.path !== null && r.path !== '/' && path.startsWith(`${r.path}/`)) ?? null;
+}

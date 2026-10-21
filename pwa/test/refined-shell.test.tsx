@@ -239,16 +239,19 @@ describe('the app bar (W2 Task S4b)', () => {
 
 describe("Refined's frame (refined.css)", () => {
   const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'refined', 'refined.css'), 'utf8');
-  /** The body of the first `@media` block whose query is exactly `query`. */
+  /** The bodies of every `@media` block whose query is exactly `query`, joined (S8's inspector rail has its own
+   *  1600 block beside the frame's). */
   const block = (query: string): string => {
-    const at = css.indexOf(`@media ${query} {`);
-    expect(at, query).toBeGreaterThanOrEqual(0);
-    let depth = 0;
-    for (let i = css.indexOf('{', at); i < css.length; i += 1) {
-      if (css[i] === '{') depth += 1;
-      if (css[i] === '}') { depth -= 1; if (depth === 0) return css.slice(at, i); }
+    const bodies: string[] = [];
+    for (let at = css.indexOf(`@media ${query} {`); at >= 0; at = css.indexOf(`@media ${query} {`, at + 1)) {
+      let depth = 0;
+      for (let i = css.indexOf('{', at); i < css.length; i += 1) {
+        if (css[i] === '{') depth += 1;
+        if (css[i] === '}') { depth -= 1; if (depth === 0) { bodies.push(css.slice(at, i)); break; } }
+      }
     }
-    return '';
+    expect(bodies.length, query).toBeGreaterThan(0);
+    return bodies.join('\n');
   };
 
   it('the sidebar is clamp(320px, 24vw, 400px), and 400 at ≥1600', () => {

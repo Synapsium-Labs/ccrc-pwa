@@ -88,3 +88,103 @@ export const ADV_SEEDS = { haiku: 'alpha', sonnet: 'beta', opus: 'gamma', fable:
 export const ADV_DEEP = 50_000;
 /** A JSON list nested `ADV_DEEP` deep: about 100 KB, valid JSON, unknown to every reader. */
 export const ADV_DEEP_TEXT = `${'['.repeat(ADV_DEEP)}${']'.repeat(ADV_DEEP)}`;
+
+// ── The advance step's own fixtures (auto-advance plan W2, Tasks 8 to 12) ──
+// Appended after W1's and importing nothing, so this block moves no line
+// above it and adds nothing to the file's import list. Neutral ids only, in
+// the `<vendor>-<version>-<family>` grammar: this repository is public. One
+// lane is built from them everywhere, `lane-a` (codex-kind), and each case
+// varies it by spreading. `CODEX` (modelCases.ts) is never extended.
+
+/** Every effort level a row may list, lowest first: the catalogue's own order,
+ *  which `resolveEffort` ranks by. */
+export const STEP_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** One catalogue row, in `parseCatalogue`'s normalised shape. */
+export const stepRow = (id: string, efforts: readonly string[] = STEP_EFFORTS, hidden = false) => ({
+  id, label: `Fixture ${id}`, context: 272000, maxContext: 272000, efforts: [...efforts], hidden,
+  priceIn: null, priceOut: null,
+});
+
+/** A fresh codex catalogue with four families:
+ *  - alpha: `model-6-alpha` is newest (`model-5.6-alpha` is older);
+ *  - beta: one model;
+ *  - gamma: `model-6.1-gamma` is newer than `model-5.6-gamma` and lists no
+ *    `max`, so an opus at `max` resolves down to `xhigh`;
+ *  - delta: one model, for an empty class whose family is stored. */
+export const STEP_CATALOGUE = {
+  probe: 'codex', fetchedAt: 1789000000, stale: false,
+  models: [
+    stepRow('model-5.6-alpha'), stepRow('model-6-alpha'),
+    stepRow('model-6-beta'),
+    stepRow('model-5.6-gamma'), stepRow('model-6.1-gamma', ['low', 'medium', 'high', 'xhigh']),
+    stepRow('model-6-delta'),
+  ],
+};
+
+/** lane-a's registry: haiku and sonnet on their family's newest model, opus one
+ *  version behind (its one candidate is `model-6.1-gamma`), fable empty. Its key
+ *  order is `parseRegistry`'s, so these bytes are what `writeRegistry` writes. */
+export const STEP_REGISTRY = {
+  probe: 'codex',
+  classes: { haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-5.6-gamma', fable: null as string | null },
+  subagent: 'sonnet',
+  discovery: 'catalogue',
+  effort: { haiku: 'high', sonnet: 'high', opus: 'max' } as Record<string, string>,
+};
+
+/** The family each class's advance-file entry stores. fable's is null: an empty
+ *  class nobody seeded stays empty until a case gives it a family. */
+export const STEP_FAMILIES: Readonly<Record<string, string | null>> = {
+  haiku: 'alpha', sonnet: 'beta', opus: 'gamma', fable: null,
+};
+
+/** A v1 advance file (plan §3.1) for lane-a: every class at `STEP_FAMILIES`
+ *  with no hold, no previous and no history, then `over[class]` spread over its
+ *  entry, and `pending`. */
+export const stepAdvance = (
+  over: Readonly<Record<string, Record<string, unknown>>> = {},
+  pending: Record<string, unknown> | null = null,
+) => ({
+  v: 1,
+  classes: Object.fromEntries(Object.entries(STEP_FAMILIES).map(([cls, family]) =>
+    [cls, { family, hold: null, previous: null, history: [], ...(over[cls] ?? {}) }])),
+  pending,
+});
+
+/** Where a codex-kind fixture lane listens, and where its OAuth would live. */
+export interface StepLane { proxyPort: number; litellmPort: number; authDir: string }
+
+/** The advance step's roster: one upstream row (a roster needs exactly one),
+ *  `lane-a` (codex-kind, on `laneA`'s ports), `lane-b` and `lane-c` (an
+ *  Anthropic lane). `lane-b` is external-kind (the live lanes' shape before their
+ *  flip), or, given `laneB`, a second codex-kind lane on those ports. */
+export const stepRoster = (laneA: StepLane, laneB?: StepLane) => ({
+  version: 1,
+  accounts: [
+    { id: 'lane-up', label: 'lane-up', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true,
+      telemetry: 'anthropic' },
+    { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude-lane-a',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: laneA.proxyPort, litellmPort: laneA.litellmPort,
+        authDir: laneA.authDir },
+      homeAble: false, telemetry: 'codex' },
+    { id: 'lane-b', label: 'lane-b', configDirSuffix: '.claude-lane-b',
+      exec: laneB === undefined ? { kind: 'external', provider: 'openai' }
+        : { kind: 'codex', provider: 'openai', proxyPort: laneB.proxyPort, litellmPort: laneB.litellmPort,
+          authDir: laneB.authDir },
+      homeAble: false, telemetry: 'codex' },
+    { id: 'lane-c', label: 'lane-c', configDirSuffix: '.claude-lane-c', exec: { kind: 'generated' }, homeAble: true,
+      telemetry: 'anthropic' },
+  ],
+});
+
+/** `catalogue` in the RAW shape the Codex endpoint answers, the fields
+ *  `ccrc-models-probe`'s `codex_models` reads, for `CCRC_MODELS_PROBE_FIXTURE`:
+ *  a refresh then probes this same catalogue back. */
+export const stepRaw = (catalogue: { models: ReadonlyArray<ReturnType<typeof stepRow>> }) => ({
+  models: catalogue.models.map((m) => ({
+    slug: m.id, display_name: m.label, description: '', context_window: m.context, max_context_window: m.maxContext,
+    visibility: m.hidden ? 'hide' : 'show', default_reasoning_level: m.efforts[0] ?? null,
+    supported_reasoning_levels: m.efforts.map((effort) => ({ effort })),
+  })),
+});

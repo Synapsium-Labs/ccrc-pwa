@@ -148,7 +148,8 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
       '_plat_mv_notdir', '_plat_ln_swap', '_plat_ctime', '_plat_mtime', '_plat_size', '_plat_btime', '_plat_devino',
       '_plat_bytes', '_plat_epoch_ms', '_plat_cp_replace', '_plat_mktemp', '_plat_mktemp_d', '_plat_mode',
       '_plat_date_to_epoch', '_plat_sha256', '_plat_sha256_check', '_plat_uuid', '_plat_ppid', '_plat_cgroup',
-      '_plat_timeout', 'die', '_json_str', '_fmt_eta', '_now_s_to', '_now_s', '_file_read_to',
+      '_plat_timeout', '_plat_timeout_capability', '_plat_timeout_strict', 'die', '_json_str', '_fmt_eta', '_now_s_to',
+      '_now_s', '_file_read_to',
     ]);
   });
 
