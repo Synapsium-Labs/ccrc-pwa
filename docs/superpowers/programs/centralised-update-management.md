@@ -2569,6 +2569,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 09:55: no anomalies; the work volume is back to 21G free as the owning session's move proceeds (root disk
         101G free, about 24G moved there). STATUS: fleet and server v0.0.514, newest v0.0.526, stable v0.0.502, intent
         dev/auto=off, backups fleet 186M/server 10262M, disk free fleet 99G/work volume 21G/server 21G.
+      - 10:55: no anomalies. Mail 7643: the owning session finished its move with every entry verified and nothing
+        discarded, freeing 8.56G on the work volume; its new large copies now go to the root disk. The root disk fell
+        about 36.5G from 08:58 to 10:27, so that session was sent the figures (7644). Root is about 1G an hour since.
+        STATUS: fleet and server v0.0.514, newest v0.0.527, stable v0.0.502, intent dev/auto=off, backups fleet
+        186M/server 10262M, disk free fleet 84G/work volume 18G/server 21G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
