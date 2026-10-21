@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c96a7a730bc01c1024ab3fc77727def92daf73b229ce02cec7840a7da8529f10
+# ccrc:generated 1 sha256=70a5bc3febb7da6d5612df2aa81735b964514a35542b2d99aacf0c5bd1e78d88
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19488,53 +19488,35 @@ _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says back
   #     Today's behaviour returns.
   # The marker is not re-measured against the live process: a restart writes `bg` 0
   # (`restart` in the hook) and the bound caps a hook that did not run.
-  local id="$1" now="$2" mf="$REG/$id.turn.json" line="" rrc re
-  local st="" sid="" sidok="" at="" stop="" bg="" kinds="" uuid="" urc why="" anchor="" sig="" age nowms
-  _reg_read_to line "$id" turn.json; rrc=$?
-  if (( rrc == 1 )); then _swap_bg_release "$id"; return 1; fi
-  if (( rrc == 2 )); then why=unreadable
-  else
-    re='^\{"v":1,'
-    if (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; then why=malformed
-    else
-      re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && { sid="${BASH_REMATCH[1]}"; sidok=1; }
-      re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
-      re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
-      [[ -n "$sidok" && -n "$st" && -n "$at" ]] || why=malformed
-      if [[ -z "$why" && "$st" == done ]]; then
-        re='"bg":(-?[0-9]{1,9})[,}]';         [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
-        re='"stopAt":([0-9]{1,16})[,}]';      [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
-        re='"bgKinds":"([a-z_,-]{0,200})"';   [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
-        [[ "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
-      fi
-    fi
-    if [[ -z "$why" ]]; then
-      # Not a `done` line, or nothing running: no hold.
-      if [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; then _swap_bg_release "$id"; return 1; fi
-      _reg_read_to uuid "$id" uuid; urc=$?
-      if (( urc == 2 )); then why=unreadable
-      elif [[ -z "$uuid" || "$sid" != "$uuid" ]]; then _swap_bg_release "$id"; return 1
-      fi
-    fi
+  local id="$1" now="$2" line="" rrc re st="" sid="" at="" stop="" bg="" kinds="" uuid="" why="" anchor sig msg age
+  _reg_read_to line "$id" turn.json; rrc=$?; (( rrc == 2 )) && why=unreadable
+  (( rrc == 1 )) && { _swap_bg_release "$id"; return 1; }
+  re='^\{"v":1,'; [[ -z "$why" ]] && { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && why=malformed
+  if [[ -z "$why" ]]; then
+    # `sid` carries a leading `=` so a present-but-empty sessionId still reads as present.
+    re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && sid="=${BASH_REMATCH[1]}"
+    re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
+    re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
+    re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
+    re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
+    re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
+    # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
+    [[ -n "$sid" && -n "$st" && -n "$at" ]] && [[ "$st" != done || "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
   fi
-  nowms=$(( now * 1000 ))
+  if [[ -z "$why" ]]; then
+    # Not a `done` line, or nothing running: no hold. Then another conversation's line: no hold.
+    { [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
+    _reg_read_to uuid "$id" uuid; (( $? == 2 )) && why=unreadable
+    [[ -z "$why" && ( -z "$uuid" || "$sid" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
+  fi
   if [[ -n "$why" ]]; then
-    anchor=$(_plat_mtime "$mf" 2>/dev/null) || anchor=""
+    anchor=$(_plat_mtime "$REG/$id.turn.json" 2>/dev/null) || anchor=""
     [[ "$anchor" =~ ^[0-9]{1,13}$ ]] || { _swap_bg_release "$id"; return 1; }
-    anchor=$(( 10#$anchor * 1000 ))
-    sig="$why:$anchor"
-  else
-    anchor="${stop:-$at}"; anchor=$(( 10#$anchor ))
-    sig="bg:$anchor"
-  fi
-  age=$(( nowms - anchor ))
-  if (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )); then _swap_bg_release "$id" expired; return 1; fi
-  if [[ -n "$why" ]]; then
-    _swap_bg_note "$id" "$sig" "the turn marker is $why, so what runs in the background is unknown"
-  else
-    _swap_bg_note "$id" "$sig" "background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"
-  fi
-  return 0
+    anchor=$(( 10#$anchor * 1000 )); sig="$why:$anchor"; msg="the turn marker is $why, so what runs in the background is unknown"
+  else anchor=$(( 10#${stop:-$at} )); sig="bg:$anchor"; msg="background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"; fi
+  age=$(( now * 1000 - anchor ))
+  (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )) && { _swap_bg_release "$id" expired; return 1; }
+  _swap_bg_note "$id" "$sig" "$msg"; return 0
 }
 
 _swap_bg_note() {   # id sig text — say ONCE per deferral EPISODE that the affinity move is waiting, and why
@@ -19545,19 +19527,14 @@ _swap_bg_note() {   # id sig text — say ONCE per deferral EPISODE that the aff
   # reads. The anchor is the row's `swapdefer` field, the same one-field idiom as
   # `_pane_narrow_note`; `_swap_bg_release` removes it when the hold lifts. A stamp that
   # cannot be written says nothing: a line per tick would be worse than a silent wait.
-  local id="$1" sig="$2" said=""
-  _reg_get_to said "$id" swapdefer
-  [[ "$said" == "$sig" ]] && return 0
-  _reg_set "$id" swapdefer "$sig" || return 0
-  echo "$(date '+%F %T') swap-defer $id: $3; the move waits (at most ${SWAP_BG_HOLD_MAX}s from the last write)" >> "$REG/swap.log"
+  local said=""; _reg_get_to said "$1" swapdefer; [[ "$said" == "$2" ]] && return 0
+  _reg_set "$1" swapdefer "$2" && echo "$(date '+%F %T') swap-defer $1: $3; the move waits (at most ${SWAP_BG_HOLD_MAX}s from the last write)" >> "$REG/swap.log"; return 0
 }
 
 _swap_bg_release() {   # id [expired] — the hold no longer stands: end its episode, and say so once if it ran out
-  local id="$1"
-  [[ -e "$REG/$id.swapdefer" || -L "$REG/$id.swapdefer" ]] || return 0
-  [[ "${2:-}" == expired ]] \
-    && echo "$(date '+%F %T') swap-defer-end $id: the hold reached ${SWAP_BG_HOLD_MAX}s; the move goes ahead" >> "$REG/swap.log"
-  rm -f -- "$REG/$id.swapdefer"
+  [[ -e "$REG/$1.swapdefer" || -L "$REG/$1.swapdefer" ]] || return 0
+  [[ "${2:-}" == expired ]] && echo "$(date '+%F %T') swap-defer-end $1: the hold reached ${SWAP_BG_HOLD_MAX}s; the move goes ahead" >> "$REG/swap.log"
+  rm -f -- "$REG/$1.swapdefer"
 }
 
 _pane_statusline_seg() {   # pane-text glyph -> text of the statusline ROW's `<glyph> …` segment, or empty
