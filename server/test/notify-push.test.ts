@@ -310,13 +310,48 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(said).toHaveLength(1);
     expect(said[0]).toContain(`(${reason})`);
     expect(said[0], 'the refusal must not echo the message').not.toContain(message.slice(0, 40));
-    // A refusal about a lane names the lane and the remedy; one about the message names neither.
+    // A refusal about a lane names the lane, the remedy and how the server picks the change up; one about the message names
+    // none of them. The over-cap arm alone explains itself: the line is a good one, only too long for the push.
     if (lane !== undefined) {
       expect(said[0]).toContain(`lane ${lane} must exist and carry exec.kind "codex"`);
       expect(said[0]).toContain("the server box's roster row");
+      expect(said[0]).toContain("is read at the server's next restart, or when an account verb the server drives answers with the roster");
     } else {
       expect(said[0]).not.toContain('exec.kind');
+      expect(said[0]).not.toContain('next restart');
     }
+    if (reason === 'over-cap') {
+      expect(said[0]).toContain(`longer than the push cap of ${MODELS_PUSH_MAX} characters`);
+      expect(said[0]).toContain('a failure line with long model ids is refused this way by design, and the banner carries it');
+    } else {
+      expect(said[0]).not.toContain('push cap');
+      expect(said[0]).not.toContain('by design');
+    }
+  });
+
+  it('the over-cap refusal explains itself, from MODELS_PUSH_MAX, and still never echoes the line', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = fakePush();
+    app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
+    const secret = 'Re-authenticate at https://example.invalid/login';
+    const message = `lane-a: opus stays on ${'m'.repeat(128)}: ${'n'.repeat(128)} failed its canary (${secret})`;
+    expect(message.length).toBeGreaterThan(MODELS_PUSH_MAX);
+    expect((await post(app, { message, push: true })).statusCode).toBe(200);
+    const said = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('(over-cap)');
+    expect(said[0]).toContain(`: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; `);
+    expect(said[0]).toContain('is refused this way by design, and the banner carries it');
+    for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'mmmmmmmm', 'nnnnnnnn', 'canary']) {
+      expect(said[0], `the warning echoes "${leaked}"`).not.toContain(leaked);
+    }
+    expect(p.notify).not.toHaveBeenCalled();
+  });
+
+  it('the over-cap clause is written from MODELS_PUSH_MAX, not as a number', () => {
+    const route = readFileSync(path.join(REPO, 'server', 'src', 'server.ts'), 'utf8');
+    expect(route).toContain('the push cap of ${MODELS_PUSH_MAX} characters');
+    expect(route).not.toMatch(/push cap of \d/);
   });
 
   it('a refusal about a lane prints the lane id and the remedy, and none of the message (the reason slot is free text)', async () => {
@@ -334,6 +369,8 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(said[0]).toContain('(unknown-lane)');
     expect(said[1]).toContain('lane lane-c must exist and carry exec.kind "codex"');
     expect(said[1]).toContain('(not-a-codex-lane)');
+    // How the change is picked up: the server re-reads its roster at a restart, or from an account verb's answer.
+    for (const l of said) expect(l).toContain("a hand edit of the server box's accounts.json is read at the server's next restart");
     for (const l of said) {
       for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {
         expect(l, `the warning echoes "${leaked}"`).not.toContain(leaked);
@@ -373,6 +410,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   it('the response never waits for the push: a push service whose notify never resolves still answers 200 within 3 seconds', async () => {
     const p = fakePush(() => new Promise<void>(() => {}));
     app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
+    await app.ready();   // so that only the request sits inside the bound, not the server's own start-up
     let timer: NodeJS.Timeout | undefined;
     const bound = new Promise<'timed-out'>((resolve) => { timer = setTimeout(() => resolve('timed-out'), 3000); });
     const res = await Promise.race([post(app, { message: MOVED, push: true }), bound]);
@@ -630,13 +668,36 @@ describe('the check is not vacuous: a message template that drifts from modelsPu
   });
 });
 
-describe('the push patterns are derived from their owners, and each rule is written once (text pins on shared/models.mjs)', () => {
+describe('the push patterns are built from their owners, every shape uses them, and each rule is spelled once (text pins on shared/models.mjs)', () => {
   const src = readFileSync(path.join(REPO, 'shared', 'models.mjs'), 'utf8');
   const count = (re: RegExp): number => src.match(re)?.length ?? 0;
+  const shapes = (): string[] => {
+    const block = /const PUSH_SHAPES = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(src);
+    expect(block, 'models.mjs has no PUSH_SHAPES block').not.toBeNull();
+    return [...block![1]!.matchAll(/new RegExp\(`([^`]*)`\)/g)].map((m) => m[1]!);
+  };
 
   it('PUSH_HEAD and PUSH_ID are built from pushInner(MODELS_LANE_ID_RE), CLASSES.join and pushInner(MODEL_ID_RE)', () => {
     expect(src).toContain("const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;");
     expect(src).toContain('const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;');
+  });
+
+  it('each of the three shapes begins with ${PUSH_HEAD} and names a model id only as ${PUSH_ID}, a reason only as ${PUSH_REASON}', () => {
+    const t = shapes();
+    expect(t, 'PUSH_SHAPES no longer holds exactly three regexes').toHaveLength(3);
+    for (const x of t) {
+      expect(x.startsWith('${PUSH_HEAD}'), `a shape does not begin with PUSH_HEAD: ${x}`).toBe(true);
+      expect(x.match(/\$\{PUSH_ID\}/g), `a shape does not name its two ids as PUSH_ID: ${x}`).toHaveLength(2);
+      // What is left once the three owners are taken out is the shape's own words and its end anchor, nothing that
+      // could be a hand-written class list, id or reason pattern.
+      const rest = x.replaceAll('${PUSH_HEAD}', '').replaceAll('${PUSH_ID}', '').replaceAll('${PUSH_REASON}', '');
+      expect(rest, `a shape spells more than its words: ${x}`).toMatch(/^[A-Za-z :\u2192]*\$$/);
+    }
+  });
+
+  it('no pattern group spells an alternation of the class words anywhere in the file: CLASSES.join is the only spelling', () => {
+    // A group opens with `(` or `(?:`; the file's `<haiku|sonnet>` usage hints open with `<` and are not patterns.
+    expect(src).not.toMatch(/[(:|]\s*(?:haiku|sonnet|opus|fable)\|(?:haiku|sonnet|opus|fable)/);
   });
 
   it('the lane and model-id repetition literals each occur once in the whole file: their definitions', () => {
@@ -644,27 +705,52 @@ describe('the push patterns are derived from their owners, and each rule is writ
     expect(count(/\{0,127\}/g), 'the model-id pattern is spelled a second time').toBe(1);
   });
 
-  it('the reason grammar is written once, and the cap is compared in one place', () => {
+  it('the reason grammar is written once, and the cap is compared in one place, whichever side of the operator it sits on', () => {
     expect(count(/\{0,120\}/g), 'the reason limit is spelled more than once').toBe(1);
     expect(count(/x20-\\+x7e/g), 'the reason alphabet is spelled more than once').toBe(1);
-    expect(count(/[<>]=?\s*MODELS_PUSH_MAX/g), 'the cap is compared in more than one place').toBe(1);
+    const op = '(?:[<>]=?|[!=]==?)';
+    expect(count(new RegExp(`${op}\\s*MODELS_PUSH_MAX\\b|\\bMODELS_PUSH_MAX\\s*${op}`, 'g')), 'the cap is compared in more than one place').toBe(1);
   });
 });
 
 describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6)', () => {
-  // The notify funnel (notice.ts) is the one way a notice is raised; two callers still reach the push service directly:
-  // the watcher's release sender and /api/notify's models push, which has no session and, by D-5211, no feed record.
-  // The design's K6 funnel (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will
-  // absorb them. This list is what that wave finds them by, and a new direct caller is red until it is argued here.
+  // The notify funnel (notice.ts) is the one way a notice is raised, and it has no push-only mode: every mode that can
+  // push first records the notice to the ring and the archive. Two callers therefore still reach the push service
+  // directly: the watcher's release sender and /api/notify's models push, which D-5211 ships with no feed record. The
+  // design's K6 funnel (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md) is the owner that will
+  // absorb them, and this list is what that wave finds them by.
+  //
+  // WHAT IT CATCHES: any non-comment line, in any JS or TS source file under server/src, that spells a call of a member
+  // named `notify` in one of NOTIFY_SPELLINGS' forms. A new direct caller written in one of them is red until it is
+  // argued here. WHAT IT DOES NOT SEE: a reference detached under another name and called later (`const { notify: n } =
+  // push`, `const n = push?.notify;`), and a call through a computed name. Today server/src holds `.ts` files only; the
+  // walk takes every JS/TS-family extension, so a `.js` or `.mts` file added later is read too.
+  //
+  // NON-CALL LINES THE SPELLINGS HAD TO LEAVE ALONE, measured at the tip: twelve lines that read or write the update intent's `notify`
+  // FIELD (`isNotifyMode(r.notify)`, `patch.notify === undefined`, `notify: row.notify,`,
+  // `notifyChannel(input.fleetIntent.notify, …)`, in store.ts, updateintentlog.ts, update/notify.ts and update/routes.ts),
+  // and the bare funnel function (`notify(deps, …)`, not a member call). None of them is followed by a call, a `bind`, a
+  // `call`, an `apply` or the end of the line.
   const SRC = path.join(REPO, 'server', 'src');
+  const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/;
   const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : []);
+    e.isDirectory() ? walk(path.join(dir, e.name)) : SOURCE_EXT.test(e.name) ? [path.join(dir, e.name)] : []);
+  const NOTIFY_SPELLINGS: RegExp[] = [
+    /\.notify\s*(?:\?\.\s*)?(?:<[^>()]*>\s*)?\(/,        // .notify(  ?.notify(  .notify?.(  .notify<T>(  .notify (
+    /\.notify\s*$/,                                         // .notify at the end of the line, the call on the next
+    /\.notify\s*\??\.\s*(?:bind|call|apply)\b/,            // .notify.bind(  ?.notify.call(  .notify.apply(
+    /\[\s*(['"`])notify\1\s*\]/,                          // ['notify']  ["notify"]
+  ];
+  /** The lines of `text` that are code (not a comment line) and spell a call of a `notify` member. */
+  const notifyLines = (text: string): string[] => text.split('\n')
+    .filter((l) => {
+      const code = l.replace(/\/\*.*?\*\//g, '');   // an inline block comment is not code
+      return !/^\s*(\/\/|\*|\/\*)/.test(code) && NOTIFY_SPELLINGS.some((re) => re.test(code));
+    });
   const callers = (): Record<string, number> => {
     const out: Record<string, number> = {};
     for (const f of walk(SRC)) {
-      const n = readFileSync(f, 'utf8').split('\n')
-        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-        .filter((l) => /\.notify\(/.test(l)).length;
+      const n = notifyLines(readFileSync(f, 'utf8')).length;
       if (n > 0) out[path.relative(SRC, f)] = n;
     }
     return out;
@@ -672,6 +758,30 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
 
   it('are the funnel, the watcher\'s release sender and this route, once each, and no others', () => {
     expect(callers()).toEqual({ 'notice.ts': 1, 'server.ts': 1, 'watch.ts': 1 });
+  });
+
+  it('the walk reads every JS/TS-family file under server/src (today: .ts only), and finds the three callers\' files among them', () => {
+    const files = walk(SRC);
+    expect(files.length).toBeGreaterThan(100);
+    expect([...new Set(files.map((f) => path.extname(f)))]).toEqual(['.ts']);
+    for (const f of ['notice.ts', 'server.ts', 'watch.ts']) expect(files).toContain(path.join(SRC, f));
+  });
+
+  it.each([
+    'void deps.push?.notify({ title: 1 });', 'sender.notify(payload);', 'p?.notify?.(payload);', 'p.notify<never>(payload);',
+    'p.notify (payload);', 'const send = p.notify.bind(p);', 'const send = p?.notify.call(p, x);', 'p.notify.apply(p, [x]);',
+    "p['notify'](x);", 'p["notify"](x);', 'await deps.push?.["notify"](x);', 'await deps.push.notify', 'go(p.notify(x) /* c */);',
+  ])('a line that spells a member call of notify is counted: %s', (line) => {
+    expect(notifyLines(line)).toEqual([line]);
+  });
+
+  it.each([
+    '// p.notify(x)', ' * p.notify(x)', '/* p.notify(x) */', '/* a */ // p.notify(x)', 'notify(deps, event, mode);',
+    'const { notify } = deps;', 'notify: NotifyMode;', 'if (patch.notify === undefined) return;', 'row.notify,',
+    'const c = notifyChannel(input.fleetIntent.notify, x);', 'x = a.notify ?? b;', 'p.notified(x);', 'p.notifyAll(x);',
+    "import { notify } from '../notice.js';",
+  ])('a line that is a comment, or no member call of notify, is not: %s', (line) => {
+    expect(notifyLines(line)).toEqual([]);
   });
 });
 
@@ -683,6 +793,10 @@ describe('the policy\'s types are held by a consumer, so typecheck-tests holds t
     'not-a-model-line': true, 'over-cap': true, 'unknown-lane': true, 'not-a-codex-lane': true,
   };
   const VERDICTS: Record<ModelsPushDecision['verdict'], true> = { pushable: true, refused: true };
+  // The reasons of the arm that carries the lane: exactly these two, in both directions, at compile time.
+  const LANE_REASONS: Record<Extract<ModelsPushDecision, { verdict: 'refused'; lane: string }>['reason'], true> = {
+    'unknown-lane': true, 'not-a-codex-lane': true,
+  };
   const roster: ModelsPushRoster = new Map([['lane-a', { exec: { kind: 'codex' } }], ['lane-c', { exec: { kind: 'generated' } }]]);
 
   it('every kind modelsPushOf reads is a ModelsPushKind, and every ModelsPushKind is read', () => {
@@ -690,13 +804,22 @@ describe('the policy\'s types are held by a consumer, so typecheck-tests holds t
     expect([...new Set(read)].sort()).toEqual(Object.keys(KIND_WORDS).sort());
   });
 
+  const decisions: ModelsPushDecision[] = [
+    modelsPushDecision('cc swap: s1 moved lane-a -> lane-b', roster),
+    modelsPushDecision('x'.repeat(MODELS_PUSH_MAX + 1), roster),
+    modelsPushDecision('lane-z: opus model-5.6-gamma → model-6.1-gamma', roster),
+    modelsPushDecision('lane-c: opus model-5.6-gamma → model-6.1-gamma', roster),
+  ];
+
+  it('exactly the lane-arm reasons come with a lane key, and no other refusal does', () => {
+    expect(Object.keys(LANE_REASONS).sort()).toEqual(['not-a-codex-lane', 'unknown-lane']);
+    for (const d of decisions) {
+      if (d.verdict !== 'refused') continue;
+      expect('lane' in d, `the refusal ${d.reason}`).toBe(d.reason in LANE_REASONS);
+    }
+  });
+
   it('every refusal word the policy produces is a ModelsPushRefusal, and every ModelsPushRefusal is produced', () => {
-    const decisions: ModelsPushDecision[] = [
-      modelsPushDecision('cc swap: s1 moved lane-a -> lane-b', roster),
-      modelsPushDecision('x'.repeat(MODELS_PUSH_MAX + 1), roster),
-      modelsPushDecision('lane-z: opus model-5.6-gamma → model-6.1-gamma', roster),
-      modelsPushDecision('lane-c: opus model-5.6-gamma → model-6.1-gamma', roster),
-    ];
     const reasons = decisions.flatMap((d) => (d.verdict === 'refused' ? [d.reason] : []));
     expect([...new Set(reasons)].sort()).toEqual(Object.keys(REFUSAL_WORDS).sort());
     expect([...new Set([...decisions, modelsPushDecision(MOVED, roster)].map((d) => d.verdict))].sort()).toEqual(Object.keys(VERDICTS).sort());

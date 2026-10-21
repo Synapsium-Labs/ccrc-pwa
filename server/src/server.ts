@@ -14,7 +14,7 @@ import { readLaneStates, readLimits, projectHome, projectPlacement } from './lim
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
-import { CLASSES, modelsPushDecision, type ModelClass } from '../../shared/models.js';
+import { CLASSES, MODELS_PUSH_MAX, modelsPushDecision, type ModelClass } from '../../shared/models.js';
 import {
   accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
@@ -1663,31 +1663,52 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // box's `~/.ccrc/accounts.json`, this route on `deps.cfg.roster`, and the two
     // rosters are compared by a digest of accounts.sh, which does not carry a
     // lane's `exec.kind`, so they can differ here and still read as agreed. The
-    // refusal names the lane and says so. The roster is read at each request:
-    // `reloadRoster` (config.ts) reassigns `cfg.roster` in place when an answer
-    // carrying a changed roster lands, so a lane flipped to codex-kind (or
-    // added) is pushable from the next request, with no restart.
+    // refusal names the lane and says so. The roster is read at each request,
+    // never cached: `reloadRoster` (config.ts) reassigns `cfg.roster` in place,
+    // so a lane that an account verb's answer carries into the roster (index.ts
+    // hands it every roster-carrying answer, reconcile's `roster` sub included)
+    // is pushable from the next request. A HAND EDIT of the server box's
+    // accounts.json is different, in local and in remote mode alike:
+    // `loadRoster` reads the file once, in `loadConfig`, nothing watches it, and
+    // reconcile compares digests of accounts.sh, which do not carry `exec.kind`,
+    // so an exec-only difference never triggers it. Such an edit takes effect at
+    // the server's next restart, or when an account verb the server drives next
+    // answers with the roster (in remote mode `reloadRoster` then rewrites the
+    // mirror from the answer; in local mode the file is the box's own, written
+    // by the verb).
     //
     // What a pushable line can carry is stated in the policy's docstring: up to
     // 120 characters of printable ASCII in a failure line's reason slot, and
     // URL-shaped model ids. That residual is accepted (D-5211), and a models
     // push records no feed entry and has no per-(lane, class) rate cap. A line
-    // over the cap (a failure line with long model ids) is refused too: it gets
-    // the banner, and this log line says so. The message itself is never
-    // logged: it is free text from a process we do not trust.
+    // over the cap (a failure line with long model ids) is refused too, by
+    // design: it gets the banner, and the log line says that and why, with the
+    // cap written from MODELS_PUSH_MAX. The message itself is never logged: it
+    // is free text from a process we do not trust.
     //
     // THIS IS A DIRECT `PushService.notify`, OUTSIDE notice.ts's `notify()` FUNNEL,
-    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The funnel's
-    // presence gate and ring record are keyed on a session id and a `NotifyEvent`
-    // kind; this notice has no session. (2) Routing it through the funnel would
-    // add a `NotifyEvent` kind, a ring and feed record and PWA catch-up
-    // handling, which widens W2 past D-5211: a models push ships with no feed
-    // record. (3) The owner that will absorb it is the consolidation design's
-    // K6 funnel, whose ARCH-59 item moves the notify.sh banner into the funnel
+    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The funnel
+    // has no push-only mode. `NOTICE_MODES` is `push`, `record-always` and
+    // `record-only`, and in `raise` (notice.ts) every mode that can push first
+    // records the notice to the ring and the archive (`log.record`, then
+    // `recordFeedEvent`, and index.ts always wires a ring) before
+    // `deps.push?.notify`; the one path that records nothing, `push` for a
+    // session the operator is looking at, pushes nothing either. (A notice with
+    // no session is not the obstacle: the daily digest goes through the funnel
+    // with `sessionId: ''`.) (2) D-5211 ships this push
+    // with NO feed record in W2, so sending it through a recording mode, or
+    // adding a push-only mode with its own `NotifyEvent` kind and PWA catch-up
+    // handling, would widen W2 past it. (3) The owner that will absorb it is
+    // the consolidation design's K6 funnel, whose ARCH-59 item moves the
+    // notify.sh banner into the funnel
     // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
-    // K6, and the ARCH-59 row of its §4). The direct callers of
-    // `PushService.notify` are listed by a census in notify-push.test.ts, so
-    // that wave finds this one mechanically and a fourth cannot appear unseen.
+    // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
+    // the direct callers of `PushService.notify` in server/src, so that wave
+    // finds this one mechanically: it counts any non-comment line that spells a
+    // call of a member named `notify` (a call, an optional call, a type
+    // argument, a `bind`/`call`/`apply`, a bracketed name, or a line ending in
+    // `.notify`), so a fourth caller written in any of those spellings is red.
+    // It does not see a reference detached under another name and called later.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,
@@ -1698,12 +1719,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (body.push === true) {
       const decision = modelsPushDecision(message, deps.cfg.roster.byId);
       if (decision.verdict === 'refused') {
-        const remedy = 'lane' in decision
+        // Per reason, what to do or what to expect; never the message.
+        const detail = 'lane' in decision
           ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
-            + '(the fleet box\'s row alone does not make it pushable)'
-          : '';
+            + '(the fleet box\'s row alone does not make it pushable); a hand edit of the server box\'s accounts.json '
+            + 'is read at the server\'s next restart, or when an account verb the server drives answers with the roster'
+          : decision.reason === 'over-cap'
+            ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
+              + 'ids is refused this way by design, and the banner carries it'
+            : '';
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
-          + `lane (${decision.reason})${remedy}; the banner went out, the phone push did not`);
+          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
         void deps.push?.notify({ title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' })
           .catch((err: unknown) => {
