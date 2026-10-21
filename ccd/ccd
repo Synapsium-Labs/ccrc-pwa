@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c6ea4207f7d24d513443b8aa0805029fc050d13ab1d1ab6780e7410e911644ee
+# ccrc:generated 1 sha256=56f277bbff1002ac62ba654e8ab2261e5aa5dcac60c98b98699238ae8e2b222c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33171,7 +33171,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its eleven callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its twelve callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -33190,10 +33190,12 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # (path-identity spec §4.5): one asks the parent of the path it measures,
   # whose leaf it never follows, and the other, with `follow`, the whole
   # path (the main checkout, which `git -C` follows).
+  # The twelfth is the shared working-directory probe, `_ws_cwd_users`: the parent of the
+  # directory it is asked is resolved here, a fourth newline site (path-identity spec §4.6).
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its eleven callers only. Bare captures stand elsewhere, and the ones
+  # for its twelve callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
@@ -33243,7 +33245,7 @@ _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one
   # `<path>2` is not under it. TWO SPELLINGS are compared: the path as given
   # (how `_child_tmpdir` composes TMPDIR) and its physical one — the parent
   # resolved, the LEAF NOT FOLLOWED (a cwd or fd link never goes through a link).
-  # THE EXPIRY PROBE'S DISCIPLINE (`_ws_expire_cwd_users`, which this neither
+  # THE WORKING-DIRECTORY PROBE'S DISCIPLINE (`_ws_cwd_users`, which this neither
   # edits nor calls): unmeasured is never "nobody". A table that cannot be
   # listed, a listing without ccd's own pid, a `status` that does not parse, a
   # walk that outruns `WS_PATH_USERS_SCAN_S`, python3 missing: unmeasured. A
@@ -33497,6 +33499,320 @@ except Exception:
   done <<< "$out"
   (( n <= 5 )) || shown+=", and $(( n - 5 )) more"
   _WS_PATH_USERS_PIDS="$pids"; _WS_PATH_USERS_WHY="$shown"
+  return 1
+}
+
+# ── who works inside a tree: the ONE working-directory probe (path-identity W3, path-identity spec §4.6) ──
+WS_CWD_USERS_SCAN_S=10   # bound on the ONE python3 call of the working-directory probe on Linux (healthy: tens of ms)
+_WS_CWD_USERS_PIDS=''
+_WS_CWD_USERS_WHY=''
+_WS_CWD_USERS_RECS=()
+_ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir or under it, compared by the string of
+  #                    its cwd link against dir's PHYSICAL spelling (its parent resolved by `_ws_dir_physical`, its leaf
+  #                    not followed) OR by the dev:ino ancestry of the directory that link names (vacuously 0 when dir
+  #                    is PROVEN absent); 1 one does (_WS_CWD_USERS_PIDS space-separated, each once; _WS_CWD_USERS_RECS
+  #                    up to five JSON lines {"pid":…,"comm":…,"cwd":…}; _WS_CWD_USERS_WHY the "process N (comm) has
+  #                    its working directory at P[, …]" sentence, with ", inside <say> by device and inode" for an
+  #                    identity-only hit); 2 unmeasured (_WS_CWD_USERS_WHY), never "nobody": dir not one plain absolute
+  #                    path, an absence not proven, a parent that cannot be resolved or holds a newline, or the walk.
+  #                    say (default dir) is the spelling its reasons use.
+  #                    Seams: _ws_expire_proc_root, _ws_expire_lsof, _ws_expire_lsof_fallback
+  # PROCESS STATE MAY ONLY REFUSE (path-identity spec §4.6): no answer of this probe grants a removal. ws-expire
+  # asks it through `_ws_expire_cwd_users`, its adapter (the fresh ladder's rung 5, and the resume); the spec has
+  # the shared reclaim and expiry tail ask it as well, after its kill and before each forced removal.
+  # WHAT IS COMPARED. Either arm makes a process a user:
+  # - THE STRING ARM, the expiry probe's own: the text of a cwd link equals the tree's physical spelling, or
+  #   begins with it followed by `/` (a sibling `<tree>2` is not inside). That spelling is the parent's physical
+  #   path, resolved WHOLE here, with the leaf's own name appended and never followed: a cwd link and lsof print
+  #   kernel-resolved paths that never go through a link, so a tree spelled through a linked root (a worktrees
+  #   root that is a symbolic link, or macOS's /var) would otherwise never match its own spelling. This arm alone
+  #   sees a cwd whose directory was removed (the kernel's ` (deleted)` suffix), and on Darwin it is the only one.
+  # - THE IDENTITY ARM (Linux): the directory the cwd link names is opened (O_PATH, which follows the link as the
+  #   kernel resolves it) and its chain of `..` walked to the root, each step's st_dev and st_ino compared with the
+  #   tree's, read by lstat (a link leaf matches nothing here, as it matches nothing by string). It sees a process
+  #   that entered through another mount or an alias of the tree, whose string names no part of it. Identities
+  #   read in one walk compare dev:ino alone: one inode is one directory at one instant.
+  # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled exception, as the expiry probe always
+  # required. Vanished: its cwd link or its stat file answers ENOENT/ESRCH; a cwd link that read but whose open
+  # then answers ENOENT is gone only when its stat file answers so too. The exception: a cwd link that answers
+  # EACCES (another uid's process, or a SAME-user NON-DUMPABLE one: ssh-agent, a setuid or setgid exec) is NOT
+  # SEEN, the stated limit, because refusing on every unreadable link would refuse every removal for ever. Every
+  # OTHER failure is UNMEASURED, never a skip: a `..` that cannot be walked (a directory on the chain with no
+  # search permission), an open that answers anything but ENOENT, a stat file that does not parse. So one
+  # same-uid process sitting in a directory that cannot be searched holds every answer at unmeasured until it
+  # moves. There is no skip on a link count of zero: that is a property of a directory, not proof a process left.
+  # THE WALK IS `_ws_path_users`' DISCIPLINE (Linux): a fixed point, never one snapshot (the table is listed again
+  # until a listing names no pid this walk has not read; the pass that finds a user ends it); a thread-group
+  # leader whose own cwd reads as vanished is asked through `task/<tid>`, and a thread entry unreadable for any
+  # reason but vanishing is unmeasured unless that thread is in exit (PF_EXITING in its stat flags).
+  # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own chain (on Linux the python3, the
+  # `timeout` that bounds it and the subshell that captures it, followed up by the parent each `stat` names; on
+  # Darwin the python3) and any child of those. ccd's ANCESTORS are not skipped: a caller whose shell sits in the
+  # tree IS using it.
+  # WHEN THE LISTING IS TRUSTED: only when it holds ccd's own process, with its cwd link standing. A table that
+  # cannot be listed or listed again, an lsof that is missing, fails or prints nothing, or a listing without ccd
+  # measured nothing: unmeasured, never "nobody".
+  # HOW IT IS ASKED, with no fork per process. Linux: ONE python3 call walks `<root>/<pid>/cwd` (the root is
+  # `_ws_expire_proc_root`), bounded by WS_CWD_USERS_SCAN_S through `_plat_timeout` (124 is unmeasured). Darwin:
+  # `_ws_expire_lsof`, bounded by WS_EXPIRE_LSOF_DEADLINE_S, and the same python3 parses its listing exactly as
+  # the expiry probe always did, unbounded: a caller may shadow python3 with a shell function there (the expiry
+  # ladder's suite hides `ps` that way), which no external bound can run, and a here-string is no input to a
+  # command the pure-bash arm of `_plat_timeout` puts in the background. python3 runs with -I, so no module in the
+  # caller's working directory is imported. The bounds are not absolute: a process in uninterruptible kernel wait
+  # (a hung network mount on a cwd's chain) outlives TERM and KILL, and the caller waits for it, the reap lock
+  # held; the answer is still never "nobody".
+  # THE RECORDS ARE JSON AT THEIR SOURCE: one json.dumps line per user, at most five, the pid an integer and every
+  # string as read; then one "#" line, the sentence, and one "=" line, every user's pid. json.dumps escapes every
+  # control character, so a newline in a path or a command never starts a second record. An answer that names a
+  # user without all three is unmeasured. Every whole answer, users or none, ends with one "." line, written only
+  # after the scan returned: an answer without it (a python3 that exited 0 having scanned nothing) is unmeasured.
+  local dir="$1" say="${2:-$1}" rc leaf parent wt me=$$ sub=$BASHPID mode=proc root='' listing='' out line py
+  _WS_CWD_USERS_PIDS=''; _WS_CWD_USERS_WHY=''; _WS_CWD_USERS_RECS=()
+  _ws_reclaim_plain_path "$dir" \
+    || { _WS_CWD_USERS_WHY="$dir is not one plain absolute path, so whether a process works inside it was never asked"; return 2; }
+  _ws_reclaim_absent "$dir"; rc=$?
+  (( rc != 2 )) || { _WS_CWD_USERS_WHY="$_WS_ABSENT_WHY — whether a process works inside $say was never asked"; return 2; }
+  (( rc != 0 )) || return 0
+  leaf="${dir##*/}"; parent="${dir%/*}"; [[ -n "$parent" ]] || parent=/
+  _ws_dir_physical "$parent" \
+    || { _WS_CWD_USERS_WHY="the directory $parent that holds $dir cannot be resolved ($_WS_PHYS_WHY), so whether a process works inside it was never asked"; return 2; }
+  wt="${_WS_PHYS%/}/$leaf"
+  [[ "$CCD_OS" != darwin ]] || mode=lsof
+  py='
+import json, os, re, subprocess, sys
+mode, wt, label, me, sub, root = sys.argv[1:7]
+VANISHED = (FileNotFoundError, ProcessLookupError)
+PID = re.compile("[0-9]+")
+def inside(p):
+    return p == wt or p.startswith(wt + "/")
+def ppid_of(pid):
+    # the parent pid, or None ONLY on proof the process is gone; anything else
+    # that goes wrong is unmeasured (exit 3), never a skip
+    if mode == "proc":
+        try:
+            with open("%s/%s/stat" % (root, pid), "rb") as fh:
+                raw = fh.read().decode("utf-8", "replace")
+        except VANISHED:
+            return None
+        f = raw[raw.rfind(")") + 2:].split() if ")" in raw else []
+        if len(f) < 2 or not f[1].isdigit():
+            sys.exit(3)
+        return f[1]
+    r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
+    out = r.stdout.strip()
+    if r.returncode == 0 and out.isdigit():
+        return out
+    # ps could not say, and its status and its silence prove nothing: only the
+    # KERNEL may say the process is gone
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None
+    sys.exit(3)
+def comm_of(pid):
+    # WHAT IT IS, for the operator text: a pid is never named without its
+    # command. DESCRIPTIVE ONLY: a command that cannot be read is "" and
+    # changes no verdict; its bytes are kept as read (surrogateescape), save
+    # the one newline the kernel or ps ends it with
+    try:
+        if mode == "proc":
+            with open("%s/%s/comm" % (root, pid), "rb") as fh:
+                raw = fh.read()
+        else:
+            raw = subprocess.run(["ps", "-o", "comm=", "-p", pid], capture_output=True).stdout
+    except Exception:
+        return ""
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    return raw.decode("utf-8", "surrogateescape")
+def say(s):
+    # the sentence is ONE line: a control character in a path or a command is
+    # written there as its escape (the record keeps the bytes)
+    return "".join(c if c.isprintable() else ascii(c)[1:-1] for c in s)
+def exiting(base):
+    # True ONLY on proof the task is going: gone, or PF_EXITING (0x4) in the
+    # flags field of its stat; anything else is unmeasured
+    try:
+        with open(base + "/stat", "rb") as fh:
+            raw = fh.read().decode("ascii", "replace")
+    except VANISHED:
+        return True
+    except PermissionError:
+        sys.exit(3)
+    f = raw[raw.rfind(")") + 2:].split()
+    if len(f) < 7 or not (f[6].isascii() and f[6].isdigit()):
+        sys.exit(3)
+    return (int(f[6]) & 4) != 0
+def gone(statf):
+    # True ONLY on proof the process is gone: its stat file answers ENOENT/ESRCH
+    try:
+        os.stat(statf)
+    except VANISHED:
+        return True
+    return False
+def entries(pid):
+    # what to compare for process <pid>, as (cwd, its link, its stat file): its
+    # own cwd link; or, for a leader whose own cwd link reads as VANISHED, the
+    # cwd link of each of its live threads (a leader that exited before its
+    # threads shows a vanished cwd while they still run where it ran)
+    base = "%s/%s" % (root, pid)
+    try:
+        return [(os.readlink(base + "/cwd"), base + "/cwd", base + "/stat")]
+    except PermissionError:
+        return []   # the ruled exception: NOT SEEN, never a refusal
+    except VANISHED:
+        pass
+    try:
+        tids = [t for t in os.listdir(base + "/task") if t != pid]
+    except VANISHED:
+        return []
+    except PermissionError:
+        sys.exit(3)
+    found = []
+    for t in tids:
+        tb = "%s/task/%s" % (base, t)
+        try:
+            found.append((os.readlink(tb + "/cwd"), tb + "/cwd", tb + "/stat"))
+        except VANISHED:
+            continue
+        except PermissionError:
+            if exiting(tb):
+                continue
+            sys.exit(3)
+    return found
+def placed(link, statf, child):
+    # True when the directory the link names has the tree (child: its st_dev and
+    # st_ino) on its chain of "..", False when it has not, None ONLY on proof the
+    # process is gone; anything else is unmeasured (exit 3)
+    try:
+        fd = os.open(link, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        if gone(statf):
+            return None
+        sys.exit(3)   # the link named nothing, yet the process was not proven gone
+    try:
+        for _ in range(4096):
+            s = os.fstat(fd)
+            if (s.st_dev, s.st_ino) == child:
+                return True
+            up = os.open("..", os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = up
+            u = os.fstat(fd)
+            if (u.st_dev, u.st_ino) == (s.st_dev, s.st_ino):
+                return False
+    except OSError:
+        sys.exit(3)   # a cwd whose ".." cannot be walked: unmeasured, never "not inside"
+    finally:
+        os.close(fd)
+    sys.exit(3)   # a chain deeper than 4096: unmeasured
+def scan():
+    users, ids = [], set()
+    if mode == "proc":
+        st = os.lstat(wt)
+        child = (st.st_dev, st.st_ino)
+        try:
+            listed = [n for n in os.listdir(root) if n.isascii() and n.isdigit()]
+        except OSError:
+            sys.exit(3)
+        if me not in listed or not os.path.islink("%s/%s/cwd" % (root, me)):
+            sys.exit(3)   # trusted only when it holds ccd itself, its cwd link standing
+        mine = {me, sub}
+        step = str(os.getpid())
+        for _ in range(64):
+            mine.add(step)
+            pp = ppid_of(step)
+            if pp is None or pp in (me, sub, "0", "1"):
+                break
+            step = pp
+        done, todo = set(), listed
+        while todo and not users:
+            for pid in todo:
+                done.add(pid)
+                if pid in mine:
+                    continue
+                hit = None
+                for p, link, statf in entries(pid):
+                    if inside(p):
+                        hit = (p, False)
+                        break
+                    if placed(link, statf, child):
+                        hit = (p, True)
+                        break
+                if hit is None:
+                    continue
+                pp = ppid_of(pid)
+                if pp is None or pp in mine:
+                    continue
+                users.append((pid,) + hit)
+            if not users:
+                try:
+                    todo = [n for n in os.listdir(root) if n.isascii() and n.isdigit() and n not in done]
+                except OSError:
+                    sys.exit(3)
+    else:
+        cwds, cur = [], None
+        for line in sys.stdin.read().split("\n"):
+            if line.startswith("p"):
+                cur = line[1:]
+            elif line.startswith("n") and cur is not None:
+                cwds.append((cur, line[1:]))
+        if me not in [c[0] for c in cwds]:
+            sys.exit(3)
+        mine = {me, sub, str(os.getpid())}
+        for pid, p in cwds:
+            if not PID.fullmatch(pid):
+                sys.exit(3)   # a pid that is not ASCII digits: no listing to trust
+            if pid in mine or pid in ids or not inside(p):
+                continue
+            pp = ppid_of(pid)
+            if pp is None or pp in mine:
+                continue
+            ids.add(pid)
+            users.append((pid, p, False))
+    if not users:
+        return
+    shown = []
+    for pid, p, byid in users[:5]:
+        c = comm_of(pid)
+        sys.stdout.write(json.dumps({"pid": int(pid), "comm": c, "cwd": p}) + "\n")
+        shown.append("process %s%s has its working directory at %s%s" % (
+            pid, " (%s)" % say(c) if c else "", say(p), ", inside %s by device and inode" % say(label) if byid else ""))
+    more = ", and %d more" % (len(users) - 5) if len(users) > 5 else ""
+    sys.stdout.write("#" + ", ".join(shown) + more + "\n")
+    sys.stdout.write("=" + " ".join(u[0] for u in users) + "\n")
+try:
+    scan()
+    sys.stdout.write(".\n")
+except Exception:
+    sys.exit(3)
+'
+  if [[ "$mode" == lsof ]]; then
+    listing=$(_ws_expire_lsof 2>/dev/null); rc=$?
+    # A listing that ran out of time is not a listing, even one that already holds ccd's own pid: unmeasured.
+    (( rc != 124 && rc < 128 )) \
+      || { _WS_CWD_USERS_WHY="lsof did not finish within ${WS_EXPIRE_LSOF_DEADLINE_S}s, so whether a process works inside $say was never asked"; return 2; }
+    out=$(LC_ALL=C.UTF-8 python3 -I -c "$py" lsof "$wt" "$say" "$me" "$sub" '' <<< "$listing" 2>/dev/null); rc=$?
+  else
+    root=$(_ws_expire_proc_root)
+    out=$(_plat_timeout "$WS_CWD_USERS_SCAN_S" env LC_ALL=C.UTF-8 python3 -I -c "$py" proc "$wt" "$say" "$me" "$sub" "$root" </dev/null 2>/dev/null); rc=$?
+    (( rc != 124 )) || { _WS_CWD_USERS_WHY="the walk of $root did not finish within ${WS_CWD_USERS_SCAN_S}s, so whether a process works inside $say was never asked"; return 2; }
+  fi
+  (( rc == 0 )) \
+    || { _WS_CWD_USERS_WHY="the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" ), exit $rc), so whether one works inside $say was never asked"; return 2; }
+  [[ "$out" == . || "$out" == *$'\n.' ]] \
+    || { _WS_CWD_USERS_WHY="the walk's answer did not end with its closing line, so whether a process works inside $say was never asked"; return 2; }
+  [[ "$out" != . ]] || return 0
+  out="${out%$'\n.'}"
+  while IFS= read -r line; do
+    case "$line" in
+      '{'*) _WS_CWD_USERS_RECS+=("$line") ;;
+      '#'*) _WS_CWD_USERS_WHY="${line#\#}" ;;
+      '='*) _WS_CWD_USERS_PIDS="${line#=}" ;;
+    esac
+  done <<< "$out"
+  [[ -n "$_WS_CWD_USERS_PIDS" && -n "$_WS_CWD_USERS_WHY" && ${#_WS_CWD_USERS_RECS[@]} -gt 0 ]] \
+    || { _WS_CWD_USERS_PIDS=''; _WS_CWD_USERS_RECS=(); _WS_CWD_USERS_WHY="the walk's answer was not read whole, so whether a process works inside $say was never asked"; return 2; }
   return 1
 }
 
@@ -35381,7 +35697,9 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   # other status is a question never answered — unmeasured.
   # AND A PROCESS WITH ITS WORKING DIRECTORY IN THE WORKTREE, whatever it is
   # (an operator's own shell, outside the pane and the unit): `in-use`,
-  # retryable, asked last (`_ws_expire_cwd_users`, 3962). WHAT IT DOES NOT SEE:
+  # retryable, asked last (`_ws_expire_cwd_users`, 3962, through the shared probe
+  # `_ws_cwd_users`, which places a cwd by its path or by its device and inode
+  # ancestry: path-identity spec §4.6). WHAT IT DOES NOT SEE:
   # a process of ANOTHER UNIX user, or a SAME-user NON-DUMPABLE one (an
   # ssh-agent, anything that cleared its dumpable flag, a setuid or setgid
   # exec) — its cwd link cannot be read from here.
@@ -35409,7 +35727,8 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
 }
 
 # THE SEAMS of the working-directory question, as `_ws_expire_now` is the clock's: a test names another root, or a
-# listing, and the real box answers /proc and lsof.
+# listing, and the real box answers /proc and lsof. Since path-identity W3 they are shared: `_ws_cwd_users`, the one
+# working-directory probe (RECLAIM region), reads all three by name (path-identity spec §4.6).
 _ws_expire_proc_root() { printf '%s' /proc; }
 _ws_expire_lsof_fallback() { printf '%s' /usr/sbin/lsof; }   # macOS keeps lsof in /usr/sbin, which a PATH may omit
 _ws_expire_lsof() {   # -> lsof's cwd listing, BOUNDED as the tail bounds its substrate calls (`_plat_timeout`: rc 124)
@@ -35423,63 +35742,24 @@ _ws_expire_lsof() {   # -> lsof's cwd listing, BOUNDED as the tail bounds its su
 
 _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working directory at workdir or under it; else
   #                          rc 1: `in-use` (naming the pids and the paths), or unmeasured
-  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY ONLY. A reclaim DOES meet a finished
-  # child's processes — the pane's process tree can outlive the tail's kill
-  # (measured 2026-10-04: a straggler re-created a removed temp root 3.7 s after
-  # `reclaim done`) — but the tail asks `_ws_path_users` of the temp root, after
-  # its kill, instead of this (spec §5.6). `_ws_expire_presence` calls it for the fresh ladder's rung 5 and
-  # for the resume where nothing has been stopped yet, and
-  # `_ws_expire_resume_eval` asks it ALONE at `worktree` (3964), where the tree
-  # may still stand; each hands it the worktree explicitly.
-  # WHAT IS COMPARED. The worktree's REAL path with its LEAF NOT FOLLOWED: the
-  # real path of its parent, then the leaf's own name. At rung 5 the workdir
-  # has been proved one plain path (`_ws_reclaim_plain_path`) but the leaf `-L`
-  # rung has not run, and a link at the leaf would be followed by a resolving
-  # `pwd -P` onto another tree. A process's cwd is a kernel-resolved path that
-  # never goes through a link, so for a link leaf the comparison is vacuous by
-  # construction and the later rung refuses the link, terminally. A cwd is IN
-  # the worktree when it equals that path or begins with it followed by `/` — a
-  # sibling `<worktree>2` is not.
-  # WHAT STANDS AT THE PATH. Nothing (PROVEN, `_ws_reclaim_absent`): no process
-  # can have it as a cwd, so the answer is "nobody" without reading /proc. A
-  # path whose existence could not be looked at is unmeasured.
-  # HOW IT IS ASKED, with NO fork per process. Linux: ONE python3 call walks
-  # `<root>/<pid>/cwd` (the root is `_ws_expire_proc_root`). Darwin (`CCD_OS`):
-  # the same call parses ONE `_ws_expire_lsof` listing (`lsof` is found on PATH,
-  # else at `_ws_expire_lsof_fallback`, /usr/sbin/lsof: macOS keeps it there and
-  # a PATH may omit it; an lsof found nowhere is unmeasured; one that outruns
-  # `WS_EXPIRE_LSOF_DEADLINE_S` is unmeasured too — the reap lock is held, and a
-  # hung network mount can block lsof for ever). The bound is not absolute: a
-  # process in uninterruptible kernel wait survives TERM and KILL, and `timeout`
-  # (or the bash fallback, which sends TERM only) waits for it — the answer is
-  # still never "nobody", but the reap lock can stay held while it waits.
-  # A PROCESS IS SKIPPED ONLY ON PROOF IT VANISHED, or on the one ruled
-  # exception. Vanished: its cwd link or its stat file answers ENOENT/ESRCH
-  # (Linux), or, on Darwin, `ps` could not name its parent AND the kernel
-  # answers no such process (`kill(pid, 0)` is ESRCH; ps's own exit status and
-  # silence prove nothing: a failing ps, or one killed by a signal, is an error).
-  # A process that exists, or whose existence cannot be told, is unmeasured. The
-  # exception is a cwd link that answers EACCES: the fleet is single-user, and
-  # refusing on every unreadable link (a root daemon's is routine) would
-  # refuse every expiry for ever. THE LIMIT, stated: what that skips is NOT
-  # SEEN — a process of ANOTHER UNIX user, and a SAME-user NON-DUMPABLE one
-  # (ssh-agent, anything that called prctl(PR_SET_DUMPABLE, 0), a setuid or
-  # setgid exec), whose /proc/<pid>/cwd is EACCES too, measured: `ssh-agent -D`
-  # in a worktree is unseen. Every OTHER failure — `ps` missing or unrunnable,
-  # a stat file that does not parse, an exception nobody anticipated — is
-  # UNMEASURED, never a skip: a skip on a guess reads as "nobody".
-  # WHAT IS NOT A USER: ccd's own process (`$$`, `$BASHPID`), the scan's own
-  # children (any pid whose parent is one of those: the python3 and, on Darwin,
-  # the lsof, both of which inherit ccd's own cwd) and the call's python3 itself.
-  # ccd's ANCESTORS are not skipped: a caller whose shell sits in the worktree
-  # IS using it.
-  # WHEN THE LISTING IS TRUSTED. Only when it holds ccd's own process — the one
-  # pid the scan can be sure of. A /proc that cannot be listed, an lsof that is
-  # missing, fails or prints nothing, and a listing without ccd in it measured
-  # nothing: unmeasured, never "nobody". (lsof's exit status is not read: it
-  # exits 1 over any one process it could not inspect, and a listing that holds
-  # ccd is a listing.)
-  local id="$1" workdir="$2" rc leaf parent preal wt me=$$ sub=$BASHPID mode=proc root='' listing='' out line shown=''
+  # AMENDMENT 3 (3962), ASKED OF AN EXPIRY. `_ws_expire_presence` calls it for the fresh ladder's rung 5 and for
+  # the resume where nothing has been stopped yet, and `_ws_expire_resume_eval` asks it ALONE at `worktree` (3964),
+  # where the tree may still stand; each hands it the worktree explicitly. A reclaim meets a finished child's
+  # processes too — the pane's process tree can outlive the tail's kill (measured 2026-10-04: a straggler
+  # re-created a removed temp root 3.7 s after `reclaim done`) — and the tail asks `_ws_path_users` of the temp
+  # root after its kill (spec §5.6); path-identity spec §4.6 has that shared tail ask this same walk of the tree.
+  # A THIN ADAPTER since path-identity W3 (path-identity spec §4.6). The walk is `_ws_cwd_users`', the ONE
+  # working-directory probe (RECLAIM region): it compares a cwd by its string AND by its device and inode
+  # ancestry, adopts `_ws_path_users`' fixed point, leader-thread walk and own-chain exclusion, and is bounded by
+  # WS_CWD_USERS_SCAN_S on Linux. Its header now holds what this one's held: what is compared, when a process is
+  # skipped (only on proof it vanished, or on the ruled EACCES exception, with that limit stated), what is not a
+  # user, and when a listing is trusted. This keeps its name, its contract and its preamble, at rung 5 where the
+  # leaf `-L` rung has not run yet: one plain absolute path; a PROVEN absence answering "nobody" with nothing
+  # read; and the parent resolved WHOLE (`_ws_dir_physical`) with the leaf's own name appended, never followed,
+  # so a link leaf is judged by its own name and the later rung refuses it. It maps the probe's three answers
+  # onto its two: 1 is `in-use`, its records kept exactly as the probe printed them (EXPIRE_IN_USE: this shell
+  # never splices a field into JSON); 2 is unmeasured, never "nobody".
+  local id="$1" workdir="$2" rc leaf parent preal wt
   _ws_reclaim_plain_path "$workdir" \
     || { _ws_reclaim_unmeasured "$workdir is not one plain absolute path, so whether a process works inside it was never asked"; return 1; }
   _ws_reclaim_absent "$workdir"; rc=$?
@@ -35489,134 +35769,13 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   _ws_dir_physical "$parent" && preal="$_WS_PHYS" \
     || { _ws_reclaim_unmeasured "the directory $parent that holds $workdir cannot be resolved ($_WS_PHYS_WHY), so whether a process works inside it was never asked"; return 1; }
   wt="${preal%/}/$leaf"
-  if [[ "$CCD_OS" == darwin ]]; then
-    mode=lsof; listing=$(_ws_expire_lsof 2>/dev/null); rc=$?
-    # A listing that ran out of time is not a listing, even when it already
-    # holds ccd's own pid (lsof walks the processes in order): unmeasured.
-    (( rc != 124 && rc < 128 )) \
-      || { _ws_reclaim_unmeasured "lsof did not finish within ${WS_EXPIRE_LSOF_DEADLINE_S}s, so whether a process works inside $workdir was never asked"; return 1; }
-  fi
-  root=$(_ws_expire_proc_root)
-  out=$(LC_ALL=C.UTF-8 python3 -c '
-import json, os, re, subprocess, sys
-mode, wt, me, sub, root = sys.argv[1:6]
-mine = {me, sub, str(os.getpid())}
-def inside(p):
-    return p == wt or p.startswith(wt + "/")
-VANISHED = (FileNotFoundError, ProcessLookupError)
-def ppid_of(pid):
-    # the parent pid, or None ONLY on proof the process is gone; anything else
-    # that goes wrong is unmeasured (exit 3), never a skip
-    if mode == "proc":
-        try:
-            with open("%s/%s/stat" % (root, pid), "rb") as fh:
-                raw = fh.read().decode("utf-8", "replace")
-        except VANISHED:
-            return None
-        f = raw[raw.rfind(")") + 2:].split() if ")" in raw else []
-        if len(f) < 2 or not f[1].isdigit():
-            sys.exit(3)
-        return f[1]
-    r = subprocess.run(["ps", "-o", "ppid=", "-p", pid], capture_output=True, text=True)
-    out = r.stdout.strip()
-    if r.returncode == 0 and out.isdigit():
-        return out
-    # ps could not say. Its exit status and its silence are NOT proof of
-    # anything (a failing ps, one killed by a signal, an empty answer all look
-    # alike): only the KERNEL may say the process is gone, and a process that
-    # exists, or whose existence cannot be told, is unmeasured.
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return None
-    sys.exit(3)
-def comm_of(pid):
-    # WHAT IT IS, for the operator text (wave 3b, ruling G of its coordinator):
-    # the fleet tmux server is a `tmux: server` too, so a pid is never
-    # named without its command. DESCRIPTIVE ONLY: a command that cannot be read
-    # is "" and changes no verdict. Its bytes are kept as read (surrogateescape),
-    # save the one newline the kernel or ps ends it with.
-    try:
-        if mode == "proc":
-            with open("%s/%s/comm" % (root, pid), "rb") as fh:
-                raw = fh.read()
-        else:
-            raw = subprocess.run(["ps", "-o", "comm=", "-p", pid], capture_output=True).stdout
-    except Exception:
-        return ""
-    if raw.endswith(b"\n"):
-        raw = raw[:-1]
-    return raw.decode("utf-8", "surrogateescape")
-def say(s):
-    # the detail sentence is ONE line: a control character in a path or a
-    # command is written there as its escape (the record keeps the bytes)
-    return "".join(c if c.isprintable() else ascii(c)[1:-1] for c in s)
-PID = re.compile("[0-9]+")
-def scan():
-    cwds = []
-    if mode == "proc":
-        try:
-            names = os.listdir(root)
-        except OSError:
-            sys.exit(3)
-        for n in names:
-            if not (n.isascii() and n.isdigit()):
-                continue
-            try:
-                cwds.append((n, os.readlink("%s/%s/cwd" % (root, n))))
-            except VANISHED + (PermissionError,):
-                continue
-    else:
-        cur = None
-        for line in sys.stdin.read().split("\n"):
-            if line.startswith("p"):
-                cur = line[1:]
-            elif line.startswith("n") and cur is not None:
-                cwds.append((cur, line[1:]))
-    if me not in [c[0] for c in cwds]:
-        sys.exit(3)
-    users = []
-    for pid, p in cwds:
-        if not PID.fullmatch(pid):
-            sys.exit(3)   # a pid that is not ASCII digits: no listing to trust
-        if pid in mine or not inside(p):
-            continue
-        pp = ppid_of(pid)
-        if pp is None or pp in mine:
-            continue
-        users.append((pid, p))
-    if not users:
-        return
-    # THE RECORDS ARE JSON HERE, never in the shell (wave 3b, a security ruling
-    # of its coordinator): one json.dumps line per process, at most five, the
-    # pid an integer and every string as read; then one "#" line, the detail
-    # sentence. json.dumps escapes every control character, so a newline in a
-    # path or a command can never start a second record.
-    shown = []
-    for pid, p in users[:5]:
-        c = comm_of(pid)
-        sys.stdout.write(json.dumps({"pid": int(pid), "comm": c, "cwd": p}) + "\n")
-        shown.append("process %s%s has its working directory at %s" % (pid, " (%s)" % say(c) if c else "", say(p)))
-    more = ", and %d more" % (len(users) - 5) if len(users) > 5 else ""
-    sys.stdout.write("#" + ", ".join(shown) + more + "\n")
-try:
-    scan()
-except Exception:
-    sys.exit(3)
-' "$mode" "$wt" "$me" "$sub" "$root" <<< "$listing" 2>/dev/null); rc=$?
-  (( rc == 0 )) \
-    || { _ws_reclaim_unmeasured "the processes of this box could not be measured ($( [[ "$mode" == lsof ]] && echo lsof || echo "$root" )), so whether one works inside $workdir was never asked"; return 1; }
-  [[ -n "$out" ]] || return 0
-  # The python printed each record ALREADY JSON (`{...}`, at most five) and one
-  # `#` line, the detail sentence: a record is kept exactly as printed — this
-  # shell never splices a field into JSON (wave 3b, a security ruling).
-  while IFS= read -r line; do
-    case "$line" in
-      '{'*) EXPIRE_IN_USE+=("$line") ;;
-      '#'*) shown="${line#\#}" ;;
-    esac
-  done <<< "$out"
-  _reap_refuse in-use "$shown — an archived workspace somebody is working in is never expired"
+  _ws_cwd_users "$wt" "$workdir"
+  case $? in
+    0) return 0 ;;
+    1) EXPIRE_IN_USE+=("${_WS_CWD_USERS_RECS[@]}")
+       _reap_refuse in-use "$_WS_CWD_USERS_WHY — an archived workspace somebody is working in is never expired" ;;
+    *) _ws_reclaim_unmeasured "$_WS_CWD_USERS_WHY" ;;
+  esac
 }
 
 _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expirable, REAP_TOKEN set), else

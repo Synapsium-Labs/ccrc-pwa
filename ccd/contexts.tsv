@@ -547,6 +547,7 @@ _ws_reclaim_dropped_count	C4
 _ws_dir_physical	C4
 _ws_path_users_proc_root	C4
 _ws_path_users	C4
+_ws_cwd_users	C4
 _ws_leaf_uid	C4
 _ws_leaf_read_small	C4
 _ws_leaf_checkout_accepted	C4

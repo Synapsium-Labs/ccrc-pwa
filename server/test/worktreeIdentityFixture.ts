@@ -86,3 +86,10 @@ export const paneFragment = (h: { sh(snippet: string): string }, id: string, wor
   os?: 'linux' | 'darwin'): string =>
   h.sh(`${os === undefined ? '' : `CCD_OS=${os}; `}printf '[%s]' "$(_plat_workdirid_pane "$REG" '${id}' '${workdir}')"`)
     .slice(1, -1);
+
+/** Forced Darwin's process listing (path-identity W3, R25): `_ws_expire_lsof` stubbed to print the `-Fpn` shape lsof
+ *  prints (`p<pid>`, `f<fd>`, `n<path>` lines; the probe reads only `p` and `n`), naming ccd's own process (`$$`) alone,
+ *  at `$HOME`. A listing is trusted only when it holds ccd's own pid, so this answers "nobody" without running a real
+ *  lsof, which a CI image may lack and which could not answer for a Darwin fixture on a Linux host. Read by name by
+ *  Task 9's probe cases and by the DARWIN prefixes Task 10 extends. */
+export const DARWIN_LSOF_STUB = "_ws_expire_lsof() { printf 'p%s\\nfcwd\\nn%s\\n' \"$$\" \"$HOME\"; };";
