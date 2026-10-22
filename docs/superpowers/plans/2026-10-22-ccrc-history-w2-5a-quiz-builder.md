@@ -9,7 +9,7 @@
 - **Task 4 (W2-D68, W2-D69, W2-D33; D-6278, D-6279).** Baseline B, parts 1 to 3 from the store (Task 1's readers) and part 4 from the baseline files (`baseline_files: 'v1'`), held in memory only: its text is non-enumerable, and the baseline record under `--out` carries counts only. A tombstoned or malformed kept list discards as `kept-unreadable`, never as an empty part 2. W2-D61's and W2-D74's B pins.
 - **Task 5 (W2-D70, W2-D34, W2-D71; D-5780).** Answerability with its timed clause, the same-millisecond count over the CLI's family scope as a report that never gates, and seeded sampling: families in seeded order (for the quiz, a per-family seeded key, `quizFamilyOrderKey`, R10), each family's candidates on its own stream, lazy stages, the three caps, the halt floor and the fidelity boundaries.
 - **Task 6 (W2-D72, W2-D73, W2-D64, W2-D54, W2-D71).** The question writer through W2-4's writer-mode spawn (RP1-writer, RP3-writer), its windowed and redacted input, the frozen lists (`frozen.json`, canonical bytes, never replaced), the fidelity pilot's three payload stdins and its overhead arithmetic (the spawns are W2-5b's), and `sourceQuiz`, Tasks 1 to 6 composed, which in quiz mode walks every local admitted family less the exclusions, never the census list (R10).
-- **Task 7 (W2-D84's first half, W2-D24, W2-D21 as amended, W2-D25, W2-D73, W2-D19, W2-D20, W2-D77; D-6280).** The record subcommands: `pilot-source`, `quiz-source`, `freeze`, `power` (with the census assembler that checks nodes only), `open --template`, `open --draft`, `open --finalize`, `verify --registry` and `verify --section ab`, each `--record` consumer re-checking `codeShas()` before it reads any other input. The `flags_accepted parity` pin, and the `--out` walk over a whole stubbed run. A refusal that needs no store and no spawn answers before `prepareOut` makes `--out` (R10). `freeze`'s meta reports `short_of_min_families` against `quiz.min_families`, never refusing on it (R11).
+- **Task 7 (W2-D84's first half, W2-D24, W2-D21 as amended, W2-D25, W2-D73, W2-D19, W2-D20, W2-D77; D-6280, D-6307).** The record subcommands: `pilot-source`, `quiz-source`, `freeze`, `power` (with the census assembler that checks nodes only), `open --template`, `open --draft`, `open --finalize`, `verify --registry` and `verify --section ab`, each `--record` consumer re-checking `codeShas()` before it reads any other input. The `flags_accepted parity` pin, and the `--out` walk over a whole stubbed run. A refusal that needs no store and no spawn answers before `prepareOut` makes `--out` (R10): the writer model, and the roster, the account, the wrapper's sha and a limits row at the threshold (D-6307). `freeze`'s meta reports `short_of_min_families` against `quiz.min_families`, never refusing on it (R11).
 - **Task 8.** The departures, the whole-PR checks and the PR. It changes no tracked file and has no commit (R2).
 
 Sessions see no change in behaviour: no hook, unit, timer, store, schema, wire or `ccd/**` file changes, and the driver opens every store read-only. Running any subcommand on a real node is the operator's (§5), after the final W2 release is rolled out (W2-D6), never the worker's.
@@ -150,7 +150,7 @@ These five inputs follow from the decisions and the spec, would bite the operato
 1. **A fact that leaks redacted text.** A key-shaped F_raw (assembled at runtime), a whitespace-split bearer token whose F_raw redaction leaves intact and whose F it masks, a fact intact alone but masked inside its leaf, and a span holding a key that reaches the question writer. Expected: `redact-fact` first, then `redact-leaf`, each counted without its value and before any admission (`baseline-hit` never shadows it); the writer's stdin and `<qid>.input.json` carry the redaction mark and no part of the value; B's text is non-enumerable and no B sentinel is found under `--out`. **Task 2** (the screens and `screenCandidate`'s order CONTROL; Task 6's `sourceQuiz` runs the same three Task 2 screens, `screenRedaction`, `screenProducer` and `screenBaseline`, as its first three stages), **Task 5** (the shipped path's order: the sampler runs the stages in `QUIZ_STAGES` order, "the stages run in QUIZ_STAGES order …", M28), **Task 6** (the writer-stub redaction pin; the F6 case: the writer's input carries F as it stands, so the screen is what keeps a masked F from the writer; and the shipped-path case, a key-shaped command in a real store dropped `redact-fact` at `sourceQuiz`'s own redaction stage, never asked of the writer, mutant M39), **Task 4** (B in memory). Both F_raw and F are screened (R10, F6: the writer's input carries F, so an F_raw-only screen would let a whitespace-split bearer token reach it); the reviewer probes that pair, Task 2's bearer case with its CONTROL and mutant M31, Task 2's F_raw-only case (a relative path through a registered value, which resolving removes from F) and mutant M32, and the end-to-end `--out` walk over a whole stubbed run (Task 7, R7).
 2. **A straddling or two-copy boundary admitted wrongly.** Anthropic rows before, a gateway row after the summary; the same boundary held by two copies in either order, and a live copy beside a retired one with a smaller `file_id`; a gateway row between the boundary and its summary; synthetic and model-less rows. Expected: the straddle refused `after-other` on one copy and over a planted store; the holding copy is `holdingCopyOf`'s, never the longest; synthetic rows skipped, never witnesses. **Task 3**, mutants M1 (before side only), M2 (the immediately preceding row only) and M3 (the longest-copy rule). The reviewer probes the unbounded before-witness (R6).
 3. **A NULL-ts or same-millisecond row.** A source row stamped exactly T_N, one stamped T_N + 1, a NULL-ts source, an unlinked sidecar, a sidecar linked to a NULL-ts row, a boundary with a NULL ts, and entries stamped T_N outside the holding copy reached by row, variant and sidecar. Expected: T_N answerable; T_N + 1, NULL ts and unlinked sidecars `unanswerable-untimed` with the failing clause named; a NULL-ts boundary dropped `ts-null` before mining; the same-millisecond count counts each entry once, outside the holding copy, and never changes the sampled list. **Task 5** (D-5780's clause 4, mutants M14 to M20 on the count) and **Task 3** (`ts-null`).
-4. **A writer spawn on a refused account, or on a moved tree.** `cx-a`, `ext-n`, `ext-a` and `gen-o`; a writer model that is not an exact Opus id; a limits row at the threshold at open; a Claude Code version that moves between two asks; a resumed `--out` whose pinned input changed. Expected: each refused before any spawn with the stub's log absent (RP3-writer); RP1-writer's whole argv and env on the admitted `up-a` and `gen-a`; the preflight before every writer batch; a resume that reuses and never respawns, and refuses a changed input. **Task 6**, and **Task 7** for the order against `--out`: a writer model that is not an exact Opus id refuses `args-invalid` before `prepareOut` makes `--out`, so a refused run leaves no `--out` (R10; Task 7's case with its CONTROL, mutant M42). The reviewer probes that order for every refusal that needs no store and no spawn, and `writer-malformed` split by failed runs with its one warning line (R6).
+4. **A writer spawn on a refused account, or on a moved tree.** `cx-a`, `ext-n`, `ext-a` and `gen-o`; a writer model that is not an exact Opus id; a limits row at the threshold at open; a Claude Code version that moves between two asks; a resumed `--out` whose pinned input changed. Expected: each refused before any spawn with the stub's log absent (RP3-writer); RP1-writer's whole argv and env on the admitted `up-a` and `gen-a`; the preflight before every writer batch; a resume that reuses and never respawns, and refuses a changed input. **Task 6**, and **Task 7** for the order against `--out`: a writer model that is not an exact Opus id refuses `args-invalid` before `prepareOut` makes `--out`, so a refused run leaves no `--out` (R10; Task 7's case with its CONTROL, mutant M42). The roster, the account, the wrapper's sha and a limits row at the threshold answer before `prepareOut` too (D-6307; Task 7's two `it.each` sets, one per subcommand, mutants M48, M49, M50, M51, M52 and M53). The reviewer probes that order for every refusal that needs no store and no spawn, and `writer-malformed` split by failed runs with its one warning line (R6).
 5. **A record subcommand on a stale code sha, or writing outside `--out`.** A tree whose `measure-history.py` moved after part 1; a record path inside a git worktree (`.git` a file); a superseding draft given without its predecessor; a frozen list edited by one byte; a census taken with a `--since` that is not `lookback_days`; a census changed between `quiz-source` and `open --finalize`. Expected: `code-changed` before any other input is read and before any spawn, for each of the six consumers; `record-invalid` before a byte is read; `args-invalid` `supersedes-required`; `quiz-sha-mismatch` with no spawn; `input-invalid` `since-mismatch`; `assignment-mismatch`; `frozen.json` written 0600 under `--out` and never replaced; `open` and `verify` write nothing. **Task 7** (the `it.each` over the six consumers with its CONTROL) and **Task 6** (the frozen list). The reviewer also probes the quiz population and its merge (R10, C1): a local admitted family that no census lists is sourced, a pilot family and a control-held id are not (**Task 6**'s population case and its CONTROL), and two nodes' outputs merged by rank are the one walk over both (**Task 5**'s keyed-order case, mutants M45 to M50; **Task 7**'s freeze merge, M18 and M41).
 
 ## File Structure
@@ -8304,7 +8304,7 @@ This task turns Tasks 1 to 6's pieces into the operator's acts before window sta
 - W2-D18 (the seed), W2-D55 and W2-D56 (budget and preflight), W2-D57 (the printed sha, D-5983), W2-D29 and W2-D59;
 - §4's part 1 and part 2 tables, §5's acts 7 to 19, and §7 (the `flags_accepted` and `CODE_SHA_FILES` parity residuals).
 
-It ships one departure this plan defines, **D-6280** (`history-replay-spend-budget-operator-given`, Choices). It cites D-5773 (W2-D20's departure: this task builds its `verify --registry` half), D-5791 (the validator's q18 and binding refusals this task relies on), D-5774 (deploy-local words), D-5983, D-5985 and D-5986 (W2-4's printed sha, claim and type-checked reads), and D-5812, D-5813 and D-5815 (W2-4's `loadStep0a` shape-only rule, unusable inputs and required flags first).
+It ships two departures this plan defines, **D-6280** (`history-replay-spend-budget-operator-given`, Choices) and **D-6307** (`history-replay-writer-admission-before-out`, Choices). It cites D-5773 (W2-D20's departure: this task builds its `verify --registry` half), D-5791 (the validator's q18 and binding refusals this task relies on), D-5774 (deploy-local words), D-5983, D-5985 and D-5986 (W2-4's printed sha, claim and type-checked reads), and D-5812, D-5813 and D-5815 (W2-4's `loadStep0a` shape-only rule, unusable inputs and required flags first).
 
 **Re-anchored against cd622b2f6 (drift from the decisions document, written at bd363a76b):**
 
@@ -8348,7 +8348,7 @@ It ships one departure this plan defines, **D-6280** (`history-replay-spend-budg
 - **Quiz-source hands `sourceQuiz` no family list (R10, C1).** W2-D71's population is every family on the node with an admitted boundary, less the pilot families and every control-held `(store_id, ccrc_id)` (W2-D77). The census's active, registry-ok list (`assembled.kept`) feeds the assignment only (W2-D73): a quiz family need not be active or registry-resolvable, because the headless arm resolves its family from its epochs, never the registry (W2-D40). So `quiz-source` passes the exclusions, never `assembled.kept`, and `sourceQuiz` walks the store's own admitted families.
 - **Freeze merges, it does not re-sample.** It requires exactly one sourced list per named node: W2-D71's population is the families on the named nodes, and each node's walk stops at the target on its own, so a merge missing a node would look full while it froze a subset, and the list would depend on which files the operator passed. A missing node refuses `sourced node-missing <label>`, a second list for one store `sourced store-id-duplicate`. Each node's quiz-source sources its own families in the GLOBAL order, each family's `quizFamilyOrderKey` (Task 6's `rank`, `[order key, candidate rank]`; W2-D71 as amended 2026-10-22), and stops at the target. The global lazy walk stops no later than any node's local walk, so the merged list sorted by rank (the key by code unit, then the candidate rank) and cut at `quiz.target` is the walk one node holding every store would make (Task 5's keyed-order case pins the merge). Two entries with one rank are `input-invalid`, and a quiz entry whose rank is not `[64 lowercase hex, a non-negative integer]` is `input-invalid` `entry rank`. `freeze` takes each node's keys as that node's `sourceQuiz` computed them, under the same `gate_code` it re-checks; it does not recompute them. `freeze` then sorts by qid (W2-D73).
 - **`quiz.min_families` is reported, never a refusal (R11).** The signed default 20 is W2-D71's "at least 20 families". `freeze`'s meta carries `short_of_min_families`, true when the merged list's family count is below the record's `quiz.min_families`; nothing refuses on it, and the halt floor (60 questions, 12 families) stays the only family-count stop. At the signed defaults, target 100 with `caps.family` 5 already implies at least 20 families, so on a list that meets the target the flag matters only when a draft raises `caps.family`; a list short of the target can be short of families too, and the flag reports that beside `below_floor`. The freeze case `the meta reports short_of_min_families …` pins it (CONTROL: at `min_families` it is false), and mutant M44 drops it.
-- **Refusals before `--out` (R10).** A refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, so a refused run leaves no `--out` to clean. In `pilot-source` that is the argv checks and the writer model: `refuseWriterModel` (Task 6's, the one spelling of the Opus test) runs before `prepareOut`, and `openWriter` asks it again for every other caller. `quiz-source`'s writer model is the validated record's, which the validator already holds to an exact Opus id (W2-D25), so it refuses `record-invalid` before `--out` with no second call. `freeze` makes `--out` after every input is read and checked.
+- **Refusals before `--out` (R10).** A refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, so a refused run leaves no `--out` to clean. In `pilot-source` that is the argv checks and the writer model: `refuseWriterModel` (Task 6's, the one spelling of the Opus test) runs before `prepareOut`, and `openWriter` asks it again for every other caller. `quiz-source`'s writer model is the validated record's, which the validator already holds to an exact Opus id (W2-D25), so it refuses `record-invalid` before `--out` with no second call. `freeze` makes `--out` after every input is read and checked. D-6307 (the coordinator's ruling in the operator's place, after the review): the same rule covers the four other refusals `openWriter` makes with no store and no spawn, `roster-invalid`, `account-refused`, `wrapper-unmeasured` and the limits row at open, so `pilot-source` and `quiz-source` ask them in `refuseWriterAdmission` before `prepareOut`, through the same functions (`readRoster`, `admitAccount`, `wrapperSha` and `refuseOnLimits`, the limits half of `batchGate`'s gate, factored so both call one function). `openWriter` keeps its own calls and stays the authority at open; the `--version` probe is a spawn and stays after `prepareOut`.
 - **`verify --section ab` reads content (R10).** W2-D84 requires it: "each control file's content equals its generation … All reads go through historyPaths, recallOffPath and readBounded". W2-D29's "the driver does not read content" is about the presence check (W2-D78(ii)), which stays W2-4's one `lstatSync(recallOffPath(…))` line. `controlFileOf` is `readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false)` and writes nothing, so single-definition's O13 one-writer pin holds unchanged, and W2-4's recall-off line pin is re-pinned to the two code lines (Step 2).
 - **The floor (W2-D71).** `freeze` writes the list whatever its size and records `below_floor` in its meta. `open --finalize` refuses a below-floor meta (`input-invalid`). A ruling to proceed lowers `quiz.halt_floor`, a signed default, in a superseding draft, and the quiz is sourced again under it. That re-sourcing is a stated cost.
 - **What `power` prints (W2-D21).**
@@ -8602,12 +8602,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   });
   /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
    *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
-  function draft7(root: string, home: string, over: R7 = {}): R7 {
-    const s0 = step0a7(root, home);
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a'): R7 {
+    const s0 = { ...step0a7(root, home), account };
     return r7drv.buildDraft({
       nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
       step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
-      pilot: pilot7(root), account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS },
+      pilot: pilot7(root), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
       gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
       overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
     }) as R7;
@@ -8665,8 +8665,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
    *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
    *  pilot result), and the part 2 buildFinal makes from them. */
-  function chain7(home: string, draftOver: R7 = {}): R7 {
-    const draft = draft7(R7_REPO, home, draftOver);
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a'): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account);
     const d = save7(draft, 'part1.json');
     const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
     const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
@@ -9403,6 +9403,85 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: async () => { throw new Error('never'); } } as never));
       r7expect(r.refusal).toEqual({ word: 'input-invalid', detail: `store ${STORE_C} is not one of the record's nodes` });
     });
+    // D-6307 (R10): every refusal that needs no store and no spawn answers before prepareOut makes --out, not the writer
+    // model alone: the roster, the account, the limits row at open and the wrapper's sha (openWriter asks each again).
+    // Each row breaks one input and names the setup of both subcommands; the CONTROL is the same run with that input
+    // admissible, which gets past the check and makes --out (it may refuse at open for another reason: a later word).
+    type AdmRow = { word: string; detail: string | null; pilot: (home: string, broken: boolean) => string;
+      quiz: (home: string, broken: boolean) => { account: string; over: R7 } };
+    const limitsRow7 = (home: string, five: number): void => {
+      const nowS = Math.floor(Date.now() / 1000);
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    };
+    /** up-a and gen-a rostered, gen-a's declared secrets file planted; its wrapper (the stub) only when `wrapper`. */
+    const genRoster7 = (home: string, wrapper: boolean): void => {
+      writeRoster(home, [FIXTURE_ACCOUNTS[0]!, FIXTURE_ACCOUNTS[1]!]);
+      const secrets = r7path.join(home, '.cc-secrets');
+      r7fs.mkdirSync(secrets, { recursive: true, mode: 0o700 });
+      r7fs.writeFileSync(r7path.join(secrets, 'gen-a.env'), '# fixture file admission stats and never opens\n', { mode: 0o600 });
+      const nowS = Math.floor(Date.now() / 1000);   // gen-a's own fresh limits row, so only the wrapper decides
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'gen-a.json'), JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      if (wrapper) plantStub(home, 'gen-a');
+    };
+    const ADM_ROWS: AdmRow[] = [
+      { word: 'roster-invalid', detail: 'absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'account-refused', detail: 'unknown-id',
+        pilot: (_home, broken) => (broken ? 'nope' : 'up-a'),
+        quiz: (_home, broken) => ({ account: broken ? 'nope' : 'up-a', over: {} }) },
+      { word: 'limits-threshold', detail: null,
+        pilot: (home, broken) => { limitsRow7(home, broken ? 90 : 10); return 'up-a'; },
+        quiz: (_home, broken) => ({ account: 'up-a', over: broken ? { limits: { threshold_pct: 5 } } : {} }) },
+      { word: 'wrapper-unmeasured', detail: 'wrapper',
+        pilot: (home, broken) => { genRoster7(home, !broken); return 'gen-a'; },
+        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; } },
+    ];
+    const admDetail = (row: AdmRow, home: string): string | null => (row.detail === 'wrapper' ? `${r7path.join(home, '.local', 'bin', 'gen-a')}: ENOENT` : row.detail);
+    const admit7 = (process.platform === 'darwin' ? r7it.skip : r7it).each(ADM_ROWS.map((r) => [r.word, r] as [string, AdmRow]));
+
+    admit7('pilot-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const account = row.pilot(home, broken);
+        const s0 = save7({ ...step0a7(R7_REPO, home), account }, 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    admit7('quiz-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const { account, over } = row.quiz(home, broken);
+        const c = chain7(home, over, account);
+        const out = outDir();
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
   });
 
   // ── freeze ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -10378,6 +10457,20 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
+/** D-6307 (R10): the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes --out, so a
+ *  refused run leaves no --out. In openWriter's order, through the SAME functions it calls, never a second spelling: the
+ *  roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`) and the limits row
+ *  at open (`limits-threshold` and the other limits words). It writes nothing, and it is a pre-check only: openWriter
+ *  asks every one again and stays the authority at open, so a state that moves between the two still refuses there,
+ *  after --out was made (an empty --out is that race's residual). The `--version` spawn stays openWriter's.
+ *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number } }} o */
+function refuseWriterAdmission({ home, accountId, limits }) {
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, accountId, home);
+  wrapperSha(launch);
+  refuseOnLimits(home, accountId, { thresholdPct: limits.threshold_pct, maxAgeMs: limits.max_age_ms }, Date.now());
+}
+
 // A handler that takes deps after its env names that parameter driverEnv, never env: W2-4 Task 5's env scan reads
 // `, env,` on a code line as an env passed whole, and the value is still main's by-name projection.
 /** `pilot-source` (W2 decisions §5 act 9, one pilot node, R9): before part 1, so its writer is preflighted against the
@@ -10401,6 +10494,7 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
   const writerModel = flags['writer-model'];
   refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
   refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
+  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS });   // D-6307: so do the roster, the account, the wrapper and the limits row
   const out = prepareOut(flags.out);
   refuseColonInRealOut(out);
   const claim = claimOut(out);
@@ -10457,6 +10551,7 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     const entry = rec.record.step0a.find((s) => s.store_id === storeId);   // the validator binds exactly one per node
     const writerModel = rec.record.writer_model;
     refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
+    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits });   // D-6307: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);
@@ -11037,6 +11132,20 @@ t 'R7, W2-D68: a whole pilot-source run'
 
 # Mx1 to Mx3b (fix round 1): a verify path writes into HOME, the presence directory, or beside the store (`.ccrc/history/db/`).
 # Each adds one `writeFileSync` to verifyRegistry or verifyAb; each is 1 failed (measured), `read-only … expected […(20)] to deeply equal […(19)]`.
+
+# M48 and M49 (fix round 2, D-6307): the early call removed from pilot-source, then from quiz-source.
+mut "$F" "  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS });   // D-6307: so do the roster, the account, the wrapper and the limits row
+" ""
+t 'answers before prepareOut makes --out'
+# Expected RED: 4 failed (measured), each on `no --out: the refusal answered before prepareOut: expected true to be false`: openWriter's later refusal still answers the word, so the word assertion passes and --out exists.
+mut "$F" "    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits });   // D-6307: before --out exists
+" ""
+t 'answers before prepareOut makes --out'
+# Expected RED: 4 failed (measured), the same way.
+# M50, M51, M52 and M53 (fix round 2): the helper without its wrapper measurement, its limits row, its account admission
+# (launch = { kind: 'upstream' }), and with a roster refusal swallowed. Measured: M50 and M51 and M53 2 failed each (the
+# subcommand pair of that row, on `--out` existing); M52 4 failed (both account rows, on the word: an unknown id's next
+# answer is `limits-stale`, its limits row being absent; both wrapper rows on `--out` existing).
 
 cmp "$F" "$SCRATCH/replay.t7.orig" && echo restored
 ```
@@ -11637,7 +11746,7 @@ Every guard this PR adds is in Tasks 1 to 7, each with its own mutant list.
 
 ## Deviations found
 
-Eleven numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found; D-6305 and D-6306 were issued for the two departures Task 6's review found. A number issued during the build is appended below by the commit that first cites it.
+Twelve numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found; D-6305 and D-6306 were issued for the two departures Task 6's review found; D-6307 was issued for the one Task 7's review found. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-5780** — `history-w2-answerable-timed` (Task 5; W2-D70, with spec erratum E19, which W2-5b amends in place): W2-D70's answerability gains a fourth clause. A source entry needs a non-null `ts_ms` at or before boundary N's own `ts_ms` (T_N). A sidecar source needs a non-null `entry_id` whose entry passes the same test. This departs from spec §10.2's "Answerability" bullet ("F must occur in a span row with searchable provenance, within the sidecar FTS window"), which reads no time and admits a sidecar however it is linked. The ground is the as-of cut (W2-D34, W2-D35). A NULL-ts row and a sidecar with a NULL `entry_id` are absent under it. A fact sourced only from one would be asked of a treatment arm whose own cut can never show it, and its miss would measure the cut, not recall. With clause 4, every admitted fact's source is visible under the cut: a leaf-N span row precedes the boundary, so the positional clause never hides it. Read with clause 1, the sidecar sources are those linked to a searchable span row and those linked to nothing in the span's transcript, so the unlinked ones reach clause 4 and are counted. What the clause removes is reported, never hidden: the `answerable` stage drops such a candidate as `unanswerable-untimed`, apart from `unanswerable`, and sampling counts each (decisions section 7: "Facts carried only by NULL-ts rows or by sidecars with no entry are never asked"). The spec sentence is amended by W2-5b (E19); this plan edits no spec. Pins: Task 5's clause-4 cases (a source stamped exactly T_N is answerable, one stamped one ms after is not, a NULL-ts row, an unlinked sidecar, a sidecar linked to a NULL-ts row) and the stage's two words; mutants M6 to M9, M12 and M13 of Task 5.
 - **D-6277** — `history-replay-pointer-lines` (Task 1; W2-D75 item 1, spec §10.2 "Reconstruction"): every whole line of the summary row that names a path ending in `.jsonl` becomes `[pointer removed]`, where the spec says "its transcript-pointer line", one line. Neither the spec nor any code, fixture or lib helper in the tree defines that line, so the rule is the widest reading that still removes it: any whole line naming a `.jsonl` path (`/^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm`). It removes more than the spec's text says, at no quiz cost: any fact on such a line is in B, which keeps the summary whole with its pointer (W2-D68 (1)), so it is never admitted. The fidelity pilot's token count moves by those lines only. Redaction runs first and the replacement after (W2-D54: whole, then any cut). Pins: Task 1's `removePointerLines` case and its item 1 case over the fixture store; mutant M2 of Task 1.
@@ -11650,3 +11759,5 @@ Eleven numbers are defined here. D-5780 is the W2 decisions document's (its bloc
 - **D-6304** — `history-replay-baseline-unrenderable-body-discard` (Task 4; W2-D68, with D-6302 and D-6303): Task 4's `baselineOf` rendered each stored body of parts 1 to 3 with `renderEntryText` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended B's build, and the run with it. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and B fails closed under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 and D-6303 rule; no word is added, and the word stays last in the list. The string leaves need no guard (`ftsTextOf` and the iterative leaf walk never throw). Pins: Task 4's D-6304 cases (a 5,000-deep summary row, kept member and post-summary row each discard `body-unrenderable`, CONTROL 4,000 deep builds); mutants MA (the `renderOrNull` wrap) and MB, MC and MD (each part's null check).
 - **D-6305** — `history-replay-failed-writer-run-is-malformed` (Task 6; W2-D72, R6): Task 6's `ask` parsed the run's result text without looking at its exit, so a run killed on timeout after it printed a result event, or one that exited non-zero with a `QUESTION:` line, answered `state: 'question'` and could reach the frozen list while `failed_runs` also counted it, and `malformed_replies` counted every `writer-malformed`, failed runs included. R6 says a run that fails, or shows no result event, is `writer-malformed` and is counted apart from malformed replies. `ask` now returns `writer-malformed` (with its run) before parsing when the code is not 0, a signal ended the run or no result event showed, and `sourceQuiz` counts `malformed_replies` only for runs that did not fail, so the `writer-malformed` drop count is failed runs plus malformed replies. Pins: Task 6's print-mode-exit case (with an exit 0 CONTROL) and its counting case; mutants X1 and X2.
 - **D-6306** — `history-replay-mined-drops-only-for-mined-boundaries` (Task 6; W2-D65, W2-D71): the brief's `sourceQuiz` merged `mineBoundary`'s site-drop counts before it checked that the boundary was mined, so a boundary discarded whole (for example `body-unrenderable` after a dropped site) put its partial drops into `counts.mined` as well as counting once under `counts.discards`. The merge now follows the check, so a discarded boundary is counted once and `counts.mined` describes mined boundaries only. Pins: Task 6's D-6306 case (a short command, then a 5,000-deep input, in the real sweep's store) with its plain-box CONTROL; mutant X3.
+
+- **D-6307** — `history-replay-writer-admission-before-out` (Task 7; R10, W2-D52, W2-D55, W2-D56): R10 rules that a refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, but the brief pinned only the writer model. Four more refusals of `pilot-source` and `quiz-source` answered only inside `openWriter`, after `--out` existed: `roster-invalid` (`readRoster`), `account-refused` (`admitAccount`), `wrapper-unmeasured` (`wrapperSha`) and a limits row at the threshold at open (`limits-threshold` and the other limits words). None needs a store or a spawn (a limits row, a roster and a wrapper are files). Both subcommands now ask them in the module-private `refuseWriterAdmission` before `prepareOut`, in `openWriter`'s order and through the same functions, never a second spelling; the limits half of `batchGate`'s gate was factored into `refuseOnLimits`, which the gate and the pre-check both call. The pre-check writes nothing. `openWriter` keeps its own calls unchanged and stays the authority at open, so it is a pre-check only: a state that changes between the two still refuses in `openWriter`, after `--out` was made, and that race leaves an empty `--out`, which is accepted. The `--version` probe is a spawn and stays after `prepareOut`; W2-4's `step0aCommand` is left alone (D-5985). The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the Task 7 review's question. Pins: Task 7's two `it.each` sets (one per subcommand; per refusal a case that answers its word with no `--out` and a CONTROL where, with the input admissible, `--out` is made); mutants M48 and M49 (the early call removed, red on `--out` existing, not on the word), M50, M51, M52 and M53 (the helper without each of its checks).

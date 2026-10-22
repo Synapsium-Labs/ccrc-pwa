@@ -1907,10 +1907,17 @@ export function batchGate({ out, home, accountId, budget, limits, now = Date.now
   return () => {
     const spent = decideBudget(spentSoFar(out), budget);
     if (spent !== null) refuse(spent.word, spent.detail);
-    const nowMs = now();
-    const stop = decideLimits(readLimitsRow(home, accountId, Math.floor(nowMs / 1000)), { nowMs, thresholdPct, maxAgeMs });
-    if (stop !== null) refuse(stop.word, stop.detail);
+    refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, now());
   };
+}
+
+/** The limits half of batchGate's check, one function: the account's limits row against the threshold and the age
+ *  bound, refusing with decideLimits' own word. batchGate's gate runs it after the budget half; the sourcing
+ *  subcommands' pre-check (refuseWriterAdmission, D-6307) runs it alone, before --out exists.
+ *  @param {string} home  @param {string} accountId  @param {{ thresholdPct: number, maxAgeMs: number }} bounds  @param {number} nowMs */
+function refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, nowMs) {
+  const stop = decideLimits(readLimitsRow(home, accountId, Math.floor(nowMs / 1000)), { nowMs, thresholdPct, maxAgeMs });
+  if (stop !== null) refuse(stop.word, stop.detail);
 }
 
 // ── W2-4 Task 7: the preflights W2-5a and W2-5b wire (W2-D56, W2-D24, W2-D6, W2-D78(ii), W2-D29, W2-D59) ────────
@@ -5259,6 +5266,20 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
+/** D-6307 (R10): the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes --out, so a
+ *  refused run leaves no --out. In openWriter's order, through the SAME functions it calls, never a second spelling: the
+ *  roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`) and the limits row
+ *  at open (`limits-threshold` and the other limits words). It writes nothing, and it is a pre-check only: openWriter
+ *  asks every one again and stays the authority at open, so a state that moves between the two still refuses there,
+ *  after --out was made (an empty --out is that race's residual). The `--version` spawn stays openWriter's.
+ *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number } }} o */
+function refuseWriterAdmission({ home, accountId, limits }) {
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, accountId, home);
+  wrapperSha(launch);
+  refuseOnLimits(home, accountId, { thresholdPct: limits.threshold_pct, maxAgeMs: limits.max_age_ms }, Date.now());
+}
+
 // A handler that takes deps after its env names that parameter driverEnv, never env: W2-4 Task 5's env scan reads
 // `, env,` on a code line as an env passed whole, and the value is still main's by-name projection.
 /** `pilot-source` (W2 decisions §5 act 9, one pilot node, R9): before part 1, so its writer is preflighted against the
@@ -5282,6 +5303,7 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
   const writerModel = flags['writer-model'];
   refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
   refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
+  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS });   // D-6307: so do the roster, the account, the wrapper and the limits row
   const out = prepareOut(flags.out);
   refuseColonInRealOut(out);
   const claim = claimOut(out);
@@ -5338,6 +5360,7 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     const entry = rec.record.step0a.find((s) => s.store_id === storeId);   // the validator binds exactly one per node
     const writerModel = rec.record.writer_model;
     refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
+    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits });   // D-6307: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);

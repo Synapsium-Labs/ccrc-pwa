@@ -8914,12 +8914,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   });
   /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
    *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
-  function draft7(root: string, home: string, over: R7 = {}): R7 {
-    const s0 = step0a7(root, home);
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a'): R7 {
+    const s0 = { ...step0a7(root, home), account };
     return r7drv.buildDraft({
       nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
       step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
-      pilot: pilot7(root), account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS },
+      pilot: pilot7(root), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
       gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
       overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
     }) as R7;
@@ -8977,8 +8977,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
    *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
    *  pilot result), and the part 2 buildFinal makes from them. */
-  function chain7(home: string, draftOver: R7 = {}): R7 {
-    const draft = draft7(R7_REPO, home, draftOver);
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a'): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account);
     const d = save7(draft, 'part1.json');
     const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
     const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
@@ -9713,6 +9713,86 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: async () => { throw new Error('never'); } } as never));
       r7expect(r.refusal).toEqual({ word: 'input-invalid', detail: `store ${STORE_C} is not one of the record's nodes` });
     });
+
+    // D-6307 (R10): every refusal that needs no store and no spawn answers before prepareOut makes --out, not the writer
+    // model alone: the roster, the account, the limits row at open and the wrapper's sha (openWriter asks each again).
+    // Each row breaks one input and names the setup of both subcommands; the CONTROL is the same run with that input
+    // admissible, which gets past the check and makes --out (it may refuse at open for another reason: a later word).
+    type AdmRow = { word: string; detail: string | null; pilot: (home: string, broken: boolean) => string;
+      quiz: (home: string, broken: boolean) => { account: string; over: R7 } };
+    const limitsRow7 = (home: string, five: number): void => {
+      const nowS = Math.floor(Date.now() / 1000);
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    };
+    /** up-a and gen-a rostered, gen-a's declared secrets file planted; its wrapper (the stub) only when `wrapper`. */
+    const genRoster7 = (home: string, wrapper: boolean): void => {
+      writeRoster(home, [FIXTURE_ACCOUNTS[0]!, FIXTURE_ACCOUNTS[1]!]);
+      const secrets = r7path.join(home, '.cc-secrets');
+      r7fs.mkdirSync(secrets, { recursive: true, mode: 0o700 });
+      r7fs.writeFileSync(r7path.join(secrets, 'gen-a.env'), '# fixture file admission stats and never opens\n', { mode: 0o600 });
+      const nowS = Math.floor(Date.now() / 1000);   // gen-a's own fresh limits row, so only the wrapper decides
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'gen-a.json'), JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      if (wrapper) plantStub(home, 'gen-a');
+    };
+    const ADM_ROWS: AdmRow[] = [
+      { word: 'roster-invalid', detail: 'absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'account-refused', detail: 'unknown-id',
+        pilot: (_home, broken) => (broken ? 'nope' : 'up-a'),
+        quiz: (_home, broken) => ({ account: broken ? 'nope' : 'up-a', over: {} }) },
+      { word: 'limits-threshold', detail: null,
+        pilot: (home, broken) => { limitsRow7(home, broken ? 90 : 10); return 'up-a'; },
+        quiz: (_home, broken) => ({ account: 'up-a', over: broken ? { limits: { threshold_pct: 5 } } : {} }) },
+      { word: 'wrapper-unmeasured', detail: 'wrapper',
+        pilot: (home, broken) => { genRoster7(home, !broken); return 'gen-a'; },
+        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; } },
+    ];
+    const admDetail = (row: AdmRow, home: string): string | null => (row.detail === 'wrapper' ? `${r7path.join(home, '.local', 'bin', 'gen-a')}: ENOENT` : row.detail);
+    const admit7 = (process.platform === 'darwin' ? r7it.skip : r7it).each(ADM_ROWS.map((r) => [r.word, r] as [string, AdmRow]));
+
+    admit7('pilot-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const account = row.pilot(home, broken);
+        const s0 = save7({ ...step0a7(R7_REPO, home), account }, 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    admit7('quiz-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const { account, over } = row.quiz(home, broken);
+        const c = chain7(home, over, account);
+        const out = outDir();
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
   });
 
   // ── freeze ─────────────────────────────────────────────────────────────────────────────────────────────────
