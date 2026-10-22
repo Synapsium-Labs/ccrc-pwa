@@ -286,8 +286,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // same menu asked again has the SAME id, and the closed hold keeps the old one: without `closed` here nothing would
   // run when it ended, and the menu coming back would open with the old answer's marker set (`answering…`, every row
   // disabled, the dismissal refused). A closed surface is the screen gone, as `dialog` going null once was: it shows no
-  // pane, so a send that landed against it is spent. Clearing it is harmless to the operator: the closing content is inert, so its
-  // marker and disabled look may change during the exit with nothing left to tap.
+  // pane, so a send that landed against it is spent. Clearing it is harmless to the operator: the closing content is
+  // inert, so its marker and disabled look may change during the exit with nothing left to tap.
   useEffect(() => {
     const onScreen = closed ? null : dialog;
     setAnswering(null);
