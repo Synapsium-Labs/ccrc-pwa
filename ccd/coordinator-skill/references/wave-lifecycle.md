@@ -786,21 +786,24 @@ whole time, which is the only prevention this ordering rule buys.
    head, and `gh pr checks <pr> --required` exits 0: for any other
    PR gh arms auto-merge instead of queueing it,
    and prints the same "will be added to the merge queue … when ready" line
-   either way. The exit decides, and a `ROUTE Q` answer does not waive it.
+   either way. The `--required` exit decides, and a `ROUTE Q` answer does not waive it.
    On `0`, go on under this gate and the read-back below. On `8` (pending),
    wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
    never by ending your turn: no mail comes when checks finish. Then run the
-   verdict again. On `1`, run the verdict again: a `RED` goes to the `RED`
+   verdict again. Whichever arm led back to the verdict, a `ROUTE Q` answer
+   does not skip this gate: never enqueue on a verdict without an exit `0`
+   read after it. On `1`, run the verdict again: a `RED` goes to the `RED`
    rule of §5b, which limits a rerun to the kind it names and never reruns
    unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any
    other line goes by its bullet in §5b. On any other exit the stop is
    `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit
    and the whole output, and never enqueue, arm, retry or choose another route
-   by hand. gh's "no required checks reported" and "no checks reported" are
-   such an exit on a queue repository: the stop is deliberately conservative,
-   not support promised by an empty required set, and it does not touch a
-   repository whose required checks gh reports.
+   by hand. gh's "no required checks reported" and "no checks reported" are an
+   exit `1`: with a `ROUTE Q` answer they are this stop, which is deliberately
+   conservative on a queue repository, not support promised by an empty
+   required set, and it does not touch a repository whose required checks gh
+   reports.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
    because the queue's merge method applies, and never `--admin`. Prove it
@@ -1208,7 +1211,9 @@ present their requested changes, without copying untrusted text into commands.
 one invocation: it skips this stop only on exact equality with the key computed
 afresh, so another PR, another head, a new or replaced review or a changed
 summary stops and asks again, and the verdict still reads the reviews and
-applies every other guard. A key whose `reviews` is empty, a summary-only
+applies every other guard. A later run of the verdict for the same landing,
+after a wait or with `BOUND_S`, sets it again the same way only while the key
+the verdict prints is unchanged; a changed key is a new ask. A key whose `reviews` is empty, a summary-only
 request, can never be ignored: inspect the PR's reviews, read the verdict again
 and report to the operator. Only a fresh `ROUTE` result permits the normal
 landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested`
@@ -1222,8 +1227,8 @@ This session reads again before each enqueue, direct merge and re-enqueue, and
 after each wait. It cannot atomically prevent a request submitted after that
 last read or while an already-enqueued PR merges, and nothing here claims
 review enforcement at queue time. If it observes a request on a queued PR, it
-stops that landing attempt, uses step 3's disarm path (or asks the operator to
-dequeue what is already queued), asks address or ignore, and never enqueues
+stops that landing attempt, disarms it as step 3 does if it is only armed, asks
+the operator to dequeue it if it is in the queue, asks address or ignore, and never enqueues
 again silently. Watching a queued PR continuously is a server follow-up, not
 this skill's.
 
