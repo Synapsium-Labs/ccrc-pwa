@@ -2400,6 +2400,30 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
     expect(fs.lstatSync(own).isFIFO(), 'the entry the stale loop kept is not removed by the failure path').toBe(true);
     expect(fs.existsSync(path.join(dir, ID)), 'nothing was written at recall-off/<id>').toBe(false);
   });
+
+  // r761 F6: M29 pins only the rename's directory fsync. Each other durability step is its own pass here, so its assertion sees only that
+  // pass's fsyncs: the root's, after recall-off/ is made (the write form's temp fsync is a file fd, which recordDirFsyncs does not record).
+  it('in-process: the root is fsynced after recall-off/ is made, and recall-off/ after --clear and after --clear-all (r761 F6)', async () => {
+    const box = w21Box('ccrc-hist-w21-fsyncs-');
+    const sweep = await import('../../ccd/history/sweep.mjs');
+    const hh = await import('./historyHelpers.js');
+    expect(fs.existsSync(w21Dir(box)), 'CONTROL: recall-off/ is absent, so the write form makes it').toBe(false);
+    const made = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'write', id: ID, generation: null }, () => {}));
+    expect(made.out).toEqual({ rc: 0 });
+    expect(made.dirs, 'the new recall-off/ is made durable in its parent').toContain(path.dirname(w21Dir(box)));
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'CONTROL: the file was written').toBe(true);
+    const cleared = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'clear', id: ID, generation: null }, () => {}));
+    expect(cleared.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'the entry is gone').toBe(false);
+    expect(cleared.dirs, 'the unlink is made durable in recall-off/').toContain(w21Dir(box));
+    const again = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'write', id: ID, generation: null }, () => {}));
+    expect(again.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'CONTROL: the file was written again').toBe(true);
+    const all = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'clear-all', id: null, generation: null }, () => {}));
+    expect(all.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'the entry is gone').toBe(false);
+    expect(all.dirs, 'the --clear-all unlinks are made durable in recall-off/').toContain(w21Dir(box));
+  });
 });
 
 // ── W2-1 Task 3, fix round 1: the writer names every entry it leaves, and an absent root is refused ─────────────────────
