@@ -19111,6 +19111,20 @@ _affinity_slot_take() {   # target now -> rc 0 granted | 1 lost | 2 granted, the
   return "$rc"
 }
 
+# `cur_serves` (D-6181, spec §3.1), defined ONCE: the session's current account
+# still serves it — `_avail` passes, the class gate answers 0, the move is not a
+# pool leave and the session is not hard-blocked. Only such a move (the return
+# home; later the sideways move) is guarded. A move off a `cur` that fails it is
+# a LEAVE, paying overage while it waits, and is never delayed.
+_affinity_cur_serves() {   # id wrapper aff-verb hard-blocked -> rc 0 iff cur still serves
+  local cls=""
+  [[ -z "$4" && "$3" != auto-pool ]] || return 1
+  _avail "$2" || return 1
+  _route_peek_to cls "$1" class; [[ "$cls" == default ]] && cls=""
+  _class_gate "$2" "$cls"
+}
+_swap_stagger_off() { [[ -e "$REG/swap-stagger-off" || -L "$REG/swap-stagger-off" ]]; }   # D-6181's brake: present -> today's undelayed dispatch
+
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
@@ -19707,6 +19721,16 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
   _swap_idle_gate "$id" "$pane" "$wrapper" "$now" || { _standdown_note "$id" idle-gate; return 0; }   # the same gate the act re-runs (D-5240)
+  # THE AFFINITY GUARDS (D-6181, spec §3.1), after the idle gate and only while
+  # `cur` still serves: a draft in the input box stands the move down (the idle
+  # gate's verdict table is untouched), then the per-account and fleet-wide
+  # slots order the arrivals. A slot that cannot be written fails OPEN.
+  if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
+    _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" \
+      && { _standdown_note "$id" draft; return 0; }
+    _affinity_slot_take "$target" "$now"
+    case $? in 1) _standdown_note "$id" stagger; return 0 ;; 2) _standdown_note "$id" stagger-unwritable ;; esac
+  fi
   # The degrade rung rides into the unit with the move; `cmd_swap` stamps it
   # after re-running this same idle gate at the act (D-5240).
   _reg_set "$id" lastswap "$now"
