@@ -10120,6 +10120,74 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
     }, 120_000);
 
+    // D-6309: a signed record's budget, limits and quiz quotas are typed as bare integers by the gate's validator, so one
+    // out of range gets through `open --draft --overrides` and reaches batchGate's or sampleQuestions' throw, a TypeError
+    // after --out. refuseOutOfRangeValues refuses them `record-invalid` before prepareOut, one row per field. Each CONTROL
+    // is the boundary value (1, and 100 for the threshold), which gets past the range check: its refusal, if any, is a
+    // later word, and --out is made unless that word is itself a pre-check word of the limits row.
+    type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean } };
+    const RANGE_ROWS: RangeRow[] = [
+      { field: 'pilot_budget', path: ['pilot_budget'], bad: [0, -1], edge: 1 },
+      { field: 'limits.threshold_pct', path: ['limits', 'threshold_pct'], bad: [0, 101], edge: 100 },
+      // A one-millisecond age bound is in range and the fixture's limits row is older, so the limits word answers, still before --out.
+      { field: 'limits.max_age_ms', path: ['limits', 'max_age_ms'], bad: [0, -1], edge: 1, after: { word: 'limits-stale', made: false } },
+      { field: 'quiz.target', path: ['quiz', 'target'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.family', path: ['quiz', 'caps', 'family'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.boundary', path: ['quiz', 'caps', 'boundary'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.kind_per_family', path: ['quiz', 'caps', 'kind_per_family'], bad: [0, -1], edge: 1 },
+    ];
+    const overrideAt = (path: string[], v: number): R7 => path.reduceRight((acc: R7 | number, k) => ({ [k]: acc }), v) as R7;
+    const quizRun7 = async (over: R7): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+      const home = home7(STORE_A);
+      const c = chain7(home, over);
+      const out = outDir();
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+      return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+    };
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(RANGE_ROWS.map((r) => [r.field, r] as [string, RangeRow]))(
+      'D-6309: quiz-source, a signed record with %s out of range refuses record-invalid before --out and any spawn; CONTROL: the boundary value passes the range check',
+      async (_field, row) => {
+        for (const v of row.bad) {
+          const bad = await quizRun7(overrideAt(row.path, v));
+          r7expect(bad.made, `${row.field}=${v}: no --out, the refusal answered before prepareOut`).toBe(false);
+          r7expect(bad.refusal, `${row.field}=${v}`).toEqual({ word: 'record-invalid', detail: `${row.field} out-of-range` });
+          r7expect(bad.calls).toBe(0);
+          r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
+        }
+        const ok = await quizRun7(overrideAt(row.path, row.edge));
+        r7expect(ok.refusal?.word, `CONTROL ${row.field}=${row.edge}: past the range check (${JSON.stringify(ok.refusal)})`).not.toBe('record-invalid');
+        if (row.after === undefined) {
+          r7expect(ok.refusal, 'CONTROL: the whole run goes through').toBeNull();
+          r7expect(ok.made, 'CONTROL: prepareOut made --out').toBe(true);
+          r7expect(ok.calls).toBe(1);
+        } else {
+          r7expect(ok.refusal?.word, 'CONTROL: the next word').toBe(row.after.word);
+          r7expect(ok.made).toBe(row.after.made);
+        }
+      }, 240_000);
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('D-6309: a record with every ranged field out of range names each one, in the order batchGate and sampleQuestions read them', async () => {
+      const over = { pilot_budget: 0, limits: { threshold_pct: 150, max_age_ms: 0 }, quiz: { target: 0, caps: { family: 0, boundary: 0, kind_per_family: 0 } } };
+      const bad = await quizRun7(over);
+      r7expect(bad.refusal).toEqual({ word: 'record-invalid', detail: RANGE_ROWS.map((r) => `${r.field} out-of-range`).join('; ') });
+      r7expect(bad.made).toBe(false);
+    }, 120_000);
+
+    r7it('D-6309: refuseOutOfRangeValues takes only positive safe integers (a float, a string, NaN and an absent value are out of range) and writes nothing', () => {
+      const good = { budget: 1, limits: { threshold_pct: 100, max_age_ms: 1 }, quotas: { target: 1, caps: { family: 1, boundary: 1, kind_per_family: 1 } } };
+      r7expect(() => r7drv.refuseOutOfRangeValues(good)).not.toThrow();
+      // pilot-source's own values (the flag grammar's positive integers, LIMITS_DEFAULTS, the draft's caps) are in range.
+      r7expect(() => r7drv.refuseOutOfRangeValues({ budget: 100_000, limits: r7drv.LIMITS_DEFAULTS, quotas: { target: 100, caps: { family: 5, boundary: 3, kind_per_family: 2 } } })).not.toThrow();
+      for (const v of [1.5, '5', Number.NaN, undefined, null, Number.MAX_SAFE_INTEGER + 2]) {
+        r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, budget: v }), `budget ${String(v)}`).toThrow(/record-invalid: pilot_budget out-of-range/);
+        r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, quotas: { ...good.quotas, target: v } }), `target ${String(v)}`).toThrow(/record-invalid: quiz.target out-of-range/);
+      }
+      r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, limits: undefined })).toThrow(/limits.threshold_pct out-of-range; limits.max_age_ms out-of-range/);
+      r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, quotas: { target: 1, caps: undefined } })).toThrow(/quiz.caps.family out-of-range; quiz.caps.boundary out-of-range; quiz.caps.kind_per_family out-of-range/);
+    });
+
     // D-6311: the code words (the tree the driver runs from is the unmeasurable one), the precedence the pre-check changes,
     // and the store open that now comes before --out. Each runs the real subcommand as a child, with the real tree.
     const pilotArgv7 = (out: string, s0: Saved): string[] => ['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)];

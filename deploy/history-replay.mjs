@@ -5390,17 +5390,50 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
-/** D-6307 (R10), D-6311: the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes --out,
- *  so a refused run leaves no --out. In openWriter's order, through the SAME functions it calls, never a second spelling:
- *  the roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`), the limits row
- *  at open (`limits-threshold` and the other limits words) and preflight's no-spawn half (preflightFiles: `tree-unmeasured`,
+/** D-6309: the record's budget, limits and quiz quotas, in range, asked before prepareOut makes --out. The
+ *  gate's validator types these fields as bare integers with no range, so a signed record can carry a value that batchGate
+ *  (`pilot_budget`, `limits.threshold_pct`, `limits.max_age_ms`) or sampleQuestions' assertCount (`quiz.target` and
+ *  `quiz.caps.family`, `boundary` and `kind_per_family`) throws on, a TypeError after --out and, for the quotas, after a
+ *  writer spawn. Every field those two assert on is checked here, each a positive safe integer and `threshold_pct` also at
+ *  most 100; their throws stay as internal assertions behind this check. A bad value refuses `record-invalid` (the word for a
+ *  record the gate would not sign), naming each field as `<path> out-of-range`; nothing is written. One function, reached
+ *  from both subcommands through refuseWriterAdmission: quiz-source passes the signed record's values, pilot-source its
+ *  `--budget` (a positive integer by the flag grammar), LIMITS_DEFAULTS and pilotCaps, with `--n-usage` as the target.
+ *  Tightening W2-3's validator in the gate is not this file's.
+ *  @param {{ budget: unknown, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
+ *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } }} o */
+export function refuseOutOfRangeValues({ budget, limits, quotas }) {
+  const positive = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 1;
+  const checks = [
+    ['pilot_budget', positive(budget)],
+    ['limits.threshold_pct', positive(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
+    ['limits.max_age_ms', positive(limits?.max_age_ms)],
+    ['quiz.target', positive(quotas?.target)],
+    ['quiz.caps.family', positive(quotas?.caps?.family)],
+    ['quiz.caps.boundary', positive(quotas?.caps?.boundary)],
+    ['quiz.caps.kind_per_family', positive(quotas?.caps?.kind_per_family)],
+  ];
+  const bad = checks.filter(([, ok]) => !ok).map(([name]) => `${name} out-of-range`);
+  if (bad.length > 0) refuse('record-invalid', bad.join('; '));
+}
+
+/** D-6307 (R10), D-6311, D-6309: the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes
+ *  --out, so a refused run leaves no --out. First the record's values in range (refuseOutOfRangeValues, `record-invalid`),
+ *  then, in openWriter's order and through the SAME functions it calls, never a second spelling: the roster
+ *  (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`), the limits row at open
+ *  (`limits-threshold` and the other limits words) and preflight's no-spawn half (preflightFiles: `tree-unmeasured`,
  *  `tree-moved`, `wrapper-moved`, `code-unmeasured`, `code-changed`) against `expected`, the values openWriter is given.
  *  It writes nothing, and it is a pre-check only: openWriter asks every one again and stays the authority at open, so a
  *  state that moves between the two still refuses there, after --out was made (an empty --out is that race's residual).
- *  The `--version` probe is a spawn and stays openWriter's, so with both the version and the tree moved this answers
+ *  Two orders differ from openWriter's alone (D-6307): the roster, account, wrapper and limits words answer before
+ *  prepareOut's `out-refused` words, and the limits word answers before `budget-exhausted` (batchGate checks the budget
+ *  first, but the budget needs the ledger under --out, which does not exist yet). D-6311 adds a third: the
+ *  `--version` probe is a spawn and stays openWriter's, so with both the version and the tree moved this answers
  *  `tree-moved` where open would have said `claude-version-moved`.
- *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number }, expected: object }} o */
-function refuseWriterAdmission({ home, accountId, limits, expected }) {
+ *  @param {{ home: string, accountId: string, budget: number, limits: { threshold_pct: number, max_age_ms: number },
+ *    quotas: { target: number, caps: { family: number, boundary: number, kind_per_family: number } }, expected: object }} o */
+function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {
+  refuseOutOfRangeValues({ budget, limits, quotas });
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);
   const wrapperSha256 = wrapperSha(launch);
@@ -5432,7 +5465,7 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
   const writerModel = flags['writer-model'];
   refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
   refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
-  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS, expected: step0a });   // D-6307, D-6311: so do the roster, the account, the wrapper, the limits row and the tree
+  refuseWriterAdmission({ home, accountId: flags.account, budget: flags.budget, limits: LIMITS_DEFAULTS, quotas: { target: nUsage, caps: pilotCaps() }, expected: step0a });   // D-6307, D-6311, D-6309: so do the ranges, the roster, the account, the wrapper, the limits row and the tree
   const rs = openReplayStore(home);   // the run's one store open (R3), read-only and before --out like quiz-source's (D-6311)
   try {
     const out = prepareOut(flags.out);
@@ -5492,7 +5525,8 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
     const expected = { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
       wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files };
-    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits, expected });   // D-6307, D-6311: before --out exists
+    refuseWriterAdmission({ home, accountId: rec.record.account, budget: rec.record.pilot_budget, limits: rec.record.limits,
+      quotas: { target: rec.record.quiz.target, caps: rec.record.quiz.caps }, expected });   // D-6307, D-6311, D-6309: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);
