@@ -8,7 +8,7 @@
 // runtime by `syntheticJwt`; no token-shaped literal is written here.
 import { describe, it, expect } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
@@ -38,6 +38,9 @@ const CODE_RUN = /[A-Z0-9]{4}-[A-Z0-9]{4}/;
 const URL_RUN = /https:\/\/\S+/;
 /** The library's own CLIENT_ID, read off its one definition (no second literal of it is written here). */
 const LIB_CLIENT_ID = /^CLIENT_ID = "([^"]+)"$/m.exec(readFileSync(AUTH_LIB, 'utf8'))?.[1];
+/** The sha256 of LiteLLM 1.105.0's CHATGPT_CLIENT_ID (`litellm/llms/chatgpt/common_utils.py:21`), so the id's value
+ *  is pinned with no second literal of it. */
+const LITELLM_CLIENT_ID_SHA256 = '584341c2f0e88ad1f7c6856553d81dc4776ff42c43951daed3e2d8d91552eaa2';
 
 /** The status report's keys, exactly. */
 const REPORT_KEYS = [
@@ -370,7 +373,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       const [r, after] = driverLines(run.stdout);
       expect(after).toMatchObject({ op: 'read', credential: 'incomplete' });
       expect(r.rc).toBe(1);
-      expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: .*disk is full/m);
+      expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: .*after 3 tries: the disk is full/m);
       expect(r.stdout).not.toContain('signed-in');
       expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
       expect(lstatKey(credPath(dir))).toBe(key);
@@ -381,7 +384,9 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     }
   });
 
-  it('signin on a disk that frees after one failed write is signed-in', async () => {
+  // Two failed writes: only the third try (SIGNIN_COMMIT_TRIES) signs in, after two SIGNIN_COMMIT_RETRY_S waits,
+  // which the op's own elapsed time (the driver's `ms`) covers; the poll answers at once, so it waits nothing.
+  it('signin on a disk that frees after two failed writes is signed-in at the third try, 0.5 s apart', async () => {
     const home = mkTmp('codex-auth-enospc1-');
     const dir = laneDir(home);
     plantMarker(dir);
@@ -389,14 +394,62 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     const srv = await fakeAuthServer(fullSignin(t));
     try {
       const r = await runMain(home, dir, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
-        env: { CCRC_CODEX_AUTH_BASE: srv.base }, faults: ['enospc-writes:1'],
+        env: { CCRC_CODEX_AUTH_BASE: srv.base }, faults: ['enospc-writes:2'],
       });
       expect(r.rc, r.stderr).toBe(0);
       expect(r.stdout).toContain('ccgpt-auth: codex-a: signed-in');
+      expect(r.ms).toBeGreaterThanOrEqual(950);
       const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
       expect(JSON.parse(readFileSync(statusPath(dir), 'utf8'))).toMatchObject({ state: 'ok', unsaved: false });
       expect(existsSync(pendingPath(dir))).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  // In one process: a refresh whose commit the full disk refused leaves an unsaved record; the record's next refresh
+  // meets a config-error, which bars it, so a sign-in runs; every sign-in commit then fails. The map must hold the
+  // refresh's record again, not the sign-in's and not nothing. Each record's refresh token has its own length.
+  it("signin on a full disk gives back the unsaved refresh record it found", async () => {
+    const home = mkTmp('codex-auth-enospc-kept-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir, { expiresIn: -120 });
+    const bytes = readFileSync(credPath(dir));
+    const now = Math.floor(Date.now() / 1000);
+    const claim = { 'https://api.openai.com/auth': { chatgpt_account_id: 'acct-fixture-signin' } };
+    const refreshed = {
+      access_token: syntheticJwt({ exp: now + 3600, iat: now, jti: randomBytes(8).toString('hex'), ...claim }),
+      refresh_token: `rtok-fixture-refreshed-${randomBytes(16).toString('hex')}`,
+      id_token: syntheticJwt({ exp: now + 3600, iat: now, email: 'lane-a@example.invalid', ...claim }),
+    };
+    const t = issued();
+    const srv = await fakeAuthServer({
+      usercode: [usercodeAnswer()], deviceToken: [deviceCodeAnswer()],
+      token: [{ status: 200, body: refreshed }, { status: 400, body: { error: 'invalid_client' } }, exchangeAnswer(t)],
+    });
+    try {
+      const run = await runAuthDriver(home, {
+        authDir: dir, faults: ['enospc-writes:50'],
+        ops: [
+          { op: 'ensure_fresh', lane: 'codex-a' },
+          { op: 'ensure_fresh', lane: 'codex-a', withinS: 100000 },
+          { op: 'main', argv: ['signin', '--auth-dir', dir, '--lane', 'codex-a'] },
+          { op: 'read' },
+        ],
+      }, { CCRC_CODEX_AUTH_BASE: srv.base }, { timeoutMs: 15_000 });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const [first, barred, r, after] = driverLines(run.stdout);
+      expect(first, run.stderr).toMatchObject({ op: 'ensure_fresh', credential: 'present', refresh_token: refreshed.refresh_token.length });
+      expect(barred).toMatchObject({ op: 'ensure_fresh', error: 'config-error' });
+      expect(r.rc, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: .*after 3 tries: the disk is full/m);
+      expect(srv.requests.map((q) => q.path)).toEqual([
+        AUTH_ROUTES.token, AUTH_ROUTES.token, AUTH_ROUTES.usercode, AUTH_ROUTES.deviceToken, AUTH_ROUTES.token,
+      ]);
+      expect(after).toMatchObject({ op: 'read', credential: 'present', refresh_token: refreshed.refresh_token.length });
+      expect(String(after.detail)).toContain('an unsaved credential for');
+      expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
     } finally {
       await srv.close();
     }
@@ -455,6 +508,14 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     },
   );
 
+  // The values themselves, off the library's one definition of each: LiteLLM 1.105.0's DEVICE_CODE_POLL_SLEEP_SECONDS
+  // (`litellm/llms/chatgpt/authenticator.py:30`) and its CHATGPT_CLIENT_ID, compared by sha256.
+  it("signin's poll floor and client id are LiteLLM 1.105.0's", () => {
+    expect(readFileSync(AUTH_LIB, 'utf8')).toMatch(/^DEVICE_POLL_MIN_S = 5$/m);
+    expect(LIB_CLIENT_ID).toEqual(expect.any(String));
+    expect(createHash('sha256').update(LIB_CLIENT_ID as string).digest('hex')).toBe(LITELLM_CLIENT_ID_SHA256);
+  });
+
   // The op's own elapsed time (the driver's `ms`, which leaves out the interpreter's start) covers two waits.
   it.each([
     ['an interval over the floor is waited', { DEVICE_POLL_MIN_S: 0.05 }, 0.5],
@@ -483,6 +544,8 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     ['its own refresh token', (t: { access: string; refresh: string; id: string }) => t.refresh],
     ["its access token's signature segment", (t: { access: string; refresh: string; id: string }) => t.access.split('.')[2]],
     ['the submitted code_verifier', () => 'cver-fixture-1'],
+    ['the submitted authorization code', () => 'acode-fixture-1'],
+    ["its id token's signature segment", (t: { access: string; refresh: string; id: string }) => t.id.split('.')[2]],
   ] as Array<[string, (t: { access: string; refresh: string; id: string }) => string]>)(
     'signin: an exchange request id that echoes %s is not stored',
     async (_what, echo) => {

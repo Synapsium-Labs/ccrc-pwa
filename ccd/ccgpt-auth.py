@@ -329,9 +329,11 @@ class Reading(NamedTuple):
 
 # The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock,
 # the ok-status fields of the refresh that produced it or None). `read` answers from one while the file's identity
-# still equals its identity, and otherwise ignores it, leaving the map unchanged and printing nothing. Three writers
-# change the map, each under the lock: `commit_record` and `retry_unsaved`, and `ensure_fresh`, which drops a record
-# whose own refresh token the endpoint refused as needs-signin (one stderr line, no token). The status fields
+# still equals its identity, and otherwise ignores it, leaving the map unchanged and printing nothing. Four writers
+# change the map, each under the lock: `commit_record` and `retry_unsaved`; `ensure_fresh`, which drops a record
+# whose own refresh token the endpoint refused as needs-signin (one stderr line, no token); and `sign_in_device`,
+# which puts back what the map held before its commits when none of them landed, and drops the record of one whose
+# rename landed (the file then holds it). The status fields
 # (`lastRefreshAt`, `lastRequestId`) are kept with the record, not read back from the status file, because that file
 # was measured on the file the record replaces and its own write may have failed with the commit's.
 _UNSAVED: Dict[str, Tuple[dict, Optional[Identity], Optional[dict]]] = {}
@@ -1140,7 +1142,8 @@ def token_request(refresh_token: str) -> Tuple[dict, Optional[str]]:
     any request. No sentence formats the answer, its body or a token. The answer's body, an error answer's included, is
     read within one deadline, TOKEN_TIMEOUT_S from the start of the request (`_read_answer`, which names what that
     deadline does not bound: the status line, the headers and a chunked answer's chunk-size lines). A request id or an
-    error code that echoes the submitted refresh token is not stored."""
+    error code that echoes the submitted refresh token is not stored, nor a request id that echoes a token the answer
+    carries (as the sign-in's `_exchange` drops one)."""
     url = auth_base() + TOKEN_PATH
     deadline = time.monotonic() + float(TOKEN_TIMEOUT_S)
     payload = json.dumps({"client_id": CLIENT_ID, "grant_type": "refresh_token", "refresh_token": refresh_token,
@@ -1197,6 +1200,9 @@ def token_request(refresh_token: str) -> Tuple[dict, Optional[str]]:
     if not isinstance(answer, dict):
         raise RefreshFailed("the token endpoint's answer is not a JSON object; the credential is unchanged; retry",
                             code="refresh-response-unreadable", request_id=rid)
+    issued = [v for v in (answer.get(k) for k in ("access_token", "refresh_token", "id_token")) if isinstance(v, str)]
+    if rid is not None and any(_echoes(rid.lower(), v) for v in issued):
+        rid = None
     return answer, rid
 
 
@@ -1534,8 +1540,11 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     5. Under one `held`: settle a checkpoint and an unsaved record, refuse as in step 1, then commit, tried
        SIGNIN_COMMIT_TRIES times SIGNIN_COMMIT_RETRY_S apart; a commit that never lands is LoginFailed with the old
        file unchanged and the sign-in's record not kept; on success the status is `ok`. A commit whose rename landed
-       and whose directory fsync failed is signed in, its status `ok` with `unsaved` true and its record kept, so the
-       next holder re-runs the commit. Answers `"signed-in"`.
+       and whose directory fsync failed is signed in too: the file holds the record, so nothing is kept in memory
+       (the one-shot CLI that signs in exits next, so no later holder in this process could re-run the commit), and
+       the status is `ok` with `unsaved` false. Only the directory entry's durability is unconfirmed; a crash that
+       brings the old file back leaves that status bound to the new file's identity, so it is no longer current
+       (D-TBD-signin-landed-rename). Answers `"signed-in"`.
     With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
@@ -1578,9 +1587,8 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
                     saved = True
                     break
             if not saved:
-                # A try that failed only AFTER its rename (the directory's fsync) left the sign-in's record in place;
-                # `commit_record` keeps it bound to that file, so the next holder's `retry_unsaved` re-runs the
-                # commit, fsync included, as it does for a refresh's record.
+                # A try that failed only AFTER its rename (the directory's fsync) left the sign-in's record in the
+                # file: the sign-in is signed in (D-TBD-signin-landed-rename).
                 on_disk = _read_file(auth_dir)
                 landed = (on_disk.access_token == record["access_token"]
                           and on_disk.refresh_token == record["refresh_token"])
@@ -1594,8 +1602,11 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
             raise LoginFailed("the credential could not be written after " + str(SIGNIN_COMMIT_TRIES) + " tries: the "
                               "disk is full; nothing was saved; sign in again once it frees (ccrc codex login "
                               + lane + ")")
+        if landed:
+            # `commit_record` bound the record to the file now in place, which holds it: nothing is left unsaved.
+            _UNSAVED.pop(key, None)
         write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastErrorCode=None,
-                     identity=_current_identity(p.credential), unsaved=not saved, **fields)
+                     identity=_current_identity(p.credential), unsaved=False, **fields)
     return "signed-in"
 
 

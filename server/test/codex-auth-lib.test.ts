@@ -2123,6 +2123,25 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  // The answer's own tokens, newly issued, are echoes too: a request id carrying one would reach the status file.
+  it.each([
+    ['its newly issued refresh token', (a: Record<string, unknown>): string => a.refresh_token as string],
+    ["its access token's signature segment", (a: Record<string, unknown>): string => (a.access_token as string).split('.')[2]],
+    ["its id token's signature segment", (a: Record<string, unknown>): string => (a.id_token as string).split('.')[2]],
+  ] as Array<[string, (a: Record<string, unknown>) => string]>)('a refresh answer\'s request id that echoes %s is never stored', async (_label, echoOf) => {
+    const home = mkTmp('codex-auth-echo-issued-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: answer, headers: { 'x-request-id': echoOf(answer) } }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.lines[0], r.stderr).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      expect(statusOf(dir)).toMatchObject({ state: 'ok', lastRequestId: null });
+      expect(statusText(dir)).not.toContain(echoOf(answer));
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
   // The plan's two names are refused by their word. The two that follow name no DNS name and reach the fake's own
   // listener when connected to (0.0.0.0 and the IPv4-mapped loopback both land on 127.0.0.1), so its request count is
   // a real check: a refusal that let them through would be seen there, with no query leaving the box.
