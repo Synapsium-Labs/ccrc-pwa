@@ -3074,6 +3074,43 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(c.opened.filter((p) => path.basename(p) !== 'coordination-snapshot.json')).toEqual([]);
   });
 
+  it('W23-T25 (D-6350): a stale record is a dir that can be counted, so own, a full dir and a stale one at keep 2 verify and thin as usual', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, d1, stale] = [9, 8, 7].map((n) => clone(home, tpl, stamp(n))) as [string, string, string];
+    writeFileSync(path.join(stale, RECORD), `${H.canonicalJson({
+      format: 'ccrc-coordination-thinned', version: 1, thinnedAt: '2026-10-01T00:00:00.000Z', by: 'update',
+      rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1', capturedAt: tpl.manifest.capturedAt, dropped: droppedOf(tpl),
+    })}\n`);
+    const c = countingFs();
+    const { r } = run({ own, dirs: [d1, stale], keep: 2, by: 'update', fs: c.fs });
+    expect(r).toEqual({ kept: 2, thinned: 1, left: 0, refused: 0, stopped: false });
+    expect(c.opened.map((p) => path.relative(home, p)), 'd1 was verified in full before it was counted').toContain(path.relative(home, path.join(d1, 'delegation-events.log')));
+    expect(dirListing(stale)).toEqual(AFTER);
+  });
+
+  it('W23-T26 (D-6350): sparse never thins: a dir the quick pass could not read is counted later on presence and size, and the dir past the count is left as it is', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, a, b, last] = [9, 8, 7, 6].map((n) => clone(home, tpl, stamp(n))) as [string, string, string, string];
+    const before = treeDigest(last);
+    const c = countingFs();
+    // The quick pass's first look at a's record fails once, so the pass counts own, b and last (3, at keep 3: sparse); the walk then reads a whole.
+    let tripped = false;
+    const fs = {
+      ...c.fs,
+      lstat(p: string) {
+        if (!tripped && p === path.join(a, RECORD)) { tripped = true; throw Object.assign(new Error('EIO: i/o error, lstat'), { code: 'EIO' }); }
+        return c.fs.lstat(p);
+      },
+    };
+    const { r } = run({ own, dirs: [a, b, last], keep: 3, by: 'update', fs });
+    expect(tripped).toBe(true);
+    expect(r).toEqual({ kept: 3, thinned: 0, left: 1, refused: 0, stopped: false });
+    expect(treeDigest(last), 'nothing unverified is ever thinned').toEqual(before);
+    expect(c.opened.filter((p) => path.basename(p) !== 'coordination-snapshot.json'), 'sparse: no classify').toEqual([]);
+  });
+
   it('W23-T24 (D-6363, review 794 F8): a dir whose user_version cannot be read is left and not counted: it is never both kept and left', () => {
     const home = mkHome();
     const tpl = template(home, '20260101-000000', 3);

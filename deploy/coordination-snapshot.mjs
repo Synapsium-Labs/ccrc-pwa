@@ -1048,7 +1048,8 @@ function quickBody(fs, dir) {
 }
 
 /**
- * What a backup directory holds, by presence and size alone: no hashing, no `quick_check`, no journal read (D-6350).
+ * What a backup directory holds, by presence and size: no hashing, no `quick_check`, no journal read (D-6350). A manifest-less coord.db
+ * is opened read-only for its header and table list (D-6364), outside the `fs` seam, as `classify`'s own legacy reading is.
  * `full` (a v1 manifest with a member, or a legacy coord.db; `source` says which), `none` (nothing to thin), `thinned` (a valid record and
  * none of the four names), `stale` (a record beside every name it lists), `interrupted` (a record beside some of them) and `damaged`.
  * A record that cannot be read is `damaged` with the `error` that said so, which a walk refuses the dir with. `record` rides the three record words.
@@ -1191,7 +1192,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
       try {
         const st = fs.lstat(d);
         if (st === null || !st.isDirectory()) continue;
-        if (holdsData(quickState(fs, d))) left++;
+        if (holdsData(reads.get(d) ?? quickState(fs, d))) left++;
       } catch (err) {
         if (!(err instanceof SnapError) && !hasCode(err)) throw err;
         left++;
@@ -1275,6 +1276,9 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
         if (verify(dir)) { noteCounted(dir, q); counted++; } else left++;
         continue;
       }
+      // Sparse means the quick pass saw nothing past the count. A dir that reaches here anyway (its quick reading failed then, or
+      // reads differently now) was never verified, and nor were the dirs counted before it, so it is left as it is, never thinned.
+      if (sparse) { left++; continue; }
       if (preMigration === 0 && refUv !== null && hasDb(q)) {
         const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
         if (uv !== null && uv < refUv) {

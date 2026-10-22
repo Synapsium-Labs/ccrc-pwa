@@ -23684,15 +23684,16 @@ _bak_ours() {
 # console-driven move or the watchdog runs under an environment that carries none unless it was set there), else 3. A whole number
 # from 2 to 9999, through `_keep_ok`; 0 and 1 are refused, never clamped. rc 0 sets BAK_DATA_KEEP (decimal); rc 1 sets
 # BAK_DATA_KEEP_WHY to the refusal sentence. Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read, or
-# that names the knob on a line `_box_env_value` does not take (an `export`, a space before `=`), refuses like an invalid value,
+# that names the knob on a non-comment line `_box_env_value` does not take (an `export`, a space before `=`, anything before the
+# name but spaces, tabs and CRs), refuses like an invalid value,
 # naming the file and never its bytes; only an absent file, or one that never names the knob, falls back to 3. The same
 # fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
 _bak_data_keep() {
   local f="$BOX_ENV_FILE" g=0 why=""
   BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
   if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
-    if [ -f "$f" ] && [ -r "$f" ]; then grep -Eq '^[[:space:]]*(export[[:space:]]+CCRC_BACKUP_DATA_KEEP[[:space:]]*|CCRC_BACKUP_DATA_KEEP[[:space:]]+)=' "$f" || g=$?; else g=3; fi
-    case "$g" in 0) why="names it on a line this reader does not take (only KEY=value: no export, no space before =)" ;; 2) why="could not be scanned" ;; 3) why="is there but cannot be read" ;; esac
+    if [ -f "$f" ] && [ -r "$f" ]; then grep -Eq $'^[[:space:]]*CCRC_BACKUP_DATA_KEEP[[:space:]]+=|^[ \t\r]*[^ \t\r#][^#]*CCRC_BACKUP_DATA_KEEP[[:space:]]*=' "$f" || g=$?; else g=3; fi
+    case "$g" in 0) why="names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 2) why="could not be scanned" ;; 3) why="is there but cannot be read" ;; esac
     [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${f/#"$HOME"/\~} $why"; return 1; }
     BAK_DATA_KEEP="$(_box_env_value "$f" CCRC_BACKUP_DATA_KEEP)"
   fi

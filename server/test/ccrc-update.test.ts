@@ -14170,16 +14170,16 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
-    it('W23-B17: a ccrc.env line the reader does not take refuses like an invalid value: an export line and a spaced =, nothing pruned or thinned, the file named and never its bytes (D-6365)', () => {
+    it('W23-B17: a ccrc.env line the reader does not take refuses like an invalid value: an export line, a spaced = and a key led by a vertical tab, nothing pruned or thinned, the file named and never its bytes (D-6365)', () => {
       const four = NAMES.slice(0, 4);
-      for (const [tag, text] of [['export', 'export CCRC_BACKUP_DATA_KEEP=9999\n'], ['spaced', 'CCRC_BACKUP_DATA_KEEP = 9999\n']] as const) {
+      for (const [tag, text] of [['export', 'export CCRC_BACKUP_DATA_KEEP=9999\n'], ['spaced', 'CCRC_BACKUP_DATA_KEEP = 9999\n'], ['vtab', '\vCCRC_BACKUP_DATA_KEEP=9999\n']] as const) {
         const home = box(`ccrc-fx-w23-b17-${tag}-`);
         plantFull(home, four);
         const before = fingerprint(home, four);
         writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
         const r = runBackup(home);
         expect(r.code, `${tag}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-        expect(r.stderr, tag).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take \(only KEY=value: no export, no space before =\) — nothing was pruned or thinned$/m);
+        expect(r.stderr, tag).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take \(it reads only a plain KEY=value line\) — nothing was pruned or thinned$/m);
         expect(r.stdout + r.stderr, `${tag}: the refusal never prints the file's bytes`).not.toContain('9999');
         expect(fingerprint(home, four), `${tag}: no data set was touched`).toEqual(before);
       }
@@ -14202,7 +14202,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
     });
 
-    it('W23-S1:the own-dir and floor filter is spelled once, in _bak_ours, and _bak_keepset, _bak_removable and _bak_thin each call it', () => {
+    it('W23-S1: the own-dir and floor filter is spelled once, in _bak_ours, and _bak_keepset, _bak_removable and _bak_thin each call it', () => {
       const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
       const body = (name: string): string => {
         const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
