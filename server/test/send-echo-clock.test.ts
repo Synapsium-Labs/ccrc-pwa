@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, ECHO_BUDGET_MS, ECHO_POLL_MS, ECHO_TRIES } from '../src/inject/send.js';
+import { sendPrompt, ownPasteChip, ownRenderedBox, ECHO_BUDGET_MS, ECHO_POLL_MS, ECHO_TRIES, SUBMIT_TRIES } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 
 // D-6366: how long `sendPrompt` waits for the typed text to echo in the box. The wait was a fixed ECHO_TRIES polls,
@@ -163,9 +163,60 @@ describe('a proven own shape ends the echo wait at the floor (D-6366)', () => {
     expect(r.keys.filter((k) => k === 'Enter')).toHaveLength(1);
     expect(r.polls()).toBe(ECHO_TRIES);
   });
+
+  // D-6366 fix round 2: the chip half of the exit. A chip that states its lines (`[Pasted text #2 +9 lines]`) is one
+  // `ownPasteChip` proves and `ownRenderedBox` does not (it reads only a bare chip), so this pane is the one
+  // that holds the `ownPasteChip` disjunct up.
+  it('an own paste chip only ownPasteChip proves is submitted after ECHO_TRIES polls', async () => {
+    const chipLines = fixture('cc300-paste-chip-lines.txt');
+    const text = Array.from({ length: 10 }, (_, j) => recorded(80, `m10lfL${String(j).padStart(2, '0')}`)).join('\n');
+    const parts = text.split('\n');
+    expect(ownPasteChip(chipLines, parts, 'proven-empty')).not.toBeNull();
+    expect(ownRenderedBox(chipLines, parts, 'proven-empty')).toBeNull();
+    const r = paneRig(chipLines);
+    const res = await sendPrompt(r.d, 'x', text);
+    expect(res).toEqual({ ok: true });
+    expect(r.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+    expect(r.polls()).toBe(ECHO_TRIES);
+  });
 });
 
-// D-6366 fix round: the proof's blind polls (failed captures) get a wall deadline. A hung tmux makes each capture fail
+// D-6366 fix round 2: the early end comes AFTER the echo check. An ordinary, fully echoed box is also one
+// `ownRenderedBox` proves, so an echo that first renders at the floor must still be taken as an echo and submitted on
+// the echo proof (the box still starts with the needle), not on the tail proof.
+describe('a late echo keeps the echo proof (D-6366)', () => {
+  const RULE = '─'.repeat(40);
+  const MSG = 'please review the open pull requests today';
+  it('a late echo on a pane where the two proofs disagree is submitted on the echo proof', async () => {
+    // Before the Enter the box is empty until echo poll ECHO_TRIES, then holds the whole message (a box
+    // `ownRenderedBox` proves). After it the box holds a PREFIX of the message that still starts with the needle but
+    // no longer holds the tail: the echo proof says "still ours" (retry Enter, then refuse), the tail proof "gone".
+    let typed = false;
+    let entered = false;
+    let polls = 0;
+    const keys: string[] = [];
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) typed = true;
+        else { keys.push(args.at(-1)!); if (args.at(-1) === 'Enter') entered = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (typed && !entered && args.includes('-e')) polls++;
+        const row = entered ? MSG.slice(0, 30) : typed && polls >= ECHO_TRIES ? MSG : '';
+        return { code: 0, stdout: `❯ ${row}\n${RULE}\n`, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async () => {} };
+    const res = await sendPrompt(d, 'x', MSG);
+    expect(polls).toBe(ECHO_TRIES);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    expect(keys.filter((k) => k === 'Enter')).toHaveLength(2);
+  });
+});
+
+// D-6366: the proof's blind polls (failed captures) get a wall deadline. A hung tmux makes each capture fail
 // only after its own timeout, so counting polls alone would make the proof cost 16 timeouts where base cost 4.
 describe('with every capture failing after 10 s the proof ends within base\'s bound (D-6366)', () => {
   it('with every capture failing after 10 s, the proof ends within base\'s bound', async () => {
@@ -195,5 +246,45 @@ describe('with every capture failing after 10 s the proof ends within base\'s bo
     // Base: one capture per watch (a failed one ends it) and the final read's two: four after the first Enter.
     expect(capturesAfterEnter).toBe(4);
     expect(t - firstEnterAt).toBeLessThanOrEqual(65_000);
+  });
+});
+
+// D-6366 fix round 2: the blind deadline counts from the first failed capture of the CURRENT blind run, and any
+// capture that returns ends that run. A loaded box (200 ms a capture) must not lose its remaining polls to one blip.
+describe('a link blip does not cut the post-Enter watch (D-6366)', () => {
+  const CAPTURE_MS = 200;
+  /** Captures after the first Enter fail at the k values in `failAt` (k from 1); the box keeps our text, so every Enter
+   *  is ignored. Answers the captures taken between the first Enter and the retry Enter: the first watch's polls. */
+  async function firstWatchPolls(failAt: ReadonlySet<number>): Promise<number> {
+    let t = 0;
+    let typed = false;
+    let enters = 0;
+    let k = 0;
+    let atRetry = -1;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) typed = true;
+        if (args.at(-1) === 'Enter') { enters++; if (enters === 2) atRetry = k; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        t += CAPTURE_MS;
+        if (enters > 0) { k++; if (failAt.has(k)) return { code: 1, stdout: '', stderr: 'blip' }; }
+        return { code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms: number) => { t += ms; }, now: () => t };
+    const res = await sendPrompt(d, 'x', 'hello from the lane');
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    return atRetry;
+  }
+
+  it('a link blip at 200 ms per capture still gets the watch\'s remaining polls', async () => {
+    expect(await firstWatchPolls(new Set([4]))).toBe(SUBMIT_TRIES);
+  });
+
+  it('two blips apart each get their own deadline: the first one\'s run ended at the capture between', async () => {
+    expect(await firstWatchPolls(new Set([2, 7]))).toBe(SUBMIT_TRIES);
   });
 });

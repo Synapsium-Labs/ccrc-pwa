@@ -88,6 +88,14 @@ interface FakeOpts {
   afterEnter?: (enters: number, k: number, s: Cc) => void;
   /** D-6011: each swallowed Enter hides the held-stash indicator from this many following captures. */
   hideAfterSwallow?: number;
+  /** D-6366: render lag. The first Enter takes effect (submits) just before this capture after it (from 1), so the
+   *  captures before it still read our text in the box. */
+  landAtCapture?: number;
+  /** D-6366: the captures after the first Enter (k from 1, counted from that Enter on) this answers true for fail,
+   *  as a link drop does. */
+  failCapture?: (k: number) => boolean;
+  /** D-6366: called on every capture, for a test's moving clock. */
+  tick?: () => void;
 }
 
 const nonBlank = (rows: string[]): boolean => rows.some((r) => r.trim() !== '');
@@ -126,8 +134,26 @@ function fakeCc(o: FakeOpts = {}) {
   let blindEnter = 0;
   let enters = 0;
   let sinceEnter = 0;
+  let sinceFirstEnter = 0;
+  let pendingLand = false;
+  const submitNow = (): void => {
+    if (!nonBlank(s.box)) return;
+    const sent = s.box.join('\n');
+    s.history.push(sent);
+    submits++;
+    if (submits === 1) blindEnter = o.blindAfterEnter ?? 0;
+    s.box = [];
+    if (o.runOnSubmit && !sent.startsWith('/')) s.running = true;
+    if (s.stash !== null && (o.restoreOnSubmit ?? true)) { s.box = s.stash; s.stash = null; }
+  };
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'capture-pane') {
+      o.tick?.();
+      if (enters > 0) {
+        sinceFirstEnter++;
+        if (pendingLand && sinceFirstEnter === o.landAtCapture) { pendingLand = false; submitNow(); }
+        if (o.failCapture?.(sinceFirstEnter)) return { code: 1, stdout: '', stderr: "can't find pane" };
+      }
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
       if (enters > 0) o.afterEnter?.(enters, ++sinceEnter, s);
       if (blindEnter > 0) { blindEnter--; return { code: 1, stdout: '', stderr: "can't find pane" }; }
@@ -164,14 +190,8 @@ function fakeCc(o: FakeOpts = {}) {
         enters++;
         sinceEnter = 0;
         if (swallow > 0) { swallow--; s.hideIndicator = o.hideAfterSwallow ?? 0; return { code: 0, stdout: '', stderr: '' }; }
-        if (!nonBlank(s.box)) return { code: 0, stdout: '', stderr: '' };
-        const sent = s.box.join('\n');
-        s.history.push(sent);
-        submits++;
-        if (submits === 1) blindEnter = o.blindAfterEnter ?? 0;
-        s.box = [];
-        if (o.runOnSubmit && !sent.startsWith('/')) s.running = true;
-        if (s.stash !== null && (o.restoreOnSubmit ?? true)) { s.box = s.stash; s.stash = null; }
+        if (o.landAtCapture !== undefined && submits === 0) { pendingLand = true; return { code: 0, stdout: '', stderr: '' }; }
+        submitNow();
       }
     }
     return { code: 0, stdout: '', stderr: '' };
@@ -795,6 +815,70 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(res).not.toHaveProperty('draft');
       expect(res).not.toHaveProperty('submittable');
       expect(f.state.history).toEqual([]);
+    });
+  });
+
+  describe('D-6366 fix round 2: a watch that went blind after reading our box buys no retry Enter', () => {
+    const human = 'a half typed note of the human';
+    const SEVEN = (k: number): boolean => k >= 2 && k <= SUBMIT_TRIES;
+
+    // One good read of our own text (the Enter has not rendered yet), then the Enter lands at capture 2 and every
+    // capture after it fails to the end of the watch: the first Enter took, its reply was lost, and Claude Code has
+    // given the human's draft back. The watch read our box once, so `pane` is not null; the retry Enter would submit
+    // the human's draft.
+    it('one good read, then seven failed captures, the Enter landing at capture 2: one Enter (around our own stash)', async () => {
+      const f = fakeCc({ box: [human], landAtCapture: 2, failCapture: SEVEN });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('one good read, then seven failed captures, the Enter landing at capture 2: one Enter (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], landAtCapture: 2, failCapture: SEVEN });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    // The same on a clock that moves: each capture costs 200 ms and each sleep its argument, so the blind run spends
+    // `SUBMIT_BLIND_MS` and the watch ends on the deadline with the box last read at poll 3.
+    const moving = (f: ReturnType<typeof fakeCc>, clock: { t: number }) => ({
+      tmux: f.tmux, queue: new KeyedQueue(), sleep: async (ms: number) => { clock.t += ms; }, now: () => clock.t,
+    });
+    const BLIND_RUN = (k: number): boolean => k >= 4 && k <= 7;
+
+    it('a watch that goes blind after reading our box never presses a retry Enter onto a restored draft (moving clock), around our own stash', async () => {
+      const clock = { t: 0 };
+      const f = fakeCc({ box: [human], landAtCapture: 4, failCapture: BLIND_RUN, tick: () => { clock.t += 200; } });
+      const res = await sendPrompt(moving(f, clock), 'lane-a', 'hello from the lane', STASH);
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('a watch that goes blind after reading our box never presses a retry Enter onto a restored draft (moving clock), over a stash already held', async () => {
+      const clock = { t: 0 };
+      const f = fakeCc({ box: [], stash: [human], landAtCapture: 4, failCapture: BLIND_RUN, tick: () => { clock.t += 200; } });
+      const res = await sendPrompt(moving(f, clock), 'lane-a', 'hello from the lane', STASH);
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    // The overlay-swallow case keeps its retry: every poll after the failed one read our box, so the Enter was
+    // swallowed, nothing was restored, and the second Enter is what sends.
+    it('a watch that read our box on every poll after its failed capture keeps the retry Enter', async () => {
+      const f = fakeCc({ box: [human], swallowEnters: 1, failCapture: (k) => k === 2 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
     });
   });
 
