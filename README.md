@@ -1204,9 +1204,11 @@ units). The knob is a whole number from 2 to 9999, default 3, read from the proc
 `~/.ccrc/ccrc.env`; `0` and `1` are refused and an invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
 there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces, tabs
 and CRs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
-`CCRC_BACKUP_DATA_KEEP=`, and refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=`
-included; a line holding a CR past its lead is never skipped, and a file holding a NUL byte cannot be scanned: unmeasured
-is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+`CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
+refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file the box's model of systemd cannot
+decide (a value a quote or a backslash carries across lines, a CR inside a line, a non-ASCII byte in an assignment) refuses
+too: unmeasured is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
 it starts no full verification that could not finish in time, leaves the rest for the next update and still exits 0 (D-6464). The newest data set from

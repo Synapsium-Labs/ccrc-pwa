@@ -23683,29 +23683,34 @@ _bak_ours() {
 }
 
 # `_bak_data_keep` — the ONE validator of CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set.
-# The process environment, else ~/.ccrc/ccrc.env (as `_upd_deadline_ms` reads its knob: thinning cannot be undone, and a
+# The process environment, else ~/.ccrc/ccrc.env (the order `_upd_deadline_ms` reads its knob in: thinning cannot be undone, and a
 # console-driven move or the watchdog runs under an environment that carries none unless it was set there), else 3. A whole number
 # from 2 to 9999, through `_keep_ok`; 0 and 1 are refused, never clamped. rc 0 sets BAK_DATA_KEEP (decimal); rc 1 sets
 # BAK_DATA_KEEP_WHY to the refusal sentence. Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read (a
 # dangling link or a directory there included), or that names the knob on a line this reader does not take, refuses like an
-# invalid value, naming the file and never its bytes. Which lines it takes is ONE positive rule, over bytes (`LC_ALL=C`, as
-# D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
+# invalid value, naming the file and never its bytes. The VALUE is read through `_box_unit_env`, the tree's byte-wise model of
+# systemd's `EnvironmentFile=` (D-3979; the coordinator's ruling on review 817, F1, F2 and F8), never the two-argument
+# `_box_env_value`, whose `read` runs in the caller's locale: the model trims the value as systemd does, and what it cannot decide
+# refuses with its own clause (BUE_WHY, which names the file and never its bytes): a value a quote or a backslash carries across
+# lines, a CR inside a line, a non-ASCII byte in an assignment. So does an exposure file that is there but cannot be read, though
+# that file never carries this knob. The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
+# as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
 # (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
 # line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
-# `CCRC_BACKUP_DATA_KEEP=` is the one `_box_env_value` takes; any other line that names the knob as a whole token (no letter,
+# `CCRC_BACKUP_DATA_KEEP=` is the one the model reads; any other line that names the knob as a whole token (no letter,
 # digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. A line holding a CR past its lead is never skipped,
 # since systemd ends a line at a bare CR and would read what follows as a line of its own (fix round 2's review); a file holding a
 # NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but
-# 0 or 1 (an awk that cannot run, or is killed) could not be scanned, and refuse too. Only an absent file, one with no such line, or
-# an empty value there (as with an empty environment variable) falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
+# 0 or 1 (an awk that cannot run, or is killed) could not be scanned, and refuse too. Only an absent file, one the model reads as not
+# naming the knob, or an empty value there (as with an empty environment variable) falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
 _bak_data_keep() {
   local f="$BOX_ENV_FILE" g=0 why=""
   BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
   if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]") { f = 1; exit } END { exit !f }' "$f" || g=$?; fi; else g=3; fi
-    case "$g" in 0) why="names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1) ;; 3) why="is there but cannot be read" ;; *) why="could not be scanned" ;; esac
-    [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${f/#"$HOME"/\~} $why"; return 1; }
-    BAK_DATA_KEEP="$(_box_env_value "$f" CCRC_BACKUP_DATA_KEEP)"
+    case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
+    if [ -z "$why" ]; then _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; 2) why="$CCRC_EXPOSURE_FILE is there but cannot be read" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
   BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"
   if _keep_ok "$BAK_DATA_KEEP" && [ "$((10#$BAK_DATA_KEEP))" -ge 2 ]; then BAK_DATA_KEEP=$((10#$BAK_DATA_KEEP)); return 0; fi
@@ -23809,7 +23814,9 @@ _bak_snap_class() {
 # one); 75 s for the control plane to read the final report, since its deadline runs on what its inventory last read, and that runs once
 # a minute, gated on a 2 s tick and stamped as it starts, and takes up to its 10 s budget (72 s, rounded up); and 10 s for what follows
 # `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside the window. On the box that
-# thins, `_upd_deadline_ms` reads the ccrc.env the server reads its deadline from. No UPD_THIN_AT (a direct call) passes no bound;
+# thins, `_upd_deadline_ms` reads the ccrc.env the server reads its deadline from, but by its own parse, which agrees with the
+# server's on canonical digits only: a non-canonical spelling there, or a user-manager value larger than the file's, can put the
+# bound past the server's deadline (review 817 F4, a residual carried to wave 24). No UPD_THIN_AT (a direct call) passes no bound;
 # `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"

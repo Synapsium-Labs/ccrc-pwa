@@ -14256,18 +14256,39 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       ['an export of another key whose value mentions the knob', bytes(`export NOTE=${K}=4\n`), 3],
       ['CRLF', bytes(`${K}=4\r\n`), 4],
       ['a tab lead', bytes(`\t${K}=4\n`), 4],
-      ['a CR lead', bytes(`\r${K}=4\n`), 4],
       ['a quoted value', bytes(`${K}="4"\n`), 4],
       ['an absent key', bytes('CCRC_BACKUP_KEEP=4\n'), 3],
+      // The value is read through the unit model (review 817, F1 and F8): bytes in any locale, trimmed as systemd trims it.
+      ['a Latin-1 é in a comment above the knob', bytes('# tuned for the caf', [0xe9], `\n${K}=9\n`), 9],
+      ['a trailing space', bytes(`${K}=4 \n`), 4],
+      ['a trailing tab', bytes(`${K}=4\t\n`), 4],
+      ['a trailing space before CRLF', bytes(`${K}=4 \r\n`), 4],
     ];
     const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
-    /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`. */
+    /** What the unit model cannot decide refuses with its own clause, naming the file (review 817, F1 and F2): each with that clause's opening. */
+    const SHAPE = `names ${K} in a shape this reader does not decide`;
+    const UNDECIDED: readonly (readonly [string, Buffer, string])[] = [
+      ['a double-quoted value spanning lines over a later knob line', bytes(`${K}=9\nFOO="x\n${K}=2\n"\n`), SHAPE],
+      ['a single-quoted value spanning lines over a later knob line', bytes(`${K}=9\nFOO='x\n${K}=2\n'\n`), SHAPE],
+      ['a backslash continuation over a later knob line', bytes(`${K}=9\nFOO=x\\\n${K}=2\n`), SHAPE],
+      ['a comment ending in a backslash over a later knob line', bytes(`${K}=9\n# note \\\n${K}=2\n`), SHAPE],
+      ['the only knob line inside another key\'s quoted value', bytes(`FOO="x\n${K}=2\n"\n`), SHAPE],
+      // systemd skips a file whose values are not valid UTF-8, which the model does not check, so it decides neither 9 nor the default.
+      ['a lone UTF-8 lead byte ending another key\'s value above the knob', bytes('FOO=', [0xc3], `\n${K}=9\n`), 'line 1 has a non-ASCII byte in a NAME=value line'],
+      ['a CR lead', bytes(`\r${K}=4\n`), 'line 1 has a carriage return inside a line'],
+    ];
+    /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`, on the Linux arm of the unit model
+     *  (`_box_unit_env`; a macOS box models its launchd job's bash, `_box_unit_env_shell`, which refuses a CR anywhere). */
     const dataKeep = (home: string, text: Buffer, locale: string): string => {
       mkdirSync(join(home, '.ccrc'), { recursive: true });
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
-      const r = sourced(home, '_bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
+      const r = sourced(home, 'CCD_OS=linux; _bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
       expect(r.code, r.stderr).toBe(0);
       return r.stdout;
+    };
+    const undecided = (out: string, clause: string, shape: string): void => {
+      expect(out.startsWith(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env ${clause}`), `${shape}: ${out}`).toBe(true);
+      expect(out, `${shape}: the refusal never prints the file's bytes`).not.toMatch(/=\d/);
     };
     /** The UTF-8 half's locale: C.UTF-8, else en_US.UTF-8, and only one `locale -a` lists; null skips that half, by name. */
     const UTF8: string | null = (() => {
@@ -14280,8 +14301,23 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17r-'), text, 'C')).toBe(UNTAKEN);
     });
 
-    it.each(READ)('W23-B17: %s reads as before under LC_ALL=C, never refused (D-6365, review 806 F1, F4)', (_shape, text, keep) => {
+    it.each(READ)('W23-B17: %s reads under LC_ALL=C, never refused (D-6365, review 806 F1, F4; review 817 F1, F8)', (_shape, text, keep) => {
       expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17a-'), text, 'C')).toBe(`rc 0 keep ${keep} why \n`);
+    });
+
+    it.each(UNDECIDED)('W23-B17: %s is a shape the unit model does not decide, so it refuses under LC_ALL=C, as unmeasured (D-6365, review 817 F1, F2)', (shape, text, clause) => {
+      undecided(dataKeep(freshUpdateBox('ccrc-fx-w23-b17d-'), text, 'C'), clause, shape);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('W23-B17: an exposure file that is there but cannot be read refuses as unmeasured, though it never carries the knob (D-6365, review 817 F1)', () => {
+      const home = freshUpdateBox('ccrc-fx-w23-b17e-');
+      const exp = join(home, '.ccrc', 'exposure.env');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(exp, 'CCRC_AUTH=on\n');
+      chmodSync(exp, 0o000);
+      const out = dataKeep(home, bytes(`${K}=4\n`), 'C');
+      chmodSync(exp, 0o600);
+      expect(out).toBe(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/exposure.env is there but cannot be read\n`);
     });
 
     it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
@@ -14302,13 +14338,14 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
-    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan reads bytes (D-3833, D-6365, review 806 F1)`, () => {
+    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan and the unit model read bytes (D-3833, D-3979, D-6365, review 806 F1, review 817 F1)`, () => {
       const loc = UTF8!;
       const charmap = spawnSync('locale', ['charmap'], { env: { ...process.env, LC_ALL: loc }, encoding: 'utf8' }).stdout ?? '';
       expect(charmap.trim(), `${loc} is a UTF-8 locale on this runner`).toBe('UTF-8');
       const home = freshUpdateBox('ccrc-fx-w23-b17u-');
       for (const [shape, text] of REFUSED) expect(dataKeep(home, text, loc), shape).toBe(UNTAKEN);
       for (const [shape, text, keep] of READ) expect(dataKeep(home, text, loc), shape).toBe(`rc 0 keep ${keep} why \n`);
+      for (const [shape, text, clause] of UNDECIDED) undecided(dataKeep(home, text, loc), clause, shape);
     });
 
     it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
