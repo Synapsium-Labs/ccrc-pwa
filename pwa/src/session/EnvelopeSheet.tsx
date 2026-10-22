@@ -26,7 +26,7 @@ import { parseAskTabs } from '../../../shared/ask-menu';
 import { Button, OptionRow } from '@ccrc/ui';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
-import { chatRow, freeTextSlot, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
+import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
 import {
   AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
   SEVERAL_ANSWERS, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy,
@@ -235,7 +235,11 @@ export function EnvelopeSheet({
   // question it is showing by the pane), and the keys over the screen showing. Worked out before any branch returns,
   // since the hook runs on every render. Nothing is keyed while the sheet cannot answer what it shows.
   const tabRow = questions !== null && dialog !== null ? parseAskTabs(dialog.raw) : null;
-  const tabs = keyTabs(tabRow?.tabs.length ?? null, placed, false, picksHeld);
+  // Where the sheet is on that row. The hook's questions are the ask's own, so the question's place among them IS its tab.
+  // The transcript's copy is one question, whose place in the copy is always 0: its tab is found by its header on the row
+  // (`headerTab`, a position fact), or is unknown (null) and the server decides, so ← is never dead on tab 2 or later.
+  const keyPlace = questions === null || from === 'hook' ? placed : headerTab(tabRow?.tabs ?? [], questions.questions[shown]!.header);
+  const tabs = keyTabs(tabRow?.tabs.length ?? null, keyPlace, false, picksHeld);
   const keyScreen: KeyScreen | null = pane === null ? null
     : boxes !== undefined ? multiKeys(boxes.options.map((o) => o.index), tabs)
       : questionKeys(
