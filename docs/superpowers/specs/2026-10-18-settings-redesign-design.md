@@ -10,6 +10,9 @@ Nothing in it is built yet.
 `feat/release-notes-whats-new` (`cc058514`, not yet a PR), which edits Settings files (§13). Rev 0 measured `6702ce2e`
 and rev 1 `537b6a41`. Read-only; nothing edited.
 **Branch:** chosen by the coordinator at plan time, from `origin/main` as measured then.
+
+> **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398):** a merge to `main` whose every changed path is outside what ships (`deploy/release-scope.mjs`'s `NOT_SHIPPED`: `docs/`, the root's `*.md` and `LICENSE`, the server and agent test trees) cuts no release: no tag, no build, no attestation. The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` still promotes only the release tagged at its HEAD: the tag at HEAD stays the whole input. The refusal of an untagged HEAD now names the newest release HEAD contains and whether anything that ships changed since it. The Dev note reads *Every merge that changes the build, minutes after it lands.*
+
 **Inputs.**
 - A measured inventory of today's Settings screen: all 28 controls and readouts with route, scope, help text, cadence
   and risk.

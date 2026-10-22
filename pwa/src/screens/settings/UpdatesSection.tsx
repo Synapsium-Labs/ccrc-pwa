@@ -67,7 +67,7 @@ export const CHANNEL_SENTENCES: Record<UpdateChannel, string> = {
 /** Each channel's note, under its option (spec §5.1). */
 export const CHANNEL_NOTES: Record<UpdateChannel, string> = {
   stable: 'Releases promoted only after they have baked.',
-  dev: 'Every merge, minutes after it lands.',
+  dev: 'Every merge that changes the build, minutes after it lands.',
 };
 
 /** The auto-install choices (`AutoMode`, W2) in spec §11.2's words. The wire's values do not change. */

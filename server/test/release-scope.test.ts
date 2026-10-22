@@ -558,3 +558,17 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
     expect(linkEscapes(derived.inputs, planted)).toEqual(['pwa/src/w25 -> docs/a.md']);
   });
 });
+
+describe('README names exactly NOT_SHIPPED (W25-d, D-6399)', () => {
+  it('W25-S13: the parenthesis after "on its `NOT_SHIPPED` list (" lists the same six rules as NOT_SHIPPED', () => {
+    const readme = readFileSync(join(REPO, 'README.md'), 'utf8').replace(/\s+/g, ' ');
+    const anchor = 'on its `NOT_SHIPPED` list (';
+    const at = readme.indexOf(anchor);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(readme.indexOf(anchor, at + 1)).toBe(-1);
+    const rest = readme.slice(at + anchor.length);
+    const tokens = [...rest.slice(0, rest.indexOf(')')).matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort();
+    const want = NOT_SHIPPED.map((r) => ('tree' in r ? `${r.tree}/` : 'rootExt' in r ? `*${r.rootExt}` : r.rootName)).sort();
+    expect(tokens).toEqual(want);
+  });
+});

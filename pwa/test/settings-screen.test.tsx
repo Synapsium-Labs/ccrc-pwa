@@ -3204,7 +3204,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     expect(AUTO_LABELS).toEqual({ off: 'Off', stable: 'On the Stable channel only', channel: 'On any channel' });
     expect(NOTIFY_LABELS).toEqual({ channel: "Every release on the fleet's channel", stable: 'Stable releases only', off: 'None' });
     expect(CHANNEL_SENTENCES).toEqual({ stable: 'Stable', dev: 'Dev' });
-    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge, minutes after it lands.' });
+    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge that changes the build, minutes after it lands.' });
     expect(AUTO_NOTES).toEqual({
       off: 'Nothing installs until you press Install or Update.',
       stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',

@@ -13,6 +13,8 @@ artifact). **Fleet names are ROLES** here — a server node, a fleet node — ne
 `deploy/reference-fleet.md`, gitignored. Every `file:line` below was measured on 2026-09-20 at `origin/main`
 `7d78b376`; a line number is a snapshot, the identifier beside it is the anchor.
 
+> **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398):** a merge to `main` whose every changed path is outside what ships (`deploy/release-scope.mjs`'s `NOT_SHIPPED`: `docs/`, the root's `*.md` and `LICENSE`, the server and agent test trees) cuts no release: no tag, no build, no attestation. The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` still promotes only the release tagged at its HEAD: the tag at HEAD stays the whole input. The refusal of an untagged HEAD now names the newest release HEAD contains and whether anything that ships changed since it.
+
 ## 0. In one paragraph
 
 Every merge to `main` is already a release and `ccrc rollout` already moves the two boxes to it — but nothing
