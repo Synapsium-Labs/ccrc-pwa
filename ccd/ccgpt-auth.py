@@ -711,9 +711,11 @@ def recover_pending(auth_dir: str) -> str:
 
     The checkpoint is fsynced through the descriptor it is read by before it is promoted (its writer may have died
     between its write and its fsync). An `OSError` is `Unreadable`, naming the checkpoint and the errno, with both
-    files kept as they are: from that fsync (a checkpoint not proven durable is never promoted, and never discarded,
-    since it may be the only copy of a refreshed pair), from the rename, or from the unlink of a discarded checkpoint.
-    A failure of the directory fsync after the rename still answers `"promoted"`: the checkpoint is in place."""
+    files kept as they are: from the open or a read of the checkpoint (an unread checkpoint may be the only copy of a
+    refreshed pair, so it is never discarded), from the rename, or from the unlink of a discarded checkpoint. A
+    checkpoint that would be promoted but whose fsync failed is refused the same way, never promoted and never
+    discarded; one that would be discarded is discarded whatever its fsync answered. A failure of the directory fsync
+    after the rename still answers `"promoted"`: the checkpoint is in place."""
     p = paths_for(auth_dir)
     try:
         pst = os.lstat(p.pending)
@@ -741,8 +743,13 @@ def recover_pending(auth_dir: str) -> str:
                     sync_error = e
             finally:
                 os.close(fd)
+        except OSError as e:
+            raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); ccrc keeps "
+                             "it and the credential as they are; fix its mode with chmod 600 " + p.pending
+                             + " or fix the disk, and retry")
+        try:
             candidate = _reading_of(json.loads(b"".join(chunks).decode("utf-8")), None, p.pending)
-        except (OSError, ValueError, RecursionError):
+        except (ValueError, RecursionError):
             candidate = None
     current = _read_file(auth_dir)
     older = current.identity is not None and pst.st_mtime_ns < current.identity[1]

@@ -902,6 +902,65 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     expect(existsSync(pendingPath(dir))).toBe(false);
   });
 
+  // The discard's unlink, refused: the lock already exists, so held() opens it in a 0500 authDir without creating
+  // anything, and the read and fsync of the checkpoint succeed; only the unlink needs to write the directory.
+  it.skipIf(process.getuid?.() === 0)('a checkpoint the discard cannot unlink in a 0500 authDir is refused credential-unusable, both files kept', async () => {
+    const home = mkTmp('codex-auth-discard-eacces-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const first = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(driverLines(first.stdout)[0].result, first.stderr).toBe('none');
+    expect(existsSync(lockPath(dir)), 'the lock exists before the directory is made read-only').toBe(true);
+    writeFileSync(pendingPath(dir), '{}', { mode: 0o600 });
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    const pendingBefore = lstatKey(pendingPath(dir));
+    chmodSync(dir, 0o500);
+    try {
+      const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+      const [line] = driverLines(r.stdout);
+      expect(line.error, r.stderr).toBe('credential-unusable');
+      expect(line.message).toContain(pendingPath(dir));
+      expect(line.message).toContain('cannot be removed');
+      expect(line.message).toContain(`check the permissions of ${dir}`);
+      expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+      expect(lstatKey(credPath(dir))).toBe(before);
+      expect(readFileSync(pendingPath(dir), 'utf8')).toBe('{}');
+      expect(lstatKey(pendingPath(dir))).toBe(pendingBefore);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  // A checkpoint the open cannot read may still be the only copy of a refreshed pair: it is kept, never discarded.
+  it.skipIf(process.getuid?.() === 0)('a checkpoint that cannot be read is refused credential-unusable and kept; once readable it is promoted', async () => {
+    const home = mkTmp('codex-auth-recover-unread-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const rec = nextRecord();
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: rec }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    const pendingBytes = readFileSync(pendingPath(dir));
+    chmodSync(pendingPath(dir), 0o000);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    chmodSync(pendingPath(dir), 0o600);
+    const [refused] = driverLines(r.stdout);
+    expect(refused.error, r.stderr).toBe('credential-unusable');
+    expect(refused.message).toContain(pendingPath(dir));
+    expect(refused.message).toContain('cannot be read (EACCES)');
+    expect(refused.message).toContain(`chmod 600 ${pendingPath(dir)}`);
+    expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    expect(readFileSync(pendingPath(dir)).equals(pendingBytes), 'the checkpoint is kept, never lost').toBe(true);
+    const again = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }, { op: 'read' }] });
+    const [promoted, read] = driverLines(again.stdout);
+    expect(promoted.result, again.stderr).toBe('promoted');
+    expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+    expect(fileRecord(dir)).toEqual(rec);
+  });
+
   it.each([['enospc-fsync:1', 'made durable'], ['enospc-replace:1', 'renamed into place']])('a promotion that meets a full disk (%s) refuses credential-unusable and keeps both files; the next holder promotes', async (fault, words) => {
     const home = mkTmp('codex-auth-recover-enospc-');
     const dir = laneDir(home);
