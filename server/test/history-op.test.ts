@@ -2184,7 +2184,7 @@ describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => 
   }, 60_000);
 
   // [what, $REG/<id>.generation ('<dir>': a directory, which no read opens; '<link>': a link to a file holding G1, which the
-  // registry read follows, as every registry read does; null: absent), extra argv, rc, reason, the file after (null: none)]
+  // registry read follows, as the sweep's readSmall does; CLI and hook refuse; null: absent), extra argv, rc, reason, the file after (null: none)]
   const TABLE: ReadonlyArray<readonly [string, string | null, readonly string[], number, string | undefined, string | null]> = [
     ['unreadable, no --generation', '<dir>', [], 2, 'generation-unreadable', null],
     ['unreadable, --generation G1', '<dir>', ['--generation', G1], 2, 'generation-unreadable', null],
