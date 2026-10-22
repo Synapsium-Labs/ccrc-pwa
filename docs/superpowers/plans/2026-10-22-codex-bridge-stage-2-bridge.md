@@ -831,8 +831,10 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
     `since = startedAt`; an unreadable, other-version or other-lane file starts fresh and counts `outcomes["stats:
     reset"]`. So a restart (every rollout of a changed package restarts a bridge, Task 11) never loses a refusal the
     hourly refresh has not read, the D24 calibration, or the 7-day watch's counters. At load, and in `name()`, every
-    name now in `known.KNOWN` is dropped from `unexplained`, so a rollout of the change that explains a name clears
-    Task 17's WARN. Methods: `name(family: str, value: str)`;
+    name now in `known.KNOWN` is dropped from `unexplained`. When the load changed the carried data (a name dropped,
+    or `stats:reset` counted), construction ends with `flush(force=True)`, so the file the doctor reads changes at
+    the restart, not at the first request after it, and a rollout of the change that explains a name clears Task 17's
+    WARN on an idle lane too. Methods: `name(family: str, value: str)`;
     `outcome(key: str)`; `request(route: str, model: str, countable_bytes: int)`; `usage(route: str, model: str,
     countable_bytes: int, input_tokens: int, *, image_count: int, continued: bool = False)` (updates
     `promptTokensMax`/`promptTokensLast` always, and the ratio only when `image_count == 0` and not `continued`: a
@@ -873,7 +875,8 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
   sample: ratio unchanged, `promptTokensMax` updated); `'an image adds IMAGE_TOKENS to the estimate'`; `'a continued
   message never moves the ratio'` (`usage(…, image_count=0, continued=True)` with a skewed sample: ratio unchanged);
   `'a carried unexplained name that KNOWN now lists is dropped at load'` (a stats file whose `unexplained` holds one
-  name in `known.KNOWN` and one outside it: the second `Stats` keeps only the second).
+  name in `known.KNOWN` and one outside it: the second `Stats` keeps only the second, and the file on disk, read
+  back with no request and no flush call after construction, no longer lists the first).
 - [ ] **Steps 2-4** as above. - [ ] **Step 5: Mutation rows** — C1 (round down) → 1; C2 (no clamp) → 1; C3
   (calibrate on an image request) → 1; C4 (no image allowance) → 1; C5 (calibrate on a continued message) → 1; T1
   (format a value into a name) → 1; T2 (no `fchmod`) → 1; T3 (keep every header) → 1; T4 (no `unexplained`) → 1;
@@ -994,7 +997,8 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
 
 **Files:**
 - Create: `ccd/codexbridge/stream.py`, `ccd/codexbridge/server.py`
-- Modify: `server/test/codexBridgeFixture.ts` (`plantBridgeLane`, `spawnBridge`)
+- Modify: `server/test/codexBridgeFixture.ts` (`plantBridgeLane`, `spawnBridge`),
+  `server/test/fixtures/codexbridge/driver.py` (the `serve` op)
 - Test: `server/test/codex-bridge-server.test.ts`
 
 **Interfaces:**
@@ -1018,13 +1022,28 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
   - `server.serve(cfg: BridgeConfig, hooks: Hooks) -> int`.
   - `server.load_auth_lib(path: str) -> module` — the one load of Stage 1's library (`spec_from_file_location`),
     cached for the process; every library call the bridge makes goes through the module it returned.
+  - **`driver.py`'s `serve` op** (`{"op": "serve"}`, the last op of its action; it prints no op line and exits with
+    `serve`'s return). In order: it loads `ccd/ccgpt-proxy.py` by path, unchanged (`spec_from_file_location` under a
+    module name other than `__main__`, so its `__main__` block, `ccd/ccgpt-proxy.py:1554`, does not run; the
+    contract's environment carries the three variables its top level reads, `:962-964`), and takes the five hooks
+    from that module, copying none: `Hooks(m._read_request_body, m._content_encoding, m._decode_body, <apply_effort>,
+    m._Server)`, where `<apply_effort>` is Task 9's two-line wrapper over `m._apply_effort`; it calls
+    `server.load_auth_lib(os.environ["CCRC_CODEX_AUTH_LIB"])`; it sets each `ccgpt_auth.<NAME>` const on the module
+    that call returned, and each `<module>.<NAME>` const on the package's module, as before; then it calls
+    `server.serve(config_from_env(os.environ), hooks)`.
+  - `spawnBridge(home: string, lane: string, o?: {env?: Record<string, string>; consts?: Record<string, unknown>;
+    timeoutMs?: number}): Promise<{port: number; key: string; proc: ChildProcess; stderr(): string; stop(signal?:
+    NodeJS.Signals): Promise<{code: number | null; signal: string | null}>}>` — runs `python3 -I driver.py` with
+    `{"pkg": <ccd dir>, "ops": [{"op": "serve"}], "consts": o.consts}` and the contract's environment for the lane
+    `plantBridgeLane` planted under `home` (`o.env` names the test upstream and auth bases, else `CLOSED_AUTH_BASE`),
+    and resolves once `GET /ccgpt/lane` answers on `port`; `key` is the lane's key, read from its `runtime.env`.
   - **How a test constant reaches the library** (`LOCK_WAIT_S`, for example). `spawnBridge` runs the bridge through
-    `driver.py`'s `serve` op, so the driver's `consts` apply to it. A key `ccgpt_auth.<NAME>` names the library: the
-    driver loads it through the bridge's own `load_auth_lib`, then sets each such const on the module that returned,
-    as Stage 1's driver sets each `consts` entry on the module it loaded (Stage 1 plan, Task 1, the `driver.py`
-    bullet), and then serves, so the bridge's later calls reach the same module. The override takes effect because
-    Stage 1's library binds no constant early (the same bullet: every bound argument defaults to `None` and resolves
-    to its module constant when the function is called).
+    the `serve` op, so the driver's `consts` apply to it. A key `ccgpt_auth.<NAME>` names the library: the op sets it
+    on the module `load_auth_lib` returned, as Stage 1's driver sets each `consts` entry on the module it loaded
+    (Stage 1 plan, Task 1, the `driver.py` bullet), and then serves, so the bridge's later calls, through the same
+    cached load, reach the same module. The override takes effect because Stage 1's library binds no constant early
+    (the same bullet: every bound argument defaults to `None` and resolves to its module constant when the function
+    is called).
   - Constants, read when called: `PING_S = 15.0`, `HOLD_S = 15.0`, `DRAIN_S = 5.0`, `STOP_MARGIN_S = 5.0`,
     `CONTINUE_MAX = 3`, `REFRESH_TICK_S = 60.0`, `FRESH_TOKEN_S = 300.0`. `DRAIN_S + STOP_MARGIN_S` is at most the
     nohup stop's TERM-to-KILL wait (Task 11), pinned there.
@@ -1112,6 +1131,8 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
     never does (Stage 1 plan, Task 3's `ensure_fresh` text: `not expired(r) and no unsaved record -> return r # no
     lock, no network`); another driver holds `held()`; `consts` `ccgpt_auth.LOCK_WAIT_S` 0.3, applied as above).
   - `'a model outside the catalogue is 404 and never reaches upstream'`.
+  - `'a model added to the catalogue after start is served without a restart'` — the test rewrites the
+    `CCGPT_CATALOGUE` file while the bridge runs, adding a model; the next request for that model reaches upstream.
   - `'an internal error logs its class only'` — a fault op raises inside the handler with a sentinel in the body and
     in the planted token: the answer is `api_error`; neither sentinel appears on stderr or in the stats file.
   - `'usage_limit_reached is 429 billing_error and the status file reads limit-paused; the next success clears it'`.
@@ -1129,7 +1150,8 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
   → 1; V12 (no refresher thread) → 1; V13 (forward the upstream body on an error) → 1 (via E7's sentinel); V14 (the
   lane id as the account header) → 1 (a tool round trip …); V15 (`refresh-failed` as 401) → 1; V16 (refresh a fresh
   token) → 1; V17 (read to EOF after `response.failed`) → 1; V18 (the idle bound on bytes, not events) → 1; V19
-  (`str(e)` in the log line) → 1; V20 (no `fail` at `DRAIN_S`) → 1; V21 (send an off-catalogue model upstream) → 1.
+  (`str(e)` in the log line) → 1; V20 (no `fail` at `DRAIN_S`) → 1; V21 (send an off-catalogue model upstream) → 1;
+  V22 (read the catalogue once at start) → 1 (a model added to the catalogue after start …).
 - [ ] **Step 6: Commit** — `codex-bridge: the direct-mode server (… Task 8)`.
 
 ### Task 9: the shim's direct entry
@@ -1206,7 +1228,9 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
     and the doctor's `siwc` FAIL (Task 13). No second `jq` reads the roster's `exec.bridge` or `exec.upstream`;
     `_codex_row` is unchanged. Every caller captures the mode and its rc first (`mode="$(_codex_lane_mode "$id")";
     mrc=$?`), never inside another command's argument: on rc 1, install prints one `NOT measured` line for the lane
-    and skips its tiers (counted as the lock-busy lane is), and start and the doctor refuse.
+    and skips its tiers (counted as the lock-busy lane is), and start and the doctor refuse. Stop, account removal
+    and `_uninst_codex` stay mode-blind on rc 1: they walk `bridge shim litellm` in that fixed order, stop only what
+    `_codex_tier_ours` proves, and never skip the lane (Task 11).
   `lane.json` gains `bridge`, `upstream` and `bridgeFiles: {stats: "bridge.stats.json", store: "reasoning.sqlite",
   recordings: "recordings"}`. `_codex_lane_json_state` checks the three for PRESENCE (strings, and an object of three
   strings), as it checks `units` today and for the same reason (`ccd/ccrc:12124-12126`), so a `lane.json` from before
@@ -1300,12 +1324,16 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   - `ccrc codex stop <id>` and account removal stop all three tiers, mode-blind, the lane's own mode's tiers front
     first and then the other mode's (`direct`: bridge, shim, litellm; `litellm`: shim, litellm, bridge), so each tier
     is measured after the one holding the shared port has gone (`not running` for the absent ones); `_codex_stop_lane`
-    prints `litellm <w>, shim <w>, bridge <w>`.
+    prints `litellm <w>, shim <w>, bridge <w>`. When `_codex_lane_mode` answers rc 1 (Task 10), both walk `bridge shim
+    litellm` in that fixed order and stop only what `_codex_tier_ours` proves; neither skips the lane.
   - **`ccrc uninstall` stops a bridge too.** `_uninst_codex` keeps its own hard-coded `local -a tiers=(shim
     litellm)` (`:24812`) and stops a tier only when `_codex_tier_ours` proves it (`:24847-24868`), so on a `direct`
     lane it would leave a running bridge, the credential's refresher, behind ccrc. Its tier list becomes
     `_codex_stop_lane`'s order for the lane's mode (`direct`: bridge, shim, litellm), read through the same rule for
-    the other mode's tier. `_uninst_codex_by_hand <id> bridge` names the unit the bridge runs under (the shim's,
+    the other mode's tier. On rc 1 from `_codex_lane_mode` it stays mode-blind, like the stop: it walks `bridge shim
+    litellm` in that fixed order, stops only what `_codex_tier_ours` proves, and never skips the lane, so a `lane.json`
+    from before this plan, which has no `bridge` key, still has its tiers stopped (today's `(shim litellm)` stops them,
+    `:24812`, `:24847-24868`). `_uninst_codex_by_hand <id> bridge` names the unit the bridge runs under (the shim's,
     `ccgpt-<id>-shim.service`, `deploy/models-op.mjs:896`), its pidfile `bridge.pid` and its argv marker
     `--ccrc-bridge=direct --ccrc-lane=<id>`.
   - **The stop waits for the drain.** The nohup arm's TERM-to-KILL wait (`:13096`, ten 1 s polls) is
@@ -1352,7 +1380,9 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
   not-stale with no LiteLLM runtime'` (no `ccgpt-runtime` generation in the fixture: start brings the bridge up and
   the stale check answers 1, current); `'uninstall stops a direct lane's bridge'` (`ccrc-uninstall.test.ts`: a
   running bridge on a direct lane is stopped and named in the stopped list, and no `left alone` line names the
-  lane).
+  lane); `'a lane.json with no bridge key still has its running shim and LiteLLM tiers stopped'`
+  (`ccrc-uninstall.test.ts`); `'uninstall with an unreadable lane mode still stops a running bridge'`
+  (`ccrc-uninstall.test.ts`).
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — L1 (adopt a running litellm tier) → 1; L2 (old argv marker) →
   1; L3 (digest ignores the package) → 1; L4 (reap misses the store) → 1; L5 (rekey restarts litellm only) → 1; L6
   (the bridge answers `{"lane"}` only) → at least 2 (today's build refuses …; start, status and stop on a healthy
@@ -1383,10 +1413,30 @@ which re-renders the env block (`deploy/models-op.mjs:1545-1548`, "THE MOVE"), a
 catalogue (`candidateFor(registry, catalogue, …)`, `:1634`). So on a `direct` lane a move is the registry and the
 env re-render, with no tier restart.
 
+**What the refresh does before the step on a `direct` lane.** The step runs only for a lane whose refresh row came back
+ok (`adv_ids`, `ccd/ccrc:11826`), and two parts of that first pass are not the bridge's. (1) The catalogue probe:
+`_models_probe_codex_env` hands it the LiteLLM runtime's interpreter (`CCRC_CODEX_PYTHON` from `ccgpt-runtime python`,
+`:10490-10492`), and `_fetch_codex_lane` refuses `runtime-absent` without one (`ccd/ccrc-models-probe:179-182`). In
+Stage 2 a `direct` lane's catalogue probe still runs on that interpreter, unchanged: the runtime stays installed until
+Stage 4 retires LiteLLM, so a `direct` lane's auto-advance needs it, while its tiers do not (Task 11). (2) The render:
+the refresh runs `_models_litellm` for every codex-probe lane (`:11797-11799`). It keeps doing so on a `direct` lane, so
+`litellm.yaml` stays current and a switch back to `litellm` (Task 12) finds it so. Measured at the render's restart
+step, `_models_litellm_lane_held` (`:10946-11059`): it returns before asking about any tier when the bytes are unchanged
+(`:10955-10958`); it stops a tier only when `_codex_tier_ours <id> litellm` reads 0 or 4 (`held=1`, `:10980`), a 1 does
+nothing (`:11027`), and both starts run only when `held` is 1 (`:11037`, `:11052`). So it already acts only on a running
+LiteLLM tier, and on a `direct` lane that tier reads 1 unless a retired one is running, which start refuses as
+`retired-tier-running` (Task 11). This task makes it so for that case too: the function captures `_codex_lane_mode <id>`
+before its tier question (`:10959`; Task 10's rule), and on `direct` it asks no tier, leaves `held` at 0 and writes
+only. On `litellm`, or rc 1, it is today's function. On a `direct` lane the render therefore never stops, restarts or
+starts a tier.
+
 **Files:**
-- Modify: `ccd/ccrc` (`_models_advance_steps`' readiness, `:11649-11658`); `deploy/models-canary.mjs` (`laneInputs`
-  `:123-141`, `laneOf` `:160-170`)
-- Test: `server/test/ccrc-models-advance.test.ts`, `server/test/models-canary.test.ts`
+- Modify: `ccd/ccrc` (`_models_advance_steps`' readiness, `:11649-11658`; `_models_litellm_lane_held`, `:10946-11059`);
+  `deploy/models-canary.mjs` (`laneInputs` `:123-141`, `laneOf` `:160-170`)
+- Test: `server/test/ccrc-models-advance.test.ts`, `server/test/models-canary.test.ts` (its planter, `:33`, and the
+  base objects at `:74-75` write `bridge: "litellm"`, and the existing passing cases stay green with it),
+  `server/test/codexLaneFixture.ts` (`laneProxyAnswersAs`, `:2354-2356`, gains a direct-shape answer mode: the lane
+  plus `mode: "direct"`)
 
 **Interfaces:**
 - Readiness: the step captures `_codex_lane_mode <id>` first (rc 1 ends the step with no event, as an unmeasured
@@ -1399,9 +1449,12 @@ env re-render, with no tier restart.
   names this lane; an absent or unknown `bridge` is `unavailable` with no keyed request, as `_codex_lane_mode`
   refuses one. The request and the reader are unchanged.
 - [ ] **Step 1: Write the failing tests** — `'the advance step moves a class on a direct lane, canary first'`
-  (`ccrc-models-advance.test.ts`: a direct lane whose fake proxy answers in the direct shape under the bridge's argv;
-  the canary runs before the commit, the class moves, no check-only `litellm` op is called and no tier is
-  restarted); `'the canary refuses a listener that answers as another lane in direct shape'` (`models-canary.test.ts`:
+  (`ccrc-models-advance.test.ts`: the tier stub answers 0 for `bridge`, the fake proxy answers in the direct shape,
+  and the real canary runs; the canary runs before the commit, the class moves, no check-only `litellm` op is called
+  and no tier is restarted); `'the hourly refresh on a direct lane renders litellm.yaml and starts no tier'`
+  (`ccrc-models-advance.test.ts`: a changed catalogue, and the tier stub answering 0 for `bridge` and for `litellm`:
+  `litellm.yaml` is rewritten, the row reads `litellm: "rendered"`, and `lane-calls` holds no `stop` or `start`
+  line); `'the canary refuses a listener that answers as another lane in direct shape'` (`models-canary.test.ts`:
   `unavailable`, and nothing carrying the key is sent); `'a direct lane's canary passes through the direct shape'`.
 - [ ] **Steps 2-4.** - [ ] **Step 5: Mutation rows** — N1 (readiness walks `litellm shim` on every lane) → 1 (the
   advance step moves a class on a direct lane …); N2 (`laneOf` accepts the `shim` shape only) → at least 2 (… moves a
@@ -1529,6 +1582,10 @@ env re-render, with no tier restart.
      edits a clone of the raw file (`deploy/models-op.mjs:1359`), deletes only the model's entry (`:1370`), and
      removes the file only when `windows` is empty and no other top-level key exists (`:1376`), else writes it back
      (D-5161). `set-window` writes the same clone, and `lower-windows` writes through it too (`writeWindows`).
+  Every refusal the pass decides at steps 1-6 is recorded the same way, `refusalsApplied["<upstream>/<model>"] = at`,
+  whether it lowered the window or was skipped (`below-minimum`, `not-a-lane-model`, `not-lower`, `older-than-entry`),
+  in the pass's one write, so each refusal is read once: a refusal skipped `older-than-entry` or `not-lower` is not
+  applied by a later refresh after `clear-window` removes the entry that skipped it.
   The refresh runs it for each `direct` lane whose `lane.json` names a stats file, under `_models_node_locked`, in
   its own pass before the probe, so a failed probe never skips a lowering.
 - The compaction chain's two env facts, pinned in `modelenv.test.ts`: `modelEnvBlock` never emits
@@ -1543,7 +1600,9 @@ env re-render, with no tier restart.
   `to` is 282000); `'a refusal on another route is not read'` (`refusals["siwc/<m>"]` on a backend lane: nothing
   lowered); `'the entry records refusedTokensEstimate'`; `'a refusal lowers, clear-window removes it, and the next
   refresh does not lower again'` (`refusalsApplied` survives the clear, and the second pass answers
-  `already-applied`); `'the hourly refresh lowers before the probe, and a failed
+  `already-applied`); `'a refusal skipped older-than-entry, then set-window and clear-window, is not applied on the
+  next refresh'` (the refusal is recorded at its skip, and the pass after the clear answers `already-applied`); `'the
+  hourly refresh lowers before the probe, and a failed
   probe does not stop it'`; `'the new window reaches settings.json in the same run'`; `'lower-windows is a write op
   and refused outside the lane-files lock'` (`ccrc-models-lock.test.ts`); `'no lane env block names the
   enforcement switch or the auto-compact window'` (`modelenv.test.ts`, over every class layout the suite builds).
@@ -1551,7 +1610,8 @@ env re-render, with no tier restart.
   `setAt`) → 1; Z4 (no first-entry cap) → 1; Z5 (the pass inside the probe-success branch) → 1 (… a failed probe
   does not stop it); Z6 (no usage floor) → 1; Z7 (read refusals by model only) → 1; Z8 (`writes: false`) → 1
   (single-definition); Z9 (`modelEnvBlock` emits the enforcement switch) → 1; Z10 (drop the applied record: no
-  `refusalsApplied` written) → 1 (a refusal lowers, clear-window removes it …).
+  `refusalsApplied` written) → 1 (a refusal lowers, clear-window removes it …); Z11 (record only a refusal that
+  lowered) → 1 (a refusal skipped older-than-entry …).
 - [ ] **Step 6: Commit** — `models: a refusal lowers the window (codex-bridge D25, … Task 15)`.
 
 ### Task 16: the README and the ownership spec
@@ -1646,8 +1706,11 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   body is that tag alone, kept apart from the finding issues; and for every CONSECUTIVE pair of stable tags from that
   tag on, oldest first, fetches the nine files at each and opens one issue per pair with findings (titled `codex
   wire: <old>..<new>`, skipped when that title exists) listing them and the upstream compare link. A pair with no
-  finding opens nothing. After the walk, the state issue's body becomes the newest tag walked (the issue is created
-  on the first run), so a finding-free pair is never walked twice. With no state issue yet, the walk starts at the
+  finding opens nothing. A pair counts as walked only when all nine files were fetched at both of its tags; the first
+  pair that could not be compared (a fetch error, a rate limit, a contract file missing at one tag) ends the walk,
+  the state is left at the last pair compared, never past the one that failed, and the job exits non-zero. After the
+  walk, the state issue's body becomes the newest tag walked (the issue is created on the first run), so a
+  finding-free pair is never walked twice. With no state issue yet, the walk starts at the
   second-newest stable tag (the newest pair). So every release between two runs is compared, never skipped, whether
   or not any pair has had a finding. The issue text holds nothing but upstream names. `nextPairs(stableTags:
   string[], lastWalked: string | null): Array<[string, string]>` is exported for the test.
@@ -1655,7 +1718,8 @@ first live step uses: recordings with a scrubber, and a bounded live probe.
   removal of the compaction endpoint constant'` (synthetic excerpts shaped like the two upstream changes, 0.162.0
   and 0.155.0, D-TBD-wire-watch-tested-on-synthetic-excerpts); `'an unchanged pair reports nothing'`; `'three
   releases since the last walk give three consecutive pairs, oldest first'`, `'no report yet, two releases since the
-  last walk give both pairs'` and `'with no state yet, the newest pair'` (`nextPairs`); and in
+  last walk give both pairs'` and `'with no state yet, the newest pair'` (`nextPairs`); `'a fetch failure on the
+  second of three pairs leaves the state at the first pair's newer tag'` (and the job exits non-zero); and in
   `ci-select-tests.test.ts`, `'a change under ccd/codexbridge selects the bridge suites'` (a map built from a trace
   record that lists `ccd/codexbridge/reducer.py` as read selects `codex-bridge-replay.test.ts`), which is D4: every
   bridge test reads the whole package through `load_all()`, so the traced selection runs the replay corpus on every
