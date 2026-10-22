@@ -172,7 +172,7 @@ describe('W25 the CLI over fixture repositories', () => {
     expect([noRepo.status, noRepo.stdout]).toEqual([2, '']);
   });
 
-  it('W25-S13: the helper answers through a symlinked path, one line, never silence', () => {
+  it('W25-S14: the helper answers through a symlinked path, one line, never silence', () => {
     const { home, root } = fixture();
     commit(root);
     symlinkSync(join(REPO, 'deploy'), join(home, 'linked'));
