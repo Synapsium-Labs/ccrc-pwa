@@ -52,6 +52,7 @@ pressed in the console") and the slow first open of a new session. One task is o
 | 32 | C8 (D-6440) | one accounts poll; an equal answer keeps the previous value | — | planned, after C6 |
 | 33 | C9 (D-6441) | the fleet list memoised; its clock a leaf | — | planned, after C6 and C8 |
 | 34 | C10 (D-6442) | the Runs board folds its finished runs | — | planned |
+| 35 | S5a (D-6466) | a phone shows the full accounts strip again, under S5's header | — | planned, first in the queue (R15) |
 
 ## Decisions & deviations
 
@@ -118,6 +119,11 @@ pressed in the console") and the slow first open of a new session. One task is o
   a refute pass; the coordinator's rulings are in the plan's §Review log. Dispatch has been blocked since B1's review first tried to dispatch (measured again at 17:00Z): `ccd`
   refuses new workspaces while the worktrees volume is under its 10 GB floor (9 to 10 GB free), so every queued run
   stays `planned` until space is reclaimed, which is the operator's or the fleet cleanup's, never this programme's.
+- **R15 (2026-10-22)**, the operator, on v0.0.570 at phone width: "The accounts at the top on mobile looked and behaved
+  better before this." #1139 had replaced the phone's full accounts strip (each lane's 5h and 7d rows with their reset
+  countdowns) with the compact grid (one reading per lane); its renders used five lanes, and at 17 the grid is nine rows
+  of cut names. Ruled: S5a (D-6466) restores the full strip under S5's header, first in the queue, and T2c sorts that
+  strip most free first. A phone fixture for any gauge task carries the operator's lane count from now on.
 - **Open with the operator:** Q2 to Q9 in the plan's §Operator questions (Q1 is ruled), each with a recommended
   default the tasks build until ruled.
 
@@ -132,8 +138,8 @@ pressed in the console") and the slow first open of a new session. One task is o
 
 ## Next-wave brief
 
-As workspaces can be created again, dispatch in this order: the review runs 805 (T1a's fix round) and 808 (B1), then
-T2e (788), B3 (785), C5, T3f (800), S18 (801), T2c (802), C1 (803), C2, C6, C10; then C3 and C4 after C1, C8 after C6,
+As workspaces can be created again, dispatch in this order: S5a, the review runs 805 (T1a's fix round) and 808 (B1),
+then T2e (788), B3 (785), C5, T3f (800), S18 (801), T2c (802), C1 (803), C2, C6, C10; then C3 and C4 after C1, C8 after C6,
 C9 after C6 and C8, C7 after C6, C8 and T1c. Each brief names the plan path, its task, the number it defines, the
 execution skill (superpowers:subagent-driven-development with superpowers:test-driven-development), the routing row (a
 worker on a spec'd plan), and the branch rule: commit on this workspace's own branch, never a separate feature branch.

@@ -101,6 +101,7 @@ Each row was located by a code reader and checked by a second, independent reade
 | C0, C1 | T0 | — |
 | S18 (W2) | T0 (ruled ahead of W2's S17 by the operator's note) | — |
 | B1, B2, B3, B4, B5 | T0; Q6 or its default (Track B runs beside Step 1) | B2 after B1 (the same functions in `send.ts`); B5 after B4 (its empty state reads the search's answer) and after T1a (both edit `sessionws.ts`) |
+| S5a | T0; #1139 merged (it is) | the operator's note on #1139's phone grid; first in the queue |
 | C2, C5, C6, C10 | T0 (Track C, from C0's report; out of the step order) | — |
 | C3, C4 | C1 merged | `server/src/bounded.ts`'s `mapBounded`; C1's registry read; C1 rewrites census comments in `watch.ts` |
 | C8 | C6 merged | C6's `sameJson` and memoised `FleetChrome` value |
@@ -149,6 +150,9 @@ T3a (fleet words, bucket chips)   T3b (names, ⋯)   T3c (header)   T3d (inspect
 --- ahead of the step order, as slots free (the operator's later notes) ---
 T2e (Instrument's desk)   T2c (gauges, ruled)   T3f (Done above Working)   S18 (W2; the device default)   C0 (responsiveness, research)   C1 (registry reads)
 T4a (colour in the chat; after T1c)
+
+--- first in the queue (the operator's note on #1139) ---
+S5a (a phone shows the full accounts strip again)
 
 --- Track C, the console's responsiveness (C0's report; rev 4), as slots free ---
 C5 (a wheel over a code block scrolls the transcript; first)   C10 (the Runs board folds finished runs)   C2 (one row for commands and PR; the bounded commands read)
@@ -256,6 +260,7 @@ Every task's requirements include this section and the W2 plan's Global constrai
 | `server/src/registry.ts` | Modify | registry reads bounded | C1 |
 | `ui/src/styles/skins.ts`, `pwa/index.html` | Modify | Instrument's `preview: false` | S18 (W2) |
 | `pwa/src/fleet/NewSessionSheet.tsx`, `pwa/src/screens/SessionScreen.tsx`, `pwa/src/stores/session.ts`, `server/src/sessionws.ts` (watched), `shared/api.ts` (the `backlog` frame's `unprompted`) | Modify | open the new session at once; the cached project list; "No messages yet" for an unprompted session | B5 |
+| `pwa/src/skins/refined/PhoneHeader.tsx`, `pwa/src/fleet/AccountsStrip.tsx` (the door's mark) | Modify | a phone's header shows the full accounts strip again | S5a |
 | `server/src/bounded.ts` | **Create** | the server's one bounded pool: B4's `limiter`, moved unchanged, and `mapBounded` on top | C1 (used by C3, C4) |
 | `server/test/bounded-pool.test.ts` | **Create** | pins the limiter (characterization) and `mapBounded` | C1 |
 | `server/src/transcript/resolve.ts` | Modify | imports the limiter from `bounded.ts` (C1); the order-independence comment (B5) | C1, B5 |
@@ -589,8 +594,8 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
 **Files:** Create `pwa/src/fleet/laneOrder.ts` (pure: `lanesByFree`) and `pwa/test/lane-order.test.ts`. Modify `pwa/src/fleet/CompactGauges.tsx` (every arrangement draws `lanesByFree`'s order; a `row` arrangement, replacing `bar` in `CompactArrangement` ≈:24, whose fit is measured from its width), `pwa/src/skins/refined/AppBar.tsx` (the gauges leave the bar's line for a second line of its own), `pwa/src/skins/refined/refined.css` (≈:135-221: the frame's first row grows to hold the bar's two lines; the gauge row's rules), `pwa/src/fleet/fleet.css` (the gauge block ≈:3405-3460), `ui/src/primitives/meter.tsx` and `meter.stories.tsx` if Step 0 needs them, `pwa/design/contrast-check.mjs` (the track pair; its stale `off` comment ≈:277-283), `pwa/test/contrast.test.ts` (the pair's labels in "token pairs the gate must keep measuring", ≈:899), and only if Step 0 chooses a palette value, `ui/design/make-themes.mjs` and the generated block of `ui/src/styles/tokens.css` (`npm run themes`). Modify, each intended change in its own commit: `pwa/test/fleet-pieces.test.tsx` (≈:248-350, the compact gauges, and ≈:295 "…reset when the binding window rolled over, — never measured"), `pwa/test/refined-shell.test.tsx` (≈:82-103, the bar's order: the gauges door moves to the row; ≈:257-260, the frame's rows; only these hunks, disjoint from #1116's ≈:142-150 and ≈:231-238), `pwa/browser/compact-gauges.browser.test.tsx`, `pwa/browser/refined-bar.browser.test.ts`.
 
 **The shape (Q1, ruled by the operator 2026-10-22).** The operator: "at least we should sort the accounts we show by most free first, as this will give a good indication as to remaining accounts with remaining capacity. Right now hiding the other 13 accounts provides absolutely 0 value to the user… descend that line BELOW the menu (fleet inbox runs etc.) so that we use full width."
-- **Most free first, one function.** `lanesByFree(lanes)` orders lanes by their binding window's use, lowest first; ties keep roster order; a lane never read, and a lane whose sign-in has expired, go last. Every arrangement draws it: Refined's row, Instrument's LED meters and the phone grid. "+n" counts the lanes past the fit, which are the fullest.
-- **Refined's gauges get the full width.** At ≥900 `AppBar` draws two lines: the bar as today (wordmark, tabs, bell, search, settings, `+ New session`) and, under it, a full-width row of gauges, the whole row one door to `/accounts` (`commandDoor('go-accounts')`). The row shows as many lanes as fit its measured width, then "+n". Instrument keeps its LED meters in its top bar, sorted. A phone keeps #1116's grid, sorted.
+- **Most free first, one function.** `lanesByFree(lanes)` orders lanes by their binding window's use, lowest first; ties keep roster order; a lane never read, and a lane whose sign-in has expired, go last. Every arrangement draws it: Refined's row, Instrument's LED meters and the phone's full strip (S5a, D-6466), so `AccountsStrip` sorts its `live` lanes through it before handing them to any arrangement. "+n" counts the lanes past the fit, which are the fullest.
+- **Refined's gauges get the full width.** At ≥900 `AppBar` draws two lines: the bar as today (wordmark, tabs, bell, search, settings, `+ New session`) and, under it, a full-width row of gauges, the whole row one door to `/accounts` (`commandDoor('go-accounts')`). The row shows as many lanes as fit its measured width, then "+n". Instrument keeps its LED meters in its top bar, sorted. A phone shows the full strip S5a restores, sorted (the operator's note of 2026-10-22 on #1139's grid).
 - **The door names the fullest lane of all.** `compactDoorLabel` (`CompactGauges.tsx` ≈:62-68) reads every lane, not the placed ones, so a lane past the fit is still the one the door's name calls the fullest.
 - **Always a number.** A rolled-over binding window reads "0%" (the server inferred it, `fiveRolledOver`/`sevenRolledOver`); the accessible name says the window reset and 0% is inferred. A lane never read reads "no reading", never 0%.
 - **Its window named.** The reading carries the binding window, "5h 62%" or "7d 80%", from `bindingPct`'s choice.
@@ -615,7 +620,7 @@ Every Modify path exists at the base except `PhoneHeader.tsx` and `pwa/test/refi
   | a never-read lane draws a `Meter` | fleet-pieces | "a lane never read reads 'no reading' and draws no meter" |
   | the track pair removed from the contract | contrast | "token pairs the gate must keep measuring" (the pair's labels) |
 
-- [ ] **Step 4: Per width × skin × mode.** The bar with seventeen lanes (one rolled over, one never read, one at 0%, one critical, one signed out) at 899, 900, 1280 and 1920, and the phone grid (#1116's, if merged) at 360 and 390, × both skins × dark and light (plus Dracula and GitHub Light if a value moved), before and after.
+- [ ] **Step 4: Per width × skin × mode.** The bar with seventeen lanes (one rolled over, one never read, one at 0%, one critical, one signed out) at 899, 900, 1280 and 1920, and the phone's full strip (after S5a) at 360 and 390, × both skins × dark and light (plus Dracula and GitHub Light if a value moved), before and after.
 - [ ] **Step 5: Verify.**
 
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/lane-order.test.ts test/fleet-pieces.test.tsx test/limit-off-band.test.ts test/refined-shell.test.tsx test/instrument-shell.test.tsx test/app.test.tsx
@@ -1223,6 +1228,44 @@ Fences:
 - **Its narrowed-desktop render** (W2's Step 4: "a desktop window narrowed to 390 stays Instrument and shows Instrument's phone layout") checks today's Instrument below 900; S11's phone layout is unbuilt.
 
 These three departures from D-5479 (`flip-after-parity`) are D-6389.
+
+### Task S5a: a phone shows the full accounts strip again, under the new header (D-6466) — after T0, first in the queue
+
+**Routing:** band 1. **Needs:** T0; #1139 (merged). **Frozen files touched:** none. **Lane:** PWA.
+
+**Why** (the operator, 2026-10-22, on v0.0.570 at phone width with 17 lanes: "The accounts at the top on mobile looked and behaved better before this."). S5 (#1139) put the compact `grid` arrangement (`CompactGauges`: one binding reading per lane) in `PhoneHeader` in place of the phone's full `AccountsStrip`, which showed each lane as a card with its 5h and 7d rows, a meter each and the countdown to each reset. S5's renders used five lanes. At 17 the grid is nine rows of cut names and a bare "reset", and the countdowns are gone.
+
+**Files:** Modify `pwa/src/skins/refined/PhoneHeader.tsx` (≈:68, `<AccountsStrip compact="grid" />` becomes `<AccountsStrip />`; its header comment ≈:4-8) and `pwa/src/fleet/AccountsStrip.tsx` (the full strip carries the door's mark, `commandDoor('go-accounts')`, as `CompactGauges` ≈:107 does). Modify, in its own commit (an intended change): `pwa/test/refined-phone.test.tsx` ≈:186-200 ("the gauges grid has one gauge per lane…") and `pwa/browser/refined-phone.browser.test.ts` ≈:79 and ≈:113-115 (the grid's gauge count and its two columns). `CompactGauges`' `grid` arrangement and its own tests stay: nothing else mounts it, and T2c decides its future.
+
+**The shape.**
+- Under the phone header's readout, the full strip as it was before #1139: two columns of cards (`.accounts-strip`, `fleet.css` ≈:748-766), each lane's name in its hue, its 5h and 7d rows with the percentage, a meter and the reset countdown, the whole strip one door to `/accounts` (`role="link"`, `ACCOUNTS_DOOR_LABEL`, Enter activates).
+- Everything else of S5 stays: the header row, the four doors, the readout, `+ New` and `--phone-nav-h`.
+- The lanes keep today's roster order here; T2c's `lanesByFree` sorts this strip too, so "most free first" arrives with T2c.
+- Instrument and the desk are unchanged.
+
+- [ ] **Step 0: Re-ground.** `PhoneHeader`'s mount; the full strip's markup and tap floor; whether it carries a `data-command` today; every test that asserts the grid in the phone header.
+- [ ] **Step 1: Red.** `refined-phone.test.tsx`: "the phone header shows the full strip: each lane's 5h and 7d rows, the strip one door to /accounts carrying go-accounts"; "the phone header mounts no compact grid". `refined-phone.browser.test.ts`: "with 17 lanes at 360 and 390 each card shows its lane's windows and a countdown where the window has a reset, and nothing scrolls sideways".
+- [ ] **Step 2: Green.** Run `tap-targets.test.tsx` and `control-census.test.ts` alone.
+- [ ] **Step 3: Mutation table, RUN.**
+
+  | Mutant | Suite | Expected red |
+  |---|---|---|
+  | the compact grid mounted again | refined-phone | "the phone header mounts no compact grid", "…shows the full strip…" |
+  | the strip's door mark dropped | refined-phone | "…carrying go-accounts" |
+  | the 7d row dropped from a card | refined-phone | "…each lane's 5h and 7d rows…" |
+
+- [ ] **Step 4: Per width × skin × mode.** The fleet at 360, 390 and 438 with 17 lanes (one rolled over, one signed out, one never read, one with a long name), Refined × dark and light: `origin/main`, the build before #1139 (`f0e873c5d^`, what the operator remembers) and after; the first session row's offset at 390×844 for all three. Instrument's phone once per mode, unchanged.
+- [ ] **Step 5: Verify.**
+
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/refined-phone.test.tsx test/accounts-strip.test.tsx test/skin-boundary.test.ts test/tap-targets.test.tsx test/control-census.test.ts test/fleet-pieces.test.tsx
+      cd pwa && ./node_modules/.bin/vitest run --maxWorkers=2 test/contrast.test.ts
+      cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/refined-phone.browser.test.ts
+      cd server && ./node_modules/.bin/vitest run --maxWorkers=2 test/rings/pwa-rings.test.ts
+      cd pwa && ./node_modules/.bin/tsc --noEmit
+
+**Fences.** T2c edits `AccountsStrip.tsx` (the sort) and `fleet-pieces.test.tsx`; T2d edits `PhoneHeader.tsx`'s badge reads (≈:18, ≈:34, ≈:45), disjoint from ≈:68; C8 edits `AccountsStrip.tsx`'s poll. S5a lands first; each later PR absorbs `main` and re-runs.
+
+**Acceptance.** A phone shows every lane's two windows and their reset countdowns under the header again. **Rollback.** A plain revert.
 
 ### Task C0: measure the console's responsiveness (research, no PR) — after T0
 
@@ -1991,6 +2034,7 @@ What the not-yet-started skins tasks inherit from this plan, so they build on it
 - **D-6440** — `one-accounts-poll` (Task C8): the fleet store is the one `/api/accounts` reader; an equal answer keeps the previous value, and every reader keeps its last good value on a malformed answer (an intended change).
 - **D-6441** — `the-fleet-list-is-memoised` (Task C9): the fleet list's trees and rows are memoised, the one-second clock reaches only its leaves, and one session opener serves both skins.
 - **D-6442** — `the-runs-board-folds-finished-runs` (Task C10): the Runs board mounts the newest 20 finished runs behind Show more, on a 30-second clock for finished rows.
+- **D-6466** — `the-phone-keeps-the-full-strip` (Task S5a): on the operator's note of 2026-10-22, a phone's header shows the full accounts strip (each lane's 5h and 7d rows with their reset countdowns) instead of #1139's compact grid; T2c's phone arm sorts that strip rather than the grid.
 - **D-6443** — `s5-landed-with-two-departures` (W2 Task S5, landed by #1139): S5 as landed edits `FleetHead.tsx` (the pool-lag readout moves into `poolLag.tsx` so `PhoneHeader` shares it), against Task S5's "does not edit FleetHead.tsx", and `--phone-nav-h` pads the fleet route only. The other five slugs in #1139's body are implementation choices within S5's text (the programme ledger's R13).
 
 C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issued and unused: none. A further departure takes a number from the ledger.
