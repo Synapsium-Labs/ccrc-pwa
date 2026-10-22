@@ -1139,7 +1139,8 @@ export function nextDialogFrame(
   const repainted = !dialog.parsed && prev.raw !== dialog.raw;
   if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi, review: reviewRows(dialog) !== null ? true : undefined },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi,
+      review: reviewRows(dialog) !== null ? true : undefined },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }
