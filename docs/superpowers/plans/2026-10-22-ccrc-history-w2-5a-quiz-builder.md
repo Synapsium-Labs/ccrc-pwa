@@ -4381,7 +4381,7 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5
 Expected RED (predicted): `31 failed` (as root, `29 failed | 2 skipped`).
 - The fixture builds (Tasks 1 to 3 supply its store opener, `rosterConfigDirs` and `admitStoreBoundaries`), and every case that reads B fails at `w5a4Drv.baselineOf is not a function`.
 - The record cases fail at `writeBaselineRecord` or `baselineRow`, `BASELINE_FILES_ID is the open record default` with `expected undefined to be 'v1'`, and `the ancestor walk` at `w5a4Drv.baselineCandidates is not a function`.
-- The `RECON_DISCARDS` case fails: the slice B appends is empty.
+- The `RECON_DISCARDS` case fails: `slice(24, 35)` holds only `body-unrenderable`, which is the list's last word since D-6302 (measured over predicted: the slice is not empty).
 
 A count that differs is a fixture or filter error. Fix it before Step 4, never by weakening an assertion.
 
@@ -4789,8 +4789,9 @@ s = s.replace(old, "  const v = [...keptOf(rs.blobs, boundary.kept_blob_id, budg
 open(p, 'w').write(s)
 EOF
 t4run 'NULL kept id|tombstoned kept blob'
-# Expected RED (predicted): 2 failed. A NULL id and a tombstone both build B, with
-# { state: 'built', … } where { state: 'discard', why: 'kept-absent' } (or 'kept-unreadable') was expected. (Task 1's
+# Expected RED (predicted): 3 failed (measured over predicted 2). A NULL id and a tombstone both build B, with
+# { state: 'built', … } where { state: 'discard', why: 'kept-absent' } (or 'kept-unreadable') was expected. The third is
+# Task 1's case 'kept(N) through bodyOf, never keptOf …', which the filter's 'tombstoned kept blob' also selects. (Task 1's
 # keptOf scan reds too, outside this filter.)
 
 # M2 (W2-D68 (2)): the primary only, no variant.

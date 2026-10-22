@@ -33,7 +33,7 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, ftsTextOf, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
@@ -760,20 +760,20 @@ const OUT_JSON_CAP = 16 * 1024 * 1024;
  *    between the lstat and the open), `over-cap` (answered from the descriptor's size before any read; the read loop's own
  *    bound stays for a file that grew after the fstat), or `unreadable` with the errno in `code`.
  *  Nothing but a regular file is ever opened for read.
- *  @param {string} p  @param {number} cap
+ *  @param {string} p  @param {number} cap  @param {boolean} [follow] W2-D69: follow a link to what it names, as Claude Code reads a CLAUDE.md, still opening nothing but a regular file and never blocking on a FIFO (O_NONBLOCK). Every --out read leaves it false.
  *  @returns {{state: 'absent'} | {state: 'bytes', bytes: Buffer} | {state: 'bad', why: 'not-regular' | 'over-cap' | 'unreadable', code?: string}} */
-function readPlain(p, cap) {
+function readPlain(p, cap, follow = false) {
   const unreadable = (e) => ({ state: 'bad', why: 'unreadable', code: String(e?.code ?? 'EUNKNOWN') });
   let st;
   try {
-    st = lstatSync(p);
+    st = follow ? statSync(p) : lstatSync(p);
   } catch (e) {
     return e?.code === 'ENOENT' ? { state: 'absent' } : unreadable(e);
   }
   if (!st.isFile()) return { state: 'bad', why: 'not-regular' };
   let fd;
   try {
-    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(p, constants.O_RDONLY | (follow ? 0 : constants.O_NOFOLLOW) | constants.O_NONBLOCK);
   } catch (e) {
     if (e?.code === 'ENOENT') return { state: 'absent' };
     if (e?.code === 'ELOOP') return { state: 'bad', why: 'not-regular' };
@@ -2562,6 +2562,8 @@ export const RECON_DISCARDS = Object.freeze([
   'over-decode-cap', 'leaf-absent',
   'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',
   'no-epoch', 'ts-null', 'before-other', 'before-unknown', 'after-other', 'after-unknown',
+  'copy-moved', 'summary-unreadable', 'kept-member-unreadable', 'post-row-unreadable', 'post-over-cap',
+  'cwd-unknown', 'cwd-missing', 'cwd-unreadable', 'file-unreadable', 'file-not-regular', 'file-over-cap',
   'body-unrenderable',
 ]);
 /** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
@@ -3235,6 +3237,340 @@ export function admitStoreBoundaries(rs) {
     });
   }
   return { boundaries, counts };
+}
+
+// ── W2-5a Task 4: Baseline B and its files (W2-D68, W2-D69; spec §10.2 "Baseline B") ──────────────────────────────
+// B is what the session still saw after compaction N, so a fact found in it is not "present only before the
+// compaction" and is never asked: W2-D62's admitFact tests every variant of F against it. It is the newline-joined
+// UNREDACTED text of four parts: (1) the summary row's stored body, whole, its transcript-pointer line kept; (2) every
+// kept(N) member present in the store, in holding-copy order, each with its primary body and every entry_variants
+// body; (3) the holding copy's rows after the summary row, up to but excluding the first operator-provenance or
+// assistant row that is not a kept member, at most BASELINE_POST_ROWS_MAX of them
+// (D-6278); (4) the baseline files (W2-D69). Every row of (1)-(3) is in B twice: as lib's renderEntryText, and as its
+// plain string leaves, ftsTextOf's, or every string leaf of an object body (D-6279).
+// The copy is Task 1's boundaryCopyOf, read again and held to the one admission judged (R3). Every blob B reads goes
+// through derive.mjs's bodyOf over Task 1's blobReadStmts (W2-D33), and the kept list is Task 1's keptMembersOf and
+// keptRowsOf. derive.mjs's kept-set reader folds a NULL id, a tombstone and a body that is not an array into one empty
+// set, which would read as "nothing was kept" and admit facts the session still saw; Task 1's scan keeps it out of
+// every deploy/*.mjs (W2-D33).
+// B is held in memory only: never written under --out, never logged, never spawned. Its text is a non-enumerable
+// property of a frozen answer, so canonicalJson, JSON.stringify and util.inspect never carry it; only counts are
+// recorded (baselineRow, writeBaselineRecord). A boundary whose B cannot be built whole is discarded with a
+// RECON_DISCARDS word and counted, never read as empty text. W2-D69's files are read through readPlain with links
+// followed, as Claude Code follows them: still nothing but a regular file of at most BASELINE_FILE_MAX is opened.
+
+/** The baseline file set this code reads (W2-D69), recorded as the open record's quiz.baseline_files and in the
+ *  pilot's `used`. A change to the set is a W2-5a amendment before part 1, under a new id; history-replay.test.ts pins
+ *  this id to the open record's default (OPEN_RECORD_V1), as decisions §7 pins CODE_SHA_FILES to GATE_CODE_FILES. */
+export const BASELINE_FILES_ID = 'v1';
+/** The largest baseline file read (W2-D69): a larger one discards its boundary, `file-over-cap`. */
+export const BASELINE_FILE_MAX = 1024 * 1024;
+/** The most rows B's part 3 takes (W2-D68): one more discards its boundary, `post-over-cap`. */
+export const BASELINE_POST_ROWS_MAX = 200;
+/** How deep `@`-imports are followed (W2-D69 (d)): a file of (a)-(c) is depth 0. */
+export const BASELINE_IMPORT_DEPTH = 5;
+/** The instruction files W2-D69 (a) reads in each listed directory and in each of its ancestors. */
+export const BASELINE_NAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']);
+/** The --out sections a baseline record is written under (W2-D72's layout). */
+export const BASELINE_SECTIONS = Object.freeze(['quiz', 'pilot']);
+/** The baseline record's file name in its section. */
+export const BASELINE_RECORD = 'baseline.json';
+/** The baseline record's kind. */
+export const BASELINE_RECORD_KIND = 'ccrc-history-w2-baseline';
+
+/** @typedef {{state: 'built', bytes: number, files: number, keptMembers: number, keptAbsent: number, postRows: number, readonly text: string}} BaselineBuilt */
+/** @typedef {{state: 'discard', why: string}} BaselineDiscard */
+/** @typedef {BaselineBuilt | BaselineDiscard} BaselineAnswer */
+/** An admitted row of Task 3's admitStoreBoundaries, read in part.
+ *  @typedef {{entry_id: number, uuid: string, transcript_pk: number, admitted: boolean, file_id: number | null,
+ *    boundary_index: number | null, summary_index: number | null, summary_entry_id: number | null}} BaselineBoundary */
+
+/** Why a boundary has no B (W2-D68, W2-D69): a RECON_DISCARDS word (R5), counted in the baseline record, never refused.
+ *  `copy-moved`: the holding copy is not the one admission judged (another file, the boundary at another index, or
+ *  another summary row; W2-D68's "absent summary row" is Task 3's own `summary-absent` drop, before B). `cwd-unknown`:
+ *  N's epoch has no absolute cwd, or no longer answers.
+ *  @param {string} why  @returns {BaselineDiscard} */
+const blDiscard = (why) => ({ state: 'discard', why });
+/** Code-unit order (W2-D18's comparison, never a locale's). */
+const blOrder = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+const BL_STMTS = new WeakMap();
+
+/** The reads B adds to Task 1's, prepared once per handle, each naming its columns: a member's variants, a transcript's
+ *  session uuid and a family's epochs up to N's. The copy, its rows and the kept list are Task 1's readers. */
+function blStmts(db) {
+  let s = BL_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    variants: db.prepare('SELECT blob_id FROM entry_variants WHERE entry_id = ? ORDER BY blob_id'),
+    transcript: db.prepare('SELECT cc_session_uuid FROM transcripts WHERE transcript_pk = ?'),
+    epochs: db.prepare('SELECT seq, cwd, cwd_real FROM epochs WHERE session_pk = ? AND seq <= ? ORDER BY seq'),
+  };
+  BL_STMTS.set(db, s);
+  return s;
+}
+
+/** A kept member's blobs (a row of Task 1's keptRowsOf): its primary, then every entry_variants blob but the primary, by
+ *  blob id, whatever its cause. */
+const blMemberBlobs = (s, m) => [Number(m.blob_id), ...s.variants.all(Number(m.entry_id)).map((v) => Number(v.blob_id)).filter((id) => id !== Number(m.blob_id))];
+
+/** Every string leaf of a value, depth-first in key order, with an explicit stack: an attachment's object can nest. */
+function blObjectLeaves(value) {
+  const out = [];
+  const stack = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) for (let i = v.length - 1; i >= 0; i -= 1) stack.push(v[i]);
+    else if (v !== null && typeof v === 'object') {
+      const keys = Object.keys(v);
+      for (let i = keys.length - 1; i >= 0; i -= 1) stack.push(v[keys[i]]);
+    }
+  }
+  return out.join('\n');
+}
+
+/** A row's plain string leaves (W2-D68's second rendering): ftsTextOf's for a string or a block list; for an object
+ *  body (an attachment's, where ftsTextOf answers '') every string leaf (D-6279). */
+function blLeaves(body) {
+  if (body !== null && typeof body === 'object' && !Array.isArray(body)) return blObjectLeaves(body);
+  return ftsTextOf(body, 'entry');
+}
+
+/** One row of parts 1-3 in both renderings (W2-D68). */
+const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];
+
+/** A built B: its counts enumerable, its text not (W2-D68: never written, logged or spawned), the whole frozen. */
+function blHeld(text, counts) {
+  const b = { state: 'built', bytes: Buffer.byteLength(text, 'utf8'), ...counts };
+  Object.defineProperty(b, 'text', { value: text, enumerable: false });
+  return Object.freeze(b);
+}
+
+/** Baseline B for one boundary Task 3's admitStoreBoundaries admitted (W2-D68), unredacted, in memory only. The parts
+ *  are built in order and the first failure answers `{state: 'discard', why}` with a RECON_DISCARDS word; otherwise
+ *  `{state: 'built', bytes, files, keptMembers, keptAbsent, postRows}` with a non-enumerable `text`. `ctx.configDirs` is
+ *  Task 2's rosterConfigDirs answer from the run's one roster read (W2-D52); `ctx.budget` is the run's bodyOf byte
+ *  budget; `ctx.home` resolves a `~` import; `ctx.top`, which no subcommand passes, is the highest ancestor W2-D69 (a)
+ *  walks. A row that is not admitted, or a ctx without configDirs, is a caller defect (TypeError).
+ *  @param {ReplayStore} rs Task 1's store
+ *  @param {BaselineBoundary} boundary
+ *  @param {{home: string, configDirs: readonly string[], budget: {bytes: number}, top?: string}} ctx
+ *  @returns {BaselineAnswer} */
+export function baselineOf(rs, boundary, ctx) {
+  if (boundary.admitted !== true || boundary.file_id === null || boundary.boundary_index === null || boundary.summary_index === null
+    || boundary.summary_entry_id === null) {
+    throw new TypeError('baselineOf: B is built only for a boundary admitStoreBoundaries admitted');
+  }
+  if (!Array.isArray(ctx.configDirs)) throw new TypeError("baselineOf: ctx.configDirs is rosterConfigDirs' answer, an array");
+  const s = blStmts(rs.db);
+  // The copy admission judged, read again through Task 1's one holding-copy reader: the same file, the boundary at its
+  // index, and at the summary's index the summary row admission named. Anything else moved: never a guess (R3).
+  const copy = boundaryCopyOf(rs, Number(boundary.entry_id));
+  const sum = copy.state === 'copy' && copy.summaryIndex !== null ? copy.rows[copy.summaryIndex] : undefined;
+  if (copy.state !== 'copy' || copy.fileId !== Number(boundary.file_id) || copy.boundaryIndex !== Number(boundary.boundary_index)
+    || copy.summaryIndex !== Number(boundary.summary_index) || sum === undefined || Number(sum.entry_id) !== Number(boundary.summary_entry_id)) return blDiscard('copy-moved');
+  const parts = [];
+  // (1) the summary row, whole. Its transcript-pointer line stays here; only the payload replaces it (W2-D75).
+  const summary = bodyOf(rs.blobs, Number(sum.blob_id), ctx.budget);
+  if (summary === null) return blDiscard('summary-unreadable');
+  parts.push(...blRenderings(summary));
+  // (2) kept(N), through Task 1's kept-list reader with B's budget: every member's primary and every variant.
+  const kept = keptMembersOf(rs, copy.boundary, ctx.budget);
+  if (kept.state !== 'kept') return kept;
+  const members = keptRowsOf(rs, kept.uuids, copy.fileId);
+  const keptIds = new Set();
+  for (const m of members.rows) {
+    keptIds.add(Number(m.entry_id));
+    for (const blobId of blMemberBlobs(s, m)) {
+      const body = bodyOf(rs.blobs, blobId, ctx.budget);
+      if (body === null) return blDiscard('kept-member-unreadable');
+      parts.push(...blRenderings(body));
+    }
+  }
+  // (3) the copy's rows after the summary row, to the first operator or assistant row that is not a kept member.
+  let postRows = 0;
+  let stopped = null;
+  for (const r of copy.rows.slice(copy.summaryIndex + 1)) {
+    if (keptIds.has(Number(r.entry_id))) continue;   // part 2's row, never the stop (D-6278)
+    if (r.type === 'assistant' || r.provenance === 'operator') break;
+    postRows += 1;
+    if (postRows > BASELINE_POST_ROWS_MAX) { stopped = 'post-over-cap'; break; }
+    const body = bodyOf(rs.blobs, Number(r.blob_id), ctx.budget);
+    if (body === null) { stopped = 'post-row-unreadable'; break; }
+    parts.push(...blRenderings(body));
+  }
+  if (stopped !== null) return blDiscard(stopped);
+  // (4) the baseline files, over N's epoch as Task 3 found its family (derive.mjs's epochOfUuid).
+  const t = s.transcript.get(Number(boundary.transcript_pk));
+  const ep = t === undefined ? null : epochOfUuid(rs.db, t.cc_session_uuid);
+  if (ep === null) return blDiscard('cwd-unknown');
+  const files = baselineFiles({
+    home: ctx.home, configDirs: ctx.configDirs, epochs: s.epochs.all(Number(ep.session_pk), Number(ep.seq)),
+    epochSeq: Number(ep.seq), top: ctx.top,
+  });
+  if (files.state === 'discard') return files;
+  for (const f of files.files) parts.push(f.text);
+  return blHeld(parts.join('\n'), { files: files.files.length, keptMembers: members.rows.length, keptAbsent: members.absent, postRows });
+}
+
+/** W2-D69 (a) and (b)'s paths, in reading order, each once: for every listed cwd (code-unit order), BASELINE_NAMES in it
+ *  and in each ancestor up to `top` (default: the filesystem root), then CLAUDE.md in every config dir. Pure.
+ *  @param {{cwds: readonly string[], configDirs: readonly string[], top?: string}} o  @returns {string[]} */
+export function baselineCandidates({ cwds, configDirs, top }) {
+  const out = new Set();
+  for (const cwd of [...cwds].sort(blOrder)) {
+    for (let dir = cwd; ; dir = path.dirname(dir)) {
+      for (const name of BASELINE_NAMES) out.add(join(dir, name));
+      if (dir === top || dir === path.dirname(dir)) break;
+    }
+  }
+  for (const c of configDirs) out.add(join(c, 'CLAUDE.md'));
+  return [...out];
+}
+
+/** A directory's state, following links: 'dir'; 'missing' (ENOENT, ENOTDIR, or not a directory); 'unreadable'. */
+function blDirState(d) {
+  let st;
+  try {
+    st = statSync(d);
+  } catch (e) {
+    return e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? 'missing' : 'unreadable';
+  }
+  return st.isDirectory() ? 'dir' : 'missing';
+}
+
+/** Every `*.md` under a memory directory (W2-D69 (c)): real subdirectories walked, a link never walked as a directory,
+ *  names in code-unit order. An absent directory (ENOENT, or a path through a regular file) holds none; any other
+ *  failure to list answers null, which discards the boundary, `file-unreadable`. */
+function blMemoryFiles(root) {
+  const out = [];
+  const walk = (dir) => {
+    let ents;
+    try {
+      ents = readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return dir === root && (e?.code === 'ENOENT' || e?.code === 'ENOTDIR');
+    }
+    for (const d of [...ents].sort((a, b) => blOrder(a.name, b.name))) {
+      const p = join(dir, d.name);
+      if (d.isDirectory()) {
+        if (!walk(p)) return false;
+      } else if (d.name.endsWith('.md')) out.push(p);
+    }
+    return true;
+  };
+  return walk(root) ? out : null;
+}
+
+/** `@`-mentions (W2-D69 (d)): an `@` at the start or after whitespace and the run of non-space after it, trailing
+ *  punctuation dropped. `~/` is `home`; anything else resolves against the importing file's directory. Over-reading
+ *  only rejects more facts; a mention that names nothing or a directory is left out by blRead. */
+const BL_IMPORT_RE = /(?<=^|\s)@(\S+)/g;
+const BL_IMPORT_TRAIL = /[.,;:!?)\]}'"`>]+$/;
+function blImports(text, file, home) {
+  const out = [];
+  for (const m of text.matchAll(BL_IMPORT_RE)) {
+    const tok = m[1].replace(BL_IMPORT_TRAIL, '');
+    if (tok === '' || tok === '~' || tok.includes('\0')) continue;
+    out.push(tok.startsWith('~/') ? join(home, tok.slice(2)) : path.resolve(path.dirname(file), tok));
+  }
+  return out;
+}
+
+/** One baseline file through readPlain, links followed (W2-D69). `absent` leaves it out: nothing there, or a path
+ *  through a regular file (ENOTDIR); for an `@`-import also a directory or a name too long to be a path, since such a
+ *  mention is not an import. Anything else that is not a regular file of at most BASELINE_FILE_MAX discards. */
+function blRead(p, imported) {
+  const r = readPlain(p, BASELINE_FILE_MAX, true);
+  if (r.state !== 'bad') return r;
+  if (r.why === 'unreadable' && (r.code === 'ENOTDIR' || (imported && r.code === 'ENAMETOOLONG'))) return { state: 'absent' };
+  if (imported && r.why === 'not-regular' && blDirState(p) === 'dir') return { state: 'absent' };
+  if (r.why === 'over-cap') return blDiscard('file-over-cap');
+  if (r.why === 'not-regular') return blDiscard('file-not-regular');
+  return blDiscard('file-unreadable');
+}
+
+/** W2-D69's files for boundary N, read whole. `epochs` are the family's epochs up to and including N's ({seq, cwd,
+ *  cwd_real}), `epochSeq` N's. N's cwd must be known and absolute (`cwd-unknown`), and it and N's cwd_real must exist as
+ *  directories (`cwd-missing`, `cwd-unreadable`). Then every candidate (baselineCandidates over the distinct absolute
+ *  cwd and cwd_real values), every `*.md` under `<config dir>/projects/<projectSlugOf(cwd)>/memory/` for each config dir
+ *  and listed cwd, then their `@`-imports breadth-first to BASELINE_IMPORT_DEPTH, `~` read as `home`, each path once.
+ *  An absent file is left out; any other failure discards (blRead).
+ *  @param {{home: string, configDirs: readonly string[], epochs: ReadonlyArray<{seq: number, cwd: string | null, cwd_real: string | null}>, epochSeq: number, top?: string}} o
+ *  @returns {{state: 'files', files: Array<{path: string, text: string}>} | BaselineDiscard} */
+export function baselineFiles({ home, configDirs, epochs, epochSeq, top }) {
+  const n = epochs.find((e) => Number(e.seq) === epochSeq);
+  if (n === undefined) return blDiscard('cwd-unknown');
+  const nDirs = [n.cwd, n.cwd_real].filter((d) => d !== null);
+  if (typeof n.cwd !== 'string' || !nDirs.every((d) => typeof d === 'string' && path.isAbsolute(d))) return blDiscard('cwd-unknown');
+  for (const d of nDirs) {
+    const st = blDirState(d);
+    if (st === 'missing') return blDiscard('cwd-missing');
+    if (st === 'unreadable') return blDiscard('cwd-unreadable');
+  }
+  const cwds = [...new Set(epochs.flatMap((e) => [e.cwd, e.cwd_real]).filter((d) => typeof d === 'string' && path.isAbsolute(d)))].sort(blOrder);
+  const roots = baselineCandidates({ cwds, configDirs, top });
+  for (const c of configDirs) {
+    for (const cwd of cwds) {
+      const listed = blMemoryFiles(join(c, 'projects', projectSlugOf(cwd), 'memory'));
+      if (listed === null) return blDiscard('file-unreadable');
+      roots.push(...listed);
+    }
+  }
+  const seen = new Set();
+  const files = [];
+  let frontier = roots.map((p) => ({ p, depth: 0 }));
+  while (frontier.length > 0) {
+    const next = [];
+    for (const { p, depth } of frontier) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const r = blRead(p, depth > 0);
+      if (r.state === 'absent') continue;
+      if (r.state === 'discard') return r;
+      const text = r.bytes.toString('utf8');
+      files.push({ path: p, text });
+      if (depth < BASELINE_IMPORT_DEPTH) for (const q of blImports(text, p, home)) next.push({ p: q, depth: depth + 1 });
+    }
+    frontier = next;
+  }
+  return { state: 'files', files };
+}
+
+/** One boundary's line in the baseline record: counts and the discard word, never B's text (W2-D68).
+ *  @param {string} boundaryUuid  @param {BaselineAnswer} b */
+export function baselineRow(boundaryUuid, b) {
+  if (b.state === 'built') {
+    return { boundary_uuid: boundaryUuid, state: 'built', why: null, bytes: b.bytes, files: b.files, kept_members: b.keptMembers,
+      kept_absent: b.keptAbsent, post_rows: b.postRows };
+  }
+  return { boundary_uuid: boundaryUuid, state: 'discard', why: b.why, bytes: null, files: null, kept_members: null, kept_absent: null,
+    post_rows: null };
+}
+
+/** `<out>/<section>/baseline.json` (0600), the run's baseline record: exactly the bytes of canonicalJson({kind, v: 1,
+ *  baseline_files, store_id, boundaries, discards}) and one newline, `boundaries` sorted by boundary_uuid (code unit) and
+ *  `discards` counting each word. Written through ensurePlainDir and writePlain (D-5986: a link or a non-directory at the
+ *  section, or a non-regular file at the record, refuses out-refused), and answered as the sha256 of the bytes on disk.
+ *  A section outside BASELINE_SECTIONS, or one boundary twice, is a caller defect (TypeError). The pilot's per-boundary
+ *  file counts are read from this record (W2-D69).
+ *  @param {string} out  @param {string} section
+ *  @param {{storeId: string, rows: ReadonlyArray<ReturnType<typeof baselineRow>>}} o  @returns {string} */
+export function writeBaselineRecord(out, section, { storeId, rows }) {
+  if (!BASELINE_SECTIONS.includes(section)) {
+    throw new TypeError(`writeBaselineRecord: section ${JSON.stringify(section)} is not one of ${BASELINE_SECTIONS.join(', ')}`);
+  }
+  const sorted = [...rows].sort((a, b) => blOrder(a.boundary_uuid, b.boundary_uuid));
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i].boundary_uuid === sorted[i - 1].boundary_uuid) throw new TypeError(`writeBaselineRecord: boundary ${sorted[i].boundary_uuid} twice`);
+  }
+  const discards = {};
+  for (const r of sorted) if (r.state === 'discard') discards[r.why] = (discards[r.why] ?? 0) + 1;
+  const rel = `${section}/${BASELINE_RECORD}`;
+  ensurePlainDir(out, section);
+  writePlain(out, rel, `${canonicalJson({ kind: BASELINE_RECORD_KIND, v: 1, baseline_files: BASELINE_FILES_ID, store_id: storeId, boundaries: sorted, discards })}\n`);
+  return shaOfPlain(out, rel);
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

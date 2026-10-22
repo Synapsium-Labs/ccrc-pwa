@@ -6739,3 +6739,569 @@ describe('W2-5a Task 3: the population over a planted store, admitStoreBoundarie
     expect(reasons.size, 'CONTROL: the planted store reaches six reasons').toBe(6);
   });
 });
+
+// ── W2-5a Task 4: Baseline B and its files (W2-D68, W2-D69; W2-D33's kept-list scan; W2-D61's quoted-command pin) ────
+// In-process, on fixture stores and fixture trees only. Each case makes a mkTmp root that holds a fixture HOME (its
+// roster is two of W2-4 Task 3's FIXTURE_ACCOUNTS rows; its store is made by store.mjs's createStore and written with
+// openWriter) and a fixture tree, and hands the driver Task 1's openReplayStore over that HOME, as a subcommand does. W2-D69's
+// ancestor walk stops at that root (ctx.top), so no case reads a file outside its own tree; the default walk to the
+// filesystem root is pinned on baselineCandidates, which reads nothing. Nothing is spawned but mkfifo, and no live
+// store or real home is read. Facts are SHA-shaped, `fa` + five digits + `cafe`, so each has its own seven-character
+// prefix (the variant W2-D62 tests), or short synthetic commands; nothing key-shaped is planted.
+// The W5A4_ and w5a4 declarations are MODULE-LEVEL: later W2-5a tasks build B fixtures with them.
+import * as w5a4Fs from 'node:fs';
+import * as w5a4Path from 'node:path';
+import { createHash as w5a4Hash } from 'node:crypto';
+import { inspect as w5a4Inspect } from 'node:util';
+import type { DatabaseSync as W5a4Db } from 'node:sqlite';
+import * as w5a4Lib from '../../ccd/history/lib.mjs';
+import * as w5a4St from '../../ccd/history/store.mjs';
+import * as w5a4DeriveMod from '../../ccd/history/derive.mjs';
+import * as w5a4Gate from '../../deploy/history-gate.mjs';
+import * as w5a4Drv from '../../deploy/history-replay.mjs';
+import { mkTmp as w5a4MkTmp } from './tmpHelpers.js';
+
+/** derive.mjs has no .d.mts (W2-1, R1): the two reads the CONTROL needs, typed at the call site. */
+const w5a4Derive = w5a4DeriveMod as unknown as {
+  keptOf: (s: unknown, blobId: number | null, budget: { bytes: number }) => Set<string>;
+  blobReadStmts: (db: W5a4Db) => unknown;
+};
+const W5A4_UUID = (n: number): string => `5a400000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const W5A4_FACT = (n: number): string => `fa${String(n).padStart(5, '0')}cafe`;
+/** A short Bash command with quotes: renderEntryText escapes them, so only the string-leaf rendering holds it whole. */
+const W5A4_QUOTED = 'git log --format="%h %s" -n 3';
+/** The served card's command, quoted the same way, inside an attachment object. */
+const W5A4_CARD_CMD = 'make check ARGS="--fast --keep"';
+const W5A4_ROOT_USER = (process.getuid?.() ?? 1) === 0;
+
+type W5a4Stored = 'tombstone' | 'over-cap';
+type W5a4Row = {
+  key: string;
+  type: 'user' | 'assistant' | 'system' | 'attachment';
+  provenance: 'operator' | 'model' | 'tool' | 'summary' | 'harness';
+  body: unknown;
+  stored?: W5a4Stored;
+  variants?: Array<{ body: unknown; cause: 'ccd-sanitize' | 'unknown'; stored?: W5a4Stored }>;
+  held?: boolean;
+};
+interface W5a4Spec {
+  rows?: W5a4Row[];
+  kept?: string[] | null | 'tombstone' | 'object' | 'non-string';
+  keptExtra?: string[];
+  /** Epochs 1..n of the family, each cwd a name under the tree (null: none). N's is `nSeq`, default the last. */
+  epochs?: Array<{ cwd: string | null; cwdReal?: string | null }>;
+  nSeq?: number;
+}
+/** An admitted row of Task 3's admitStoreBoundaries, as the fixture knows it. */
+type W5a4Admission = {
+  entry_id: number; uuid: string; transcript_pk: number; ts_ms: number | null; ccrc_id: string | null; generation: string | null;
+  admitted: boolean; reason: string | null; file_id: number | null; boundary_index: number | null; summary_index: number | null;
+  summary_entry_id: number | null; before: string | null; after: string | null;
+};
+/** Task 1's ReplayStore, as the fixture reads it. */
+type W5a4Rs = { db: W5a4Db; close(): void };
+interface W5a4Fixture {
+  root: string; home: string; tree: string; cwd: string; rs: W5a4Rs; db: W5a4Db; keptBlobId: number | null;
+  boundary: W5a4Admission;
+  ctx: { home: string; configDirs: string[]; budget: { bytes: number }; top: string };
+  uuidOf: (key: string) => string;
+}
+type W5a4Answer =
+  | { state: 'built'; bytes: number; files: number; keptMembers: number; keptAbsent: number; postRows: number; text: string }
+  | { state: 'discard'; why: string };
+
+/** The holding copy, in line order: an operator row and three kept rows before the boundary; the summary (its last line
+ *  the transcript pointer); a kept assistant row; the served card and a harness notice; the operator's next prompt (the
+ *  stop); and a row after it. Assistant rows carry Task 3's anthropic fixture model, so RP5 admits the boundary. */
+function w5a4Rows(): W5a4Row[] {
+  const bash = { type: 'tool_use', id: 'toolu_k1', name: 'Bash', input: { command: W5A4_QUOTED } };
+  return [
+    { key: 'op1', type: 'user', provenance: 'operator', body: `look at ${W5A4_FACT(4)} please` },
+    { key: 'a1', type: 'assistant', provenance: 'model', body: [{ type: 'text', text: '...' }, bash], variants: [
+      { cause: 'ccd-sanitize', body: [{ type: 'text', text: `the sanitised text named ${W5A4_FACT(5)}` }, bash] },
+      { cause: 'unknown', body: [{ type: 'text', text: `another copy named ${W5A4_FACT(6)}` }, bash] },
+    ] },
+    { key: 'r1', type: 'user', provenance: 'tool', body: [{ type: 'tool_result', tool_use_id: 'toolu_k1', content: `kept output ${W5A4_FACT(3)}` }] },
+    { key: 'a2', type: 'assistant', provenance: 'model', body: [{ type: 'tool_use', id: 'toolu_k2', name: 'Edit', input: { [W5A4_FACT(9)]: true } }] },
+    { key: 'boundary', type: 'system', provenance: 'harness', body: 'Conversation compacted' },
+    { key: 'summary', type: 'user', provenance: 'summary',
+      body: `This session is being continued. Summary: ${W5A4_FACT(1)} was the head.\nIf you need specifics, read the full transcript at: /home/u/.claude/projects/-home-u-tree-demo/${W5A4_FACT(2)}.jsonl` },
+    { key: 'a3', type: 'assistant', provenance: 'model', body: [{ type: 'text', text: `a kept reply after the summary, ${W5A4_FACT(7)}` }] },
+    { key: 'card', type: 'attachment', provenance: 'harness', body: { type: 'hook_additional_context', content: [`History: node L1a2b3c4 ran ${W5A4_CARD_CMD}`] } },
+    { key: 'sys', type: 'system', provenance: 'harness', body: `a harness notice ${W5A4_FACT(8)}` },
+    { key: 'op2', type: 'user', provenance: 'operator', body: 'the next prompt' },
+    { key: 'late', type: 'attachment', provenance: 'harness', body: { type: 'hook_additional_context', content: [`later context ${W5A4_FACT(30)}`] } },
+  ];
+}
+const W5A4_KEPT = ['a1', 'r1', 'a2', 'a3'];
+/** w5a4Rows with one row patched. */
+const w5a4With = (key: string, patch: Partial<W5a4Row>): W5a4Row[] => w5a4Rows().map((r) => (r.key === key ? { ...r, ...patch } : r));
+
+const w5a4Open: W5a4Rs[] = [];
+afterEach(() => {
+  for (const rs of w5a4Open) { try { rs.close(); } catch { /* its case closed it */ } }
+  w5a4Open.length = 0;
+});
+
+/** One family, one confirmed epoch per `epochs` entry, one transcript (N's epoch's session uuid), one live copy
+ *  (file 1) holding every row not marked `held: false`, and the boundary's kept list. Answers the admitted row Task 3
+ *  would hand B, built by position over the held rows, and the ctx a subcommand passes, with `top` at the root. */
+function w5a4Fixture(spec: W5a4Spec = {}): W5a4Fixture {
+  const root = w5a4MkTmp('w5a4-baseline-');
+  const home = w5a4Path.join(root, 'home');
+  const tree = w5a4Path.join(root, 'tree');
+  const cwd = w5a4Path.join(tree, 'demo');
+  w5a4Fs.mkdirSync(cwd, { recursive: true });
+  w5a4Fs.mkdirSync(home, { recursive: true });
+  writeRoster(home, FIXTURE_ACCOUNTS.slice(0, 2));
+  w5a4St.createStore(home);
+  const dbFile = w5a4Lib.historyPaths(home).dbFile;
+  const w = w5a4St.openWriter(dbFile);
+  const rows = spec.rows ?? w5a4Rows();
+  const epochs = spec.epochs ?? [{ cwd: 'demo' }];
+  const nSeq = spec.nSeq ?? epochs.length;
+  const under = (name: string | null | undefined): string | null => (name === null || name === undefined ? null : w5a4Path.join(tree, name));
+  let blobN = 0;
+  const blob = (body: unknown, stored?: W5a4Stored): number => {
+    blobN += 1;
+    const raw = Buffer.from(JSON.stringify(body), 'utf8');
+    const sha = w5a4Hash('sha256').update(`${blobN}:`).update(raw).digest();
+    if (stored === 'tombstone') {
+      return Number(w.prepare("INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, 'br5', NULL, ?, 1)").run(sha, raw.length).lastInsertRowid);
+    }
+    const rawLen = stored === 'over-cap' ? w5a4Lib.BLOB_DECODE_MAX + 1 : raw.length;
+    return Number(w.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)").run(sha, w5a4St.brotli(raw), rawLen).lastInsertRowid);
+  };
+  const ids = new Map<string, number>();
+  const uuids = new Map<string, string>();
+  const uuidOf = (key: string): string => {
+    const u = uuids.get(key);
+    if (u === undefined) throw new Error(`w5a4Fixture: no row ${key}`);
+    return u;
+  };
+  w.exec('BEGIN');
+  w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'fam-a', ?, 'demo', 1)").run(W5A4_UUID(0xfa));
+  const epoch = w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, cwd_real, confirmed_ms) VALUES (1, ?, ?, 'startup', 'hook', ?, ?, 1)");
+  epochs.forEach((e, i) => { epoch.run(i + 1, W5A4_UUID(0xe0 + i), under(e.cwd), under(e.cwdReal)); });
+  w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(W5A4_UUID(0xe0 + nSeq - 1));
+  w.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (1, 1, 5401, 1, 'live', 1)").run();
+  const entry = w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, is_compact_summary)
+    VALUES (?, 1, ?, ?, ?, 1, 0, 1, ?, ?, ?)`);
+  const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (1, ?, ?)');
+  const variant = w.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause) VALUES (?, ?, 1, 1, ?)');
+  rows.forEach((r, i) => {
+    const primary = blob(r.body, r.stored);
+    const id = Number(entry.run(W5A4_UUID(i + 1), r.type, r.type === 'assistant' ? W5A3_CLAUDE : null, r.provenance, primary, 1_000 + i,
+      r.provenance === 'summary' ? 1 : 0).lastInsertRowid);
+    ids.set(r.key, id);
+    uuids.set(r.key, W5A4_UUID(i + 1));
+    if (r.held !== false) member.run(id, i + 1);
+    if (r.variants !== undefined) {
+      variant.run(id, primary, 'unknown');   // a store may list the primary among its variants; B reads it once
+      for (const v of r.variants) variant.run(id, blob(v.body, v.stored), v.cause);
+    }
+  });
+  const kept = spec.kept === undefined ? W5A4_KEPT : spec.kept;
+  let keptBlobId: number | null = null;
+  if (kept === 'tombstone') keptBlobId = blob([uuidOf('a1')], 'tombstone');
+  else if (kept === 'object') keptBlobId = blob({ allUuids: [uuidOf('a1')] });
+  else if (kept === 'non-string') keptBlobId = blob([uuidOf('a1'), 7]);
+  else if (kept !== null) keptBlobId = blob([...kept.map(uuidOf), ...(spec.keptExtra ?? [])]);
+  w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid, kept_blob_id) VALUES (?, 1, 1, ?, ?)')
+    .run(ids.get('boundary')!, uuidOf('summary'), keptBlobId);
+  w.exec('COMMIT');
+  w5a4St.closeWriter(w);
+  const rs = w5a4Drv.openReplayStore(home) as unknown as W5a4Rs;
+  w5a4Open.push(rs);
+  const held = rows.filter((r) => r.held !== false).map((r) => r.key);
+  const boundary: W5a4Admission = {
+    entry_id: ids.get('boundary')!, uuid: uuidOf('boundary'), transcript_pk: 1, ts_ms: 1_000 + rows.findIndex((r) => r.key === 'boundary'),
+    ccrc_id: 'fam-a', generation: W5A4_UUID(0xfa), admitted: true, reason: null, file_id: 1,
+    boundary_index: held.indexOf('boundary'), summary_index: held.indexOf('summary'), summary_entry_id: ids.get('summary')!,
+    before: 'anthropic', after: 'anthropic',
+  };
+  const configDirs = w5a4Drv.rosterConfigDirs(w5a4Drv.readRoster(home).roster, home);
+  return { root, home, tree, cwd, rs, db: rs.db, keptBlobId, boundary, ctx: { home, configDirs, budget: { bytes: 0 }, top: root }, uuidOf };
+}
+
+/** A file with its parent directories. */
+const w5a4Put = (p: string, text: string): void => {
+  w5a4Fs.mkdirSync(w5a4Path.dirname(p), { recursive: true });
+  w5a4Fs.writeFileSync(p, text);
+};
+/** W2-D69's tree for a fixture, one fact per file: the cwd's CLAUDE.md (with a relative, a `~`, a directory, a
+ *  nobody and a chained mention), the cwd's .claude/CLAUDE.md, the tree's CLAUDE.local.md and a CLAUDE.md that links to
+ *  a regular file, gen-a's config-dir CLAUDE.md, a memory file under the cwd's slug in the upstream config dir, the two
+ *  imported files, and a six-link import chain. */
+function w5a4WriteFiles(fx: W5a4Fixture): void {
+  w5a4Put(w5a4Path.join(fx.cwd, 'CLAUDE.md'),
+    `# demo\nfact ${W5A4_FACT(10)}\nsee @docs/notes.md and @~/shared/team.md, the folder @docs/ and ask @nobody.\nchain: @chain/d1.md\n`);
+  w5a4Put(w5a4Path.join(fx.cwd, '.claude', 'CLAUDE.md'), `fact ${W5A4_FACT(12)}\n`);
+  w5a4Put(w5a4Path.join(fx.tree, 'CLAUDE.local.md'), `fact ${W5A4_FACT(11)}\n`);
+  w5a4Put(w5a4Path.join(fx.root, 'elsewhere', 'real.md'), `fact ${W5A4_FACT(18)}\n`);
+  w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'elsewhere', 'real.md'), w5a4Path.join(fx.tree, 'CLAUDE.md'));
+  w5a4Put(w5a4Path.join(fx.home, '.gen-a', 'CLAUDE.md'), `fact ${W5A4_FACT(13)}\n`);
+  w5a4Put(w5a4Path.join(fx.home, '.claude', 'projects', fx.cwd.replace(/[^A-Za-z0-9]/g, '-'), 'memory', 'topic.md'), `fact ${W5A4_FACT(14)}\n`);
+  w5a4Put(w5a4Path.join(fx.cwd, 'docs', 'notes.md'), `fact ${W5A4_FACT(15)}\n`);
+  w5a4Put(w5a4Path.join(fx.home, 'shared', 'team.md'), `fact ${W5A4_FACT(16)}\n`);
+  for (let i = 1; i <= 6; i += 1) w5a4Put(w5a4Path.join(fx.cwd, 'chain', `d${i}.md`), `fact ${W5A4_FACT(20 + i)}\n${i < 6 ? `@d${i + 1}.md\n` : ''}`);
+}
+const w5a4B = (fx: W5a4Fixture, boundary: W5a4Admission = fx.boundary): W5a4Answer =>
+  w5a4Drv.baselineOf(fx.rs as never, boundary, fx.ctx) as unknown as W5a4Answer;
+function w5a4Built(fx: W5a4Fixture): Extract<W5a4Answer, { state: 'built' }> {
+  const b = w5a4B(fx);
+  if (b.state !== 'built') throw new Error(`B was not built: ${JSON.stringify(b)}`);
+  return b;
+}
+const w5a4Admitted = (kind: 'sha' | 'command', F: string, text: string): boolean =>
+  w5a4Gate.admitFact(kind, F, text, '', { repoRoots: [] }).admitted;
+
+describe('W2-5a Task 4: Baseline B parts 1 to 3, W2-D68', () => {
+  it('B is built for the row admitStoreBoundaries admits, read in place of a hand-made row', () => {
+    const fx = w5a4Fixture();
+    const rows = w5a4Drv.admitStoreBoundaries(fx.rs as never).boundaries as unknown as W5a4Admission[];
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.admitted, JSON.stringify(row)).toBe(true);
+    const pick = (r: W5a4Admission) => [r.entry_id, r.uuid, r.transcript_pk, r.file_id, r.boundary_index, r.summary_index, r.summary_entry_id];
+    expect(pick(row)).toEqual(pick(fx.boundary));
+    const viaTask3 = w5a4B(fx, row);
+    expect(viaTask3.state).toBe('built');
+    expect((viaTask3 as { text: string }).text).toBe(w5a4Built(fx).text);
+  });
+
+  it('part 1 is the summary row whole, its pointer line kept', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(1), b.text), 'the summary text').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(2), b.text), 'the transcript-pointer line: B keeps it, only the payload removes it').toBe(false);
+  });
+
+  it('part 2 is every kept member in the store, its primary and every variant', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(3), b.text), 'a kept tool_result').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(5), b.text), 'only in a ccd-sanitize variant').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(6), b.text), 'only in a variant of another cause: expand would not pick it, B reads it').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(7), b.text), 'only in a post-summary kept member').toBe(false);
+    // CONTROL: a row of leaf N's span outside kept(N) is not in B, so B is not the whole copy.
+    expect(w5a4Admitted('sha', W5A4_FACT(4), b.text)).toBe(true);
+  });
+
+  it('W2-D74: a fact only in the sanitised body, the primary expand passes over, is rejected by B (R7)', () => {
+    const a1 = w5a4Rows().find((r) => r.key === 'a1')!;
+    const primary = [{ type: 'text', text: `the sanitised primary ${W5A4_FACT(42)}` }, ...(a1.body as unknown[]).slice(1)];
+    const b = w5a4Built(w5a4Fixture({ rows: w5a4With('a1', { body: primary }) }));
+    expect(w5a4Admitted('sha', W5A4_FACT(42), b.text)).toBe(false);
+    // CONTROL: no variant holds it, so only B's reading of the primary rejects it.
+    expect(a1.variants!.some((v) => JSON.stringify(v.body).includes(W5A4_FACT(42)))).toBe(false);
+  });
+
+  it('both renderings: a short quoted command in a kept tool_use and a fact only in a tool_use key are not admitted', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('command', W5A4_QUOTED, b.text), 'W2-D61: the string leaf holds it whole').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(9), b.text), 'renderEntryText keeps an input key; the leaves do not').toBe(false);
+    // CONTROL: each rendering alone misses one of them, so neither half is redundant.
+    const bash = [{ type: 'tool_use', id: 'toolu_k1', name: 'Bash', input: { command: W5A4_QUOTED } }];
+    expect(w5a4Admitted('command', W5A4_QUOTED, w5a4Lib.renderEntryText(bash))).toBe(true);
+    const keyed = [{ type: 'tool_use', id: 'toolu_k2', name: 'Edit', input: { [W5A4_FACT(9)]: true } }];
+    expect(w5a4Admitted('sha', W5A4_FACT(9), w5a4Lib.ftsTextOf(keyed, 'entry'))).toBe(true);
+  });
+
+  it('part 3 takes the rows after the summary to the first operator row, the served card included', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, b.text), 'the served card: its string leaves hold the quoted command').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(8), b.text), 'a harness row before the stop').toBe(false);
+    expect(b.postRows).toBe(2);
+    // CONTROL: the row after the operator's next prompt is not in B.
+    expect(w5a4Admitted('sha', W5A4_FACT(30), b.text)).toBe(true);
+    // CONTROL: the card's JSON rendering escapes its quotes, and ftsTextOf reads nothing of an object, so the object's
+    // string leaves are what reject it (D-6279).
+    const card = { type: 'hook_additional_context', content: [`History: node L1a2b3c4 ran ${W5A4_CARD_CMD}`] };
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, w5a4Lib.renderEntryText(card))).toBe(true);
+    expect(w5a4Lib.ftsTextOf(card, 'entry')).toBe('');
+  });
+
+  it('a kept member after the summary is never the stop, and an assistant row that is not kept is', () => {
+    // a3, a kept assistant row between the summary and the card, is part 2's, so the card is still read
+    // (D-6278).
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(7), b.text)).toBe(false);
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, b.text)).toBe(false);
+    // CONTROL: with a3 outside kept(N) it is the first assistant row after the summary, the stop, so neither it nor the
+    // card is in B.
+    const c = w5a4Built(w5a4Fixture({ kept: ['a1', 'r1', 'a2'] }));
+    expect(w5a4Admitted('sha', W5A4_FACT(7), c.text)).toBe(true);
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, c.text)).toBe(true);
+    expect(c.postRows).toBe(0);
+  });
+
+  it('kept members come in holding-copy order, absent ones are counted, and the run budget is charged', () => {
+    const rows: W5a4Row[] = [...w5a4Rows(), { key: 'x', type: 'user', provenance: 'tool', held: false,
+      body: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: `elsewhere ${W5A4_FACT(31)}` }] }];
+    const fx = w5a4Fixture({ rows, kept: ['x', 'a3', 'a2', 'r1', 'a1'], keptExtra: [W5A4_UUID(0xdead), W5A4_UUID(0xbeef)] });
+    const b = w5a4Built(fx);
+    expect([b.keptMembers, b.keptAbsent]).toEqual([5, 2]);
+    const at = (n: number): number => b.text.indexOf(W5A4_FACT(n));
+    expect(at(5)).toBeGreaterThan(-1);
+    expect(at(5) < at(3) && at(3) < at(7) && at(7) < at(31), 'held members by line (a1, r1, a3), then the unheld one').toBe(true);
+    expect(b.bytes).toBe(Buffer.byteLength(b.text, 'utf8'));
+    expect(fx.ctx.budget.bytes, 'every blob B read was charged to the run budget').toBeGreaterThan(0);
+  });
+});
+
+describe('W2-5a Task 4: B fails closed, W2-D68', () => {
+  it('a NULL kept id discards as kept-absent', () => {
+    expect(w5a4B(w5a4Fixture({ kept: null }))).toEqual({ state: 'discard', why: 'kept-absent' });
+  });
+
+  it('a tombstoned kept blob discards as kept-unreadable, never an empty B', () => {
+    const fx = w5a4Fixture({ kept: 'tombstone' });
+    expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'kept-unreadable' });
+    // CONTROL, the reason for Task 1's keptOf scan (W2-D33): derive.mjs's kept-set reader answers an empty set for this
+    // same blob, which a B built on it would read as "nothing was kept".
+    expect(w5a4Derive.keptOf(w5a4Derive.blobReadStmts(fx.db), fx.keptBlobId, { bytes: 0 }).size).toBe(0);
+  });
+
+  it('a kept body that is not an array of strings discards as kept-unreadable', () => {
+    expect(w5a4B(w5a4Fixture({ kept: 'object' }))).toEqual({ state: 'discard', why: 'kept-unreadable' });
+    expect(w5a4B(w5a4Fixture({ kept: 'non-string' }))).toEqual({ state: 'discard', why: 'kept-unreadable' });
+  });
+
+  it('an empty kept list is an empty part 2, not a discard', () => {
+    const b = w5a4Built(w5a4Fixture({ kept: [] }));
+    expect([b.keptMembers, b.keptAbsent]).toEqual([0, 0]);
+    expect(w5a4Admitted('sha', W5A4_FACT(3), b.text)).toBe(true);
+  });
+
+  it('a kept member whose primary or a variant is pruned or over the decode cap discards', () => {
+    const a1 = w5a4Rows().find((r) => r.key === 'a1')!;
+    for (const rows of [
+      w5a4With('a1', { stored: 'tombstone' }),
+      w5a4With('a1', { stored: 'over-cap' }),
+      w5a4With('a1', { variants: [{ ...a1.variants![0]!, stored: 'tombstone' }, a1.variants![1]!] }),
+    ]) expect(w5a4B(w5a4Fixture({ rows }))).toEqual({ state: 'discard', why: 'kept-member-unreadable' });
+  });
+
+  it('a summary that cannot be read is summary-unreadable, a copy that moved is copy-moved, and a row not admitted throws', () => {
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('summary', { stored: 'tombstone' }) }))).toEqual({ state: 'discard', why: 'summary-unreadable' });
+    const fx = w5a4Fixture();
+    expect(w5a4B(fx, { ...fx.boundary, boundary_index: fx.boundary.boundary_index! + 1 })).toEqual({ state: 'discard', why: 'copy-moved' });
+    expect(w5a4B(fx, { ...fx.boundary, summary_index: 999 })).toEqual({ state: 'discard', why: 'copy-moved' });
+    expect(() => w5a4B(fx, { ...fx.boundary, admitted: false, reason: 'after-other' })).toThrow(TypeError);
+  });
+
+  it('a post-summary row that cannot be read discards; a row after the stop is never read', () => {
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('sys', { stored: 'tombstone' }) }))).toEqual({ state: 'discard', why: 'post-row-unreadable' });
+    // CONTROL: the same damage after the operator's next prompt is never read.
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('late', { stored: 'tombstone' }) })).state).toBe('built');
+  });
+
+  it('B\'s discard words are appended to RECON_DISCARDS after Task 3\'s, each once (R5)', () => {
+    expect(w5a4Drv.RECON_DISCARDS.slice(24, 35)).toEqual(['copy-moved', 'summary-unreadable', 'kept-member-unreadable', 'post-row-unreadable',
+      'post-over-cap', 'cwd-unknown', 'cwd-missing', 'cwd-unreadable', 'file-unreadable', 'file-not-regular', 'file-over-cap']);
+    expect(w5a4Drv.RECON_DISCARDS, 'kept-absent and kept-unreadable are Task 1\'s').toEqual(expect.arrayContaining(['kept-absent', 'kept-unreadable']));
+    expect(new Set(w5a4Drv.RECON_DISCARDS).size).toBe(w5a4Drv.RECON_DISCARDS.length);
+  });
+
+  it('more than 200 post-summary rows discard as post-over-cap; 200 do not', () => {
+    const many = (n: number): W5a4Row[] => [
+      ...w5a4Rows().slice(0, 6),
+      ...Array.from({ length: n }, (_, i): W5a4Row => ({ key: `h${i}`, type: 'system', provenance: 'harness', body: `notice ${i}` })),
+      { key: 'op2', type: 'user', provenance: 'operator', body: 'the next prompt' },
+    ];
+    expect(w5a4Built(w5a4Fixture({ rows: many(200), kept: ['a1', 'r1', 'a2'] })).postRows).toBe(200);
+    expect(w5a4B(w5a4Fixture({ rows: many(201), kept: ['a1', 'r1', 'a2'] }))).toEqual({ state: 'discard', why: 'post-over-cap' });
+  });
+});
+
+describe('W2-5a Task 4: B is held in memory only, W2-D68 and W2-D33', () => {
+  /** What the default fixture plants in B, as the seven-character variant W2-D62 tests, and the two commands. */
+  const IN_B = [1, 2, 3, 5, 6, 7, 8, 9].map((n) => W5A4_FACT(n).slice(0, 7));
+  const leaks = (text: string): string[] => [...IN_B, W5A4_QUOTED, W5A4_CARD_CMD].filter((s) => text.includes(s));
+  const refusal = (fn: () => unknown): { word: string; detail: string } | null => {
+    try { fn(); return null; } catch (e) { if (e instanceof DriverRefusal) return { word: e.word, detail: e.detail }; throw e; }
+  };
+  const byUuid = (a: { boundary_uuid: string }, b: { boundary_uuid: string }): number =>
+    (a.boundary_uuid < b.boundary_uuid ? -1 : a.boundary_uuid > b.boundary_uuid ? 1 : 0);
+
+  it('its text is not enumerable, so no serialiser or inspector carries it', () => {
+    const fx = w5a4Fixture();
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m));
+    const b = w5a4Built(fx);
+    const calls = spies.map((s) => s.mock.calls.length);
+    for (const s of spies) s.mockRestore();
+    expect(calls, 'B is never logged').toEqual([0, 0, 0, 0]);
+    expect(leaks(b.text), 'CONTROL: the text holds every planted fact').toHaveLength(IN_B.length + 2);
+    expect(Object.keys(b)).not.toContain('text');
+    expect(Object.isFrozen(b)).toBe(true);
+    for (const [how, s] of [['JSON.stringify', JSON.stringify(b)], ['canonicalJson', w5a4Lib.canonicalJson(b)], ['inspect', w5a4Inspect(b, { depth: 8 })]] as const) {
+      expect(leaks(s), how).toEqual([]);
+    }
+  });
+
+  it('the baseline record carries counts only, and a scan of --out finds no B text', () => {
+    const fx = w5a4Fixture();
+    const b = w5a4Built(fx);
+    const out = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out'));
+    const rows = [w5a4Drv.baselineRow(fx.boundary.uuid, b), w5a4Drv.baselineRow(W5A4_UUID(2), { state: 'discard', why: 'kept-absent' })];
+    expect(rows[0]).toEqual({ boundary_uuid: fx.boundary.uuid, state: 'built', why: null, bytes: b.bytes, files: 0, kept_members: 4, kept_absent: 0, post_rows: 2 });
+    const sha = w5a4Drv.writeBaselineRecord(out, 'quiz', { storeId: 'store-a', rows });
+    const file = w5a4Path.join(out, 'quiz', w5a4Drv.BASELINE_RECORD);
+    const bytes = w5a4Fs.readFileSync(file);
+    expect(bytes.toString('utf8')).toBe(`${w5a4Lib.canonicalJson({
+      kind: 'ccrc-history-w2-baseline', v: 1, baseline_files: 'v1', store_id: 'store-a', boundaries: [...rows].sort(byUuid), discards: { 'kept-absent': 1 },
+    })}\n`);
+    expect(sha).toBe(w5a4Lib.sha256Hex(bytes));
+    expect(w5a4Fs.statSync(file).mode & 0o777).toBe(0o600);
+    // The scan: every file under --out, read whole, holds nothing B holds (the CONTROL is the case above: the text does).
+    const walk = (dir: string): string[] => w5a4Fs.readdirSync(dir, { withFileTypes: true })
+      .flatMap((d) => (d.isDirectory() ? walk(w5a4Path.join(dir, d.name)) : [w5a4Path.join(dir, d.name)]));
+    const files = walk(out);
+    expect(files).toContain(file);
+    for (const f of files) expect(leaks(w5a4Fs.readFileSync(f, 'utf8')), f).toEqual([]);
+  });
+
+  it('the record is sorted by boundary and counts each discard word', () => {
+    const fx = w5a4Fixture();
+    const out = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out'));
+    const d = (n: number, why: string) => w5a4Drv.baselineRow(W5A4_UUID(n), { state: 'discard', why });
+    w5a4Drv.writeBaselineRecord(out, 'pilot', { storeId: 'store-a', rows: [d(3, 'kept-absent'), d(1, 'post-over-cap'), d(2, 'kept-absent')] });
+    const rec = JSON.parse(w5a4Fs.readFileSync(w5a4Path.join(out, 'pilot', 'baseline.json'), 'utf8')) as
+      { boundaries: Array<{ boundary_uuid: string }>; discards: Record<string, number> };
+    expect(rec.boundaries.map((r) => r.boundary_uuid)).toEqual([W5A4_UUID(1), W5A4_UUID(2), W5A4_UUID(3)]);
+    expect(rec.discards).toEqual({ 'kept-absent': 2, 'post-over-cap': 1 });
+  });
+
+  it('the record refuses a link at its section or its file, and a caller defect throws', () => {
+    const fx = w5a4Fixture();
+    const rows = [w5a4Drv.baselineRow(W5A4_UUID(1), { state: 'discard', why: 'kept-absent' })];
+    const out1 = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out1'));
+    w5a4Fs.mkdirSync(w5a4Path.join(fx.root, 'elsewhere-dir'));
+    w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'elsewhere-dir'), w5a4Path.join(out1, 'quiz'));
+    expect(refusal(() => w5a4Drv.writeBaselineRecord(out1, 'quiz', { storeId: 's', rows }))).toEqual({ word: 'out-refused', detail: 'quiz is not a directory' });
+    expect(w5a4Fs.readdirSync(w5a4Path.join(fx.root, 'elsewhere-dir'))).toEqual([]);
+    const out2 = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out2'));
+    w5a4Fs.mkdirSync(w5a4Path.join(out2, 'quiz'));
+    w5a4Fs.writeFileSync(w5a4Path.join(fx.root, 'target.json'), 'untouched\n');
+    w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'target.json'), w5a4Path.join(out2, 'quiz', 'baseline.json'));
+    expect(refusal(() => w5a4Drv.writeBaselineRecord(out2, 'quiz', { storeId: 's', rows })))
+      .toEqual({ word: 'out-refused', detail: 'quiz/baseline.json is not a regular file' });
+    expect(w5a4Fs.readFileSync(w5a4Path.join(fx.root, 'target.json'), 'utf8')).toBe('untouched\n');
+    expect(() => w5a4Drv.writeBaselineRecord(out2, 'arms', { storeId: 's', rows })).toThrow(TypeError);
+    expect(() => w5a4Drv.writeBaselineRecord(out2, 'pilot', { storeId: 's', rows: [rows[0]!, rows[0]!] })).toThrow(TypeError);
+  });
+
+  it('BASELINE_FILES_ID is the open record default', () => {
+    const rec = w5a4Gate.OPEN_RECORD_V1 as unknown as { draft: { quiz: { fields: { baseline_files: { value: string } } } } };
+    expect(w5a4Drv.BASELINE_FILES_ID).toBe(rec.draft.quiz.fields.baseline_files.value);
+    expect(w5a4Drv.BASELINE_FILES_ID).toBe('v1');
+  });
+});
+
+describe('W2-5a Task 4: the baseline files, W2-D69', () => {
+  it('a fact in any file of a, b or c is not admitted; a later epoch is not read', () => {
+    const fx = w5a4Fixture({ epochs: [{ cwd: 'old' }, { cwd: 'demo' }, { cwd: 'later' }], nSeq: 2 });
+    w5a4WriteFiles(fx);
+    w5a4Put(w5a4Path.join(fx.tree, 'old', 'CLAUDE.md'), `fact ${W5A4_FACT(17)}\n`);
+    w5a4Put(w5a4Path.join(fx.tree, 'later', 'CLAUDE.md'), `fact ${W5A4_FACT(19)}\n`);
+    const b = w5a4Built(fx);
+    for (const [n, where] of [[10, 'the cwd CLAUDE.md'], [11, 'an ancestor CLAUDE.local.md'], [12, 'the cwd .claude/CLAUDE.md'],
+      [13, 'a config dir CLAUDE.md'], [14, 'a memory file under the slug'], [17, 'an earlier epoch cwd'],
+      [18, 'a CLAUDE.md that links to a regular file']] as const) {
+      expect(w5a4Admitted('sha', W5A4_FACT(n), b.text), where).toBe(false);
+    }
+    // CONTROL: an epoch after N's is not the family's history up to N.
+    expect(w5a4Admitted('sha', W5A4_FACT(19), b.text)).toBe(true);
+    // 7 at depth 0 (demo/CLAUDE.md, demo/.claude/CLAUDE.md, tree/CLAUDE.md, tree/CLAUDE.local.md, old/CLAUDE.md,
+    // .gen-a/CLAUDE.md, topic.md), 3 at depth 1 (notes.md, team.md, d1.md), d2 to d5.
+    expect(b.files).toBe(14);
+  });
+
+  it('a fact only in an imported file is not admitted, to depth 5 and no deeper', () => {
+    const fx = w5a4Fixture();
+    w5a4WriteFiles(fx);
+    const b = w5a4Built(fx);
+    expect(w5a4Admitted('sha', W5A4_FACT(15), b.text), 'a relative import').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(16), b.text), 'a ~ import, read as HOME').toBe(false);
+    for (let depth = 1; depth <= 5; depth += 1) expect(w5a4Admitted('sha', W5A4_FACT(20 + depth), b.text), `depth ${depth}`).toBe(false);
+    // CONTROL: the sixth link of the chain is past BASELINE_IMPORT_DEPTH and is never read.
+    expect(w5a4Admitted('sha', W5A4_FACT(26), b.text)).toBe(true);
+    expect(w5a4Drv.BASELINE_IMPORT_DEPTH).toBe(5);
+  });
+
+  it('an absent file is left out, and a mention of a directory or of nothing is not an import', () => {
+    expect(w5a4Built(w5a4Fixture()).files).toBe(0);
+    const fx = w5a4Fixture();
+    w5a4Put(w5a4Path.join(fx.cwd, 'docs', 'keep.txt'), 'not markdown\n');
+    w5a4Put(w5a4Path.join(fx.cwd, 'CLAUDE.md'), 'see the folder @docs/ and ask @nobody.\n');
+    expect(w5a4Built(fx).files).toBe(1);
+  });
+
+  it('a removed worktree discards: N cwd or cwd_real gone is cwd-missing, an unknown one cwd-unknown; an earlier gone cwd is left out', () => {
+    const removed = w5a4Fixture();
+    w5a4Fs.rmSync(removed.cwd, { recursive: true });
+    expect(w5a4B(removed)).toEqual({ state: 'discard', why: 'cwd-missing' });
+    expect(w5a4B(w5a4Fixture({ epochs: [{ cwd: 'demo', cwdReal: 'real-gone' }] }))).toEqual({ state: 'discard', why: 'cwd-missing' });
+    expect(w5a4B(w5a4Fixture({ epochs: [{ cwd: null }] }))).toEqual({ state: 'discard', why: 'cwd-unknown' });
+    // CONTROL: an earlier epoch's removed directory is left out, and its ancestors are still read.
+    const earlier = w5a4Fixture({ epochs: [{ cwd: 'gone' }, { cwd: 'demo' }] });
+    w5a4Put(w5a4Path.join(earlier.tree, 'CLAUDE.md'), `fact ${W5A4_FACT(40)}\n`);
+    expect(w5a4Admitted('sha', W5A4_FACT(40), w5a4Built(earlier).text)).toBe(false);
+  });
+
+  it.skipIf(W5A4_ROOT_USER)('an unreadable memory file or memory directory discards as file-unreadable', () => {
+    const fx = w5a4Fixture();
+    w5a4WriteFiles(fx);
+    const memory = w5a4Path.join(fx.home, '.claude', 'projects', fx.cwd.replace(/[^A-Za-z0-9]/g, '-'), 'memory');
+    const topic = w5a4Path.join(memory, 'topic.md');
+    w5a4Fs.chmodSync(topic, 0o000);
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'file-unreadable' });
+    } finally { w5a4Fs.chmodSync(topic, 0o600); }
+    w5a4Fs.chmodSync(memory, 0o000);
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'file-unreadable' });
+    } finally { w5a4Fs.chmodSync(memory, 0o700); }
+    expect(w5a4B(fx).state, 'CONTROL: readable again, B is built').toBe('built');
+  });
+
+  it.skipIf(W5A4_ROOT_USER)('an unreadable cwd discards as cwd-unreadable', () => {
+    const fx = w5a4Fixture();
+    w5a4Fs.chmodSync(fx.tree, 0o600);   // no search permission: the stat of tree/demo fails EACCES
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'cwd-unreadable' });
+    } finally { w5a4Fs.chmodSync(fx.tree, 0o700); }
+  });
+
+  it('a FIFO or a directory at CLAUDE.md discards as file-not-regular', () => {
+    const fifo = w5a4Fixture();
+    const mk = spawnSync('mkfifo', [w5a4Path.join(fifo.cwd, 'CLAUDE.md')], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    expect(w5a4B(fifo), 'answered from the stat, never a blocking open').toEqual({ state: 'discard', why: 'file-not-regular' });
+    const dir = w5a4Fixture();
+    w5a4Fs.mkdirSync(w5a4Path.join(dir.cwd, 'CLAUDE.md'));
+    expect(w5a4B(dir)).toEqual({ state: 'discard', why: 'file-not-regular' });
+  });
+
+  it('a file over 1 MiB discards as file-over-cap; one of exactly 1 MiB is read', () => {
+    expect(w5a4Drv.BASELINE_FILE_MAX).toBe(1024 * 1024);
+    const over = w5a4Fixture();
+    w5a4Put(w5a4Path.join(over.cwd, 'CLAUDE.md'), 'x'.repeat(w5a4Drv.BASELINE_FILE_MAX + 1));
+    expect(w5a4B(over)).toEqual({ state: 'discard', why: 'file-over-cap' });
+    const at = w5a4Fixture();
+    w5a4Put(w5a4Path.join(at.cwd, 'CLAUDE.md'), `${W5A4_FACT(41)}${'x'.repeat(w5a4Drv.BASELINE_FILE_MAX - W5A4_FACT(41).length)}`);
+    expect(w5a4Admitted('sha', W5A4_FACT(41), w5a4Built(at).text)).toBe(false);
+  });
+
+  it('the ancestor walk reaches the filesystem root by default and stops at top when given', () => {
+    const names = (dir: string): string[] => ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((n) => w5a4Path.join(dir, n));
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: ['/home/u/.gen-a'] })).toEqual([
+      ...names('/home/u/tree/demo'), ...names('/home/u/tree'), ...names('/home/u'), ...names('/home'), ...names('/'),
+      '/home/u/.gen-a/CLAUDE.md',
+    ]);
+    // Each path once: the upstream config dir's CLAUDE.md is also an ancestor's .claude/CLAUDE.md, and is read once.
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: ['/home/u/.claude'] })).toHaveLength(15);
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: [], top: '/home/u/tree' }))
+      .toEqual([...names('/home/u/tree/demo'), ...names('/home/u/tree')]);
+    expect(w5a4Drv.BASELINE_NAMES).toEqual(['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']);
+  });
+});
