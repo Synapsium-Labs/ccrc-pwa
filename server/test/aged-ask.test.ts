@@ -25,7 +25,8 @@ const raw = (over: {
   state: {
     state: over.state ?? 'waiting', event: 'Notification', updatedAt: Date.now() - 31 * 60_000,
     ask: over.ask === undefined ? QUESTIONS : over.ask, subagents: [],
-  } as HookState,
+    graphQueries: null, graphGateDenials: null, interrupted: false,
+  },
 });
 
 /** The aligned menu for question `k` of QUESTIONS, as `checkDialog` frames it. */
