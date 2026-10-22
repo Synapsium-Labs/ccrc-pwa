@@ -1431,6 +1431,23 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   - `gh pr merge 1120 --match-head-commit f271ddb03…` queued it, and it merged at 09:01:35Z as `3fe68e1de`, its squash
     patch-id equal to the branch's diff from `bb1a9478d`. Run 768 closed `done`. D-6321 is defined; D-6322 and D-6323
     are unused.
+- **2026-10-22 — run 762 live on `v0.0.559` (7895, 7897, 7899).** The operator tapped `v0.0.559`, which carries #1115:
+  the fleet box at 09:19-09:20Z, then the server at 09:21-09:24Z, both gates passing and doctor at 0 failed on each.
+  - Boot: recovery logged "changed 507 activity row(s) from covered task notifications" at 09:26:57Z, 3 min 12 s
+    after the start.
+  - The first ready pass, at 09:29:38Z, retired 99,000 rows with one full projection: block 18.8 s, `stallMid` 5.3 s,
+    `stallMax` 5.5 s. cpBytes went from 81.2 to 12.6 MB, and cpActivities from 112,218 to 13,220.
+  - Afterwards: ordinary passes block 1.4-2.8 s (5.7-9.1 s on `v0.0.555`), `projectFull` 0, cpActivities about
+    13,220, and cpBytes flat (about a byte a minute, against about 11 KB a minute before). The first hourly door, at
+    10:00:16Z, read `retired=0`, as expected. The hourly prune phase that carries it took 1.7 s, against 10.0-11.1 s on
+    every hour-boundary pass on `v0.0.555`.
+  - No anomaly: no retirement or recovery failure, no `fold-refused` or `reconstructing`, no mismatch line, and no
+    /health miss at the hourly probe (which cannot see inside one pass).
+  - One attempt was filed at 09:05:27Z, still on `v0.0.555` (cpAttempts 56 to 57): a genuinely new decision, since
+    none has repeated. It still blocked 32.7 s, `stallMid` 24.1 s, on the 81 MB checkpoint. Run 740 stopped the
+    repeats, not a filing's cost, which is mostly the whole-checkpoint clone, build and encode. The soak watcher
+    reports the first filing on `v0.0.559`.
+  - Disk: after this move's 1,842 MB backup the server had 14,668 MB free, further under the operator's 15 GB line.
 
 ## Carried constraints
 
@@ -1572,7 +1589,7 @@ change the spec or convert O1–O5 into prior requirements.
 run 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762
 (follow-up 7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above).
 Follow-up 8 (run 768, the spool's hook-cost row as a same-run ratio) landed as #1120, `3fe68e1de`. No wave-3 run is
-open. The soak has not started; its start, and the rollout of `v0.0.557` or later, are the operator's.
+open, and #1115 is live since `v0.0.559` (decisions above). The soak has not started; its start is the operator's.
 - Added to wave 4's list since #597:
   - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
   - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
