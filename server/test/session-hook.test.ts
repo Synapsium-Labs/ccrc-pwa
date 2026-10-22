@@ -10875,9 +10875,9 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // THE BANDS (15+ isolated runs each, fleet box, 1-minute load recorded per set). Shipped: 1.193-1.275 (mean 1.230, load
   // 8.8-9.9) and 1.160-1.285 (mean 1.236, load 7.4-8.6), absent-arm medians 33.3-39.3 ms. The default mutation, the spool's jq run a
   // second time (one more jq fork per event), measured 1.463-1.628 (mean 1.570, load 8.8-9.9): its best case sits 15% above the
-  // shipped worst, so no R leaves even 10% on both sides of it, and this row does NOT see one extra fork. The smallest
-  // mutation it separates is two more forks: 1.749-1.951 (mean 1.858, load 7.4-8.7). R=1.5: +17% over the shipped worst
-  // (1.5/1.285), +17% under the mutation's best (1.749/1.5).
+  // shipped worst, so no R leaves even 10% on both sides of it (the best, 1.371, leaves ~7% each side), and this row does NOT
+  // see one extra fork. The smallest mutation it separates is two more forks: 1.749-1.951 (mean 1.858, load 7.4-8.7).
+  // R=1.5: +17% over the shipped worst (1.5/1.285), +17% under the mutation's best (1.749/1.5).
   //
   // WHAT THIS GUARD CANNOT SEE — its masking window. A ratio is blind to anything that inflates BOTH arms (the parse every event
   // pays, the box's load), and blind in one direction to anything that slows the DENOMINATOR alone: the absent arm is the hook's
@@ -10885,7 +10885,9 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // measured bands, a no-spool regression of >=17% (1.749/1.5 = 1.166) pulls the two-fork mutation's BEST case back under R=1.5,
   // and ~24% (1.858/1.5 = 1.239) pulls a MEAN mutated run there, silently and with the suite green. What still binds the
   // absolute cost is the p95 pin above, which times the hook's no-spool cost; this ratio binds the spool's increment over it. If
-  // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together.
+  // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together. And below the
+  // window, with no masking at all: one extra jq fork of the spool (mutant 1.463-1.628 against shipped 1.160-1.285, ~7% best
+  // margin) does not separate, so the smallest spool regression this row can see is two forks.
   it('the spool\'s increment: 20 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
     const payload = (toolUseId: string): object => ({
       session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
