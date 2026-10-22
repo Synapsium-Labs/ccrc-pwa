@@ -35,7 +35,7 @@ const { interrupted, resumeToken, failedPairAgrees } = verbHelpers(() => h);
 
 const LINUX = process.platform === 'linux';
 type Run = { code: number; stdout: string; stderr: string };
-type Doc = { failed?: string; detail?: string; refused?: string; reclaimed?: string; expired?: string };
+type Doc = { failed?: string; detail?: string; refused?: string; reclaimed?: string; expired?: string; crumb?: boolean };
 const docOf = (r: Run): Doc => JSON.parse(r.stdout) as Doc;
 /** The post-kill wait's bound, lowered: nothing here works in the temp root, so the first ask already ends it. */
 const WAIT = 'CCD_RECLAIM_TMPROOT_WAIT_S=2;';
@@ -446,6 +446,7 @@ describe.skipIf(!LINUX)('the tail re-proves the tree, the rows and the main chec
     const r = expireVerb(h, expiryToken(), { pre: `${WAIT} ${KEEP_HOOK} ${AT_NPROOF}` });
     expect(fs.existsSync(path.join(h.home, 'at-nproof-ran')), 'the CONTROL: the checkout’s parent was moved and linked inside the tail').toBe(true);
     stoppedAt(r, X(a), 'worktree-remove-failed', 'children', `the checkout is no longer proven inside the tree: ${sub} is a symbolic link`);
+    expect(docOf(r).crumb, 'the document marks the attempt resumable').toBe(true);
     expect(fs.lstatSync(sub).isSymbolicLink(), 'the link stands where the parent was').toBe(true);
     expect(fs.readFileSync(path.join(moved, 'inner', 'f'), 'utf8'), 'the moved checkout stands, with its files').toBe('nested work\n');
     expect(h.git(a.main, 'branch', '--list', 'ws/nested'), 'its branch stands').toContain('ws/nested');
