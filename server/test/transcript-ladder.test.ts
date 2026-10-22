@@ -5,7 +5,7 @@
 // Real files on real disk against `localIO`, the idiom `transcript-parse.test.ts`
 // already establishes for this module; `FleetIO` spread-fakes (the
 // `unlistableIO` shape from `sessionws.test.ts`) cover the seams disk cannot.
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
   utimesSync, writeFileSync,
@@ -14,8 +14,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, continuesInto, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
-  resumedPastMarker, RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
+  collapseHits, continuesInto, GLOB_STAT_CONCURRENCY, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript,
+  RESOLVER_BACKOFF_MS, resumedPastMarker, RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit,
+  type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -1435,5 +1436,168 @@ describe('continuesInto — the registry-move witness (D-4947)', () => {
     expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS]!, [])).toBe(true);
     expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS + 1]!, []))
       .toBe(false);
+  });
+});
+
+// D-6369: rungs 5 and 6 stat with bounded concurrency. A real fleet holds thousands of project directories at
+// ~24 ms a call, so the serial search made a new session wait about a minute for its first frame. The fake below is
+// in-memory with FAKE time: each call sleeps on a fake timer, so serial code costs calls x 10 ms of fake time and
+// the parallel search costs about calls / bound x 10 ms.
+describe('the uuid search runs its stats with bounded concurrency (D-6369)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const OWN = '/fake/.claude';
+  const LANE_A = '/fake/.claude-lane-a';
+  const LANE_B = '/fake/.claude-lane-b';
+  const FOREIGN = [{ account: 'lane-a', configDir: LANE_A }, { account: 'lane-b', configDir: LANE_B }];
+  const dirName = (i: number): string => `d${String(i).padStart(2, '0')}`;
+  const fileIn = (cfg: string, i: number): string => path.join(cfg, 'projects', dirName(i), `${UUID}.jsonl`);
+
+  /** `[mtimeMs, size]` per directory index. */
+  type Hits = Record<number, readonly [number, number]>;
+  interface Spec {
+    /** Directories per home. */
+    readonly n: number;
+    readonly own?: Hits;
+    /** null: the account cannot be MEASURED (its readdir and root stat answer null). */
+    readonly a?: Hits | null;
+    readonly b?: Hits | null;
+    /** Files that exist in the tree but whose `stat` answers null. */
+    readonly failing?: readonly string[];
+    /** The own configDir's witness stat answers null. */
+    readonly ownRootDark?: boolean;
+    /** Listing order of every `projects/` directory. */
+    readonly listing?: 'fwd' | 'rev';
+    /** Which end of the listing answers its stat last; unset: every call takes exactly 10 ms. */
+    readonly delay?: 'asc' | 'desc';
+  }
+
+  /** A `FleetIO` over a virtual tree: every readdir and stat takes 10 ms (plus a rank-dependent skew for a
+   *  per-directory stat, so completion order differs from issue order) of FAKE time, and the fake counts the
+   *  calls in flight. Methods the search has no business calling throw. */
+  const fakeIO = (spec: Spec): { io: FleetIO; stats: { inFlight: number; max: number; calls: number } } => {
+    const stats = { inFlight: 0, max: 0, calls: 0 };
+    const homes: [string, Hits | null | undefined][] = [[OWN, spec.own ?? {}], [LANE_A, spec.a === undefined ? {} : spec.a],
+      [LANE_B, spec.b === undefined ? {} : spec.b]];
+    const names = Array.from({ length: spec.n }, (_, i) => dirName(i));
+    const listed = spec.listing === 'rev' ? [...names].reverse() : names;
+    const files = new Map<string, { mtimeMs: number; size: number }>();
+    const dirs = new Map<string, string[]>();
+    const roots = new Set<string>();
+    for (const [cfg, hits] of homes) {
+      if (hits === null || hits === undefined) continue;   // unmeasurable: no listing, no root
+      roots.add(cfg);
+      dirs.set(path.join(cfg, 'projects'), [...listed]);
+      for (const [i, [mtimeMs, size]] of Object.entries(hits)) files.set(fileIn(cfg, Number(i)), { mtimeMs, size });
+    }
+    if (spec.ownRootDark === true) roots.delete(OWN);
+    const delayOf = (p: string): number => {
+      const m = /\/projects\/d(\d+)\//.exec(p);
+      if (m === null || spec.delay === undefined) return 10;
+      const i = Number(m[1]);
+      return 10 + (spec.delay === 'desc' ? spec.n - 1 - i : i);
+    };
+    const call = async <T>(p: string, answer: () => T): Promise<T> => {
+      stats.inFlight += 1; stats.calls += 1; stats.max = Math.max(stats.max, stats.inFlight);
+      try { await new Promise<void>((r) => setTimeout(r, delayOf(p))); return answer(); }
+      finally { stats.inFlight -= 1; }
+    };
+    const fileStat = (p: string): { mtimeMs: number; size: number } | null =>
+      (spec.failing ?? []).includes(p) ? null : files.get(p) ?? (roots.has(p) ? { mtimeMs: 0, size: 0 } : null);
+    const impl = {
+      realpath: async (): Promise<string | null> => null,
+      readdir: (p: string) => call(p, () => dirs.get(p) ?? null),
+      stat: (p: string) => call(p, () => fileStat(p)),
+      statMeasured: (p: string) => call(p, () => {
+        const st = files.get(p);
+        return st === undefined ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, ...st };
+      }),
+      readFileFromMeasured: (p: string) => call(p, () => ({ ok: true as const, data: '{}\n', size: files.get(p)?.size ?? 0 })),
+    };
+    const io = new Proxy(impl, {
+      get: (t, k) => (k in t ? (t as Record<string | symbol, unknown>)[k]
+        : () => { throw new Error(`unexpected io.${String(k)}`); }),
+    }) as unknown as FleetIO;
+    return { io, stats };
+  };
+
+  const search = async (spec: Spec): Promise<{
+    r: Awaited<ReturnType<typeof resolveTranscript>>; elapsed: number; stats: { inFlight: number; max: number; calls: number };
+  }> => {
+    const { io, stats } = fakeIO(spec);
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    const p = resolveTranscript(io, {
+      configDir: OWN, dir: '/fake/work/demo', registryWorkdir: '/fake/work/reg', uuid: UUID, foreign: FOREIGN,
+    });
+    await vi.runAllTimersAsync();
+    const r = await p;
+    const elapsed = Date.now() - t0;
+    vi.useRealTimers();
+    return { r, elapsed, stats };
+  };
+
+  const MISS = { kind: 'fallback', path: transcriptPath(OWN, '/fake/work/demo', UUID), complete: true } as const;
+
+  it('a missing uuid over 3 HOMEs × 50 directories resolves in under 200 ms', async () => {
+    const { r, elapsed, stats } = await search({ n: 50 });
+    expect(r).toEqual(MISS);
+    // 155 calls at 10 ms apiece: ~1.5 s one after another; a handful of waves at the bound.
+    expect(stats.calls).toBe(2 + 1 + 50 + 2 + 100);
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  it('never more than the bound in flight', async () => {
+    const { r, stats } = await search({ n: 50 });
+    expect(r).toEqual(MISS);
+    expect(stats.max, 'the search runs calls side by side at all').toBeGreaterThan(1);
+    // 100 foreign directories fill the bound ACROSS the two homes, which share one limiter: bounding each home
+    // alone would put 64 in flight, and an unbounded Promise.all 100.
+    expect(stats.max).toBe(GLOB_STAT_CONCURRENCY);
+    expect(stats.max).toBeLessThanOrEqual(GLOB_STAT_CONCURRENCY);
+  });
+
+  it('the parallel search answers exactly what the serial one does', async () => {
+    const at = (cfg: string, i: number): string => fileIn(cfg, i);
+    const found = (p: string, rung: 'uuid-glob' | 'foreign-glob', account: string | null) =>
+      ({ kind: 'found', path: p, rung, account, uuid: UUID });
+    const cases: { name: string; spec: Omit<Spec, 'listing' | 'delay'>; want: unknown }[] = [
+      { // rung 5: the newest is a middle hit, and a duplicate pair (same size and mtime) is the newest of all
+        name: 'rung 5: newest of several own hits, duplicates collapsed to the lowest path',
+        spec: { n: 12, own: { 1: [1000, 10], 3: [9000, 20], 5: [5000, 11], 8: [9000, 20], 10: [3000, 12] } },
+        want: found(at(OWN, 3), 'uuid-glob', null) },
+      { // rung 6: newest across homes sits mid-pool, and an mtime tie goes to the earlier roster entry
+        name: 'rung 6: an mtime tie goes to the earlier account',
+        spec: { n: 12, a: { 2: [4000, 5], 9: [8000, 6] }, b: { 1: [2000, 4], 4: [8000, 7], 11: [6000, 8] } },
+        want: found(at(LANE_A, 9), 'foreign-glob', 'lane-a') },
+      { name: 'rung 6: a strictly newer hit in the later account wins',
+        spec: { n: 12, a: { 2: [4000, 5], 9: [8000, 6] }, b: { 1: [2000, 4], 4: [9000, 7], 11: [6000, 8] } },
+        want: found(at(LANE_B, 4), 'foreign-glob', 'lane-b') },
+      { name: 'a complete fallback: no hit anywhere', spec: { n: 12 }, want: MISS },
+      { // lane-a has no root at all, but the own configDir witness answers: measured empty, so still complete
+        name: 'a complete fallback: an absent foreign root is measured empty',
+        spec: { n: 12, a: null }, want: MISS },
+      { // the own configDir witness is dark too: lane-a cannot be measured at all
+        name: 'an incomplete fallback: a foreign account cannot be measured',
+        spec: { n: 12, a: null, ownRootDark: true }, want: { ...MISS, complete: false } },
+      { name: 'a hit in a measurable account still answers beside an unmeasurable one',
+        spec: { n: 12, a: null, ownRootDark: true, b: { 6: [7000, 9] } },
+        want: found(at(LANE_B, 6), 'foreign-glob', 'lane-b') },
+      { // the newest file exists but its stat answers null: folded to absent, the next newest answers
+        name: 'rung 5: a failing stat on the newest hit folds to absent',
+        spec: { n: 12, own: { 1: [1000, 10], 6: [9000, 20], 9: [5000, 11] }, failing: [at(OWN, 6)] },
+        want: found(at(OWN, 9), 'uuid-glob', null) },
+      { name: 'rung 6: a failing stat on the newest foreign hit folds to absent',
+        spec: { n: 12, a: { 2: [4000, 5] }, b: { 4: [9000, 7], 11: [6000, 8] }, failing: [at(LANE_B, 4)] },
+        want: found(at(LANE_B, 11), 'foreign-glob', 'lane-b') },
+    ];
+    for (const c of cases) {
+      for (const listing of ['fwd', 'rev'] as const) {
+        for (const delay of ['asc', 'desc'] as const) {
+          const { r } = await search({ ...c.spec, listing, delay });
+          expect(r, `${c.name} [listing ${listing}, delay ${delay}]`).toEqual(c.want);
+        }
+      }
+    }
   });
 });
