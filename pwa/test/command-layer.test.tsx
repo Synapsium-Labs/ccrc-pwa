@@ -265,7 +265,8 @@ describe('the base commands, through the palette', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     const page = screen.getByRole('combobox');
     expect(page.getAttribute('value') ?? (page as HTMLInputElement).value, 'a page starts empty').toBe('');
-    expect(screen.getByRole('option', { name: /^Instrument\b/ })).toBeTruthy();
+    // The option's accessible name is its title then its group ("InstrumentLayout"), so no word boundary follows.
+    expect(screen.getByRole('option', { name: /^Instrument/ })).toBeTruthy();
     for (const o of screen.getAllByRole('option')) expect(o.textContent ?? '', 'Instrument is no longer a preview').not.toContain('(preview)');
     expect(screen.getByRole('option', { name: /Match this device/ })).toBeTruthy();
     fireEvent.change(page, { target: { value: 'instrument' } });
