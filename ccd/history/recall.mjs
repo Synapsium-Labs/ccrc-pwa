@@ -205,18 +205,44 @@ function eofOf(db, transcriptPks) {
   return out;
 }
 
+const VISIBLE = new WeakMap();
+/** W2-D37, with W2-D35's epoch rule: the scope's families and transcripts as the header and the --json scope count and
+ *  name them. With no cut, the scope's own lists. Under an as-of cut (rc.scope.cut, W2-D38), a transcript counts iff it
+ *  holds an entry lib's one predicate leaves visible, and a family iff one of its confirmed epochs is visible by lib's
+ *  epoch statement (cutVisibleEpochs), so a transcript, an epoch or a family that holds only what the cut hides is never
+ *  counted, never named and never read for the lag. rc.scope itself is not narrowed (R5): each read site applies the cut
+ *  in its own SQL. Once per context. */
+export function visibleScope(rc) {
+  if (cutOf(rc) === null) return { families: rc.scope.families, transcriptPks: rc.scope.transcriptPks };
+  const known = VISIBLE.get(rc);
+  if (known !== undefined) return known;
+  const tsql = `SELECT DISTINCT e.transcript_pk AS pk FROM entries e
+    WHERE e.transcript_pk IN (SELECT value FROM json_each(:tpks))${cutAnd(rc, 'e')}`;
+  const transcriptPks = rc.db.prepare(tsql).all(bindFor(tsql, { tpks: JSON.stringify(rc.scope.transcriptPks), ...cutBinds(rc) }))
+    .map((r) => Number(r.pk)).sort((a, b) => a - b);
+  const epochs = rc.db.prepare(`SELECT session_pk AS pk, cc_session_uuid AS u FROM epochs
+    WHERE confirmed_ms IS NOT NULL AND session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.families.map((f) => f.sessionPk)));
+  const shown = cutVisibleEpochs(rc, epochs.map((r) => r.u));
+  const held = new Set(epochs.filter((r) => shown.has(r.u)).map((r) => Number(r.pk)));
+  const out = Object.freeze({ families: rc.scope.families.filter((f) => held.has(f.sessionPk)), transcriptPks });
+  VISIBLE.set(rc, out);
+  return out;
+}
+
 const HEADERS = new WeakMap();
 /** §8.3's header for this read: the scope, coverage, indexed-through and lag. lag is now minus the oldest
  *  end-of-file mark in scope; it reads `unmeasured` while any file in scope has none, and while a recovery step
- *  is registered (§8.8: no tick has reached end-of-file). Computed once per context. */
+ *  is registered (§8.8: no tick has reached end-of-file). Its counts and its lag read only what the as-of cut leaves visible
+ *  (visibleScope; W2-D37). Computed once per context. */
 export function scopeHeader(rc) {
   const known = HEADERS.get(rc);
   if (known !== undefined) return known;
   const recovering = recoverOpenOn(rc.db);
-  const lag = scopeLag({ eofMs: eofOf(rc.db, rc.scope.transcriptPks), nowMs: rc.nowMs, recovering });
+  const vis = visibleScope(rc);
+  const lag = scopeLag({ eofMs: eofOf(rc.db, vis.transcriptPks), nowMs: rc.nowMs, recovering });
   const line = headerLine({
-    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project, families: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS,
+    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project, families: vis.families.length,
+    transcripts: vis.transcriptPks.length, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS,
   });
   const h = Object.freeze({ line, indexedThroughMs: lag.indexedThroughMs, lagS: lag.lagS });
   HEADERS.set(rc, h);
@@ -246,21 +272,24 @@ function nodeItem(n, parentById, family, rc) {
   };
 }
 
-/** The JSON scope mirrors cli.mjs's scopeJson exactly, including its cap-fitting family prefix. */
-function jsonScope(rc) {
+/** The --json scope object (§8.3), defined once: cli.mjs's envelope prints it and tree's cap fitting measures it. A widened
+ *  scope names only a bounded prefix, and `families_total` is complete. Under an as-of cut both name and count only what
+ *  is visible (visibleScope; W2-D37). */
+export function scopeJsonOf(rc) {
+  const vis = visibleScope(rc);
   return {
     kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
+    families: vis.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
       .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
-    families_total: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length,
+    families_total: vis.families.length,
+    transcripts: vis.transcriptPks.length,
   };
 }
 
 /** Render the actual final JSON representation whose length the cap promises. */
 function renderJson(rc, head, items, shown, total, next) {
   return `${JSON.stringify(redactFinalJson(readEnvelope({
-    exit: EXIT.OK, storeId: rc.storeId, scope: jsonScope(rc),
+    exit: EXIT.OK, storeId: rc.storeId, scope: scopeJsonOf(rc),
     header: { indexedThroughMs: head.indexedThroughMs, lagS: head.lagS }, items, shown, total,
     next: next === null ? null : nextLine(next),
   }), rc.pairIdx))}\n`;
@@ -324,7 +353,9 @@ export function runTree(rc, a) {
       if (child !== undefined) walk(child, level + 1);
     }
   };
-  for (const f of rc.scope.families) {
+  // R8: a family heading names only a family the as-of cut leaves visible (visibleScope, W2-D35's epoch rule), so a family
+  // with no visible epoch is never named by tree, nor its generation. With no cut, the scope's own families.
+  for (const f of visibleScope(rc).families) {
     out.push({ text: `family ${f.ccrcId} generation=${f.generation === '' ? '(none)' : f.generation} first-seen=${isoOf(f.firstSeenMs)}`, node: null });
     const listed = epochs.all(f.sessionPk);
     // W2-D35: an epoch shows iff one of its transcripts holds a row the as-of cut shows; null with no cut shows them all.
@@ -385,7 +416,7 @@ export function runTree(rc, a) {
 
 /** Room kept for what the CLI prints around a verb's blocks: Task 11's header, `shown K of N`, `next:` and a hint
  *  line; with --json, the envelope's fixed fields and its scope, which names at most a handful of families plus
- *  `families_total` (Task 11's scopeJson and lib's SCOPE_FAMILIES_JSON_MAX), so it is bounded whatever the project holds. A verb's own blocks fill
+ *  `families_total` (scopeJsonOf and lib's SCOPE_FAMILIES_JSON_MAX), so it is bounded whatever the project holds. A verb's own blocks fill
  *  OUTPUT_CAP minus this (Tasks 13 and 15). */
 const FRAME_RESERVE = 1200;
 
@@ -751,16 +782,25 @@ function hitItem(rc, hit, snippet, nodeId, family) {
 /** The group key of rows no leaf covers yet: grep's live tail (§8.4). */
 const LIVE_TAIL = '';
 
+/** W2-D37: the as-of boundary this call reads under, rc.scope.cut's `asof` (W2-D38), or null when no cut is set. */
+function asOfOf(rc) {
+  const cut = cutOf(rc);
+  return cut === null ? null : cut.asof;
+}
+
 /** The hint a refused cursor carries. */
 const STALE_CURSOR = 'that --cursor belongs to another query, scope or filter; run the query again without it';
 
-/** What a grep cursor is bound to: the query, the scope and every filter. A cursor from another query or scope
- *  is refused, never applied to the wrong list. */
+/** What a grep cursor is bound to: the query, the scope, every filter and, only under an as-of cut, its boundary
+ *  (W2-D37). A cursor from another query, scope or cut, or from none, is refused, never applied to the wrong list. With no
+ *  cut the key is the one every earlier build printed. */
 function grepKey(rc, a) {
+  const asof = asOfOf(rc);
   return sha256Hex(canonicalJson({
     words: a.regex === null ? sanitizeFtsQuery(a.words.join(' ')) : null, regex: a.regex,
     scope: [rc.scope.kind, rc.scope.id, rc.scope.generation],
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs, node: a.node, sort: a.sort, recall: a.includeRecall,
+    ...(asof === null ? {} : { asof }),
   })).slice(0, 20);
 }
 
@@ -1010,6 +1050,9 @@ export function runRegex(rc, a, deps = {}) {
     provenance: [...(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE)],
     prefilter: regexPrefilter(a.regex),
     pattern: guard.source,
+    // W2-D38: the cut, as the very values the parent binds for lib's one predicate (cutBinds, lib's asOfBinds), so the
+    //  child applies that predicate itself; null with no cut. The key is always present: the child refuses a job without it.
+    cut: cutOf(rc) === null ? null : cutBinds(rc),
     pairs: pairsOf(rc.pairIdx),
     // §8.3 layer 4: the parent's units, so the child masks what this process's output would. stdin only.
     belt: rc.pairIdx.belt == null ? [] : [...rc.pairIdx.belt.texts],
@@ -1939,7 +1982,9 @@ export function runExpand(rc, a) {
   const r = expandResolve(rc, s, want);
   if (r.refuse !== undefined) return r.refuse;
   const items = expandItems(s, r.entryIds);
-  const at = xlib.decideExpandCursor({ cursor: decoded, key: r.key, total: items.length });
+  // W2-D37: the key a cursor is checked against, and minted with, names the as-of cut, only when one is set.
+  const ckey = xlib.expandCursorKey(r.key, asOfOf(rc));
+  const at = xlib.decideExpandCursor({ cursor: decoded, key: ckey, total: items.length });
   if (!at.ok) return refusal('bad-args', 'that --cursor belongs to another expansion');
   const scope = rc.scopeArgs ?? [];
   const blocks = [];
@@ -1957,7 +2002,7 @@ export function runExpand(rc, a) {
     if (item.partial) { next = { i, o: item.to }; break; }
   }
   const nextArgs = next === null ? null
-    : ['expand', ...r.args, ...scope, ...(a.json ? ['--json'] : []), '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: r.key, i: next.i, o: next.o })];
+    : ['expand', ...r.args, ...scope, ...(a.json ? ['--json'] : []), '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: ckey, i: next.i, o: next.o })];
   const hint = a.cursor === null ? xlib.delegateHint(expandEstimate(s, items, r.whole)) : null;
   return { exit: xlib.EXIT.OK, header: null, blocks, items: out, total: items.length, shown, next: nextArgs, ...(hint === null ? {} : { hint }) };
 }

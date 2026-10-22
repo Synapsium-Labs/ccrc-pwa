@@ -11097,3 +11097,56 @@ describe('W2-2a as-of cut: asOfCut, asOfEntrySql and asOfBinds, lib\'s one defin
     } finally { db.close(); }
   });
 });
+
+// ── W2-2a Task 4 (W2-D37): an expand cursor's key names the as-of cut it was minted under ──────────────────────────
+// Pure, so it runs on darwin too. A cursor holds exactly its resource's fields (encodeCursor refuses any other), so the cut
+// joins the key itself: grep hashes it into `q` (recall.mjs grepKey), expand appends it to `t` here.
+describe('expandCursorKey and expandResumeOf under an as-of cut (W2-D37; W2-2a Task 4)', () => {
+  const lib = async () => await import('../../ccd/history/lib.mjs');
+  const N = '0189abcd-1234-4678-9abc-00000000a5f6';
+  const M = '0189abcd-1234-4678-9abc-00000000a5f7';
+  const U = '0189abcd-1234-4678-9abc-00000000a5f8';
+  /** One key of each kind expand prints: a node id, an entry uuid, a raw-only row's key and an around key. */
+  const KEYS = ['L0123456789abcdef0123', U, `x${'0123456789abcdef'.repeat(2)}`, `around:${U}:50:50`];
+  const cur = (t: string) => ({ v: 1 as const, resource: 'expand' as const, t, i: 0, o: 0 });
+
+  it('with no cut, the key is the expansion\'s own, unchanged, so a cursor printed before W2-2a still resumes', async () => {
+    const l = await lib();
+    for (const k of KEYS) expect(l.expandCursorKey(k, null), k).toBe(k);
+  });
+
+  it('under a cut, the key names its boundary, and no two cuts, nor a cut and none, share a key', async () => {
+    const l = await lib();
+    for (const k of KEYS) {
+      expect(l.expandCursorKey(k, N), k).toBe(`${k}:asof:${N}`);
+      expect(new Set([l.expandCursorKey(k, null), l.expandCursorKey(k, N), l.expandCursorKey(k, M)]).size, k).toBe(3);
+    }
+  });
+
+  it('a key minted under a cut resumes its own target, so a bare --cursor still names what it pages', async () => {
+    const l = await lib();
+    for (const k of KEYS) {
+      const plain = l.expandResumeOf(cur(k));
+      expect(plain, `CONTROL: ${k} resumes with no cut`).not.toBeNull();
+      expect(l.expandResumeOf(cur(l.expandCursorKey(k, N))), k).toEqual(plain);
+    }
+  });
+
+  it('decideExpandCursor refuses a cursor minted under another cut or under none, in both directions', async () => {
+    const l = await lib();
+    const K = KEYS[0]!;
+    const at = (minted: string | null, used: string | null) =>
+      l.decideExpandCursor({ cursor: cur(l.expandCursorKey(K, minted)), key: l.expandCursorKey(K, used), total: 1 });
+    expect([at(null, null), at(N, N)], 'CONTROL: the same cut, or none, resumes').toEqual([{ ok: true, i: 0, o: 0 }, { ok: true, i: 0, o: 0 }]);
+    for (const [minted, used] of [[null, N], [N, null], [N, M], [M, N]] as const) {
+      expect(at(minted, used), `${String(minted)} then ${String(used)}`).toEqual({ ok: false });
+    }
+  });
+
+  it('the longest key expand prints, under a cut, is still a cursor encodeCursor accepts and decodeCursor reads back', async () => {
+    const l = await lib();
+    const c = cur(l.expandCursorKey(`around:${U}:${l.AROUND_MAX}:${l.AROUND_MAX}`, N));
+    expect(c.t.length, 'CONTROL: the longest key there is').toBe(91);
+    expect(l.decodeCursor(l.encodeCursor(c), 'expand')).toEqual(c);
+  });
+});

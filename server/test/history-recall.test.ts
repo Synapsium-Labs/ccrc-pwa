@@ -6545,3 +6545,419 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     expect(all(p8), 'the parent\'s summary ref stays (R6)').toContain('zqw2d35modelparent');
   }, HEAVY);
 });
+
+// ── W2-2a Task 4 (W2-D37, W2-D38): the remaining doors of the as-of cut ──────────────────────────────────────────
+// The regex child applies lib's one predicate with the values the parent binds; the grep and expand cursors are bound to
+// the cut; the header and the --json scope count and name only what the cut leaves visible. In-process: no W2-2a CLI path
+// sets a cut (W2-2b's env path does), so every cut here rides on rc.scope.cut, built by Task 2's store half.
+//
+// The fixture: one family whose first transcript holds boundary N (e6, kept(N) = [e5]) and boundary N+1 (e13), then a
+// /clear epoch and another family of the project, both stamped long after N. Under N: e1-e3 are visible by stamp; e4 has
+// no stamp and is outside kept(N), so it is hidden; e5 has no stamp but is kept(N), so it is visible; e8 is after N;
+// e9 is stamped before T_N but written after N's boundary in its holding copy (the positional clause), and a second copy
+// of the transcript rewrites its body, so hidden e9 has a variant; out44.txt is the sidecar of hidden e11; orphan44.txt is
+// a sidecar no row names (a NULL entry_id).
+describe.skipIf(process.platform === 'darwin')('W2-D37 and W2-D38: the regex child, the cursors and the header under an as-of cut (W2-2a Task 4)', () => {
+  const ID = 'claude-a-asof4';
+  const OID = 'claude-a-asof4o';
+  const G = '0189abcd-1234-4678-9abc-00000000a5f4';
+  const GO = '0189abcd-1234-4678-9abc-00000000b5f4';
+  const T1 = 'a5f40001';
+  const T2 = 'a5f40002';
+  const TO = 'a5f40003';
+  const U1 = t16uuid(T1, 0);
+  const U2 = t16uuid(T2, 0);
+  const UO = t16uuid(TO, 0);
+  const e = (i: number): string => t16uuid(T1, i);
+  const LONG = `zqasoflong ${'plain words '.repeat(3000)}end`;
+  const STALE_GREP = 'that --cursor belongs to another query, scope or filter; run the query again without it';
+  const STALE_EXPAND = 'that --cursor belongs to another expansion';
+  type Cut = {
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  };
+  type CutRc = GrepRc & { scope: { cut?: Cut | null } };
+  type Job = Record<string, unknown> & { cut: Record<string, unknown> | null };
+  type Recall = {
+    runGrep(rc: CutRc, a: RGrepArgs, deps?: GrepDeps): GrepVerbResult;
+    runExpand(rc: CutRc, a: Record<string, unknown>): GrepVerbResult;
+    runTree(rc: CutRc & { scopeArgs: string[] }, a: { depth: number; json: boolean }): GrepVerbResult;
+    scopeHeader(rc: CutRc): { line: string; indexedThroughMs: number | null; lagS: number | null };
+    scopeJsonOf(rc: CutRc): { kind: string; id: string; project: string | null; families: Array<{ ccrc_id: string; generation: string; first_seen_ms: number }>; families_total: number; transcripts: number };
+    asOfCutOf(rc: CutRc, asof: string): { ok: true; cut: Cut } | { ok: false; rc: 2; reason: 'asof-invalid' };
+  };
+  type Worker = { scanRegexJob(job: Record<string, unknown>): { matches: Array<{ blob_id: number; match: string }>; scanned: number } };
+  const L = libRead as unknown as { asOfBinds(c: Cut): Record<string, unknown>; expandCursorKey(k: string, a: string | null): string };
+  let box: rH.HistoryBox;
+  const rec = async (): Promise<Recall> => (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
+  const withCut = (rc: GrepRc, cut: Cut | null): CutRc => ({ ...rc, scope: { ...rc.scope, cut } });
+  /** The cut at boundary `uuid`, through Task 2's store half (W2-D39, R2): every case's cut comes through it, and the
+   *  fixture case's CONTROL deep-equals it against the cut sqlCutAt measures. */
+  const cutAt = async (rc: GrepRc, uuid: string): Promise<Cut> => {
+    const r = (await rec()).asOfCutOf(rc, uuid);
+    if (!r.ok) throw new Error(`fixture: boundary ${uuid} gave no cut (${r.reason})`);
+    return r.cut;
+  };
+  /** W2-D38's cut for boundary `uuid`, measured with SQL as W2-D34 defines it, without asOfCutOf (R2), as Task 2's cutAt
+   *  measures it: the boundary's own stamp, its holding copy by lib's pickHoldingCopy (a live copy first, then the lowest
+   *  file_id) and its line there, the summary row its anchor names, and the kept set the fixture's boundary keeps. */
+  function sqlCutAt(db: RDatabaseSync, uuid: string, kept: string[]): Cut {
+    const b = db.prepare(`SELECT e.entry_id AS entry_id, e.ts_ms AS ts_ms, e.transcript_pk AS tpk, bd.anchor_uuid AS anchor
+      FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id WHERE e.uuid = ?`).get(uuid) as unknown as
+      { entry_id: number; ts_ms: number; tpk: number; anchor: string };
+    const copies = db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line FROM ingest_files f
+      LEFT JOIN memberships mb ON mb.file_id = f.file_id AND mb.entry_id = ? WHERE f.transcript_pk = ? ORDER BY f.file_id`)
+      .all(b.entry_id, b.tpk) as unknown as Array<{ file_id: number; source_key: string; line: number | null }>;
+    expect(copies.filter((x) => x.line !== null), 'CONTROL: two copies hold boundary N').toHaveLength(2);
+    const held = libRead.pickHoldingCopy(copies.map((x) => ({ fileId: Number(x.file_id), live: x.source_key === '', holds: x.line !== null })));
+    const at = copies.find((x) => Number(x.file_id) === held)!;
+    const sum = db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(b.anchor) as unknown as { entry_id: number };
+    return {
+      asof: uuid, tsCut: Number(b.ts_ms), boundaryEntryId: Number(b.entry_id), summaryEntryId: Number(sum.entry_id),
+      keptUuids: [...kept].sort(), holdingFileId: Number(held), boundaryLine: Number(at.line),
+    };
+  }
+  /** A spawn seam that records each job the parent writes on the child's stdin. With `real`, the child runs as runRegex runs
+   *  it; otherwise it answers "no match" at once, for a case that reads only the job. */
+  const spyOn = (jobs: Job[], real: boolean): GrepDeps['spawn'] => ((cmd: string, args: string[], opts: { input: string }) => {
+    jobs.push(JSON.parse(opts.input) as Job);
+    return real ? spawnSync(cmd, args, opts as never)
+      : { status: 0, signal: null, error: undefined, stdout: `${JSON.stringify({ done: true, scanned: 0, matched: 0 })}\n`, stderr: '' };
+  }) as unknown as GrepDeps['spawn'];
+  const cursorOf = (next: string[] | null): string => {
+    expect(next, 'CONTROL: the page has a next line').not.toBeNull();
+    return next![next!.indexOf('--cursor') + 1]!;
+  };
+  const uuids = (r: GrepVerbResult): unknown[] => r.items.map((x) => x['entry_uuid']);
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-asof4-');
+    const noStamp = (r: rFx.Row): rFx.Row => { const o = { ...r }; delete o['timestamp']; return o; };
+    /** The first transcript's rows. `variant` is its second copy, which rewrites e9's body (a hidden row's variant). */
+    const rows1 = (variant: boolean): rFx.Row[] => [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U1, text: 'zqasofpage first zqasofpre' }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U1, text: 'zqasofpage second', requestId: 'req_a5f4_2', msgId: 'msg_a5f4_2' }),
+      rFx.userRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U1, text: LONG }),
+      noStamp(rFx.userRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U1, text: 'zqasofnull a row with no stamp' })),
+      noStamp(rFx.userRow({ uuid: e(5), ts: t16ts(5), parentUuid: e(4), sessionId: U1, text: 'zqasofkept kept by boundary N' })),
+      rFx.boundaryRow({ uuid: e(6), ts: t16ts(6), parentUuid: e(5), sessionId: U1, trigger: 'manual', headUuid: e(5), anchorUuid: e(7), tailUuid: e(5), allUuids: [e(5)] }),
+      rFx.summaryRow({ uuid: e(7), ts: t16ts(7), parentUuid: e(6), sessionId: U1, text: t16summary('zqa5f4n') }),
+      rFx.userRow({ uuid: e(8), ts: t16ts(8), parentUuid: e(7), sessionId: U1, text: 'zqasofpage third zqasofpost' }),
+      rFx.userRow({ uuid: e(9), ts: t16ts(5), parentUuid: e(8), sessionId: U1,
+        text: variant ? 'zqasofvar a later copy rewrote this row' : 'zqasofstep stamped before N, written after it' }),
+      rFx.toolUseRow({ uuid: e(10), ts: t16ts(10), parentUuid: e(9), sessionId: U1, toolUseId: 'toolu_01A5F4SIDE', name: 'Bash', input: { command: 'cat out44.log' }, requestId: 'req_a5f4_10', msgId: 'msg_a5f4_10' }),
+      rFx.toolResultRow({ uuid: e(11), ts: t16ts(11), parentUuid: e(10), sessionId: U1, toolUseId: 'toolu_01A5F4SIDE', content: 'Output too large. Full output saved to: tool-results/out44.txt' }),
+      rFx.userRow({ uuid: e(12), ts: t16ts(12), parentUuid: e(11), sessionId: U1, text: 'zqasofmore kept by boundary N+1' }),
+      rFx.boundaryRow({ uuid: e(13), ts: t16ts(13), parentUuid: e(12), sessionId: U1, trigger: 'manual', headUuid: e(12), anchorUuid: e(14), tailUuid: e(12), allUuids: [e(12)] }),
+      rFx.summaryRow({ uuid: e(14), ts: t16ts(14), parentUuid: e(13), sessionId: U1, text: t16summary('zqa5f4m') }),
+    ];
+    const t = t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U1, rows: rows1(false) });
+    // A second copy in another account's home, read after the first (t16scan below), so e9's rewritten body is a variant
+    // and the first copy (the lower file_id) still holds N: the DM2b shape, as Task 2's fixture has it.
+    rH.plantTranscript(box, 'claude-b', path.basename(path.dirname(t)), U1, rows1(true));
+    const dir = path.join(path.dirname(t), U1, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'out44.txt'), 'zqasofside the sidecar body\n');
+    fs.writeFileSync(path.join(dir, 'orphan44.txt'), 'zqasoforphan nobody names this file\n');
+    // A /clear after N: epoch 2 of the same family, its one row stamped long after T_N (the history-card precedent).
+    rH.plantSession(box, ID, { uuid: U2 });
+    rH.plantTranscript(box, Object.keys(box.accountHome)[0]!, rH.SEED_SLUG, U2,
+      [rFx.userRow({ uuid: t16uuid(T2, 1), ts: t16ts(30), sessionId: U2, text: 'zqasofclear after the clear' })]);
+    rH.spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U2, src: 'clear', gen: G });
+    const cleared = (): boolean => {
+      const db = rH.openStoreRO(box);
+      try {
+        return Number((db.prepare(`SELECT count(*) AS n FROM epochs ep WHERE ep.cc_session_uuid = ? AND ep.confirmed_ms IS NOT NULL
+          AND EXISTS (SELECT 1 FROM transcripts t JOIN entries x ON x.transcript_pk = t.transcript_pk WHERE t.cc_session_uuid = ep.cc_session_uuid)`)
+          .get(U2) as { n: number }).n) === 1;
+      } finally { db.close(); }
+    };
+    for (let i = 0; i < 4 && !cleared(); i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
+    expect(cleared(), 'CONTROL: the /clear epoch is confirmed and holds its row').toBe(true);
+    // Another family of the same project, wholly after N.
+    t16seed(box, { id: OID, project: 'demo', generation: GO, uuid: UO,
+      rows: [rFx.userRow({ uuid: t16uuid(TO, 1), ts: t16ts(40), sessionId: UO, text: 'zqasofother another family' })] });
+    t16scan(box);
+  }, 6 * HEAVY);
+
+  it('the fixture: boundary N keeps a row with no stamp, N+1 follows, a hidden row has a variant, a /clear epoch and another family come after N, and the store half measures the SQL-measured cut', async () => {
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cut = await cutAt(rc, e(6));
+      expect([cut.asof, cut.tsCut, [...cut.keptUuids]], 'N, T_N and kept(N)').toEqual([e(6), Date.parse(t16ts(6)), [e(5)]]);
+      const measured = ((): Cut => {
+        const db = rH.openStoreRO(box);
+        try { return sqlCutAt(db, e(6), [e(5)]); } finally { db.close(); }
+      })();
+      expect((await rec()).asOfCutOf(rc, e(6)), 'CONTROL (R2): the store half deep-equals the cut measured with SQL, all seven fields')
+        .toEqual({ ok: true, cut: measured });
+      const variants = Number((rc.db.prepare(`SELECT count(*) AS n FROM entry_variants v JOIN entries x ON x.entry_id = v.entry_id
+        WHERE x.uuid = ? AND v.blob_id <> x.blob_id`).get(e(9)) as { n: number }).n);
+      expect(variants, 'CONTROL: the second copy gave hidden e9 one variant body').toBe(1);
+      const ts = (u: string): unknown => (rc.db.prepare('SELECT ts_ms AS t FROM entries WHERE uuid = ?').get(u) as { t: number | null }).t;
+      expect([ts(e(4)), ts(e(5)), ts(e(9))], 'two rows with no stamp; one written after N, stamped before T_N').toEqual([null, null, Date.parse(t16ts(5))]);
+      expect(rc.db.prepare(`SELECT s.name AS name, x.uuid AS uuid FROM sidecars s LEFT JOIN entries x ON x.entry_id = s.entry_id
+        WHERE s.name IN ('orphan44.txt', 'out44.txt') ORDER BY s.name`).all(), 'one sidecar linked to e11, one linked to nothing')
+        .toEqual([{ name: 'orphan44.txt', uuid: null }, { name: 'out44.txt', uuid: e(11) }]);
+      expect(rc.scope.transcriptPks, 'two confirmed epochs: the first transcript and the /clear one').toHaveLength(2);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: the parent hands the regex child the cut as the values it binds, and a row the cut hides is no --regex hit', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cutN = await cutAt(rc, e(6));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, true);
+      const a = await GRX.grepArgs(['--regex', '[z]qasofpos[t]']);
+      const open = recall.runGrep(rc, a, { spawn, budgetMs: 60_000 });
+      expect([open.exit, uuids(open)], 'CONTROL: with no cut, the row after N is a hit').toEqual([0, [e(8)]]);
+      expect(Object.hasOwn(jobs[0]!, 'cut'), 'with no cut the job says so, never by leaving the key out').toBe(true);
+      expect(jobs[0]!.cut).toBeNull();
+      const cut = recall.runGrep(withCut(rc, cutN), a, { spawn, budgetMs: 60_000 });
+      expect([cut.exit, cut.items, cut.total, cut.hint], 'exit 3 with the reach line, nothing shown or counted').toEqual([3, [], 0, libRead.SEARCH_REACH]);
+      expect(jobs[1]!.cut, 'the job carries lib asOfBinds of the cut, through JSON').toEqual(JSON.parse(JSON.stringify(L.asOfBinds(cutN))));
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: the child applies the lib predicate itself: hidden rows, a row with no stamp, a positional hide, a hidden row\'s variant and the sidecars of a hidden row or of none are never scanned', async () => {
+    const recall = await rec();
+    const worker = (await import('../../ccd/history/regex-worker.mjs')) as unknown as Worker;
+    const rc = await GRX.rc(box, ID);
+    try {
+      const cutN = await cutAt(rc, e(6));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, false);
+      const a = await GRX.grepArgs(['--regex', '[z]qasofpr[e]']);
+      recall.runGrep(rc, a, { spawn });
+      recall.runGrep(withCut(rc, cutN), a, { spawn });
+      expect(jobs, 'CONTROL: one job each, as the parent wrote them').toHaveLength(2);
+      const label = new Map<number, string>();
+      const byUuid = (u: string, l: string): void => { label.set(Number((rc.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(u) as { b: number }).b), l); };
+      const byName = (n: string, l: string): void => { label.set(Number((rc.db.prepare('SELECT blob_id AS b FROM sidecars WHERE name = ?').get(n) as { b: number }).b), l); };
+      byUuid(e(1), 'pre'); byUuid(e(8), 'post'); byUuid(e(9), 'step'); byUuid(e(4), 'null'); byUuid(e(5), 'kept');
+      byName('out44.txt', 'side'); byName('orphan44.txt', 'orphan');
+      label.set(Number((rc.db.prepare(`SELECT v.blob_id AS b FROM entry_variants v JOIN entries x ON x.entry_id = v.entry_id
+        WHERE x.uuid = ? AND v.blob_id <> x.blob_id`).get(e(9)) as { b: number }).b), 'stepvar');
+      const P = 'zqasof(?:pre|post|step|null|kept|side|orphan|var)';
+      const scan = (j: Job) => worker.scanRegexJob({ ...j, pattern: P, prefilter: null });
+      const open = scan(jobs[0]!);
+      expect(open.matches.map((m) => label.get(m.blob_id)).sort(), 'CONTROL: with no cut, the child matches every one')
+        .toEqual(['kept', 'null', 'orphan', 'post', 'pre', 'side', 'step', 'stepvar']);
+      const cut = scan(jobs[1]!);
+      expect(cut.matches.map((m) => label.get(m.blob_id)).sort(), 'under N: the row before N and kept(N) only').toEqual(['kept', 'pre']);
+      expect(cut.scanned, 'a hidden candidate is not even scanned').toBeLessThan(open.scanned);
+      const noKey: Record<string, unknown> = { ...jobs[1]!, pattern: P, prefilter: null };
+      delete noKey['cut'];
+      expect(() => worker.scanRegexJob(noKey), 'a job with no cut key is malformed, never read as uncut').toThrow('the job names no cut');
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D38: a kept row reaches the child with the cut, and a row with no stamp outside kept(N) does not: --regex end to end', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const run = async (r: CutRc, pattern: string) => recall.runGrep(r, await GRX.grepArgs(['--regex', pattern]), { budgetMs: 60_000 });
+      const kept = await run(rcN, '[z]qasofkep[t]');
+      expect([kept.exit, uuids(kept)], 'kept(N) is visible whatever its stamp').toEqual([0, [e(5)]]);
+      const nul = await run(rcN, '[z]qasofnul[l]');
+      expect([nul.exit, nul.items], 'a row with no stamp outside kept(N) is absent').toEqual([3, []]);
+      const open = await run(rc, '[z]qasofnul[l]');
+      expect([open.exit, uuids(open)], 'CONTROL: with no cut it is a hit').toEqual([0, [e(4)]]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a grep cursor is bound to its cut: minted with none, under N or under N+1, it resumes only under the same one', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const rcM = withCut(rc, await cutAt(rc, e(13)));
+      const page = async (r: CutRc, cursor: string | null) =>
+        recall.runGrep(r, await GRX.grepArgs(['zqasofpage', '--limit', '1', ...(cursor === null ? [] : ['--cursor', cursor])]));
+      const u = await page(rc, null);
+      const n = await page(rcN, null);
+      const m = await page(rcM, null);
+      expect([u.total, n.total, m.total], 'CONTROL: the count each cut leaves (e8 is after N, before N+1)').toEqual([3, 2, 3]);
+      const [cu, cn, cm] = [cursorOf(u.next), cursorOf(n.next), cursorOf(m.next)];
+      expect((await page(rc, cu)).exit, 'CONTROL: no cut, then no cut').toBe(0);
+      const nn = await page(rcN, cn);
+      expect([nn.exit, uuids(nn)], 'CONTROL: N then N, the second page').toEqual([0, [e(1)]]);
+      expect((await page(rcM, cm)).exit, 'CONTROL: N+1 then N+1').toBe(0);
+      for (const [name, r, c] of [['none then N', rcN, cu], ['N then none', rc, cn], ['N then N+1', rcM, cn], ['N+1 then N', rcN, cm]] as const) {
+        const s = await page(r, c);
+        expect([s.exit, s.reason, s.hint, s.items, s.total], name).toEqual([2, 'bad-args', STALE_GREP, [], 0]);
+      }
+      // With no cut the key is the one every earlier build printed: its hashed object holds no asof.
+      expect(libRead.decodeCursor(cu, 'grep')!.q).toBe(libRead.sha256Hex(libRead.canonicalJson({
+        words: libRead.sanitizeFtsQuery('zqasofpage'), regex: null, scope: ['family', ID, G],
+        role: null, tool: null, since: null, before: null, node: null, sort: 'recency', recall: false,
+      })).slice(0, 20));
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a --regex cursor is bound to its cut the same way, and refused before any child is spawned', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const jobs: Job[] = [];
+      const spawn = spyOn(jobs, true);
+      const argv = (cursor: string | null) => GRX.grepArgs(['--regex', '[z]qasofpag[e]', '--limit', '1', ...(cursor === null ? [] : ['--cursor', cursor])]);
+      const n = recall.runGrep(rcN, await argv(null), { spawn, budgetMs: 60_000 });
+      expect([n.exit, n.total], 'CONTROL: under N two hits, e8 hidden').toEqual([0, 2]);
+      expect(recall.runGrep(rc, await argv(null), { spawn, budgetMs: 60_000 }).total, 'CONTROL: with no cut, three').toBe(3);
+      const cn = cursorOf(n.next);
+      const spawned = jobs.length;
+      const s = recall.runGrep(rc, await argv(cn), { spawn, budgetMs: 60_000 });
+      expect([s.exit, s.reason, s.hint], 'N then none').toEqual([2, 'bad-args', STALE_GREP]);
+      expect(jobs.length, 'refused before the child').toBe(spawned);
+      const ok = recall.runGrep(rcN, await argv(cn), { spawn, budgetMs: 60_000 });
+      expect([ok.exit, uuids(ok)], 'CONTROL: N then N').toEqual([0, [e(1)]]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: an expand cursor is bound to its cut, with its target and given alone; with no cut its key is the target itself; alone, it resolves its target under the call\'s own cut first', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const rcM = withCut(rc, await cutAt(rc, e(13)));
+      const X = (r: CutRc, cursor: string | null, target: string | null) =>
+        recall.runExpand(r, { target, around: null, before: 5, after: 5, cursor, json: true });
+      const mint = (r: CutRc): string => {
+        const p = X(r, null, e(3));
+        expect(p.exit, 'CONTROL: the long row is visible').toBe(0);
+        return cursorOf(p.next);
+      };
+      const [cu, cn, cm] = [mint(rc), mint(rcN), mint(rcM)];
+      expect(libRead.decodeCursor(cu, 'expand')!.t, 'no cut: the key every earlier build printed').toBe(e(3));
+      expect(libRead.decodeCursor(cn, 'expand')!.t).toBe(L.expandCursorKey(e(3), e(6)));
+      const how = (target: string | null): string => (target === null ? 'alone' : 'with its target');
+      for (const [name, r, c] of [['none', rc, cu], ['N', rcN, cn], ['N+1', rcM, cm]] as const) {
+        for (const target of [e(3), null]) {
+          const p = X(r, c, target);
+          expect([p.exit, Number(p.items[0]?.['from'] ?? 0) > 0], `CONTROL ${name} then ${name}, ${how(target)}: the second page`).toEqual([0, true]);
+        }
+      }
+      for (const [name, r, c] of [['none then N', rcN, cu], ['N then none', rc, cn], ['N then N+1', rcM, cn], ['N+1 then N', rcN, cm]] as const) {
+        for (const target of [e(3), null]) {
+          const p = X(r, c, target);
+          expect([p.exit, p.reason, p.hint, p.items], `${name}, ${how(target)}`).toEqual([2, 'bad-args', STALE_EXPAND, []]);
+        }
+      }
+      // A bare --cursor resolves its target under the call's own cut BEFORE the key check: a window minted under N+1 around
+      // e8, which N hides, answers exit 3 under N, never the stale refusal, so it tells nothing about what N+1 showed.
+      const win = recall.runExpand(rcM, { target: null, around: e(8), before: 5, after: 5, cursor: null, json: true });
+      expect(win.exit, 'CONTROL: under N+1 the window around e8 is visible, and e3 outgrows its first page').toBe(0);
+      const cw = cursorOf(win.next);
+      expect(X(rcM, cw, null).exit, 'CONTROL: N+1 then N+1, alone').toBe(0);
+      const gone = X(rcN, cw, null);
+      expect([gone.exit, gone.reason], 'N+1 then N, alone, on a target N hides').toEqual([3, undefined]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: the header and the --json scope count only the transcripts the cut leaves visible, in the same grammar', async () => {
+    const recall = await rec();
+    const rc = await GRX.rc(box, ID);
+    try {
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      const GRAMMAR = /^scope=family\(claude-a-asof4, (\d+) transcripts\) coverage=this-box indexed-through=\S+ lag=\S+$/;
+      expect(GRAMMAR.exec(recall.scopeHeader(rc).line)?.[1], 'CONTROL: with no cut, the /clear transcript counts').toBe('2');
+      expect(GRAMMAR.exec(recall.scopeHeader(rcN).line)?.[1], 'under N, the /clear transcript holds nothing visible').toBe('1');
+      expect(recall.scopeJsonOf(rc).transcripts, 'CONTROL').toBe(2);
+      expect(recall.scopeJsonOf(rcN)).toEqual({
+        kind: 'family', id: ID, project: 'demo', families: [{ ccrc_id: ID, generation: G, first_seen_ms: rc.scope.families[0]!.firstSeenMs }],
+        families_total: 1, transcripts: 1,
+      });
+      // One definition: cli.mjs's --json envelope prints recall.mjs's object, and builds none of its own.
+      const read = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+      const cliText = read('cli.mjs');
+      expect(cliText).toContain('scope: scopeJsonOf(rc),');
+      expect(cliText).not.toMatch(/^function scopeJson\(/m);
+      expect(cliText).not.toContain('transcripts: rc.scope.transcriptPks.length');
+      expect(cliText).not.toContain('families_total:');
+      expect(read('recall.mjs')).not.toMatch(/^function jsonScope\(/m);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: a widened header counts and names only the families with a visible epoch', async () => {
+    const recall = await rec();
+    const a = await GRX.rc(box, ID);
+    const b = await GRX.rc(box, OID);
+    try {
+      const proj: GrepRc = { ...a, scope: { ...a.scope, kind: 'project', id: ID, generation: null, project: 'demo',
+        sessionPks: [...a.scope.sessionPks, ...b.scope.sessionPks],
+        transcriptPks: [...a.scope.transcriptPks, ...b.scope.transcriptPks].sort((x, y) => x - y),
+        families: [...a.scope.families, ...b.scope.families] } };
+      const projN = withCut(proj, await cutAt(a, e(6)));
+      expect(recall.scopeHeader(proj).line, 'CONTROL').toMatch(/^scope=project\(demo, 2 families\) coverage=this-box /);
+      expect(recall.scopeHeader(projN).line).toMatch(/^scope=project\(demo, 1 families\) coverage=this-box /);
+      expect(recall.scopeJsonOf(proj).families_total, 'CONTROL').toBe(2);
+      const j = recall.scopeJsonOf(projN);
+      expect([j.families_total, j.transcripts, j.families.map((f) => f.ccrc_id)]).toEqual([1, 1, [ID]]);
+      expect(JSON.stringify(j), 'the hidden family is not named, nor is its generation').not.toMatch(new RegExp(`${OID}|${GO}`));
+    } finally { a.db.close(); b.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37 and R8 (SEC-1): a widened tree heads only the families with a visible epoch, so a family the cut hides prints no heading, id or generation', async () => {
+    const recall = await rec();
+    const a = await GRX.rc(box, ID);
+    const b = await GRX.rc(box, OID);
+    try {
+      const proj: GrepRc = { ...a, scope: { ...a.scope, kind: 'project', id: ID, generation: null, project: 'demo',
+        sessionPks: [...a.scope.sessionPks, ...b.scope.sessionPks],
+        transcriptPks: [...a.scope.transcriptPks, ...b.scope.transcriptPks].sort((x, y) => x - y),
+        families: [...a.scope.families, ...b.scope.families] } };
+      const tree = (r: CutRc): GrepVerbResult => recall.runTree({ ...r, scopeArgs: [] }, { depth: 2, json: true });
+      /** Each family heading's first three words: `family <id> generation=<g>`. */
+      const heads = (r: GrepVerbResult): string[] => r.blocks.filter((l) => l.startsWith('family ')).map((l) => l.split(' ').slice(0, 3).join(' '));
+      const open = tree(proj);
+      expect(open.exit, JSON.stringify(open)).toBe(0);
+      expect(heads(open), 'CONTROL: with no cut both families head the tree, each with its generation')
+        .toEqual([`family ${ID} generation=${G}`, `family ${OID} generation=${GO}`]);
+      const r = tree(withCut(proj, await cutAt(a, e(6))));
+      expect(r.exit, JSON.stringify(r)).toBe(0);
+      expect(heads(r), 'only the visible family heads the tree').toEqual([`family ${ID} generation=${G}`]);
+      expect(JSON.stringify(r), 'the hidden family is not named anywhere in the answer, nor is its generation').not.toMatch(new RegExp(`${OID}|${GO}`));
+    } finally { a.db.close(); b.db.close(); }
+  }, HEAVY);
+
+  it('W2-D37: the lag is read over visible transcripts only: a hidden transcript with no end-of-file mark leaves the cut header measured', async () => {
+    const recall = await rec();
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    const u2 = Number((w.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(U2) as { pk: number }).pk);
+    const u1 = Number((w.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(U1) as { pk: number }).pk);
+    const LIVE = "FROM ingest_files WHERE source_key = '' AND status = 'live' AND transcript_pk = ?";
+    const orig = (w.prepare(`SELECT eof_ms AS m ${LIVE}`).get(u2) as { m: number | null }).m;
+    let rc: GrepRc | null = null;
+    try {
+      w.prepare(`UPDATE ingest_files SET eof_ms = NULL WHERE source_key = '' AND transcript_pk = ?`).run(u2);
+      rc = await GRX.rc(box, ID);
+      const rcN = withCut(rc, await cutAt(rc, e(6)));
+      expect(recall.scopeHeader(rc).line, 'CONTROL: with no cut, the /clear transcript has no mark').toMatch(/ indexed-through=unmeasured lag=unmeasured$/);
+      const eofMs = (w.prepare(`SELECT eof_ms AS m ${LIVE}`).all(u1) as Array<{ m: number | null }>).map((r) => r.m);
+      expect(eofMs.length > 0 && eofMs.every((m) => typeof m === 'number'), 'CONTROL: the first transcript is read to its end').toBe(true);
+      expect(recall.scopeHeader(rcN).line).toBe(libRead.headerLine({
+        kind: 'family', id: ID, project: 'demo', families: 1, transcripts: 1,
+        ...libRead.scopeLag({ eofMs: eofMs as number[], nowMs: rc.nowMs, recovering: false }),
+      }));
+    } finally {
+      w.prepare(`UPDATE ingest_files SET eof_ms = ? WHERE source_key = '' AND transcript_pk = ?`).run(orig, u2);
+      w.close();
+      rc?.db.close();
+    }
+  }, HEAVY);
+
+  it('W2-D38: the child spells no predicate of its own, the parent hands it lib asOfBinds through cutBinds, and the expand key suffix is spelled once, in lib', () => {
+    const read = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', 'history', f), 'utf8');
+    const worker = read('regex-worker.mjs');
+    expect(worker).toMatch(/^import \{[^}]*\basOfEntrySql\b[^}]*\} from '\.\/lib\.mjs';$/m);
+    for (const own of ['ts_ms', 'memberships', 'boundary_line', 'kept_blob_id']) expect(worker, own).not.toContain(own);
+    expect(read('recall.mjs').split('cut: cutOf(rc) === null ? null : cutBinds(rc),').length - 1, 'the job line').toBe(1);
+    for (const f of ['recall.mjs', 'regex-worker.mjs', 'cli.mjs']) expect(read(f), f).not.toContain(':asof:');
+    expect(read('lib.mjs').split("':asof:'").length - 1).toBe(1);
+  });
+});

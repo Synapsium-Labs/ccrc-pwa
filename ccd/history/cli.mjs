@@ -57,11 +57,11 @@ import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
   decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
-  decideRecallOff, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  decideRecallOff, parseSpoolLine,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
-import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
@@ -812,17 +812,6 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
-/** The --json scope object (§8.3). A widened scope names only a bounded prefix; `families_total` is complete. */
-function scopeJson(rc) {
-  return {
-    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
-      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
-    families_total: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length,
-  };
-}
-
 /** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
  *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
  *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
@@ -831,7 +820,7 @@ function emitResult(rc, res, json) {
   let text;
   if (json) {
     text = `${JSON.stringify(redactFinalJson(readEnvelope({
-      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
+      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJsonOf(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
       // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.

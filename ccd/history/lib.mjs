@@ -8493,17 +8493,34 @@ export function expandArgsOf(parsed) {
   };
 }
 
+/** W2-D37: what joins an expand cursor's key to the as-of boundary it was minted under. No key expand prints holds it: a
+ *  node id is a kind letter and hex, an entry key is a uuid or `x` and 32 hex, and an around key is
+ *  `around:<uuid>:<before>:<after>`. */
+const ASOF_KEY_SEP = ':asof:';
+
+/** W2-D37: an expand cursor's key. With no cut (`asof` null), the expansion's own key, unchanged, so a cursor printed by an
+ *  earlier build still resumes; under an as-of cut, that key, then `:asof:` and boundary N's uuid. A cursor minted under
+ *  one cut, or under none, therefore never equals the key of a call under another, and decideExpandCursor refuses it. A
+ *  uuid `asof` keeps the longest key at 91 characters, inside the cursor grammar's 128. */
+export function expandCursorKey(key, asof) {
+  return asof === null ? key : `${key}${ASOF_KEY_SEP}${asof}`;
+}
+
 /** What a decoded expand cursor names, for `expand --cursor <c>` given alone: its key is the target, or
- *  `around:<uuid>:<before>:<after>`. null when the key names nothing expand could resolve. */
+ *  `around:<uuid>:<before>:<after>`, followed under an as-of cut by expandCursorKey's suffix, which names no target and
+ *  is dropped here; the cut itself is checked against the call's own by decideExpandCursor (W2-D37). null when the key
+ *  names nothing expand could resolve. */
 export function expandResumeOf(cursor) {
   if (cursor === null || typeof cursor.t !== 'string') return null;
-  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(cursor.t);
+  const sep = cursor.t.indexOf(ASOF_KEY_SEP);
+  const t = sep === -1 ? cursor.t : cursor.t.slice(0, sep);
+  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(t);
   if (m !== null) {
     const before = Number(m[2]);
     const after = Number(m[3]);
     return before > AROUND_MAX || after > AROUND_MAX ? null : { target: null, around: m[1], before, after };
   }
-  return expandTargetOf(cursor.t) === 'bad' ? null : { target: cursor.t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
+  return expandTargetOf(t) === 'bad' ? null : { target: t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
 }
 
 /** An entry named by uuid: outside the scope is out-of-scope, never not-found (§8.2). */

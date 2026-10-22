@@ -3873,7 +3873,7 @@ Predicted, written before the run:
     - the header case: `expected '2' to be '1'`;
     - the widened case: `project(demo, 2 families)` under N;
     - the widened tree case: its CONTROL passes, then `only the visible family heads the tree` holds both headings, the hidden family's with its generation: Task 3's epoch filter drops its epoch, never its heading;
-    - the lag case: the cut header reads `indexed-through=unmeasured lag=unmeasured`;
+    - the lag case: measured: the cut header counts two transcripts, `expected 'scope=family(claude-a-asof4, 2 transc…' to be 'scope=family(claude-a-asof4, 1 transc…'` (predicted: the cut header reads `indexed-through=unmeasured lag=unmeasured`; both hold on the unguarded code, and the transcript count differs first);
     - the scan case: the worker holds no `asOfEntrySql` import.
 
 A different count means a prediction is wrong. Read the first failing line of each case before writing any code. When a CONTROL is what failed, correct the fixture, never the guard.

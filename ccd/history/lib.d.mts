@@ -933,6 +933,7 @@ export function expandArgsOf(parsed: { positional: readonly string[]; opts: Read
   { ok: true; args: ExpandArgs } | { ok: false; reason: 'bad-args' };
 export function expandResumeOf(cursor: Readonly<Record<string, unknown>> | null):
   { target: string | null; around: string | null; before: number; after: number } | null;
+export function expandCursorKey(key: string, asof: string | null): string;
 export function entryScopeVerdict(i: { found: boolean; inScope: boolean }): 'ok' | 'out-of-scope' | 'not-found';
 export function expandCuts(i: { whole: boolean; kind: 'entry' | 'sidecar'; provenance: string | null }): boolean;
 export function decideExpandCursor(i: { cursor: Readonly<Record<string, unknown>> | null; key: string; total: number }):
