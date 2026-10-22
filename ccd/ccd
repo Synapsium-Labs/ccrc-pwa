@@ -18993,9 +18993,31 @@ _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099
   [[ "$rc" -eq 0 ]] || return 0
   [[ "$pin" == "$w" ]] && return 0
   rm -f -- "$REG/$id.swappin"
-  rm -f -- "$REG/$id.swappinnote"
+  rm -f -- "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: every pin clear takes its expiry
   echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
   return 0
+}
+
+# THE PIN'S EXPIRY (D-6181, spec §3.3, D4). The pin stays one word; its end is
+# a separate field, `swappinexp` = `<epoch> <reset|ttl>`, so every older reader,
+# a supervisor still on the previous ccd mid-deploy, and a revert all keep
+# holding a new pin. `reset`: the later raw reset of home's windows at or above
+# SWAP_CEILING when the pin was set — the operator moved the session because
+# home was blocked, and that reason ends when the window resets. `ttl`: no home
+# window was blocked, the pin was set on home itself, or that reset lies beyond
+# the bound — the set time plus SWAP_PIN_TTL ("or after 24 h", whichever first).
+_swap_pin_expiry_to() {   # var home target now -> var = "<epoch> reset|ttl"
+  local __pe_out="$1" __pe_home="$2" __pe_tgt="$3" __pe_now="$4" __pe_w __pe_v __pe_r __pe_best=0 __pe_cap
+  __pe_cap=$(( __pe_now + SWAP_PIN_TTL ))
+  if [[ -n "$__pe_home" && "$__pe_tgt" != "$__pe_home" ]]; then
+    for __pe_w in five seven; do
+      _limit_field_to __pe_v "$__pe_home" "$__pe_w" 0
+      [[ "$__pe_v" =~ ^[0-9]+$ ]] && (( 10#$__pe_v >= SWAP_CEILING )) || continue
+      _limit_reset_to __pe_r "$__pe_home" "$__pe_w" && (( __pe_r > __pe_best )) && __pe_best=$__pe_r
+    done
+  fi
+  if (( __pe_best > __pe_now && __pe_best < __pe_cap )); then printf -v "$__pe_out" '%s reset' "$__pe_best"
+  else printf -v "$__pe_out" '%s ttl' "$__pe_cap"; fi
 }
 
 _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for THIS account (D-3097)
@@ -28728,9 +28750,14 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # tick's `_swap_pin_tick` would reach the same conclusion on its next pass;
   # doing it here means the two surfaces never disagree even for one tick.
   if [[ "${CCD_SWAP_AUTO:-}" == 1 ]]; then
-    [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+    [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"
   else
     _reg_set "$id" swappin "$target"
+    # D-6181: the expiry beside it, never in it; a write that fails leaves a
+    # legacy pin, which the tick gives an expiry on its first read.
+    local pexp pnow; _now_s_to pnow
+    _swap_pin_expiry_to pexp "$(_home_for "$id")" "$target" "$pnow"
+    _reg_set "$id" swappinexp "$pexp" 2>/dev/null || true
   fi
   # `cmd_ensure` runs in this same process at ccd:12815, but only when
   # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
@@ -28848,7 +28875,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   # the affinity arm actually reads, so leaving a pin standing beside it would
   # give one session two answers to the same question — and the pin's would win,
   # silently suppressing the return-home the operator just asked for.
-  [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+  [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: with its expiry
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
     && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
