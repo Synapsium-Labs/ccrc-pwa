@@ -1336,7 +1336,8 @@ into a pass.
   removal, and before the child's. At each site the order is the cwd ask, then the re-ask, then W2's mount ask, then
   `keep_of` or the forced removal. So the identity compare stands as close to the act as W2's mount ask allows, and the
   probe's bounded walk stands outside the window the re-ask leaves. The cwd ask has a window of its own,
-  `cwd-ask-to-opendir-window`, below.
+  `cwd-ask-to-opendir-window`, below. For a checkout the re-ask also proves its path a second time, after the identity
+  compare: `reask-re-proves-the-nested-checkouts-path`, below.
 - `reask-words-follow-the-owned-call`: owned's proof (1) fails as `containment-refuted`, a new emission site in the tail
   ws-expire shares. Every other answer (an identity that differs or cannot be measured, and owned's 2) fails as
   `worktree-remove-failed`. Both keep the tree, the branch and the breadcrumb, and both cut their detail.
@@ -1362,6 +1363,17 @@ into a pass.
   <id>)": the first step clears the hold, and the second lets the pane record its entry again. The wording alone
   changed. The hold, its return path and the writer of the field are as before, and the verbs are the operator's to
   run.
+- `reask-re-proves-the-nested-checkouts-path`: the re-ask compared a standing nested checkout's identity after
+  resolving its parent through any link (`_ws_path_ident` refuses a link only at the leaf), so a checkout moved out of
+  the child, with a link left in its parent path, measured the same and passed, and `git worktree remove --force` then
+  removed it through the link. With a checkout, the re-ask now derives the tree's physical root afresh
+  (`_ws_dir_physical`, a root that cannot be resolved answering 2) after the identity compare and runs
+  `_ws_reclaim_nested_proven` on that root and the checkout again: no link at any component, each a directory, resolving
+  to itself. Only an answer of 0 with the checkout still standing goes on; a refusal, or a checkout that vanished in the
+  window, answers 2 (`worktree-remove-failed`), and the first proof's results, which the tail reads after the removal, are
+  restored on every exit. The call arguments and order of the tail are as before, and the re-ask without a checkout
+  asks nothing more. This narrows the race and does not close it: the second proof is one instant, not an atomic
+  proof, and `reask-to-opendir-window` stands.
 
 **The suites.**
 - `darwin-prefixes-take-the-identity-shims`: on a Linux host, a forced-Darwin full tail now measures identities, and GNU
@@ -1426,7 +1438,9 @@ into a pass.
 - `reask-identity-is-per-attempt`: the recorded identities live for one attempt, and no tombstone field carries them.
   A resumed attempt re-proves them.
 - `reask-to-opendir-window`: the window from the last identity compare, through W2's mount read, to git's own opendir
-  (§4.7). The cwd probe's bounded walk comes before the re-ask, outside that window.
+  (§4.7). The cwd probe's bounded walk comes before the re-ask, outside that window. For a nested checkout the second
+  proof of its path (`reask-re-proves-the-nested-checkouts-path`) narrows this window and does not close it: it runs
+  once, directly after the identity compare, and the window from there to git's own opendir stays.
 - `cwd-ask-to-opendir-window`: the cwd ask's own window. The probe is asked before the re-ask, so a process that enters
   the tree after it, during the re-ask, W2's mount read or git's own run, is not asked. Each process's window opens at
   its own read inside the walk, not when the probe ends. The probe also measures the tree at its path as it walks, and

@@ -4337,7 +4337,9 @@ the spec, never this contract.
   `cwd-refusal-reuses-worktree-remove-failed`, `cwd-probe-holds-a-double-slash-physical-root`,
   `cwd-probe-collapses-a-double-slash-parent`, `cwd-probe-confirms-a-vanished-link-by-a-second-read` and
   `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`.
-- The tail window: `reask-words-follow-the-owned-call` and `reappeared-tree-refuses`.
+- The tail window: `reask-words-follow-the-owned-call`, `reappeared-tree-refuses` and
+  `reask-re-proves-the-nested-checkouts-path` (a nested checkout's path is proven a second time in the re-ask, so a
+  checkout moved out with a link left in its parent path is refused; the race is narrowed, not closed).
 - The suites: `darwin-prefixes-take-the-identity-shims`, `audit-document-key-pins-outside-the-boundary` and
   `r77-cases-time-their-race-through-a-python3-shim`.
 - Decided by what was built: none.
@@ -4364,7 +4366,8 @@ the spec, never this contract.
   The probe also states pid and tid reuse as a limit, with no slug.
 - The tail window: `reask-identity-is-per-attempt`, `reask-to-opendir-window`, `cwd-ask-to-opendir-window`,
   `tail-reasks-can-outrun-the-act-row`, `identity-found-after-the-kill-repeats` and `worktree-ask-to-force-window`,
-  narrowed, and `vanished-checkout-arms-ask-no-cwd`.
+  narrowed, and `vanished-checkout-arms-ask-no-cwd`. `reask-to-opendir-window` is also narrowed for a nested
+  checkout by `reask-re-proves-the-nested-checkouts-path`, and stands.
 - Unmeasured: `git-mount-crossing-unmeasured` and `exdev-class-moot-under-pi5-a`. The operator may measure either on a
   throwaway box of their own choosing.
 - W2's, standing: `human-gated-removals-ask-no-mounts` and `vanished-checkout-arms-ask-no-mounts`.
