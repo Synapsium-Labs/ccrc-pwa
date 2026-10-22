@@ -826,3 +826,62 @@ Recorded verbatim from the coordinator's fix-round mail, with one substitution: 
 >
 > Gate: everything this round touches, plus ccrc-install.test.ts and the suites of your first gate. Run ccrc-update.test.ts's touched describes locally; PR #1137's `test (server)` is the arbiter for the whole file. Name in the wave-done what ran where.
 > Landing unchanged: first-ready against runs 722 and 774, with merge-tree measured before any absorb. Push, then send wave-done in the same turn.
+
+## Coordinator rulings on review 806 (2026-10-22)
+
+Recorded verbatim from the coordinator's second fix-round mail, with two substitutions. As before, the review report's path is written as "the review's report", because this repository is public. The round's two reserve numbers are written as "the two numbers the mail names": a tracked file may not name an issued number before a plan defines it, and deviation-refs reds on one above the high-water. This round defines neither, and amends D-6363 and D-6365 in place.
+
+> Run 775, wave 23: fix round 2. Review 806 read 28df42ded. Its report is the review's report; read it whole before you start. These are my rulings on its eight findings.
+>
+> Record them in the plan, verbatim, as "Coordinator rulings on review 806 (2026-10-22)". Make the same substitution as last time: write the report's path as "the review's report".
+>
+> Reserve for this round: the two numbers the mail names, issued to this wave. Prefer amending D-6363 and D-6365 in place. Define a reserve number only for a departure that no existing entry covers, and name it in the wave-done.
+>
+> F1 and F4a, ruled together: D-6365's shape scan becomes one positive rule, under LC_ALL=C. This replaces the list of refused shapes. F4a is ruled NOT intended: a line that names a different key is not this knob's line. That follows the tree's own rule at ccd/ccrc:3181-3182, where `export OLD_KEY=…` and `export NOTE=KEY=…` name another key.
+> - Trim a line's leading spaces, tabs and CRs, the set `_box_env_value` trims. Then:
+>   - (a) The line is a comment if it now begins with `#`. Use the comment set the tree's env readers already use; if `_box_env_unit_whole` also takes `;`, follow it, and say which in the as-built note.
+>   - (b) The line is a plain assignment if it now begins, optionally after `export` plus spaces or tabs, with an identifier `[A-Za-z_][A-Za-z0-9_]*` immediately followed by `=`, and that identifier is NOT the knob. This is another key's line. A line that begins with exactly `CCRC_BACKUP_DATA_KEEP=` is the line `_box_env_value` takes.
+>   - (c) Any other line that names CCRC_BACKUP_DATA_KEEP as a whole token refuses, as unmeasured. A whole token has no `[A-Za-z0-9_]` byte on either side. An `export` of the knob itself is case (c): `export CCRC_BACKUP_DATA_KEEP=9` refuses.
+> - The scan runs whether or not a plain line is also present, as it does today. An odd line beside a plain one still refuses.
+> - Byte semantics everywhere (LC_ALL=C, the tree's precedent D-3833), so the box's locale cannot change an answer.
+> - Must refuse: `+=`, `:=`, a space or tab before `=`, a UTF-8 NBSP before `=`, a UTF-8 NBSP lead, a Latin-1 0xA0 lead, a 0xFF lead, a vertical-tab lead, `export` of the knob, and a line holding the bare name with no `=`.
+> - Must read as before (not refuse): a comment naming the knob, the `_OLD` suffix key, an `OLD_` prefix key, `NOTE=see CCRC_BACKUP_DATA_KEEP=4`, `export NOTE=CCRC_BACKUP_DATA_KEEP=4`, CRLF, a tab lead, a quoted value, and an absent key.
+> - Pin both sides: one B17 row per refusal shape and one must-not-refuse row per accepted shape (this also closes F4b). Run the byte-shape cases under LC_ALL=C and under a UTF-8 locale. Use C.UTF-8, or en_US.UTF-8 when `locale -a` lists it. If neither exists on the runner, skip that half visibly; never pass it silently.
+> - Mutation rows:
+>   - drop LC_ALL=C, and the UTF-8 lead case reds;
+>   - let (b) take the knob too, and the `export` case reds;
+>   - narrow (c) to start-of-line, and the NBSP-lead case reds;
+>   - drop (a), so comments are scanned, and the comment row reds.
+>   Measure each one red, then restore it byte-identical.
+> - What a refusal does stays as built. It is D-6347's invalid-value arm: `_bak_gc` returns before the count prune, and `ccrc backup` exits 1 after its backup. An unreadable setting changes nothing irreversible. Whether an unmeasurable knob should stop only its own act or the whole gc is carried to wave 24, which makes every operator tunable read ccrc.env. Do not change it here.
+> - Amend D-6365's text, `_bak_data_keep`'s comment and the README sentence to say the positive rule, not a list.
+>
+> F2 (minor): fix it.
+> - Add `left++` in own's catch, and in own's earlier `quickState` catch, so a refused own counts as left (D-6363).
+> - Add a T24 case on own: own's coord.db read fails at keep 2 with three more legacy dirs, and the summary's counts add up to the dirs on disk.
+> - Mutation row: delete the new `left++`, and T24-own reds.
+>
+> F3 (minor, text): fix the README. "A data set that reads as damaged is never thinned." Add one clause for the ruled exception: past the count a dir is read on presence and size, so damage of the same length there is not seen (D-6350, D-6364). Stay inside the consented README lines (mail 7950).
+>
+> F5 (minor): fix it. Add B18 cases for a dangling symlink at ccrc.env and for a directory there. Mutation row: delete `|| [ -L "$f" ]`, and the dangling case reds. If the directory case cannot red under any single mutation of the same arm, say so in the as-built note.
+>
+> F6 (minor, text): amend D-6350's opening and Step 7. Name `_bak_keepset`'s verification beside `thin`'s: two verifications in steady state at the default. State the worst case plainly, as argued and not measured: six full verifications, which reaches the 900 s deadline at Step 7's weighted figure.
+> - Then read, in the code, what the 900 s deadline does to a run that reaches it: the deadline's reader, D-6356's re-stamp, and the watchdog. Write that in one sentence of the as-built note, with its path:line.
+> - If reaching the deadline can make the watchdog or the control plane revert or fail a box that is healthy, STOP and report it in the wave-done before you land anything. Do not fix it in this round.
+>
+> F7 (minor, text): H2b's title cites D-6349, not D-6363.
+>
+> F8 (minor, text): fix all three slips.
+> - plan:600: "a rollback by flip thins".
+> - README:1205-1206: the CR is accepted too. This sentence is rewritten under F1 anyway.
+> - plan:234 and the comment at deploy/coordination-snapshot.mjs:1279-1280: say which dir is read again (only one whose quick read threw, or a stale dir after its record goes). State the side effect the reviewer names: outside sparse mode, a dir past the count is thinned on a reading taken before the count's verifications. It is harmless under the lock, because nothing else of ccrc's writes a backup dir.
+>
+> Routing is unchanged: class opus, effort xhigh. Round 1's first full run was unrun, not red, so there is no shallow signal to raise on.
+>
+> Growth: ccd/ccrc stands at +37 net against the stop line of 39. If F1's rule cannot fit under it, stop and report the measured count before landing. Do not compress unrelated code to make room.
+>
+> The gate is unchanged: the brief's suites, ccrc-update.test.ts by the touched describes, and PR #1137's CI test (server) as the arbiter for the whole file.
+>
+> Landing is still first-ready against runs 722 and 774. Measure `git merge-tree` against origin/main before pushing. Absorb only on a conflict or a red.
+>
+> Claim 2215 holds. Mail wave-done with the fingerprint when done.
