@@ -9964,7 +9964,10 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
  *  `rewrites - (projectDelta + projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full) plus any delta call that threw (the `delegation
  *  projection stale:` warn line names it). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
  *  (its no-op compare's two, the written checkpoint's one, `verifyDecodable`'s re-encode) and `cpBytes` the bytes of the last checkpoint it wrote, absent on a pass that
- *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. `retired` (D-6268) is the zero-delta retirement's count on a pass that called its door. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. `retired` (D-6268) is the zero-delta retirement's count on a
+ *  pass that called its door; `pendingBash` (D-6271) the builder's pending Bash calls on unmapped keys at the pass's settle; `cpCandidates` the
+ *  checkpoint's identity-candidate holds (agent stop-only and bare candidates, plus pending Bash). The formatter fills in list order, so the keys
+ *  after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
  *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
@@ -9974,7 +9977,7 @@ export const DELEGATION_PASS_SLOW_KEYS = [
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
-  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes', 'retired',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -10680,6 +10683,7 @@ class DelegationLane {
         f.cpActivities = cp.activities.length; f.cpMapping = Object.keys(cp.activityIdsByNaturalKey).length;
         const now = t.durable.commitMeasures();
         f.encodes = now.encodes - (t.measures?.encodes ?? 0);
+        f.pendingBash = now.pendingBash; f.cpCandidates = cp.pruningHolds.filter((h) => h.reason === 'identity-candidate').length;
         if (now.cpBytes !== null && now.writes > (t.measures?.writes ?? 0)) f.cpBytes = now.cpBytes;
       }
       f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;

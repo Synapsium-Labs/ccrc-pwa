@@ -1828,11 +1828,12 @@ export class DelegationDurability {
    *     NOT counted: row and codec encodes, journal-record encodes, and `applyCheckpointChange`'s `leaseState` compare;
    *   - `writes`: how many commits reached the write point (`encodeDelegationCheckpoint` calls);
    *   - `cpBytes`: `bytes.length` of the last of those (the canonical JSON plus its final LF: the bytes written), null before any.
+   *   - `pendingBash` (D-6271): a READ-TIME value, not cumulative: the builder's pending Bash calls on unmapped keys now.
    * Counted where the work happens, so a commit that throws later (a failed edge, a refused decode) still counted its encodes. A no-op
    * flush (skipped before the write point) therefore advances `encodes` by 2 and `writes` and `cpBytes` not at all.
    */
-  commitMeasures(): { encodes: number; writes: number; cpBytes: number | null } {
-    return { encodes: this.measuredEncodes, writes: this.measuredWrites, cpBytes: this.measuredBytes };
+  commitMeasures(): { encodes: number; writes: number; cpBytes: number | null; pendingBash: number } {
+    return { encodes: this.measuredEncodes, writes: this.measuredWrites, cpBytes: this.measuredBytes, pendingBash: this.builder.pendingBashCallCount() };
   }
   failure(): DelegationDurabilityFailure | null { return this.failureNow; }
   /** The last torn journal tail this process healed, or null: when, how many bytes, and where they are kept (D-4655). A heal is a
