@@ -1232,7 +1232,7 @@ describe('session store connect()', () => {
     first.onclose?.(new Event('close') as CloseEvent);
     vi.advanceTimersByTime(60_000);
     expect(lastSocket()).not.toBe(first);
-    expect(store.getState().askFrameSeen).toBe(true);    // nothing has opened yet: the old truth stands until it does
+    expect(store.getState().askFrameSeen).toBe(false);   // the drop itself took it down (the-ask-holds-through-a-reconnect)
     lastSocket().open();
     expect(store.getState().askFrameSeen).toBe(false);
     expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
@@ -1250,6 +1250,35 @@ describe('session store connect()', () => {
     vi.advanceTimersByTime(60_000);
     lastSocket().open();
     expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().disconnect();
+  });
+
+  // D-6325, `the-ask-holds-through-a-reconnect`: the flag is also what says a surface is LIVE (the sheet holds what it
+  // showed, read-only, while it is false). It therefore falls the moment the socket drops, not only when the next
+  // connection opens: from the drop until that connection's first ask or ask_cleared frame, no answer may go on the old
+  // connection's evidence.
+  it('the socket dropping resets askFrameSeen at once, before the next connection opens', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().conn).toBe('down');
+    expect(store.getState().askFrameSeen, 'down: nothing is live').toBe(false);
+    expect(store.getState().ask, 'the held envelope itself is untouched').toEqual(askFixture);
+
+    // And through the reconnect's own states: the flag stays down until a frame of the new connection sets it.
+    vi.advanceTimersByTime(60_000);
+    expect(store.getState().conn).toBe('connecting');
+    expect(store.getState().askFrameSeen).toBe(false);
+    lastSocket().open();
+    expect(store.getState().conn).toBe('open');
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
     store.getState().disconnect();
   });
 });
