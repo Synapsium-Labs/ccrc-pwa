@@ -127,6 +127,32 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
     expect(document.querySelectorAll('.opt-desc')).toHaveLength(1);
   });
 
+  // The held line when the pane's cursor rests on the commit row names that row by the SHEET's own word (the one its
+  // commit button shows), never by the pane's own label for it (a debris label here).
+  it.each([
+    [DEBRIS_LABEL, 'Next'],
+    ['Submit', 'Review answers'],
+  ])('a pick-several question with the cursor on a commit row labelled %j names it %j, never the pane\'s label', (commit, word) => {
+    const multi = askFixture(9).dialog!;
+    const dialog: Dialog = { ...multi, multi: { ...multi.multi!, commit, cursor: 'commit' } };
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({
+        type: 'ask', key: null,
+        ask: { questions: [{
+          question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+          options: [{ label: 'North' }, { label: 'East' }, { label: 'South' }],
+        }] },
+      });
+    });
+    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(screen.getByRole('button', { name: word })).toBeInTheDocument();
+    expect(dom()).toContain(`In the terminal the cursor is on the ${word} row`);
+    expect(dom()).not.toContain(DEBRIS_LABEL);
+  });
+
   it('fixture 2 (aged): the transcript\'s question, every label and every description', () => {
     renderSheet(2);
     expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question })).toBeInTheDocument();
