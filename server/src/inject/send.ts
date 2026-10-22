@@ -134,6 +134,7 @@ export type SendResult =
  * carries none. Never any of the text, the draft or the pane.
  */
 export function refusalShape(res: Extract<SendResult, { ok: false }>): string {
+  // `rows=` is the whole box only for `draft-present`; every other outcome carries the one marker row (so `rows=1`).
   if (res.draft === undefined) return 'no-box-reading';
   return `rows=${res.draft.split('\n').length} ${PASTE_CHIP.test(res.draft) ? 'chip' : 'no-chip'}`;
 }
@@ -147,6 +148,10 @@ const PANE_TAIL = 2000;
  *  queues the message — so this is bounded by render time, not by Claude. */
 const SUBMIT_POLL_MS = 120;
 export const SUBMIT_TRIES = 8;
+/** D-6366: once a post-Enter capture has FAILED, the watch also ends when this much time is spent (the larger of the
+ *  wall time and the sleeps asked for): fast-failing captures (a link blip) keep all their polls, a hung tmux whose
+ *  captures each fail after their own timeout ends the watch at its first, as before. */
+export const SUBMIT_BLIND_MS = SUBMIT_TRIES * SUBMIT_POLL_MS;
 
 /** How long to wait for the input box to echo the typed text (~2.4 s of sleeping
  *  at least; `ECHO_BUDGET_MS` below stretches that on a slow box). A busy pane
@@ -322,12 +327,19 @@ async function watchSubmit(
 ): Promise<{ seen: SubmitSeen; pane: string | null }> {
   let maybe = false;
   let last: string | null = null;
+  const now = d.now ?? Date.now;
+  const start = now();
+  let slept = 0;
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
+    slept += SUBMIT_POLL_MS;
     const pane = await d.tmux.captureAnsi(id);
     // D-6366: a failed capture is a blind poll, exactly like an absent box. One dropped read (a link drop) used to end
-    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) is what bounds it.
-    if (pane === null) continue;
+    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time.
+    if (pane === null) {
+      if (Math.max(now() - start, slept) >= SUBMIT_BLIND_MS) break;
+      continue;
+    }
     const read = draftOfMeasured(pane);
     // ABSENCE IS NOT PROOF OF DEPARTURE, and this is the one place where the
     // collapse read as the OPPOSITE of the truth: with no box in the capture
@@ -390,8 +402,11 @@ async function submitOverHeldStash(
       if (!turnWasRunning && turnRunning(window)) return { ok: true };
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
+    // D-6366: a watch that read no box buys no retry Enter: the first may have landed, and Claude Code gives the human's
+    // stashed draft back at submit, so a second would submit it. The final read decides.
+    if (pane === null) break;
   }
-  return enterIgnored(d, id, { still, ok: () => ({ ok: true }) });
+  return enterIgnored(d, id, { classify, onGone: async () => ({ ok: true }) });
 }
 
 /**
@@ -415,25 +430,28 @@ async function pressEnterAndConfirm(
   if (await submitted(d, id, sleep, still)) return { ok: true };
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, still)) return { ok: true };
-  return enterIgnored(d, id, { still, ok: () => ({ ok: true }) });
+  return enterIgnored(d, id, { classify: (pane, draft) => (still(pane, draft) ? 'ours' : 'gone'), onGone: async () => ({ ok: true }) });
 }
 
 /**
  * Two Enters pressed and our own text never left: `pressEnterAndConfirm`'s refusal, shared by the stash path.
  *
- * D-6366: this final read is the last chance to learn the text left. `gone` is the caller's own proof and answer: when
- * the read holds a box and `still` says our text is no longer in it, the Enter landed after all (a reply lost, every
- * watch poll blind), and the caller's success is returned in place of the refusal, exactly as a `gone` poll gives it.
+ * D-6366: this final read is the last chance to learn the text left, and the caller judges it with the classifier its
+ * own watch uses. `gone` (the Enter landed after all; a reply lost, every poll blind) returns the caller's success,
+ * as a `gone` poll gives it. `maybe-restored` (the box may be the human's restored draft) refuses `enter-ignored` with
+ * no `draft` and no `submittable`, so "Send it" can never press Enter on it. `ours` and an absent box refuse as before.
  */
 async function enterIgnored(
   d: SendDeps,
   id: string,
-  gone?: { still: StillInBox; ok: () => SendResult | Promise<SendResult> },
+  judge?: { classify: (pane: string, draft: string) => SubmitSeen; onGone: () => Promise<SendResult> },
 ): Promise<SendResult> {
   const stuck = await d.tmux.capture(id);
   const lastPane = await d.tmux.captureAnsi(id);
   const last = draftOfMeasured(lastPane ?? '');
-  if (gone !== undefined && lastPane !== null && last.box === 'present' && !gone.still(lastPane, last.draft)) return gone.ok();
+  const seen = judge !== undefined && lastPane !== null && last.box === 'present' ? judge.classify(lastPane, last.draft) : 'ours';
+  if (seen === 'gone') return judge!.onGone();
+  if (seen === 'maybe-restored') return { ok: false, error: 'enter-ignored', pane: (stuck ?? '').slice(-PANE_TAIL) };
   // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
   // which is what that token reports and is true whatever the last capture
   // shows. What CANNOT survive an absent box is the CLAIM beside it:
@@ -1054,9 +1072,9 @@ async function submitAroundStash(
       if (!stash.turnWasRunning && turnRunning(window)) return verifyRestore(d, id, sleep, stash);
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
+    if (pane === null) break; // D-6366: no retry Enter after a watch that read no box (see `submitOverHeldStash`)
   }
-  // D-6366: the loop's own classifier decides at the final read too, and only `gone` counts.
-  return enterIgnored(d, id, { still: (p, dr) => stashAwareStill(p, dr) !== 'gone', ok: () => verifyRestore(d, id, sleep, stash) });
+  return enterIgnored(d, id, { classify: stashAwareStill, onGone: () => verifyRestore(d, id, sleep, stash) });
 }
 
 function unverifiedRestore(id: string, why: string): SendResult {
@@ -1591,11 +1609,15 @@ export function sendPrompt(
       // whole box from it, not just the marker row `lastBox` carries.
       let lastPane: string | null = null;
       const nextPoll = echoPoller(d, sleep);
+      let polls = 0;
       while (!echoed && await nextPoll()) {
+        polls++;
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
         lastPane = ansi;
+        // D-6366: a box proven to be our own chip or rendering never echoes the needle; its wait ends at the floor.
+        if (polls >= ECHO_TRIES && (ownPasteChip(ansi, parts, provenance) !== null || ownRenderedBox(ansi, parts, provenance) !== null)) break;
         if (lastBox.box === 'absent') continue;
         if (lastBox.draft.startsWith(needle)) echoed = true;
       }
