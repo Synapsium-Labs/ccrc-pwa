@@ -333,6 +333,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
     - a docs merge while the newest contained release is unpublished, a draft, missing an asset, or failing its checksum, or while gh or the API is down;
     - a merge that touches `.github/workflows/release-main.yml` (D-6409);
     - this round's own landing merge, which changes `deploy/` and `.github/`.
+    - the first docs merge after a hand-cut `vX.Y.0` minor: `release.yml` builds from a tag checkout, so that release's `build.json` holds `"ref":"HEAD"`, not `"main"`, and `ref` is compared (D-6408). The next main-built release is a valid base again.
 
     None of these is a comparer miss, and the coordinator should not read one as a miss during the live proof. A docs merge whose base was built by an older builder or toolchain whose output differs (a builder change, a dependency resolved differently, a Node or npm version that changed the dists) also releases. That difference is real: the bytes differ, and the line names the first entry.
   - **Every merge builds.** A docs-only merge now spends the build's minutes and one tarball download. It attests and publishes nothing.
@@ -414,6 +415,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - `could not compare (<reason>); releasing <next>`.
 
   `<path>` is JSON-quoted, so no line can carry a newline or start a workflow command. These lines carry no `release-main.sh:` prefix, as the coordinator wrote them; the script's other messages keep it.
+  - **The first path.** `<K>` counts every differing path, MANIFEST included. `<path>` is the first differing path in the C locale other than `MANIFEST`, and `MANIFEST` only when nothing else differs. MANIFEST's digest lines move with every content change and it sorts first, so without this rule the line would name `MANIFEST` for every content, added or removed entry (found by fix round 2's implementer). Rows W25-C2, C5 and C6 pin it.
 
 
 ## File structure
