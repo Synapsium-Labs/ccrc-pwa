@@ -256,14 +256,16 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
     vi.spyOn(api, 'updates').mockResolvedValue(waitingAt('v0.0.10'));
     renderFleet(<UpdateIndicator form="row" />);
     expect(await screen.findByRole('button', { name: 'Dismiss v0.0.10' })).toBeInTheDocument();
-    // Its size is the stylesheet's: 24px under a fine pointer, the tap floor otherwise.
+    // Its size is the design system's `CloseButton` (the tap floor, borderless, transparent); the app sheet adds the
+    // compact 24px under a fine pointer and nothing else: no border, colour or background of its own.
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const base = /\.update-indicator-dismiss\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(base).toMatch(/min-width:\s*var\(--tap-min\)/);
-    expect(base).toMatch(/min-height:\s*var\(--tap-min\)/);
+    const rules = [...css.matchAll(/\.update-indicator-dismiss\s*\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(rules.length).toBeGreaterThan(0);
+    for (const body of rules) expect(body).not.toMatch(/\b(border|background|color|outline)[\w-]*\s*:/);
     const fine = /@media \(pointer: fine\)\s*\{[^@]*?\.update-indicator-dismiss\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(fine).toMatch(/min-width:\s*24px/);
     expect(fine).toMatch(/min-height:\s*24px/);
+    expect(screen.getByRole('button', { name: 'Dismiss v0.0.10' })).toHaveClass('min-w-tap', 'min-h-tap');
   });
 
   it('dismiss hides the indicator in the bar and the phone row alike', async () => {
@@ -367,5 +369,28 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
     await until(() => expect(indicators()).toHaveLength(0));
     expect(document.querySelector('.halt-banner'), 'and stands after the line is dismissed').not.toBeNull();
     expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeInTheDocument();
+  });
+
+  it('a dismissed stale view draws no stale words in the indicator\'s place, and the screen\'s status region still says it', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null });
+    const updates = vi.spyOn(api, 'updates')
+      .mockImplementationOnce(() => Promise.resolve(waiting()))
+      .mockImplementation(() => Promise.reject(new Error('offline')));
+    act(() => { dismissRelease('v0.0.9'); });
+    setSkin(REFINED);
+    atWidth(899);
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-project-a', project: 'project-a' })] }));
+    render(<App />);
+    await until(() => expect(updates).toHaveBeenCalledTimes(1));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    const region = (): string => [...document.querySelectorAll('.sr-only[role="status"]')].map((e) => e.textContent).join('|');
+    await until(() => expect(region(), 'the view is stale: the screen announces it').toContain(UPDATES_STALE_TEXT));
+    expect(indicators(), 'dismissed: nothing of the line renders').toHaveLength(0);
+    expect(document.querySelector('.update-indicator-stale'), 'and no stale words in its place').toBeNull();
+    // CONTROL: the same stale view, not dismissed, draws the line with its stale words.
+    act(() => { window.localStorage.clear(); resetDismissalForTests(); });
+    await until(() => expect(document.querySelector('.update-indicator-stale')).not.toBeNull());
+    expect(region()).toContain(UPDATES_STALE_TEXT);
   });
 });

@@ -62,6 +62,18 @@ describe('releaseDismissal', () => {
     expect(readDismissed()).toBe('v0.0.11');
   });
 
+  it('a dismissal over unreadable storage writes nothing, so it cannot lower a newer mark another tab stored', () => {
+    window.localStorage.setItem(KEY, 'v0.0.10');
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+    dismissRelease('v0.0.9');
+    expect(write, 'storage could not be read, so the write is skipped').not.toHaveBeenCalled();
+    expect(readDismissed(), 'the page mark still holds the dismissal while storage is unreadable').toBe('v0.0.9');
+    vi.restoreAllMocks();
+    expect(window.localStorage.getItem(KEY), 'the newer tag is still there').toBe('v0.0.10');
+    expect(readDismissed()).toBe('v0.0.10');
+  });
+
   it('the mark survives a reload', () => {
     dismissRelease('v0.0.9');
     resetDismissalForTests();

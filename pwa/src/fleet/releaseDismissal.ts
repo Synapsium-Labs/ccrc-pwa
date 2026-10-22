@@ -29,19 +29,23 @@ function higher(a: string | null, b: string | null): string | null {
   return compareReleaseTags(a, b) >= 0 ? a : b;
 }
 
-/** What storage holds, counted only when it is a well-formed tag. Never throws. */
-function readStored(): string | null {
+/** What storage says, in three words that are never folded: a tag, `absent` (nothing, or a value that is no tag), or
+ *  `unreadable` (the read threw). A write over `unreadable` could lower a newer mark another tab stored. */
+type Stored = { kind: 'tag'; tag: string } | { kind: 'absent' } | { kind: 'unreadable' };
+
+function readStored(): Stored {
   try {
     const raw = window.localStorage.getItem(KEY);
-    return isReleaseTag(raw) ? raw : null;
+    return isReleaseTag(raw) ? { kind: 'tag', tag: raw } : { kind: 'absent' };
   } catch {
-    return null;
+    return { kind: 'unreadable' };
   }
 }
 
 /** The release tag dismissed on this device (storage and this page together), or `null` when none is. */
 export function readDismissed(): string | null {
-  return higher(readStored(), pageMark);
+  const stored = readStored();
+  return higher(stored.kind === 'tag' ? stored.tag : null, pageMark);
 }
 
 /** Hide the release `tag` until a newer one waits. A non-tag is refused silently. Never lowers the mark: storage is
@@ -50,7 +54,8 @@ export function readDismissed(): string | null {
 export function dismissRelease(tag: string): void {
   if (!isReleaseTag(tag)) return;
   const stored = readStored();
-  if (stored === null || compareReleaseTags(tag, stored) === 1) {
+  // Over unreadable storage nothing is written: the write could lower a newer mark; the page mark below still holds.
+  if (stored.kind === 'absent' || (stored.kind === 'tag' && compareReleaseTags(tag, stored.tag) === 1)) {
     try {
       window.localStorage.setItem(KEY, tag);
     } catch {

@@ -21,7 +21,7 @@
 // status bar (both mounted by the frame at a desk only), `row` under Refined's phone header and in Instrument's fleet
 // column below the desk width. A door runs its command (`commandDoor`), and navigates by nothing of its own.
 import type { ReactNode } from 'react';
-import { Button, Door, Icon, toast } from '@ccrc/ui';
+import { CloseButton, Door, toast } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
 import { CONTENT_ID } from '../skins/frame';
 import { useFleetChrome } from './FleetChrome';
@@ -66,16 +66,12 @@ export function UpdateIndicator({ form }: { form: UpdateIndicatorForm }): ReactN
         {words}
       </Door>
       {stale && <span className="update-indicator-stale" aria-hidden="true">{UPDATES_STALE_TEXT}</span>}
-      <Button
-        variant="ghost"
-        size="fit"
-        className="update-indicator-dismiss"
-        aria-label={`Dismiss ${shown.tag}`}
+      <CloseButton
+        label={`Dismiss ${shown.tag}`}
         title="Hidden until a newer release; Settings › Updates still lists it"
+        className="update-indicator-dismiss"
         onClick={() => dismiss(shown.tag)}
-      >
-        <Icon name="x" size={16} />
-      </Button>
+      />
     </span>
   );
 }
