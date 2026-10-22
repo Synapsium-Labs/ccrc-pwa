@@ -6559,8 +6559,26 @@ describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
   it('an index outside the copy is a defect: TypeError, never a verdict', () => {
     const c = w5a3Copy([CL], [CL]);
     for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
-      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(/is not a row of the copy/);
     }
+  });
+
+  it('R6: the before witness is not bounded by the previous boundary: with no assistant row between two boundaries, the second is judged by the real row before the first', () => {
+    const c = w5a3Copy([CL], []);
+    const boundary2 = w5a3Uid(0xa3, 0x4001);
+    const summary2 = w5a3Uid(0xa3, 0x4002);
+    const rows: W5a3Row[] = [
+      ...c.rows,
+      w5a3Op(w5a3Uid(0xa3, 0x4000)),
+      { uuid: boundary2, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 },
+      { uuid: summary2, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 },
+      w5a3Op(w5a3Uid(0xa3, 0x4003)),
+      w5a3Asst(w5a3Uid(0xa3, 0x4004), CL),
+    ];
+    const bi2 = rows.findIndex((r) => r.uuid === boundary2);
+    const si2 = rows.findIndex((r) => r.uuid === summary2);
+    expect(rows.slice(c.si + 1, bi2).some((r) => r.type === 'assistant'), 'CONTROL: no assistant row between the two boundaries').toBe(false);
+    expect(w5a3Drv.admitBoundary(rows, bi2, si2)).toEqual(ADMITTED);
   });
 });
 

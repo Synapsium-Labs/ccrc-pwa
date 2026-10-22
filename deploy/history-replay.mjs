@@ -3193,7 +3193,9 @@ function admissionStmts(db) {
   return s;
 }
 
-/** One boundary that has a family and a time, judged in Task 1's holding copy. A boundary no copy holds is
+/** One boundary that has a family and a time, judged in Task 1's holding copy. A `boundary-absent` answer from
+ *  boundaryCopyOf throws rather than being counted: the boundary row was read from this same handle a moment earlier,
+ *  and no ccd/history writer deletes boundaries. A boundary no copy holds is
  *  boundary-uncopied, one whose copy has no summary row summary-absent; an admitted row names its summary row
  *  (summary_entry_id), so Baseline B can check the copy it reads again is this one. */
 function admitHeld(rs, b) {

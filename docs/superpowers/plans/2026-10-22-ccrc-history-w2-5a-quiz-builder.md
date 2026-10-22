@@ -3142,8 +3142,26 @@ describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
   it('an index outside the copy is a defect: TypeError, never a verdict', () => {
     const c = w5a3Copy([CL], [CL]);
     for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
-      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(/is not a row of the copy/);
     }
+  });
+
+  it('R6: the before witness is not bounded by the previous boundary: with no assistant row between two boundaries, the second is judged by the real row before the first', () => {
+    const c = w5a3Copy([CL], []);
+    const boundary2 = w5a3Uid(0xa3, 0x4001);
+    const summary2 = w5a3Uid(0xa3, 0x4002);
+    const rows: W5a3Row[] = [
+      ...c.rows,
+      w5a3Op(w5a3Uid(0xa3, 0x4000)),
+      { uuid: boundary2, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 },
+      { uuid: summary2, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 },
+      w5a3Op(w5a3Uid(0xa3, 0x4003)),
+      w5a3Asst(w5a3Uid(0xa3, 0x4004), CL),
+    ];
+    const bi2 = rows.findIndex((r) => r.uuid === boundary2);
+    const si2 = rows.findIndex((r) => r.uuid === summary2);
+    expect(rows.slice(c.si + 1, bi2).some((r) => r.type === 'assistant'), 'CONTROL: no assistant row between the two boundaries').toBe(false);
+    expect(w5a3Drv.admitBoundary(rows, bi2, si2)).toEqual(ADMITTED);
   });
 });
 
@@ -3392,7 +3410,9 @@ function admissionStmts(db) {
   return s;
 }
 
-/** One boundary that has a family and a time, judged in Task 1's holding copy. A boundary no copy holds is
+/** One boundary that has a family and a time, judged in Task 1's holding copy. A `boundary-absent` answer from
+ *  boundaryCopyOf throws rather than being counted: the boundary row was read from this same handle a moment earlier,
+ *  and no ccd/history writer deletes boundaries. A boundary no copy holds is
  *  boundary-uncopied, one whose copy has no summary row summary-absent; an admitted row names its summary row
  *  (summary_entry_id), so Baseline B can check the copy it reads again is this one. */
 function admitHeld(rs, b) {
@@ -3482,6 +3502,8 @@ mut deploy/history-replay.mjs "  for (let i = boundaryIndex - 1; i >= 0; i -= 1)
 cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
 # Expected RED (predicted): 2 failed, both with reason 'before-unknown' in place of 'after-other': the row before
 # every fixture boundary is the operator's /compact row, whose model is null.
+# M2 reds on every fixture because the row just before each boundary is the operator's /compact row with a null model, so M2
+# proves the assistant-type filter. M1 is what covers RP5's "only the row before" CONTROL.
 
 # M3 (W2-D66's CONTROL "most rows after", on the two-copy fixtures): the copy with the most rows after the boundary,
 # W1's window rule, ties to the smaller file_id, in place of derive.mjs's holding copy.
@@ -3571,6 +3593,12 @@ mut deploy/history-replay.mjs "  if (copy.summaryIndex === null) return { ...unj
 cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
 # Expected RED (predicted): 8 failed. On T8, TypeError: admitBoundary: summaryIndex null is not a row of the copy,
 # thrown from planted() in every case.
+
+# M16 (R6, fix round 1): the before witness stops at the previous boundary row.
+mut deploy/history-replay.mjs "  for (let i = boundaryIndex - 1; i >= 0; i -= 1) if (copyRows[i].type === 'assistant') nearestFirst.push(copyRows[i].model);" "  for (let i = boundaryIndex - 1; i >= 0; i -= 1) { if (copyRows[i].type === 'system') break; if (copyRows[i].type === 'assistant') nearestFirst.push(copyRows[i].model); }"
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 3')
+cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
+# Expected RED (measured): 1 failed | 23 passed, the "R6: the before witness is not bounded" case, before 'unknown'.
 
 cmp "$SCRATCH/replay.orig" deploy/history-replay.mjs && echo restored
 ```
