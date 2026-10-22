@@ -151,7 +151,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, DialogTabTarget } from '../../../shared/api';
+import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { OptionRow, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
@@ -214,14 +214,37 @@ export interface DialogSheetProps {
 
 export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
-  const dialog = useStore((s) => s.dialog);
+  const storeDialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
   const applyAnswered = (answeredId: string, next: Dialog | null): void => useStore.getState().applyAnswered(answeredId, next);
-  const hookAsk = useStore((s) => s.ask);
-  const askFrameSeen = useStore((s) => s.askFrameSeen);
+  const storeAsk = useStore((s) => s.ask);
+  const live = useStore((s) => s.askFrameSeen);
+  // D-6325, decision `the-ask-holds-through-a-reconnect` (F2) and its exit (F3). The surface is LIVE exactly while
+  // `askFrameSeen` holds (this connection has spoken about the envelope). What is SHOWN is the INPUTS of the last live
+  // render that showed a surface, kept in this ref:
+  //  - live, and `askSource` says something: the store's current values, recorded here;
+  //  - live, and `askSource` says `none` (the ask ended): the surface it was showing is marked `closed`, and stays
+  //    rendered, closed (`open={false}`, its content inert), so it leaves with its exit and never re-opens on its own;
+  //  - not live (the socket dropped, or the new connection has not spoken): the same held surface, as it was, read-only
+  //    (`claim` refuses every send) with one status line, so a reconnect neither unmounts the drawer nor closes a phone's
+  //    keyboard, and a `dialog` frame that arrives in the gap does not repaint it.
+  // The ref is written during render, idempotently (the same render writes the same value); it holds the store it
+  // belongs to, so another session's surface is never carried over.
+  const liveSource = askSource({ ask: storeAsk, dialog: storeDialog, askFrameSeen: live });
+  const shownRef = useRef<{ store: SessionStore; ask: HookAsk | null; dialog: Dialog | null; closed: boolean } | null>(null);
+  if (shownRef.current !== null && shownRef.current.store !== useStore) shownRef.current = null;
+  if (live && liveSource.kind !== 'none') {
+    shownRef.current = { store: useStore, ask: storeAsk, dialog: storeDialog, closed: false };
+  } else if (live && shownRef.current !== null && !shownRef.current.closed) {
+    shownRef.current = { ...shownRef.current, closed: true };
+  }
+  const held = shownRef.current;
+  const dialog = held === null ? storeDialog : held.dialog;
+  const hookAsk = held === null ? storeAsk : held.ask;
+  const closed = held !== null && held.closed;
   // D-6325: what an ask surface may show, decided once per render and before any branch returns (hooks run every
-  // render). Everything below renders from it.
-  const source = askSource({ ask: hookAsk, dialog, askFrameSeen });
+  // render). Everything below renders from it. A held surface is decided as it was when it was live.
+  const source = held === null ? liveSource : askSource({ ask: hookAsk, dialog, askFrameSeen: true });
 
   // The option index whose answer is in flight (null = none).
   const [answering, setAnswering] = useState<number | null>(null);
@@ -283,6 +306,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     sending.current = locked;
   });
   const claim = (): boolean => {
+    // The gap is read-only (`the-ask-holds-through-a-reconnect`): no answer goes on the old connection's evidence.
+    if (!live) return false;
     if (sending.current) return false;
     sending.current = true;
     return true;
@@ -317,9 +342,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   const askKey = hooked ? JSON.stringify(envelope) : null;
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
-  const open = hooked
+  const open = !closed && (hooked
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
-    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId;
+    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId);
 
   const hide = (): void => {
     if (hooked) {
@@ -610,10 +635,22 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
 
   return (
     <AskSheet open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title}>
-      {surface}
+      {/* The gap's one status line, at the container level so every kind of surface gets it (the approval, a question,
+          the review, a menu, the terminal door), in the plain words of `RECONNECTING`. A closed surface is on its way
+          out and says nothing. */}
+      {!live && !closed && <p className="dlg-copy" role="status">{RECONNECTING}</p>}
+      {/* The surface always sits in this one wrapper, so it never remounts when the ask ends: `inert` takes every control
+          in it out of reach once the surface is closed (a closing drawer still holds its content for the exit). */}
+      <div className="contents" inert={closed}>
+        {surface}
+      </div>
     </AskSheet>
   );
 }
+
+/** The one sentence the sheet says while the socket is down or the new connection has not yet spoken: the ask stays up and
+ *  nothing can be sent. A sentence constant, so `plain-words.test.ts` reads it. */
+const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
 
 /** The titles of the two surfaces that offer only the terminal. Sentence constants, so `plain-words.test.ts` reads them. */
 const UNREADABLE_TITLE = "Claude is asking a question this screen can't read yet.";

@@ -110,9 +110,11 @@ export interface SessionState {
   ask: HookAsk | null;
   /** D-6325: has an `ask` or `ask_cleared` frame arrived on THIS connection? `ask` above survives a dropped socket
    *  (the automatic reconnect never calls `disconnect()`), so by itself it cannot tell "no envelope" from "not yet
-   *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). False when
-   *  the store is created, on every socket open (automatic reconnects included) and on `disconnect()`; a dialog frame
-   *  never sets it. Per connection, never persisted. */
+   *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). It is the
+   *  surface's LIVENESS: false when the store is created, the moment the socket is anything but open (the drop, and
+   *  every reconnect attempt), on every socket open and on `disconnect()`; a dialog frame never sets it. While it is
+   *  false the sheet that was showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`).
+   *  Per connection, never persisted. */
   askFrameSeen: boolean;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
@@ -830,7 +832,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
             return file === null ? since : `${since}&sinceFile=${encodeURIComponent(file)}`;
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
-          onState: (conn) => set({ conn }),
+          // D-6325 (`the-ask-holds-through-a-reconnect`): the flag is the surface's LIVENESS, so it falls the moment the
+          // socket is anything but open, not only when the next one opens. From the drop to that connection's first
+          // `ask`/`ask_cleared` frame nothing is live: the sheet keeps what it showed, read-only (`DialogSheet`).
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -838,6 +843,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           onOpen: () => {
             // D-6325: a new connection has said nothing about the envelope yet. The `ask` the store holds is the last
             // connection's; it is not current until this one's first `ask` or `ask_cleared` frame sets the flag again.
+            // (`onState` already lowered it at the drop; this keeps the open itself a reset, whatever state preceded.)
             set({ askFrameSeen: false });
             reportVisible();
           },
