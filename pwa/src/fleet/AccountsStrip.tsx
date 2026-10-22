@@ -23,8 +23,8 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
-import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
+import { commandDoor } from '../command/door';
 import { ACCOUNTS_DOOR_LABEL, CompactGauges, type CompactArrangement } from './CompactGauges';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
@@ -98,7 +98,9 @@ export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}
   else if (accounts.length === 0) placeholder = 'no accounts reporting';
   else if (live.length === 0) placeholder = 'all lanes disabled';
 
-  const openAccounts = (): void => navigate('/accounts');
+  // The strip is the `go-accounts` door: it asks the command layer, which navigates, as the palette's "Go to
+  // Accounts" does.
+  const door = commandDoor('go-accounts');
   // role="link" (not "button"): this mirrors an <a> to /accounts, so it takes
   // the anchor's own keyboard contract — Enter activates, Space does not
   // (Space belongs to role="button"). tabIndex=0 is what makes a <div> reach
@@ -107,7 +109,7 @@ export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    openAccounts();
+    door.onClick();
   };
 
   if (compact !== undefined) return <CompactGauges compact={compact} lanes={live} roster={roster} placeholder={placeholder} />;
@@ -118,7 +120,7 @@ export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}
       role="link"
       tabIndex={0}
       aria-label={ACCOUNTS_DOOR_LABEL}
-      onClick={openAccounts}
+      {...door}
       onKeyDown={onKeyDown}
     >
       {placeholder !== null ? (

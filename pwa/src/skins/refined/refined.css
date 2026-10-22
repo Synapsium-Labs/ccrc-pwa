@@ -245,8 +245,8 @@
 }
 
 /* W2 Task S5 (D-5471; spec §5.3, Fleet and Shell, phone rows): Refined's phone header and its `+ New`. Layout only:
-   the readout keeps `.fleet-count`'s face and ink, the doors `Door`'s, the gauges the compact grid's, the button
-   `Button`'s primary fill. Neither is mounted at a desk (`useMediaQuery`), so nothing here is width-gated. */
+   the readout keeps `.fleet-count`'s face and ink, the doors `Door`'s, the accounts strip its own
+   (fleet.css's `.accounts-strip`), the button `Button`'s primary fill. Neither is mounted at a desk (`useMediaQuery`), so nothing here is width-gated. */
 .ref-phone-head {
   display: grid;
   gap: var(--sp-2);
