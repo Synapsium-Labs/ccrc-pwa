@@ -432,7 +432,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       // Nothing else in the frame names or draws an unread count: the list head's Mail door is gone at a desk.
       expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 1, bell: 1 });
       expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
-      expect(document.querySelectorAll('[class*="bg-status-attention-tint"]'), `${width}px: count pills`).toHaveLength(1);
+      expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
       cleanup();
     }
     // The printed count is capped like the sibling doors' and the name carries the real number.
@@ -449,7 +449,8 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       mount('/');
       const door = within(rail()).getByRole('button', { name: 'Inbox' });
       expect(door.textContent, `${width}px`).toBe('Inbox');
-      expect(door.querySelector('[class*="bg-status-attention-tint"]'), `${width}px`).toBeNull();
+      expect(door.querySelector('.ins-rail-count'), `${width}px`).toBeNull();
+      expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
       expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
       cleanup();
     }

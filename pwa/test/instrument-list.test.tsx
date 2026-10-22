@@ -18,8 +18,10 @@
 // `browser/instrument-desk.browser.test.ts`'s. MUTATION TABLE (plan Task T2e Step 3; RUN, this suite alone):
 //   the dense block's media prelude without (pointer: fine) ... "nothing of the dense arrangement is declared outside the fine-pointer desk block"
 //                                                                 (and "under a fine pointer at a desk a status row is two lines on --row-h …")
-//   the one-line row's lamp rule removed ..................... "under a fine pointer at a desk a status row is two lines on --row-h …"
-//   the state's flex `0 0 auto` as `0 1 auto` ................. "under a fine pointer at a desk a status row is two lines on --row-h …"
+//   the no-context row's lamp rule removed .................... "under a fine pointer at a desk a status row is two lines on --row-h …"
+//   the state's flex `0 0 auto` as `0 1 auto` + `min-width: 0` ... "under a fine pointer at a desk a status row is two lines on --row-h …"
+//                                                                 (`expected '\n flex: 0 1 auto;\n min-width:…' to match /flex:\s*0 0 auto/`; the browser file's
+//                                                                 layout does not change under it, a wrapped flex line deciding on max-content sizes)
 // The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
 // file's header's.
 import { readFileSync } from 'node:fs';
@@ -456,8 +458,11 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The lamp and the actions button lose the three-line centring margin they carry from the shared sheet.
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
     expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
-    // A one-line row (no context fact) centres its lamp with its name (T2e fix round 1, F5).
-    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE)).toMatch(/align-self:\s*center/);
+    // A row with no context fact makes its name's line the floor high and puts the lamp at that line's middle, so the
+    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix rounds 1 and 2, F5).
+    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE))
+      .toMatch(/margin-top:\s*calc\(\(var\(--row-h\) - var\(--fs-base\) \* var\(--lh-tight\)\) \/ 2\)/);
     mount();
     expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
@@ -474,7 +479,8 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
   it('nothing of the dense arrangement is declared outside the fine-pointer desk block', () => {
     // A coarse pointer, or a width below 900, keeps the shared sheet's `--tap-min` rows, group heads and toggle.
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-body > .sess-open', '.ins-row .sess-body > .sess-meta:not(.sess-meta--context)',
-      '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', '.ins-row .sess-actions',
+      '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child',
+      '.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', '.ins-row .sess-actions',
       '.ins-row .sess-meta--context', '.ins-group-head', '.ins-toggle-option']) {
       expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');

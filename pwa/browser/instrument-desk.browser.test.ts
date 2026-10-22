@@ -17,9 +17,13 @@
 //   fleet.css's `.sess-actions::before` inset without
 //     the border's 2px (the 42 px hit area it documents)  "under touch emulation, every row and control is at least 44 px"
 //                                                         (the hit area is the padding box, clientWidth, not the border box)
-//   the one-line row's lamp rule removed ............... "the lamp sits on the name's first line in every row …"
-//   the state's flex `0 0 auto` as `0 1 auto` + min-width 0  "at 1280 (the 340 column) … every row is at most three lines and under 61 px"
-//                                                         (and "at 1280 the two needs-you rows … are exactly three lines")
+//   the lamp's alignment rule removed ................. "the lamp sits on the name's first line in every row …"
+//   the dense body as the old grid (`grid-template-columns:
+//     minmax(0, 1fr) fit-content(60%)`, context `grid-column: 1 / -1`)  "at 1280 (the 340 column) … every row is at most three lines and under 61 px"
+//                                                         (`lines: expected 4 to be less than or equal to 3`), "…exactly three lines" (`expected 4 to be 3`)
+//   the dense body `flex-flow: row nowrap` ............. the same cases (`lines: expected 4 to be 3`, `name: expected false to be true`)
+// The state's `flex: 0 0 auto` as `0 1 auto` + `min-width: 0` is NOT red here (a wrapped flex line is decided on max-content
+// sizes before any shrinking, so the layout is identical): test/instrument-list.test.tsx's rule pin catches it.
 // The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
 // `--row-h`, which is 44 under a coarse pointer already. That mutant is test/instrument-list.test.tsx's.
 //
@@ -51,6 +55,12 @@ const SESSIONS = [
   session('pool-tag-cleanup-run', 'idle', 'idle'), session('fleet-words-plain-pass', 'idle', 'idle'),
   session('session-header-title', 'idle', 'idle'),
   session('drawer-pty-follow-up', 'dead', 'dead'), session('echo-wait-budget-fix', 'dead', 'dead'),
+  // A main checkout of a second project that needs the operator, with a long branch for its name (a main checkout's
+  // label is its branch): no context fact, and the name and `waiting · needs you` do not fit side by side at 340, so
+  // the row is two lines with no context.
+  session('main', 'attention', 'idle', {
+    id: 'project-b', project: 'project-b', workdir: '/w/project-b', workspace: null, name: null, branch: 'project-b-with-a-long-name',
+  }),
 ];
 const FIXTURE: AppFixture = {
   api: {
@@ -134,8 +144,8 @@ describe('no empty fourth column', () => {
  *  column's own head (the wordmark and five doors, 120 px with the count line) sat above it. MEASURED on this fixture
  *  (names of 17 to 25 characters, three-line rows at 61 px): 352 px, at 1280x800, 1440x900 and 1599x900. */
 const BEFORE = 352;
-/** What T2e removes from that offset on this fixture, written exactly as measured: 352 before, AFTER_OFFSET after, a
- *  saving of BUDGET px, not rounded down. It is the head's chrome (the wordmark and the doors row; the count line
+/** What T2e removes from that offset on this fixture, written exactly as measured: 352 before, 223 after, a saving of
+ *  129 px, not rounded down (AFTER_OFFSET and BUDGET below). It is the head's chrome (the wordmark and the doors row; the count line
  *  stays), the toggle (44 to 32) and the first group head (44 to 32). */
 const AFTER_OFFSET = 223;
 const BUDGET = BEFORE - AFTER_OFFSET;
@@ -217,6 +227,8 @@ async function measureRows(page: import('playwright-core').Page) {
   });
 }
 
+/** The two main checkouts: no workspace, so no context fact. */
+const MAIN_CHECKOUTS = ['project-a', 'project-b'];
 const NAMES = SESSIONS.map((s) => (s as { workspace: string | null }).workspace).filter((w): w is string => w !== null);
 
 describe('dense rows under a fine pointer', () => {
@@ -236,7 +248,7 @@ describe('dense rows under a fine pointer', () => {
             expect(r.asks, `${r.id}: no ask`).toBe(false);
             expect(r.name, `${r.id}: name`).toBe(true);
             expect(r.state, `${r.id}: state word`).toBe(true);
-            expect(r.context, `${r.id}: context`).toBe(r.id !== 'project-a'); // a main checkout has none
+            expect(r.context, `${r.id}: context`).toBe(!MAIN_CHECKOUTS.includes(r.id)); // a main checkout has none
             // Every fact is drawn, at most as name, state, context: three lines, under the 61 px of main's rows.
             expect(r.lines, `${r.id}: lines`).toBeLessThanOrEqual(3);
             expect(r.height, `${r.id}: height`).toBeLessThan(61);
@@ -247,20 +259,25 @@ describe('dense rows under a fine pointer', () => {
               expect(r.height, `${r.id}: height`).toBeLessThanOrEqual(42);
             }
           }
-          expect(rows.filter((r) => r.nameLines === 1 && r.beside).length, 'rows that fit').toBeGreaterThanOrEqual(5);
+          // The rows that fit, exactly: at 340 neither needs-you row nor the second main checkout (a 26-character name
+          // beside `waiting · needs you`); at 420 only project-a-review-wave-two and project-b do not.
+          const fit = rows.filter((r) => r.nameLines === 1 && r.beside).map((r) => r.id).sort();
+          const open = ['project-a', 'project-a-banner-quiet-line', 'project-a-desk-density-pass', 'project-a-gauge-window-words',
+            'project-a-inspector-sections-tidy', 'project-a-transcript-search-rungs'];
+          expect(fit, 'rows that fit').toEqual(width === 1280 ? open : [...open, 'project-a-ask-routing-follow-up'].sort());
         } finally {
           await ctx.close();
         }
       });
     }
 
-    it(`at 1280 the two needs-you rows, a long name beside "waiting · needs you", are exactly three lines: the name, the state, the context (${theme})`, async () => {
+    it(`at 1280 the two workspace needs-you rows, a long name beside "waiting · needs you", are exactly three lines: the name, the state, the context; the second main checkout is the name and the state (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1280, 800, '/');
       try {
         const rows = (await measureRows(page)).filter((r) => r.needsYou);
-        expect(rows.map((r) => r.id).sort()).toEqual(['project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two']);
+        expect(rows.map((r) => r.id).sort()).toEqual(['project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two', 'project-b']);
         for (const r of rows) {
-          expect(r.lines, `${r.id}: lines`).toBe(3);
+          expect(r.lines, `${r.id}: lines`).toBe(r.id === 'project-b' ? 2 : 3);
           expect(r.beside, `${r.id}: the state word has dropped to its own line`).toBe(false);
         }
       } finally {
@@ -268,7 +285,7 @@ describe('dense rows under a fine pointer', () => {
       }
     });
 
-    it(`at 1600 every row but project-a-review-wave-two is two lines (one for the main checkout), and that row is three (${theme})`, async () => {
+    it(`at 1600 every row but project-a-review-wave-two is two lines (one for the main checkout project-a), and that row is three (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1600, 900, '/');
       try {
         const rows = await measureRows(page);
@@ -286,8 +303,10 @@ describe('dense rows under a fine pointer', () => {
       try {
         const rows = await measureRows(page);
         // The comment in instrument.css says the lamp sits on the name's line; in a one-line row (no context fact) the
-        // name is centred in the floor, so the lamp has to be too.
+        // name is centred in the floor, so the lamp has to be too; in the second main checkout the state has dropped to a
+        // second line with no context, and the lamp stays on the first.
         expect(rows.find((r) => r.id === 'project-a')!.lines, 'the main checkout is one line').toBe(1);
+        expect(rows.find((r) => r.id === 'project-b')!.lines, 'the second main checkout is two lines, no context').toBe(2);
         expect(new Set(rows.map((r) => r.lines)), 'one-, two- and three-line rows are all in the fixture').toEqual(new Set([1, 2, 3]));
         for (const r of rows) {
           expect(Math.abs(r.lamp - r.nameFirst), `${r.id}: lamp ${r.lamp} vs name ${r.nameFirst}`).toBeLessThanOrEqual(1);

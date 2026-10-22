@@ -375,10 +375,16 @@
   .ins-row .sess-line > :first-child {
     margin-top: 0;
   }
-  /* A row with no context fact (a main checkout) is one line, centred in the floor, so its lamp is centred with it: the
-     shared sheet's `align-self: start` would leave the lamp above the name's line (T2e fix round 1, F5). */
+  /* A row with no context fact (a main checkout) has slack only when it is ONE line, and the name is centred in the
+     floor. So its name's line IS the floor high, the text centred in it, and the lamp sits at that line's middle: on the
+     name's first line whether the state stays beside the name or drops under it (T2e fix rounds 1 and 2, F5). The
+     lamp's own height is the shared sheet's (`--fs-base` x `--lh-tight`). */
+  .ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open {
+    min-height: var(--row-h);
+    align-items: center;
+  }
   .ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child {
-    align-self: center;
+    margin-top: calc((var(--row-h) - var(--fs-base) * var(--lh-tight)) / 2);
   }
   .ins-row .sess-actions {
     align-self: center;
