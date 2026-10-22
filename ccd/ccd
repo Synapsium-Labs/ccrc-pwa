@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=574df6b708d145ca303b37c8b21cd672e67c4a2836376c61ad2dfaf4211dc812
+# ccrc:generated 1 sha256=b34a08d0eab77fe3b7f72659e611f7ed6700b5c553c025c2be2bd9aed7a937ff
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33037,6 +33037,16 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # is the project directory under another spelling. Birth times are not
   # compared: both are read at one instant, and one inode has one. A measure
   # that fails is 2, never 1 and never a pass.
+  #
+  # ASKED AT THE ACT'S START, AND AGAIN BEFORE EVERY STANDING FORCED REMOVAL
+  # (path-identity spec §4.7). `_ws_reclaim_tail` asks it once, before the
+  # settle, and `_ws_reclaim_reask` asks it again, whole, directly before each
+  # standing nested checkout's and the child's keep and again before each
+  # forced removal. Each call re-lists the registry, re-reads every row and
+  # makes its own identity walk and its own read of the mount table; nothing
+  # an earlier call answered is read. The two identities it measures last are
+  # what the tail records from its first call, and what each re-ask compares
+  # its own fresh measures with.
   local id="$1" wd="$2" main="$3" rc nested
   _WS_OWNED_WHY=''; _WS_OWNED_MAINID=''; _WS_OWNED_WDID=''
   _ws_reclaim_plain_path "$wd" \
@@ -33082,9 +33092,10 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   return 0
 }
 
-_WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''
+_WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''; _WS_NPROOF_IDENT=''
 _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie inside the resolved tree wdreal
-  #                                  (_WS_NPROOF_GONE=1: it no longer exists); 1 (_WS_NPROOF_WHY) when not
+  #                                  (_WS_NPROOF_GONE=1: it no longer exists; otherwise _WS_NPROOF_IDENT, the
+  #                                  identity of the checkout that stands); 1 (_WS_NPROOF_WHY) when not
   # CONTAINMENT IS PROVEN AT REMOVAL TIME, NOT READ OFF A STRING (spec §5.5,
   # rung 9). A recorded nested path that merely STARTS with the child's
   # resolved path proves nothing: a directory between the two swapped for a
@@ -33096,8 +33107,15 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
   # on disk to remove) — PROVEN absent (`_ws_reclaim_absent`), never a failed
   # `-e`, which EACCES answers too; and a checkout that stands must resolve
   # (`pwd -P`) to exactly the recorded path.
+  # AND ITS IDENTITY IS RECORDED HERE (path-identity spec §4.7). A checkout
+  # that stands is measured once it has resolved to itself (`_ws_path_ident`:
+  # its parent resolved, its leaf never followed), and `_WS_NPROOF_IDENT`
+  # carries that identity ('' on GONE and on 1) for `_ws_reclaim_reask` to
+  # compare directly before the checkout's keep and again directly before its
+  # forced removal. A measure that fails is 1, never a pass: what was not
+  # measured is never an identity.
   local root="$1" p="$2" rest cur seg real arc
-  _WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''
+  _WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''; _WS_NPROOF_IDENT=''
   [[ -n "$root" ]] || { _WS_NPROOF_WHY="the child's own tree could not be resolved, so no checkout inside it can be proven to be there"; return 1; }
   { _ws_reclaim_plain_path "$p" && [[ "$p" == "$root"/?* ]]; } \
     || { _WS_NPROOF_WHY="the record names $p, which is not one plain path strictly inside $root"; return 1; }
@@ -33115,6 +33133,8 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
   done
   real=$(cd -- "$p" >/dev/null 2>&1 && pwd -P) || { _WS_NPROOF_WHY="could not resolve $p"; return 1; }
   [[ "$real" == "$p" ]] || { _WS_NPROOF_WHY="$p resolves to $real, not to itself"; return 1; }
+  _ws_path_ident "$p" || { _WS_NPROOF_WHY="the checkout at $p could not be measured by device and inode (${_WS_IDENT_WHY:-it reads as $_WS_IDENT_KIND})"; return 1; }
+  _WS_NPROOF_IDENT="$_WS_IDENT"
   return 0
 }
 
@@ -33140,6 +33160,76 @@ _ws_reclaim_nested_record() {   # main cpath -> rc 0 with _WS_NREC_BRANCH ('' = 
     esac
   done <<< "$listing"
   (( hit )) || return 1
+  return 0
+}
+
+# ── the tail's re-ask before every standing forced removal (path-identity spec §4.7) ──
+_WS_REASK_WHY=''
+_ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing refuses; 1 (_WS_REASK_WHY)
+  #                        `_ws_reclaim_owned` PROVED the tree is not only the child's own; 2 (_WS_REASK_WHY) anything
+  #                        else. In order, each fresh, nothing cached: (1) `_ws_reclaim_owned` whole, 1 -> 1, any other
+  #                        non-zero -> 2; (2) `_ws_path_ident "$main" follow` against mainid, `_ws_path_ident "$workdir"`
+  #                        against wdid (an EMPTY wdid with the tree standing is `reappeared-tree-refuses`), and with
+  #                        cpath, `_ws_path_ident "$cpath"` against cid. An empty recorded value, `_ws_ident_eq` 1 or 2,
+  #                        or a measure that is not 0 -> 2
+  # THE WINDOW BEFORE A FORCED REMOVAL, NARROWED (path-identity spec §4.7).
+  # `_ws_reclaim_tail` asks `_ws_reclaim_owned` once, before the settle, and the
+  # settle and the nested steps run after it. Before this re-ask, none of these
+  # was asked again before `git worktree remove --force`: a row another
+  # session's start writes inside the child; an ancestor re-pointed; a checkout
+  # or the child swapped for a copy; the project directory re-pointed; or a tree
+  # that stands again after the owned call proved it gone. So the tail asks this
+  # before each standing nested checkout's and the child's
+  # `_ws_reclaim_keep_of`, and again before each forced removal, each time
+  # directly before the site's mount question, and stops on any answer but 0.
+  # - OWNED, WHOLE AND FRESH. The registry is re-listed and every row re-read,
+  #   with one new identity walk and one new read of the mount table
+  #   (`_ws_reclaim_workdir_shared` keeps its maps for one call only); the
+  #   record and the main checkout are asked again. Nothing an earlier call
+  #   answered is read. Its 1 is a PROOF and stays 1, which the tail prints
+  #   `containment-refuted`; its 2, a question not asked (a walk that ran out
+  #   of its bound included), stays 2.
+  # - THEN THE IDENTITIES THE ACT RECORDED, each measured again as it was first
+  #   measured (`_ws_path_ident`: a tree's parent resolved and its leaf never
+  #   followed; the project directory followed whole, as `git -C` follows it),
+  #   and compared by `_ws_ident_eq` (device and inode, and the birth times
+  #   where both carry one). Owned comes first, so a proof is never pre-empted
+  #   by a measure that failed. An EMPTY recorded value matches nothing: for the
+  #   tree it means the owned call proved it gone, so a tree that stands at a
+  #   removal now is not the tree the act proved (`reappeared-tree-refuses`).
+  # - NOT HERE: the working-directory probe (`_ws_cwd_users`) is the site's own
+  #   line, asked directly BEFORE this one, so its bounded walk of the process
+  #   table never sits between the last compare here and the removal. The
+  #   mount question (`_ws_removal_mounts_clear`) comes directly after this
+  #   one. Owned's own read of the mount table catches a mount under the child
+  #   first, so the mount question is the backstop for one that appears after
+  #   it (`w2-mount-asks-shadowed-by-the-reask`).
+  # - STATED, NOT PREVENTED. The identities are per attempt: a resumed attempt
+  #   records them again at its own owned call (`reask-identity-is-per-attempt`).
+  #   The window from the last compare here, through the mount question's
+  #   read of the table, to git's own opendir stays (`reask-to-opendir-window`).
+  #   Each re-ask's walk is bounded
+  #   (`WS_RECLAIM_WALK_S`), but its git reads are not
+  #   (`rows-rung-git-reads-unbounded`, and owned's own worktree list, as
+  #   before). An act makes two re-asks per standing tree, so together they can
+  #   outrun the runner's act row. A kill there lands at a step the breadcrumb
+  #   resumes, and the next attempt re-proves from its start
+  #   (`tail-reasks-can-outrun-the-act-row`).
+  local id="$1" wd="$2" main="$3" wdid="$4" mainid="$5" cpath="${6-}" cid="${7-}" rc
+  _WS_REASK_WHY=''
+  _ws_reclaim_owned "$id" "$wd" "$main"; rc=$?
+  (( rc != 1 )) || { _WS_REASK_WHY="$_WS_OWNED_WHY"; return 1; }
+  (( rc == 0 )) || { _WS_REASK_WHY="${_WS_OWNED_WHY:-the containment check answered $rc, an answer it never gives, so whether $wd is still owned by the child was never asked}"; return 2; }
+  [[ -n "$mainid" ]] || { _WS_REASK_WHY="no identity of the project directory was recorded when the act began, so whether $main is still that directory was never asked"; return 2; }
+  _ws_path_ident "$main" follow || { _WS_REASK_WHY="the project directory could not be measured again (${_WS_IDENT_WHY:-it reads as $_WS_IDENT_KIND}), so whether $main is still the one the act proved was never asked"; return 2; }
+  _ws_ident_eq "$_WS_IDENT" "$mainid" || { _WS_REASK_WHY="the project directory is not the one the act proved when it began: $main measures $_WS_IDENT, recorded $mainid"; return 2; }
+  [[ -n "$wdid" ]] || { _WS_REASK_WHY="a tree stands again where the act proved none when it began, at $wd, so it is not the tree the act proved"; return 2; }
+  _ws_path_ident "$wd" || { _WS_REASK_WHY="the tree could not be measured again (${_WS_IDENT_WHY:-it reads as $_WS_IDENT_KIND}), so whether $wd is still the one the act proved was never asked"; return 2; }
+  _ws_ident_eq "$_WS_IDENT" "$wdid" || { _WS_REASK_WHY="the tree is not the one the act proved when it began: $wd measures $_WS_IDENT, recorded $wdid"; return 2; }
+  [[ -n "$cpath" ]] || return 0
+  [[ -n "$cid" ]] || { _WS_REASK_WHY="no identity of the checkout was recorded when it was proven, so whether $cpath is still that checkout was never asked"; return 2; }
+  _ws_path_ident "$cpath" || { _WS_REASK_WHY="the checkout could not be measured again (${_WS_IDENT_WHY:-it reads as $_WS_IDENT_KIND}), so whether $cpath is still the one proven inside the tree was never asked"; return 2; }
+  _ws_ident_eq "$_WS_IDENT" "$cid" || { _WS_REASK_WHY="the checkout is not the one proven inside the tree: $cpath measures $_WS_IDENT, recorded $cid"; return 2; }
   return 0
 }
 
@@ -34699,6 +34789,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
   local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc wdrc cwrc qwd
+  local wdid='' mainid='' cid='' rarc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
   # Every failure from here on is printed past a breadcrumb, for both verbs
   # (`crumb`, spec §5.6).
@@ -34863,17 +34954,21 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       "the registry row of $id (project '$regproject', workdir '$regworkdir', branch '$regbranch') and the record its pin wrote (project '$project', workdir '$workdir', branch '$tregbranch') disagree — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
     return 1
   fi
-  # THE TREE IS RE-PROVEN THE CHILD'S OWN (spec §5.5, §5.6) — on a resumed arm
-  # the only identity check there is — and a refusal says how it was reached. A
-  # PROOF that it is not (rc 1) is `containment-refuted`, from this literal call
-  # site: a retry meets the same thing until the other tree or row is moved or
-  # removed. A question that could not be asked (rc 2) stays
-  # `worktree-remove-failed`. Both stop HERE, where the tail always stopped: the
-  # unit stopped and the pane killed, the tombstone and the breadcrumb standing,
-  # nothing further deleted, and no step after this one run.
+  # THE TREE IS RE-PROVEN THE CHILD'S OWN (spec §5.5, §5.6) — asked here, at
+  # the act's start, and again before every standing forced removal
+  # (`_ws_reclaim_reask`, path-identity spec §4.7) — and a refusal says how it
+  # was reached. A PROOF that it is not (rc 1) is `containment-refuted`, from
+  # this call site and from each re-ask's: a retry meets the same thing until
+  # the other tree or row is moved or removed. A question that could not be
+  # asked (rc 2) stays `worktree-remove-failed`. Both stop HERE, where the tail
+  # always stopped: the unit stopped and the pane killed, the tombstone and the
+  # breadcrumb standing, nothing further deleted, and no step after this one
+  # run. On 0, the two identities this call measured are recorded, once, for
+  # every re-ask to compare: the tree's ('' when it was proven gone) and the
+  # project directory's.
   _ws_reclaim_owned "$id" "$workdir" "$main"; orc=$?
   case "$orc" in
-    0) : ;;
+    0) wdid="$_WS_OWNED_WDID"; mainid="$_WS_OWNED_MAINID" ;;
     1) _ws_reclaim_fail "$id" "$lctx" containment-refuted \
          "$_WS_OWNED_WHY — so the tree at that path is not only $id's own; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"
        return 1 ;;
@@ -34971,8 +35066,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # enters nothing. A checkout PROVEN gone is not asked: its arm clears a
   # record, with no force flag, over nothing that stands. And the child's
   # whole tree is asked before this loop, by the rows rung's mount hold at
-  # the owned call: a mount that appears after it, outside every nested
-  # checkout, is step (4)'s to find.
+  # the owned call, and again at each re-ask below: a mount that appears
+  # after the last of those, outside every nested checkout, is step (4)'s
+  # to find.
   # NOR WHILE A PROCESS WORKS INSIDE THE CHILD (path-identity spec §4.6).
   # Each of a standing checkout's two mount asks is preceded by one ask of
   # `_ws_cwd_users` of the CHILD's tree (`$workdir`, a superset of the
@@ -34983,6 +35079,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # checkout standing and the probe's reason cut by `_ws_leaf_why_line`.
   # Process state never grants: a probe that says nobody only lets the
   # mount ask be asked. A checkout PROVEN gone is not asked.
+  # AND EACH STANDING CHECKOUT IS RE-PROVEN FIRST (path-identity spec §4.7).
+  # Before its `_ws_reclaim_keep_of`, and again before its forced removal,
+  # each time after the working-directory probe and directly before the
+  # mount question, `_ws_reclaim_reask` asks `_ws_reclaim_owned` whole and
+  # fresh, then compares the project directory, the child's tree and the
+  # checkout with the identities the act recorded: the checkout's as
+  # `_ws_reclaim_nested_proven` proved it in this iteration (`cid`). Owned's
+  # proof fails `containment-refuted`; anything else fails
+  # `worktree-remove-failed`; either leaves the breadcrumb and the checkout
+  # standing, and both reasons are cut to one journal line
+  # (`_ws_leaf_why_line`). The probe stands before it, so the probe's bounded
+  # walk stays outside the window the re-ask narrows. Like the tail's owned
+  # call, each re-ask asks the rows rung's mount hold of the child's whole
+  # tree again. A checkout PROVEN gone takes no re-ask.
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
@@ -35006,6 +35116,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
           "$_WS_NPROOF_WHY — ccd cannot prove the checkout at $cpath is inside $id's own tree, so nothing further was deleted"
         return 1
       fi
+      cid="$_WS_NPROOF_IDENT"
       if (( treegone && ! _WS_NPROOF_GONE )); then
         _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
           "$id's own tree is gone, yet a checkout stands at $cpath — ccd cannot prove it went with the tree, so nothing further was deleted"
@@ -35041,6 +35152,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         _ws_cwd_users "$workdir"; cwrc=$?
         (( cwrc == 0 )) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
+        _ws_reclaim_reask "$id" "$workdir" "$main" "$wdid" "$mainid" "$cpath" "$cid"; rarc=$?
+        (( rarc != 1 )) || { _ws_reclaim_fail "$id" "$lctx" containment-refuted "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the checkout at $cpath stands; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"; return 1; }
+        (( rarc == 0 )) || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_removal_mounts_clear "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
@@ -35048,6 +35162,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         _ws_cwd_users "$workdir"; cwrc=$?
         (( cwrc == 0 )) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
+        _ws_reclaim_reask "$id" "$workdir" "$main" "$wdid" "$mainid" "$cpath" "$cid"; rarc=$?
+        (( rarc != 1 )) || { _ws_reclaim_fail "$id" "$lctx" containment-refuted "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the checkout at $cpath stands; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"; return 1; }
+        (( rarc == 0 )) || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_removal_mounts_clear "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
@@ -35139,6 +35256,14 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # unbounded, as ws-expire's always did (`darwin-cwd-parse-unbounded-as-today`).
   # A remote kill that lands in one leaves the breadcrumb at this step, and
   # the next attempt asks again.
+  # AND THE TREE IS RE-PROVEN FIRST (path-identity spec §4.7), as step (3)
+  # re-proves each standing checkout: inside the `-d` arm, after the link
+  # test, `_ws_reclaim_reask` runs before the tree's `_ws_reclaim_keep_of` and
+  # again before its forced removal, each time after the working-directory
+  # probe and directly before the mount question. A tree the owned
+  # call proved gone, which stands here again, is refused
+  # (`reappeared-tree-refuses`): it is not the tree the act proved. A tree
+  # PROVEN gone takes no re-ask.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
       _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
@@ -35149,6 +35274,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       _ws_cwd_users "$workdir"; cwrc=$?
       (( cwrc == 0 )) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
+      _ws_reclaim_reask "$id" "$workdir" "$main" "$wdid" "$mainid"; rarc=$?
+      (( rarc != 1 )) || { _ws_reclaim_fail "$id" "$lctx" containment-refuted "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the tree at $workdir stands; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"; return 1; }
+      (( rarc == 0 )) || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_removal_mounts_clear "$workdir" resolve \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
@@ -35156,6 +35284,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       _ws_cwd_users "$workdir"; cwrc=$?
       (( cwrc == 0 )) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$( (( cwrc == 1 )) && printf 'a process works inside it: ' )$_WS_CWD_USERS_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
+      _ws_reclaim_reask "$id" "$workdir" "$main" "$wdid" "$mainid"; rarc=$?
+      (( rarc != 1 )) || { _ws_reclaim_fail "$id" "$lctx" containment-refuted "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the tree at $workdir stands; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"; return 1; }
+      (( rarc == 0 )) || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(_ws_leaf_why_line "$_WS_REASK_WHY") — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_removal_mounts_clear "$workdir" resolve \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \

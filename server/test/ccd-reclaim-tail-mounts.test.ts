@@ -143,8 +143,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     const inner = nested(c);
     const realInner = fs.realpathSync(inner);
     realMounts(h);
-    mountOnceKept(realInner, path.join(realInner, 'mnt'));
-    const r = childReclaimVerb(h, reclaimToken(), { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(realInner, path.join(realInner, 'mnt'), 2)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays at the step that failed').toBe('reclaim:children');
@@ -172,8 +171,7 @@ describe.skipIf(!LINUX)('the tail asks the mount question before every standing 
     const c = makeChild(h);
     const wd = workdirOf(CHILD_ID);
     realMounts(h);
-    mountOnceKept(wd, path.join(fs.realpathSync(c.wt), 'sub'));
-    const r = childReclaimVerb(h, reclaimToken(), { pre: LINUX_PRE });
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${LINUX_PRE} ${MOUNT_AT_ASK(wd, path.join(fs.realpathSync(c.wt), 'sub'), 2)}` });
     const o = mountFailed(r);
     expect(o.detail).toMatch(/^something is mounted at /);
     expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:worktree');

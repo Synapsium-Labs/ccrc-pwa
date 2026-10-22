@@ -542,6 +542,7 @@ _ws_reclaim_fail	C4
 _ws_reclaim_owned	C4
 _ws_reclaim_nested_proven	C4
 _ws_reclaim_nested_record	C4
+_ws_reclaim_reask	C4
 _ws_reclaim_kept_read	C4
 _ws_reclaim_dropped_count	C4
 _ws_dir_physical	C4
