@@ -5,11 +5,12 @@
 // asserts the debris is ABSENT from the DOM and, beside it, that what the surface does show is PRESENT (the transcript's
 // question, the can't-read sentence with its way to the terminal, the review's fixed words). The answer path is the
 // one it always was: a tap answers through `/dialog` with the dialog's id and the printed index.
+import type { ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { Dialog, FleetSession } from '../../shared/api';
+import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
@@ -21,6 +22,17 @@ import {
   ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, DEBRIS_LABEL, HOOK_QUESTIONS, askFixture, type AskFixture,
 } from './askFixtures';
 import { fleetSession } from './fleetFixture';
+
+// The transcript's rows, all of them in order: virtuoso measures nothing in jsdom and would render none.
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react');
+  return {
+    Virtuoso: (props: { totalCount: number; itemContent: (i: number) => ReactNode }) =>
+      React.createElement('div', { 'data-testid': 'virtuoso' },
+        Array.from({ length: props.totalCount }, (_, i) =>
+          React.createElement('div', { key: i }, props.itemContent(i)))),
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -287,6 +299,32 @@ describe('the tab strip (D-6325)', () => {
     });
     render(<DialogSheet id={ID} store={store2} onOpenTerminal={vi.fn()} />);
     expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
+  });
+});
+
+describe('the transcript\'s Answer control (D-6325)', () => {
+  const askCard: ChatEvent = {
+    kind: 'tool_use', uuid: 'a1', ts: '2026-10-22T10:00:00.000Z', toolId: 't1', name: 'AskUserQuestion',
+    input: JSON.stringify({ questions: [{ question: 'Which cache?', header: 'Cache', multiSelect: false,
+      options: [{ label: 'Redis' }, { label: 'None' }] }] }),
+  };
+  const withCard = (n: number) => {
+    const out = renderScreen(n, plainRow());
+    act(() => out.store.setState({ events: [askCard] }));
+    return out;
+  };
+
+  // The control raises the sheet. Before this connection's first ask frame the sheet is nothing (`askSource`), so a
+  // control offered then would be one that raises nothing.
+  it('is offered while a sheet is up (fixture 1)', () => {
+    withCard(1);
+    expect(document.querySelector('.ask-answer')).not.toBeNull();
+  });
+
+  it('is not offered before the first ask frame, however the pane looks (fixture 0)', () => {
+    withCard(0);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('.ask-answer'), 'a control that would raise nothing').toBeNull();
   });
 });
 
