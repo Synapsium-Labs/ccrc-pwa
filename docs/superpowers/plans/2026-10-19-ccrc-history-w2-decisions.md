@@ -879,6 +879,7 @@ build · **yes** (`D-5766`) · W2-2a (the cut), W2-5a (the count) · SEAM-b1, wi
 **W2-D35. Nodes, epochs, sidecars, and grouping.**
 - **A leaf** is visible iff its `boundary_entry_id`'s entry is visible.
 - **A parent** is visible iff every descendant leaf is visible, whenever it was formed.
+- **Amended (coordinator, 2026-10-22, W2-2a plan):** a node with no descendant leaf, which only a damaged store holds, is hidden under any cut. Its gist cannot be checked against the cut, so it fails closed.
 - `nodes_fts` hits and `node_refs` follow their node's visibility.
 - **An epoch** is visible iff one of its transcripts holds a visible entry.
 - `entry_variants` and sidecars follow their entry. A sidecar with a NULL entry_id is absent.
@@ -914,6 +915,7 @@ build · no · W2-2a · SEAM-b5.
 - With no pane, the CLI still answers `no-identity`.
 - The env allow-list (single-definition.test.ts:5364) grows to 7 in **this** PR, because this is the first PR that reads the names.
 - `asof-invalid` is appended to REASON_ROWS here, with the store half of `asOfCut`'s validation: a boundary row, a main transcript, and T_N.
+- **Amended (coordinator, 2026-10-22, W2-2a plan):** the store half also refuses `asof-invalid` when no copy holds N, since the positional hide (W2-D34) is defined only inside N's holding copy. Only a damaged store reaches it. It takes no number of its own: D-5765's entry names it.
 
 build · plan-chosen spelling (`D-5765`) · W2-2a · PS3; SEAM-g; the SEAM-asof-invalid-pr finding; C16. This resolves the consistency report's §4, which listed the allow-list under W2-2b although W2-2a is the first reader.
 
@@ -1453,6 +1455,8 @@ Fewer than 60 questions or fewer than 12 families halts W2 for a ruling before p
 
 **Amended (coordinator, 2026-10-20, W2-3 review 664, F1):** "seeded order" draws over the families sorted by `familyKey`, and within a family over its candidates sorted by candidate id, both by code unit (W2-D18).
 
+**Amended (coordinator, 2026-10-22, W2-5a plan):** each node sources only its own families, so the quiz's family order is a per-family seeded key: the `'quiz-sample'` substream seed hashed with `familyKey`, compared by code unit. Every node then orders its own families exactly as the order over all named nodes would, and `freeze` merges the nodes' outputs in that order. The population stays as above: every family with an admitted boundary, never only the census's active list (which feeds the assignment, W2-D73).
+
 open-record-default · no · W2-5a · QZ-11; §10.2:2638, :2711-2713.
 
 **W2-D72. The question writer.**
@@ -1824,7 +1828,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 
 7. Run step 0a on each node: `history-replay.mjs step0a --out <dir> --account <id> --budget <N> --writer-model <id> --judge-model <id> --arm-model <id>` (version, wrapper sha, flags, writer, judge and box init, code shas, release stamp). Post each output's sha256, which is printed on stderr. Amended (coordinator, 2026-10-20, W2-4 review, F14): every flag is required. A record that part 1 would refuse is re-run on a fresh `--out`.
 8. **The maintenance freeze begins** (W2-D7). Record its time.
-9. Run `pilot-source --step0a <file> --step0a-sha256 <hex> --budget <N>` on the node or nodes holding the pilot families. This spends on the account and reads the homes' CLAUDE.md and memory files. Record the pilot frozen sha.
+9. Run `pilot-source --step0a <file> --step0a-sha256 <hex> --budget <N>` on the one node holding the pilot families (**amended, coordinator, 2026-10-22, W2-5a plan:** one pilot node, and `pilot-source` runs once there, because part 1 has one pilot section with one seed). This spends on the account and reads the homes' CLAUDE.md and memory files. Record the pilot frozen sha.
 10. Run `open --draft` with the step 0a and `pilot-source` outputs. Save part 1 with mode 0600 off-repo. Post its sha256.
 
 **Census and Q18 (before any arm data)**
