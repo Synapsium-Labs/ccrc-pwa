@@ -253,6 +253,20 @@ describe('the tick spends rc 5 and rc 6', () => {
     expect(h.reg(ID, 'degraded'), 'and nobody degrades on a fabricated fact').toBeNull();
   });
 
+  // D-6180's characterization: the episode's stamp is backdated rather than
+  // the clock moved, so the sweep and the limits files stay exactly as fresh.
+  it('today: a classwindow episode logs once and never again after 31 minutes', () => {
+    limits('claude', 99, 99); limits('claude-a', 20, 20); seedRow('claude', 'fable'); sweep({ 'claude-a': 0.5 });
+    plantNotify();
+    tick();
+    h.sh(`_reg_set ${ID} tickstuck "${now() - 31 * 60} classwindow"`);
+    tick();
+    // flipped by D-6180's re-log floor: the same field is said again, with its age
+    const said = swapLog().split('\n').filter((l) => l.includes(`tick-undecidable ${ID}: classwindow`));
+    expect(said).toHaveLength(2);
+    expect(said[1]).toMatch(/deciding nothing \(still, 31m\)$/);
+  });
+
   it('rc 6 dispatches to the destination carrying the rung, and stamps nothing at the decision (D-5240)', () => {
     // The stamp is the ACT's now (`cmd_swap`, after its act-time gates;
     // `ccd-swap-guards.test.ts` pins the stamp, its route row and its order):

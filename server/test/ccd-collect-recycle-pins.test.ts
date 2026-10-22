@@ -73,9 +73,10 @@ const VARIABLE_FIELD = /\b_reg_set\s+\S+\s+["']?\$/;
 /** The four variable-field `_reg_set` calls measured at b0647d850, by the function each sits in, and why none can be
  *  handed `child`: `cmd_route` and `_route_argv_write` write a route field the route vocabulary validated first
  *  (`_route_valid`), `_pane_narrow_note` writes `<site>narrownote`, and `_route_note_floored` writes a marker every
- *  caller spells as a literal note name (`routenote…`, `swappinnote`). A new one is a possible second `.child` writer:
- *  review it, then add it here with the reason it cannot write `child`. */
-const VARIABLE_FIELD_CENSUS = ['_pane_narrow_note', '_route_argv_write', '_route_note_floored', 'cmd_route'];
+ *  caller spells as a literal note name (`routenote…`, `swappinnote`). D-6180 added a fifth: `_standdown_note` writes
+ *  `$fld`, set in its own body to the literal `standdown` (a limit-arm site) or `standdownaff` (an affinity-arm site).
+ *  A new one is a possible second `.child` writer: review it, then add it here with the reason it cannot write `child`. */
+const VARIABLE_FIELD_CENSUS = ['_pane_narrow_note', '_route_argv_write', '_route_note_floored', '_standdown_note', 'cmd_route'];
 
 describe('premise 1 — ONE TMPDIR composer', () => {
   const files = shellScripts(ROOTS);

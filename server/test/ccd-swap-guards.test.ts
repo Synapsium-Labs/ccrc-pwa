@@ -304,6 +304,30 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     expect(fs.readFileSync(limitsFile(), 'utf8')).toBe(newer);
   });
 
+  // D-6180: a fresh scan that finds a CARRIED-IN limit row (older than this
+  // pane's process and than the last swap) is the same "no longer blocked" as
+  // `negative` — the cancel, its restore and `lastswap` are identical; only the
+  // word on the `rescue-cancel` line may name the reason.
+  it('kept: the act-time rescue gate cancels on a fresh carried-in scan exactly as on negative', () => {
+    const tx = decideRescue();
+    const at = nowS() - 60;
+    fs.appendFileSync(tx, `${JSON.stringify({
+      parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: `b${at}`, timestamp: new Date(at * 1000).toISOString(),
+      message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your session limit · resets 9:10pm (UTC)" }] },
+      isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
+      quotaLimits: { status: 'rejected', resetsAt: at + 3600, rateLimitType: 'five_hour' },
+    })}\n`);
+    pane('❯ ');
+    act(`_pane_born() { echo ${nowS() - 30}; };`);
+    expect(swapLog()).toMatch(new RegExp(`rescue-cancel ${ID}: no longer blocked \\((negative|carried-in)\\)`));
+    expect(swapLog()).not.toContain('rescue-backoff');
+    expect(stopped()).toBe(false);
+    expect(fs.readFileSync(limitsFile(), 'utf8')).toBe(PRIOR);
+    expect(fs.existsSync(regPath('rescueprev'))).toBe(false);
+    expect(h.reg(ID, 'lastswap'), 'lastswap restored').toBe(prevSwap);
+    expect(h.reg(ID, 'wrapper')).toBe('gpt');
+  });
+
   it('a draft at the act backs off and undoes nothing', () => {
     decideRescue();
     const marker = path.join(reg(), 'gpt-authdead');

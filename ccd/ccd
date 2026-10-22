@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=882a6a43c25fe5a2ddb20c11fde5a5e204147c8bc3d2c3fc37caf7edea6e0c90
+# ccrc:generated 1 sha256=952a0c6eab5d036c1b3359d2d1a8a09eb7c77fe5e7ad85df7ccbf92feffa845b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3937,16 +3937,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), and D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 47: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # The 50: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
+  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -18572,7 +18572,7 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   (( w >= READER_MIN_COLS ))
 }
 
-_pane_narrow_note() {   # id site — say ONCE per COMPACT_NOTE_FLOOR that a tick stood down BLIND.
+_pane_narrow_note() {   # id site [evidence] — say ONCE per COMPACT_NOTE_FLOOR that a tick stood down BLIND (the swap site adds D-6180's `evidence=`).
   # WHY A NOTE AT ALL, AND WHY THESE TWO SITES. §6.3's stand-down was silent at
   # exactly the two places where silence costs the most. `_auto_swap_check`'s
   # guard is the FIRST statement after its locals, so on a narrow pane the whole
@@ -18615,7 +18615,7 @@ _pane_narrow_note() {   # id site — say ONCE per COMPACT_NOTE_FLOOR that a tic
   said=$(_reg_get "$id" "${site}narrownote")
   [[ "$said" =~ ^[0-9]+$ && $((now - said)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
   _reg_set "$id" "${site}narrownote" "$now"
-  echo "$(date '+%F %T') $site-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"
+  echo "$(date '+%F %T') $site-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)${3:+ evidence=$3}" >> "$REG/swap.log"
   return 0
 }
 
@@ -18681,7 +18681,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -18699,6 +18699,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # `running`, `stalepress`, `negative` or `draft`. No caller's answer changes;
   # only `cmd_swap`'s act-time rescue gate reads the word.
   HARD_BLOCK_VIA=""; HARD_BLOCK_NO=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
+  HARD_BLOCK_EV=""   # D-6180: the limit evidence behind a carried-in or draft "no"
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -18712,7 +18713,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   _pane_measurable "$id" || { HARD_BLOCK_NO=unmeasurable; return 1; }   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
   # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
   # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
-  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
+  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=pane; return 1; }; HARD_BLOCK_VIA=pane; return 0; }
   # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
   # arm below the transcript deliberately: a banner Claude Code is rendering on
   # screen right now is the same condition `_pane_hard_blocked` answers, merely
@@ -18720,7 +18721,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
   # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
   # both still reports the older, more specific detector.
-  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
+  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && { HARD_BLOCK_NO=stalepress; return 1; }
@@ -18731,14 +18732,14 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     verdict="$scan_verdict"
   else
     born=$(_pane_born "$id")
-    _limit_dated "$id" transcript "$born" && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
+    _limit_dated "$id" transcript "$born"; lrc=$?; (( lrc == 0 )) && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
-  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; return 1; }
+  [[ "$verdict" -eq 1 ]] || { HARD_BLOCK_NO=negative; (( lrc == 3 )) && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=carried-in; }; return 1; }   # D-6180: a fresh scan names a carried-in row
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
-  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && { HARD_BLOCK_NO=draft; return 1; }
+  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
@@ -19019,7 +19020,9 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # whose only call sites are below — is skipped here, so without the note a
   # wedged session on a narrow pane is neither rescued nor marked, and nothing
   # anywhere says why. `_pane_narrow_note` carries the floor; see its header.
-  _pane_measurable "$id" || { _pane_narrow_note "$id" swap; return 0; }
+  _pane_measurable "$id" || {
+    _standdown_evidence "$id" || _standdown_probe "$id" "" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"   # D-6180: at most once per TRANSCRIPT_ARM_INTERVAL
+    _pane_narrow_note "$id" swap "$STANDDOWN_EV"; return 0; }
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
@@ -19295,6 +19298,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   _now_s_to now; _reg_get_to last "$id" lastswap   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   if [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"
+    # D-6180: a limit this cooldown holds is said, once per episode; only the
+    # transcript's own limit row counts here (spec §3.2).
+    _standdown_evidence "$id" "$now" || _standdown_probe "$id" "$now" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"
+    [[ "$STANDDOWN_EV" == transcript ]] && _standdown_note "$id" cooldown transcript ""
     return 0
   fi
   # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
@@ -19306,6 +19313,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   _reg_get_to blocked "$id" swapblocked; bts="${blocked%% *}"   # D-4963: a builtin read, no subshell
   if [[ "$bts" =~ ^[0-9]+$ && $((now - bts)) -lt "$SWAPBLOCK_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"   # a refused swap is a decision too — see above
+    _standdown_evidence "$id" "$now" || _standdown_probe "$id" "$now" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"   # D-6180, as above
+    [[ "$STANDDOWN_EV" == transcript ]] && _standdown_note "$id" swapblocked transcript ""
     return 0
   fi
   pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
@@ -19325,7 +19334,20 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # pay the registry/cache read; a positive also re-measures the draft. The
   # `_tick_strand_undecidable` block at its own call site below discloses that
   # its same-cadence call shares this cache rather than adding another scan.
-  _session_hard_blocked "$id" "$pane" && hard_blocked=1; _rescue_policy "$id" "$wrapper" "$pane" "$hard_blocked" || { [[ -z "$stuck" ]] && _tick_decided "$id"; return 0; }
+  _session_hard_blocked "$id" "$pane" && hard_blocked=1
+  # D-6180: the limit arm's silent exits, said once per episode and only with
+  # limit evidence (`negative` carries none and writes nothing). A hard-blocked
+  # tick never enters this block, so nothing here runs before the rescue.
+  if [[ -z "$hard_blocked" ]]; then
+    case "${HARD_BLOCK_NO:-}" in
+      carried-in|draft) [[ -n "${HARD_BLOCK_EV:-}" ]] && _standdown_note "$id" "$HARD_BLOCK_NO" "$HARD_BLOCK_EV" "$pane" ;;
+      running) _standdown_evidence "$id" "$now" && [[ "$STANDDOWN_EV" != none ]] && _standdown_note "$id" running "$STANDDOWN_EV" "$pane" ;;
+      stalepress)
+        _standdown_evidence "$id" "$now" || _standdown_probe "$id" "$now" "$(_transcript_path "$id" 2>/dev/null)" "$(_pane_born "$id")"
+        [[ "$STANDDOWN_EV" != none ]] && _standdown_note "$id" stalepress "$STANDDOWN_EV" "$pane" ;;
+    esac
+  fi
+  _rescue_policy "$id" "$wrapper" "$pane" "$hard_blocked" || { [[ -z "$stuck" ]] && _tick_decided "$id"; return 0; }
   [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
   #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
@@ -19466,7 +19488,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   fi
   # A destination exists: whatever the pane says, this row is not stranded.
   _strand_clear "$id"
-  _avail "$target" || return 0
+  if ! _avail "$target"; then   # D-6180: a target chosen, then dropped, is said
+    if [[ -n "$hard_blocked" ]]; then _standdown_note "$id" target-unavailable "${HARD_BLOCK_VIA:-}" "$pane"
+    else _standdown_note "$id" target-unavailable; fi
+    return 0
+  fi
   # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
   # anyway -> swap now. The 429/rate-limit patterns also catch an overflow lane hitting
   # its own backend's usage cap (the gpt lane's ChatGPT-sub Codex cap surfaces as "API Error:
@@ -19523,9 +19549,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"
+    local lane; _swap_lane_to lane "$target"   # D-6180
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra) lane=$lane" >> "$REG/swap.log"
     local rtx="" rtxb=""
     rtx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$rtx" ]] && rtxb=$(_plat_size "$rtx" 2>/dev/null) || { rtx=""; rtxb=""; }
+    [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
+    [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"   # D-6180: both arms' episodes
     _dispatch_swap "$id" "$target" rescue "$last" "$now" "$dfrom" "$dto" "$rtx" "$rtxb"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
@@ -19562,21 +19591,24 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   fi
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
-  [[ -e "$REG/$id.hold" ]] && return 0
+  [[ -e "$REG/$id.hold" ]] && { _standdown_note "$id" hold; return 0; }   # D-6180: a move ccd wanted, held
   # A WOKEN ROW TAKES NO COSMETIC SWAP for SWAP_COOLDOWN (D-5242): it has just
   # paid a cold `--resume`, and a relocation now would pay another. A builtin
   # test and read, no fork; `-f` first, so a FIFO here cannot block the tick.
   local woke=""
   [[ -f "$REG/$id.woke" ]] && { IFS= read -r woke < "$REG/$id.woke"; } 2>/dev/null
-  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && return 0
+  [[ "$woke" =~ ^[0-9]+$ && $(( now - woke )) -lt "$SWAP_COOLDOWN" ]] && { _standdown_note "$id" woke; return 0; }
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).
-  _swap_idle_gate "$id" "$pane" "$wrapper" "$now" || return 0   # the same gate the act re-runs (D-5240)
+  _swap_idle_gate "$id" "$pane" "$wrapper" "$now" || { _standdown_note "$id" idle-gate; return 0; }   # the same gate the act re-runs (D-5240)
   # The degrade rung rides into the unit with the move; `cmd_swap` stamps it
   # after re-running this same idle gate at the act (D-5240).
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
+  local lane; _swap_lane_to lane "$target"   # D-6180
+  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home] lane=$lane" >> "$REG/swap.log"
+  [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
+  [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"   # D-6180: both arms' episodes
   _dispatch_swap "$id" "$target" affinity "$last" "$now" "$dfrom" "$dto"
   return 0
 }
@@ -27817,11 +27849,19 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
   # silent — the failure direction this file chooses everywhere else. A floor
   # would have to sit on the re-stamp path only, never on an episode's first
   # line, and no measured case asks for one yet.
-  local _tu_prev _tu_rc
+  local _tu_prev _tu_rc _tu_now _tu_ts _tu_still=""
   _tu_prev=$(_reg_read "$1" tickstuck); _tu_rc=$?
   [[ "$_tu_rc" -eq 2 ]] && return 0
-  [[ "$_tu_rc" -eq 0 && "${_tu_prev#* }" == "$2" ]] && return 0
-  _reg_set "$1" tickstuck "$(date +%s) $2" 2>/dev/null || true
+  _now_s_to _tu_now
+  # THE SAME FIELD IS SAID AGAIN after COMPACT_NOTE_FLOOR (D-6180), with how long
+  # since it was last said, so a session frozen for hours stays visible in the
+  # swap log instead of going quiet after its first line; the stamp is refreshed.
+  if [[ "$_tu_rc" -eq 0 && "${_tu_prev#* }" == "$2" ]]; then
+    _tu_ts="${_tu_prev%% *}"
+    [[ "$_tu_ts" =~ ^[0-9]+$ ]] && (( _tu_now - _tu_ts >= COMPACT_NOTE_FLOOR )) || return 0
+    _tu_still=" (still, $(( (_tu_now - _tu_ts) / 60 ))m)"
+  fi
+  _reg_set "$1" tickstuck "$_tu_now $2" 2>/dev/null || true
   # THE GROUP CARRIES THE REDIRECT, and the order is the whole point: in
   # `cmd >> file 2>/dev/null` the redirections are applied left to right, so
   # when `>>` fails bash reports "Is a directory" on a stderr that has not been
@@ -27829,7 +27869,7 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
   # that. `{ …; } 2>/dev/null` silences the group before the inner redirect is
   # attempted, which is the only spelling that keeps a failed append out of the
   # supervise journal.
-  { echo "$(date '+%F %T') tick-undecidable $1: $2 could not be measured — deciding nothing" \
+  { echo "$(date '+%F %T') tick-undecidable $1: $2 could not be measured — deciding nothing$_tu_still" \
       >> "$REG/swap.log"; } 2>/dev/null || true
   return 0
 }
@@ -27995,6 +28035,127 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   return 0
 }
 _tick_decided() { [[ -e "$REG/$1.tickstuck" ]] && rm -f -- "$REG/$1.tickstuck"; return 0; }
+
+# ── THE STAND-DOWN LINES (D-6180; auto-swap reliability spec §3.2, ruling D5) ──
+# `_auto_swap_check` holds a session in a dozen places, and before D-6180 said
+# so in almost none of them (spec §2.5's table): two limits in a week ended with
+# no action and no line, and why could not be recovered afterwards. These three
+# helpers say it, and decide nothing: every caller returns exactly where it
+# returned before, with the same rc, whether a line is written or not.
+#
+# ONE LINE PER EPISODE, PER ARM. The episode is keyed on the reason word in a
+# registry field (`<epoch> <reason>`): the same word inside COMPACT_NOTE_FLOOR
+# writes nothing, a new word or an older stamp writes again. Each arm keeps its
+# own field — `standdown` for the limit arm (a site that passes the tick's tail:
+# cooldown, swapblocked, carried-in, draft, running, stalepress, the hard-blocked
+# target-unavailable) and `standdownaff` for the affinity arm (the other
+# target-unavailable, hold, woke, idle-gate). One shared field let a tick that
+# writes one word from each arm (a carried-in banner under `.hold`, say) end its
+# own episode every tick: two lines per tick, forever. Per arm, a reason word
+# ends only its own arm's episode (departure `standdown-per-arm`). `_tick_decided`
+# does NOT clear it — it runs on the very cooldown and policy returns that write
+# these lines, so clearing there would write a line every tick. The episode ends
+# at a new reason word or at a dispatch (`_auto_swap_check` removes both fields at
+# both `_dispatch_swap` call sites). The steady-state tick never reaches a note,
+# so it neither reads nor writes the field.
+
+# id [now] -> rc 0 and STANDDOWN_EV = the kept answer | rc 1, a probe is due
+# (STANDDOWN_EV=none until `_standdown_probe` answers). The evidence a limit-arm
+# stand-down needs: is the transcript's newest real row a limit row of THIS
+# process (`transcript`), an older one (`carried-in`), or neither (`none`)? The
+# answer, `none` included, is kept in `standdownprobe` (`<epoch> <answer>`) and
+# reused while younger than TRANSCRIPT_ARM_INTERVAL, so a limit that lands five
+# minutes into a cooldown is seen within one interval, and the probe runs at most
+# once per interval per session. A global, not output: a kept answer costs no
+# subshell. The `running` site reads the kept answer only and never probes (a
+# mid-turn pane is not asked). Never called on the rescue path.
+#
+# TWO HALVES, AND THE CALLER JOINS THEM: `_auto_swap_check` resolves the
+# transcript and the pane's birth only when this answers 1, so a kept answer
+# forks nothing and the probe's inputs come from the reads the tick already owns.
+_standdown_evidence() {
+  local id="$1" now="${2:-}" rec ts ans
+  STANDDOWN_EV=none
+  [[ "$now" =~ ^[0-9]+$ ]] || _now_s_to now
+  _reg_get_to rec "$id" standdownprobe
+  ts="${rec%% *}"; ans="${rec#* }"
+  [[ "$ts" =~ ^[0-9]+$ && "$ans" =~ ^(transcript|carried-in|none)$ ]] && (( now - ts < TRANSCRIPT_ARM_INTERVAL )) \
+    || return 1
+  STANDDOWN_EV="$ans"
+  return 0
+}
+
+# id now transcript-path born -> STANDDOWN_EV, and the answer kept for
+# `_standdown_evidence`. Asked of `_limit_read`, cached by the transcript's date
+# and writing no `carried-in` note, unlike `_limit_dated`, whose rc 3 calls
+# `_carried_in_note`: the probe observes, it never speaks for the transcript arm.
+_standdown_probe() {
+  local id="$1" now="$2" f="$3" born="$4" rc=1 out="" sw=""
+  [[ "$now" =~ ^[0-9]+$ ]] || _now_s_to now
+  STANDDOWN_EV=none
+  [[ -n "$f" ]] && { out=$(_limit_read "$id" "$f" "$born" 2>/dev/null); rc=$?; }
+  # rc 3 is refined exactly as `_limit_dated` refines it, minus its note: a row
+  # no swap followed, or a process that never came up, is a block there, so it
+  # is `transcript` here too (D-6180; the review's carried-in-kept-block).
+  if (( rc == 3 )); then
+    _reg_get_to sw "$id" lastswap
+    { [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) && ! _never_came_up "$id" "$born"; } || rc=0
+  fi
+  case "$rc" in 0) STANDDOWN_EV=transcript ;; 3) STANDDOWN_EV=carried-in ;; esac
+  _reg_set "$id" standdownprobe "$now $STANDDOWN_EV" 2>/dev/null || true
+  return 0
+}
+
+# id tail -> prints yes | no: does Claude Code's limit text show on the WHOLE
+# visible pane while the tick's `tail -8` missed it (spec §2.5's dialog
+# hypothesis)? The tick keeps no whole-pane capture (its read is
+# `capture-pane … | tail -8` in one pipeline), so this takes one plain
+# `capture-pane -p` of its own; an empty `tail` (the cooldown sites, which return
+# before the tick captures) is that capture's own last eight lines. Reached only
+# from a note that is about to be written, so at most once per episode.
+_standdown_outside_tail() {
+  local id="$1" tail="$2" full rows
+  full=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null)
+  if [[ -z "$tail" ]]; then
+    mapfile -t rows <<<"$full"
+    (( ${#rows[@]} > 8 )) && rows=("${rows[@]: -8}")
+    printf -v tail '%s\n' "${rows[@]}"
+  fi
+  if { _pane_hard_blocked "$full" || _pane_limit_banner "$full"; } \
+     && ! { _pane_hard_blocked "$tail" || _pane_limit_banner "$tail"; }; then
+    echo yes
+  else
+    echo no
+  fi
+}
+
+# var account -> var = anthropic | other: the `lane=` word that ends the
+# `auto-rescue`, `auto-home` and `auto-pool` lines (D-6180), so landings are
+# counted by backend without re-deriving the roster. "other" is defined here, once,
+# as "not `_is_anthropic_backend`" — not `_swap_target`'s non-home-able overflow
+# bracket, which is a placement question rather than a backend one.
+_swap_lane_to() {
+  if _is_anthropic_backend "$2"; then printf -v "$1" '%s' anthropic; else printf -v "$1" '%s' other; fi
+}
+
+# id reason [evidence] [tail] -> one `stand-down` line per episode.
+# Line: `stand-down <id>: <reason>[ evidence=<word>][ banner-outside-tail=<yes|no>]`.
+# A fourth argument (the tick's tail, possibly empty) marks a limit-arm site and
+# asks for `banner-outside-tail`; an affinity-arm site passes the reason alone.
+# Every write is best-effort: a line that cannot be written changes nothing.
+_standdown_note() {
+  local id="$1" why="$2" ev="${3:-}" now rec ts ot="" fld=standdownaff
+  (( $# >= 4 )) && fld=standdown   # ONE EPISODE PER ARM (D-6180): see the header
+  _now_s_to now
+  _reg_get_to rec "$id" "$fld"
+  ts="${rec%% *}"
+  [[ "${rec#* }" == "$why" && "$ts" =~ ^[0-9]+$ ]] && (( now - ts < COMPACT_NOTE_FLOOR )) && return 0
+  _reg_set "$id" "$fld" "$now $why" 2>/dev/null || true
+  (( $# >= 4 )) && ot=$(_standdown_outside_tail "$id" "$4")
+  { echo "$(date '+%F %T') stand-down $id: $why${ev:+ evidence=$ev}${ot:+ banner-outside-tail=$ot}" \
+      >> "$REG/swap.log"; } 2>/dev/null || true
+  return 0
+}
 
 _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
   # One dot-free registry field, so `_reg_purge` (`grep -n '^_reg_purge()'
