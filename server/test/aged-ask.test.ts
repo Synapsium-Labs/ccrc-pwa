@@ -142,6 +142,11 @@ describe('keepAgedAsk: the multi menu\'s length and the review screen (D-6324)',
     expect(keepAgedAsk(raw(), reviewOf('Which shade?', 'Which weight?'))).toBe(false);
   });
 
+  it('does not keep a one-question envelope on the review screen of another call', () => {
+    expect(keepAgedAsk(raw({ ask: MULTI_ASK }), reviewOf('Which colour?', 'Which size?'))).toBe(false);
+    expect(keepAgedAsk(raw({ ask: MULTI_ASK }), reviewOf('Which tools?', 'Which size?'))).toBe(false);
+  });
+
   it('does not keep one on a review screen that lists no question', () => {
     expect(keepAgedAsk(raw(), reviewOf())).toBe(false);
   });
