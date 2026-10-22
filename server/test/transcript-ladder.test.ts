@@ -1574,6 +1574,9 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
         spec: { n: 12, a: { 2: [4000, 5], 9: [8000, 6] }, b: { 1: [2000, 4], 4: [9000, 7], 11: [6000, 8] } },
         want: found(at(LANE_B, 4), 'foreign-glob', 'lane-b') },
       { name: 'a complete fallback: no hit anywhere', spec: { n: 12 }, want: MISS },
+      { // lane-a has no root at all, but the own configDir witness answers: measured empty, so still complete
+        name: 'a complete fallback: an absent foreign root is measured empty',
+        spec: { n: 12, a: null }, want: MISS },
       { // the own configDir witness is dark too: lane-a cannot be measured at all
         name: 'an incomplete fallback: a foreign account cannot be measured',
         spec: { n: 12, a: null, ownRootDark: true }, want: { ...MISS, complete: false } },

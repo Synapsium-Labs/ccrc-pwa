@@ -235,7 +235,8 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  * How many of rung 5's and rung 6's calls may be in flight at once, ACROSS every home one search touches (D-6369).
  * The search used to stat each project directory in turn: on a fleet with thousands of them, at tens of
  * milliseconds a call, a new session waited about a minute for its first frame. The agent link has no in-flight
- * cap of its own, so this bound is the only one; it is a courtesy to the link, not a limit the link imposes.
+ * cap of its own, so this is the only bound on ONE search, a courtesy to the link rather than a limit it imposes;
+ * searches running at once (one per session stream) each hold their own.
  */
 export const GLOB_STAT_CONCURRENCY = 32;
 
@@ -312,7 +313,7 @@ const limiter = (max: number): Limit => {
  * account after the own-account glob returned `complete: true`, which happens
  * only via a non-null `readdir` of `<own>/projects` or a non-null `stat` of
  * `<own>` — both of which establish that `<own>` EXISTS. So a null stat of it
- * one call later is about the connection, never about the directory. The own
+ * later in the same search is about the connection, never about the directory. The own
  * account itself gets no witness (`null`): the only path above it is `$HOME`,
  * which the agent read whitelist deliberately excludes (`underClaudeGlob`
  * requires a first segment starting `.claude`), and widening that whitelist to
