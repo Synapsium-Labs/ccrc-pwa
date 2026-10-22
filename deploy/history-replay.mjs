@@ -2550,7 +2550,8 @@ export async function step0bMechanics({ launch, out, model, settingsMode, lang, 
 // A discard is a count by its RECON_DISCARDS word, never a refusal. A store that cannot be opened or read refuses
 // store-unreadable.
 
-/** Every word a boundary is discarded with (R5): reconstruction's (W2-D68, W2-D75, W2-D54), then the words Tasks 2, 3 and
+/** Every word a boundary is discarded with (R5): reconstruction's (W2-D68, W2-D75, W2-D54; `body-unrenderable`, D-6302, a body
+ *  that parses and cannot be rendered), then the words Tasks 2, 3 and
  *  4 append here in place (mining's span words, admission's verdicts, Baseline B's). Counts, never refusals, and never a
  *  DRIVER_REASONS or GATE_REASONS word. */
 export const RECON_DISCARDS = Object.freeze([
@@ -2559,8 +2560,10 @@ export const RECON_DISCARDS = Object.freeze([
   'kept-absent', 'kept-unreadable',
   'member-tombstone', 'member-over-cap', 'member-undecodable',
   'over-decode-cap', 'leaf-absent',
+  'body-unrenderable',
 ]);
-/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. */
+/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
+ *  other word, so neither map is ever read with a key it lacks (D-6301). */
 const SUMMARY_LOST = Object.freeze({ tombstone: 'summary-tombstone', 'over-cap': 'summary-over-cap', undecodable: 'summary-undecodable' });
 const MEMBER_LOST = Object.freeze({ tombstone: 'member-tombstone', 'over-cap': 'member-over-cap', undecodable: 'member-undecodable' });
 /** What item 1 puts in place of a transcript-pointer line (spec §10.2 "Reconstruction", item 1). */
@@ -2724,6 +2727,8 @@ export function keptRowsOf(rs, uuids, fileId) {
 export function entryBodyOf(rs, row) {
   const k = expandEntryBody(rs, { entry_id: row.entry_id, blob_id: row.blob_id });
   if (k.state === 'body' || k.state === 'unparseable') return { state: k.state, body: k.body, rawLen: k.blob.bytes.length };
+  // D-6301: a word expandEntryBody gains later has no discard here, so it throws rather than reach a wordless discard.
+  if (!Object.hasOwn(SUMMARY_LOST, k.state) || !Object.hasOwn(MEMBER_LOST, k.state)) throw new TypeError(`entryBodyOf: unknown body state ${k.state}`);
   return { state: 'lost', word: k.state };
 }
 
@@ -2752,6 +2757,19 @@ export function renderKeptMember(row, k, idx) {
   return { state: 'text', text: lines.join('\n') };
 }
 
+/** `fn()`, or null when it throws a RangeError: a body nested past V8's JSON.stringify stack (about 4,500 levels, far
+ *  inside lib's JSON_DEPTH_MAX) parses and cannot be rendered, as recall.mjs's expandEntryText meets it (D-6302). Any other
+ *  throw is a defect and propagates.
+ *  @template T  @param {() => T} fn  @returns {T | null} */
+function renderOrNull(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof RangeError) return null;
+    throw e;
+  }
+}
+
 /** Boundary N's payload (spec §10.2 "Reconstruction"; W2-D75 items 1 to 3), composed by composePayload:
  *  1. the summary row's text, redacted whole, its transcript-pointer lines replaced by POINTER_REMOVED;
  *  2. each kept(N) member the store holds, in N's holding copy's file order, rendered by renderKeptMember;
@@ -2765,7 +2783,9 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
   const sum = entryBodyOf(rs, copy.rows[copy.summaryIndex]);
   if (sum.state === 'lost') return reconDiscard(SUMMARY_LOST[sum.word]);
   if (sum.state === 'unparseable') return reconDiscard('summary-unparseable');
-  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);
+  const sumText = renderOrNull(() => renderEntryText(sum.body));
+  if (sumText === null) return reconDiscard('body-unrenderable');
+  const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);
   if (s1.state !== 'text') return s1;
   const item1 = removePointerLines(s1.text);
   const kept = keptMembersOf(rs, copy.boundary);
@@ -2777,7 +2797,8 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
     const k = entryBodyOf(rs, row);
     if (k.state === 'lost') return reconDiscard(MEMBER_LOST[k.word]);
     if (k.state === 'unparseable') unparseable += 1;
-    const m = renderKeptMember(row, k, rs.idx);
+    const m = renderOrNull(() => renderKeptMember(row, k, rs.idx));
+    if (m === null) return reconDiscard('body-unrenderable');
     if (m.state !== 'text') return m;
     rendered.push(m.text);
   }

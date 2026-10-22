@@ -329,7 +329,7 @@ It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3),
 - Produces (`deploy/history-replay.mjs`, all exported unless marked):
   - `DRIVER_REASONS` gains `'store-unreadable'`, appended after `'interrupted'`.
   - `CODE_SHA_FILES === GATE_CODE_FILES`: the same frozen array, so the four paths are spelled once.
-  - `RECON_DISCARDS: readonly string[]`, frozen: the one list of boundary discards (R5). Task 1's fourteen words come first: `'boundary-absent'`, `'boundary-uncopied'`, `'summary-absent'`, `'summary-unparseable'`, `'summary-tombstone'`, `'summary-over-cap'`, `'summary-undecodable'`, `'kept-absent'`, `'kept-unreadable'`, `'member-tombstone'`, `'member-over-cap'`, `'member-undecodable'`, `'over-decode-cap'` and `'leaf-absent'`. Tasks 2, 3 and 4 append theirs in place. It is disjoint from `DRIVER_REASONS` and from the gate's `GATE_REASONS`.
+  - `RECON_DISCARDS: readonly string[]`, frozen: the one list of boundary discards (R5). Task 1's fifteen words come first: `'boundary-absent'`, `'boundary-uncopied'`, `'summary-absent'`, `'summary-unparseable'`, `'summary-tombstone'`, `'summary-over-cap'`, `'summary-undecodable'`, `'kept-absent'`, `'kept-unreadable'`, `'member-tombstone'`, `'member-over-cap'`, `'member-undecodable'`, `'over-decode-cap'`, `'leaf-absent'` and `'body-unrenderable'` (D-6302). Tasks 2, 3 and 4 append theirs in place. It is disjoint from `DRIVER_REASONS` and from the gate's `GATE_REASONS`.
   - `POINTER_REMOVED = '[pointer removed]'`.
   - `removePointerLines(text: string): { text: string, replaced: number }`, pure.
   - `composePayload(parts: { summary: string, kept: readonly string[] }, question: string): string`, pure: items 1 to 3 joined by one blank line, the question (already redacted) followed by `ANSWER_PROTOCOL`. It accepts `''` as the question and empty parts.
@@ -340,10 +340,10 @@ It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3),
   - `spanRowsOf(rs, boundaryEntryId: number)` answers `{ state: 'span', rows: { entry_id, uuid, type, model, provenance, ts_ms, blob_id }[] }`, leaf N's sources in their recorded order (N's holding copy's file order), or `{ state: 'discard', why: 'leaf-absent' }`.
   - `keptMembersOf(rs, boundary, budget = { bytes: 0 })` answers `{ state: 'kept', uuids: string[] }`, or `{ state: 'discard', why: 'kept-absent' | 'kept-unreadable' }`. A body that is not a list of strings is `kept-unreadable`. The uuids are deduplicated, in first-occurrence order. Baseline B passes its run budget.
   - `keptRowsOf(rs, uuids, fileId): { rows: { entry_id, uuid, type, blob_id, line: number | null }[], absent: number, offCopy: number }`. The rows are in N's holding copy's file order, and members outside that copy come after them, by `entry_id`.
-  - `entryBodyOf(rs, row: { entry_id, blob_id })` answers `{ state: 'body' | 'unparseable', body, rawLen }` or `{ state: 'lost', word: 'tombstone' | 'over-cap' | 'undecodable' }`.
+  - `entryBodyOf(rs, row: { entry_id, blob_id })` answers `{ state: 'body' | 'unparseable', body, rawLen }` or `{ state: 'lost', word: 'tombstone' | 'over-cap' | 'undecodable' }`. Any other body state throws a `TypeError` naming it, never a discard with no word (D-6301).
   - `renderKeptMember(row: { type }, k, idx)` answers `{ state: 'text', text }` or `{ state: 'discard', why: 'over-decode-cap' }`.
-  - `reconstructPayload(rs, boundaryEntryId: number, question: string)` answers `{ state: 'payload', text, counts: { members, absent, off_copy, unparseable, pointer_lines } }`, or `{ state: 'discard', why: <a RECON_DISCARDS word> }`.
-  - Module-private: `replayStmts(db)`, `storeRefusal(e): never`, `reconDiscard(why)`, `SUMMARY_LOST`, `MEMBER_LOST` and `POINTER_LINE_RE`.
+  - `reconstructPayload(rs, boundaryEntryId: number, question: string)` answers `{ state: 'payload', text, counts: { members, absent, off_copy, unparseable, pointer_lines } }`, or `{ state: 'discard', why: <a RECON_DISCARDS word> }`. A summary or kept-member body that parses and cannot be rendered (nested past `JSON.stringify`'s stack) is the discard `body-unrenderable` (D-6302).
+  - Module-private: `replayStmts(db)`, `storeRefusal(e): never`, `reconDiscard(why)`, `renderOrNull(fn)`, `SUMMARY_LOST`, `MEMBER_LOST` and `POINTER_LINE_RE`.
   - Test side, module level for Tasks 3 to 7: `w5a1H` (`historyHelpers`), `w5a1Fx` (`historyFixtures`), `w5a1BeforeAll`.
 - Produces (test side):
   - the `w5a1`-prefixed imports;
@@ -1063,8 +1063,10 @@ export const RECON_DISCARDS = Object.freeze([
   'kept-absent', 'kept-unreadable',
   'member-tombstone', 'member-over-cap', 'member-undecodable',
   'over-decode-cap', 'leaf-absent',
+  'body-unrenderable',
 ]);
-/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. */
+/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
+ *  other word, so neither map is ever read with a key it lacks (D-6301). */
 const SUMMARY_LOST = Object.freeze({ tombstone: 'summary-tombstone', 'over-cap': 'summary-over-cap', undecodable: 'summary-undecodable' });
 const MEMBER_LOST = Object.freeze({ tombstone: 'member-tombstone', 'over-cap': 'member-over-cap', undecodable: 'member-undecodable' });
 /** What item 1 puts in place of a transcript-pointer line (spec §10.2 "Reconstruction", item 1). */
@@ -1228,6 +1230,8 @@ export function keptRowsOf(rs, uuids, fileId) {
 export function entryBodyOf(rs, row) {
   const k = expandEntryBody(rs, { entry_id: row.entry_id, blob_id: row.blob_id });
   if (k.state === 'body' || k.state === 'unparseable') return { state: k.state, body: k.body, rawLen: k.blob.bytes.length };
+  // D-6301: a word expandEntryBody gains later has no discard here, so it throws rather than reach a wordless discard.
+  if (!Object.hasOwn(SUMMARY_LOST, k.state) || !Object.hasOwn(MEMBER_LOST, k.state)) throw new TypeError(`entryBodyOf: unknown body state ${k.state}`);
   return { state: 'lost', word: k.state };
 }
 
@@ -1256,6 +1260,19 @@ export function renderKeptMember(row, k, idx) {
   return { state: 'text', text: lines.join('\n') };
 }
 
+/** `fn()`, or null when it throws a RangeError: a body nested past V8's JSON.stringify stack (about 4,500 levels, far
+ *  inside lib's JSON_DEPTH_MAX) parses and cannot be rendered, as recall.mjs's expandEntryText meets it (D-6302). Any other
+ *  throw is a defect and propagates.
+ *  @template T  @param {() => T} fn  @returns {T | null} */
+function renderOrNull(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof RangeError) return null;
+    throw e;
+  }
+}
+
 /** Boundary N's payload (spec §10.2 "Reconstruction"; W2-D75 items 1 to 3), composed by composePayload:
  *  1. the summary row's text, redacted whole, its transcript-pointer lines replaced by POINTER_REMOVED;
  *  2. each kept(N) member the store holds, in N's holding copy's file order, rendered by renderKeptMember;
@@ -1269,7 +1286,9 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
   const sum = entryBodyOf(rs, copy.rows[copy.summaryIndex]);
   if (sum.state === 'lost') return reconDiscard(SUMMARY_LOST[sum.word]);
   if (sum.state === 'unparseable') return reconDiscard('summary-unparseable');
-  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);
+  const sumText = renderOrNull(() => renderEntryText(sum.body));
+  if (sumText === null) return reconDiscard('body-unrenderable');
+  const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);
   if (s1.state !== 'text') return s1;
   const item1 = removePointerLines(s1.text);
   const kept = keptMembersOf(rs, copy.boundary);
@@ -1281,7 +1300,8 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
     const k = entryBodyOf(rs, row);
     if (k.state === 'lost') return reconDiscard(MEMBER_LOST[k.word]);
     if (k.state === 'unparseable') unparseable += 1;
-    const m = renderKeptMember(row, k, rs.idx);
+    const m = renderOrNull(() => renderKeptMember(row, k, rs.idx));
+    if (m === null) return reconDiscard('body-unrenderable');
     if (m.state !== 'text') return m;
     rendered.push(m.text);
   }
@@ -1558,7 +1578,7 @@ R 'renderToolUseLine|unsanitised side'
 # Expected RED (predicted): 2 failed: the composePayload case and the W2-D74 store case (READ_LINE).
 
 # M19 (W2-D54): the summary row sent unredacted.
-mut deploy/history-replay.mjs '  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);' "  const s1 = { state: 'text', text: renderEntryText(sum.body) };"
+mut deploy/history-replay.mjs '  const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);' "  const s1 = { state: 'text', text: sumText };"
 R 'a user text block and a tool_use input'
 # Expected RED (predicted): 1 failed, the summary: expected '<summary>…' not to contain the secret.
 
@@ -11490,10 +11510,12 @@ Every guard this PR adds is in Tasks 1 to 7, each with its own mutant list.
 
 ## Deviations found
 
-Five numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1). A number issued during the build is appended below by the commit that first cites it.
+Seven numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-5780** — `history-w2-answerable-timed` (Task 5; W2-D70, with spec erratum E19, which W2-5b amends in place): W2-D70's answerability gains a fourth clause. A source entry needs a non-null `ts_ms` at or before boundary N's own `ts_ms` (T_N). A sidecar source needs a non-null `entry_id` whose entry passes the same test. This departs from spec §10.2's "Answerability" bullet ("F must occur in a span row with searchable provenance, within the sidecar FTS window"), which reads no time and admits a sidecar however it is linked. The ground is the as-of cut (W2-D34, W2-D35). A NULL-ts row and a sidecar with a NULL `entry_id` are absent under it. A fact sourced only from one would be asked of a treatment arm whose own cut can never show it, and its miss would measure the cut, not recall. With clause 4, every admitted fact's source is visible under the cut: a leaf-N span row precedes the boundary, so the positional clause never hides it. Read with clause 1, the sidecar sources are those linked to a searchable span row and those linked to nothing in the span's transcript, so the unlinked ones reach clause 4 and are counted. What the clause removes is reported, never hidden: the `answerable` stage drops such a candidate as `unanswerable-untimed`, apart from `unanswerable`, and sampling counts each (decisions section 7: "Facts carried only by NULL-ts rows or by sidecars with no entry are never asked"). The spec sentence is amended by W2-5b (E19); this plan edits no spec. Pins: Task 5's clause-4 cases (a source stamped exactly T_N is answerable, one stamped one ms after is not, a NULL-ts row, an unlinked sidecar, a sidecar linked to a NULL-ts row) and the stage's two words; mutants M6 to M9, M12 and M13 of Task 5.
 - **D-6277** — `history-replay-pointer-lines` (Task 1; W2-D75 item 1, spec §10.2 "Reconstruction"): every whole line of the summary row that names a path ending in `.jsonl` becomes `[pointer removed]`, where the spec says "its transcript-pointer line", one line. Neither the spec nor any code, fixture or lib helper in the tree defines that line, so the rule is the widest reading that still removes it: any whole line naming a `.jsonl` path (`/^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm`). It removes more than the spec's text says, at no quiz cost: any fact on such a line is in B, which keeps the summary whole with its pointer (W2-D68 (1)), so it is never admitted. The fidelity pilot's token count moves by those lines only. Redaction runs first and the replacement after (W2-D54: whole, then any cut). Pins: Task 1's `removePointerLines` case and its item 1 case over the fixture store; mutant M2 of Task 1.
 - **D-6278** — `history-replay-baseline-kept-not-a-stop` (Task 4; W2-D68 (3)): W2-D68 (3) stops B's part 3 at "the first operator-provenance or assistant row" after the summary. A kept(N) member there is part 2's row (W2-D68 itself pins "a post-summary kept member"), so Task 4 passes over it: it is never the stop, and the rows after it, the served card among them, stay in B. The departure only grows B, so admission rejects more facts, never fewer. Pins: Task 4's case 'a kept member after the summary is never the stop' with its CONTROL; mutant M9 of Task 4.
 - **D-6279** — `history-replay-baseline-object-leaves` (Task 4; W2-D68's second rendering): W2-D68's second rendering is "its `ftsTextOf` string leaves". `ftsTextOf` answers `''` for an object body, and an attachment row's stored body is its `attachment` object, so the served card would enter B only as JSON, its quotes escaped. B takes every string leaf of an object body instead. This only grows B, so admission rejects more facts, never fewer. Pins: Task 4's case 'part 3 takes the rows after the summary', whose CONTROL is the card's JSON rendering; mutant M6 of Task 4.
 - **D-6280** — `history-replay-spend-budget-operator-given` (Task 7; decisions §4 part 2, §5 act 17): `open --finalize` takes part 2's `spend_budget` from the operator (`--spend-budget N`) and copies the pilot-result file's fields as given, where §4 derives it from the pilot's extrapolation for the frozen list times 1.25. That extrapolation is W2-5b's usage pilot and has no shape at this base. §5's act 17 already has the operator approve the spend budget, so the figure the operator approves is the figure recorded. W2-5b, which defines the pilot result's producer, tightens `open --finalize` to derive it and refuse a mismatch (a ledger carry, R8). Pins: Task 7's `open --finalize` case that prints part 2 with `spend_budget` equal to the given flag, and `FLAG_SPECS`' `spend-budget` entry.
+- **D-6301** — `history-replay-unknown-body-word-throws` (Task 1; D-6238, the Drifts row "Each word keeps its own discard; an unknown word throws"): Task 1's `entryBodyOf` turned every body state other than `body` and `unparseable` into `{ state: 'lost', word }`, so a word `expandEntryBody` gains later reached `SUMMARY_LOST[word]` or `MEMBER_LOST[word]` as `undefined` and `reconstructPayload` answered a discard with no word. The header's rule governs: `entryBodyOf` throws a `TypeError` naming the state unless both maps own it. A wordless discard would be counted under nothing, and the operator would read an unexplained shortfall. Pins: Task 1's D-6301 case (a stub `expandEntryBody` answering an unknown state throws through `entryBodyOf` and `reconstructPayload`, and a known body-less state keeps its own discard through the same stub); mutant F1 of the fix round.
+- **D-6302** — `history-replay-unrenderable-body-discard` (Task 1; W2-D75 items 1 and 2): Task 1's `reconstructPayload` rendered a summary or kept-member body with `renderEntryText` and `JSON.stringify` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`, and so reaches `expandEntryBody` as `body`) threw a `RangeError` that ended the run, where `recall.mjs`'s `expandEntryText` already catches the same error. The rendering is now guarded by `renderOrNull`, which catches `RangeError` only and rethrows anything else, and the boundary is discarded under one new `RECON_DISCARDS` word, `body-unrenderable`, appended after `leaf-absent`: a counted discard, never a refusal (R5). Pins: Task 1's D-6302 case (a 10,000-level nested kept member and summary row each discard `body-unrenderable`) and the `RECON_DISCARDS` case; mutants F2a, F2b and F2c of the fix round.

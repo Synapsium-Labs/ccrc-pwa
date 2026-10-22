@@ -59,6 +59,7 @@ import * as w5a1Fx from './historyFixtures.js';
 import * as w5a1Lib from '../../ccd/history/lib.mjs';
 import * as w5a1Derive from '../../ccd/history/derive.mjs';
 import * as w5a1Recall from '../../ccd/history/recall.mjs';
+import { createStore as w5a1CreateStore } from '../../ccd/history/store.mjs';
 import * as w5a1Gate from '../../deploy/history-gate.mjs';
 import * as w5a1Drv from '../../deploy/history-replay.mjs';
 
@@ -5503,6 +5504,7 @@ type W5a1Payload =
 const w5a1 = w5a1Drv as unknown as {
   openReplayStore(home: string): W5a1Rs;
   reconstructPayload(rs: W5a1Rs, boundaryEntryId: number, question: string): W5a1Payload;
+  entryBodyOf(rs: unknown, row: { entry_id: number; blob_id: number }): { state: string; word?: string };
   boundaryCopyOf(rs: W5a1Rs, boundaryEntryId: number): { state: string; rows: Array<{ blob_id: number; uuid: string }>; summaryIndex: number | null };
   spanRowsOf(rs: W5a1Rs, boundaryEntryId: number): { state: 'span'; rows: Array<Record<string, unknown>> } | { state: 'discard'; why: string };
   composePayload(parts: { summary: string; kept: readonly string[] }, question: string): string;
@@ -5531,7 +5533,8 @@ const W5A1_KEPT_OF = /\bkeptOf\b/;
 const W5A1_DECODE = /\bunbrotli(?:Prefix)?\b|\bbrotliDecompress(?:Sync)?\b|\bcreateBrotliDecompress\b|(['"`])node:zlib\1/;
 /** Every word the store cases below answer: each must be a RECON_DISCARDS member. */
 const W5A1_SEEN_DISCARDS = ['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable', 'summary-tombstone',
-  'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone', 'member-over-cap', 'member-undecodable'];
+  'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone', 'member-over-cap', 'member-undecodable',
+  'body-unrenderable'];
 
 describe('W2-5a Task 1: the driver reads the store only through W2-1 exports', () => {
   it('CONTROL: the keptOf pattern sees an import, a call, a namespace read and an alias, and not another name; the corpus holds the driver and the gate, and the driver reads kept lists through bodyOf', () => {
@@ -5579,7 +5582,7 @@ describe('W2-5a Task 1: the driver reads the store only through W2-1 exports', (
     expect(cli.some((l) => l.includes("recallOffPresence } from './sweep.mjs';")), 'CONTROL: cli.mjs imports sweep\'s reader').toBe(true);
   });
 
-  it('RECON_DISCARDS is frozen, duplicate-free, Task 1\'s fourteen words first, holds every word the store cases answer, and is disjoint from DRIVER_REASONS and GATE_REASONS: a discard is a count, never a refusal (R5)', () => {
+  it('RECON_DISCARDS is frozen, duplicate-free, Task 1\'s fourteen words first, holds every word the store cases answer (body-unrenderable, D-6302, among them), and is disjoint from DRIVER_REASONS and GATE_REASONS: a discard is a count, never a refusal (R5)', () => {
     expect(Array.isArray(w5a1.RECON_DISCARDS) && Object.isFrozen(w5a1.RECON_DISCARDS)).toBe(true);
     // Tasks 2, 3 and 4 append their boundary words after these, in place, each pinning its own slice.
     expect(w5a1.RECON_DISCARDS.slice(0, 14)).toEqual(['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable',
@@ -5857,4 +5860,85 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: reconstruction fro
     expect(pick, 'the payload\'s summary row is the one derivation used').toBe(leaf!.s);
     expect(parts(payload())[1], 'CONTROL: the memberships are back').toBe(USER_PART);
   }, HEAVY);
+
+  it('D-6301: a body word expandEntryBody does not answer today throws a TypeError naming it, never a discard with no word; a word it does answer keeps its own discard (CONTROL)', async () => {
+    let word = 'mystery';
+    vi.resetModules();
+    vi.doMock('../../ccd/history/recall.mjs', async (importOriginal: () => Promise<object>) => ({
+      ...(await importOriginal()),
+      expandEntryBody: () => ({ state: word, body: null, primary: null, causes: [], blob: { state: 'none' } }),
+    }));
+    try {
+      const fresh = (await import('../../deploy/history-replay.mjs')) as unknown as typeof w5a1;
+      expect(() => fresh.entryBodyOf({}, { entry_id: 1, blob_id: 1 })).toThrow(new TypeError('entryBodyOf: unknown body state mystery'));
+      const rs = fresh.openReplayStore(box.home);
+      try {
+        expect(() => fresh.reconstructPayload(rs, idOf(u(5)), QUESTION), 'the payload path throws too').toThrow(TypeError);
+        word = 'tombstone';
+        expect(fresh.reconstructPayload(rs, idOf(u(5)), QUESTION), 'CONTROL: a known body-less word keeps its own discard through the same stub')
+          .toEqual({ state: 'discard', why: 'summary-tombstone' });
+      } finally { rs.close(); }
+    } finally {
+      vi.doUnmock('../../ccd/history/recall.mjs');
+      vi.resetModules();
+    }
+  }, HEAVY);
+
+  it('D-6302: a body nested past JSON.stringify\'s stack parses and cannot be rendered; a kept member and the summary row each discard the boundary body-unrenderable, a count, never a thrown RangeError', () => {
+    const DEPTH = 10_000;
+    const nested = `${'{"a":'.repeat(DEPTH)}1${'}'.repeat(DEPTH)}`;
+    expect(() => JSON.stringify(JSON.parse(nested)), 'CONTROL: this depth parses and cannot be stringified').toThrow(RangeError);
+    withBlob(blobOf(u(1)), stored(`[{"type":"tool_use","name":"Read","input":${nested}}]`), () => {
+      expect(picked(u(1)).state, 'CONTROL: expandEntryBody answers body for it').toBe('body');
+      expect(payload()).toEqual({ state: 'discard', why: 'body-unrenderable' });
+    });
+    withBlob(blobOf(u(6)), stored(nested), () => {
+      expect(picked(u(6)).state, 'CONTROL: expandEntryBody answers body for it').toBe('body');
+      expect(payload()).toEqual({ state: 'discard', why: 'body-unrenderable' });
+    });
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: openReplayStore\'s refusal arms on a fixture HOME (W2-D51, W2-D59)', () => {
+  /** What the open answers for `home`: 'opened', or the refusal's word and detail. */
+  const answer = (home: string): [string, string] => {
+    try { w5a1.openReplayStore(home).close(); return ['opened', '']; } catch (e) {
+      expect(e).toBeInstanceOf(w5a1.DriverRefusal);
+      const r = e as { word: string; detail: string };
+      return [r.word, r.detail];
+    }
+  };
+  /** A store the real createStore made under a fresh fixture HOME, then `edit` run on a writer handle. */
+  const storeWith = (prefix: string, edit: (db: W5a1Db) => void): string => {
+    const home = mkTmp(prefix);
+    w5a1CreateStore(home);
+    const db = new W5a1Db(w5a1Lib.historyPaths(home).dbFile);
+    try { edit(db); } finally { db.close(); }
+    return home;
+  };
+
+  it('CONTROL: an untouched created store opens', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-ok-', () => {}))).toEqual(['opened', '']);
+  });
+
+  it('a store whose meta holds no store_id refuses store-unreadable store-id-absent', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-noid-', (db) => { db.prepare("DELETE FROM meta WHERE k = 'store_id'").run(); })))
+      .toEqual(['store-unreadable', 'store-id-absent']);
+  });
+
+  it('a store whose store_id is not a UUID refuses store-unreadable store-id-unreadable, apart from an absent one', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-badid-', (db) => { db.prepare("UPDATE meta SET v = 'not-a-uuid' WHERE k = 'store_id'").run(); })))
+      .toEqual(['store-unreadable', 'store-id-unreadable']);
+  });
+
+  it('a file that is not a SQLite database refuses store-unreadable with store-read-failed and SQLite\'s own message', () => {
+    const home = mkTmp('ccrc-w5a1-arm-garbage-');
+    const f = w5a1Lib.historyPaths(home).dbFile;
+    mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    writeFileSync(f, 'this is not a database. '.repeat(400), { mode: 0o600 });
+    const [word, detail] = answer(home);
+    expect(word).toBe('store-unreadable');
+    expect(detail).toMatch(/^store-read-failed: .+/);
+  });
 });
