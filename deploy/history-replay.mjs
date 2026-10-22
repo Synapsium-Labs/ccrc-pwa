@@ -33,13 +33,13 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, ftsTextOf, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { EXIT, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
-import { expandEntryBody } from '../ccd/history/recall.mjs';
+import { expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, ASSIGNMENT_ARMS, FACT_KINDS, GATE_CODE_FILES, PILOT_SUBSTREAM, admitFact, collapseWs, familyKey, randInt, substream } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -2853,6 +2853,7 @@ const SPAN_LOST = Object.freeze({ unparseable: 'span-unparseable', tombstone: 's
 export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
+  'unanswerable', 'unanswerable-untimed',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -3584,6 +3585,436 @@ export function writeBaselineRecord(out, section, { storeId, rows }) {
   ensurePlainDir(out, section);
   writePlain(out, rel, `${canonicalJson({ kind: BASELINE_RECORD_KIND, v: 1, baseline_files: BASELINE_FILES_ID, store_id: storeId, boundaries: sorted, discards })}\n`);
   return shaOfPlain(out, rel);
+}
+
+// ── W2-5a Task 5: answerability, the same-millisecond count and sampling (W2-D70, W2-D34, W2-D71; D-5780) ──────────
+// Answerability (W2-D70) asks whether boundary N's own store could answer a fact at all. Some source in leaf N's span
+// holds F_raw verbatim in the text the index holds; that blob is indexed and unpruned; the index's own MATCH returns
+// it; and (clause 4, D-5780) the source is stamped at or before T_N. Clause 4 removes what the as-of cut (W2-D34,
+// W2-D35) hides: a NULL-ts row, and a sidecar with no entry. The same-millisecond count (W2-D34's residual) is
+// reported per admitted question and decides nothing. Sampling (W2-D71) walks families, then each family's
+// candidates, in one seeded order, skips by quota before any filter, and runs the filters lazily in QUIZ_STAGES'
+// order. Every read here is on the read-only handle; nothing writes.
+
+/** The filters a quiz candidate passes, in W2-D71's order. sampleQuestions runs them in exactly this order, lazily:
+ *  a candidate a quota skips reaches none of them, and one a stage drops reaches no later stage. This task ships the
+ *  `answerable` stage (answerableStage); the subcommand that samples hands in the rest. */
+export const QUIZ_STAGES = Object.freeze(['redaction', 'producer', 'admit-baseline', 'answerable', 'writer', 'admit-question']);
+
+/** What sampling counts when a quota, not a filter, passes a candidate over (W2-D71's caps). A skipped candidate
+ *  reaches no stage. */
+export const QUOTA_SKIPS = Object.freeze(['cap-family', 'cap-boundary', 'cap-kind']);
+
+/** Why one source fails W2-D70, each word with the clause it belongs to. checkSource answers one of these, and W2-5b's
+ *  re-check before an arm batch (W2-D78(iii)(b)) names the clause from it. */
+export const SOURCE_FAILS = Object.freeze({
+  'entry-absent': 1, provenance: 1, 'not-verbatim': 1,
+  'blob-absent': 2, 'not-indexed': 2, pruned: 2,
+  'no-match': 3,
+  unlinked: 4, 'ts-null': 4, 'ts-after': 4,
+});
+
+const ANSWER_STMTS = new WeakMap();
+/** The reads answerability makes, prepared once per handle. */
+function answerStmts(db) {
+  let s = ANSWER_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    entry: db.prepare('SELECT entry_id, uuid, ts_ms, provenance, blob_id FROM entries WHERE entry_id = ?'),
+    // A sidecar is a source when it is linked to a searchable span row, and also when it is linked to nothing
+    // (entry_id NULL): clauses 1 to 3 read such a sidecar as the spec did, and clause 4 removes it (D-5780), so the
+    // removal is counted. A sidecar linked to any other row is never a source.
+    sidecars: db.prepare(`SELECT name, blob_id, entry_id FROM sidecars WHERE transcript_pk = ?
+      AND (entry_id IS NULL OR entry_id IN (SELECT value FROM json_each(?))) ORDER BY name, blob_id`),
+    blob: db.prepare('SELECT z, raw_len, fts_indexed, pruned_ms FROM blobs WHERE blob_id = ?'),
+    match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ? AND rowid = ?'),
+  };
+  ANSWER_STMTS.set(db, s);
+  return s;
+}
+
+/** A blob's index text as the sweep writes it. indexBlob inserts entryIndexText over ftsTextOfBlob's text, and
+ *  rederiveFts recomputes it the same way. A blob ftsTextOfBlob answers over-cap or undecodable gets no index row.
+ *  The driver calls the sweep's own function, so deploy/ holds no second decode (W2-D74).
+ *  @returns {Promise<{state: 'text', text: string} | {state: 'none'}>} */
+async function indexTextOf(b, isSidecar, idx) {
+  if (b.z === null) return { state: 'none' };
+  const t = await ftsTextOfBlob(b.z, isSidecar, idx, Number(b.raw_len));
+  if (t.undecodable === true || t.overCap === true) return { state: 'none' };
+  return { state: 'text', text: entryIndexText(t.text, idx) };
+}
+
+/** @param {keyof typeof SOURCE_FAILS} why */
+const sourceFail = (why) => ({ ok: false, clause: SOURCE_FAILS[why], why });
+
+/**
+ * One source against W2-D70's four clauses, cheapest first. The order is clause 1's provenance part, then clause 2,
+ * clause 3, clause 1's verbatim part, and clause 4 last, so "passes 1 to 3 and fails 4" is measured. The answer names
+ * the first clause that fails. The caller vouches that an entry source is a leaf-N span row; a sidecar source with a
+ * null entryId is an unlinked sidecar.
+ * @param {object} db the read-only handle
+ * @param {object} idx the run's pair index
+ * @param {{via: 'entry'|'sidecar', entryId: number|null, blobId: number, name: string|null}} source
+ * @param {string} factRaw F_raw (W2-D61)
+ * @param {number} tsMs T_N, boundary N's own ts_ms
+ * @returns {Promise<{ok: true, entryUuid: string} | {ok: false, clause: number, why: string}>}
+ */
+export async function checkSource(db, idx, source, factRaw, tsMs) {
+  if (typeof factRaw !== 'string' || factRaw === '') throw new TypeError('checkSource: factRaw is a non-empty string');
+  if (!Number.isSafeInteger(tsMs)) throw new TypeError(`checkSource: tsMs=${String(tsMs)} is not an integer`);
+  if (source.via !== 'entry' && source.via !== 'sidecar') throw new TypeError(`checkSource: via ${JSON.stringify(source.via)}`);
+  if (source.via === 'entry' && source.entryId === null) throw new TypeError('checkSource: an entry source names its entry');
+  const s = answerStmts(db);
+  let row = null;
+  if (source.entryId !== null) {
+    row = s.entry.get(source.entryId) ?? null;
+    if (row === null) return sourceFail('entry-absent');
+    if (!SEARCHABLE_PROVENANCE.includes(row.provenance)) return sourceFail('provenance');
+  }
+  const b = s.blob.get(source.blobId);
+  if (b === undefined) return sourceFail('blob-absent');
+  if (Number(b.fts_indexed) !== 1) return sourceFail('not-indexed');
+  if (b.pruned_ms !== null || b.z === null) return sourceFail('pruned');
+  if (s.match.get(ftsPhrase(factRaw), source.blobId) === undefined) return sourceFail('no-match');
+  const t = await indexTextOf(b, source.via === 'sidecar', idx);
+  if (t.state !== 'text' || !t.text.includes(factRaw)) return sourceFail('not-verbatim');
+  if (row === null) return sourceFail('unlinked');
+  if (row.ts_ms === null) return sourceFail('ts-null');
+  if (Number(row.ts_ms) > tsMs) return sourceFail('ts-after');
+  return { ok: true, entryUuid: row.uuid };
+}
+
+/**
+ * W2-D70: is F_raw answerable from leaf N's span? Sources are the span's rows in holding-copy file order, then the
+ * span transcript's sidecars that are linked to a searchable span row or to nothing, by (name, blob_id). The first
+ * source that passes all four clauses answers. With none, `untimed` says some source passed clauses 1 to 3 and only
+ * clause 4 (D-5780) removed it, and `unanswerable` says none did. A span id missing from the store is a defect: the
+ * caller read the span from this store.
+ * @param {object} db
+ * @param {object} idx
+ * @param {{tsMs: number, transcriptPk: number, spanEntryIds: number[]}} ctx
+ * @param {string} factRaw
+ * @returns {Promise<{state: 'answerable', source: {via: 'entry'|'sidecar', entryId: number|null, blobId: number, name: string|null, entryUuid: string}} | {state: 'untimed'} | {state: 'unanswerable'}>}
+ */
+export async function answerability(db, idx, ctx, factRaw) {
+  if (!Array.isArray(ctx.spanEntryIds)) throw new TypeError('answerability: spanEntryIds is an array');
+  const s = answerStmts(db);
+  const rows = ctx.spanEntryIds.map((id) => {
+    const r = s.entry.get(id);
+    if (r === undefined) throw new TypeError(`answerability: span entry ${String(id)} is not in the store`);
+    return r;
+  });
+  const linkable = rows.filter((r) => SEARCHABLE_PROVENANCE.includes(r.provenance)).map((r) => Number(r.entry_id));
+  const sources = [
+    ...rows.map((r) => ({ via: 'entry', entryId: Number(r.entry_id), blobId: Number(r.blob_id), name: null })),
+    ...s.sidecars.all(ctx.transcriptPk, JSON.stringify(linkable)).map((c) => ({
+      via: 'sidecar', entryId: c.entry_id === null ? null : Number(c.entry_id), blobId: Number(c.blob_id), name: c.name,
+    })),
+  ];
+  let untimed = false;
+  for (const src of sources) {
+    const v = await checkSource(db, idx, src, factRaw, ctx.tsMs);
+    if (v.ok) return { state: 'answerable', source: { ...src, entryUuid: v.entryUuid } };
+    if (v.clause === 4) untimed = true;
+  }
+  return { state: untimed ? 'untimed' : 'unanswerable' };
+}
+
+/**
+ * The `answerable` stage (QUIZ_STAGES[3]). It keeps an answerable candidate with its `source`, which freeze reads as
+ * `source_entry_uuid` (W2-D73), and drops the rest as `unanswerable`, or as `unanswerable-untimed` when only clause 4
+ * (D-5780) removed every source: two FACT_DROP_REASONS words (R5), so what D-5780 costs is counted apart.
+ * @param {object} db
+ * @param {object} idx
+ * @param {(candidate: object) => {tsMs: number, transcriptPk: number, spanEntryIds: number[], factRaw: string}} contextOf
+ */
+export function answerableStage(db, idx, contextOf) {
+  return async (candidate) => {
+    const c = contextOf(candidate);
+    const a = await answerability(db, idx, c, c.factRaw);
+    if (a.state === 'answerable') return { keep: true, candidate: { ...candidate, source: a.source } };
+    return { keep: false, reason: a.state === 'untimed' ? 'unanswerable-untimed' : 'unanswerable' };
+  };
+}
+
+/**
+ * The transcripts the CLI searches for one family (R6): recall.mjs's own family scope, never a second family rule.
+ * familiesOf with kind 'family' answers the family's row-life (a family a re-key merged answers the family it merged
+ * into), and transcriptsOf its confirmed epochs' transcripts that hold rows. The same-millisecond count reads this.
+ * @param {object} db
+ * @param {{ccrc_id: string, generation: string}} f
+ * @returns {number[]}
+ */
+export function familyScopeOf(db, f) {
+  const fams = scopeFamiliesOf(db, { kind: 'family', id: f.ccrc_id, generation: f.generation, project: null, workdir: null, workdirReal: null });
+  return transcriptsOf(db, fams.map((x) => x.sessionPk));
+}
+
+/** W2-D34's same-millisecond count. These are the entries holding an FTS hit for the phrase, by their own row, a variant
+ *  or a linked sidecar, that the cut leaves visible outside N's holding copy at exactly T_N: stamped T_N, in the family's
+ *  transcripts, searchable (a sidecar by its route, as grep shows it), and not a member of the holding file. Each entry is
+ *  counted once. N's boundary and summary entries are members of that file, and a kept(N) member stamped T_N outside it
+ *  is visible by its stamp anyway, so no cut code is needed. */
+const SAME_MS_SQL = `WITH m(blob_id) AS (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH :q),
+  hit(entry_id, via) AS (
+    SELECT e.entry_id, 'row' FROM m JOIN entries e ON e.blob_id = m.blob_id
+    UNION SELECT v.entry_id, 'row' FROM m JOIN entry_variants v ON v.blob_id = m.blob_id
+    UNION SELECT s.entry_id, 'sidecar' FROM m JOIN sidecars s ON s.blob_id = m.blob_id)
+  SELECT count(DISTINCT e.entry_id) AS n FROM hit h JOIN entries e ON e.entry_id = h.entry_id
+  WHERE e.ts_ms = :t
+    AND e.transcript_pk IN (SELECT value FROM json_each(:tpks))
+    AND (h.via = 'sidecar' OR e.provenance IN (SELECT value FROM json_each(:provs)))
+    AND NOT EXISTS (SELECT 1 FROM memberships mb WHERE mb.file_id = :hold AND mb.entry_id = e.entry_id)`;
+const SAME_MS_STMTS = new WeakMap();
+
+/**
+ * `asof_same_ms_hits` for one admitted question (W2-D34). Reported, never gating: nothing in sampling reads it.
+ * @param {object} db
+ * @param {{tsMs: number, holdingFileId: number, transcriptPks: number[]}} ctx
+ * @param {string} factRaw
+ * @returns {number}
+ */
+export function asofSameMsHits(db, ctx, factRaw) {
+  if (typeof factRaw !== 'string' || factRaw === '') throw new TypeError('asofSameMsHits: factRaw is a non-empty string');
+  if (!Number.isSafeInteger(ctx.tsMs) || !Number.isSafeInteger(ctx.holdingFileId) || !Array.isArray(ctx.transcriptPks)) {
+    throw new TypeError('asofSameMsHits: tsMs and holdingFileId are integers and transcriptPks an array');
+  }
+  let st = SAME_MS_STMTS.get(db);
+  if (st === undefined) {
+    st = db.prepare(SAME_MS_SQL);
+    SAME_MS_STMTS.set(db, st);
+  }
+  const r = st.get({
+    q: ftsPhrase(factRaw), t: ctx.tsMs, hold: ctx.holdingFileId,
+    tpks: JSON.stringify(ctx.transcriptPks), provs: JSON.stringify(SEARCHABLE_PROVENANCE),
+  });
+  return Number(r.n);
+}
+
+/** sampleQuestions' `afterAdmit` for the quiz: each admitted question's report, keyed by its qid beside the frozen list,
+ *  never in it (W2-D73 fixes the entry keys). */
+export function sameMsReport(db, contextOf) {
+  return async (candidate) => {
+    const c = contextOf(candidate);
+    return { asof_same_ms_hits: asofSameMsHits(db, c, c.factRaw) };
+  };
+}
+
+/** Code-unit order (W2-D18's amendment). */
+const cmpUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+/** @param {{store_id: string, ccrc_id: string, generation: string}} f */
+const familyKeyOf = (f) => familyKey(f.store_id, f.ccrc_id, f.generation);
+
+/**
+ * A seeded order (W2-D18's amendment, W2-D71). `items` is sorted by `keyOf`, by code unit, and a key listed twice is
+ * a defect. Then a Fisher–Yates order is drawn from `rng` by randInt, as handcheckSample draws: n − 1 draws for n items.
+ * The same stream and the same items give the same order in any input order.
+ * @template T
+ * @param {{nextU32(): number}} rng
+ * @param {readonly T[]} items
+ * @param {(item: T) => string} keyOf
+ * @returns {T[]}
+ */
+export function seededOrder(rng, items, keyOf) {
+  const keyed = items.map((it) => {
+    const k = keyOf(it);
+    if (typeof k !== 'string') throw new TypeError('seededOrder: every key is a string');
+    return /** @type {[string, T]} */ ([k, it]);
+  });
+  keyed.sort((a, b) => cmpUnit(a[0], b[0]));
+  for (let i = 1; i < keyed.length; i += 1) {
+    if (keyed[i - 1][0] === keyed[i][0]) throw new TypeError(`seededOrder: the key ${JSON.stringify(keyed[i][0])} is listed twice`);
+  }
+  const out = keyed.map(([, it]) => it);
+  for (let s = 0; s < out.length - 1; s += 1) {
+    const j = s + randInt(rng, out.length - s);
+    [out[s], out[j]] = [out[j], out[s]];
+  }
+  return out;
+}
+
+/** A keyed family order (W2-D71 as amended 2026-10-22; R10): the families sorted by `keyOf`, by code unit, each with
+ *  its key, which is its family rank. No draw. A key that is not a non-empty string, or one listed twice (one family
+ *  given twice), is a defect.
+ *  @template F  @param {readonly F[]} families  @param {(f: F) => string} keyOf  @returns {Array<[string, F]>} */
+function keyedOrder(families, keyOf) {
+  const pairs = families.map((f) => {
+    const k = keyOf(f);
+    if (typeof k !== 'string' || k === '') throw new TypeError('sampleQuestions: every family order key is a non-empty string');
+    return /** @type {[string, F]} */ ([k, f]);
+  });
+  pairs.sort((x, y) => cmpUnit(x[0], y[0]));
+  for (let i = 1; i < pairs.length; i += 1) {
+    if (pairs[i - 1][0] === pairs[i][0]) throw new TypeError(`sampleQuestions: the family order key ${pairs[i][0]} is listed twice`);
+  }
+  return pairs;
+}
+
+/** The quiz's stream: the open record's seed, substream 'quiz-sample' (W2-D71). */
+export function quizRng(recordSeedHex) {
+  return substream(recordSeedHex, 'quiz-sample');
+}
+
+/** The pilot's stream: the pilot's own seed, never the record's, substream PILOT_SUBSTREAM (W2-D71, W2-D18). */
+export function pilotRng(pilotSeedHex) {
+  return substream(pilotSeedHex, PILOT_SUBSTREAM);
+}
+
+/** One family's own candidate stream: the walk's seed joined to the family's key, under the walk's label. A family's
+ *  candidate order is then the same on whichever node holds it, whatever the other families hold, so every node's ranks
+ *  are the global walk's and freeze merges them by rank alone (W2-D71; R4).
+ *  @param {string} seedHex  @param {string} label 'quiz-sample' or PILOT_SUBSTREAM
+ *  @param {{store_id: string, ccrc_id: string, generation: string}} family */
+export function familyRng(seedHex, label, family) {
+  return substream(`${seedHex}:${familyKeyOf(family)}`, label);
+}
+
+/** The quiz's per-family order key (W2-D71, as the coordinator amended it in place on 2026-10-22; R10): the
+ *  'quiz-sample' substream's seed, sha256Hex(`<seed>:quiz-sample`) as the gate's substream derives it, hashed with the
+ *  family's familyKey, as 64 lowercase hex. Families sorted by it, by code unit, come in one order on every node, and
+ *  a node needs no list of the others' families, so each node's ranks are the walk over every node's (freeze merges by
+ *  rank).
+ *  @param {string} recordSeedHex  @param {{store_id: string, ccrc_id: string, generation: string}} family */
+export function quizFamilyOrderKey(recordSeedHex, family) {
+  if (typeof recordSeedHex !== 'string' || recordSeedHex === '') throw new TypeError('quizFamilyOrderKey: the seed is a non-empty string, passed in');
+  return sha256Hex(`${sha256Hex(`${recordSeedHex}:quiz-sample`)}:${familyKeyOf(family)}`);
+}
+
+/** A fresh seed: 32 bytes from `draw` (crypto's randomBytes), as 64 lowercase hex. pilot-source records it in the pilot
+ *  section (W2-D71). No flag ever takes a seed; a test injects `draw`. */
+export function drawSeedHex(draw = randomBytes) {
+  const b = draw(32);
+  if (!(b instanceof Uint8Array) || b.length !== 32) throw new TypeError('drawSeedHex: the draw is 32 bytes');
+  return Buffer.from(b).toString('hex');
+}
+
+/**
+ * The quiz population (W2-D71, W2-D77). It keeps the families with at least one W2-D66-admitted boundary and drops,
+ * counted: every pilot family, and every family whose (store_id, ccrc_id) holds a control-assigned family at any
+ * generation. The input order is kept.
+ * @template {{store_id: string, ccrc_id: string, generation: string, admitted: number}} F
+ * @param {F[]} families
+ * @param {{pilotFamilies: Array<{store_id: string, ccrc_id: string, generation: string}>, assignment: Array<{store_id: string, ccrc_id: string, generation: string, arm: string}>}} o
+ * @returns {{families: F[], excluded: {'no-admitted-boundary': number, pilot: number, 'control-id': number}}}
+ */
+export function quizPopulation(families, { pilotFamilies, assignment }) {
+  const pilot = new Set(pilotFamilies.map(familyKeyOf));
+  const controlIds = new Set();
+  for (const a of assignment) {
+    if (!ASSIGNMENT_ARMS.includes(a.arm)) throw new TypeError(`quizPopulation: arm ${JSON.stringify(a.arm)} is not an assignment arm`);
+    if (a.arm === 'control') controlIds.add(canonicalJson([a.store_id, a.ccrc_id]));
+  }
+  const kept = [];
+  const excluded = { 'no-admitted-boundary': 0, pilot: 0, 'control-id': 0 };
+  for (const f of families) {
+    if (!Number.isSafeInteger(f.admitted) || f.admitted < 0) throw new TypeError(`quizPopulation: admitted=${String(f.admitted)} is not a count`);
+    if (f.admitted === 0) excluded['no-admitted-boundary'] += 1;
+    else if (pilot.has(familyKeyOf(f))) excluded.pilot += 1;
+    else if (controlIds.has(canonicalJson([f.store_id, f.ccrc_id]))) excluded['control-id'] += 1;
+    else kept.push(f);
+  }
+  return { families: kept, excluded };
+}
+
+/** @param {string} name @param {unknown} v */
+function assertCount(name, v) {
+  if (!Number.isSafeInteger(v) || /** @type {number} */ (v) < 1) throw new TypeError(`sampleQuestions: the quota ${name}=${String(v)} is not a positive integer`);
+}
+
+/**
+ * W2-D71's draw. Families come in seeded order (by familyKey), and within each family its candidates in seeded order
+ * (by id), from the one `rng`, or from `candidateRng(family)` when it is given (a walk spread over nodes). With
+ * `familyOrder`, the families are not drawn: they are sorted by `familyOrder(family)`, by code unit (the quiz passes
+ * quizFamilyOrderKey, W2-D71 as amended 2026-10-22, R10). Each question carries `rank: [family rank, candidate rank]`,
+ * its place in the two orders; the family rank is the family's index in the drawn order, or its key under
+ * `familyOrder`, so the ranks of nodes that each hold some families merge into the one walk. A candidate is first checked against the quotas: the target, then the per-family,
+ * per-boundary and per-kind caps, which count admitted questions only. A candidate a cap skips is counted under
+ * QUOTA_SKIPS and reaches no stage. The rest run QUIZ_STAGES in order, and the first stage that drops one ends its run;
+ * the drop is counted under that stage and its reason. `afterAdmit` runs once per admitted question, and its answer is
+ * stored in `reports` and never read here. A family is mined (`candidates()`) only when the draw reaches it. Malformed
+ * inputs are defects (TypeError).
+ * @param {{families: Array<{store_id: string, ccrc_id: string, generation: string, candidates: () => Promise<Array<{id: string, kind: string, boundary_uuid: string}>>}>, rng: {nextU32(): number}, quotas: {target: number, caps: {family: number, boundary: number, kind_per_family: number}}, stages: Record<string, Function>, afterAdmit?: Function, candidateRng?: Function, familyOrder?: (family: {store_id: string, ccrc_id: string, generation: string}) => string}} o
+ */
+export async function sampleQuestions({ families, rng, quotas, stages, afterAdmit, candidateRng, familyOrder }) {
+  for (const name of QUIZ_STAGES) if (typeof stages[name] !== 'function') throw new TypeError(`sampleQuestions: no '${name}' stage`);
+  for (const name of Object.keys(stages)) if (!QUIZ_STAGES.includes(name)) throw new TypeError(`sampleQuestions: '${name}' is an unknown stage`);
+  assertCount('target', quotas.target);
+  for (const k of ['family', 'boundary', 'kind_per_family']) assertCount(`caps.${k}`, quotas.caps?.[k]);
+  const drops = Object.fromEntries(QUIZ_STAGES.map((n) => [n, {}]));
+  const skips = Object.fromEntries(QUOTA_SKIPS.map((w) => [w, 0]));
+  const questions = [];
+  const reports = {};
+  const taken = new Set();
+  const ordered = familyOrder === undefined ? [...seededOrder(rng, families, familyKeyOf).entries()] : keyedOrder(families, familyOrder);
+  for (const [fi, f] of ordered) {
+    if (questions.length >= quotas.target) break;
+    const candidates = await f.candidates();
+    for (const c of candidates) {
+      if (!FACT_KINDS.includes(c.kind)) throw new TypeError(`sampleQuestions: candidate ${JSON.stringify(c.id)} has kind ${JSON.stringify(c.kind)}`);
+      if (typeof c.boundary_uuid !== 'string' || c.boundary_uuid === '') throw new TypeError(`sampleQuestions: candidate ${JSON.stringify(c.id)} names no boundary`);
+    }
+    let inFamily = 0;
+    const inBoundary = new Map();
+    const inKind = new Map();
+    const order = seededOrder(candidateRng === undefined ? rng : candidateRng(f), candidates, (x) => x.id);
+    for (const [ci, c] of order.entries()) {
+      if (questions.length >= quotas.target) break;
+      if (inFamily >= quotas.caps.family) { skips['cap-family'] += 1; continue; }
+      if ((inBoundary.get(c.boundary_uuid) ?? 0) >= quotas.caps.boundary) { skips['cap-boundary'] += 1; continue; }
+      if ((inKind.get(c.kind) ?? 0) >= quotas.caps.kind_per_family) { skips['cap-kind'] += 1; continue; }
+      let cur = c;
+      let dropped = null;
+      for (const name of QUIZ_STAGES) {
+        const v = await stages[name](cur, f);
+        if (v.keep === true) { cur = v.candidate; continue; }
+        if (typeof v.reason !== 'string' || v.reason === '') throw new TypeError(`sampleQuestions: the '${name}' stage dropped ${JSON.stringify(c.id)} without a reason word`);
+        dropped = { stage: name, reason: v.reason };
+        break;
+      }
+      if (dropped !== null) {
+        drops[dropped.stage][dropped.reason] = (drops[dropped.stage][dropped.reason] ?? 0) + 1;
+        continue;
+      }
+      inFamily += 1;
+      inBoundary.set(c.boundary_uuid, (inBoundary.get(c.boundary_uuid) ?? 0) + 1);
+      inKind.set(c.kind, (inKind.get(c.kind) ?? 0) + 1);
+      questions.push({ ...cur, rank: [fi, ci] });
+      taken.add(familyKeyOf(f));
+      if (afterAdmit !== undefined) reports[c.id] = await afterAdmit(cur, f);
+    }
+  }
+  return { questions, families: [...taken].sort(cmpUnit), drops, skips, reports };
+}
+
+/** W2-D71's halt floor: fewer questions or fewer families than `haltFloor` (part 1's `quiz.halt_floor`) halts W2 for a
+ *  ruling before part 2. Exactly the floor does not. */
+export function quizFloor(nQuestions, nFamilies, haltFloor) {
+  const short = [];
+  if (nQuestions < haltFloor.questions) short.push('questions');
+  if (nFamilies < haltFloor.families) short.push('families');
+  return { halt: short.length > 0, short };
+}
+
+/**
+ * The fidelity pilot's boundaries (W2-D71: sourced like the quiz). Families come in seeded order, and within each its
+ * boundaries in seeded order (by boundary_uuid), from the one `rng`. The first boundary `admitBoundary` keeps is taken,
+ * at most one per family, until `n`. A dropped boundary is counted by its reason. A family is read (`boundaries()`)
+ * only when the draw reaches it.
+ */
+export async function sampleFidelityBoundaries({ families, rng, n, admitBoundary }) {
+  if (!Number.isSafeInteger(n) || n < 1) throw new TypeError(`sampleFidelityBoundaries: n=${String(n)} is not a positive integer`);
+  const picked = [];
+  const drops = {};
+  for (const f of seededOrder(rng, families, familyKeyOf)) {
+    if (picked.length >= n) break;
+    for (const b of seededOrder(rng, await f.boundaries(), (x) => x.boundary_uuid)) {
+      const v = await admitBoundary(b, f);
+      if (v.keep === true) { picked.push({ family: f, boundary: b }); break; }
+      if (typeof v.reason !== 'string' || v.reason === '') throw new TypeError('sampleFidelityBoundaries: a dropped boundary carries a reason word');
+      drops[v.reason] = (drops[v.reason] ?? 0) + 1;
+    }
+  }
+  return { boundaries: picked, drops };
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

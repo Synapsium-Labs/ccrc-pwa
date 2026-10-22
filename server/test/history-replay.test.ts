@@ -3045,7 +3045,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
     '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
-    '../ccd/history/recall.mjs': '{ expandEntryBody }',
+    '../ccd/history/recall.mjs': '{ expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
     '../ccd/history/sweep.mjs': '{ ftsTextOfBlob }',
   };
@@ -7334,5 +7334,588 @@ describe('W2-5a Task 4: the baseline files, W2-D69', () => {
     expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: [], top: '/home/u/tree' }))
       .toEqual([...names('/home/u/tree/demo'), ...names('/home/u/tree')]);
     expect(w5a4Drv.BASELINE_NAMES).toEqual(['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']);
+  });
+});
+
+// ── W2-5a Task 5: answerability, the same-millisecond count and sampling ─────────────────────────────────────────
+// (W2-D70, W2-D34, W2-D71; D-5780). In-process only. Every store is built by hand under a mkTmp HOME, as
+// history-card.test.ts's W1-B3 Task 4 builds one: createStore, then rows inserted directly, and each blob the sweep would
+// index indexed through the sweep's own ftsTextOfBlob and indexBlob. Nothing here runs a pass, spawns a child, reads a
+// roster, a live store or a live HOME, or reaches claude, ccrc or gh. The sampler's stages are recording stand-ins.
+import { createHash as w5a5Hash } from 'node:crypto';
+import type { DatabaseSync as W5a5Db } from 'node:sqlite';
+import { describe as w5a5describe, expect as w5a5expect, it as w5a5it } from 'vitest';
+import * as w5a5Drv from '../../deploy/history-replay.mjs';
+import * as w5a5Lib from '../../ccd/history/lib.mjs';
+import * as w5a5Gate from '../../deploy/history-gate.mjs';
+import * as w5a5StoreMod from '../../ccd/history/store.mjs';
+import * as w5a5SweepMod from '../../ccd/history/sweep.mjs';
+import { mkTmp as w5a5MkTmp } from './tmpHelpers.js';
+
+type W5a5Rng = { nextU32(): number };
+type W5a5Cand = { id: string; kind: string; boundary_uuid: string; rank?: [number | string, number]; [k: string]: unknown };
+type W5a5Verdict = { keep: true; candidate: W5a5Cand } | { keep: false; reason: string };
+type W5a5Stage = (c: W5a5Cand, f: unknown) => Promise<W5a5Verdict>;
+type W5a5Src = { via: 'entry' | 'sidecar'; entryId: number | null; blobId: number; name: string | null };
+type W5a5Check = { ok: true; entryUuid: string } | { ok: false; clause: number; why: string };
+type W5a5Answer = { state: 'answerable'; source: W5a5Src & { entryUuid: string } } | { state: 'untimed' } | { state: 'unanswerable' };
+type W5a5Span = { tsMs: number; transcriptPk: number; spanEntryIds: number[] };
+type W5a5Same = { tsMs: number; holdingFileId: number; transcriptPks: number[] };
+type W5a5FamRef = { store_id: string; ccrc_id: string; generation: string };
+type W5a5Quotas = { target: number; caps: { family: number; boundary: number; kind_per_family: number } };
+type W5a5Sampled = { questions: W5a5Cand[]; families: string[]; drops: Record<string, Record<string, number>>; skips: Record<string, number>; reports: Record<string, unknown> };
+/** The exports this task adds, typed for the test. The driver is JavaScript, so its inferred JSDoc types are loose. */
+interface W5a5Api {
+  QUIZ_STAGES: readonly string[];
+  QUOTA_SKIPS: readonly string[];
+  FACT_DROP_REASONS: readonly string[];
+  RECON_DISCARDS: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  SOURCE_FAILS: Readonly<Record<string, number>>;
+  familyScopeOf(db: W5a5Db, f: { ccrc_id: string; generation: string }): number[];
+  familyRng(seedHex: string, label: string, f: W5a5FamRef): W5a5Rng;
+  checkSource(db: W5a5Db, idx: unknown, source: W5a5Src, factRaw: string, tsMs: number): Promise<W5a5Check>;
+  answerability(db: W5a5Db, idx: unknown, ctx: W5a5Span, factRaw: string): Promise<W5a5Answer>;
+  answerableStage(db: W5a5Db, idx: unknown, contextOf: (c: W5a5Cand) => W5a5Span & { factRaw: string }): W5a5Stage;
+  asofSameMsHits(db: W5a5Db, ctx: W5a5Same, factRaw: string): number;
+  sameMsReport(db: W5a5Db, contextOf: (c: W5a5Cand) => W5a5Same & { factRaw: string }): (c: W5a5Cand) => Promise<{ asof_same_ms_hits: number }>;
+  seededOrder<T>(rng: W5a5Rng, items: readonly T[], keyOf: (x: T) => string): T[];
+  quizRng(seedHex: string): W5a5Rng;
+  pilotRng(seedHex: string): W5a5Rng;
+  quizFamilyOrderKey(seedHex: string, f: W5a5FamRef): string;
+  drawSeedHex(draw?: (n: number) => Uint8Array): string;
+  quizPopulation<F extends W5a5FamRef & { admitted: number }>(families: F[], o: { pilotFamilies: W5a5FamRef[]; assignment: Array<W5a5FamRef & { arm: string }> }): { families: F[]; excluded: Record<string, number> };
+  sampleQuestions(o: { families: unknown[]; rng: W5a5Rng; quotas: W5a5Quotas; stages: Record<string, W5a5Stage>; afterAdmit?: (c: W5a5Cand, f: unknown) => Promise<unknown>; candidateRng?: (f: W5a5FamRef) => W5a5Rng; familyOrder?: (f: W5a5FamRef) => string }): Promise<W5a5Sampled>;
+  quizFloor(nQuestions: number, nFamilies: number, haltFloor: { questions: number; families: number }): { halt: boolean; short: string[] };
+  sampleFidelityBoundaries(o: { families: unknown[]; rng: W5a5Rng; n: number; admitBoundary: (b: { boundary_uuid: string }, f: unknown) => Promise<{ keep: true } | { keep: false; reason: string }> }): Promise<{ boundaries: Array<{ family: W5a5FamRef; boundary: { boundary_uuid: string } }>; drops: Record<string, number> }>;
+}
+const w5a5D = w5a5Drv as unknown as W5a5Api;
+const w5a5Sweep = w5a5SweepMod as unknown as {
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, idx: unknown, rawLen: number): Promise<{ text: string | null; overCap?: boolean }>;
+  indexBlob(db: W5a5Db, blobId: number, text: string, idx: unknown, overCap?: boolean): void;
+};
+
+w5a5describe('W2-5a Task 5: answerability, the same-millisecond count and sampling', () => {
+  const D = w5a5D;
+  const T = 1_760_000_000_000;              // boundary N's ts_ms: T_N
+  const IDX = w5a5Lib.makePairIndex([]);    // no registered pair: redaction changes none of these texts
+  const INDEXED = new Set<string>(w5a5Lib.INDEXED_PROVENANCE as readonly string[]);
+  const UUID = (n: number): string => `5a5e0000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+  type RowSpec = { key: string; ts: number | null; provenance: string; text: string; files?: number[]; indexed?: boolean; variantText?: string };
+  type SideSpec = { key: string; name: string; bytes: Buffer; linkTo: string | null; tpk?: number };
+  type Fx = { dbFile: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string> };
+
+  /** A store built by hand. Transcript 1 is this family's main transcript, with file 1 (N's holding copy) and file 2 (another
+   *  copy of it). Transcript 2 is another family's, with file 3. Rows go in the order given, each a member of every file it
+   *  lists (default file 1) at its own line. A row whose provenance the sweep indexes (INDEXED_PROVENANCE) is indexed
+   *  through the sweep's own functions unless `indexed: false`, and so is every variant and sidecar. `edit` runs on the
+   *  writer before it closes. */
+  async function build(rows: RowSpec[], sides: SideSpec[] = [], edit?: (w: W5a5Db, fx: Fx) => void): Promise<Fx> {
+    const home = w5a5MkTmp('w5a5-store-');
+    w5a5StoreMod.createStore(home);
+    const dbFile = w5a5Lib.historyPaths(home).dbFile;
+    const w = w5a5StoreMod.openWriter(dbFile) as unknown as W5a5Db;
+    w5a5StoreMod.createFtsTables(w);
+    w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?), (2, ?)').run(UUID(9001), UUID(9002));
+    const file = w.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 'live', 1)");
+    file.run(1, 5001, 1);
+    file.run(2, 5002, 1);
+    file.run(3, 5003, 2);
+    const fx: Fx = { dbFile, entry: {}, blob: {}, uuid: {} };
+    const blobOf = (bytes: Buffer): number => Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+      .get(w5a5Hash('sha256').update(bytes).digest(), w5a5StoreMod.CODEC, w5a5StoreMod.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+    const index = async (blobId: number, isSidecar: boolean): Promise<void> => {
+      const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(blobId) as { z: Uint8Array; raw_len: number | bigint };
+      const t = await w5a5Sweep.ftsTextOfBlob(b.z, isSidecar, IDX, Number(b.raw_len));
+      w5a5Sweep.indexBlob(w, blobId, t.text ?? '', IDX, t.overCap === true);
+    };
+    const body = (text: string): Buffer => Buffer.from(w5a5Lib.canonicalJson([{ type: 'text', text }]));
+    const ent = w.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', ?, 1, ?, ?, ?, ?) RETURNING entry_id");
+    const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    for (const [i, r] of rows.entries()) {
+      const files = r.files ?? [1];
+      const blobId = blobOf(body(r.text));
+      const id = Number((ent.get(UUID(i + 1), files.includes(3) ? 2 : 1, r.provenance, i, files[0]!, blobId, r.ts) as { entry_id: number | bigint }).entry_id);
+      for (const f of files) member.run(f, id, i + 1);
+      fx.entry[r.key] = id;
+      fx.blob[r.key] = blobId;
+      fx.uuid[r.key] = UUID(i + 1);
+      if (r.indexed !== false && INDEXED.has(r.provenance)) await index(blobId, false);
+      if (r.variantText !== undefined) {
+        const v = blobOf(body(r.variantText));
+        w.prepare("INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause) VALUES (?, ?, ?, 1, 'unknown')").run(id, v, files[0]!);
+        fx.blob[`${r.key}:variant`] = v;
+        await index(v, false);
+      }
+    }
+    for (const s of sides) {
+      const blobId = blobOf(s.bytes);
+      w.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+        .run(s.tpk ?? 1, s.name, blobId, s.linkTo === null ? null : fx.entry[s.linkTo]!, T - 60_000);
+      fx.blob[s.key] = blobId;
+      await index(blobId, true);
+    }
+    edit?.(w, fx);
+    w5a5StoreMod.closeWriter(w);
+    return fx;
+  }
+  /** The driver's reads go through the read-only handle, as W2-D51's openReader route opens it. */
+  async function withReader<R>(fx: Fx, fn: (db: W5a5Db) => Promise<R> | R): Promise<R> {
+    const db = w5a5StoreMod.openReader(fx.dbFile) as unknown as W5a5Db;
+    try { return await fn(db); } finally { db.close(); }
+  }
+  const span = (fx: Fx, keys: string[]): W5a5Span => ({ tsMs: T, transcriptPk: 1, spanEntryIds: keys.map((k) => fx.entry[k]!) });
+  const ans = (fx: Fx, keys: string[], fact: string): Promise<W5a5Answer> => withReader(fx, (db) => D.answerability(db, IDX, span(fx, keys), fact));
+  const check = (fx: Fx, src: W5a5Src, fact: string): Promise<W5a5Check> => withReader(fx, (db) => D.checkSource(db, IDX, src, fact, T));
+  const rowSrc = (fx: Fx, key: string): W5a5Src => ({ via: 'entry', entryId: fx.entry[key]!, blobId: fx.blob[key]!, name: null });
+
+  w5a5describe('answerability, W2-D70 and D-5780', () => {
+    w5a5it('the words are fixed: the two drop words, appended to FACT_DROP_REASONS after Task 2\'s (R5), and each failure word with its clause', () => {
+      w5a5expect(D.FACT_DROP_REASONS.slice(14, 16)).toEqual(['unanswerable', 'unanswerable-untimed']);
+      w5a5expect(new Set(D.FACT_DROP_REASONS).size).toBe(D.FACT_DROP_REASONS.length);
+      w5a5expect({ ...D.SOURCE_FAILS }).toEqual({
+        'entry-absent': 1, provenance: 1, 'not-verbatim': 1, 'blob-absent': 2, 'not-indexed': 2, pruned: 2, 'no-match': 3, unlinked: 4, 'ts-null': 4, 'ts-after': 4,
+      });
+      w5a5expect(Object.isFrozen(D.SOURCE_FAILS)).toBe(true);
+    });
+
+    w5a5it('a fact in a stamped model row of the span is answerable, and the source is that row', async () => {
+      const fx = await build([{ key: 'm', ts: T - 5000, provenance: 'model', text: 'run zqcmd51 now' }]);
+      w5a5expect(await ans(fx, ['m'], 'zqcmd51 now')).toEqual({
+        state: 'answerable', source: { via: 'entry', entryId: fx.entry.m, blobId: fx.blob.m, name: null, entryUuid: fx.uuid.m },
+      });
+    });
+
+    w5a5it('clause 4: a source stamped exactly T_N is answerable, and one stamped one ms after T_N is untimed', async () => {
+      const at = await build([{ key: 'r', ts: T, provenance: 'tool', text: 'zqat51 output' }]);
+      w5a5expect((await ans(at, ['r'], 'zqat51 output')).state).toBe('answerable');
+      const after = await build([{ key: 'r', ts: T + 1, provenance: 'tool', text: 'zqat51 output' }]);
+      w5a5expect(await ans(after, ['r'], 'zqat51 output')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(after, rowSrc(after, 'r'), 'zqat51 output')).toEqual({ ok: false, clause: 4, why: 'ts-after' });
+    });
+
+    w5a5it('clause 4: a NULL-ts source is not answerable, and is untimed', async () => {
+      const fx = await build([{ key: 'r', ts: null, provenance: 'tool', text: 'zqnull51 output' }]);
+      w5a5expect(await ans(fx, ['r'], 'zqnull51 output')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqnull51 output')).toEqual({ ok: false, clause: 4, why: 'ts-null' });
+    });
+
+    w5a5it('clause 1: a harness row and an indexed recall-echo row are not sources; CONTROL: the same text in a tool row is', async () => {
+      const harness = await build([{ key: 'h', ts: T - 1000, provenance: 'harness', text: 'zqmeta51 injected' }]);
+      w5a5expect(await ans(harness, ['h'], 'zqmeta51 injected')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(harness, rowSrc(harness, 'h'), 'zqmeta51 injected')).toEqual({ ok: false, clause: 1, why: 'provenance' });
+      const echo = await build([{ key: 'e', ts: T - 1000, provenance: 'recall-echo', text: 'zqecho51 result' }]);
+      w5a5expect(await ans(echo, ['e'], 'zqecho51 result')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(echo, rowSrc(echo, 'e'), 'zqecho51 result')).toEqual({ ok: false, clause: 1, why: 'provenance' });
+      const tool = await build([{ key: 'e', ts: T - 1000, provenance: 'tool', text: 'zqecho51 result' }]);
+      w5a5expect((await ans(tool, ['e'], 'zqecho51 result')).state).toBe('answerable');
+    });
+
+    w5a5it('clause 2: a blob marked unindexed, and a pruned blob, are not sources even with their index row still present', async () => {
+      const cold = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqcold51 output' }], [],
+        (w, fx) => { w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(fx.blob.r!); });
+      w5a5expect(await ans(cold, ['r'], 'zqcold51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(cold, rowSrc(cold, 'r'), 'zqcold51 output')).toEqual({ ok: false, clause: 2, why: 'not-indexed' });
+      const pruned = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqgone51 output' }], [],
+        (w, fx) => { w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(T, fx.blob.r!); });
+      w5a5expect(await ans(pruned, ['r'], 'zqgone51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(pruned, rowSrc(pruned, 'r'), 'zqgone51 output')).toEqual({ ok: false, clause: 2, why: 'pruned' });
+    });
+
+    w5a5it('clause 3: a source the index MATCH does not return is not answerable', async () => {
+      const fx = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqmiss51 output' }], [],
+        (w, f) => { w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(f.blob.r!); });
+      w5a5expect(await ans(fx, ['r'], 'zqmiss51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqmiss51 output')).toEqual({ ok: false, clause: 3, why: 'no-match' });
+    });
+
+    w5a5it('clause 1: a phrase the MATCH finds but the index text does not hold verbatim is not answerable; CONTROL: the verbatim fact is', async () => {
+      const fx = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqrun51 zqtest51:zqunit51 now' }]);
+      w5a5expect(await ans(fx, ['r'], 'zqrun51 zqtest51-zqunit51')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqrun51 zqtest51-zqunit51')).toEqual({ ok: false, clause: 1, why: 'not-verbatim' });
+      w5a5expect((await ans(fx, ['r'], 'zqrun51 zqtest51:zqunit51')).state).toBe('answerable');
+    });
+
+    w5a5it('the sidecar window: a fact past SIDECAR_FTS_BYTES is not answerable, and one inside it is', async () => {
+      const bytes = Buffer.from(`zqhead51 ${'x '.repeat(270_000)}zqtail51\n`);
+      w5a5expect(bytes.indexOf('zqtail51'), 'CONTROL: the tail starts past the window').toBeGreaterThan(w5a5Lib.SIDECAR_FTS_BYTES);
+      const fx = await build([{ key: 'tr', ts: T - 2000, provenance: 'tool', text: 'Output too large. Full output saved to: tool-results/big51.txt' }],
+        [{ key: 's', name: 'big51.txt', bytes, linkTo: 'tr' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqhead51')).toEqual({
+        state: 'answerable', source: { via: 'sidecar', entryId: fx.entry.tr, blobId: fx.blob.s, name: 'big51.txt', entryUuid: fx.uuid.tr },
+      });
+      w5a5expect(await ans(fx, ['tr'], 'zqtail51')).toEqual({ state: 'unanswerable' });
+    });
+
+    w5a5it('clause 4: an unlinked sidecar is untimed; CONTROL: the same sidecar linked to a stamped span row is answerable', async () => {
+      const side = (linkTo: string | null): SideSpec[] => [{ key: 's', name: 'toolu_01SIDE51.txt', bytes: Buffer.from('zqside51 body\n'), linkTo }];
+      const row: RowSpec[] = [{ key: 'tr', ts: T - 2000, provenance: 'tool', text: 'saved elsewhere' }];
+      const unlinked = await build(row, side(null));
+      w5a5expect(await ans(unlinked, ['tr'], 'zqside51 body')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(unlinked, { via: 'sidecar', entryId: null, blobId: unlinked.blob.s!, name: 'toolu_01SIDE51.txt' }, 'zqside51 body'))
+        .toEqual({ ok: false, clause: 4, why: 'unlinked' });
+      const linked = await build(row, side('tr'));
+      w5a5expect((await ans(linked, ['tr'], 'zqside51 body'))).toEqual({
+        state: 'answerable', source: { via: 'sidecar', entryId: linked.entry.tr, blobId: linked.blob.s, name: 'toolu_01SIDE51.txt', entryUuid: linked.uuid.tr },
+      });
+    });
+
+    w5a5it('clause 4: a sidecar linked to a NULL-ts span row is untimed, though the sidecar has a first-seen time', async () => {
+      const fx = await build([{ key: 'tr', ts: null, provenance: 'tool', text: 'saved elsewhere' }],
+        [{ key: 's', name: 'toolu_01SIDE52.txt', bytes: Buffer.from('zqside52 body\n'), linkTo: 'tr' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqside52 body')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(fx, { via: 'sidecar', entryId: fx.entry.tr!, blobId: fx.blob.s!, name: 'toolu_01SIDE52.txt' }, 'zqside52 body'))
+        .toEqual({ ok: false, clause: 4, why: 'ts-null' });
+    });
+
+    w5a5it('a sidecar linked to a row outside the span is never a source', async () => {
+      const fx = await build([
+        { key: 'tr', ts: T - 2000, provenance: 'tool', text: 'nothing here' },
+        { key: 'post', ts: T + 5000, provenance: 'tool', text: 'a later result' },
+      ], [{ key: 's', name: 'toolu_01SIDE53.txt', bytes: Buffer.from('zqside53 body\n'), linkTo: 'post' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqside53 body')).toEqual({ state: 'unanswerable' });
+    });
+
+    w5a5it('sources are tried rows first, in span order, then sidecars: a fact in both answers from the row', async () => {
+      const fx = await build([{ key: 'r', ts: T - 3000, provenance: 'tool', text: 'zqboth51 in the row' }],
+        [{ key: 's', name: 'toolu_01SIDE54.txt', bytes: Buffer.from('zqboth51 in the sidecar\n'), linkTo: 'r' }]);
+      const a = await ans(fx, ['r'], 'zqboth51');
+      w5a5expect(a.state === 'answerable' ? a.source.via : a.state).toBe('entry');
+    });
+
+    w5a5it('answerableStage keeps an answerable candidate with its source, and drops the rest as unanswerable or unanswerable-untimed', async () => {
+      const fx = await build([
+        { key: 'good', ts: T - 3000, provenance: 'tool', text: 'zqgood51 output' },
+        { key: 'null', ts: null, provenance: 'tool', text: 'zqnull53 output' },
+        { key: 'cold', ts: T - 3000, provenance: 'tool', text: 'zqcold53 output', indexed: false },
+      ]);
+      const verdicts = await withReader(fx, async (db) => {
+        const stage = D.answerableStage(db, IDX, (c) => ({ ...span(fx, ['good', 'null', 'cold']), factRaw: c.fact_raw as string }));
+        const out: Record<string, W5a5Verdict> = {};
+        for (const f of ['zqgood51 output', 'zqnull53 output', 'zqcold53 output']) out[f] = await stage({ id: f, kind: 'error', boundary_uuid: UUID(7000), fact_raw: f }, null);
+        return out;
+      });
+      w5a5expect(verdicts['zqgood51 output']).toEqual({
+        keep: true,
+        candidate: { id: 'zqgood51 output', kind: 'error', boundary_uuid: UUID(7000), fact_raw: 'zqgood51 output', source: { via: 'entry', entryId: fx.entry.good, blobId: fx.blob.good, name: null, entryUuid: fx.uuid.good } },
+      });
+      w5a5expect(verdicts['zqnull53 output']).toEqual({ keep: false, reason: 'unanswerable-untimed' });
+      w5a5expect(verdicts['zqcold53 output']).toEqual({ keep: false, reason: 'unanswerable' });
+    });
+  });
+
+  w5a5describe('the same-millisecond count, W2-D34', () => {
+    /** One fact, zqsame51, planted in every shape the count must tell apart. Expected: 4 (out, outVariant, outSide, outDual). */
+    const SAME_ROWS: RowSpec[] = [
+      { key: 'holdAfter', files: [1], ts: T, provenance: 'tool', text: 'zqsame51 in the holding copy' },
+      { key: 'both', files: [1, 2], ts: T, provenance: 'tool', text: 'zqsame51 in both copies' },
+      { key: 'out', files: [2], ts: T, provenance: 'tool', text: 'zqsame51 outside' },
+      { key: 'outBefore', files: [2], ts: T - 1, provenance: 'tool', text: 'zqsame51 one ms before' },
+      { key: 'outAfter', files: [2], ts: T + 1, provenance: 'tool', text: 'zqsame51 one ms after' },
+      { key: 'outNull', files: [2], ts: null, provenance: 'tool', text: 'zqsame51 with no stamp' },
+      { key: 'outEcho', files: [2], ts: T, provenance: 'recall-echo', text: 'zqsame51 echoed' },
+      { key: 'outVariant', files: [2], ts: T, provenance: 'tool', text: 'no fact here a', variantText: 'zqsame51 in a variant' },
+      { key: 'outSide', files: [2], ts: T, provenance: 'tool', text: 'no fact here b' },
+      { key: 'outDual', files: [2], ts: T, provenance: 'tool', text: 'zqsame51 in a row and its sidecar' },
+      { key: 'otherFamily', files: [3], ts: T, provenance: 'tool', text: 'zqsame51 in another family' },
+    ];
+    const SAME_SIDES: SideSpec[] = [
+      { key: 'sSide', name: 'toolu_01SAME51.txt', bytes: Buffer.from('zqsame51 in a sidecar\n'), linkTo: 'outSide' },
+      { key: 'sDual', name: 'toolu_01SAME52.txt', bytes: Buffer.from('zqsame51 in the dual sidecar\n'), linkTo: 'outDual' },
+      { key: 'sLoose', name: 'toolu_01SAME53.txt', bytes: Buffer.from('zqsame51 unlinked\n'), linkTo: null },
+    ];
+    const CTX: W5a5Same = { tsMs: T, holdingFileId: 1, transcriptPks: [1] };
+
+    w5a5it('counts the entries outside N holding copy, in the family, searchable, stamped exactly T_N, by row, variant or sidecar, each once', async () => {
+      const fx = await build(SAME_ROWS, SAME_SIDES);
+      await withReader(fx, (db) => {
+        w5a5expect(D.asofSameMsHits(db, CTX, 'zqsame51')).toBe(4);
+        w5a5expect(D.asofSameMsHits(db, CTX, 'zqabsent51')).toBe(0);
+      });
+    });
+
+    w5a5it('familyScopeOf is recall.mjs\'s own family scope: a confirmed epoch\'s transcript that holds rows, never an unconfirmed epoch\'s or another family\'s (R6)', async () => {
+      const home = w5a5MkTmp('w5a5-scope-');
+      w5a5StoreMod.createStore(home);
+      const dbFile = w5a5Lib.historyPaths(home).dbFile;
+      const w = w5a5StoreMod.openWriter(dbFile) as unknown as W5a5Db;
+      w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'fam-a', 'g1', 'demo', 1), (2, 'fam-b', 'g1', 'demo', 2)").run();
+      const ep = w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', ?)");
+      ep.run(1, 1, UUID(9101), 1);
+      ep.run(1, 2, UUID(9102), null);
+      ep.run(2, 1, UUID(9103), 1);
+      w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?), (2, ?), (3, ?)').run(UUID(9101), UUID(9102), UUID(9103));
+      const bytes = Buffer.from(w5a5Lib.canonicalJson([{ type: 'text', text: 'scope' }]));
+      const blobId = Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+        .get(w5a5Hash('sha256').update(bytes).digest(), w5a5StoreMod.CODEC, w5a5StoreMod.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+      const ent = w.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 0, 0, ?, ?)");
+      for (const t of [1, 2, 3]) ent.run(UUID(9200 + t), t, blobId, T - 1000);
+      w5a5StoreMod.closeWriter(w);
+      const fx: Fx = { dbFile, entry: {}, blob: {}, uuid: {} };
+      w5a5expect(await withReader(fx, (db) => D.familyScopeOf(db, { ccrc_id: 'fam-a', generation: 'g1' }))).toEqual([1]);
+      // CONTROL: every transcript of the family's epochs, the second family rule R6 forbids, would also take the unconfirmed one.
+      const naive = await withReader(fx, (db) => (db.prepare(`SELECT DISTINCT t.transcript_pk AS p FROM epochs e
+        JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid WHERE e.session_pk = 1 ORDER BY p`).all() as Array<{ p: number | bigint }>).map((r) => Number(r.p)));
+      w5a5expect(naive).toEqual([1, 2]);
+    });
+
+    w5a5it('sameMsReport answers the count per admitted candidate, as a report', async () => {
+      const fx = await build(SAME_ROWS, SAME_SIDES);
+      const rep = await withReader(fx, (db) => D.sameMsReport(db, (c) => ({ ...CTX, factRaw: c.fact_raw as string }))({ id: 'q1', kind: 'error', boundary_uuid: UUID(7001), fact_raw: 'zqsame51' }));
+      w5a5expect(rep).toEqual({ asof_same_ms_hits: 4 });
+    });
+  });
+
+  w5a5describe('sampling, W2-D71', () => {
+    const SEED = 'ab'.repeat(32);
+    const L8 = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const BIG: W5a5Quotas = { target: 1000, caps: { family: 1000, boundary: 1000, kind_per_family: 1000 } };
+    type Fam = W5a5FamRef & { admitted: number; calls: number; candidates: () => Promise<W5a5Cand[]> };
+    const fam = (ccrc: string, cands: W5a5Cand[], o: { store?: string; gen?: string; admitted?: number } = {}): Fam => {
+      const f: Fam = {
+        store_id: o.store ?? 's1', ccrc_id: ccrc, generation: o.gen ?? 'g1', admitted: o.admitted ?? 1, calls: 0,
+        candidates: async () => { f.calls += 1; return cands; },
+      };
+      return f;
+    };
+    const cand = (id: string, kind = 'sha', boundary = `b-${id}`): W5a5Cand => ({ id, kind, boundary_uuid: boundary });
+    const recorder = (log: string[], drop: Record<string, Record<string, string>> = {}): Record<string, W5a5Stage> => Object.fromEntries(
+      D.QUIZ_STAGES.map((n) => [n, async (c: W5a5Cand): Promise<W5a5Verdict> => {
+        log.push(`${n}:${c.id}`);
+        const reason = drop[n]?.[c.id];
+        return reason === undefined ? { keep: true, candidate: c } : { keep: false, reason };
+      }]));
+    const ids = (r: W5a5Sampled): string[] => r.questions.map((q) => q.id);
+    const fk = (f: W5a5FamRef): string => w5a5Gate.familyKey(f.store_id, f.ccrc_id, f.generation);
+
+    w5a5it('the stage order and the quota words are fixed', () => {
+      w5a5expect([...D.QUIZ_STAGES]).toEqual(['redaction', 'producer', 'admit-baseline', 'answerable', 'writer', 'admit-question']);
+      w5a5expect([...D.QUOTA_SKIPS]).toEqual(['cap-family', 'cap-boundary', 'cap-kind']);
+      w5a5expect(Object.isFrozen(D.QUIZ_STAGES) && Object.isFrozen(D.QUOTA_SKIPS)).toBe(true);
+    });
+
+    w5a5it('seededOrder sorts by key, then draws its order: a recorded vector for each substream, and input order never moves it', () => {
+      w5a5expect(D.seededOrder(D.quizRng(SEED), L8, (x) => x)).toEqual(['f', 'a', 'g', 'b', 'd', 'h', 'e', 'c']);
+      w5a5expect(D.seededOrder(D.quizRng(SEED), [...L8].reverse(), (x) => x)).toEqual(['f', 'a', 'g', 'b', 'd', 'h', 'e', 'c']);
+      w5a5expect(D.seededOrder(D.pilotRng(SEED), L8, (x) => x)).toEqual(['h', 'b', 'f', 'e', 'c', 'g', 'd', 'a']);
+      const rng = D.quizRng(SEED);
+      D.seededOrder(rng, L8, (x) => x);
+      w5a5expect(D.seededOrder(rng, ['x1', 'x2', 'x3', 'x4'], (x) => x), 'a second order continues the same stream').toEqual(['x4', 'x3', 'x1', 'x2']);
+    });
+
+    w5a5it('seededOrder refuses a key listed twice', () => {
+      w5a5expect(() => D.seededOrder(D.quizRng(SEED), ['k1', 'k1'], (x) => x)).toThrow(/listed twice/);
+    });
+
+    w5a5it('drawSeedHex is 32 drawn bytes as 64 lowercase hex, and refuses a draw of another length', () => {
+      w5a5expect(D.drawSeedHex(() => new Uint8Array(32).fill(0xab))).toBe('ab'.repeat(32));
+      const a = D.drawSeedHex();
+      w5a5expect(a).toMatch(/^[0-9a-f]{64}$/);
+      w5a5expect(D.drawSeedHex()).not.toBe(a);
+      w5a5expect(() => D.drawSeedHex(() => new Uint8Array(16))).toThrow(/32 bytes/);
+    });
+
+    w5a5it('families in seeded order, then the candidates of each family, all from one stream: a recorded vector', async () => {
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-c': [cand('c2'), cand('c1'), cand('c3')], 'fam-a': [cand('a1'), cand('a3'), cand('a2')], 'fam-b': [cand('b3'), cand('b1'), cand('b2')],
+      };
+      const fams = Object.entries(lists).map(([id, cs]) => fam(id, cs));
+      const r = await D.sampleQuestions({ families: fams, rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      w5a5expect(ids(r)).toEqual(['a2', 'a3', 'a1', 'b1', 'b2', 'b3', 'c1', 'c3', 'c2']);
+      w5a5expect(r.families).toEqual(fams.map(fk).sort());
+      const rev = Object.entries(lists).reverse().map(([id, cs]) => fam(id, [...cs].reverse()));
+      const again = await D.sampleQuestions({ families: rev, rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      w5a5expect(ids(again), 'the same seed and inputs in another order give the same list').toEqual(ids(r));
+    });
+
+    w5a5it('the stages run in QUIZ_STAGES order, whatever order the stages object lists them in', async () => {
+      const log: string[] = [];
+      const stages = Object.fromEntries(Object.entries(recorder(log)).reverse());
+      await D.sampleQuestions({ families: [fam('fam-a', [cand('o1')])], rng: D.quizRng(SEED), quotas: BIG, stages });
+      w5a5expect(log).toEqual(D.QUIZ_STAGES.map((n) => `${n}:o1`));
+    });
+
+    w5a5it('lazy: a candidate a stage drops reaches no later stage, and the drop is counted under that stage', async () => {
+      const log: string[] = [];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('c1'), cand('c2', 'path')])], rng: D.quizRng(SEED), quotas: BIG,
+        stages: recorder(log, { 'admit-baseline': { c1: 'in-baseline' } }),
+      });
+      w5a5expect(log.filter((l) => l.endsWith(':c1'))).toEqual(['redaction:c1', 'producer:c1', 'admit-baseline:c1']);
+      w5a5expect(r.drops['admit-baseline']).toEqual({ 'in-baseline': 1 });
+      w5a5expect(ids(r)).toEqual(['c2']);
+    });
+
+    w5a5it('the family cap: five questions, the rest skipped before any stage', async () => {
+      const kinds = ['sha', 'path', 'command', 'error'];
+      const log: string[] = [];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', Array.from({ length: 7 }, (_, i) => cand(`k${i}`, kinds[i % 4]!)))], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 5, boundary: 1000, kind_per_family: 1000 } }, stages: recorder(log),
+      });
+      w5a5expect(r.questions.length).toBe(5);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 2, 'cap-boundary': 0, 'cap-kind': 0 });
+      w5a5expect(log.filter((l) => l.startsWith('redaction:')).length).toBe(5);
+    });
+
+    w5a5it('the boundary cap: three questions from one boundary', async () => {
+      const kinds = ['sha', 'path', 'command', 'error', 'sha'];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', kinds.map((k, i) => cand(`b${i}`, k, 'b-one')))], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 1000, boundary: 3, kind_per_family: 1000 } }, stages: recorder([]),
+      });
+      w5a5expect(r.questions.length).toBe(3);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 0, 'cap-boundary': 2, 'cap-kind': 0 });
+    });
+
+    w5a5it('the kind cap: two questions of one kind in a family', async () => {
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('s1'), cand('s2'), cand('s3'), cand('s4'), cand('p1', 'path')])], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 1000, boundary: 1000, kind_per_family: 2 } }, stages: recorder([]),
+      });
+      w5a5expect(r.questions.map((q) => q.kind).sort()).toEqual(['path', 'sha', 'sha']);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 0, 'cap-boundary': 0, 'cap-kind': 2 });
+    });
+
+    w5a5it('a cap counts admitted questions only: a candidate the writer drops does not use the family cap', async () => {
+      w5a5expect(D.seededOrder(D.quizRng(SEED), ['d1', 'd2', 'd3'], (x) => x), 'CONTROL: d1 is drawn first').toEqual(['d1', 'd2', 'd3']);
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('d1'), cand('d2', 'path'), cand('d3', 'command')])], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 2, boundary: 1000, kind_per_family: 1000 } }, stages: recorder([], { writer: { d1: 'writer-leak' } }),
+      });
+      w5a5expect(ids(r)).toEqual(['d2', 'd3']);
+      w5a5expect(r.drops.writer).toEqual({ 'writer-leak': 1 });
+    });
+
+    w5a5it('each question carries its rank, [family rank, candidate rank]; with candidateRng a family\'s ranks do not depend on what other families hold (R4)', async () => {
+      const cr = (f: W5a5FamRef): W5a5Rng => D.familyRng(SEED, 'quiz-sample', f);
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-a': ['a1', 'a2', 'a3', 'a4'].map((n) => cand(n)), 'fam-b': ['b1', 'b2', 'b3', 'b4'].map((n) => cand(n)), 'fam-c': ['c1', 'c2', 'c3', 'c4'].map((n) => cand(n)),
+      };
+      const rankOf = (r: W5a5Sampled): Record<string, string> => Object.fromEntries(r.questions.map((q) => [q.id, JSON.stringify(q.rank)]));
+      const whole = rankOf(await D.sampleQuestions({ families: Object.entries(lists).map(([id, cs]) => fam(id, cs)), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), candidateRng: cr }));
+      w5a5expect(Object.keys(whole)).toHaveLength(12);
+      w5a5expect(new Set(Object.values(whole)).size, 'no two questions share a rank').toBe(12);
+      for (const only of Object.keys(lists)) {
+        // A node that holds one family walks the same global list, the others empty, and ranks its own as the whole walk does.
+        const local = rankOf(await D.sampleQuestions({ families: Object.entries(lists).map(([id, cs]) => fam(id, id === only ? cs : [])), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), candidateRng: cr }));
+        w5a5expect(local, only).toEqual(Object.fromEntries(Object.entries(whole).filter(([id]) => id.startsWith(only.slice(-1)))));
+      }
+    });
+
+    w5a5it('the quiz\'s keyed family order (W2-D71 as amended 2026-10-22; R10): families sorted by quizFamilyOrderKey, each question ranked [key, candidate rank], and two nodes\' outputs merged by rank are the one walk over both', async () => {
+      const cr = (f: W5a5FamRef): W5a5Rng => D.familyRng(SEED, 'quiz-sample', f);
+      const ko = (f: W5a5FamRef): string => D.quizFamilyOrderKey(SEED, f);
+      // The key, recomputed from its definition: the 'quiz-sample' substream's seed hashed with familyKey.
+      const sub = w5a5Hash('sha256').update(`${SEED}:quiz-sample`).digest('hex');
+      const refA: W5a5FamRef = { store_id: 's1', ccrc_id: 'fam-a', generation: 'g1' };
+      w5a5expect(ko(refA)).toBe(w5a5Hash('sha256').update(`${sub}:${fk(refA)}`).digest('hex'));
+      w5a5expect(ko(refA)).toMatch(/^[0-9a-f]{64}$/);
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-a': ['a1', 'a2', 'a3'].map((n) => cand(n)), 'fam-b': ['b1', 'b2', 'b3'].map((n) => cand(n)),
+        'fam-c': ['c1', 'c2', 'c3'].map((n) => cand(n)), 'fam-d': ['d1', 'd2', 'd3'].map((n) => cand(n)),
+      };
+      const walk = (held: string[], target: number): Promise<W5a5Sampled> => D.sampleQuestions({
+        families: held.map((id) => fam(id, lists[id]!)), rng: D.quizRng(SEED), quotas: { ...BIG, target }, stages: recorder([]),
+        candidateRng: cr, familyOrder: ko,
+      });
+      const all = await walk(['fam-a', 'fam-b', 'fam-c', 'fam-d'], 1000);
+      // A recorded vector: the keys sort fam-a, fam-d, fam-b, fam-c; each family's candidates come from its own stream.
+      w5a5expect(ids(all)).toEqual(['a3', 'a2', 'a1', 'd2', 'd1', 'd3', 'b1', 'b3', 'b2', 'c2', 'c1', 'c3']);
+      w5a5expect(all.questions.map((q) => q.rank)).toEqual(['fam-a', 'fam-d', 'fam-b', 'fam-c'].flatMap((id) =>
+        [0, 1, 2].map((ci) => [ko({ store_id: 's1', ccrc_id: id, generation: 'g1' }), ci])));
+      const again = await walk(['fam-d', 'fam-c', 'fam-b', 'fam-a'], 1000);
+      w5a5expect(ids(again), 'input order never moves the keyed order').toEqual(ids(all));
+      // Two nodes, each holding the families the other's sit between in the key order, and no list of the other's.
+      const cmp = (x: string | number, y: string | number): number => (x < y ? -1 : x > y ? 1 : 0);
+      const byRank = (x: W5a5Cand, y: W5a5Cand): number => cmp(x.rank![0], y.rank![0]) || cmp(x.rank![1], y.rank![1]);
+      for (const target of [1000, 5]) {
+        const one = await walk(['fam-a', 'fam-b', 'fam-c', 'fam-d'], target);
+        const nodeA = await walk(['fam-a', 'fam-b'], target);
+        const nodeB = await walk(['fam-d', 'fam-c'], target);
+        const merged = [...nodeA.questions, ...nodeB.questions].sort(byRank).slice(0, target);
+        w5a5expect(merged.map((q) => [q.id, q.rank]), `target ${target}`).toEqual(one.questions.map((q) => [q.id, q.rank]));
+        if (target === 5) {
+          w5a5expect(ids(one)).toEqual(['a3', 'a2', 'a1', 'd2', 'd1']);
+          w5a5expect([...nodeA.questions, ...nodeB.questions].slice(0, target).map((q) => q.id),
+            'CONTROL: the nodes\' lists concatenated are not the walk; only the rank order merges them').toEqual(['a3', 'a2', 'a1', 'b1', 'b3']);
+        }
+      }
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('x1')]), fam('fam-a', [cand('x2')])], rng: D.quizRng(SEED),
+        quotas: BIG, stages: recorder([]), candidateRng: cr, familyOrder: ko })).rejects.toThrow(/listed twice/);
+    });
+
+    w5a5it('the target stops the draw: no further stage runs, and a family not reached is never mined', async () => {
+      const log: string[] = [];
+      const fams = [fam('fam-a', ['1', '2', '3', '4', '5'].map((n) => cand(`a${n}`))), fam('fam-b', ['1', '2', '3', '4', '5'].map((n) => cand(`b${n}`)))];
+      const r = await D.sampleQuestions({ families: fams, rng: D.quizRng(SEED), quotas: { ...BIG, target: 3 }, stages: recorder(log) });
+      w5a5expect(r.questions.length).toBe(3);
+      w5a5expect(log.filter((l) => l.startsWith('writer:')).length).toBe(3);
+      w5a5expect(fams[0]!.calls + fams[1]!.calls).toBe(1);
+    });
+
+    w5a5it('the same-millisecond report never gates: the list is the same with and without it, and each question carries its report', async () => {
+      const make = (): Fam[] => [fam('fam-a', [cand('a1'), cand('a2', 'path')]), fam('fam-b', [cand('b1')])];
+      const plain = await D.sampleQuestions({ families: make(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      const withRep = await D.sampleQuestions({
+        families: make(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), afterAdmit: async () => ({ asof_same_ms_hits: 7 }),
+      });
+      w5a5expect(ids(withRep)).toEqual(ids(plain));
+      w5a5expect(plain.reports).toEqual({});
+      w5a5expect(withRep.reports).toEqual(Object.fromEntries(ids(plain).map((id) => [id, { asof_same_ms_hits: 7 }])));
+    });
+
+    w5a5it('malformed sampler inputs are defects: a missing or unknown stage, a drop with no reason, a bad quota, a bad kind, a repeated id', async () => {
+      const one = (): Fam[] => [fam('fam-a', [cand('x1')])];
+      const stages = recorder([]);
+      const noWriter = Object.fromEntries(Object.entries(stages).filter(([k]) => k !== 'writer'));
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: noWriter })).rejects.toThrow(/no 'writer' stage/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: { ...stages, judge: stages.writer! } })).rejects.toThrow(/'judge' is an unknown stage/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([], { producer: { x1: '' } }) })).rejects.toThrow(/without a reason word/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, target: 0 }, stages })).rejects.toThrow(/not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, caps: { ...BIG.caps, boundary: 0 } }, stages })).rejects.toThrow(/caps\.boundary=0 is not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('y1', 'decision')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/has kind/);
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('z1'), cand('z1', 'path')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/listed twice/);
+    });
+
+    w5a5it('the population drops families with no admitted boundary, pilot families, and every family of a control-assigned store and id', () => {
+      const F = (store: string, ccrc: string, gen: string, admitted = 1): W5a5FamRef & { admitted: number } => ({ store_id: store, ccrc_id: ccrc, generation: gen, admitted });
+      const a1 = F('s1', 'fam-a', 'g1', 2); const a2 = F('s1', 'fam-a', 'g2'); const b1 = F('s1', 'fam-b', 'g1'); const b2 = F('s1', 'fam-b', 'g2');
+      const a3 = F('s2', 'fam-a', 'g1'); const c1 = F('s1', 'fam-c', 'g1'); const c2 = F('s1', 'fam-c', 'g2'); const d1 = F('s1', 'fam-d', 'g1', 0);
+      const r = D.quizPopulation([a1, a2, b1, b2, a3, c1, c2, d1], {
+        pilotFamilies: [c1],
+        assignment: [{ ...a1, arm: 'control' }, { ...b1, arm: 'treatment' }, { ...a3, arm: 'treatment' }],
+      });
+      w5a5expect(r.families).toEqual([b1, b2, a3, c2]);
+      w5a5expect(r.excluded).toEqual({ 'no-admitted-boundary': 1, pilot: 1, 'control-id': 2 });
+      w5a5expect(() => D.quizPopulation([b1], { pilotFamilies: [], assignment: [{ ...b1, arm: 'holdout' }] })).toThrow(/not an assignment arm/);
+    });
+
+    w5a5it('the halt floor: fewer than 60 questions or fewer than 12 families halts, and exactly the floor does not', () => {
+      const floor = { questions: 60, families: 12 };
+      w5a5expect(D.quizFloor(60, 12, floor)).toEqual({ halt: false, short: [] });
+      w5a5expect(D.quizFloor(59, 12, floor)).toEqual({ halt: true, short: ['questions'] });
+      w5a5expect(D.quizFloor(60, 11, floor)).toEqual({ halt: true, short: ['families'] });
+      w5a5expect(D.quizFloor(0, 0, floor)).toEqual({ halt: true, short: ['questions', 'families'] });
+    });
+
+    w5a5it('fidelity boundaries: at most one per family, in seeded family order, a dropped boundary counted, and a family not reached never read', async () => {
+      type FFam = W5a5FamRef & { calls: number; boundaries: () => Promise<Array<{ boundary_uuid: string }>> };
+      const ffam = (id: string): FFam => {
+        const f: FFam = { store_id: 's1', ccrc_id: id, generation: 'g1', calls: 0, boundaries: async () => { f.calls += 1; return [{ boundary_uuid: `${id}-b1` }, { boundary_uuid: `${id}-b2` }]; } };
+        return f;
+      };
+      const four = (): FFam[] => ['fam-a', 'fam-b', 'fam-c', 'fam-d'].map(ffam);
+      const fams = four();
+      const two = await D.sampleFidelityBoundaries({ families: fams, rng: D.pilotRng(SEED), n: 2, admitBoundary: async () => ({ keep: true }) });
+      w5a5expect(two.boundaries.map((p) => p.family.ccrc_id)).toEqual(['fam-d', 'fam-c']);
+      w5a5expect(fams.reduce((n, f) => n + f.calls, 0)).toBe(2);
+      const all = await D.sampleFidelityBoundaries({
+        families: four(), rng: D.pilotRng(SEED), n: 10,
+        admitBoundary: async (b, f) => ((f as FFam).ccrc_id === 'fam-a' ? { keep: false, reason: 'payload-discarded' } : { keep: true }),
+      });
+      w5a5expect(all.boundaries.map((p) => p.family.ccrc_id).sort()).toEqual(['fam-b', 'fam-c', 'fam-d']);
+      w5a5expect(all.drops).toEqual({ 'payload-discarded': 2 });
+    });
   });
 });

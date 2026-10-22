@@ -5747,6 +5747,7 @@ w5a5describe('W2-5a Task 5: answerability, the same-millisecond count and sampli
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: { ...stages, judge: stages.writer! } })).rejects.toThrow(/'judge' is an unknown stage/);
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([], { producer: { x1: '' } }) })).rejects.toThrow(/without a reason word/);
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, target: 0 }, stages })).rejects.toThrow(/not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, caps: { ...BIG.caps, boundary: 0 } }, stages })).rejects.toThrow(/caps\.boundary=0 is not a positive integer/);
       await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('y1', 'decision')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/has kind/);
       await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('z1'), cand('z1', 'path')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/listed twice/);
     });
@@ -6290,7 +6291,7 @@ Confirm that the named case(s) red, restore with `cp .superpowers/sdd/history-w2
 | M12 | delete `if (v.clause === 4) untimed = true;` | every `untimed` expectation, and the stage case's `unanswerable-untimed` |
 | M13 | in `answerableStage`, swap the two reason literals | "answerableStage keeps …" |
 | M14 | `count(DISTINCT e.entry_id)` → `count(*)` | "counts the entries outside N holding copy …" (5) |
-| M15 | delete the `AND NOT EXISTS (SELECT 1 FROM memberships …)` line | the same (6) |
+| M15 | delete the `AND NOT EXISTS (SELECT 1 FROM memberships …)` line, close the template literal after the previous line, and delete the `hold` key from the bound object (measured: an unbound or unknown named parameter is a different red) | the same (6) |
 | M16 | `WHERE e.ts_ms = :t` → `WHERE e.ts_ms <= :t` | the same (5); the hand-picked fixture places one row at T_N − 1 |
 | M17 | delete `AND e.transcript_pk IN (SELECT value FROM json_each(:tpks))` and its `tpks` key | the same (5) |
 | M18 | delete the `UNION SELECT v.entry_id, 'row' …` line | the same (3) |
@@ -6311,8 +6312,8 @@ Confirm that the named case(s) red, restore with `cp .superpowers/sdd/history-w2
 | M33 | move `inFamily += 1;` to directly after the three cap checks, before the stage loop | "a cap counts admitted questions only …" |
 | M34 | delete the inner loop's `if (questions.length >= quotas.target) break;` | "the target stops the draw …" |
 | M35 | delete the outer loop's `if (questions.length >= quotas.target) break;` | the same (the second family is mined) |
-| M36 | after `reports[c.id] = await afterAdmit(cur, f);` add `if (reports[c.id].asof_same_ms_hits > 0) questions.pop();` | "the same-millisecond report never gates …" |
-| M37 | each of the five `TypeError` guards in `sampleQuestions` deleted in turn (missing stage, unknown stage, reason-less drop, quota, kind) | "malformed sampler inputs are defects …", at the matching `rejects` |
+| M36 | replace `if (afterAdmit !== undefined) reports[c.id] = await afterAdmit(cur, f);` with `if (afterAdmit !== undefined) { reports[c.id] = await afterAdmit(cur, f); if (reports[c.id].asof_same_ms_hits > 0) questions.pop(); }` (measured: appending the `if` after the unbraced statement runs it with no `afterAdmit` and reds eleven cases, not the one) | "the same-millisecond report never gates …" |
+| M37 | each of the six `TypeError` guards in `sampleQuestions` deleted in turn (missing stage, unknown stage, reason-less drop, target quota, kind, and the caps loop's quota, measured green until the malformed-inputs case gained its `caps.boundary` line) | "malformed sampler inputs are defects …", at the matching `rejects` |
 | M38 | `controlIds.add(canonicalJson([a.store_id, a.ccrc_id]))` and its reader → keyed by `familyKeyOf(a)` / `familyKeyOf(f)` | "the population drops …" (`fam-a` g2 is kept) |
 | M39 | the same keys → `a.ccrc_id` / `f.ccrc_id` | the same (the s2 `fam-a` is dropped) |
 | M40 | `pilot.has(familyKeyOf(f))` → `pilotFamilies.some((p) => p.ccrc_id === f.ccrc_id)` | the same (`fam-c` g2 is dropped) |
