@@ -82,6 +82,7 @@ afterEach(() => {
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
 });
 
+const SESSION = '/s/lane-a-project-a';
 const indicators = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.update-indicator')];
 
 describe('UpdateIndicator (D-6327)', () => {
@@ -124,8 +125,9 @@ describe('UpdateIndicator (D-6327)', () => {
 
   it('one indicator per width: the bar at ≥900 (Refined), the status bar (Instrument), under the phone header (Refined) and in the fleet column (Instrument) below 900', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(waiting());
-    const mount = async (skin: typeof REFINED | typeof INSTRUMENT, width: number): Promise<HTMLElement> => {
+    const mount = async (skin: typeof REFINED | typeof INSTRUMENT, width: number, at = '/'): Promise<HTMLElement> => {
       setSkin(skin);
+      act(() => { navigate(at); });
       atWidth(width);
       act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'lane-a-project-a', project: 'project-a' })] }));
       render(<App />);
@@ -142,11 +144,20 @@ describe('UpdateIndicator (D-6327)', () => {
     expect(el.parentElement!.firstElementChild, 'Refined 900: the first of them, before the bell').toBe(el);
     expect(el).toHaveAttribute('data-form', 'bar');
     cleanup();
+    // The same on a session route (the bars are on every route, and the fleet column sits beside the session).
+    el = await mount(REFINED, 900, SESSION);
+    expect(el.closest('header.shell-accounts'), 'Refined 900, session route: in the app bar').not.toBeNull();
+    expect(el).toHaveAttribute('data-form', 'bar');
+    cleanup();
     // Instrument at a desk: the status bar, between the summary and the keys.
     el = await mount(INSTRUMENT, 900);
     expect(el.closest('footer.shell-status'), 'Instrument 900: in the status bar').not.toBeNull();
     expect(el.previousElementSibling?.matches('.ins-status-summary'), 'after the summary').toBe(true);
     expect(el.nextElementSibling?.matches('.ins-status-keys'), 'before the keys').toBe(true);
+    expect(el).toHaveAttribute('data-form', 'status');
+    cleanup();
+    el = await mount(INSTRUMENT, 900, SESSION);
+    expect(el.closest('footer.shell-status'), 'Instrument 900, session route: in the status bar').not.toBeNull();
     expect(el).toHaveAttribute('data-form', 'status');
     cleanup();
     // Refined on a phone: a row of the phone header, after the accounts strip.
@@ -209,8 +220,9 @@ describe('UpdateIndicator (D-6327)', () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     expect(code).toMatch(/import \{[^}]*\breleaseWaitingWords\b[^}]*\} from '\.\/releaseWaiting'/);
     expect(code).toMatch(/releaseWaitingWords\(/);
-    // It builds no sentence of its own: no string or template in the code spells "available".
-    expect(code.match(/(['"`])(?:(?!\1)[^\\\n]|\\.)*available(?:(?!\1)[^\\\n]|\\.)*\1/g) ?? []).toEqual([]);
+    // It builds no sentence of its own: the word never appears in the code, as a string, a template, JSX text or an
+    // identifier (`↑ {tag} available` as JSX text is the idiomatic way to build it inline).
+    expect(code).not.toMatch(/\bavailable\b/);
     // The title is the banner's sentence from its one owner, never rebuilt here.
     expect(code).toMatch(/updateBannerText\(/);
     expect(code).not.toMatch(/is out on/);

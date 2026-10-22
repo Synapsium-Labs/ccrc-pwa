@@ -7,7 +7,7 @@
 // the design system cannot import the app's polling hook to find out whether a
 // node is behind, and these two functions never needed it: they are pure reads
 // of a `NodeWire`. `useUpdatesView.ts` re-exports both, so every existing
-// reader (SettingsScreen, UpdateIndicator, movePlan and their tests) keeps its
+// reader (SettingsScreen, releaseWaiting.ts, movePlan and their tests) keeps its
 // import and there is still exactly one definition.
 import { isReleaseTag, isUpdateChannel, type NodeWire } from './api.js';
 import { isNewerTag } from './semver.js';
