@@ -537,15 +537,12 @@ function OwnWordsLine({ children }: { children: ReactNode }): ReactNode {
  */
 export function ChatRow({
   row,
-  selectedIndex,
   answering,
   disabled,
   onAnswer,
   keys,
 }: {
   row: Dialog['options'][number];
-  /** The pane's cursor row, when the sheet shows the cursor (the scraped sheet does, the envelope's does not). */
-  selectedIndex?: number;
   answering: number | null;
   disabled: boolean;
   onAnswer: (optionIndex: number) => void;
@@ -553,13 +550,13 @@ export function ChatRow({
   keys?: AskKeys;
 }): ReactNode {
   const waiting = answering === row.index;
-  const selected = lit(keys, row.index, selectedIndex);
+  const selected = lit(keys, row.index);
   return (
     <div className="opts">
       <OptionRow
         {...keyed(keys, row.index)}
         selected={selected}
-        glyph={selectedIndex === undefined && keys === undefined ? undefined : selected ? '❯' : ''}
+        glyph={keys === undefined ? undefined : selected ? '❯' : ''}
         index={row.index}
         label={CHAT_LABEL}
         sublabel={CHAT_DECLINES}
