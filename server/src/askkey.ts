@@ -25,13 +25,13 @@ export function askKey(ask: HookAsk | null): string | null {
 }
 
 /** What a stream's last pane reading shows of the menu on screen: the transcript-aligned question (`Dialog.ask`), for
- *  an unparsed multiSelect menu its labels (`Dialog.multi`), whether it is the review screen of a multi-question call
- *  (`reviewRows`), and the raw pane of an UNPARSED capture (null for a parsed menu or none). `sessionws.ts`'s
- *  `DialogSeen` satisfies it. */
+ *  an unparsed multiSelect menu its labels (`Dialog.multi`), for a review screen the question texts it lists
+ *  (`reviewQuestions`; absent when the menu is not a review screen), and the raw pane of an UNPARSED capture (null for a
+ *  parsed menu or none). `sessionws.ts`'s `DialogSeen` satisfies it. */
 export interface MenuEvidence {
   ask: DialogAsk | null;
   multi?: DialogMulti;
-  review?: boolean;
+  review?: readonly string[];
   raw: string | null;
 }
 
@@ -43,11 +43,15 @@ function agedQuestions(raw: HookStateRawRead): HookAskQuestion[] | null {
   return ask !== null && 'questions' in ask ? ask.questions : null;
 }
 
+/** THE question-text match of both correspondence arms: `pairMatches`, the tree's one normalised-prefix rule. A review
+ *  lists only the first line of a wrapped question, a prefix of the envelope's text. */
+const sameQuestion = (a: string, b: string): boolean => pairMatches(a, b);
+
 /** The correspondence half: is the pane's parsed or multi menu question `q`? */
 function showsQuestion(menu: MenuEvidence, q: HookAskQuestion): boolean {
   if (menu.ask !== null) {
     const shown = menu.ask;
-    return shown.question === q.question && shown.options.length === q.options.length
+    return sameQuestion(shown.question, q.question) && shown.options.length === q.options.length
       && shown.options.every((o, i) => o === null || o.label === q.options[i]!.label);
   }
   const multi = menu.multi;
@@ -60,13 +64,18 @@ function showsQuestion(menu: MenuEvidence, q: HookAskQuestion): boolean {
  *
  * `foldHookStateRead` drops an envelope older than `HOOKSTATE_FRESH_MS`, which cleared the sheet's structured copy at
  * 30 minutes under a question still on screen. True only when the raw read is the current session's, `waiting`, a
- * questions envelope, and the pane shows it: SOME question of it is the menu on screen (every question, not only the
- * first that `askKey` hashes: the pane may be on the second), a parsed menu by its question text and option labels or
- * an unparsed multi menu by its labels through `pairMatches`; or the pane is on the review screen of a call with more
- * than one question (no question is aligned to the `Submit answers` / `Cancel` rows, but it is the same call).
+ * questions envelope, and the pane shows it, by one of three arms:
+ * - a parsed menu: SOME question of the envelope (every question, not only the first that `askKey` hashes: the pane
+ *   may be on the second) has the same text and the same option labels;
+ * - an unparsed multi menu: its labels match one question's through `pairMatches`;
+ * - the review screen the ask ends on, which lists the questions it asked: at least one is listed, and EVERY listed
+ *   question is one of the envelope's. "Every listed", not "all listed", because a tall review can lose rows from the
+ *   capture. It covers a one-question multiSelect ask, which Claude Code also ends on a review, and it drops an
+ *   envelope on the review of another call.
  *
- * The parsed arm trusts `alignAsk`'s forgiveness: it receives only alignments `alignAsk` produced, where a `null`
- * entry is a row it forgave under its own bound (one miss, from four options up), and keeps no second bound of its own.
+ * Question texts are compared by ONE matcher for the parsed and review arms (`sameQuestion`). The parsed arm trusts
+ * `alignAsk`'s forgiveness: it receives only alignments `alignAsk` produced, where a `null` entry is a row it forgave
+ * under its own bound (one miss, from four options up), and keeps no second bound of its own.
  *
  * Legitimately different from the 30-minute cut that holds for every reader that DISPLAYS or ANSWERS the envelope (the
  * fleet card, the push body, the coordinator hold, `answerAsk`'s read): only the per-session stream holds a live menu
@@ -77,7 +86,9 @@ function showsQuestion(menu: MenuEvidence, q: HookAskQuestion): boolean {
 export function keepAgedAsk(raw: HookStateRawRead, menu: MenuEvidence): boolean {
   const questions = agedQuestions(raw);
   if (questions === null) return false;
-  if (menu.review === true) return questions.length > 1;
+  if (menu.review !== undefined) {
+    return menu.review.length > 0 && menu.review.every((t) => questions.some((q) => sameQuestion(t, q.question)));
+  }
   return questions.some((q) => showsQuestion(menu, q));
 }
 
@@ -87,11 +98,14 @@ export const NO_AGED_KEEP: AgedKeep = { kept: false, redraws: 0 };
 
 /**
  * D-6324: the stream's next keep decision. An unparsed capture that carries no `multi` is a menu grabbed mid-redraw
- * (`parseDialog` gives it a new pane-hash id and no alignment), so the FIRST such tick keeps the previous decision while
- * the envelope is still eligible, and the envelope does not flap `ask_cleared` / `ask`. A second consecutive one, a
- * parsed menu that does not correspond, and no menu decide as `keepAgedAsk` does.
+ * (`parseDialog` gives it a new pane-hash id and no alignment), so the FIRST such capture keeps the previous decision
+ * while the envelope is still eligible, and the envelope does not flap `ask_cleared` / `ask`. A second consecutive one,
+ * a parsed menu that does not correspond, and no menu decide as `keepAgedAsk` does. A tick with no `reading` (its
+ * capture failed, so `seenDialog` is the previous capture's) leaves the count alone: a redraw then a failed capture is
+ * not two redraws. The envelope's eligibility is re-checked either way.
  */
-export function nextAgedKeep(prev: AgedKeep, raw: HookStateRawRead, menu: MenuEvidence): AgedKeep {
+export function nextAgedKeep(prev: AgedKeep, raw: HookStateRawRead, menu: MenuEvidence, reading: boolean): AgedKeep {
+  if (!reading) return { kept: prev.kept && agedQuestions(raw) !== null, redraws: prev.redraws };
   const redraws = menu.raw !== null && menu.multi === undefined ? prev.redraws + 1 : 0;
   const kept = redraws === 1 ? prev.kept && agedQuestions(raw) !== null : keepAgedAsk(raw, menu);
   return { kept, redraws };

@@ -18,7 +18,7 @@ import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, readHookStateRawMeasured } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
-import { reviewRows } from '../../shared/ask-menu.js';
+import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
@@ -659,7 +659,7 @@ export class SessionStream {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog);
+    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, this.failedCaptures === 0);
     const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
@@ -1096,8 +1096,8 @@ export interface DialogSeen {
   raw: string | null;
   /** An unparsed multiSelect menu's labels (`Dialog.multi`), the evidence `keepAgedAsk` reads (D-6324). */
   multi?: DialogMulti;
-  /** The pane is the review screen of a multi-question call (`reviewRows`), the same evidence's third arm (D-6324). */
-  review?: boolean;
+  /** The question texts a review screen lists (`reviewQuestions`); absent when the pane is not a review (D-6324). */
+  review?: string[];
 }
 
 /**
@@ -1140,7 +1140,7 @@ export function nextDialogFrame(
   if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
     seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi,
-      review: reviewRows(dialog) !== null ? true : undefined },
+      review: reviewQuestions(dialog) ?? undefined },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }
