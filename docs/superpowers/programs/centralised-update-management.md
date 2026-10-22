@@ -5531,6 +5531,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **Consents checked.** All seven README hunks sit in the consented regions; one is the paragraph the plan's Task 4
       specifies. Both CLAUDE.md hunks are outside "Known load flakes". An external per-PR merge gate reds on this PR only,
       and `main`'s rules (a pull request and a merge queue, no required status checks) do not gate on it.
+  - **19:00 UTC: the broker soak waits for a fix (operator ruling, relayed in mail 8187).** The ruling is "Fix first,
+    then soak". The tap to v0.0.570 recorded 36 session-hours unmeasured from one pass during the fleet agent's
+    reconnect, about half the week's gate budget. The broker's own follow-up (its run 816) lets such an hour wait for
+    a later pass that can measure it. The soak clock starts on that fix's release, and updates stay free meanwhile.
+    The hourly zero-hour watch pauses; the daily disk report and this probe carry on.
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
