@@ -368,6 +368,13 @@ const prWith = (decision: string | null, extra: Record<string, unknown> = {}): A
 const CR = 'CHANGES_REQUESTED';
 const rev = (id: number, state: string, user: number | null = 1): Record<string, unknown> =>
   ({ id, state, user: user === null ? null : { id: user, login: 'reviewer-a' } });
+/** A review as GitHub shapes it: every field a real answer carries, a long free-text body, the author's login and links. */
+const fullReview = (id: number, state: string, user: number, bodyLen: number): Record<string, unknown> => ({
+  id, node_id: `PRR_${id}`, state, body: 'x'.repeat(bodyLen), commit_id: HC, submitted_at: '2026-10-22T10:00:00Z',
+  author_association: 'MEMBER', html_url: `https://example.test/o/r/pull/42#pullrequestreview-${id}`,
+  pull_request_url: 'https://example.test/api/o/r/pulls/42', _links: { html: { href: 'https://example.test/x' } },
+  user: { login: 'reviewer-a', id: user, node_id: `U_${user}`, avatar_url: 'https://example.test/a.png', type: 'User', site_admin: false },
+});
 const withReviews = (base: () => Fixture, decision: string | null, ...rs: unknown[]) =>
   with_(base, { pr: prWith(decision), reviews: ok(rs) });
 /** The key the stop prints and CR_IGNORE must equal: this field order, these types, compact (`pr` and `head` strings). */
@@ -400,6 +407,10 @@ const REQUESTS: Case[] = [
       with_(positive, { pr: prWith('REVIEW_REQUIRED'), reviews: ok([rev(7, CR)]) }), askLine(false, 7)],
   ]),
   ['the summary and the list both say it: the key carries both', withReviews(measured, CR, rev(7, CR)), askLine(true, 7)],
+  ['the summary says APPROVED but a review in the list requests changes: the list decides', withReviews(measured, 'APPROVED',
+    rev(1, 'APPROVED', 1), rev(2, CR, 2)), askLine(false, 2)],
+  ['a deleted account\'s request is not cleared by a user whose id equals its review id', withReviews(measured, '',
+    rev(5, CR, null), rev(6, 'APPROVED', 5)), askLine(false, 5)],
   ['a later approval by the same user clears an earlier request', withReviews(measured, '', rev(1, CR), rev(2, 'APPROVED')), GOOD_Q],
   ['a later dismissal by the same user clears an earlier request', withReviews(measured, '', rev(1, CR), rev(2, 'DISMISSED')), GOOD_Q],
   ['a later request by the same user replaces an earlier approval', withReviews(measured, '', rev(1, 'APPROVED'), rev(2, CR)),
@@ -443,6 +454,14 @@ const REQUESTS: Case[] = [
     headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: CR }), reviews: ok([rev(7, CR)]) }),
     `STOP not-at-head: the PR head is ${'f'.repeat(40)}`],
   // Unreadable reviews are never folded into "no requests".
+  // Real-sized answers: GitHub-shaped entries carry a login, a long body and links, and the block must keep only what it
+  // reads, or the whole answer lands in one argument and Linux refuses an argument over 128 KiB.
+  ['reviews: about a hundred full-size reviews (login, 1.5 KB body, links) are still read', with_(measured, { reviews:
+    ok(Array.from({ length: 100 }, (_, i) => fullReview(i + 1, 'APPROVED', i + 1, 1500))) }), GOOD_Q],
+  ['reviews: one 140 KB review body is still read', with_(measured, { reviews: ok([fullReview(1, 'APPROVED', 1, 140000)]) }), GOOD_Q],
+  ['reviews: full-size reviews still show a request among them', with_(measured, { reviews:
+    ok([...Array.from({ length: 99 }, (_, i) => fullReview(i + 1, 'APPROVED', i + 1, 1500)), fullReview(100, CR, 200, 1500)]) }),
+    askLine(false, 100)],
   ['reviews: gh fails', with_(measured, { reviews: fail(502) }), gStop],
   ['reviews: gh exits 0 with empty stdout, which jq alone slurps into no pages', with_(measured, { reviews: { code: 200, raw: '' } }), gStop],
   ['reviews: gh fails with empty stdout', with_(measured, { reviews: { code: 500, raw: '' } }), gStop],
@@ -584,13 +603,15 @@ const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|ap
  *  branch no case reaches is still a red: `gh pr review`, `gh api --method=PATCH …` and `gh api -XPATCH …` match none
  *  of it. It judges a LOGICAL line (see `ghSpelled`), so a write split over a `\` continuation cannot hide its flags
  *  on the next physical line. */
-const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\|)|api -i "repos\/\{owner\}\/\{repo\}\/branches\/\$base\/protection" 2>\/dev\/null\))/;
+const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\|(?!&))|api -i "repos\/\{owner\}\/\{repo\}\/branches\/\$base\/protection" 2>\/dev\/null\))/;
 /** Every gh the block's text spells, each from the word `gh` to the end of its logical line: backslash continuations
  *  are joined first, so the whole call is judged and not only its first physical line. */
 const ghSpelled = (b: string): string[] => {
   const logical = b.replace(/\\\n[ \t]*/g, ' ');
   return [...logical.matchAll(/\bgh\b/g)].map((m) => logical.slice(m.index).split('\n')[0]!);
 };
+/** Every line of the block that redirects stderr, once per redirect: `2>`, `&>` and `|&`. */
+const stderrHits = (t: string): string[] => t.split('\n').flatMap((l) => (l.match(/2>|&>|\|&/g) ?? []).map(() => l));
 /** The spelled gh calls that are not one of the reads. */
 const ghOffenders = (b: string): string[] => ghSpelled(b).filter((s) => !GH_SPELLED.test(s));
 
@@ -612,13 +633,39 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('redirects stderr exactly once: read 3\'s own call, with no exec redirect and none on the reviews read', () => {
     expect(blocks).toHaveLength(1);
     const b = blocks[0]!;
-    const hits = b.split('\n').flatMap((l) => (l.match(/2>|&>/g) ?? []).map(() => l));
+    const hits = stderrHits(b);
     expect(hits, 'the block redirects stderr other than on read 3\'s one call').toHaveLength(1);
     expect(hits[0]).toContain('branches/$base/protection');
     expect(hits[0]).toMatch(/gh api -i "repos\/\{owner\}\/\{repo\}\/branches\/\$base\/protection" 2>\/dev\/null\)$/);
     const reviews = ghSpelled(b).filter((l) => l.includes('/reviews'));
     expect(reviews, 'the block spells the reviews read exactly once').toHaveLength(1);
     expect(reviews[0]).toMatch(/^gh api --paginate "repos\/\{owner\}\/\{repo\}\/pulls\/\$PR\/reviews" \|/);
+  });
+
+  it('judges `|&` as a stderr redirect: planted on the reviews read, the spelling allowlist and the census both reject it', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    const read = 'gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" | jq -sc \'';
+    expect(b.split(read), 'the planted pipe lost its anchor').toHaveLength(2);
+    const planted = b.replace(read, read.replace(' | jq', ' |& jq'));
+    expect(planted).not.toBe(b);
+    const offenders = ghOffenders(planted);
+    expect(offenders, '`|&` passed the spelling allowlist').toHaveLength(1);
+    expect(offenders[0]).toContain('/reviews');
+    expect(stderrHits(planted), '`|&` passed the stderr census').toHaveLength(2);
+    expect(stderrHits(b)).toHaveLength(1);
+  });
+
+  it('a stderr redirect planted before the close of another read is an offender: only read 3\'s own call may carry one', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    const read = 'r4=$(gh api "repos/{owner}/{repo}" | jq -ce';
+    expect(b.split(read), 'the planted redirect lost its anchor').toHaveLength(2);
+    const planted = b.replace(read, 'r4=$(gh api "repos/{owner}/{repo}" 2>/dev/null) | jq -ce');
+    const offenders = ghOffenders(planted);
+    expect(offenders, 'the allowlist passed a redirect on read 4').toHaveLength(1);
+    expect(offenders[0]).toContain('2>/dev/null)');
+    expect(ghOffenders(b)).toEqual([]);
   });
 
   it('CR_IGNORE is read from the invoking shell only: the block never assigns, exports or defaults it', () => {

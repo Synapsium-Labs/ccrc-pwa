@@ -899,13 +899,15 @@ case "$state" in OPEN|CLOSED|MERGED) ;; *) stop "unreadable: read 1" ;; esac
 [ "$head" = "$HC" ] || stop "not-at-head: the PR head is $head"
 
 # Read 1's reviews, in API order (oldest first), every page. A malformed page, an empty answer or a failed call is a
-# stop, never "no requests". An entry with no user is a deleted account: its identity is its own review id.
+# stop, never "no requests". Every entry is validated whole, then only its id, state and user id are kept, so no
+# login or free text reaches an argument. An entry with no user is a deleted account: its identity is its own review id.
 rv=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" | jq -sc '
   def sint: type == "number" and . == floor and . > 0 and . <= 9007199254740991;
   if length > 0 and all(.[]; type == "array")
      and all(.[][]; type == "object" and (.id | sint) and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED",
        "COMMENTED", "PENDING")) and (.user == null or (.user.id | sint)))
-  then flatten(1) else error("malformed") end') || stop "unreadable: read 1's reviews"
+  then [.[][] | {id, state, user: (if .user == null then null else {id: .user.id} end)}]
+  else error("malformed") end') || stop "unreadable: read 1's reviews"
 # Per identity, the latest opinionated review (COMMENTED and PENDING neither clear nor replace one); the requests that
 # stand are the review ids of the identities whose kept review requests changes. Only numbers reach the key.
 sel=$(jq -nc --argjson rv "$rv" --argjson pr "$r1" '
