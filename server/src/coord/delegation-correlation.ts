@@ -651,8 +651,9 @@ export function planDelegationDroppedPrune(input: DelegationPruneInput): Delegat
  *     run), and rung 3's is the upstream id of an `agent` activity row. A key whose names are none of those is never asked. And a key
  *     naming X from parent R is REDUNDANT when the checkpoint already holds R's activity row for X, because `claimsOf` reads rows and
  *     sees R as a claimant whatever the lane holds: only a rival with NO row (a parent that sent a bare event naming X, whose meta was
- *     never read) can be hidden by an eviction, and that is the key kept. Wave 3 never deletes an activity row; a wave that does must
- *     revisit this rule. A run id is never redundant by rows (a row names a worker, not the run), so it is kept while a present tree or
+ *     never read) can be hidden by an eviction, and that is the key kept. Wave 3 never deletes an agent or workflow activity row. D-6268
+ *     retires only zero-delta `bash-worktree` rows, which no clause here reads (clause (a) reads `agent` rows and run ids only), so the rule holds
+ *     as it stands; a wave that deletes an agent or workflow row must revisit it. A run id is never redundant by rows (a row names a worker, not the run), so it is kept while a present tree or
  *     a workflow row carries the run.
  * "Never asked" is about NOW: a path or a name asked about later is what the planner's marks are for (R73).
  */

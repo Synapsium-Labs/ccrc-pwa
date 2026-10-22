@@ -6,7 +6,7 @@
 // six tables' columns. Every vector below is computed independently of the implementation (Python's `hashlib` and
 // `json`), never by running the function under test.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -1020,6 +1020,83 @@ describe('D-6190, D-6191: an attempt is a decision; rows that repeat one decisio
     expect(out.attempts).toBe(input);
     expect(out.removed).toBe(0);
     expect(keyOf()(input[0]!)).not.toBe(keyOf()(input[1]!));
+  });
+});
+
+describe('RB25: delegationListingsEqual is the ONE listing equality (D-6267)', () => {
+  // Not exported at the base: reached through the namespace and a cast, so each row is red on its own assertion.
+  type Equal = (before: readonly string[], after: readonly string[]) => boolean;
+  const equal = (): Equal => {
+    const fn = (modelNs as unknown as Record<string, unknown>)['delegationListingsEqual'];
+    expect(typeof fn, 'delegationListingsEqual is exported by the model').toBe('function');
+    return fn as Equal;
+  };
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // MB9 (order-sensitive) reds the first two; MB10 (ignores removals) reds the fifth.
+  it.each([
+    ['order is ignored', ['a', 'b'], ['b', 'a'], true],
+    ['duplicates are ignored', ['a', 'a'], ['a'], true],
+    ['two empty listings are equal', [], [], true],
+    ['an addition is a difference', ['a'], ['a', 'b'], false],
+    ['a removal is a difference', ['a', 'b'], ['a'], false],
+  ] as const)('RB25: %s', (_label, before, after, expected) => {
+    expect(equal()(before, after)).toBe(expected);
+  });
+
+  it('RB25: 200 generated pairs (fixed seed) agree with a reference that compares sorted unique arrays', () => {
+    const fn = equal();
+    const rnd = mulberry32(0x6267);
+    const pool = ['a', 'b', 'c', 'd', 'wt-x', 'wt-raw'];
+    const draw = (): string[] => Array.from({ length: Math.floor(rnd() * 6) }, () => pool[Math.floor(rnd() * pool.length)]!);
+    const reference = (x: readonly string[], y: readonly string[]): boolean => JSON.stringify([...new Set(x)].sort()) === JSON.stringify([...new Set(y)].sort());
+    let equalPairs = 0;
+    for (let i = 0; i < 200; i++) {
+      const left = draw();
+      // every third pair is a reshuffle (with a repeat) of the left side, so the equal outcome is well covered
+      const right = i % 3 === 0 ? [...left, ...left.slice(0, 1)].sort(() => rnd() - 0.5) : draw();
+      const want = reference(left, right);
+      if (want) equalPairs++;
+      expect(fn(left, right), `pair ${i}: ${JSON.stringify(left)} vs ${JSON.stringify(right)}`).toBe(want);
+    }
+    expect(equalPairs, 'the generated pairs hold both outcomes').toBeGreaterThan(20);
+    expect(equalPairs).toBeLessThan(200);
+  });
+
+  // The census. Scope: every .ts file under server/src, comments stripped (whole-line and trailing `//`).
+  // "A second helper" = any DECLARATION (function, const/let/var, or a modifier-led method) whose name contains `listing(s)Equal`, in any
+  // file but the model's own single `export function delegationListingsEqual`. Callers = files holding a `delegationListingsEqual(` call.
+  const srcRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const files = readdirSync(srcRoot, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.ts')).sort();
+  const codeOf = (rel: string): string => readFileSync(path.join(srcRoot, rel), 'utf8').split('\n')
+    .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+  it('RB25 census: only delegation-checkpoint.ts calls delegationListingsEqual', () => {
+    const callers = files.filter((f) => /(?<!\w)delegationListingsEqual\s*\(/.test(codeOf(f).replace(/\bfunction\s+delegationListingsEqual\s*\(/g, ''))).map((f) => f.split(path.sep).join('/'));
+    expect(callers).toEqual(['coord/delegation-checkpoint.ts']);
+  });
+
+  it('RB25 census: no second listing-equality helper exists in server/src (one declaration, in the model)', () => {
+    const decl = [
+      /\bfunction\s+(\w*listings?Equal\w*)/gi,
+      /\b(?:const|let|var)\s+(\w*listings?Equal\w*)/gi,
+      /^\s*(?:(?:public|private|protected|static|async|readonly)\s+)+(\w*listings?Equal\w*)\s*[(=<:]/gim,
+    ];
+    const found: string[] = [];
+    for (const f of files) {
+      const code = codeOf(f);
+      for (const re of decl) for (const m of code.matchAll(re)) found.push(`${f.split(path.sep).join('/')}:${m[1]}`);
+    }
+    expect(found.sort()).toEqual(['coord/delegation-model.ts:delegationListingsEqual']);
   });
 });
 
