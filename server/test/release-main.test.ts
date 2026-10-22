@@ -14,7 +14,12 @@ import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+
+// Every test builds several tarballs and clones; one end-of-file sweep of all of
+// them can overrun vitest's 20 s hook timeout under load, so each test removes
+// its own directories.
+removeTmpFixturesEachTest();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -148,7 +153,7 @@ function plantBin(home: string, ghExit = 0, ghView: GhView = {}): string {
     '#!/bin/sh',
     'printf \'%s\\n\' "$PWD $*" >> "$HOME/npm-argv"',
     'if [ "$1" = "run" ] && [ "$2" = "build" ]; then case "$PWD" in',
-    '  */server) mkdir -p dist/server/src; echo "// s" > dist/server/src/index.js ;;',
+    '  */server) mkdir -p dist/server/src; echo "// s" > dist/server/src/index.js; if [ -f "$HOME/dist-mode" ]; then chmod "$(cat "$HOME/dist-mode")" dist/server; fi ;;',
     '  */pwa) mkdir -p ../server/dist-pwa; echo "<title>p</title>" > ../server/dist-pwa/index.html ;;',
     '  */agent) mkdir -p dist/agent/src; echo "// a" > dist/agent/src/index.js ;;',
     'esac; fi; exit 0',
@@ -507,7 +512,9 @@ describe('release-main.sh: compare — a build identical to the newest release H
   const releases: Array<[string, string, (r: string) => void, ((r: string) => void) | undefined, number, string]> = [
     ['W25-C2: a content change to a shipped file', 'c2', (r) => writeFileSync(join(r, 'ccd', 'ccrc'), '#!/usr/bin/env bash\necho changed\n', { mode: 0o755 }), undefined, 2, 'ccd/ccrc'],
     ['W25-C3: a mode-only change', 'c3', (r) => chmodSync(join(r, 'ccd', 'ccrc'), 0o644), undefined, 1, 'ccd/ccrc'],
-    ['W25-C4: a symlink\'s target change', 'c4', (r) => { unlinkSync(join(r, 'ccd', 'link')); symlinkSync('install.sh', join(r, 'ccd', 'link')); }, (r) => symlinkSync('ccrc', join(r, 'ccd', 'link')), 1, 'ccd/link'],
+    // The two targets are the same length, so a link whose target is dropped
+    // from the fingerprint shows through the target and not through the size.
+    ['W25-C4: a symlink\'s target change (targets of equal length)', 'c4', (r) => { unlinkSync(join(r, 'ccd', 'link')); symlinkSync('ccrd', join(r, 'ccd', 'link')); }, (r) => { writeFileSync(join(r, 'ccd', 'ccrd'), 'x\n'); symlinkSync('ccrc', join(r, 'ccd', 'link')); }, 1, 'ccd/link'],
     ['W25-C5: an added entry', 'c5', put('ccd/added'), undefined, 2, 'ccd/added'],
     ['W25-C6: a removed entry', 'c6', (r) => rmSync(join(r, 'ccd', 'extra')), put('ccd/extra'), 2, 'ccd/extra'],
   ];
@@ -848,6 +855,114 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(notes).toContain('- The code merge after');
     expect(notes).toContain('- The merge under release');
   });
+
+  it('W25-C24: a directory whose mode alone differs releases, and the line names that directory', () => {
+    const home = mkTmp('ccrc-relmain-w25c24-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    // The stub npm re-modes one built directory when this file exists. It is
+    // written after the base asset was built, so only HEAD's candidate has it.
+    writeFileSync(join(home, 'dist-mode'), '750\n');
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.differs('v0.0.1', 1, 'server/dist/server', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  it('W25-C25: a nested build.json whose sha differs releases — only the top-level one is normalised', () => {
+    const home = mkTmp('ccrc-relmain-w25c25-');
+    const nested = (sha: string) => put('ccd/sub/build.json', `{"sha":"${sha}","builtAt":"t","version":"v"}\n`);
+    const root = fixture(home, { tags: ['v0.0.1'], seed: nested('a'), merge: nested('b'), assets: ['v0.0.1'] });
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    // MANIFEST's digest line for the nested file moves too: two entries, and the line names the file.
+    expect(c.stdout).toBe(`${L.differs('v0.0.1', 2, 'ccd/sub/build.json', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  /** Both sides carry a tree of one file and no build.json or MANIFEST, byte for byte equal. */
+  function plantBareTrees(home: string, out: string): void {
+    const tree = mkTmp('ccrc-relmain-bare-');
+    mkdirSync(join(tree, 'ccd'), { recursive: true });
+    writeFileSync(join(tree, 'ccd', 'x'), 'x\n');
+    const bare = join(home, 'bare.tar.gz');
+    expect(spawnSync('tar', ['-czf', bare, '-C', tree, '.']).status).toBe(0);
+    plantAsset(home, 'v0.0.1', bare);
+    copyFileSync(bare, join(out, 'candidate', 'ccrc-v0.0.2.tar.gz'));
+  }
+  it('W25-C26: trees with entries but no top-level build.json and MANIFEST have no fingerprint — they release, and never match', () => {
+    const home = mkTmp('ccrc-relmain-w25c26-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    plantBareTrees(home, out);
+    const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: join(home, 'output') });
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant('the fingerprint of v0.0.1 failed', 'v0.0.2')}\n`);
+    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\n');
+  });
+
+  it.each([
+    ['no build.json line', (lines: string[]) => lines.filter((l) => !l.endsWith('  build.json'))],
+    ['two build.json lines', (lines: string[]) => [...lines, ...lines.filter((l) => l.endsWith('  build.json'))]],
+  ])('W25-C27: a base MANIFEST with %s releases — the base has no fingerprint', (_name, edit) => {
+    const home = mkTmp('ccrc-relmain-w25c27-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    // Re-pack the base asset with the damaged MANIFEST, under a matching SHA256SUMS.
+    const tree = join(home, 'base-tree');
+    mkdirSync(tree, { recursive: true });
+    const asset = join(home, 'assets', 'v0.0.1', 'ccrc-v0.0.1.tar.gz');
+    expect(spawnSync('tar', ['-xpzf', asset, '-C', tree]).status).toBe(0);
+    const lines = readFileSync(join(tree, 'MANIFEST'), 'utf8').split('\n');
+    expect(lines.filter((l) => l.endsWith('  build.json'))).toHaveLength(1);
+    writeFileSync(join(tree, 'MANIFEST'), edit(lines).join('\n'));
+    const repacked = join(home, 'repacked.tar.gz');
+    expect(spawnSync('tar', ['-czf', repacked, '-C', tree, '.']).status).toBe(0);
+    plantAsset(home, 'v0.0.1', repacked);
+    const out = join(home, 'out');
+    const { p, c } = pipeline(root, home, out);
+    expect(p.code, p.stderr).toBe(0);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe(`${L.cant('the fingerprint of v0.0.1 failed', 'v0.0.2')}\n`);
+    expect(stateOf(out)).toMatch(/^built true\n/);
+  });
+
+  it('W25-C28: a HEAD a later release already contains is a re-run of an older merge — nothing is built, tagged, pushed or asked of gh (D-6502)', () => {
+    const home = mkTmp('ccrc-relmain-w25c28-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, assets: ['v0.0.1'] });
+    const sha = git(root, 'rev-parse', 'HEAD');
+    // A later merge was released first (v0.0.5 sits on its descendant); the
+    // older merge's run starts now, on a detached checkout of its commit.
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'a later merge');
+    git(root, 'tag', 'v0.0.5');
+    git(root, 'checkout', '-q', '--detach', sha);
+    const out = join(home, 'out');
+    const outFile = join(home, 'output');
+    const { p, c, q } = pipeline(root, home, out, {}, { GITHUB_OUTPUT: outFile });
+    expect(p.code, p.stderr).toBe(0);
+    expect(p.stdout).toContain('release-main.sh: HEAD is already contained in v0.0.5 — a re-run of an older merge; nothing to build');
+    expect(stateOf(out)).toBe(`built contained\ncontained-by v0.0.5\nhead ${sha}\n`);
+    expect(git(root, 'tag', '--list').split('\n')).toEqual(['v0.0.1', 'v0.0.5']);
+    expect(existsSync(join(home, 'npm-argv'))).toBe(false);
+    expect(existsSync(join(out, 'candidate'))).toBe(false);
+    expect(c.code, c.stderr).toBe(0);
+    expect(c.stdout).toBe('release-main.sh: nothing to compare — HEAD is already contained in v0.0.5\n');
+    expect(readFileSync(outFile, 'utf8')).toBe('release=false\n');
+    expect(q.code, q.stderr).toBe(0);
+    expect(q.stdout).toBe('release-main.sh: nothing to publish — HEAD is already contained in v0.0.5\n');
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    expect(tarballsIn(out)).toEqual([]);
+    // the state is bound to its HEAD: a later commit makes publish die
+    git(root, 'checkout', '-q', '-B', 'rerun');
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'after the state');
+    const late = run(root, home, ['publish', '--out', out]);
+    expect(late.code).toBe(1);
+    expect(late.stderr).toMatch(/was measured for [0-9a-f]{40}, not HEAD [0-9a-f]{40}/);
+  });
 });
 
 describe('release-main.sh: source pins', () => {
@@ -878,13 +993,14 @@ describe('release-main.sh: source pins', () => {
     expect(s).toContain('cmp -s "$d/fp-base" "$d/fp-head"');
     expect(s).toContain('LC_ALL=C comm -3 "$d/fp-base" "$d/fp-head"');
   });
-  it('W25-P2: the four state words, each spelled once', () => {
+  it('W25-P2: the five state words, each spelled once', () => {
     const s = src();
+    expect(s).toContain("printf 'built contained\\ncontained-by %s\\nhead %s\\n'");
     expect(s).toContain("printf 'built candidate\\ntag %s\\nhead %s\\n'");
     expect(s).toContain("printf 'built unchanged\\nsame-as %s\\nhead %s\\n'");
     expect(s).toContain("printf 'built true\\ntag %s\\nhead %s\\n'");
     expect(s).toContain("printf 'built false\\ntag %s\\n'");
-    for (const w of ['candidate', 'unchanged', 'true', 'false']) {
+    for (const w of ['candidate', 'unchanged', 'contained', 'true', 'false']) {
       expect(s.match(new RegExp(`printf 'built ${w}\\\\n`, 'g')) ?? [], `printf 'built ${w}'`).toHaveLength(1);
     }
   });

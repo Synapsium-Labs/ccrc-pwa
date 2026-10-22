@@ -1,5 +1,5 @@
-# Every merge to main whose build differs from the newest release it contains
-# becomes a PRERELEASE carrying a provenance bundle (designs 2026-09-18 §3 and
+# Every merge to main that starts a run, and whose build differs from the newest
+# release it contains, becomes a PRERELEASE carrying a provenance bundle (designs 2026-09-18 §3 and
 # 2026-09-20 §4). Thin by design, like release.yml: deploy/release-main.sh owns
 # the derivation, the local tag, the build, the comparison, the push and the
 # publish — in THREE ARMS, so the attest ACTION can run between the comparison
@@ -18,9 +18,31 @@
 # required.
 name: release-main
 
+# THE TRIGGER (D-6511, the operator's amendment; supersedes D-6397). A merge
+# that changes only docs/ or the root's Markdown starts no run: no runner, no
+# build, no release. Any other merge starts the normal flow, and the build
+# fingerprint still decides every run that starts (D-6512). The facts:
+#   - GitHub's `*` does not cross `/`. So '*.md' is the root's Markdown files
+#     only and 'docs/**' is the root docs/ tree only; the shipped skills under
+#     ccd/ and anything under pwa/src/docs/ still start a run.
+#   - A push in which every changed file matches starts no run at all.
+#   - GitHub's limits: a push of more than 1,000 commits, or a diff that times
+#     out, always runs; a diff of more than 3,000 files runs only if a
+#     non-ignored file is among the first 3,000 the filter returns. The last
+#     case can skip a real change, which is delayed and never lost (D-6512):
+#     the base is the newest release HEAD contains, not the push's before, so
+#     the next run that starts builds the change and releases it.
+#   - No workflow_dispatch: there is no manual release button (the operator's
+#     ruling). A failed release followed only by docs merges stays unreleased
+#     until the next merge outside the two patterns, or until the failed run is
+#     re-run.
+#   - The list is two root-anchored patterns, and is never widened without a
+#     ledger entry. server/test/build-release.test.ts pins this block exactly
+#     (W25-F1) and pins that the build archives neither pattern (W25-F2).
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '*.md']
 
 # Two close merges serialise, so the second derives its tag after the first
 # has pushed. Never cancel: nothing reaches origin before the publish arm's

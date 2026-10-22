@@ -653,14 +653,6 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
 
-  it('triggers on main pushes and on NOTHING else', () => {
-    const src = wf();
-    expect(src).toMatch(/^on:\n  push:\n    branches: \[main\]$/m);
-    for (const trigger of ['tags:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
-      expect(src, `release-main.yml must not also trigger on ${trigger}`).not.toContain(trigger);
-    }
-  });
-
   it('serialises: one concurrency group, never cancelling an in-flight release', () => {
     expect(wf()).toMatch(/^concurrency:\n  group: release-main\n  cancel-in-progress: false$/m);
   });
@@ -675,7 +667,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(src).toContain('bash deploy/release-main.sh prepare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh compare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh publish --out release-out');
-    expect(src).toContain("if: steps.compare.outputs.release == 'true'");
+    expect(src, 'the attest gate is exactly the compare output, nothing appended').toMatch(/^        if: steps\.compare\.outputs\.release == 'true'$/m);
     expect(src).not.toContain('hashFiles');
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
@@ -692,8 +684,79 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 
   // W25 (D-6397, D-6401, D-6499): every merge builds, then compare decides.
-  it('W25-Y1: no trigger filter — a paths list would be a second, hand-kept list, judged over the push\'s own range', () => {
-    expect(wf()).not.toMatch(/^\s+paths(-ignore)?:/m);
+  // The `on:` block, as an exact text block: from the line `on:` up to the next
+  // top-level key, comments and blank lines stripped. Never a regex that ends
+  // at `$`, which a longer line or a following key would satisfy (D-6513).
+  const onBlock = (src: string): string[] => {
+    const lines = src.split('\n');
+    const from = lines.indexOf('on:');
+    expect(from, 'the workflow has a top-level on: line').toBeGreaterThan(-1);
+    const out = ['on:'];
+    for (const l of lines.slice(from + 1)) {
+      if (/^[A-Za-z_]/.test(l)) break;
+      if (l.trim() === '' || l.trim().startsWith('#')) continue;
+      out.push(l);
+    }
+    return out;
+  };
+  const EXACT_ON = [
+    'on:',
+    '  push:',
+    '    branches: [main]',
+    "    paths-ignore: ['docs/**', '*.md']",
+  ];
+
+  // W25 (D-6511, D-6513): the trigger is the operator's, spelled once.
+  it('W25-F1: the trigger is push to main with paths-ignore of docs/** and *.md, no paths key and no other event', () => {
+    expect(onBlock(wf())).toEqual(EXACT_ON);
+  });
+
+  it('W25-F1: the block reader sees each widening and addition (the pin is not vacuous)', () => {
+    const wrap = (on: string[]): string => `name: x\n\n# note\n${on.join('\n')}\n\n# next\nconcurrency:\n  group: g\n`;
+    expect(onBlock(wrap(EXACT_ON))).toEqual(EXACT_ON);
+    const variants: string[][] = [
+      EXACT_ON.slice(0, 3),
+      EXACT_ON.map((l) => l.replace("'*.md'", "'**/*.md'")),
+      EXACT_ON.map((l) => l.replace("'docs/**'", "'**/docs/**'")),
+      [EXACT_ON[0], '  workflow_dispatch:', ...EXACT_ON.slice(1)],
+      [...EXACT_ON.slice(0, 3), "    paths: ['ccd/**']", EXACT_ON[3]],
+    ];
+    for (const v of variants) expect(onBlock(wrap(v))).not.toEqual(EXACT_ON);
+  });
+
+  // The PATHSPEC entries of build-release.sh, read from the file: the array
+  // literal (it spans lines) and the per-package arm, expanded over the loop's
+  // package list.
+  const pathspecEntries = (script: string): string[] => {
+    const arr = /^PATHSPEC=\(([^)]*)\)/m.exec(script);
+    if (!arr) throw new Error('build-release.sh holds no PATHSPEC=(...) array');
+    const entries = arr[1].split(/\s+/).filter((w) => w !== '' && !w.startsWith('#'));
+    const loop = /^for pkg in ([^;]+); do\n(?:(?!^done).*\n)*?.*PATHSPEC\+=\("\$pkg\/([^"]+)"\)/m.exec(script);
+    if (!loop) throw new Error('build-release.sh holds no per-package PATHSPEC+= arm');
+    for (const pkg of loop[1].trim().split(/\s+/)) entries.push(`${pkg}/${loop[2]}`);
+    if (entries.length === 0) throw new Error('no PATHSPEC entries were found');
+    return entries;
+  };
+  const filteredEntries = (entries: string[]): string[] => entries.filter(
+    (e) => e === 'docs' || e.startsWith('docs/') || (!e.includes('/') && e.endsWith('.md')),
+  );
+
+  it('W25-F2: no PATHSPEC entry of build-release.sh is docs, sits under docs/, or is a root Markdown file', () => {
+    const entries = pathspecEntries(readFileSync(SCRIPT, 'utf8'));
+    expect(entries.length, 'the scan found the array and the per-package arm').toBeGreaterThan(8);
+    expect(entries).toContain('install.sh');
+    expect(entries).toContain('server/scripts');
+    expect(filteredEntries(entries), 'the trigger ignores these, so the build must not archive them').toEqual([]);
+  });
+
+  it('W25-F2: the scan sees a planted docs entry and a planted root Markdown entry, and throws on a script with no array', () => {
+    const synthetic = (first: string): string => `PATHSPEC=(${first} shared\n  server/package.json)\n# a note\nfor pkg in server agent; do\n  if [ -n "$x" ]; then PATHSPEC+=("$pkg/scripts"); fi\ndone\n`;
+    expect(pathspecEntries(synthetic('install.sh'))).toEqual(['install.sh', 'shared', 'server/package.json', 'server/scripts', 'agent/scripts']);
+    expect(filteredEntries(pathspecEntries(synthetic('install.sh')))).toEqual([]);
+    expect(filteredEntries(pathspecEntries(synthetic('README.md')))).toEqual(['README.md']);
+    expect(filteredEntries(pathspecEntries(synthetic('docs')))).toEqual(['docs']);
+    expect(filteredEntries(pathspecEntries(synthetic('docs/a.md')))).toEqual(['docs/a.md']);
+    expect(() => pathspecEntries('echo nothing\n')).toThrow();
   });
 
   it('W25-Y2: the compare step holds the token for the base check and the download, and runs the second arm', () => {

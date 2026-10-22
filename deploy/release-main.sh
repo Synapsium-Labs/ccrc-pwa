@@ -22,7 +22,9 @@
 #              pushed here), build the candidate with build-release.sh (the one
 #              builder) into $OUT_DIR/candidate, outside the attest step's
 #              glob, and write $OUT_DIR/release-main.state as `built
-#              candidate` (D-6499, D-6500).
+#              candidate` (D-6499, D-6500). A HEAD that a release tag already
+#              contains is a re-run of an older merge: it builds nothing,
+#              tags nothing and records `built contained` (D-6502).
 #   compare  — GH_TOKEN. Pick the base (the newest release tag HEAD contains,
 #              D-6392), download its tarball outside the checkout, check it
 #              against its own SHA256SUMS, extract both tarballs, fingerprint
@@ -118,12 +120,13 @@ derive_tags() {
   fi
 }
 
-# Reads $STATE into BUILT, TAG, SAME and HEAD_AT (empty when a key is absent).
+# Reads $STATE into BUILT, TAG, SAME, CONTAINED and HEAD_AT (empty when a key is
+# absent).
 read_state() {
   local k v
-  BUILT=""; TAG=""; SAME=""; HEAD_AT=""
+  BUILT=""; TAG=""; SAME=""; CONTAINED=""; HEAD_AT=""
   while read -r k v; do
-    case "$k" in built) BUILT="$v" ;; tag) TAG="$v" ;; same-as) SAME="$v" ;; head) HEAD_AT="$v" ;; esac
+    case "$k" in built) BUILT="$v" ;; tag) TAG="$v" ;; same-as) SAME="$v" ;; contained-by) CONTAINED="$v" ;; head) HEAD_AT="$v" ;; esac
   done < "$STATE"
 }
 
@@ -185,8 +188,9 @@ const walk = (dir) => {
       rows.push([rel, 'd', mode, 0, '', '']);
       walk(full);
     } else if (st.isFile()) {
-      const top = rel.indexOf('/') < 0;
-      const body = top ? normalise(rel, fs.readFileSync(full)) : fs.readFileSync(full);
+      // normalise matches the exact top-level names only, so a nested build.json
+      // or MANIFEST is hashed as it is (D-6408).
+      const body = normalise(rel, fs.readFileSync(full));
       rows.push([rel, 'f', mode, body.length, sha(body), '']);
     } else {
       throw new Error('unsupported entry type: ' + JSON.stringify(rel));
@@ -223,6 +227,19 @@ prepare() {
       return 0
     fi
     die "HEAD carries $at_head which origin does not hold — a previous prepare's local tag; delete it (git tag -d $at_head) and re-run. Nothing was built or pushed"
+  fi
+
+  # A HEAD that a release tag already contains is a re-run of an older merge
+  # (D-6502): a tag cut now would number this older content above every newer
+  # release, and its base would still be this merge's own older tag, so an
+  # outage or a drifted toolchain would publish it. Build nothing, tag nothing,
+  # and say so.
+  local contained
+  contained="$(git -C "$ROOT" tag --contains HEAD | newest)" || contained=""
+  if [ -n "$contained" ]; then
+    echo "release-main.sh: HEAD is already contained in $contained — a re-run of an older merge; nothing to build"
+    printf 'built contained\ncontained-by %s\nhead %s\n' "$contained" "$(git -C "$ROOT" rev-parse HEAD)" > "$STATE"
+    return 0
   fi
 
   derive_tags
@@ -345,6 +362,12 @@ compare() {
     set_output false
     return 0
   fi
+  if [ "$BUILT" = contained ]; then
+    # D-6502: prepare found a release tag that already contains HEAD.
+    echo "release-main.sh: nothing to compare — HEAD is already contained in ${CONTAINED:-an earlier release}"
+    set_output false
+    return 0
+  fi
   local head; head="$(git -C "$ROOT" rev-parse HEAD)"
   [ "$BUILT" = candidate ] && [[ "$TAG" =~ $SHAPE ]] \
     || die "$STATE does not read 'built candidate' with a release tag — re-run prepare"
@@ -398,6 +421,14 @@ publish() {
     [ "$HEAD_AT" = "$head" ] \
       || die "$STATE was measured for ${HEAD_AT:-no commit}, not HEAD $head — re-run prepare"
     echo "release-main.sh: no release for this merge — built unchanged, the same as $same; nothing to push, attest or publish"
+    return 0
+  fi
+  if [ "$built" = contained ]; then
+    # D-6502: a re-run of an older merge; the state is bound to its HEAD.
+    [[ "$CONTAINED" =~ $SHAPE ]] || die "malformed $STATE — re-run prepare"
+    [ "$HEAD_AT" = "$head" ] \
+      || die "$STATE was measured for ${HEAD_AT:-no commit}, not HEAD $head — re-run prepare"
+    echo "release-main.sh: nothing to publish — HEAD is already contained in $CONTAINED"
     return 0
   fi
   if [ "$built" = false ]; then
