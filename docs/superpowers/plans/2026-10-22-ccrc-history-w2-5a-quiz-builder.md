@@ -3755,6 +3755,7 @@ Departures this task ships, each defined in this plan's `## Deviations found`: D
 **Departures this task ships** (each defined in this plan's `## Deviations found`):
 - D-6278: W2-D68 (3) stops part 3 at "the first operator-provenance or assistant row" after the summary. A kept(N) member there is part 2's row (W2-D68 itself pins "a post-summary kept member"), so this task passes over it: it is never the stop. The rows after it, the served card among them, stay in B. The departure only grows B, so it rejects more facts, never fewer. Pins: the case 'a kept member after the summary is never the stop' with its CONTROL; mutant M9.
 - D-6279: W2-D68's second rendering is "its `ftsTextOf` string leaves". `ftsTextOf` answers `''` for an object body, and an attachment row's stored body is its `attachment` object, so the served card would enter B only as JSON, with its quotes escaped. B takes every string leaf of an object body instead. This only grows B. Pins: the case 'part 3 takes the rows after the summary', whose CONTROL is the card's JSON rendering; mutant M6.
+- D-6304 (a fix round before review): B renders each stored body of parts 1 to 3 through `renderOrNull`, and a body nested past about 4,500 levels fails B closed as `body-unrenderable`, the existing word (D-6302, D-6303). Pins: the D-6304 cases and mutants MA to MD.
 - **W2-D74's second pin is here (R7):** a fact only in the sanitised body, the primary that expand passes over, is rejected by B, because B reads the primary and every variant. Pin: its own case; mutant M36.
 
 **Residuals, named:**
@@ -4176,6 +4177,37 @@ describe('W2-5a Task 4: B fails closed, W2-D68', () => {
   });
 });
 
+describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304', () => {
+  /** A fixture whose row `key` stores an object nested `depth` deep. It parses, and lib's renderEntryText throws a
+   *  RangeError on it from about 4,500 levels. Built at runtime: the blob is written raw, because JSON.stringify of the
+   *  nested value would throw in the fixture itself. */
+  const nested = (key: string, depth: number): W5a4Fixture => {
+    const fx = w5a4Fixture();
+    fx.rs.close();
+    const w = w5a4St.openWriter(w5a4Lib.historyPaths(fx.home).dbFile);
+    const row = w.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(fx.uuidOf(key)) as { blob_id: number };
+    const raw = Buffer.from(`${'{"a":'.repeat(depth)}"x"${'}'.repeat(depth)}`, 'utf8');
+    w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(w5a4St.brotli(raw), raw.length, Number(row.blob_id));
+    w5a4St.closeWriter(w);
+    const rs = w5a4Drv.openReplayStore(fx.home) as unknown as W5a4Rs;
+    w5a4Open.push(rs);
+    return { ...fx, rs, db: rs.db };
+  };
+
+  it.each([['summary', 'the summary row (part 1)'], ['a3', 'a kept member (part 2)'], ['card', 'a post-summary row (part 3)']])(
+    '%s: a body nested 5,000 deep discards body-unrenderable, and 4,000 deep builds B (%s)', (key) => {
+      expect(w5a4B(nested(key, 5000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
+      // CONTROL: the same row 4,000 deep renders, so the discard is the depth and not the fixture.
+      expect(w5a4B(nested(key, 4000)).state).toBe('built');
+    });
+
+  it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
+    expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+  });
+});
+
 describe('W2-5a Task 4: B is held in memory only, W2-D68 and W2-D33', () => {
   /** What the default fixture plants in B, as the seven-character variant W2-D62 tests, and the two commands. */
   const IN_B = [1, 2, 3, 5, 6, 7, 8, 9].map((n) => W5A4_FACT(n).slice(0, 7));
@@ -4378,7 +4410,7 @@ describe('W2-5a Task 4: the baseline files, W2-D69', () => {
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 4'
 ```
 
-Expected RED (predicted): `31 failed` (as root, `29 failed | 2 skipped`).
+Expected RED (predicted): `35 failed` (as root, `33 failed | 2 skipped`).
 - The fixture builds (Tasks 1 to 3 supply its store opener, `rosterConfigDirs` and `admitStoreBoundaries`), and every case that reads B fails at `w5a4Drv.baselineOf is not a function`.
 - The record cases fail at `writeBaselineRecord` or `baselineRow`, `BASELINE_FILES_ID is the open record default` with `expected undefined to be 'v1'`, and `the ancestor walk` at `w5a4Drv.baselineCandidates is not a function`.
 - The `RECON_DISCARDS` case fails: `slice(24, 35)` holds only `body-unrenderable`, which is the list's last word since D-6302 (measured over predicted: the slice is not empty).
@@ -4502,8 +4534,15 @@ function blLeaves(body) {
   return ftsTextOf(body, 'entry');
 }
 
-/** One row of parts 1-3 in both renderings (W2-D68). */
-const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];
+/** One row of parts 1-3 in both renderings (W2-D68), or null when renderEntryText cannot render the body: one nested past
+ *  V8's JSON.stringify stack parses and then throws a RangeError, which renderOrNull turns into null so the caller fails
+ *  closed as `body-unrenderable` (D-6304, as D-6302 and D-6303 rule). The string leaves never throw: blObjectLeaves is
+ *  iterative and ftsTextOf is measured fine at every depth.
+ *  @returns {string[] | null} */
+function blRenderings(body) {
+  const rendered = renderOrNull(() => renderEntryText(body));
+  return rendered === null ? null : [rendered, blLeaves(body)];
+}
 
 /** A built B: its counts enumerable, its text not (W2-D68: never written, logged or spawned), the whole frozen. */
 function blHeld(text, counts) {
@@ -4539,7 +4578,9 @@ export function baselineOf(rs, boundary, ctx) {
   // (1) the summary row, whole. Its transcript-pointer line stays here; only the payload replaces it (W2-D75).
   const summary = bodyOf(rs.blobs, Number(sum.blob_id), ctx.budget);
   if (summary === null) return blDiscard('summary-unreadable');
-  parts.push(...blRenderings(summary));
+  const summaryParts = blRenderings(summary);
+  if (summaryParts === null) return blDiscard('body-unrenderable');
+  parts.push(...summaryParts);
   // (2) kept(N), through Task 1's kept-list reader with B's budget: every member's primary and every variant.
   const kept = keptMembersOf(rs, copy.boundary, ctx.budget);
   if (kept.state !== 'kept') return kept;
@@ -4550,7 +4591,9 @@ export function baselineOf(rs, boundary, ctx) {
     for (const blobId of blMemberBlobs(s, m)) {
       const body = bodyOf(rs.blobs, blobId, ctx.budget);
       if (body === null) return blDiscard('kept-member-unreadable');
-      parts.push(...blRenderings(body));
+      const memberParts = blRenderings(body);
+      if (memberParts === null) return blDiscard('body-unrenderable');
+      parts.push(...memberParts);
     }
   }
   // (3) the copy's rows after the summary row, to the first operator or assistant row that is not a kept member.
@@ -4563,7 +4606,9 @@ export function baselineOf(rs, boundary, ctx) {
     if (postRows > BASELINE_POST_ROWS_MAX) { stopped = 'post-over-cap'; break; }
     const body = bodyOf(rs.blobs, Number(r.blob_id), ctx.budget);
     if (body === null) { stopped = 'post-row-unreadable'; break; }
-    parts.push(...blRenderings(body));
+    const rowParts = blRenderings(body);
+    if (rowParts === null) { stopped = 'body-unrenderable'; break; }
+    parts.push(...rowParts);
   }
   if (stopped !== null) return blDiscard(stopped);
   // (4) the baseline files, over N's epoch as Task 3 found its family (derive.mjs's epochOfUuid).
@@ -4755,7 +4800,7 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 ```
 
 Expected:
-- The filtered run is green: `31 passed` (as root, `29 passed | 2 skipped`: the two permission cases).
+- The filtered run is green: `35 passed` (as root, `33 passed | 2 skipped`: the two permission cases).
 - The whole file is green. That includes W2-4's D-5986 cases, which pin `readPlain`'s two-argument behaviour unchanged; Task 1's import pin, unchanged, because no import line or pinned name was added; Task 1's `keptOf` scan; and W2-4 Task 1's `node:sqlite` scan.
 - tsc prints nothing. A line naming only `agent/src/` or a module that is not installed comes from the worktree's install. A line naming `history-replay` is this task's.
 
@@ -4810,7 +4855,7 @@ t4run 'part 2 is every kept member|both renderings'
 # Expected RED (predicted): 2 failed, a kept tool_result: expected true to be false; W2-D61: expected true to be false.
 
 # M5 (W2-D68, both renderings): the string leaves dropped.
-mut deploy/history-replay.mjs "const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];" "const blRenderings = (body) => [renderEntryText(body)];"
+mut deploy/history-replay.mjs "  return rendered === null ? null : [rendered, blLeaves(body)];" "  return rendered === null ? null : [rendered];"
 t4run 'both renderings|part 3 takes the rows'
 # Expected RED (predicted): 2 failed, the quoted command and the card's command admitted: expected true to be false.
 
@@ -4821,7 +4866,7 @@ t4run 'part 3 takes the rows'
 # Expected RED (predicted): 1 failed, the served card: expected true to be false.
 
 # M7 (W2-D68, both renderings): renderEntryText dropped.
-mut deploy/history-replay.mjs "const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];" "const blRenderings = (body) => [blLeaves(body)];"
+mut deploy/history-replay.mjs "  return rendered === null ? null : [rendered, blLeaves(body)];" "  return rendered === null ? null : [blLeaves(body)];"
 t4run 'both renderings'
 # Expected RED (predicted): 1 failed, renderEntryText keeps an input key: expected true to be false.
 
@@ -4882,7 +4927,7 @@ t4run 'summary that cannot be read'
 # Expected RED (predicted): 1 failed, the shifted boundary_index builds B where copy-moved was expected.
 
 # M18 (W2-D68 (1)): the pointer line dropped from B, as the payload drops it.
-mut deploy/history-replay.mjs "  parts.push(...blRenderings(summary));" "  parts.push(...blRenderings(String(summary).split('\n').slice(0, -1).join('\n')));"
+mut deploy/history-replay.mjs "  const summaryParts = blRenderings(summary);" "  const summaryParts = blRenderings(String(summary).split('\n').slice(0, -1).join('\n'));"
 t4run 'part 1 is the summary row'
 # Expected RED (predicted): 1 failed, the transcript-pointer line: expected true to be false.
 
@@ -11539,7 +11584,7 @@ Every guard this PR adds is in Tasks 1 to 7, each with its own mutant list.
 
 ## Deviations found
 
-Eight numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found. A number issued during the build is appended below by the commit that first cites it.
+Nine numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-5780** — `history-w2-answerable-timed` (Task 5; W2-D70, with spec erratum E19, which W2-5b amends in place): W2-D70's answerability gains a fourth clause. A source entry needs a non-null `ts_ms` at or before boundary N's own `ts_ms` (T_N). A sidecar source needs a non-null `entry_id` whose entry passes the same test. This departs from spec §10.2's "Answerability" bullet ("F must occur in a span row with searchable provenance, within the sidecar FTS window"), which reads no time and admits a sidecar however it is linked. The ground is the as-of cut (W2-D34, W2-D35). A NULL-ts row and a sidecar with a NULL `entry_id` are absent under it. A fact sourced only from one would be asked of a treatment arm whose own cut can never show it, and its miss would measure the cut, not recall. With clause 4, every admitted fact's source is visible under the cut: a leaf-N span row precedes the boundary, so the positional clause never hides it. Read with clause 1, the sidecar sources are those linked to a searchable span row and those linked to nothing in the span's transcript, so the unlinked ones reach clause 4 and are counted. What the clause removes is reported, never hidden: the `answerable` stage drops such a candidate as `unanswerable-untimed`, apart from `unanswerable`, and sampling counts each (decisions section 7: "Facts carried only by NULL-ts rows or by sidecars with no entry are never asked"). The spec sentence is amended by W2-5b (E19); this plan edits no spec. Pins: Task 5's clause-4 cases (a source stamped exactly T_N is answerable, one stamped one ms after is not, a NULL-ts row, an unlinked sidecar, a sidecar linked to a NULL-ts row) and the stage's two words; mutants M6 to M9, M12 and M13 of Task 5.
 - **D-6277** — `history-replay-pointer-lines` (Task 1; W2-D75 item 1, spec §10.2 "Reconstruction"): every whole line of the summary row that names a path ending in `.jsonl` becomes `[pointer removed]`, where the spec says "its transcript-pointer line", one line. Neither the spec nor any code, fixture or lib helper in the tree defines that line, so the rule is the widest reading that still removes it: any whole line naming a `.jsonl` path (`/^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm`). It removes more than the spec's text says, at no quiz cost: any fact on such a line is in B, which keeps the summary whole with its pointer (W2-D68 (1)), so it is never admitted. The fidelity pilot's token count moves by those lines only. Redaction runs first and the replacement after (W2-D54: whole, then any cut). Pins: Task 1's `removePointerLines` case and its item 1 case over the fixture store; mutant M2 of Task 1.
@@ -11549,3 +11594,4 @@ Eight numbers are defined here. D-5780 is the W2 decisions document's (its block
 - **D-6301** — `history-replay-unknown-body-word-throws` (Task 1; D-6238, the Drifts row "Each word keeps its own discard; an unknown word throws"): Task 1's `entryBodyOf` turned every body state other than `body` and `unparseable` into `{ state: 'lost', word }`, so a word `expandEntryBody` gains later reached `SUMMARY_LOST[word]` or `MEMBER_LOST[word]` as `undefined` and `reconstructPayload` answered a discard with no word. The header's rule governs: `entryBodyOf` throws a `TypeError` naming the state unless both maps own it. A wordless discard would be counted under nothing, and the operator would read an unexplained shortfall. Pins: Task 1's D-6301 case (a stub `expandEntryBody` answering an unknown state throws through `entryBodyOf` and `reconstructPayload`, and a known body-less state keeps its own discard through the same stub); mutant F1 of the fix round.
 - **D-6302** — `history-replay-unrenderable-body-discard` (Task 1; W2-D75 items 1 and 2): Task 1's `reconstructPayload` rendered a summary or kept-member body with `renderEntryText` and `JSON.stringify` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`, and so reaches `expandEntryBody` as `body`) threw a `RangeError` that ended the run, where `recall.mjs`'s `expandEntryText` already catches the same error. The rendering is now guarded by `renderOrNull`, which catches `RangeError` only and rethrows anything else, and the boundary is discarded under one new `RECON_DISCARDS` word, `body-unrenderable`, appended after `leaf-absent`: a counted discard, never a refusal (R5). Pins: Task 1's D-6302 case (a 10,000-level nested kept member and summary row each discard `body-unrenderable`) and the `RECON_DISCARDS` case; mutants F2a, F2b and F2c of the fix round.
 - **D-6303** — `history-replay-unrenderable-mined-body-discard` (Task 2; W2-D65, with D-6302): Task 2's `mineBoundary` rendered each mined row's body with `renderEntryText` unguarded, so a mined body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended the run. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and the boundary is discarded under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 rules for reconstruction; no word is added, and the word is kept last in the list. Pins: Task 2's D-6303 case (5,000 deep discards, CONTROL 4,000 deep mines), the list pin that `body-unrenderable` is last, and the unwrapped-render mutant of the fix round.
+- **D-6304** — `history-replay-baseline-unrenderable-body-discard` (Task 4; W2-D68, with D-6302 and D-6303): Task 4's `baselineOf` rendered each stored body of parts 1 to 3 with `renderEntryText` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended B's build, and the run with it. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and B fails closed under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 and D-6303 rule; no word is added, and the word stays last in the list. The string leaves need no guard (`ftsTextOf` and the iterative leaf walk never throw). Pins: Task 4's D-6304 cases (a 5,000-deep summary row, kept member and post-summary row each discard `body-unrenderable`, CONTROL 4,000 deep builds); mutants MA (the `renderOrNull` wrap) and MB, MC and MD (each part's null check).

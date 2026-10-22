@@ -7113,6 +7113,37 @@ describe('W2-5a Task 4: B fails closed, W2-D68', () => {
   });
 });
 
+describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304', () => {
+  /** A fixture whose row `key` stores an object nested `depth` deep. It parses, and lib's renderEntryText throws a
+   *  RangeError on it from about 4,500 levels. Built at runtime: the blob is written raw, because JSON.stringify of the
+   *  nested value would throw in the fixture itself. */
+  const nested = (key: string, depth: number): W5a4Fixture => {
+    const fx = w5a4Fixture();
+    fx.rs.close();
+    const w = w5a4St.openWriter(w5a4Lib.historyPaths(fx.home).dbFile);
+    const row = w.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(fx.uuidOf(key)) as { blob_id: number };
+    const raw = Buffer.from(`${'{"a":'.repeat(depth)}"x"${'}'.repeat(depth)}`, 'utf8');
+    w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(w5a4St.brotli(raw), raw.length, Number(row.blob_id));
+    w5a4St.closeWriter(w);
+    const rs = w5a4Drv.openReplayStore(fx.home) as unknown as W5a4Rs;
+    w5a4Open.push(rs);
+    return { ...fx, rs, db: rs.db };
+  };
+
+  it.each([['summary', 'the summary row (part 1)'], ['a3', 'a kept member (part 2)'], ['card', 'a post-summary row (part 3)']])(
+    '%s: a body nested 5,000 deep discards body-unrenderable, and 4,000 deep builds B (%s)', (key) => {
+      expect(w5a4B(nested(key, 5000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
+      // CONTROL: the same row 4,000 deep renders, so the discard is the depth and not the fixture.
+      expect(w5a4B(nested(key, 4000)).state).toBe('built');
+    });
+
+  it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
+    expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+  });
+});
+
 describe('W2-5a Task 4: B is held in memory only, W2-D68 and W2-D33', () => {
   /** What the default fixture plants in B, as the seven-character variant W2-D62 tests, and the two commands. */
   const IN_B = [1, 2, 3, 5, 6, 7, 8, 9].map((n) => W5A4_FACT(n).slice(0, 7));

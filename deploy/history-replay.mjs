@@ -3337,8 +3337,15 @@ function blLeaves(body) {
   return ftsTextOf(body, 'entry');
 }
 
-/** One row of parts 1-3 in both renderings (W2-D68). */
-const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];
+/** One row of parts 1-3 in both renderings (W2-D68), or null when renderEntryText cannot render the body: one nested past
+ *  V8's JSON.stringify stack parses and then throws a RangeError, which renderOrNull turns into null so the caller fails
+ *  closed as `body-unrenderable` (D-6304, as D-6302 and D-6303 rule). The string leaves never throw: blObjectLeaves is
+ *  iterative and ftsTextOf is measured fine at every depth.
+ *  @returns {string[] | null} */
+function blRenderings(body) {
+  const rendered = renderOrNull(() => renderEntryText(body));
+  return rendered === null ? null : [rendered, blLeaves(body)];
+}
 
 /** A built B: its counts enumerable, its text not (W2-D68: never written, logged or spawned), the whole frozen. */
 function blHeld(text, counts) {
@@ -3374,7 +3381,9 @@ export function baselineOf(rs, boundary, ctx) {
   // (1) the summary row, whole. Its transcript-pointer line stays here; only the payload replaces it (W2-D75).
   const summary = bodyOf(rs.blobs, Number(sum.blob_id), ctx.budget);
   if (summary === null) return blDiscard('summary-unreadable');
-  parts.push(...blRenderings(summary));
+  const summaryParts = blRenderings(summary);
+  if (summaryParts === null) return blDiscard('body-unrenderable');
+  parts.push(...summaryParts);
   // (2) kept(N), through Task 1's kept-list reader with B's budget: every member's primary and every variant.
   const kept = keptMembersOf(rs, copy.boundary, ctx.budget);
   if (kept.state !== 'kept') return kept;
@@ -3385,7 +3394,9 @@ export function baselineOf(rs, boundary, ctx) {
     for (const blobId of blMemberBlobs(s, m)) {
       const body = bodyOf(rs.blobs, blobId, ctx.budget);
       if (body === null) return blDiscard('kept-member-unreadable');
-      parts.push(...blRenderings(body));
+      const memberParts = blRenderings(body);
+      if (memberParts === null) return blDiscard('body-unrenderable');
+      parts.push(...memberParts);
     }
   }
   // (3) the copy's rows after the summary row, to the first operator or assistant row that is not a kept member.
@@ -3398,7 +3409,9 @@ export function baselineOf(rs, boundary, ctx) {
     if (postRows > BASELINE_POST_ROWS_MAX) { stopped = 'post-over-cap'; break; }
     const body = bodyOf(rs.blobs, Number(r.blob_id), ctx.budget);
     if (body === null) { stopped = 'post-row-unreadable'; break; }
-    parts.push(...blRenderings(body));
+    const rowParts = blRenderings(body);
+    if (rowParts === null) { stopped = 'body-unrenderable'; break; }
+    parts.push(...rowParts);
   }
   if (stopped !== null) return blDiscard(stopped);
   // (4) the baseline files, over N's epoch as Task 3 found its family (derive.mjs's epochOfUuid).
