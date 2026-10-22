@@ -63,7 +63,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Account pools** | Tag projects and accounts into pools; placement, swaps and rescues stay inside one, and a blocked session with no room left in its pool strands, loudly, instead of crossing. |
 | **An optional session gate** | Passkeys or a passphrase, off by default, and it fails shut on every ambiguity rather than open. `ccrc expose` arms it. |
 | **One whitelisted socket** | Split across two boxes, the server never SSHes the fleet host. It drives it through a closed set of whitelisted operations, and nothing else. |
-| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that touches only docs or the server and agent tests cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
+| **Signed releases, updates that undo themselves** | Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that changes only docs starts no release run, and one whose build comes out identical, a tests-only merge for one, cuts none), and `stable` is a promotion behind a full-suite gate. A box moves with one verb or one tap in Settings, behind a health gate that restores the previous build when it fails. |
 | **Public in one verb** | `ccrc expose` writes the Caddy config for a DuckDNS name, your own domain or a bare IP, arms the session gate, and prints the root steps instead of running them. |
 | **A doctor that names the fix** | `ccrc doctor` prints one verdict per check, with a remedy under every WARN and FAIL, and the install's own exit code is doctor's. |
 
@@ -157,8 +157,9 @@ bash install.sh --release [vX.Y.Z] --role fleet
 ```
 
 **Which release you get.** Every merge to `main` that changes what ships publishes a release, born a
-prerelease — the `dev` channel; a merge that touches only docs or the server and agent tests publishes
-none, and the next release contains it. `stable` moves only by promotion, so it can trail `dev` by many
+prerelease — the `dev` channel. A merge that changes only `docs/` or the root's Markdown starts no
+release run; any other merge builds, and it releases unless its tarball matches the newest published
+release it contains. A merge that publishes none is in the next release. `stable` moves only by promotion, so it can trail `dev` by many
 releases. A bare `--release` installs the newest **stable** release (`latest/download`
 never serves a prerelease); name a tag to take any published build, a `dev` one included.
 The repository's Releases page, or `gh release list -R Synapsium-Labs/ccrc-pwa`, lists both
@@ -744,7 +745,8 @@ Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook st
 (`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`) is the two-box worked proof of the
 install and update verbs in this section.
 
-**The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
+**The pipeline.** Every push to `main` that changes anything outside `docs/` and the root's Markdown runs
+`.github/workflows/release-main.yml` (a push of only those starts no run), thin like its
 siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`, tags
 it LOCALLY and runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged
 HEAD) into a candidate directory. `release-main.sh compare` then downloads the newest release HEAD

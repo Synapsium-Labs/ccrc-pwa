@@ -254,7 +254,7 @@ Re-measured in fix round 1 (review 812, F8). Each mutation was applied alone, th
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it; D-6502 to D-6510 are unused. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; none was removed.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines all twenty, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6409 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round; D-6408 and D-6409 for review 818's). Fix round 2 also defines D-6499 to D-6501, from the block D-6499 to D-6510 issued to this wave for it (D-6502 to D-6510 are unused), and D-6511 to D-6513, the block issued with the operator's docs-trigger amendment. Fix round 2 rewrote D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405, and marked D-6391, D-6396, D-6399 (in part), D-6402, D-6403, D-6404, D-6406 and D-6407 superseded where they no longer apply; the amendment marked D-6397 superseded; none was removed.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented by measuring the artifact (option (b)): every merge builds, and a release is skipped only when the build's fingerprint (D-6408) exactly equals that of the newest release HEAD contains (D-6392). The path classifier (option (a)) is retired. This inverts the first text, which chose (a).
   - Why: two review rounds (812, 818) found eleven families of build inputs that the static guard (D-6396) passed silently, and the last one put `server/test` into the tarball with the guard green. A model of every way the builder, npm, tsc, vite and Tailwind can read a file has no end.
@@ -309,6 +309,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **Link escape.** A tracked symlink at or under a derived input whose target resolves to a `notShipped` path.
   - The derivation lives in the test file. The matcher it checks against is the helper's own `notShipped`, so there is one list and one matcher.
 - **D-6397.** `release-main.yml` gets no `paths:` or `paths-ignore:` filter, and a pin asserts that.
+  - **Superseded by the operator's docs-trigger amendment (2026-10-22):** the trigger carries `paths-ignore: ['docs/**', '*.md']` (D-6511). D-6512 answers each of the three reasons below, and its pin W25-Y1 and the regex trigger row are retired (D-6513).
   - Such a filter would be a second, hand-kept list.
   - GitHub evaluates it over the push's own range, which reintroduces the failed-release hazard of D-6392.
   - The existing trigger regex would let one pass unnoticed (`build-release.test.ts:658`, `m` flag, ends at `$`).
@@ -336,7 +337,8 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
     - the first docs merge after a hand-cut `vX.Y.0` minor: `release.yml` builds from a tag checkout, so that release's `build.json` holds `"ref":"HEAD"`, not `"main"`, and `ref` is compared (D-6408). The next main-built release is a valid base again.
 
     None of these is a comparer miss, and the coordinator should not read one as a miss during the live proof. A docs merge whose base was built by an older builder or toolchain whose output differs (a builder change, a dependency resolved differently, a Node or npm version that changed the dists) also releases. That difference is real: the bytes differ, and the line names the first entry.
-  - **Every merge builds.** A docs-only merge now spends the build's minutes and one tarball download. It attests and publishes nothing.
+  - **Every merge outside the trigger's two patterns builds** (D-6511). A merge that changes only `docs/` or the root's Markdown starts no run at all. Any other merge whose tarball comes out identical, a tests-only merge for one, spends the build's minutes and one tarball download, and attests and publishes nothing.
+  - **A failed release followed only by docs merges stays unreleased** until the next merge outside the two patterns, or until someone re-runs the failed run (D-6512). There is no other door: the operator ruled out a manual release button.
   - **Release notes.** The next release's notes list the skipped `docs(…)` commits under "Behind the scenes", within `NOTES_BUDGET_BYTES`. That is correct: the release contains them.
   - **No change.** The update catalogue, the resolver, notify's reading of published releases, the inventory, `ccrc rollout`, `rollback`, `RUNS_ATTRIBUTION_SINCE` (`shared/api.ts:9490-9501`, measured by `git tag --contains`, which still holds) and `landing.ts`.
 - **D-6401.** The workflow always builds.
@@ -349,7 +351,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **The token.** `GH_TOKEN` goes only to `compare` and `publish`, never to `prepare`, whose step runs `npm ci`. W25-Y4 pins it, with its mutation row.
   - **Not a boundary.** `compare` runs after `npm ci` in the same job, so it does not stop a hostile dependency. An install script can already reach the checkout credential and the OIDC request token (D-6405), and it could rewrite the files `compare` later runs. The build/release job split is the operator's open follow-up.
   - **No `continue-on-error`.** A `compare` that crashes fails the job before the attest step, and nothing was pushed (D-6499).
-  - **No trigger filter** (D-6397).
+  - **The trigger filter** is D-6511's two root-anchored patterns. D-6397 is superseded.
   - Rewritten in fix round 2 (review 818). The first text is in git history at `4ca88f61e`.
 - **D-6402.** `unchanged` needs the base's classifier to agree. After HEAD's helper answers `unchanged`, `measure_change` writes `git show <base>:deploy/release-scope.mjs` into a fresh `mktemp -d` directory and asks that copy the same question. It skips only if both answer `unchanged`.
   - **Superseded by fix round 2 (review 818):** there is no classifier to copy; a comparer changing itself releases unconditionally instead (D-6409).
@@ -416,6 +418,21 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
 
   `<path>` is JSON-quoted, so no line can carry a newline or start a workflow command. These lines carry no `release-main.sh:` prefix, as the coordinator wrote them; the script's other messages keep it.
   - **The first path.** `<K>` counts every differing path, MANIFEST included. `<path>` is the first differing path in the C locale other than `MANIFEST`, and `MANIFEST` only when nothing else differs. MANIFEST's digest lines move with every content change and it sorts first, so without this rule the line would name `MANIFEST` for every content, added or removed entry (found by fix round 2's implementer). Rows W25-C2, C5 and C6 pin it.
+- **D-6511.** The trigger. `release-main.yml` runs on exactly `push`, `branches: [main]`, `paths-ignore: ['docs/**', '*.md']`, with no `paths:` key and no other event (the operator's docs-trigger amendment).
+  - **What the patterns match.** GitHub's `*` does not cross `/`. So `'*.md'` matches only the root's Markdown, and `'docs/**'` only the root `docs/` tree. The shipped skills under `ccd/` and everything under `pwa/src/docs/` still start the run.
+  - **What a match does.** A push in which every changed file matches starts no run: no runner, no build, no release. Any other file in the push starts the normal flow.
+  - **GitHub's documented limits.** A push of more than 1,000 commits, or one whose diff times out, always runs. A diff of more than 3,000 files runs only if a non-ignored file is among the first 3,000 the filter returns, so that case can skip a real change. D-6512 shows it is delayed, never lost.
+  - **No `workflow_dispatch`:** there is no manual force-release button (the operator's answer 2).
+  - **Stated in the workflow.** The comment above the trigger says all of this, and says the list is two root-anchored patterns that are never widened without a ledger entry.
+- **D-6512.** Why the filter is safe now, when D-6397 refused it. Each of D-6397's three reasons is answered in turn.
+  - **"A second, hand-kept list."** The list is two patterns, and neither decides a release: the fingerprint still decides every run that starts (D-6393). Row F2 pins the patterns disjoint from what the build archives.
+  - **"GitHub evaluates it over the push's own range"** (D-6392's hazard). The base is the newest published release HEAD contains, not the push's before. So a push the filter skips, the 3,000-file case included, can only delay a change to the next run that starts. That run's build includes the change and releases it, so nothing is lost or mislabelled.
+  - **Said plainly:** a failed release followed only by docs merges stays unreleased until the next merge outside the two patterns, or until someone re-runs the failed run. There is no other door (the operator's answer 2).
+  - **"The trigger pin would miss one"** (the old regex row, which stopped at `$`). It is replaced by an exact pin, row F1 (D-6513).
+- **D-6513.** The rows, each measured red under its mutation before landing:
+  - **W25-F1** (`build-release.test.ts`, `release-main.yml` describe). The `on:` block, read as an exact text block, is exactly the push trigger of D-6511. It goes red if paths-ignore is dropped, if a pattern is widened to `'**/*.md'` or `'**/docs/**'`, if `workflow_dispatch` is added, or if a `paths:` key is added.
+  - **W25-F2.** No PATHSPEC entry of `deploy/build-release.sh` is `docs`, sits under `docs/`, or is a root `*.md` file. The entries are parsed from the file, the per-package `scripts/` arm included. It goes red if `README.md` or `docs` is added to PATHSPEC.
+  - **Retired:** W25-Y1 (no trigger filter) and the row `'triggers on main pushes and on NOTHING else'`, whose regex stopped at `$`. W25-F1 replaces both.
 
 
 ## File structure
@@ -1077,9 +1094,65 @@ Routing is unchanged: class opus, effort high, subagents sonnet. The redesign mo
 Growth: report the net lines per file. Landing is first-ready against runs 775 (PR #1137, in fix round 3), 722 and 774, with merge-tree measured before pushing. Claims 2241 and 2246 hold.
 Mail wave-done with the fingerprint when done. A review run follows.
 
+## Operator answers and the docs-trigger amendment (2026-10-22)
+
+Verbatim, as received from the coordinator.
+
+Run 793, wave 25, fix round 2: an amendment from the operator. Fold it into this round; it does not restart it. Record it verbatim in the plan, after the rulings on review 818, as "Operator answers and the docs-trigger amendment (2026-10-22)". New block: D-6511, D-6512, D-6513.
+
+The operator's answers to the four questions I raised after ruling on review 818:
+1. A docs-only merge must not spend CI budget. I had asked whether it was fine that, under the fingerprint design, a docs merge still builds. The answer is no.
+2. No manual force-release button. Add no workflow_dispatch to release-main.yml.
+3. The build/release job split (D-6405) is wave 26, after this wave lands. Do not split jobs here.
+4. The agent-link handshake fix is its own wave. Nothing for you.
+
+This amendment supersedes the last sentence of item 6 in my rulings mail ("No paths filter on the trigger") and supersedes D-6397.
+
+A. D-6511, the trigger. release-main.yml's push trigger becomes exactly:
+    on:
+      push:
+        branches: [main]
+        paths-ignore: ['docs/**', '*.md']
+What that means:
+- GitHub's `*` does not cross `/`. So '*.md' matches only the root's Markdown files, and 'docs/**' only the root docs/ tree. The shipped skills under ccd/ and anything under pwa/src/docs/ still start the run.
+- A push in which every changed file matches is not run at all: no runner, no build, no release. Any other file in the push starts the normal flow, within the limits below.
+- GitHub's documented limits (workflow syntax page, "paths" and its cheat sheet):
+  - a push of more than 1,000 commits, or a diff that times out, always runs;
+  - a diff of more than 3,000 files runs only if a non-ignored file is among the first 3,000 the filter returns.
+  The 3,000-file case can skip a real change. D-6512 covers it: that change is delayed, never lost.
+The comment above the trigger states these facts. It also says the list is two root-anchored patterns, never widened without a ledger entry.
+
+B. D-6512, why this is safe now when D-6397 refused it. Mark D-6397's entry superseded, and answer each of its three reasons:
+- "A second hand-kept list." It is two patterns, and neither decides a release: the fingerprint still decides every run that starts. Row F2 below pins the patterns disjoint from what the build archives.
+- "GitHub evaluates it over the push's own range" (D-6392's hazard). The base is the newest published release that HEAD contains, not the push's before. So a push the filter skips, including the 3,000-file case, can only delay a change to the next run that starts. That run's build includes the change and releases it, so nothing is lost or mislabelled. Say plainly in the plan: a failed release followed only by docs merges stays unreleased until the next merge outside the two patterns, or until someone re-runs the failed run. Answer 2 means there is no other door.
+- "The trigger pin would miss one" (build-release.test.ts:658's regex). Replace that pin with an exact one: row F1.
+
+C. D-6513, the rows. Measure each before and after: it must go red when its mutation is applied.
+- F1: the trigger is exactly push, branches [main], paths-ignore ['docs/**', '*.md'], with no `paths:` key and no other event. Read the `on:` block structurally or as an exact text block, never with a regex that stops at `$`. Each of these mutations must turn the row red:
+  - drop paths-ignore;
+  - widen a pattern to '**/*.md';
+  - widen a pattern to '**/docs/**';
+  - add workflow_dispatch;
+  - add a `paths:` key.
+- F2: no PATHSPEC entry in deploy/build-release.sh is docs/, sits under docs/, or is a root *.md file. Parse the entries from the file, including the per-package scripts/ arm. Mutation: add README.md, or docs, to PATHSPEC; the row goes red.
+- Retire the pin that asserted no filter (D-6397's row), and name it in the plan as retired.
+
+D. The docs. Where this wave already rewords "every merge to main becomes a prerelease", say instead:
+- a merge that changes only docs/ or the root's Markdown starts no release run;
+- any other merge builds, and it releases unless its tarball matches the newest published release it contains.
+Edit only inside the consented regions: the list in README claim 2240, and CLAUDE.md's two rewordings. If the change needs a region outside them, ask me first.
+
+E. The post-landing check changes:
+- The landing merge itself releases, because it changes .github/.
+- The next docs-only merge should start no release-main run at all. Check the Actions list, not a log line.
+- The next tests-only merge should print "built unchanged".
+- The next code merge should print "differs" and release.
+
+Send the wave-done as before, and include the rows' before and after readings in it.
+
 ## Fix round 2: the release decision moves to the built artifact (2026-10-22)
 
-The coordinator's rulings on review 818 (above) redesign the decision. This section is the brief for that round, and where it and an earlier section disagree, this one governs. Task 1, the `decide` and `measure` arms, and Task 3's measured sentences are retired. Task 4's copy keeps its user-facing rule and changes its mechanism sentence. The deviations are D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405 as rewritten, D-6408, D-6409 and D-6499 to D-6501 as new, and D-6391, D-6396, D-6402 to D-6404, D-6406 and D-6407 as superseded.
+The coordinator's rulings on review 818 (above) redesign the decision. This section is the brief for that round, and where it and an earlier section disagree, this one governs. The operator's docs-trigger amendment (above) adds the trigger filter (D-6511 to D-6513) and governs over this section's "no trigger filter" and over W25-Y1. Task 1, the `decide` and `measure` arms, and Task 3's measured sentences are retired. Task 4's copy keeps its user-facing rule and changes its mechanism sentence. The deviations are D-6390, D-6392, D-6393, D-6398, D-6400, D-6401 and D-6405 as rewritten, D-6408, D-6409 and D-6499 to D-6501 as new, and D-6391, D-6396, D-6402 to D-6404, D-6406 and D-6407 as superseded.
 
 ### Interfaces
 

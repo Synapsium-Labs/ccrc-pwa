@@ -245,7 +245,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
   `main` that changes what ships becomes a GitHub **prerelease** within about a minute
   (`.github/workflows/release-main.yml` → `deploy/release-main.sh prepare` → `build-release.sh` →
-  `actions/attest-build-provenance` → `release-main.sh publish`; patch per released merge, and a merge whose
+  `actions/attest-build-provenance` → `release-main.sh publish`; patch per released merge; a merge that changes only
+  `docs/` or the root's Markdown starts no release run (`paths-ignore`), and a merge whose
   build's tarball matches the newest contained release's entry for entry (`release-main.sh compare`; only
   `build.json`'s `sha`, `builtAt` and `version` and MANIFEST's `build.json` line are set aside) cuts none, so
   `stable` promotes a release's own commit, never such an untagged head; a hand-pushed `vX.Y.0` tag for a minor rides
