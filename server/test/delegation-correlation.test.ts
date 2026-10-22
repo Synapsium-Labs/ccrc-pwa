@@ -59,6 +59,8 @@ import {
   type DelegationListingWindow,
   type DelegationPruneProject,
 } from '../src/coord/delegation-correlation.js';
+import { planDelegationReconciliation } from '../src/coord/delegation-policy.js';
+import * as modelNs from '../src/coord/delegation-model.js';
 import {
   delegationSha256Hex,
   deriveDelegationActivityId,
@@ -102,13 +104,16 @@ const subagentStop = (n: number, agentId: string, over: Over = {}): DelegationEv
   ({ ...base(n, over), eventKind: 'SubagentStop', agentId, agentType: null, agentTranscriptPath: null });
 const agentLaunch = (n: number, agentId: string, status: 'async-launched' | 'completed' = 'async-launched', over: Over = {}): DelegationEventEnvelopeV1 =>
   ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Agent', toolUseId: `toolu_${n}`, outcome: status, launch: { status, agentId, isAsync: status === 'async-launched' } });
-const workflowLaunch = (n: number, runId: string, status: 'async-launched' | 'completed' = 'async-launched', over: Over = {}): DelegationEventEnvelopeV1 =>
-  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_${n}`, outcome: status,
-    launch: { status, taskId: 'task_1', taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `/fixture/transcripts/${runId}`, scriptPath: '/fixture/scripts/review-pass.js' } });
+const workflowLaunch = (n: number, runId: string, status: 'async-launched' | 'completed' = 'async-launched', over: Over = {}, ids: { taskId?: string; toolUseId?: string } = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: ids.toolUseId ?? `toolu_${n}`, outcome: status,
+    launch: { status, taskId: ids.taskId ?? 'task_1', taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `/fixture/transcripts/${runId}`, scriptPath: '/fixture/scripts/review-pass.js' } });
 const bashPre = (n: number, toolUseId: string, listing?: readonly string[], over: Over = {}): DelegationEventEnvelopeV1 =>
   ({ ...base(n, over), eventKind: 'PreToolUse', toolName: 'Bash', toolUseId, ...(listing === undefined ? {} : { listing }) });
 const bashPost = (n: number, toolUseId: string, listing?: readonly string[], over: Over = {}): DelegationEventEnvelopeV1 =>
   ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId, outcome: 'completed', ...(listing === undefined ? {} : { listing }) });
+/** A task notification as the hook journals it: a UserPromptSubmit carrying `notification` (D-6269). */
+const notification = (n: number, toolUseId: string, taskId: string, status: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed', over: Over = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'UserPromptSubmit', notification: { taskId, toolUseId, status } });
 
 const evidence = (event: DelegationEventEnvelopeV1): DelegationJournalEntryV1 => ({ kind: 'evidence-accepted', event });
 function evidenceChain(events: readonly DelegationEventEnvelopeV1[]): DelegationJournalRecordV1[] {
@@ -116,6 +121,20 @@ function evidenceChain(events: readonly DelegationEventEnvelopeV1[]): Delegation
   let prev: string | null = null;
   events.forEach((event, i) => {
     const r = buildDelegationJournalRecord({ sequence: i + 1, acceptedAt: T(100000 + i + 1), previousDigest: prev, entry: evidence(event) });
+    out.push(r);
+    prev = r.digest;
+  });
+  return out;
+}
+/**
+ * A chain whose records are accepted at the given journal instants (epoch ms), in order. The ONE helper for every row whose ageing
+ * matters: ageing reads `acceptedAt` only, never `observedAt` and never a clock (D-6267, D-6270).
+ */
+function chainAt(entries: readonly (readonly [DelegationEventEnvelopeV1, number])[]): DelegationJournalRecordV1[] {
+  const out: DelegationJournalRecordV1[] = [];
+  let prev: string | null = null;
+  entries.forEach(([event, acceptedAtMs], i) => {
+    const r = buildDelegationJournalRecord({ sequence: i + 1, acceptedAt: formatDelegationInstant(acceptedAtMs), previousDigest: prev, entry: evidence(event) });
     out.push(r);
     prev = r.digest;
   });
@@ -340,7 +359,7 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(activityOf(w.builder.build(1).activities, 'workflow', 'wf_run1-0')!.executionState).toBe('ended');
   });
 
-  it('a Bash call that mentions no worktree opens nothing and holds nothing; one that carries a listing opens a bash-worktree activity', () => {
+  it('a Bash call that mentions no worktree opens nothing and holds nothing; a call whose PostToolUse listing differs from its PreToolUse listing opens a bash-worktree activity', () => {
     const quiet = world([bashPre(1, 'toolu_q'), bashPost(2, 'toolu_q')]);
     expect(quiet.activities).toEqual([]);
     expect(quiet.cp.pruningHolds.map((h) => h.reason)).toEqual(['checkpoint-anchor']);
@@ -354,7 +373,7 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(a.activityId).toBe(deriveDelegationActivityId(keyOf('bash-worktree', 'toolu_b1'), listed.records[0]!.journalId));
   });
 
-  it('a Bash PostToolUse whose listing was dropped (truncated) still ends the activity its PreToolUse opened', () => {
+  it('a Bash PostToolUse that carries no listing, after a listing-carrying PreToolUse, opens the call with the PreToolUse as identity, ended at the PostToolUse', () => {
     const w = world([bashPre(1, 'toolu_b1', ['main-wt']), bashPost(2, 'toolu_b1')]);
     expect(w.activities).toHaveLength(1);
     expect(w.activities[0]!.executionState).toBe('ended');
@@ -381,7 +400,7 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(namedAgentsOf(sessionEnd(1, 'clear'))).toEqual([]);
   });
 
-  it('namedAgentsOf names exactly: agents (launch/start join; stop and emitter do not), workflow runs (the launch response is the run join), Bash tool calls (a join only with a listing)', () => {
+  it('A19: namedAgentsOf names exactly: agents (launch/start join; stop and emitter do not), workflow runs (the launch response is the run join), Bash tool calls (never a join on their own: the builder decides across the two records)', () => {
     expect(namedAgentsOf(agentLaunch(1, AGENT))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: false }]);
     expect(namedAgentsOf(agentLaunch(1, AGENT, 'completed'))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: true }]);
     expect(namedAgentsOf(subagentStart(1, AGENT))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: false }]);
@@ -393,8 +412,9 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     ]);
     expect(namedAgentsOf(workflowLaunch(1, 'wf_run1'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: true, ends: false }]);
     expect(namedAgentsOf(workflowLaunch(1, 'wf_run1', 'completed'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: true, ends: true }]);
-    expect(namedAgentsOf(bashPre(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: true, ends: false }]);
-    expect(namedAgentsOf(bashPost(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: true, ends: true }]);
+    // A19 (D-6267, rule A): a Bash record is never a join, listing or no listing; a PostToolUse still ends. MA20 reds the first two.
+    expect(namedAgentsOf(bashPre(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: false, ends: false }]);
+    expect(namedAgentsOf(bashPost(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: false, ends: true }]);
     expect(namedAgentsOf(bashPost(1, 'toolu_b1'))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: false, ends: true }]);
     expect(namedAgentsOf(sessionStart(1))).toEqual([]);
   });
@@ -2211,5 +2231,296 @@ describe('the natural key the ladder depends on is the model\'s, not a second sp
     const { w } = agentWorld();
     const a = activityOf(w.activities, 'agent', AGENT)!;
     expect(w.cp.activityIdsByNaturalKey[encodeDelegationNaturalKey(keyOf('agent', AGENT))]).toBe(a.activityId);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Run 762: a zero-delta Bash call is no window of rung 4 and no key a pruning plan reads (D-6268); workflow runs end on their task
+// notification (D-6269); start-less stop candidates age out on journal time (D-6270)
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** A small seeded generator (mulberry32): a fixed literal seed per use, never `Math.random`. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe('RB16: a zero-delta window never links a tree (rung 4 reads only a sole ADDED name)', () => {
+  const zeroRec = rawRecord({ adminRecord: 'wt-x', canonicalPath: WT('wt-x'), headBranch: 'x-branch' });
+  const equalWindow = win({ toolUseId: 'toolu_b1', before: ['wt-x'], after: ['wt-x'] });
+  // Green by design at base; the mutant "`soleAdded` admits a zero-delta window" reds it. The first world keeps a row for the call under
+  // BOTH rules (a delta pair for the same call id); the second is the equal pair's own world (a row at base, none under rule A).
+  it.each([
+    ['a row for the call exists (a delta pair names its id)', [bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', 'wt-raw'])]],
+    ['the equal pair\'s own world', [bashPre(10, 'toolu_b1', ['wt-x']), bashPost(12, 'toolu_b1', ['wt-x'])]],
+  ] as const)('RB16: %s: the verdict is not linked and not rung 4, and policy plans no linked lease request', (_label, events) => {
+    const w = world(events);
+    const v = correlateDelegation(input({ record: zeroRec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [equalWindow] }));
+    expect(v.kind, `verdict ${JSON.stringify(v)}`).not.toBe('linked');
+    expect(v.kind === 'linked' ? v.rung : null).not.toBe(4);
+    const effects = planDelegationReconciliation({
+      now: T(200000), recovery: w.report.state, census: [zeroRec], correlations: [{ record: zeroRec, verdict: v }], registryReadable: true,
+      firstDeadParents: [], previousSuccessfulCensus: null, censusedProjects: [REPO], previousCensusedProjects: [REPO],
+    });
+    expect(effects.map((e) => e.kind)).not.toContain('request-linked-lease-identity');
+  });
+});
+
+describe('RB24: forgetting dropped keys never reads a bash-worktree row (prunableDelegationDropped)', () => {
+  // Green by design at base; MB25 ("`pruneDropped` treats bash rows like agent rows") reds it.
+  it('RB24: over generated keys, including keys whose agentId or launchAgentId equals a bash row\'s upstreamId, the verdict with the bash rows equals the verdict without them', () => {
+    const w = world([
+      bashPre(1, 'toolu_b1', ['main-wt']), bashPost(2, 'toolu_b1', ['main-wt', 'wt-raw']),
+      bashPre(3, 'toolu_b2', ['main-wt']), bashPost(4, 'toolu_b2', ['main-wt', 'wt-other']),
+      subagentStart(5, AGENT), subagentStart(6, AGENT_2, { sessionId: OTHER }),
+    ]);
+    const all = w.activities;
+    const bashRows = all.filter((a) => a.sourceKind === 'bash-worktree');
+    expect(bashRows.map((a) => a.upstreamId).sort(), 'the fixture holds bash rows (a delta call opens under every rule)').toEqual(['toolu_b1', 'toolu_b2']);
+    const without = all.filter((a) => a.sourceKind !== 'bash-worktree');
+    const rnd = mulberry32(0x6268);
+    const pick = <X>(xs: readonly X[]): X => xs[Math.floor(rnd() * xs.length)]!;
+    const names: readonly (string | null)[] = [null, null, AGENT, AGENT_2, 'toolu_b1', 'toolu_b2', 'abc999'];
+    const keys = new Map<string, DelegationDroppedKey>();
+    for (let i = 0; i < 80; i++) {
+      const k: DelegationDroppedKey = {
+        parentId: pick([PARENT, OTHER]), parentIncarnation: INC, agentId: pick(names), launchAgentId: pick(names),
+        runId: pick([null, null, 'wf_run1', 'toolu_b1']), cwd: pick([null, WT('wt-x'), WT(`agent-${AGENT}`)]), startStop: pick([true, false]),
+      };
+      keys.set(delegationDroppedKeyId(k), k);
+    }
+    const entries = [...keys].map(([id, k]) => [id, k, 0] as const);
+    const census = [record(), rawRecord()];
+    const paths: ReadonlySet<string> = new Set(census.flatMap((r) => (r.canonicalPath === null ? [] : [r.canonicalPath])));
+    const withAll = prunableDelegationDropped(entries, census, paths, all, Number.POSITIVE_INFINITY);
+    const withoutBash = prunableDelegationDropped(entries, census, paths, without, Number.POSITIVE_INFINITY);
+    expect([...withAll].sort()).toEqual([...withoutBash].sort());
+    // not vacuous: some key carries a bash id and is among those forgotten (nothing asks about it), and some key is kept
+    const bashIds = new Set(bashRows.map((a) => a.upstreamId));
+    const bashKeyed = [...keys].filter(([, k]) => (k.agentId !== null && bashIds.has(k.agentId)) || (k.launchAgentId !== null && bashIds.has(k.launchAgentId))).map(([id]) => id);
+    expect(bashKeyed.length).toBeGreaterThan(0);
+    expect(withAll.some((id) => bashKeyed.includes(id))).toBe(true);
+    expect(withAll.length).toBeLessThan(entries.length);
+  });
+});
+
+describe('D-WF: a workflow run ends on its task notification (D-6269)', () => {
+  const rowOf = (activities: readonly DelegationActivityRow[], upstreamId: string, parentId = PARENT): DelegationActivityRow => {
+    const a = activityOf(activities, 'workflow', upstreamId, parentId);
+    if (a === undefined) throw new Error(`no workflow row ${upstreamId} of ${parentId}`);
+    return a;
+  };
+  const holdReasons = (cp: { pruningHolds: readonly { reason: string }[] }): string[] => cp.pruningHolds.map((h) => h.reason);
+
+  it('D-WF1: a launch, then a completed notification for its tool-use id and task id: the run is ended at the notification, identity and ID unchanged', () => {
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(2, 'toolu_1', 'task_1', 'completed')]);
+    const before = world([workflowLaunch(1, 'wf_run1')]);
+    const run = rowOf(w.activities, 'wf_run1');
+    expect(run.executionState).toBe('ended');
+    expect(run.endedAt).toBe(T(2));
+    expect(run.lastEventAt).toBe(T(2));
+    const launchOnly = rowOf(before.activities, 'wf_run1');
+    expect(run.identityJournalId).toBe(launchOnly.identityJournalId);
+    expect(run.activityId).toBe(launchOnly.activityId);
+  });
+
+  it('D-WF2: the notification ends the run and exactly its workers (same parent, same incarnation, id = run id + "-" + canonical index)', () => {
+    // wf_run10 starts with `wf_run1` and OTHER's wf_run1 shares the run id and the tool-use id: neither may end.
+    const events = [
+      workflowLaunch(1, 'wf_run1'), workflowLaunch(2, 'wf_run10'),
+      workflowLaunch(3, 'wf_run1', 'async-launched', { sessionId: OTHER }, { toolUseId: 'toolu_1' }),
+      notification(4, 'toolu_1', 'task_1', 'completed'),
+    ];
+    const records = evidenceChain(events);
+    const report = recoverDelegation(null, records.slice(0, 3));
+    expect(report.failure).toBeNull();
+    const b = report.facts!.builder;
+    for (const [parentId, runId, idx] of [[PARENT, 'wf_run1', 0], [PARENT, 'wf_run1', 1], [PARENT, 'wf_run10', 0], [OTHER, 'wf_run1', 0]] as const) {
+      expect(b.openWorkflowWorkerFromMeta(parentId, INC, runId, idx).kind).toBe('opened');
+    }
+    b.foldRecord(records[3]!);
+    const rows = b.build(1).activities;
+    for (const id of ['wf_run1', 'wf_run1-0', 'wf_run1-1']) {
+      const r = rowOf(rows, id);
+      expect([id, r.executionState, r.endedAt]).toEqual([id, 'ended', T(4)]);
+    }
+    for (const [id, parentId] of [['wf_run10', PARENT], ['wf_run10-0', PARENT], ['wf_run1', OTHER], ['wf_run1-0', OTHER]] as const) {
+      expect([id, parentId, rowOf(rows, id, parentId).executionState]).toEqual([id, parentId, 'active']);
+    }
+  });
+
+  it.each([
+    ['wf_aaaaaaaa-512', 'toolu_1'],
+    ['wf_aaaaaaaa-51', 'toolu_2'],
+  ] as const)('D-WF2 (iii): of two runs whose ids end in digits, the notification of %s ends only that run (the other stays active)', (_name, notified) => {
+    // live run ids end in `-<digits>` themselves, so a `-<n>` suffix says nothing about being a worker. toolu_1 launched -512, toolu_2 launched -51.
+    const w = world([
+      workflowLaunch(1, 'wf_aaaaaaaa-512'), workflowLaunch(2, 'wf_aaaaaaaa-51'),
+      notification(3, notified, 'task_1', 'completed'),
+    ]);
+    const ended = notified === 'toolu_1' ? 'wf_aaaaaaaa-512' : 'wf_aaaaaaaa-51';
+    const other = notified === 'toolu_1' ? 'wf_aaaaaaaa-51' : 'wf_aaaaaaaa-512';
+    expect(rowOf(w.activities, ended).executionState).toBe('ended');
+    expect(rowOf(w.activities, other).executionState).toBe('active');
+  });
+
+  it('D-WF3: a worker opened from its meta AFTER the run ended opens ended, with the run\'s end', () => {
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(2, 'toolu_1', 'task_1', 'completed')]);
+    expect(w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0).kind).toBe('opened');
+    const worker = rowOf(w.builder.build(1).activities, 'wf_run1-0');
+    expect(worker.executionState).toBe('ended');
+    expect(worker.endedAt).toBe(T(2));
+    expect(worker.lastEventAt).toBe(T(2));
+  });
+
+  it('D-WF4: a notification whose tool-use id matches but whose task id differs leaves the run active (lastEventAt untouched)', () => {
+    // Green by design at base; mutant MW2 (the task id check removed) reds it.
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(2, 'toolu_1', 'task_other', 'completed')]);
+    const run = rowOf(w.activities, 'wf_run1');
+    expect(run.executionState).toBe('active');
+    expect(run.endedAt).toBeNull();
+    expect(run.lastEventAt).toBe(T(1));
+  });
+
+  it.each([
+    ['completed', true], ['failed', true], ['cancelled', true], ['unknown', false],
+  ] as const)('D-WF5: status %s, terminal: %s (a terminal word ends the run at the notification; unknown only touches lastEventAt)', (status, terminal) => {
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(2, 'toolu_1', 'task_1', status)]);
+    const run = rowOf(w.activities, 'wf_run1');
+    if (terminal) {
+      expect([run.executionState, run.endedAt, run.lastEventAt]).toEqual(['ended', T(2), T(2)]);
+    } else {
+      expect([run.executionState, run.endedAt, run.lastEventAt]).toEqual(['active', null, T(2)]);       // MW4 (`terminal = true`) reds this; at base it is red on lastEventAt T(1)
+    }
+  });
+
+  it.each([
+    ['(i) another incarnation', { parentIncarnation: 'g2' }, 'MW3'],
+    ['(ii) another session', { sessionId: OTHER }, 'MW3b'],
+  ] as const)('D-WF6: a notification under %s does not end the PARENT/INC run', (_label, over, _mutant) => {
+    // Green by design at base; mutants MW3 / MW3b (the index key drops the incarnation / the session) red (i) / (ii).
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(2, 'toolu_1', 'task_1', 'completed', over)]);
+    const run = rowOf(w.activities, 'wf_run1');
+    expect(run.executionState).toBe('active');
+    expect(run.lastEventAt).toBe(T(1));
+  });
+
+  it('D-WF7: an Agent launch is never indexed: a notification naming its tool-use id and agent id leaves the agent active', () => {
+    // Green by design at base; the "Agent-index mutant" reds it.
+    const w = world([agentLaunch(1, AGENT), subagentStart(2, AGENT), notification(3, 'toolu_1', AGENT, 'completed')]);
+    expect(w.activities).toHaveLength(1);
+    expect(w.activities[0]!.sourceKind).toBe('agent');
+    expect(w.activities[0]!.executionState).toBe('active');
+    expect(holdReasons(w.cp)).toEqual(['checkpoint-anchor']);
+  });
+
+  it('D-WF8: a notification journaled BEFORE its launch is ignored: the run opens active and nothing is held', () => {
+    // Green by design at base; mutant MW15 (an unmatched notification is kept pending) reds it.
+    const w = world([notification(1, 'toolu_2', 'task_1', 'completed'), workflowLaunch(2, 'wf_run1')]);
+    expect(rowOf(w.activities, 'wf_run1').executionState).toBe('active');
+    expect(holdReasons(w.cp)).toEqual(['checkpoint-anchor']);
+  });
+
+  it('D-WF9: two notifications: endedAt stays the FIRST, lastEventAt follows the later', () => {
+    const w = world([workflowLaunch(1, 'wf_run1'), notification(3, 'toolu_1', 'task_1', 'completed'), notification(5, 'toolu_1', 'task_1', 'completed')]);
+    const run = rowOf(w.activities, 'wf_run1');
+    expect(run.executionState).toBe('ended');
+    expect(run.endedAt).toBe(T(3));
+    expect(run.lastEventAt).toBe(T(5));
+  });
+
+  it('D-WF14: a notification observed BEFORE the launch\'s observedAt (journal order: launch first) ends the run at the launch\'s observedAt', () => {
+    const w = world([workflowLaunch(10, 'wf_run1'), notification(8, 'toolu_10', 'task_1', 'completed')]);
+    const run = rowOf(w.activities, 'wf_run1');
+    expect(run.executionState).toBe('ended');
+    expect(run.endedAt).toBe(T(10));
+    expect(run.lastEventAt).toBe(T(10));
+  });
+
+  it('D-WF15: two launches under one tool-use id: the FIRST wins the index, so the notification ends wf_a and leaves wf_b', () => {
+    const w = world([
+      workflowLaunch(1, 'wf_a', 'async-launched', {}, { toolUseId: 'toolu_x' }), workflowLaunch(2, 'wf_b', 'async-launched', {}, { toolUseId: 'toolu_x' }),
+      notification(3, 'toolu_x', 'task_1', 'completed'),
+    ]);
+    expect(rowOf(w.activities, 'wf_a').executionState).toBe('ended');
+    expect(rowOf(w.activities, 'wf_b').executionState).toBe('active');
+  });
+});
+
+describe('D-SC: a start-less stop ages out on journal time (D-6270)', () => {
+  // The horizon comes through the model namespace; the literal is the ruled value (48 h) and only lets the rows run at base, where the
+  // constant does not exist yet.
+  const H = (modelNs as unknown as { DELEGATION_STOP_CANDIDATE_HORIZON_MS?: number }).DELEGATION_STOP_CANDIDATE_HORIZON_MS ?? 172_800_000;
+  const A0 = Date.UTC(2026, 9, 14, 12);
+  const Y = AGENT;
+  const recoverAt = (entries: readonly (readonly [DelegationEventEnvelopeV1, number])[]) => {
+    const records = chainAt(entries);
+    const report = recoverDelegation(null, records);
+    return { records, report, cp: report.state.checkpoint };
+  };
+  const candidateHolds = (cp: { pruningHolds: readonly { reason: string; ownerId?: string; journalId: string }[] }) => cp.pruningHolds.filter((h) => h.reason === 'identity-candidate');
+  const ownerY = encodeDelegationNaturalKey(keyOf('agent', Y));
+
+  it('D-SC1: a stop and, exactly H later, any record: the stop is no identity evidence any more (observedAts one second apart: ageing is on acceptedAt)', () => {
+    const r = recoverAt([[subagentStop(1, Y), A0], [sessionStart(2), A0 + H]]);
+    expect(r.report.failure).toBeNull();
+    expect(candidateHolds(r.cp)).toEqual([]);
+  });
+
+  it('D-SC2: the same chain one millisecond short of H still holds the stop', () => {
+    // Green by design at base; mutant MS5 (the horizon is the 24 h read horizon) reds it.
+    const r = recoverAt([[subagentStop(1, Y), A0], [sessionStart(2), A0 + H - 1]]);
+    expect(r.report.failure).toBeNull();
+    const holds = candidateHolds(r.cp);
+    expect(holds.map((h) => h.ownerId)).toEqual([ownerY]);
+    expect(holds[0]!.journalId).toBe(r.records[0]!.journalId);
+  });
+
+  it('D-SC2b: a second stop of the same agent moves the ageing origin: stop(A0), stop(A0+H-1s), record at A0+H keeps the hold', () => {
+    // Green by design at base; mutant MS11 (lastAcceptedAt set at creation only) reds it.
+    const r = recoverAt([[subagentStop(1, Y), A0], [subagentStop(2, Y), A0 + H - 1000], [sessionStart(3), A0 + H]]);
+    expect(r.report.failure).toBeNull();
+    const holds = candidateHolds(r.cp);
+    expect(holds).toHaveLength(1);
+    expect(holds[0]!.ownerId).toBe(ownerY);
+    expect(holds[0]!.journalId).toBe(r.records[0]!.journalId);
+  });
+
+  it.each([
+    ['a bare occurrence alone', (): DelegationEventEnvelopeV1[] => [bareTool(1, Y)]],
+    ['a stop, then a bare occurrence', (): DelegationEventEnvelopeV1[] => [subagentStop(1, Y), bareTool(2, Y)]],
+    ['a bare occurrence, then a stop', (): DelegationEventEnvelopeV1[] => [bareTool(1, Y), subagentStop(2, Y)]],
+  ] as const)('D-SC3: %s never ages: the hold survives a record 10 horizons later', (_label, events) => {
+    // Green by design at base; MS2 (every candidate ages) reds all three, MS3 (stopOnly kept on update) reds the second.
+    const evs = events();
+    const r = recoverAt([...evs.map((e) => [e, A0] as const), [sessionStart(10), A0 + 10 * H]]);
+    expect(r.report.failure).toBeNull();
+    const holds = candidateHolds(r.cp);
+    expect(holds.map((h) => h.ownerId)).toEqual([ownerY]);
+    expect(holds[0]!.journalId).toBe(r.records[0]!.journalId);
+  });
+
+  it('D-SC4: a join accepted at exactly H opens from its OWN record: its identity, ID and openedAt are the start\'s, it is active, and nothing is held', () => {
+    const r = recoverAt([[subagentStop(1, Y), A0], [subagentStart(2, Y), A0 + H]]);
+    expect(r.report.failure).toBeNull();
+    expect(r.cp.activities).toHaveLength(1);
+    const a = r.cp.activities[0]!;
+    expect(a.identityJournalId).toBe(r.records[1]!.journalId);
+    expect(a.activityId).toBe(deriveDelegationActivityId(keyOf('agent', Y), r.records[1]!.journalId));
+    expect(a.openedAt).toBe(T(2));
+    expect(a.executionState).toBe('active');
+    expect(candidateHolds(r.cp)).toEqual([]);
+  });
+
+  it('D-SC5: ageing is global: another owner\'s record accepted at A0+H forgets PARENT\'s start-less stop', () => {
+    const r = recoverAt([[subagentStop(1, Y), A0], [sessionStart(2, { sessionId: OTHER }), A0 + H]]);
+    expect(r.report.failure).toBeNull();
+    expect(candidateHolds(r.cp)).toEqual([]);
   });
 });

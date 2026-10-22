@@ -2162,3 +2162,17 @@ Found in the wave-3 follow-up 7 (run 740, block D-6190..D-6201, taken in order):
 - **D-6200** — `unused` (run 740): issued to this follow-up; no departure took it.
 - **D-6201** — `unused` (run 740): issued to this follow-up; no departure took it.
 - **Unused:** D-6192..D-6201 were issued to this follow-up and are unused.
+
+Found in the wave-3 follow-up 7b (run 762, block D-6267..D-6276, taken in order):
+
+- **D-6267** — `a-bash-call-opens-only-on-a-changed-listing` (wave-3 follow-up 7b, part (a)): rule A and the one Bash-call map. The body follows with the code.
+- **D-6268** — `a-zero-delta-bash-call-is-retired` (wave-3 follow-up 7b, part (b)): the retirement door, the lease guard and the lane's hourly call. The body follows with the code.
+- **D-6269** — `workflow-run-ends-on-its-task-notification` (wave-3 follow-up 7b, part (d)): a Workflow run and its workers end on the run's task notification, in both fold modes. The body follows with the code.
+- **D-6270** — `a-start-less-stop-ages-out` (wave-3 follow-up 7b, part (e)): start-less stop candidates age out after `DELEGATION_STOP_CANDIDATE_HORIZON_MS`. The body follows with the code.
+- **D-6271** — `the-growth-keys-on-the-slow-line` (wave-3 follow-up 7b, part (f)): `retired`, `pendingBash` and `cpCandidates` on the slow line. The body follows with the code.
+- **D-6272** — `the-checkpoint-bound-docs-are-corrected` (wave-3 follow-up 7b, part (g)): the document corrections, and the items carried in from the review of run 740. The body follows with the code.
+- **D-6273** — `unused` (run 762): issued to this follow-up; no departure took it.
+- **D-6274** — `unused` (run 762): issued to this follow-up; no departure took it.
+- **D-6275** — `unused` (run 762): issued to this follow-up; no departure took it.
+- **D-6276** — `unused` (run 762): issued to this follow-up; no departure took it.
+- **Unused:** D-6273..D-6276 were issued to this follow-up and are unused.

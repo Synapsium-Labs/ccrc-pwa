@@ -640,6 +640,85 @@ describe('5. retained pre-checkpoint evidence opens an activity the checkpoint l
     expect(disk(third.home).checkpoint!.activities.map((a) => a.activityId)).toEqual([act.activityId]);
     expect(third.coord.readDelegationProjection().activities.map((a) => a.activityId)).toEqual([act.activityId]);
   });
+
+  it('A22: through the real lane, equal-listing Bash pairs open nothing; a pending Pre is held across a restart and opens, from the Pre\'s journal id, only on the delta Post', async () => {
+    const bashLine = (kind: 'PreToolUse' | 'PostToolUse', toolUseId: string, listing: string[], at: string): string =>
+      lineOf(common(OWNER, kind === 'PreToolUse'
+        ? { eventKind: kind, toolName: 'Bash', toolUseId, listing, cwd: '/w/demo' }
+        : { eventKind: kind, toolName: 'Bash', toolUseId, outcome: 'completed', listing, cwd: '/w/demo' }, at));
+    const wtKey = { parentId: OWNER, parentIncarnation: INC, sourceKind: 'bash-worktree' as const, upstreamId: 'toolu_wt1' };
+    const lines = [
+      startLine(OWNER, '2026-10-15T10:01:00.000Z'),
+      bashLine('PreToolUse', 'toolu_wt1', ['old-tree'], '2026-10-15T10:02:00.000Z'),
+    ];
+    // three equal-listing calls (a Pre and a Post naming the same records): the old rule opened a row for each at its Pre
+    for (let i = 0; i < 3; i++) {
+      const at = (sec: number): string => `2026-10-15T10:0${3 + i}:${sec === 0 ? '00' : '30'}.000Z`;
+      lines.push(bashLine('PreToolUse', `toolu_e${i}`, ['main-wt'], at(0)), bashLine('PostToolUse', `toolu_e${i}`, ['main-wt'], at(1)));
+    }
+    const first = world();
+    writeBucket(first, OWNER, bucketOf(NOW), ...lines);
+    await censusPass(first, NOW, { demo: [] });
+    const cp1 = disk(first.home).checkpoint!;
+    expect(cp1.appliedJournalSequence, 'the start line, the pending Pre and three equal pairs were all accepted').toBe(8);
+    expect(cp1.activities.map((a) => `${a.sourceKind} ${a.upstreamId}`), 'rule A: no call is open yet, and an equal pair never opens').toEqual([]);
+    const preRecord = journalRecords(first.home).find((r) => {
+      const ev = (r['entry'] as { event?: { eventKind?: string; toolUseId?: string } }).event;
+      return ev?.eventKind === 'PreToolUse' && ev.toolUseId === 'toolu_wt1';
+    })!;
+    expect(preRecord, 'the pending Pre is journaled').toBeDefined();
+    expect(cp1.pruningHolds.filter((h) => h.reason === 'identity-candidate'), 'only the pending Pre is held: its record is its identity').toEqual([
+      { journalId: preRecord['journalId'], reason: 'identity-candidate', ownerId: encodeDelegationNaturalKey(wtKey) },
+    ]);
+    await first.watcher.closeDelegation();
+
+    const again = world({ home: first.home });                          // a restart: no memory, the same ~/.ccrc
+    appendBucket(again, OWNER, bucketOf(NOW), bashLine('PostToolUse', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:08:00.000Z'));
+    await censusPass(again, NOW + STEP, { demo: [] });
+    const cp2 = disk(again.home).checkpoint!;
+    expect(cp2.activities.map((a) => `${a.sourceKind} ${a.upstreamId}`), 'the delta Post opens the call, and no equal pair ever did').toEqual(['bash-worktree toolu_wt1']);
+    const act = cp2.activities[0]!;
+    expect(act.identityJournalId, 'the identity is the PRE\'s accepted journal id, not the Post\'s').toBe(preRecord['journalId']);
+    expect(act.activityId).toBe(deriveDelegationActivityId(wtKey, String(preRecord['journalId'])));
+    expect(act.executionState).toBe('ended');
+    expect(act.openedAt, 'opened when the Pre observed it').toBe('2026-10-15T10:02:00.000Z');
+    expect(act.endedAt).toBe('2026-10-15T10:08:00.000Z');
+    expect(cp2.pruningHolds.filter((h) => h.reason === 'identity-candidate'), 'the hold is released once the call is decided').toEqual([]);
+    expect(again.coord.readDelegationProjection().activities.map((a) => a.activityId), 'SQLite holds only it').toEqual([act.activityId]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// 5b. A WORKFLOW RUN ends on its task notification, through the production lane (D-6269)
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe('5b. a workflow run ends when its task notification is journaled', () => {
+  it('D-WF-E2E: a hook-shaped launch response opens the run; the UserPromptSubmit notification for its tool-use id and task id ends it, on disk and in SQLite', async () => {
+    const launched = lineOf(common(OWNER, {
+      eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: 'toolu_w1', outcome: 'async-launched',
+      launch: { status: 'async-launched', taskId: 'task_1', taskType: 'local_workflow', workflowName: 'review-pass', runId: 'wf_run1', transcriptDir: '/fixture/transcripts/wf_run1', scriptPath: '/fixture/scripts/review-pass.js' },
+    }, '2026-10-15T10:02:00.000Z'));
+    const endedAt = '2026-10-15T10:07:00.000Z';
+    const notified = lineOf(common(OWNER, { eventKind: 'UserPromptSubmit', notification: { taskId: 'task_1', toolUseId: 'toolu_w1', status: 'completed' } }, endedAt));
+    // the production parser accepts both lines as written (the row is red on the run's state, never on an ingest refusal)
+    const owner = { sessionId: OWNER, parentIncarnation: INC };
+    for (const l of [launched, notified]) {
+      const parsed = parseDelegationSpoolLine(new TextEncoder().encode(l.trimEnd()), owner) as { ok: boolean };
+      expect(parsed.ok, 'the line is accepted by the ingest parser').toBe(true);
+    }
+    const w = world();
+    writeBucket(w, OWNER, bucketOf(NOW), startLine(OWNER, '2026-10-15T10:01:00.000Z'), launched, notified);
+    await censusPass(w, NOW, { demo: [] });
+    const journaled = journalRecords(w.home).map((r) => (r['entry'] as { kind: string; event?: { eventKind: string } }));
+    expect(journaled.map((e) => `${e.kind} ${e.event?.eventKind}`), 'the notification event was accepted into the journal').toEqual([
+      'evidence-accepted SessionStart', 'evidence-accepted PostToolUse', 'evidence-accepted UserPromptSubmit',
+    ]);
+    const cp = disk(w.home).checkpoint!;
+    const runOf = (c: DelegationCheckpointV1) => c.activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === 'wf_run1');
+    expect(runOf(cp), 'the launch response opened the run').toBeDefined();
+    expect(runOf(cp)).toMatchObject({ executionState: 'ended', endedAt, lastEventAt: endedAt, openedAt: '2026-10-15T10:02:00.000Z' });
+    expect(runOf(w.coord.readDelegationProjection()), 'SQLite shows the same end').toMatchObject({ executionState: 'ended', endedAt, lastEventAt: endedAt });
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════

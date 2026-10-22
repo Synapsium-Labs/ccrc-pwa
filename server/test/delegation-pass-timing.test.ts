@@ -39,7 +39,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
-import type { FleetSession } from '../../shared/api.js';
+import type { DelegationEventEnvelopeV1, FleetSession } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { FleetWatcher, DELEGATION_PASS_BUDGET_MS, DELEGATION_SWEEP_MS } from '../src/watch.js';
@@ -52,10 +52,11 @@ import * as model from '../src/coord/delegation-model.js';
 import * as checkpointMod from '../src/coord/delegation-checkpoint.js';
 import type { DelegationCensusPass, ParentIncarnation, WorktreeCensus } from '../src/coord/gitref.js';
 import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint, type DelegationProjectionRepairReport } from '../src/coord/delegation-checkpoint.js';
-import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
+import { DELEGATION_JOURNAL_FILE, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import { DELEGATION_EVENTS_CAP, canonicalDelegationJson, type DelegationAttemptRow, type DelegationCensusRecord, type DelegationCheckpointV1 } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);                       // 2026-10-15T10:30Z; the hour 10:00 is open
 const INC = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -428,6 +429,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
   const treeOfAgent = (agent: string): DelegationCensusRecord => record('demo', `agent-${agent}`, { canonicalPath: wtOf(`agent-${agent}`) });
   const WITH_META = [1, 2, 3].map(agentId);                                // linked at rung 2: their metas are on disk
   const NO_META = [4, 5].map(agentId);                         // no meta: unmeasured
+  const EXTRA = [6, 7, 8, 9, 10, 11, 12].map(agentId);         // RE3 (D-6267): started with no transcript, so no claimant, no meta and no tree; they hold `activities` apart from `vUnresolved` once the equal pairs below open no row
   const SCRATCHES = [1, 2, 3, 4].map((i) => record('demo', `scratch-tree-${i}`));   // each: a parent whose own cwd is in it, and a subagent working there
   const LATE = [1, 2, 3, 4, 5].map((i) => record('demo', `late-${i}`));    // first listed by the armed pass: inside the birth wait
   const OTHER = [record('other', 'x-one'), record('other', 'x-two')];
@@ -438,9 +440,29 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_s${n}`, outcome: 'completed', agentId: `ag${n}`, cwd: SCRATCHES[n - 1]!.canonicalPath }, '2026-10-15T10:03:00.000Z')),
   ];
   const OWNERS = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f', 'demo-g'];       // with a spool directory
+  /** RE3: the listing-carrying Bash PreToolUse lines of the spool with no PostToolUse line of the same call, counted from the files alone. */
+  const pendingBashInSpool = (w: World): number => {
+    const calls = new Map<string, { pre: boolean; post: boolean }>();
+    for (const owner of OWNERS) {
+      for (const bucket of [BUCKET09, BUCKET10]) {
+        const file = bucketFile(w, owner, bucket);
+        if (!existsSync(file)) continue;
+        for (const line of readFileSync(file, 'utf8').split('\n').filter((l) => l !== '')) {
+          const e = JSON.parse(line) as { eventKind?: string; toolName?: string; toolUseId?: string; sessionId?: string; listing?: unknown };
+          if (e.toolName !== 'Bash' || !Array.isArray(e.listing)) continue;
+          const key = `${e.sessionId}/${e.toolUseId}`;
+          const c = calls.get(key) ?? { pre: false, post: false };
+          if (e.eventKind === 'PreToolUse') c.pre = true;
+          if (e.eventKind === 'PostToolUse') c.post = true;
+          calls.set(key, c);
+        }
+      }
+    }
+    return [...calls.values()].filter((c) => c.pre && !c.post).length;
+  };
   const SESSIONS = [...OWNERS, 'demo-h', 'demo-i', 'demo-j', 'demo-k', 'demo-l', 'demo-p'].map((id) => sessionOf(id));    // the last six have none
 
-  it('D-5692 R1: one line; pairs=1500 and reconcile=1500; the key set is the phases that ran; every size equals its independent count', async () => {
+  it('RE3: D-5692 R1: one line; pairs=1500 and reconcile=1500; the key set is the phases that ran; every size equals its independent count', async () => {
     const warn = quietWarn();
     const w = world();
     for (const owner of OWNERS) writeBucket(w, owner, BUCKET10, startLine(owner, '2026-10-15T10:01:00.000Z'));
@@ -493,7 +515,8 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     appendBucket(w, 'demo-a', BUCKET10,
       ...[...WITH_META, ...NO_META].map((id, i) => agentStart(w, id, `2026-10-15T10:02:${second(i)}.000Z`)),
       bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'),
-      ...scratchLines(OWNERS[0]!, 1));
+      ...scratchLines(OWNERS[0]!, 1),
+      ...EXTRA.map((id, i) => lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: id, agentType: null, cwd: '/w/demo' }, `2026-10-15T10:03:${second(i)}.000Z`))));
     for (const [i, owner] of OWNERS.slice(1, SCRATCHES.length).entries()) appendBucket(w, owner, BUCKET10, ...scratchLines(owner, i + 2));
     // demo-b gets one more start; demo-c and demo-d each run a series of unrelated bash calls (five and six), long after the creator's
     appendBucket(w, 'demo-b', BUCKET10, startLine('demo-b', '2026-10-15T10:08:00.000Z'));
@@ -584,6 +607,10 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       encodes: passEncodes,
       cpBytes: statSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)).size,
       // the checkpoint on disk after the pass
+      // RE3 (D-6271): the builder's pending Bash calls on unmapped keys, counted from the spool's own lines (a listing-carrying PreToolUse
+      // with no PostToolUse: every pair this fixture writes is complete, so none), and the on-disk checkpoint's identity-candidate holds
+      pendingBash: pendingBashInSpool(w),
+      cpCandidates: cp.pruningHolds.filter((h) => h.reason === 'identity-candidate').length,
       cpSessions: cp.sessions.length, cpAttempts: cp.attempts.length, cpLeases: cp.leases.length, openLeases: cp.leases.filter((l) => l.releasedAt === null).length,
       cpLineage: cp.lineage.length, cpIntervals: cp.observationIntervals.length, cpCursors: cp.bucketCursors.length,
       // D-5832 (run 645): the virtual CPU clock and sampler read 0 in this pass (nothing sets them), so every CPU and stall key is present
@@ -624,13 +651,21 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     expectTimings(lines[0]!, { pairs: 1500, reconcile: 1500 });
     expect(m.get('rewrite'), 'the port\'s rewrite ran in 0 ms and is present').toBe(0);
     expect(r.fired, 'the lane announced its phases').toContain('pairs');
+    // `retired` is NOT on this line (and so not in the exact key set above): the primed pass at PRIMED_AT, in this hour, was the lane's first
+    // pass in its UTC hour and spent the hourly retirement slot; this armed pass does not call the door.
+    expect(m.has('retired'), 'the armed pass is not the lane\'s first in its UTC hour: the door was not called').toBe(false);
 
     // The sizes this fixture can tell apart are pairwise different and not zero, so a swap of any two of them shows. The values: ownerCount
-    // 13, evidence 41, appended 42, trees 16, treesPastWait 11, claimants 5, activities 21, pointMetas 3, pathMap 18, win 14, winHeld 12,
-    // vUnresolved 10, cpSessions 7, cpAttempts 8, cpIntervals 15, cpCursors 9, rewrites 6, censusAge 7000, and the two representatives of
-    // the tied groups below, vLinked 4 and vUnmeasured 2, and droppedMeasured, a flag, 1. The fixture untied what a modest change could
+    // 13, evidence 48, appended 49, trees 16, treesPastWait 11, claimants 5, activities 28 at the base, pointMetas 3, pathMap 18, win 14,
+    // winHeld 12, vUnresolved 10, cpSessions 7, cpAttempts 8, cpIntervals 15, cpCursors 9, rewrites 6, censusAge 7000, and the two representatives
+    // of the tied groups below, vLinked 4 and vUnmeasured 2, and droppedMeasured, a flag, 1. The fixture untied what a modest change could
     // (more agents, a fourth scratch tree, a second hour of spool for two owners, three more sessions): every size in this list is
     // different from every other.
+    // RE3 (D-6267): `activities` is the one size that FOLLOWS the fold rule. At the base, the old rule opens a row for each of the 11 equal-listing
+    // Bash pairs of demo-c and demo-d (5 + 6), so it reads 28 (the 9 agent rows, the 7 EXTRA agents' rows, the one delta row, the 11 pairs);
+    // under rule A an equal pair opens no row and a complete pair leaves no pending Pre, so it reads 17 (28 - 11). The seven EXTRA agents (start
+    // lines with no transcript, so no claimant, no meta and no tree) move it, `evidence` and `appended` clear of every other size at BOTH values:
+    // the base's 28 and the tip's 17 are free, and without them the tip's 10 would tie `vUnresolved` (10).
     const distinct = ['ownerCount', 'evidence', 'appended', 'trees', 'treesPastWait', 'claimants', 'activities', 'pointMetas', 'pathMap', 'win',
       'winHeld', 'vUnresolved', 'cpSessions', 'cpAttempts', 'cpIntervals', 'cpCursors', 'rewrites', 'censusAge', 'vLinked', 'vUnmeasured', 'droppedMeasured'];
     for (const key of distinct) expect(expected[key], `${key} is not zero`).toBeGreaterThan(0);
@@ -925,6 +960,7 @@ const SLOW_KEYS = [
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
   'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes',
+  'retired', 'pendingBash', 'cpCandidates',                         // D-6268, D-6271: right after `encodes`, before `censusAge`, so they drop late
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -1432,24 +1468,33 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
 });
 
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
-  it('D-5832: at realistic values (7 digits each) the whole line is 1,908 bytes and drops nothing; at the largest values (2,039 bytes, 77 of the 107 input keys kept, dropped=30) the keys that drop are a suffix of the list; the first four new keys and the delta projection\'s five stay', () => {
+  it('RE2: (D-5832, D-6271) at realistic values (7 digits each) the whole line is 1,965 bytes and drops nothing; at the largest values (2,044 bytes, 77 of the 110 input keys kept, dropped=33) the keys that drop are a suffix of the list; `retired`, `pendingBash` and `cpCandidates` stay, in the order encodes < retired < pendingBash < cpCandidates < censusAge', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
     expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
     const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
-    expect(keys, 'the list holds the 83 old input keys and the 19 new ones, and the delta projection\'s five').toHaveLength(107);
+    expect(keys, 'the list holds the 83 old input keys, the 19 of D-5832, the delta projection\'s five and the three of D-6271').toHaveLength(110);
+    // The exported list, not this file's copy: the three keys in their place, right after `encodes` and before `censusAge`.
+    const exported = surface['DELEGATION_PASS_SLOW_KEYS'] as readonly string[] | undefined;
+    expect(Array.isArray(exported), 'DELEGATION_PASS_SLOW_KEYS is exported').toBe(true);
+    const idx = (k: string): number => exported!.indexOf(k);
+    for (const k of ['retired', 'pendingBash', 'cpCandidates']) expect(idx(k), `${k} is in DELEGATION_PASS_SLOW_KEYS`).toBeGreaterThan(-1);
+    expect([idx('encodes'), idx('retired'), idx('pendingBash'), idx('cpCandidates'), idx('censusAge')], 'encodes < retired < pendingBash < cpCandidates < censusAge')
+      .toEqual([idx('encodes'), idx('encodes') + 1, idx('encodes') + 2, idx('encodes') + 3, idx('censusAge')]);
+    expect(idx('cpCandidates') < idx('censusAge'), 'the three sit before `censusAge`, so the keys after it drop first').toBe(true);
+    expect(exported!.filter((k) => k !== 'dropped'), 'the exported list holds exactly the 110 input keys').toHaveLength(110);
     const real = format!(Object.fromEntries(keys.map((k) => [k, 1234567])));
     const realPairs = parse(real);
-    expect(realPairs.size, 'every key is on the line (an unknown key is ignored by the formatter at main)').toBe(keys.length);
+    expect(realPairs.size, 'every key is on the line (an unknown key is ignored by the formatter)').toBe(keys.length);
     expect(realPairs.has('dropped'), 'nothing drops at realistic values').toBe(false);
-    expect(Buffer.byteLength(real)).toBe(1908);
+    expect(Buffer.byteLength(real)).toBe(1965);
 
     const MAX = Number.MAX_SAFE_INTEGER;
     const big = format!(Object.fromEntries(keys.map((k) => [k, MAX])));
     expect(Buffer.byteLength(big)).toBeLessThanOrEqual(2048);
-    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2039);
+    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2044);
     const bp = parse(big);
     const present = keys.filter((k) => bp.has(k));
-    expect(present, 'exactly 77 of the 107 input keys are kept').toHaveLength(77);
+    expect(present, 'exactly 77 of the 110 input keys are kept').toHaveLength(77);
     expect(bp.size, 'the 77 kept keys and the `dropped` pair are the line\'s pairs').toBe(78);
     expect(present, 'with equal-width values the greedy fill keeps a prefix: the end of the list drops').toEqual(keys.slice(0, present.length));
     for (const k of ['blockCpu', 'stallMax', 'stallP99', 'cpuThread']) expect(bp.has(k), `${k} (right after other) is never the first to go`).toBe(true);
@@ -1457,12 +1502,12 @@ describe('D-5832 (the bound): the new keys sit where the line\'s bound drops the
       expect(bp.has(k), `${k} (after censusAge) drops at the largest values`).toBe(false);
     }
     expect(bp.get('dropped'), 'and the line counts them').toBe(keys.length - present.length);
-    expect(bp.get('dropped'), 'exactly 30 of them').toBe(30);
-    // The delta projection's five keys sit before `censusAge` (`projectDelta`, `projectFull`, `deltaRows` after `rewriteEvents`; `cpBytes`, `encodes` after
-    // `cpCursors`), so none of them drops at the largest value, and the dropped names are exactly the list's last 30.
-    for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes']) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
-    // (The five new keys take 91 bytes of the bound, so at the largest values five older keys, `vUnresolved` to `eRunChild`, now drop that were kept before; none of the five new keys does.)
-    for (const k of ['vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the delta projection's five now push out) drops at the largest values`).toBe(false);
+    expect(bp.get('dropped'), 'exactly 33 of them').toBe(33);
+    // The delta projection's five keys and D-6271's three sit before `censusAge`, so none of them drops at the largest value, and the dropped
+    // names are exactly the list's last 33.
+    for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates']) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
+    // (The three new keys take 84 bytes at the largest values of the bound, so at the largest values three older keys, `lostCalls`, `vLinked` and `vRunChild`, now drop that were kept before; none of the three new keys does.)
+    for (const k of ['lostCalls', 'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the new keys push out) drops at the largest values`).toBe(false);
     expect(keys.filter((k) => !bp.has(k)), 'the dropped keys, by name').toEqual(keys.slice(77));
   });
 });
@@ -1977,5 +2022,149 @@ describe('R22 (c/d): the measurement keys: `encodes` equals an independent count
     const m = theLine(sc.lines);
     expect(m.get('encodes'), 'the line\'s encodes is the independent count').toBe(spied);
     expect(m.get('cpBytes'), 'cpBytes is the size of the file the last write left').toBe(fileSize(sc.w));
+  });
+});
+
+// ── run 762 (D-6268, D-6271): the lane retires zero-delta Bash stock once an hour, and the slow line reports it ───────────
+
+describe('RE1, RE8: a lane seeded with legacy stock retires its zero-delta Bash calls on its first pass in an hour; the line says how many, and what is still pending', () => {
+  const OWNER = 'demo-a';
+  const BUCKET11 = '2026101511';
+  const T0 = Date.UTC(2026, 9, 15, 10, 30, 0);
+  const iso = (ms: number): string => model.formatDelegationInstant(ms);
+  const evOf = (n: number, acceptedAt: number, over: Record<string, unknown>): DelegationEventEnvelopeV1 => ({
+    v: 1, observedAt: iso(acceptedAt - 1000), sessionId: OWNER, parentIncarnation: INC, claudeSessionId: CLAUDE,
+    eventId: model.delegationSha256Hex(`legacy-stock-event-${n}`), bucket: BUCKET10, startOffset: n * 100, endOffset: n * 100 + 99, ...over,
+  } as DelegationEventEnvelopeV1);
+  /** ONE helper shape for every chain: events with the instant each is ACCEPTED at (journal time, never a clock read). */
+  const chainAt = (entries: ReadonlyArray<readonly [DelegationEventEnvelopeV1, number]>): model.DelegationJournalRecordV1[] => {
+    const out: model.DelegationJournalRecordV1[] = [];
+    let previous: string | null = null;
+    entries.forEach(([event, acceptedAt], i) => {
+      const r = buildDelegationJournalRecord({ sequence: i + 1, acceptedAt: iso(acceptedAt), previousDigest: previous, entry: { kind: 'evidence-accepted', event } });
+      out.push(r);
+      previous = r.digest;
+    });
+    return out;
+  };
+  const bashEv = (n: number, kind: 'PreToolUse' | 'PostToolUse', toolUseId: string, listing: string[], acceptedAt: number): DelegationEventEnvelopeV1 =>
+    evOf(n, acceptedAt, { eventKind: kind, toolName: 'Bash', toolUseId, listing, ...(kind === 'PostToolUse' ? { outcome: 'completed' } : {}) });
+
+  /** RE0's shape (generated, neutral): E1..E4 equal-listing calls (the third compares as a SET), C1 a call that added a name, A1 a Pre with no
+   *  Post, one agent (start and stop); `activeToo` adds A2, a second Pre with no Post. All accepted within the hour before the first pass. */
+  function legacy(opts: { activeToo?: boolean; suffix?: boolean } = {}) {
+    const t = (k: number): number => T0 + k * 20_000;
+    let n = 0;
+    const steps: Array<readonly [DelegationEventEnvelopeV1, number]> = [];
+    const push = (build: (id: number, at: number) => DelegationEventEnvelopeV1): void => { n += 1; steps.push([build(n, t(n)), t(n)]); };
+    push((id, at) => evOf(id, at, { eventKind: 'SessionStart', source: 'startup' }));
+    const pair = (toolUseId: string, pre: string[], post: string[]): void => {
+      push((id, at) => bashEv(id, 'PreToolUse', toolUseId, pre, at));
+      push((id, at) => bashEv(id, 'PostToolUse', toolUseId, post, at));
+    };
+    pair('toolu_e1', ['main-wt', 'wt-raw'], ['wt-raw', 'main-wt']);
+    pair('toolu_e2', ['main-wt'], ['main-wt']);
+    pair('toolu_e3', ['main-wt', 'wt-x'], ['main-wt', 'wt-x']);
+    pair('toolu_e4', ['main-wt'], ['main-wt']);
+    pair('toolu_c1', ['main-wt'], ['main-wt', 'wt-new']);
+    push((id, at) => bashEv(id, 'PreToolUse', 'toolu_a1', ['main-wt'], at));
+    if (opts.activeToo === true) push((id, at) => bashEv(id, 'PreToolUse', 'toolu_a2', ['main-wt'], at));
+    push((id, at) => evOf(id, at, { eventKind: 'SubagentStart', agentId: 'agent-aaa111', agentType: null }));
+    push((id, at) => evOf(id, at, { eventKind: 'SubagentStop', agentId: 'agent-aaa111', agentType: null, agentTranscriptPath: null }));
+    const covered = chainAt(steps);
+    const stock = oldRuleCheckpoint(covered);
+    const idOf = (toolUseId: string): string => stock.activities.find((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === toolUseId)!.activityId;
+    if (opts.suffix !== true) return { covered, all: covered, stock, idOf };
+    // After the helper's applied position, written through the journal: a lease on E4's row (the helper never takes a lease record; the
+    // fixture's recovery replays it through the fold), a rule-A pending Pre with no Post, and a SubagentStop with no start.
+    const leaseId = 'lease-stock-1';
+    const lease: model.DelegationJournalEntryV1 = {
+      kind: 'lease-created', leaseId, generation: 0, activityId: idOf('toolu_e4'), parentId: OWNER, parentIncarnation: INC, project: 'demo', adminRecord: 'wt-leased',
+      canonicalPath: '/w/demo/.claude/worktrees/wt-leased', creationBase: null, sourceKind: 'raw', correlationJournalIds: [], firstObservedAt: iso(t(n + 1)),
+      lineageId: model.deriveDelegationLineageId({ leaseId, parentId: OWNER, parentIncarnation: INC, activityId: idOf('toolu_e4') }),
+    } as model.DelegationJournalEntryV1;
+    const last = covered.at(-1)!;
+    const leaseRec = buildDelegationJournalRecord({ sequence: last.sequence + 1, acceptedAt: iso(t(n + 1)), previousDigest: last.digest, entry: lease });
+    const tail = [
+      [bashEv(n + 2, 'PreToolUse', 'toolu_p1', ['main-wt'], t(n + 2)), t(n + 2)] as const,
+      [evOf(n + 3, t(n + 3), { eventKind: 'SubagentStop', agentId: 'agent-bbb222', agentType: null, agentTranscriptPath: null }), t(n + 3)] as const,
+    ];
+    const suffix: model.DelegationJournalRecordV1[] = [leaseRec];
+    for (const [event, acceptedAt] of tail) {
+      const prev = suffix.at(-1)!;
+      suffix.push(buildDelegationJournalRecord({ sequence: prev.sequence + 1, acceptedAt: iso(acceptedAt), previousDigest: prev.digest, entry: { kind: 'evidence-accepted', event } }));
+    }
+    return { covered, all: [...covered, ...suffix], stock, idOf };
+  }
+  /** The files a restart would find: the whole journal, and the LEGACY checkpoint covering its first part (the old rule's rows, from the one helper). */
+  const seedStock = (w: World, s: ReturnType<typeof legacy>): void => {
+    mkdirSync(path.join(w.home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(w.home, '.ccrc', DELEGATION_JOURNAL_FILE), Buffer.concat(s.all.map((r) => Buffer.from(encodeDelegationJournalRecord(r)))));
+    writeFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE), checkpointMod.encodeDelegationCheckpoint(s.stock));
+  };
+  const H11 = Date.UTC(2026, 9, 15, 11, 2, 0);                         // a fresh UTC hour: the lane's first pass is its first in the hour
+  const RETIRABLE = ['toolu_e1', 'toolu_e2', 'toolu_e3'];
+  /** The slow line of one armed pass (the pass is armed by 1,001 ms in `noteSessions`, so a line is written), parsed, with its sanity read first. */
+  async function armedPass(w: World, r: Rig, warn: { mock: { calls: unknown[][] } }, now: number): Promise<Map<string, number>> {
+    const before = slowLines(warn).length;
+    r.arm({ noteSessions: 1001 });
+    await censusPass(w, now, { demo: [] });
+    const lines = slowLines(warn);
+    expect(lines.length - before, 'the armed pass wrote exactly one slow line').toBe(1);
+    return parse(lines.at(-1)!);
+  }
+  const present = (m: Map<string, number>, key: string): number => {
+    expect(m.has(key), `the line carries ${key}`).toBe(true);
+    return m.get(key)!;
+  };
+
+  it('RE1: the first pass in a fresh UTC hour retires the 3 retirable calls (not the leased one, the changed one, the active one or the agent); the line carries retired=3, pendingBash=1, cpCandidates as the disk counts them, cpActivities = cpMapping = the residual rows, projectFull=1', async () => {
+    const warn = quietWarn();
+    const w = world();
+    const s = legacy({ suffix: true });
+    seedStock(w, s);
+    const stockRows = s.stock.activities.length;
+    const r = rig(w);
+    const m = await armedPass(w, r, warn, H11);
+    const cp = checkpointOf(w.home);
+    // fixture sanity, true at the base and at the tip: the stock was found, the lease replayed onto E4's row, and the pass reached its end
+    expect(stockRows, 'the legacy stock holds E1..E4, C1, A1 and the agent').toBe(7);
+    expect(cp.leases.map((l) => l.activityId), 'the journal-written lease is on E4\'s row').toEqual([s.idOf('toolu_e4')]);
+    expect(m.get('cpLeases'), 'the line reads the lease').toBe(1);
+    // the new keys, read off the line as numbers
+    expect(present(m, 'retired'), 'retired: E1, E2 and E3').toBe(3);
+    expect(present(m, 'pendingBash'), 'pendingBash: the one rule-A pending Pre, on an unmapped key (A1\'s mapped Pre is not counted)').toBe(1);
+    const candidates = cp.pruningHolds.filter((h) => h.reason === 'identity-candidate').length;
+    expect(candidates, 'fixture sanity: the pending Pre and the start-less stop are both identity candidates on disk').toBeGreaterThanOrEqual(2);
+    expect(present(m, 'cpCandidates'), 'cpCandidates: every identity-candidate hold on disk (the stop candidate too), not the pending Bash count').toBe(candidates);
+    const residual = stockRows - RETIRABLE.length;
+    expect(cp.activities.map((a) => a.upstreamId).sort(), 'the residual rows: the leased E4, C1, A1 and the agent').toEqual(['agent-aaa111', 'toolu_a1', 'toolu_c1', 'toolu_e4']);
+    expect(present(m, 'cpActivities'), 'cpActivities is the residual rows').toBe(residual);
+    expect(present(m, 'cpMapping'), 'cpMapping is the residual rows').toBe(residual);
+    expect(present(m, 'projectFull'), 'the retirement is one full projection (activity keys left)').toBe(1);
+  });
+
+  it('RE8: the door runs on the first pass of each UTC hour only: pass 1 retires 3 and projects in full; pass 2 (5 min on) retires nothing, projects no full rewrite and keeps its rows; pass 3 (next hour) retires the row whose equal Post arrived meanwhile', async () => {
+    const warn = quietWarn();
+    const w = world();
+    const s = legacy({ activeToo: true });
+    seedStock(w, s);
+    const r = rig(w);
+    const m1 = await armedPass(w, r, warn, H11);
+    // A2's equal Post arrives before pass 2, about half an hour after its Pre was accepted (10:34 and 11:07, journal time): inside the pending bound of an hour
+    writeBucket(w, OWNER, BUCKET11, bashPost(OWNER, 'toolu_a2', ['main-wt'], '2026-10-15T11:04:00.000Z'));
+    const m2 = await armedPass(w, r, warn, H11 + 5 * 60_000);
+    const afterSecond = checkpointOf(w.home);
+    const m3 = await armedPass(w, r, warn, H11 + 60 * 60_000);
+    // fixture sanity, true at the base and at the tip: the Post reached the journal and ended A2's row
+    expect(afterSecond.activities.find((a) => a.upstreamId === 'toolu_a2')?.executionState, 'A2\'s equal Post was applied in pass 2 and ended its row').toBe('ended');
+    expect(present(m1, 'retired'), 'pass 1: the first pass of the hour retires E1, E2 and E3').toBe(3);
+    expect(present(m1, 'projectFull'), 'pass 1: one full projection').toBe(1);
+    expect(m2.has('retired'), 'pass 2, the same UTC hour: the door is not called, so no retired key').toBe(false);
+    expect(m2.get('projectFull') ?? 0, 'pass 2: no full projection').toBe(0);
+    expect(present(m2, 'cpActivities'), 'pass 2: the rows are as pass 1 left them').toBe(present(m1, 'cpActivities'));
+    expect(present(m3, 'retired'), 'pass 3, the next hour: A2 (ended, its Post equal) is retired').toBe(1);
+    expect(present(m3, 'projectFull'), 'pass 3: one full projection').toBe(1);
+    expect(present(m3, 'cpActivities'), 'pass 3: one row fewer').toBe(present(m2, 'cpActivities') - 1);
   });
 });

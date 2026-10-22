@@ -83,6 +83,9 @@ import {
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
 import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
+import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
+import * as modelNs from '../src/coord/delegation-model.js';
+import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -4130,5 +4133,1149 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     l.ctl.failStats = false;
     await expectFull(l, 'the next per-pass repair, eventStats healthy');
     await expectShort(l, 'after the full repair');
+  });
+});
+
+// ── run 762 (D-6267 to D-6271): shared fixtures of the retirement rows, the workflow-end rows and the stop-ageing rows below ──────────
+
+/** The ruled bound, through the model's namespace. The literal is the fallback ONLY so these rows run, and fail on their own assertions, at
+ *  the base, where the constant does not exist yet. */
+const BOUND = ((modelNs as unknown as Record<string, unknown>)['DELEGATION_BASH_PENDING_MS'] as number | undefined) ?? 3_600_000;
+/** Journal time. Every fixture record is accepted from here on, within BOUND of the first; no clock is read anywhere in this section. */
+const T0 = Date.UTC(2026, 9, 14, 12);
+const LANE_B = 'lane-b-demo';
+const K1 = 'toolu_k1';   // zero-delta: Pre [a,b], Post [b,a]; ended
+const K2 = 'toolu_k2';   // delta: Pre [a], Post [a,c]; ended
+const K3 = 'toolu_k3';   // Pre [a], no Post; active (an old-rule row)
+const K5 = 'toolu_k5';   // a truncated Pre, then Post [a]: identity = the Post
+const K6 = 'toolu_k6';   // Post [a] before Pre [a]: identity = the Post
+
+type Ev = DelegationEventEnvelopeV1;
+/** One event and the instant (epoch ms, journal time) its record is accepted at. */
+type Timed = readonly [event: Ev, acceptedAtMs: number];
+
+const bashPre = (n: number, id: string, listing?: readonly string[], over: Over = {}, truncated = false): Ev =>
+  ({ ...base(n, over), eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: id, ...(listing === undefined ? {} : { listing }), ...(truncated ? { truncated: true as const } : {}) });
+const bashPost = (n: number, id: string, listing?: readonly string[], over: Over = {}, truncated = false): Ev =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: id, outcome: 'completed', ...(listing === undefined ? {} : { listing }), ...(truncated ? { truncated: true as const } : {}) });
+const workflowLaunch = (n: number, runId: string, over: Over = {}): Ev =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_${n}`, outcome: 'async-launched',
+    launch: { status: 'async-launched', taskId: 'task_1', taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `transcripts/${runId}`, scriptPath: 'scripts/review-pass.js' } });
+
+/** The ONE chain shape of this section: records over `buildDelegationJournalRecord`, each accepted at its own journal instant. */
+function chainAt(entries: readonly Timed[], first = 1, previous: string | null = null): DelegationJournalRecordV1[] {
+  const out: DelegationJournalRecordV1[] = [];
+  let prev = previous;
+  entries.forEach(([event, ms], i) => {
+    const r = buildDelegationJournalRecord({ sequence: first + i, acceptedAt: formatDelegationInstant(ms), previousDigest: prev, entry: evidence(event) });
+    out.push(r);
+    prev = r.digest;
+  });
+  return out;
+}
+/** A durable batch whose records carry their own journal instants (the applier's injected clock is then not read for them). */
+const timedBatch = (entries: readonly Timed[]): DelegationDurableBatch =>
+  ({ accepted: entries.map(([event, ms]) => ({ event, acceptedAt: formatDelegationInstant(ms) })), cursor: null, interval: null });
+const sequenceAt = (events: readonly Ev[], from: number, stepMs = 1000): Timed[] => events.map((e, i) => [e, from + i * stepMs] as const);
+
+const bashKeyOf = (id: string, over: Over = {}) =>
+  ({ parentId: over.sessionId ?? PARENT, parentIncarnation: over.parentIncarnation ?? INC, sourceKind: 'bash-worktree' as const, upstreamId: id });
+const encOf = (id: string, over: Over = {}): string => encodeDelegationNaturalKey(bashKeyOf(id, over));
+const rowOf = (cp: DelegationCheckpointV1, id: string, over: Over = {}): DelegationActivityRow | undefined =>
+  cp.activities.find((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === id && a.parentId === (over.sessionId ?? PARENT));
+const mapped = (cp: DelegationCheckpointV1, id: string, over: Over = {}): boolean => Object.hasOwn(cp.activityIdsByNaturalKey, encOf(id, over));
+const bashIds = (cp: DelegationCheckpointV1): string[] => cp.activities.filter((a) => a.sourceKind === 'bash-worktree').map((a) => a.upstreamId).sort();
+const canon = (cp: DelegationCheckpointV1): string => canonicalDelegationJson(cp);
+const journalIdOf = (records: readonly DelegationJournalRecordV1[], event: Ev): string => {
+  const r = records.find((x) => x.entry.kind === 'evidence-accepted' && x.entry.event.eventId === event.eventId);
+  if (r === undefined) throw new Error(`no record for ${event.eventId}`);
+  return r.journalId;
+};
+const sqlHas = (store: CoordStore, id: string): boolean => store.readDelegationProjection().activities.some((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === id);
+
+// ── the door and the builder's accessor, through casts ──────────────────────────────────────────────────────────────
+
+type DoorResult = { retired: number; applied: DelegationApplyOutcome | null };
+/** `retireZeroDeltaBashActivities`, which does not exist at the base: its absence is a plain assertion, never a TypeError. */
+function doorOf(dur: DelegationDurability): () => Promise<DoorResult> {
+  const fn = (dur as unknown as { retireZeroDeltaBashActivities?: () => Promise<DoorResult> }).retireZeroDeltaBashActivities;
+  expect(typeof fn, 'DelegationDurability.retireZeroDeltaBashActivities is the D-6268 door and exists').toBe('function');
+  return () => fn!.call(dur);
+}
+type Fact = { kind: 'pre'; journalId: string; sequence: number; listing: readonly string[] } | { kind: 'equal'; preJournalId: string };
+/** The builder's `bashCallFactOf(encoded)` (read only), reached through the applier's private builder. */
+function factOf(dur: DelegationDurability, id: string, over: Over = {}): Fact | undefined {
+  const builder = (dur as unknown as { builder: { bashCallFactOf?: (encoded: string) => Fact | undefined } }).builder;
+  expect(typeof builder.bashCallFactOf, 'DelegationCheckpointBuilder.bashCallFactOf exists').toBe('function');
+  return builder.bashCallFactOf!(encOf(id, over));
+}
+const kindOf = (dur: DelegationDurability, id: string, over: Over = {}): string | undefined => factOf(dur, id, over)?.kind;
+
+// ── the B fixture: a generated, neutral journal for `lane-a-demo`, covered by a legacy checkpoint ──────────────────────
+
+/** `withLaneB` adds a second session whose ONLY activity is one retirable call (Pre [a], Post [a]). */
+function bFixture(opts: { withLaneB?: boolean } = {}) {
+  const e = {
+    start: sessionStart(1),
+    k1Pre: bashPre(2, K1, ['a', 'b']),
+    k3Pre: bashPre(3, K3, ['a']),
+    k2Pre: bashPre(4, K2, ['a']),
+    k6Post: bashPost(5, K6, ['a']),
+    k5Pre: bashPre(6, K5, undefined, {}, true),
+    k1Post: bashPost(7, K1, ['b', 'a']),
+    k2Post: bashPost(8, K2, ['a', 'c']),
+    k5Post: bashPost(9, K5, ['a']),
+    k6Pre: bashPre(10, K6, ['a']),
+    agentStart: subagentStart(11, X),
+    agentStop: subagentStop(12, X),
+    run: workflowLaunch(13, 'run-1'),
+  };
+  const events: Ev[] = Object.values(e);
+  if (opts.withLaneB === true) {
+    events.push(bashPre(50, 'toolu_lb1', ['a'], { sessionId: LANE_B }), bashPost(51, 'toolu_lb1', ['a'], { sessionId: LANE_B }));
+  }
+  const timed = sequenceAt(events, T0);
+  const records = chainAt(timed);
+  const legacy = oldRuleCheckpoint(records);
+  return { e, timed, records, legacy };
+}
+type Fixture = ReturnType<typeof bFixture>;
+
+/** A fixture directory: the journal, then a checkpoint (the legacy one unless `cp` is given, written at revision 1) covering `covered`. */
+function writeDir(records: readonly DelegationJournalRecordV1[], cp: DelegationCheckpointV1 | null): string {
+  const dir = mkTmp('ccrc-deleg-ret-');
+  writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf(records));
+  if (cp !== null) writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), encodeDelegationCheckpoint({ ...cp, revision: 1 }));
+  return dir;
+}
+const writeFixture = (f: Fixture, cp: DelegationCheckpointV1 = f.legacy): string => writeDir(f.records, cp);
+/** A legacy checkpoint with some activity rows (and mapping entries) edited; rows re-sorted, the mapping rebuilt from them. */
+function fabricate(cp: DelegationCheckpointV1, edit: (rows: DelegationActivityRow[], mapping: Record<string, string>) => void): DelegationCheckpointV1 {
+  const rows = cp.activities.map((a) => ({ ...a }));
+  const mapping = { ...cp.activityIdsByNaturalKey };
+  edit(rows, mapping);
+  const sorted = modelNs.sortedProjectionRows({ sessions: cp.sessions, attempts: cp.attempts, activities: rows, leases: cp.leases, lineage: cp.lineage });
+  return { ...cp, activityIdsByNaturalKey: mapping, activities: sorted.activities };
+}
+
+/** The B fixture opened ready, with the door in hand. */
+async function openB(opts: { withLaneB?: boolean } = {}) {
+  const f = bFixture(opts);
+  const dir = writeFixture(f);
+  const h = harness({ dir });
+  const dur = await h.open();
+  expect(dur.failure(), 'the legacy fixture recovers ready').toBeNull();
+  // `door` resolves the method on its first call, so a row that never retires (RB17) runs at the base, where the door does not exist.
+  return { f, dir, h, dur, door: () => doorOf(dur)() };
+}
+const k1Of = (cp: DelegationCheckpointV1): DelegationActivityRow => {
+  const r = rowOf(cp, K1);
+  if (r === undefined) throw new Error('the fixture holds no K1 row');
+  return r;
+};
+
+/** RE0's fixed, neutral journal for `lane-a-demo`: three equal Bash calls (e1, e2, e3: the retirable stock), one call that added a name (d1), one
+ *  Pre with no Post (p1: an old-rule active row) and one SubagentStart/Stop pair. `withPending: false` leaves p1 out (RE5's own fixture). */
+const re0Events = (opts: { withPending?: boolean } = {}): Ev[] => [
+  sessionStart(1),
+  bashPre(2, 'toolu_e1', ['a']), bashPost(3, 'toolu_e1', ['a']),
+  bashPre(4, 'toolu_e2', ['a', 'b']), bashPost(5, 'toolu_e2', ['b', 'a']),
+  bashPre(6, 'toolu_e3', ['a', 'a']), bashPost(7, 'toolu_e3', ['a']),
+  bashPre(8, 'toolu_d1', ['a']), bashPost(9, 'toolu_d1', ['a', 'c']),
+  ...(opts.withPending === false ? [] : [bashPre(10, 'toolu_p1', ['a'])]),
+  subagentStart(11, X), subagentStop(12, X),
+];
+
+// Rule A (D-6267) opens a Bash call only on a changed listing, so a box that ran the old rule carries one ended, unleased row per
+// zero-delta call (one measured PreToolUse, then one measured PostToolUse naming the same records). The door
+// `retireZeroDeltaBashActivities` (D-6268) retires those rows and their natural-key mapping together, under the applier's lock, and
+// nothing else may. Every legacy stock below comes from `oldRuleCheckpoint(journal)` (`delegationOldRuleFixture.ts`), never from the
+// fold at hand. The door, the constants and the builder's `bashCallFactOf` are reached through casts and namespace imports, so each row
+// is red at the base on its own assertion (the first thing a door row does is assert the door exists) and never on a type error.
+// RB11, RB12, RB12b, RB12c, RB13, RB-CLONE and RB-COST are in `delegation-fold-alloc.test.ts`; RB16 and RB24 in the correlation test;
+// RB21 and RB22 in the watch test; RB25 in the model test.
+describe('run 762: the zero-delta Bash retirement door, its lease guard and its recovery parity (D-6268)', () => {
+
+  // ── RE0: the pin of the old rule ────────────────────────────────────────────────────────────────────────────────────
+
+  it('RE0: oldRuleCheckpoint reproduces the old rule\'s checkpoint, pinned by two digests computed at the base (green by design; reds if the helper drifts)', () => {
+    // The journal: three equal Bash calls (one with the same names in another order), one call that added a name, one Pre with no Post
+    // and one SubagentStart/Stop pair, for `lane-a-demo`, each record accepted a second after the one before. The two literals were
+    // computed at the BASE (run 740's merged tip, where the fold IS the old rule) from `recoverDelegation(null, journal)`: the sha-256 of
+    // the canonical checkpoint bytes (`encodeDelegationCheckpoint`), and the sha-256 of the activity IDs sorted by code unit and joined
+    // with LF, no trailing LF: sha256(ids.sort().join('\n')). The helper must reproduce both at the base and at every later tip.
+    // Mutant: a helper that drifts from the old rule (identity, opening, end, mapping or holds).
+    const events: Ev[] = re0Events();
+    const journal = chainAt(sequenceAt(events, T0));
+    const cp = oldRuleCheckpoint(journal);
+    const digests = (c: DelegationCheckpointV1): { bytes: string; ids: string } => ({
+      bytes: createHash('sha256').update(encodeDelegationCheckpoint(c)).digest('hex'),
+      ids: sha(c.activities.map((a) => a.activityId).sort().join('\n')),
+    });
+    expect(digests(cp)).toEqual({ bytes: '380a6ce031f1145709d0d3d4063bbfed0ffc057607d910175047ad30d1b06017', ids: 'baa2f3a84b663f5f5bfdb102560f700bd792cff5923e21ed2186a87a3c508e73' });
+  });
+
+  // ── RB1 to RB10: the door's effect, the predicate's conjuncts ───────────────────────────────────────────────────────
+
+  it('RB1: the door retires K1, the one zero-delta call, and only K1: row and map entry together, nothing else moves, SQLite follows', async () => {
+    const { dir, h, dur, door } = await openB();
+    const before = dur.state().checkpoint;
+    const k1 = k1Of(before);
+    const journalBefore = readDisk(dir).journal;
+    const statsBefore = h.store.delegationEventStats();
+    const out = await door();
+    expect(out.retired, 'K1 is the only ended, unleased, zero-delta call of the fixture').toBe(1);
+    const after = dur.state().checkpoint;
+    expect(rowOf(after, K1), 'K1\'s row is gone').toBeUndefined();
+    expect(mapped(after, K1), 'K1\'s map entry is gone').toBe(false);
+    expect(after.activities, 'every other row is present, unchanged, under its unchanged ID').toEqual(before.activities.filter((a) => a.activityId !== k1.activityId));
+    expect(after.activityIdsByNaturalKey, 'every other entry is present').toEqual(
+      Object.fromEntries(Object.entries(before.activityIdsByNaturalKey).filter(([, id]) => id !== k1.activityId)));
+    expect(after.appliedJournalSequence, 'no journal record is appended').toBe(before.appliedJournalSequence);
+    expect(readDisk(dir).journal, 'the journal bytes are unchanged').toEqual(journalBefore);
+    expect(after.revision, 'one checkpoint replacement').toBe(before.revision + 1);
+    expect(after.sessions, 'the lane-a-demo session row is present').toEqual(before.sessions);
+    expect(after.sessions.map((s) => s.sessionId)).toEqual([PARENT]);
+    expect(h.store.delegationEventStats(), 'no event row moves').toEqual(statsBefore);
+    expect(sqlHas(h.store, K1), 'SQLite lacks K1').toBe(false);
+    expect(canon(h.store.readDelegationProjection()), 'and holds the rest').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(after)));
+    expect(out.applied?.projection.status, 'the outcome is projected').toBe('projected');
+    expect(decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!)), 'the file on disk is the new state').toEqual(after);
+    // MB-hold-mapped: K3's pending Pre is a fact on a MAPPED key, and a mapped key needs no hold.
+    expect(after.pruningHolds.filter((x) => Object.hasOwn(after.activityIdsByNaturalKey, x.ownerId)), 'no hold names a mapped key').toEqual([]);
+  });
+
+  it('RB1b: a session whose only activity is retired keeps its session row, in the checkpoint and in SQLite, and its event rows', async () => {
+    const { h, dur, door } = await openB({ withLaneB: true });
+    const before = dur.state().checkpoint;
+    expect(rowOf(before, 'toolu_lb1', { sessionId: LANE_B }), 'the fixture\'s second session holds its one legacy row').toBeDefined();
+    const eventsOf = (): unknown => h.store.db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE sessionId = ?').get(LANE_B)?.['n'];
+    const statsBefore = h.store.delegationEventStats();
+    expect(eventsOf()).toBe(2);
+    const out = await door();
+    expect(out.retired, 'K1 and lane-b-demo\'s call').toBe(2);
+    const after = dur.state().checkpoint;
+    expect(rowOf(after, 'toolu_lb1', { sessionId: LANE_B }), 'its call is retired').toBeUndefined();
+    expect(after.sessions.map((s) => s.sessionId).sort(), 'the door never removes a session').toEqual([PARENT, LANE_B]);
+    expect(h.store.readDelegationProjection().sessions.map((s) => s.sessionId).sort(), 'nor does SQLite lose it').toEqual([PARENT, LANE_B]);
+    expect(eventsOf(), 'its delegation_events rows are unchanged').toBe(2);
+    expect(h.store.delegationEventStats()).toEqual(statsBefore);
+  });
+
+  it('RB2: a fresh applier on the same directory recovers the retired state exactly, its facts agree with the live ones, and a second door finds nothing and writes nothing', async () => {
+    const { dir, dur, door } = await openB();
+    await door();
+    const live = dur.state().checkpoint;
+    const again = await harness({ dir }).open();
+    expect(again.failure(), 'recovery of the retired checkpoint is ready').toBeNull();
+    expect(canon(again.state().checkpoint), 'canonically equal to the live checkpoint, revision included').toBe(canon(live));
+    for (const id of [K1, K2, K3, K5, K6]) expect(factOf(again, id), `the fact of ${id}, recovered vs live`).toEqual(factOf(dur, id));
+    const disk = readDisk(dir);
+    const second = await doorOf(again)();
+    expect(second, 'nothing retirable: nothing written').toEqual({ retired: 0, applied: null });
+    expect(readDisk(dir), 'the file bytes are unchanged').toEqual(disk);
+  });
+
+  it('RB3: B needs A: recovery of the retired checkpoint passes the identity-evidence and final-validate phases with no failure', async () => {
+    // Green at the tip by design (red at the base only because it needs the door). Mutant MB-noA (rule A reverted: a listing Bash record is
+    // a join again): the covered Post of the retired K1 then refuses `fold-refused` at the identity-evidence phase.
+    const { dir, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+    expect(report.failure, 'recovery over the retired checkpoint').toBeNull();
+    expect(report.completedPhases).toContain('identity-evidence');
+    expect(report.completedPhases).toContain('final-validate');
+  });
+
+  it('RB4: recovery from nothing, after the door, derives no K1 row, derives the same IDs, and differs on bash keys only by K3 (an old-rule active row)', async () => {
+    const { dir, dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const live = dur.state().checkpoint;
+    const bare = mkTmp('ccrc-deleg-ret-');
+    cpSync(path.join(dir, DELEGATION_JOURNAL_FILE), path.join(bare, DELEGATION_JOURNAL_FILE));        // the journal alone: no checkpoint file
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, bare);
+    expect(report.failure, 'the journal alone recovers').toBeNull();
+    const fresh = report.state.checkpoint;
+    expect(rowOf(fresh, K1), 'no K1 row').toBeUndefined();
+    expect(rowOf(fresh, K2)?.activityId, 'K2 has the same activityId').toBe(rowOf(live, K2)!.activityId);
+    for (const id of [K5, K6]) expect(rowOf(fresh, id)?.activityId, `${id} has the same activityId`).toBe(rowOf(live, id)!.activityId);
+    expect(bashIds(live).filter((id) => !bashIds(fresh).includes(id)), 'only K3, the old-rule active row, is absent from the fresh fold').toEqual([K3]);
+    expect(bashIds(fresh).filter((id) => !bashIds(live).includes(id)), 'and the fresh fold has nothing the live state lacks').toEqual([]);
+    expect(fresh.activities.filter((a) => a.sourceKind !== 'bash-worktree'), 'the agent and workflow rows agree').toEqual(live.activities.filter((a) => a.sourceKind !== 'bash-worktree'));
+  });
+
+  it('RB5: after the door, an old-rule row\'s late equal Post makes a fact and retires on the next door; rule-A calls leave no row and no fact; recovery equals live', async () => {
+    const { dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    expect(kindOf(dur, K3), 'K3 is an active old-rule row with its identity Pre pending').toBe('pre');
+    await dur.applyAccepted(timedBatch(sequenceAt([
+      bashPost(30, K3, ['a']),                                                       // K3's equal Post, within BOUND of its Pre
+      bashPre(31, 'toolu_n1', ['a']), bashPost(32, 'toolu_n1', ['a']),               // N1: a rule-A equal call
+      bashPre(33, 'toolu_n2', ['a']), bashPost(34, 'toolu_n2', ['a', 'd']),          // N2: a rule-A delta call
+    ], T0 + 20_000)));
+    const mid = dur.state().checkpoint;
+    expect(rowOf(mid, K3)?.executionState, 'K3 ended').toBe('ended');
+    expect(kindOf(dur, K3), 'with a fact').toBe('equal');
+    expect(rowOf(mid, 'toolu_n1'), 'N1 never has a row').toBeUndefined();
+    expect(kindOf(dur, 'toolu_n1'), 'nor a fact').toBeUndefined();
+    expect(rowOf(mid, 'toolu_n2')?.executionState, 'N2 has a row, opened at its Post with the Pre\'s identity').toBe('ended');
+    expect(kindOf(dur, 'toolu_n2'), 'and no fact').toBeUndefined();
+    expect((await door()).retired, 'K3 retires; N2 is not retired').toBe(1);
+    const live = dur.state().checkpoint;
+    expect(rowOf(live, K3)).toBeUndefined();
+    expect(rowOf(live, 'toolu_n2'), 'N2 stays').toBeDefined();
+    const report = await dur.recover();
+    expect(report.failure, 'recovery after the second retirement').toBeNull();
+    expect(canon(dur.state().checkpoint), 'recovered equals live').toBe(canon(live));
+    expect(rowOf(dur.state().checkpoint, K3)).toBeUndefined();
+  });
+
+  it('RB6: a legacy K1 row that is still active although its equal Post is covered is not retired (the ended conjunct; mutant MB5)', async () => {
+    const f = bFixture();
+    const k1 = k1Of(f.legacy);
+    const cp = fabricate(f.legacy, (rows) => {
+      const i = rows.findIndex((a) => a.activityId === k1.activityId);
+      rows[i] = { ...rows[i]!, executionState: 'active', endedAt: null };
+    });
+    const dur = await harness({ dir: writeFixture(f, cp) }).open();
+    expect(dur.failure()).toBeNull();
+    expect(rowOf(dur.state().checkpoint, K1)?.executionState, 'recovery observes; it never touches the row').toBe('active');
+    expect(kindOf(dur, K1), 'the equal fact forms all the same: only the ended conjunct keeps the row').toBe('equal');
+    const out = await doorOf(dur)();
+    expect(out.retired).toBe(0);
+    expect(rowOf(dur.state().checkpoint, K1), 'K1 is present').toBeDefined();
+    expect(mapped(dur.state().checkpoint, K1)).toBe(true);
+  });
+
+  it('RB7: a K1 row named by a journal-written lease is never retired; the door does not throw; row, lease and lineage stay (the lease conjunct; mutant MB3)', async () => {
+    const f = bFixture();
+    const k1 = k1Of(f.legacy);
+    // The lease is written AFTER the legacy checkpoint's applied position, straight into the journal (createLease now refuses a zero-delta
+    // call), and the fixture's recovery replays it onto the old-rule row and saves, with its lease and opening lineage.
+    const entry = leaseEntryFor(k1.activityId, { leaseId: 'lease-k1', sourceKind: 'raw', adminRecord: 'wt-k1', canonicalPath: '/work/project-a/wt-k1' });
+    const leaseRecord = buildDelegationJournalRecord({
+      sequence: f.records.length + 1, acceptedAt: formatDelegationInstant(T0 + 20_000), previousDigest: f.records[f.records.length - 1]!.digest, entry,
+    });
+    const dur = await harness({ dir: writeDir([...f.records, leaseRecord], f.legacy) }).open();
+    expect(dur.failure(), 'the suffix lease replays onto the legacy row').toBeNull();
+    expect(dur.state().checkpoint.leases.map((l) => l.activityId), 'the replayed lease names K1').toEqual([k1.activityId]);
+    const out = await doorOf(dur)();
+    expect(out.retired, 'a leased row is never retired').toBe(0);
+    const cp = dur.state().checkpoint;
+    expect(rowOf(cp, K1), 'K1 is intact').toEqual(k1);
+    expect(cp.leases.map((l) => l.leaseId), 'its lease is intact').toEqual(['lease-k1']);
+    expect(cp.lineage.filter((n) => n.leaseId === 'lease-k1'), 'and its opening lineage').toHaveLength(1);
+    expect(dur.failure(), 'the applier is ready').toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+  });
+
+  it.each([['open', null], ['closed', { closedAt: T(20), closeReason: 'closed-fixture' }]] as const)(
+    'RB8: an activity-owned lineage row naming K1, %s, keeps it from retirement (the lineage conjunct; mutant MB4)', async (_state, closed) => {
+      const { dur, door } = await openB();
+      const k1 = k1Of(dur.state().checkpoint);
+      const lineage: DelegationLineageRow = {
+        lineageId: sha('lineage-of-k1'), parentId: PARENT, parentIncarnation: INC, activityId: k1.activityId, leaseId: null, runId: null,
+        openedAt: T(10), closedAt: closed?.closedAt ?? null, closeReason: closed?.closeReason ?? null,
+      };
+      const change = await dur.applyCheckpointChange((cp) => ({ ...cp, lineage: [...cp.lineage, lineage] }));
+      expect(change.durable, 'the lineage row landed through the change door').toBe(true);
+      const out = await door();
+      expect(out.retired, 'a row a lineage row names is kept, whether the lineage is open or closed').toBe(0);
+      const cp = dur.state().checkpoint;
+      expect(rowOf(cp, K1)).toEqual(k1);
+      expect(cp.lineage.map((n) => n.lineageId)).toEqual([lineage.lineageId]);
+    });
+
+  it('RB9: a legacy row whose identity is the equal Post, not the Pre, gets no fact and is never retired', async () => {
+    // MB7 (the identity conjunct) is declared equivalent under the start rule; this row shows a Post-identity row never retires.
+    const f = bFixture();
+    const postJournalId = journalIdOf(f.records, f.e.k1Post);
+    const newId = deriveDelegationActivityId(bashKeyOf(K1), postJournalId);
+    const cp = fabricate(f.legacy, (rows, mapping) => {
+      const i = rows.findIndex((a) => a.activityId === k1Of(f.legacy).activityId);
+      rows[i] = { ...rows[i]!, activityId: newId, identityJournalId: postJournalId, openedAt: f.e.k1Post.observedAt };
+      mapping[encOf(K1)] = newId;
+    });
+    const dur = await harness({ dir: writeFixture(f, cp) }).open();
+    expect(dur.failure()).toBeNull();
+    expect(kindOf(dur, K1), 'a Pre that is not the row\'s identity starts no fact').toBeUndefined();
+    const out = await doorOf(dur)();
+    expect(out.retired).toBe(0);
+    expect(rowOf(dur.state().checkpoint, K1)?.activityId).toBe(newId);
+  });
+
+  it('RB10: legacy ended calls that REMOVED a name (R1) or ADDED one (A1) are not retired, hold no fact, and recovery stays ready (mutant MB10)', async () => {
+    const records = chainAt(sequenceAt([
+      sessionStart(1), bashPre(2, 'toolu_r1', ['a', 'b']), bashPost(3, 'toolu_r1', ['a']), bashPre(4, 'toolu_a1', ['a']), bashPost(5, 'toolu_a1', ['a', 'b']), sessionStart(6),
+    ], T0));
+    const legacy = oldRuleCheckpoint(records);
+    expect(['toolu_r1', 'toolu_a1'].map((id) => rowOf(legacy, id)?.executionState), 'the legacy stock holds both, ended').toEqual(['ended', 'ended']);
+    const dur = await harness({ dir: writeDir(records, legacy) }).open();
+    expect(dur.failure(), 'recovery stays ready').toBeNull();
+    expect(kindOf(dur, 'toolu_r1'), 'R1 holds no fact').toBeUndefined();
+    expect(kindOf(dur, 'toolu_a1'), 'A1 holds no fact').toBeUndefined();
+    const out = await doorOf(dur)();
+    expect(out.retired, 'neither is retired').toBe(0);
+    expect(['toolu_r1', 'toolu_a1'].map((id) => rowOf(dur.state().checkpoint, id) !== undefined)).toEqual([true, true]);
+  });
+
+  // ── RB14, RB15, RB17, RB19: the other doors around it ───────────────────────────────────────────────────────────────
+
+  it('RB14: an interval-only checkpoint change between the recovery and the door keeps the facts: the door still retires K1 (mutant MB15)', async () => {
+    const { dur, door } = await openB();
+    const change = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals, intervalFor('2026101400', 'measured', T(3))] }));
+    expect(change.durable, 'the interval landed').toBe(true);
+    expect(dur.state().checkpoint.observationIntervals).toHaveLength(1);
+    expect(kindOf(dur, K1), '`replaceRows` keeps the journal-derived facts').toBe('equal');
+    const out = await door();
+    expect(out.retired).toBe(1);
+    expect(rowOf(dur.state().checkpoint, K1)).toBeUndefined();
+  });
+
+  it('RB15: before the door has run, createLease refuses a zero-delta call (zero-delta-call) before minting a UUID and writes nothing; a delta call is still leased (mutants MB17, MB18)', async () => {
+    const { f, dir, h, dur } = await openB();
+    const cp0 = dur.state().checkpoint;
+    const request = (id: string, adminRecord: string): DelegationLeaseCreationRequest => ({
+      activityId: rowOf(cp0, id)!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord, canonicalPath: `/work/project-a/${adminRecord}`,
+      creationBase: null, sourceKind: 'raw', correlationJournalIds: [f.records[1]!.journalId], firstObservedAt: T(40),
+    });
+    expect(modelNs.leaseSourceKindOfActivity('bash-worktree'), 'a bash-worktree activity\'s lease is a raw one').toBe('raw');
+    const disk = readDisk(dir);
+    const uuidsBefore = h.uuidCalls.n;
+    const refused = await dur.createLease(request(K1, 'wt-k1'));
+    expect(refused, 'K1 is a zero-delta call: never a lease activity').toMatchObject({ kind: 'refused', reason: 'zero-delta-call' });
+    expect(h.uuidCalls.n, 'no UUID was minted').toBe(uuidsBefore);
+    expect(readDisk(dir), 'the journal and the checkpoint are unchanged').toEqual(disk);
+    expect(dur.state().checkpoint).toBe(cp0);
+    expect(checkpointNs.isDelegationCheckpointKebab('zero-delta-call'), 'the refusal word is admitted to the kebab scan').toBe(true);
+    const control = await dur.createLease(request(K2, 'wt-k2'));
+    expect(control.kind, 'the control: K2 changed its listing and is leased').toBe('created');
+    expect(h.uuidCalls.n, 'one UUID, for the control').toBe(uuidsBefore + 1);
+  });
+
+  it('RB17: a checkpoint-only change cannot drop K1\'s row and its map entry together; the O4 guard stands (green by design; mutant MB22)', async () => {
+    const { dir, dur } = await openB();
+    const k1 = k1Of(dur.state().checkpoint);
+    const disk = readDisk(dir);
+    const stateBefore = dur.state();
+    await expect(dur.applyCheckpointChange((cp) => ({
+      ...cp, activities: cp.activities.filter((a) => a.activityId !== k1.activityId),
+      activityIdsByNaturalKey: Object.fromEntries(Object.entries(cp.activityIdsByNaturalKey).filter(([, id]) => id !== k1.activityId)),
+    }))).rejects.toMatchObject({ code: 'change-refused' });
+    expect(readDisk(dir), 'nothing was written').toEqual(disk);
+    expect(dur.state(), 'the state is the same object').toBe(stateBefore);
+    expect(rowOf(dur.state().checkpoint, K1)).toBeDefined();
+    expect(dur.failure(), 'a refusal does not poison the applier').toBeNull();
+  });
+
+  it('RB19: after the door, a re-read of K1\'s records (the same eventIds) is skipped as a duplicate: no record, row, mapping or fact for K1, revision unchanged', async () => {
+    const { f, dir, dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const after = dur.state().checkpoint;
+    const disk = readDisk(dir);
+    const out = await dur.applyAccepted(timedBatch([[f.e.k1Pre, T0 + 5000], [f.e.k1Post, T0 + 6000]]));
+    expect(out.appended, 'nothing is appended').toEqual([]);
+    expect(out.skipped.map((s) => s.reason)).toEqual(['duplicate-event', 'duplicate-event']);
+    expect(out.durable).toBe(false);
+    const cp = dur.state().checkpoint;
+    expect(cp.revision, 'the revision is unchanged').toBe(after.revision);
+    expect(rowOf(cp, K1), 'no row').toBeUndefined();
+    expect(mapped(cp, K1), 'no mapping').toBe(false);
+    expect(kindOf(dur, K1), 'no fact').toBeUndefined();
+    expect(readDisk(dir), 'no byte written').toEqual(disk);
+  });
+
+  // ── RB18: the one code that deletes ─────────────────────────────────────────────────────────────────────────────────
+
+  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash (a census of code lines, by enclosing method)', () => {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-checkpoint.ts');
+    let method = '(file)';
+    let inClass = false;
+    const hits: string[] = [];
+    for (const raw of readFileSync(file, 'utf8').split('\n')) {
+      if (/^\s*(\*|\/\/|\/\*)/.test(raw)) continue;                         // a comment line is not code
+      const l = raw.replace(/\s\/\/.*$/, '');                               // nor is a trailing comment
+      if (/^(?:export )?(?:abstract )?class [A-Za-z_]\w*/.test(l)) { inClass = true; method = '(class)'; }
+      const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
+      if (top !== null) { inClass = false; method = top[1]!; }
+      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly|get|set)\s+)*(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
+      if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) method = m[1]!;
+      if (/delete this\.mapping\[|this\.activities\.delete\(/.test(l)) hits.push(method);
+      if (/^}/.test(l)) { inClass = false; method = '(file)'; }
+    }
+    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash']);
+  });
+
+  // ── RB20: the fault matrix ──────────────────────────────────────────────────────────────────────────────────────────
+
+  describe('RB20: a fault injected at every edge of the door\'s application leaves the old state or the new one', () => {
+    // The door appends no journal record, so its edges are build, the checkpoint write, its fsync, the rename, the directory fsync and
+    // project. Before the rename (build, the write, its fsync, the rename's `before`) the old checkpoint stays on disk; from the rename's
+    // `after` on, the new one is. A project fault leaves the checkpoint durable and the projection stale (never a failed door).
+    const CASES = (['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync', 'project'] as const)
+      .flatMap((edge) => (['before', 'after'] as const).map((when) => [edge, when] as const));
+    it.each(CASES)('RB20: a fault at %s:%s during the door', async (edge, when) => {
+      const f = bFixture();
+      const dir = writeFixture(f);
+      const h = harness({ dir });
+      const fault = { armed: false, hits: 0 };
+      const dur = await h.open({ onEdge: (e, w) => { if (fault.armed && e === edge && w === when) { fault.hits++; throw new SimulatedCrash(`${e}:${w}`); } } });
+      expect(dur.failure()).toBeNull();
+      const door = doorOf(dur);
+      const preRename = edge === 'build' || edge === 'checkpoint-write' || edge === 'checkpoint-fsync' || (edge === 'checkpoint-rename' && when === 'before');
+      const onDisk = (): DelegationCheckpointV1 => decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!));
+      const old = dur.state().checkpoint;
+      fault.armed = true;
+      if (edge === 'project') {
+        const out = await door();
+        fault.armed = false;
+        expect(fault.hits).toBe(1);
+        expect(out.retired, 'the checkpoint replacement completed').toBe(1);
+        expect(out.applied?.projection.status, 'the projection did not').toBe('failed');
+        expect(rowOf(onDisk(), K1), 'K1 is gone from the durable checkpoint').toBeUndefined();
+        if (when === 'before') expect(sqlHas(h.store, K1), 'the projection never ran: SQLite still holds K1').toBe(true);
+        await dur.repairProjection();
+        expect(sqlHas(h.store, K1), 'the next repair leaves SQLite without K1').toBe(false);
+        expect(canon(h.store.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+        expect(dur.failure(), 'a projection fault never fails the applier').toBeNull();
+        return;
+      }
+      await expect(door()).rejects.toThrow(SimulatedCrash);
+      fault.armed = false;
+      expect(fault.hits).toBe(1);
+      expect(dur.state().phase, 'the applier is poisoned: reconstructing').toBe('reconstructing');
+      if (preRename) {
+        // MB23: a door that mutated the applier's own builder (not the clone it commits) would leave the poisoned applier's state ahead of its disk.
+        expect(canon(dur.state().checkpoint), 'the applier\'s checkpoint is the on-disk one, before recover()').toBe(canon(onDisk()));
+        expect(canon(onDisk()), 'and the old one').toBe(canon(old));
+        const builder = (dur as unknown as { builder: { build(revision: number): DelegationCheckpointV1 } }).builder;
+        expect(canon(builder.build(old.revision)), 'the builder still says what the disk says').toBe(canon(old));
+      }
+      const report = await dur.recover();
+      expect(report.failure, 'recover() is ready every time').toBeNull();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, K1) !== undefined, preRename ? 'a fault before the rename leaves K1' : 'a fault from the rename on leaves K1 gone').toBe(preRename);
+      const next = await door();
+      expect(next.retired, preRename ? 'the next door retires K1' : 'nothing is left to retire').toBe(preRename ? 1 : 0);
+      expect(rowOf(dur.state().checkpoint, K1)).toBeUndefined();
+      const fresh = await harness({ dir }).open();
+      expect(fresh.failure(), 'and a fresh applier recovers the result').toBeNull();
+      expect(canon(fresh.state().checkpoint)).toBe(canon(dur.state().checkpoint));
+    });
+  });
+
+  // ── RB23: the projection of the door's commit ───────────────────────────────────────────────────────────────────────
+
+  it('RB23: the door\'s commit projects as a FULL rewrite (keys left), the next ordinary application as a delta, and the five tables equal the checkpoint\'s view', async () => {
+    const f = bFixture();
+    const h = harness({ dir: writeFixture(f) });
+    const modes: string[] = [];
+    const real = delegationProjectionPortOfStore(h.store);
+    const projection: DelegationProjectionPort = {
+      project: (cp) => { modes.push('project'); real.project(cp); },
+      projectChanged: (prior, next) => { const r = real.projectChanged(prior, next); modes.push(`projectChanged:${r.mode}`); return r; },
+      insertEvents: (rows) => real.insertEvents(rows),
+      eventStats: () => real.eventStats(),
+    };
+    const dur = await h.open({ projection });
+    expect(dur.failure()).toBeNull();
+    const door = doorOf(dur);
+    modes.length = 0;
+    expect((await door()).retired).toBe(1);
+    expect(modes, 'the door\'s commit: one projectChanged, which answered full').toEqual(['projectChanged:full']);
+    expect(canon(h.store.readDelegationProjection()), 'the five tables equal the checkpoint\'s view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+    modes.length = 0;
+    await dur.applyAccepted(timedBatch([[subagentStart(60, Y), T0 + 30_000]]));
+    expect(modes, 'the next application deltas again').toEqual(['projectChanged:delta']);
+    expect(canon(h.store.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+  });
+
+  // ── RB26: an idle door costs nothing ────────────────────────────────────────────────────────────────────────────────
+
+  it('RB26: with nothing retirable (a journal folded by rule A alone), the door answers {retired: 0, applied: null} with zero whole-checkpoint encodes, no write, no revision', async () => {
+    const records = chainAt(sequenceAt([
+      sessionStart(1), bashPre(2, 'toolu_z1', ['a']), bashPost(3, 'toolu_z1', ['a']),                 // an equal call: rule A opens nothing
+      bashPre(4, 'toolu_d1', ['a']), bashPost(5, 'toolu_d1', ['a', 'c']),                             // a delta call: one row, not retirable
+      bashPre(6, 'toolu_p1', ['a']),                                                                  // a pending call
+      subagentStart(7, X), subagentStop(8, X),
+    ], T0));
+    const dir = writeDir(records, null);
+    const h = harness({ dir });
+    const dur = await h.open();
+    expect(dur.failure()).toBeNull();
+    const door = doorOf(dur);
+    const whole = (x: unknown): boolean => {
+      if (typeof x !== 'object' || x === null) return false;
+      const o = x as Record<string, unknown>;
+      return o['v'] === 1 && ['sessions', 'activities', 'attempts', 'leases', 'lineage', 'bucketCursors'].every((k) => Array.isArray(o[k]));
+    };
+    const disk = readDisk(dir);
+    const revision = dur.state().checkpoint.revision;
+    const measures = dur.commitMeasures();
+    // `canonicalDelegationJson` is reached through the model's namespace, as the pass-timing rows do: the applier calls it through its own import.
+    const spy = vi.spyOn(modelNs, 'canonicalDelegationJson');
+    try {
+      const out = await door();
+      expect(out, 'idle: nothing retired, nothing applied').toEqual({ retired: 0, applied: null });
+      expect(spy.mock.calls.filter(([x]) => whole(x)), 'zero whole-checkpoint encodes').toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(dur.commitMeasures(), 'the applier\'s own encode and write counters did not move').toEqual(measures);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(dir), 'the bytes are unchanged').toEqual(disk);
+  });
+
+  // ── RB-gap: a call whose Pre aged out before its Post is never retired ──────────────────────────────────────────────
+
+  describe('RB-gap: the Pre of an old-rule active row ages at the bound, and the door retires only a call that was not aged before its Post', () => {
+    // The legacy checkpoint holds an old-rule ACTIVE row (Pre [a] accepted at T0 + 1 s) and a session start. A filler from another
+    // session, then the row's equal Post, are accepted afterwards. A filler at exactly the bound ages the Pre (its fact is forgotten, so the
+    // Post is no 'equal' fact); a filler one millisecond short does not, and the Post (accepted past the bound, but AFTER the naming
+    // that consumes its Pre) makes the fact. The same function of the records runs live and in recovery (ageing reads `acceptedAt` only).
+    const GAP = 'toolu_gap';
+    async function gapRun(fillerAfterPreMs: number) {
+      const pre = bashPre(2, GAP, ['a']);
+      const records = chainAt([[sessionStart(1), T0], [pre, T0 + 1000]]);
+      const dir = writeDir(records, oldRuleCheckpoint(records));
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, GAP)?.executionState, 'the legacy row is active').toBe('active');
+      expect(kindOf(dur, GAP), 'its Pre is a pending fact').toBe('pre');
+      const tPre = T0 + 1000;
+      await dur.applyAccepted(timedBatch([
+        [sessionStart(10, { sessionId: LANE_B }), tPre + fillerAfterPreMs],
+        [bashPost(11, GAP, ['a']), tPre + BOUND + 1000],
+      ]));
+      expect(rowOf(dur.state().checkpoint, GAP)?.executionState, 'the late Post ended the row').toBe('ended');
+      return { dur, door: doorOf(dur) };
+    }
+
+    it('RB-gap: a filler accepted AT the bound ages the Pre: no fact, the door retires 0, and recovery stays ready with K ended and mapped (mutants MB-gap, MA11)', async () => {
+      const { dur, door } = await gapRun(BOUND);
+      expect(kindOf(dur, GAP), 'the Pre aged before its Post: the Post forms no fact').toBeUndefined();
+      const out = await door();
+      expect(out.retired, 'a call whose Pre aged before its Post is not retired').toBe(0);
+      const report = await dur.recover();
+      expect(report.failure, 'recovery, which ages the covered Pre the same way, stays ready').toBeNull();
+      expect(dur.failure()).toBeNull();
+      const cp = dur.state().checkpoint;
+      expect(rowOf(cp, GAP)?.executionState, 'K is ended').toBe('ended');
+      expect(mapped(cp, GAP), 'and mapped').toBe(true);
+    });
+
+    it('RB-gap-b: the same with the filler one millisecond short of the bound: the Pre is still pending at the Post, the door retires 1, and recovery is ready', async () => {
+      const { dur, door } = await gapRun(BOUND - 1);
+      expect(kindOf(dur, GAP), 'the Post consumed its own Pre').toBe('equal');
+      const out = await door();
+      expect(out.retired).toBe(1);
+      const report = await dur.recover();
+      expect(report.failure, 'recovery over the retired checkpoint').toBeNull();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, GAP), 'K is gone').toBeUndefined();
+    });
+  });
+
+  // ── RB-PAR: recovery parity, twin appliers over a seeded generator ─────────────────────────────────────────────────
+
+  describe('RB-PAR: an applier re-opened through recover() after every step equals the live one (N = 6 seeds, 16 steps each)', () => {
+    /** mulberry32: a small seeded generator written here, so no row reads `Math.random`. */
+    function mulberry32(seed: number): () => number {
+      let a = seed >>> 0;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const STEPS = 16;
+    const POOL = 6;
+    const KINDS = ['equal', 'differing', 'truncated', 'unmeasured', 'post-first', 'late-post', 'gap', 'interval', 'door'] as const;
+    type Step = { kind: (typeof KINDS)[number]; timed: Timed[]; hour?: string };
+
+    /** The legacy stock all six seeds start from: three retirable equal calls, one delta call and POOL old-rule active rows (Pre only). */
+    function parFixture() {
+      const events: Ev[] = [sessionStart(1)];
+      for (const [i, id] of ['toolu_e0', 'toolu_e1', 'toolu_e2'].entries()) events.push(bashPre(2 + 2 * i, id, ['a']), bashPost(3 + 2 * i, id, ['a']));
+      events.push(bashPre(8, 'toolu_d0', ['a']), bashPost(9, 'toolu_d0', ['a', 'b']));
+      const poolIds = Array.from({ length: POOL }, (_, i) => `toolu_old${i}`);
+      poolIds.forEach((id, i) => events.push(bashPre(10 + i, id, ['a'])));
+      const timed = sequenceAt(events, T0);
+      const records = chainAt(timed);
+      const tPre = (id: string): number => timed.find(([e]) => e.eventKind === 'PreToolUse' && e.toolUseId === id)![1];
+      return { records, legacy: oldRuleCheckpoint(records), poolIds, tPre, named: ['toolu_e0', 'toolu_e1', 'toolu_e2', 'toolu_d0', ...poolIds] };
+    }
+
+    /** The steps of one seed: a function of the seed and the fixture alone. */
+    function stepsOf(seed: number, fx: ReturnType<typeof parFixture>): Step[] {
+      const rng = mulberry32(seed);
+      let t = T0 + 60_000;
+      let n = 100;
+      let c = 0;
+      let pool = 0;
+      const out: Step[] = [];
+      for (let i = 0; i < STEPS; i++) {
+        let kind: Step['kind'] = i === STEPS - 1 ? 'door' : KINDS[Math.floor(rng() * KINDS.length)]!;
+        if ((kind === 'late-post' || kind === 'gap') && pool >= POOL) kind = 'equal';
+        const id = `toolu_s${++c}`;
+        switch (kind) {
+          case 'equal': out.push({ kind, timed: [[bashPre(n++, id, ['a', 'b']), t], [bashPost(n++, id, ['b', 'a', 'a']), t + 1000]] }); t += 2000; break;
+          case 'differing': out.push({ kind, timed: [[bashPre(n++, id, ['a']), t], [bashPost(n++, id, ['a', 'c']), t + 1000]] }); t += 2000; break;
+          case 'truncated': out.push({ kind, timed: [[bashPre(n++, id, undefined, {}, true), t], [bashPost(n++, id, ['a']), t + 1000]] }); t += 2000; break;
+          case 'unmeasured': out.push({ kind, timed: [[bashPre(n++, id, ['a']), t], [bashPost(n++, id), t + 1000]] }); t += 2000; break;
+          case 'post-first': out.push({ kind, timed: [[bashPost(n++, id, ['a']), t], [bashPre(n++, id, ['a']), t + 1000]] }); t += 2000; break;
+          case 'late-post': out.push({ kind, timed: [[bashPost(n++, fx.poolIds[pool++]!, ['a']), t]] }); t += 1000; break;
+          case 'gap': {
+            const old = fx.poolIds[pool++]!;
+            t = Math.max(t, fx.tPre(old) + BOUND + (rng() < 0.5 ? 0 : 7));       // a filler AT or past the bound, between the old Pre and its Post
+            out.push({ kind, timed: [[sessionStart(n++, { sessionId: LANE_B }), t], [bashPost(n++, old, ['a']), t + 1000]] }); t += 2000; break;
+          }
+          case 'interval': out.push({ kind, timed: [], hour: `20261014${String(i % 24).padStart(2, '0')}` }); break;
+          case 'door': out.push({ kind, timed: [] }); break;
+        }
+      }
+      return out;
+    }
+
+    it.each([101, 202, 303, 404, 505, 606])('RB-PAR: seed %i: 16 generated steps; after each, the re-opened applier equals the live one (checkpoint, door counts, facts) (mutants MB6, MB12, MB-gap, MB-noA)', async (seed) => {
+      const fx = parFixture();
+      const live = await harness({ dir: writeDir(fx.records, fx.legacy) }).open();
+      const twin = await harness({ dir: writeDir(fx.records, fx.legacy) }).open();
+      expect(live.failure()).toBeNull();
+      expect(twin.failure()).toBeNull();
+      const liveDoor = doorOf(live);
+      const twinDoor = doorOf(twin);
+      const named = [...fx.named];
+      const steps = stepsOf(seed, fx);
+      for (const [i, step] of steps.entries()) {
+        const ctx = `seed ${seed} step ${i} (${step.kind})`;
+        try {
+          for (const [e] of step.timed) if (e.eventKind === 'PreToolUse' || e.eventKind === 'PostToolUse') named.push(e.toolUseId);
+          if (step.kind === 'door') {
+            const a = await liveDoor();
+            const b = await twinDoor();
+            expect(b.retired, `${ctx}: the door's retired counts agree`).toBe(a.retired);
+          } else if (step.kind === 'interval') {
+            for (const d of [live, twin]) {
+              await d.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals.filter((x) => x.utcHour !== step.hour), intervalFor(step.hour!, 'measured', T(i))] }));
+            }
+          } else {
+            await live.applyAccepted(timedBatch(step.timed));
+            await twin.applyAccepted(timedBatch(step.timed));
+          }
+          const report = await twin.recover();                                                     // the twin is re-opened after every step
+          expect(report.failure, `${ctx}: recovery is ready`).toBeNull();
+          expect(canon(twin.state().checkpoint), `${ctx}: the recovered checkpoint equals the live one`).toBe(canon(live.state().checkpoint));
+          for (const id of new Set(named)) expect(factOf(twin, id), `${ctx}: the fact of ${id}, recovered vs live`).toEqual(factOf(live, id));
+        } catch (err) {
+          throw new Error(`${ctx}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+        }
+      }
+    }, 120_000);
+  });
+});
+
+// Run 762, the second half: the Workflow run's end on its task notification (D-6269), the start-less stop's ageing (D-6270) and the
+// retirement door's wiring (D-6268). It reuses the first section's fixtures above (`chainAt`, `Timed`, the B fixture's helpers, `re0Events`,
+// the door's cast) and adds none of its own beyond the notification envelope. The new report field `coveredEnds` and the horizon constant
+// are reached through casts and the model's namespace, so every row that needs them fails on its own assertion at the base.
+// D-WF1 to D-WF9, D-WF14, D-WF15 and D-SC1 to D-SC5 are in the correlation test; D-SC-COST in the fold-alloc test; D-WF-E2E in the
+// integration test; RE1 to RE3 and RE8 in the pass-timing test; RE9 in the watch test.
+describe('run 762: workflow runs end on their task notification, start-less stops age out, and the retirement door is wired (D-6268, D-6269, D-6270)', () => {
+  /** The ruled horizon, through the model's namespace. The literal (48 h) is the fallback ONLY so the rows run, and fail on their own
+   *  assertions, at the base, where the constant does not exist yet. Journal time throughout: no clock is read. */
+  const H = ((modelNs as unknown as Record<string, unknown>)['DELEGATION_STOP_CANDIDATE_HORIZON_MS'] as number | undefined) ?? 172_800_000;
+  const A0 = Date.UTC(2026, 9, 10);
+  const RUN = 'wf_run1';
+  const Y1 = 'agent-y1';
+  const Y2 = 'agent-y2';
+
+  /** A task notification as the hook journals it: a UserPromptSubmit carrying `notification` (copied from the correlation test's helper). */
+  const notification = (n: number, toolUseId: string, taskId: string, status: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed', over: Over = {}): Ev =>
+    ({ ...base(n, over), eventKind: 'UserPromptSubmit', notification: { taskId, toolUseId, status } });
+
+  /** `report.coveredEnds`, which does not exist at the base. */
+  const coveredEndsOf = (report: unknown): number | undefined => (report as { coveredEnds?: number }).coveredEnds;
+  /** The strict reading: the field exists and is a number (D-6269's recovery report). */
+  const coveredEndsStrict = (report: unknown): number => {
+    const n = coveredEndsOf(report);
+    expect(typeof n, 'DelegationRecoveryReport.coveredEnds exists and is a number (D-6269)').toBe('number');
+    return n as number;
+  };
+  const encoded = (cp: DelegationCheckpointV1, revision = 1): Uint8Array => encodeDelegationCheckpoint({ ...cp, revision });
+  const wfRun = (cp: DelegationCheckpointV1): DelegationActivityRow | undefined => cp.activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === RUN);
+  const wfWorker = (cp: DelegationCheckpointV1): DelegationActivityRow | undefined => cp.activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === `${RUN}-0`);
+  const wfRows = (cp: DelegationCheckpointV1): (DelegationActivityRow | undefined)[] => [wfRun(cp), wfWorker(cp)];
+  const candidateHolds = (cp: DelegationCheckpointV1) => cp.pruningHolds.filter((h) => h.reason === 'identity-candidate');
+  const onDisk = (dir: string): DelegationCheckpointV1 => decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!));
+
+  // ── the workflow world: session start, the Workflow launch (toolu_2, task_1), its task notification ───────────────────
+
+  /** r = [sessionStart(1), launch(2), notification(3)] and the four checkpoints of D-WF10 (a), (b), (c); the builder's own worker opening is
+   *  `openWorkflowWorkerFromMeta`. Every checkpoint is written at revision 1. */
+  function wfWorld(status: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed') {
+    const records = chainAt(sequenceAt([sessionStart(1), workflowLaunch(2, RUN), notification(3, 'toolu_2', 'task_1', status)], T0));
+    const [r1, r2, r3] = records as [DelegationJournalRecordV1, DelegationJournalRecordV1, DelegationJournalRecordV1];
+    const recA = recoverDelegation(null, [r1, r2]);
+    expect(recA.failure, 'the launch alone recovers').toBeNull();
+    const bA = recA.facts!.builder;
+    const opened = bA.openWorkflowWorkerFromMeta(PARENT, INC, RUN, 0);
+    expect(opened.kind, 'worker 0 opens from the run').toBe('opened');
+    const cpA = bA.build(1);
+    const bC = bA.clone();
+    bC.foldRecord(r3);
+    const cpC = bC.build(1);
+    const recB = recoverDelegation(null, [r1]);
+    expect(recB.failure).toBeNull();
+    const cpB: DelegationCheckpointV1 = { ...recB.state.checkpoint, revision: 1 };
+    return { records, r1, r2, r3, cpA, cpB, cpC };
+  }
+  /** cpC with the run and the worker set back to active, as a checkpoint built before the rule existed would hold them. */
+  const staleOf = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({
+    ...cp,
+    activities: cp.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)),
+  });
+
+  it('D-WF10: a task notification ends its run and worker on every route: recovered from a checkpoint before the launch, after it, folded live, and across the replaceRows path', async () => {
+    // Mutants: MW9 reds (a); MW11 and MW12 red (d) (the launch index or the folded rows lost across `replaceRows`).
+    const w = wfWorld();
+    const ended = { executionState: 'ended', endedAt: T(3), lastEventAt: T(3) };
+    // (c) the live fold of the notification onto a builder that holds the worker.
+    expect(wfRun(w.cpC), '(c) the run row exists').toBeDefined();
+    expect(wfWorker(w.cpC), '(c) the worker row exists').toBeDefined();
+    expect(wfRun(w.cpC), '(c) the notification ends the run at its observation time').toMatchObject(ended);
+    expect(wfWorker(w.cpC), '(c) and its worker').toMatchObject(ended);
+    // (a) a checkpoint covering the launch and the worker, recovered over the whole journal: the notification is replayed.
+    const a = recoverDelegation(encoded(w.cpA), w.records);
+    expect(a.failure, '(a) recovery from the checkpoint after the launch').toBeNull();
+    expect(a.replayed, '(a) the notification is the one replayed record').toBe(1);
+    expect(wfRows(a.state.checkpoint), '(a) run and worker rows equal the live fold\'s').toEqual(wfRows(w.cpC));
+    // (b) a checkpoint covering the session start only: the launch and the notification are both replayed (no worker: it opens by meta).
+    const b = recoverDelegation(encoded(w.cpB), w.records);
+    expect(b.failure, '(b) recovery from the checkpoint before the launch').toBeNull();
+    expect(wfRun(b.state.checkpoint), '(b) the run row equals the live fold\'s').toEqual(wfRun(w.cpC));
+    // (c) the live fold's own checkpoint covers everything: recovery changes nothing and ends nothing.
+    const c = recoverDelegation(encoded(w.cpC), w.records);
+    expect(c.failure).toBeNull();
+    expect(canon(c.state.checkpoint), '(c) nothing changes').toBe(canon({ ...w.cpC, revision: 1 }));
+    expect(coveredEndsStrict(c), '(c) no covered notification ended a row').toBe(0);
+    // (d) the applier: the launch, the worker by meta, an interval-only change (replaceRows), and only then the notification.
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(timedBatch(sequenceAt([sessionStart(1), workflowLaunch(2, RUN)], T0)));
+    const meta = await dur.applyPositiveWorkflowMeta({ parentId: PARENT, parentIncarnation: INC, runId: RUN, workerIndex: 0 });
+    expect(meta.kind).toBe('opened');
+    const change = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals, intervalFor('2026101400', 'measured', T(3))] }));
+    expect(change.durable, 'the interval-only change landed').toBe(true);
+    await dur.applyAccepted(timedBatch([[notification(3, 'toolu_2', 'task_1'), T0 + 2000]]));
+    const d = dur.state().checkpoint;
+    expect(wfRun(d), '(d) the run is ended after the replaceRows path').toMatchObject(ended);
+    expect(wfWorker(d), '(d) and its worker').toMatchObject(ended);
+    expect(wfRows(d), '(d) equal to the live fold\'s rows').toEqual(wfRows(w.cpC));
+  });
+
+  it('D-WF11: a checkpoint built before the rule holds an active run and worker whose notification is covered: recovery ends both, replays nothing and reports coveredEnds 2', () => {
+    // Mutants: MW1 and MW10.
+    const w = wfWorld();
+    const stale = staleOf(w.cpC);
+    expect(wfRows(stale).map((r) => r?.executionState), 'the premise: both are active in the stale checkpoint').toEqual(['active', 'active']);
+    const report = recoverDelegation(encoded(stale), w.records);
+    expect(report.failure, 'recovery is ready').toBeNull();
+    expect(report.replayed, 'the notification is covered, not replayed').toBe(0);
+    expect(coveredEndsStrict(report), 'the covered notification changed the run and the worker').toBe(2);
+    expect(wfRows(report.state.checkpoint), 'rows equal the live fold\'s, field for field').toEqual(wfRows(w.cpC));
+  });
+
+  it('D-WF12: the applier saves what covered notifications ended: the disk checkpoint, the SQLite projection and one warn line all show 2 rows', async () => {
+    // Mutant: MW13 (needsSave ignores coveredEnds: the disk assertion).
+    const w = wfWorld();
+    const dir = writeDir(w.records, staleOf(w.cpC));
+    const lines: string[] = [];
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => { lines.push(String(m)); });
+    let dur: DelegationDurability;
+    const h = harness({ dir });
+    try {
+      dur = await h.open({ warn: (m) => { lines.push(m); } });
+    } finally {
+      consoleWarn.mockRestore();
+    }
+    expect(dur.failure(), 'the applier is ready').toBeNull();
+    const disk = onDisk(dir);
+    expect(wfRows(disk).map((r) => r?.executionState), 'the disk checkpoint has both ended (needsSave)').toEqual(['ended', 'ended']);
+    const projected = h.store.readDelegationProjection().activities.filter((a) => a.sourceKind === 'workflow');
+    expect(projected.map((a) => a.executionState), 'SQLite shows both ended').toEqual(['ended', 'ended']);
+    const ours = lines.filter((l) => l.includes('delegation recovery ended'));
+    expect(ours, 'one warn line, naming 2 rows').toHaveLength(1);
+    expect(ours[0]).toContain('ccrc-server: delegation recovery ended 2 activity row(s) from covered task notifications');
+  });
+
+  it('D-WF13: a covered SubagentStop never edits a row: an agent hand-set back to active stays active, and coveredEnds is 0 (green by design; mutant MW14)', () => {
+    // Green at the base, where `coveredEnds` is absent: the count is read as `?? 0`, and at the tip it must exist and be 0.
+    const records = chainAt(sequenceAt([sessionStart(1), subagentStart(2, X), subagentStop(3, X)], T0));
+    const full = recoverDelegation(null, records);
+    expect(full.failure).toBeNull();
+    expect(activityOf(full.state.checkpoint, X)?.executionState, 'the premise: the stop ended X').toBe('ended');
+    const handSet: DelegationCheckpointV1 = {
+      ...full.state.checkpoint, revision: 1,
+      activities: full.state.checkpoint.activities.map((a) => (a.upstreamId === X ? { ...a, executionState: 'active' as const, endedAt: null } : a)),
+    };
+    const report = recoverDelegation(encoded(handSet), records);
+    expect(report.failure).toBeNull();
+    expect(report.replayed).toBe(0);
+    expect(activityOf(report.state.checkpoint, X), 'X stays exactly as the checkpoint held it').toMatchObject({ executionState: 'active', endedAt: null });
+    expect(coveredEndsOf(report) ?? 0, 'no row was changed by a covered record').toBe(0);
+  });
+
+  // ── D-6270: start-less stop ageing, recovery and the applier ─────────────────────────────────────────────────────────────
+
+  it('D-SC7: a join after the horizon opens from its OWN record whichever checkpoint recovery starts from: the same Y activityId and mapping from nothing, from r1 and from r1-r2', () => {
+    // Mutant: MS7 (covered records do not age: reds the third route).
+    const records = chainAt([[subagentStop(1, Y), A0], [sessionStart(2), A0 + H], [subagentStart(3, Y), A0 + H + 1000]]);
+    const expectedId = deriveDelegationActivityId(keyOf(Y), records[2]!.journalId);
+    const expectedMap = { [encodeDelegationNaturalKey(keyOf(Y))]: expectedId };
+    const routes: [string, Uint8Array | null][] = [
+      ['(i) from no checkpoint', null],
+      ['(ii) from the checkpoint after r1', encoded(recoverDelegation(null, records.slice(0, 1)).state.checkpoint)],
+      ['(iii) from the checkpoint after r1-r2', encoded(recoverDelegation(null, records.slice(0, 2)).state.checkpoint)],
+    ];
+    for (const [name, bytes] of routes) {
+      const report = recoverDelegation(bytes, records);
+      expect(report.failure, `${name}: recovery is ready`).toBeNull();
+      const y = activityOf(report.state.checkpoint, Y);
+      expect(y?.identityJournalId, `${name}: Y\'s identity is the SubagentStart past the horizon, not the stale stop`).toBe(records[2]!.journalId);
+      expect(y?.activityId, `${name}: Y\'s ID is derived from that record`).toBe(expectedId);
+      expect(report.state.checkpoint.activityIdsByNaturalKey, `${name}: the mapping`).toEqual(expectedMap);
+    }
+  });
+
+  it('D-SC8: the applier ages a start-less stop at the horizon: one identity-candidate hold on disk after the first application, none after the one at A0 + H', async () => {
+    // Mutants: MS1 and MS9. The applier\'s injected clock supplies each record\'s acceptedAt.
+    const h = harness();
+    const dur = await h.open();
+    h.clock.ms = A0;
+    await dur.applyAccepted(batch([sessionStart(1), subagentStop(2, Y)]));
+    expect(candidateHolds(onDisk(h.dir)).map((x) => x.ownerId), 'the stop-only candidate is held').toEqual([encodeDelegationNaturalKey(keyOf(Y))]);
+    h.clock.ms = A0 + H;
+    await dur.applyAccepted(batch([sessionStart(3)]));
+    expect(candidateHolds(onDisk(h.dir)), 'a record accepted H after the stop ages its candidate out').toEqual([]);
+    expect(dur.state().checkpoint.activities, 'and nothing was opened').toEqual([]);
+  });
+
+  it('D-SC9: a checkpoint holding two stop-only candidates, recovered over a journal whose last record is accepted H past them, holds none and opens nothing', () => {
+    // Red at the base: both holds survive. The suffix record is the only one that ages them (the first two are covered).
+    const first = chainAt([[subagentStop(1, Y1), A0], [subagentStop(2, Y2), A0 + 1000], [sessionStart(3), A0 + 2000]]);
+    const pre = recoverDelegation(null, first);
+    expect(pre.failure).toBeNull();
+    expect(candidateHolds(pre.state.checkpoint), 'the premise: two holds before the horizon').toHaveLength(2);
+    const last = chainAt([[sessionStart(4), A0 + H + 2000]], 4, first[2]!.digest);
+    const report = recoverDelegation(encoded(pre.state.checkpoint), [...first, ...last]);
+    expect(report.failure, 'recovery is ready').toBeNull();
+    expect(report.replayed).toBe(1);
+    expect(candidateHolds(report.state.checkpoint), 'both stops are past the horizon at the suffix record').toEqual([]);
+    expect(report.state.checkpoint.activities, 'no activity').toEqual([]);
+  });
+
+  // ── D-6268's wiring: RE0's stock through the door, the real store, the codec and the not-ready door ────────────────────────
+
+  /** RE0's stock as a fixture directory: the journal, then the legacy checkpoint covering it. `leased` adds a fourth equal call (l1) and a
+   *  JOURNAL-written lease for it AFTER the checkpoint's applied position (never `createLease`, which now refuses a zero-delta call). */
+  function re0Stock(opts: { leased?: boolean; withPending?: boolean } = {}) {
+    const events = [...re0Events({ withPending: opts.withPending }), ...(opts.leased === true ? [bashPre(20, 'toolu_l1', ['a']), bashPost(21, 'toolu_l1', ['a'])] : [])];
+    const records = chainAt(sequenceAt(events, T0));
+    const legacy = oldRuleCheckpoint(records);
+    let journal: DelegationJournalRecordV1[] = records;
+    if (opts.leased === true) {
+      const entry = leaseEntryFor(rowOf(legacy, 'toolu_l1')!.activityId, { leaseId: 'lease-l1', sourceKind: 'raw', adminRecord: 'wt-l1', canonicalPath: '/work/project-a/wt-l1' });
+      journal = [...records, buildDelegationJournalRecord({
+        sequence: records.length + 1, acceptedAt: formatDelegationInstant(T0 + 60_000), previousDigest: records[records.length - 1]!.digest, entry,
+      })];
+    }
+    return { records, legacy, journal, dir: (): string => writeDir(journal, legacy) };
+  }
+  const RETIRABLE = ['toolu_e1', 'toolu_e2', 'toolu_e3'];
+
+  /** A port over the real store that records each `projectChanged`: its mode, the rows it touched, and how many full projections it nested. */
+  function loggingPort(store: CoordStore) {
+    const real = delegationProjectionPortOfStore(store);
+    const full = vi.spyOn(store, 'projectDelegationCheckpoint');
+    const calls: { mode: string; nested: number; rows: number | null }[] = [];
+    const projection: DelegationProjectionPort = {
+      project: (cp) => real.project(cp),
+      projectChanged: (prior, next) => {
+        const before = full.mock.calls.length;
+        const r = real.projectChanged(prior, next);
+        calls.push({ mode: r.mode, nested: full.mock.calls.length - before, rows: r.mode === 'delta' ? r.rows : null });
+        return r;
+      },
+      insertEvents: (rows) => real.insertEvents(rows),
+      eventStats: () => real.eventStats(),
+    };
+    return { projection, calls, restore: (): void => full.mockRestore() };
+  }
+  const eventsOf = (store: CoordStore): unknown[] =>
+    store.db.prepare('SELECT * FROM delegation_events ORDER BY journalSequence').all().map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'id')));
+
+  it('RE4: over RE0\'s stock the door retires exactly the three equal calls, as one FULL projection with one nested full call; the next application deltas; the leased row survives (mutants ME3, ME14; 728\'s MD14, MD21)', async () => {
+    const stock = re0Stock({ leased: true });
+    const dir = stock.dir();
+    const h = harness({ dir });
+    const log = loggingPort(h.store);
+    try {
+      const dur = await h.open({ projection: log.projection });
+      expect(dur.failure(), 'the stock recovers ready, the suffix lease replayed').toBeNull();
+      const before = dur.state().checkpoint;
+      expect(before.leases.map((l) => l.leaseId), 'the premise: the fourth equal call is leased').toEqual(['lease-l1']);
+      const door = doorOf(dur);
+      const stats = h.store.delegationEventStats();
+      log.calls.length = 0;
+      const out = await door();
+      const after = dur.state().checkpoint;
+      // (i) three retired, and exactly those keys leave.
+      expect(out.retired, '(i) the three equal calls; the leased one is kept').toBe(3);
+      const gone = before.activities.filter((a) => !after.activities.some((x) => x.activityId === a.activityId));
+      expect(gone.map((a) => a.upstreamId).sort(), '(i) the rows that left').toEqual(RETIRABLE);
+      expect(Object.keys(before.activityIdsByNaturalKey).filter((k) => !Object.hasOwn(after.activityIdsByNaturalKey, k)).sort(), '(i) the map entries that left')
+        .toEqual(RETIRABLE.map((id) => encOf(id)).sort());
+      // (ii) one projectChanged, which answered full through one nested full projection.
+      expect(log.calls, '(ii) the door\'s commit: one projectChanged, full, one nested full call').toEqual([{ mode: 'full', nested: 1, rows: null }]);
+      // (iii) the five tables equal the checkpoint's view; (iv) no event row moved.
+      expect(canon(h.store.readDelegationProjection()), '(iii) SQLite equals the checkpoint\'s view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(after)));
+      expect(h.store.delegationEventStats(), '(iv) delegation_events is unchanged').toEqual(stats);
+      // (vi) the leased row and its lineage survive.
+      expect(rowOf(after, 'toolu_l1'), '(vi) the leased row').toBeDefined();
+      expect(after.leases.map((l) => l.leaseId), '(vi) its lease').toEqual(['lease-l1']);
+      expect(after.lineage.filter((n) => n.leaseId === 'lease-l1'), '(vi) its lineage').toHaveLength(1);
+      // (v) an ordinary application next: a delta, with the rows it touched.
+      await dur.applyAccepted(timedBatch([[subagentStart(40, Y), T0 + 70_000]]));
+      expect(log.calls.length, '(v) one more projectChanged').toBe(2);
+      expect(log.calls[1], '(v) it deltas again').toMatchObject({ mode: 'delta', nested: 0 });
+      expect(log.calls[1]!.rows, '(v) with the rows it touched').toBeGreaterThan(0);
+      expect(canon(h.store.readDelegationProjection()), '(iii) and the tables still equal the view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+      expect(h.store.delegationEventStats().count, '(iv) the new event is the only addition').toBe(stats.count + 1);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('RE5: over its own fixture (no active Pre-without-Post row, no gap at the bound) the retired checkpoint recovers ready from the files and equals a recovery from nothing (mutant MB-noA)', async () => {
+    const stock = re0Stock({ withPending: false });
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    expect((await doorOf(dur)()).retired, 'the three equal calls').toBe(3);
+    const live = dur.state().checkpoint;
+    // (a) from the files: ready, no failure, equal to the live state except the revision.
+    const files = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+    expect(files.failure, '(a) recovery over the retired checkpoint').toBeNull();
+    expect(withoutRevision(files.state.checkpoint), '(a) equal to live').toBe(withoutRevision(live));
+    // (b) from nothing over the whole journal (rule A): the same activities, mapping and IDs.
+    const fresh = recoverDelegation(null, stock.records);
+    expect(fresh.failure, '(b) the journal alone recovers').toBeNull();
+    expect(fresh.state.checkpoint.activities, '(b) the same activities, with the same IDs').toEqual(live.activities);
+    expect(fresh.state.checkpoint.activityIdsByNaturalKey, '(b) the same mapping').toEqual(live.activityIdsByNaturalKey);
+  });
+
+  it('RE5b: twin stores, one projecting always in full and one through the delta, agree table by table after the open, the retirement and two flushes (mutant ME3)', async () => {
+    const stock = re0Stock({ leased: true });
+    const mk = (alwaysFull: boolean) => {
+      const h = harness({ dir: stock.dir() });
+      const real = delegationProjectionPortOfStore(h.store);
+      const projection: DelegationProjectionPort = alwaysFull
+        ? { ...real, projectChanged: (_prior, next) => { real.project(next); return { mode: 'full' }; } }
+        : real;
+      return { h, open: () => h.open({ projection }) };
+    };
+    const a = mk(true);
+    const b = mk(false);
+    const full = await a.open();
+    const delta = await b.open();
+    expect(full.failure()).toBeNull();
+    expect(delta.failure()).toBeNull();
+    const same = (step: string): void => {
+      expect(b.h.store.readDelegationProjection(), `${step}: the five tables, by primary key`).toEqual(a.h.store.readDelegationProjection());
+      expect(eventsOf(b.h.store), `${step}: delegation_events without id`).toEqual(eventsOf(a.h.store));
+      expect(canon(delta.state().checkpoint), `${step}: the checkpoints`).toBe(canon(full.state().checkpoint));
+    };
+    same('after the open');
+    expect((await doorOf(full)()).retired).toBe(3);
+    expect((await doorOf(delta)()).retired).toBe(3);
+    same('after the retirement');
+    const flush1 = timedBatch([[subagentStart(40, Y), T0 + 70_000]]);
+    await full.applyAccepted(flush1);
+    await delta.applyAccepted(flush1);
+    same('after flush 1');
+    const flush2 = timedBatch([[bashPre(41, 'toolu_n2', ['a']), T0 + 71_000], [bashPost(42, 'toolu_n2', ['a', 'z']), T0 + 72_000]]);
+    await full.applyAccepted(flush2);
+    await delta.applyAccepted(flush2);
+    same('after flush 2');
+    expect(b.h.store.readDelegationProjection().activities.some((x) => RETIRABLE.includes(x.upstreamId)), 'the retired calls are gone from the delta store').toBe(false);
+  });
+
+  it('RE6: the retired checkpoint, with a pending Bash call and an agent candidate in the builder, still decodes with main\'s 15 keys, v 1 and the four hold reasons (green by design; mutants ME10, ME10b)', async () => {
+    // Green at the base too: with no door the stock is simply not retired, and the closed shape is the same.
+    const MAIN_KEYS = [
+      'v', 'revision', 'appliedJournalSequence', 'appliedJournalId', 'appliedJournalDigest', 'activityIdsByNaturalKey', 'coordinatorIntentByParent',
+      'sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds',
+    ];
+    const FOUR_REASONS = ['checkpoint-anchor', 'identity-candidate', 'open-lease', 'open-lineage'];
+    const stock = re0Stock();
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    const door = (dur as unknown as { retireZeroDeltaBashActivities?: () => Promise<unknown> }).retireZeroDeltaBashActivities;
+    if (typeof door === 'function') await door.call(dur);                       // absent at the base: the row does not assert it here
+    await dur.applyAccepted(timedBatch([[bashPre(30, 'toolu_q1', ['a']), T0 + 80_000], [bareTool(31, 'agent-q1'), T0 + 81_000]]));
+    const bytes = new Uint8Array(readDisk(dir).checkpoint!);
+    const cp = decodeDelegationCheckpoint(bytes);                              // accepts: the strict decoder reads the closed shape
+    expect(Object.keys(cp).sort(), 'the decoded checkpoint\'s keys are main\'s 15').toEqual([...MAIN_KEYS].sort());
+    expect(Object.keys(JSON.parse(Buffer.from(bytes).toString('utf8')) as object).sort(), 'and so are the file\'s').toEqual([...MAIN_KEYS].sort());
+    expect(cp.v).toBe(1);
+    expect(candidateHolds(cp).length, 'the agent candidate is held').toBeGreaterThan(0);
+    for (const h of cp.pruningHolds) expect(FOUR_REASONS, `hold reason ${h.reason}`).toContain(h.reason);
+    expect(Object.keys(modelNs.DELEGATION_PRUNING_HOLD_REASONS).sort(), 'the closed hold vocabulary is the same four').toEqual(FOUR_REASONS);
+  });
+
+  describe('RE7: a crash at each edge of the retirement commit (but project), then a fresh recover()', () => {
+    // The door appends no journal record, so the journal edges never fire in it; its edges are the checkpoint's. Before the rename the
+    // stock is held; from it on the stock is gone. Either way recovery is ready and the next hourly slot lands on the same result.
+    const CASES = (['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync'] as const)
+      .flatMap((edge) => (['before', 'after'] as const).map((when) => [edge, when] as const));
+    it.each(CASES)('RE7: a fault at %s:%s during the retirement of RE0\'s stock (mutant MB-noA reds the after-rename arm)', async (edge, when) => {
+      const stock = re0Stock();
+      const dir = stock.dir();
+      const fault = { armed: false, hits: 0 };
+      const dur = await harness({ dir }).open({ onEdge: (e, w) => { if (fault.armed && e === edge && w === when) { fault.hits++; throw new SimulatedCrash(`${e}:${w}`); } } });
+      expect(dur.failure()).toBeNull();
+      const door = doorOf(dur);
+      const preRename = edge === 'build' || edge === 'checkpoint-write' || edge === 'checkpoint-fsync' || (edge === 'checkpoint-rename' && when === 'before');
+      fault.armed = true;
+      await expect(door()).rejects.toThrow(SimulatedCrash);
+      fault.armed = false;
+      expect(fault.hits).toBe(1);
+      const fresh = await harness({ dir }).open();
+      expect(fresh.failure(), 'a fresh recover() does not refuse').toBeNull();
+      expect(RETIRABLE.map((id) => rowOf(fresh.state().checkpoint, id) !== undefined), preRename ? 'before the rename the stock is held' : 'from the rename on the stock is gone')
+        .toEqual([preRename, preRename, preRename]);
+      const next = await doorOf(fresh)();
+      expect(next.retired, preRename ? 'the next slot retires all three' : 'nothing is left to retire').toBe(preRename ? 3 : 0);
+      const ref = await harness({ dir: stock.dir() }).open();
+      expect((await doorOf(ref)()).retired).toBe(3);
+      expect(withoutRevision(fresh.state().checkpoint), 'the same result as an uncrashed retirement').toBe(withoutRevision(ref.state().checkpoint));
+    });
+  });
+
+  it('RE10: a not-ready applier (a restore marker refused its recovery) rejects the door with not-ready and writes nothing', async () => {
+    const stock = re0Stock();
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    writeFileSync(path.join(dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    expect(dur.state().phase, 'the applier is reconstructing').toBe('reconstructing');
+    const before = readDisk(dir);
+    await expect(doorOf(dur)()).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(dir), 'nothing was written').toEqual(before);
   });
 });
