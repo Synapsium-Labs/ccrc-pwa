@@ -377,17 +377,20 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
     'sessions', 'attempts', 'activities', 'mapping', 'intent', 'leases', 'lineage', 'cursors', 'intervals', 'candidates', 'leaseFacts',
     'leaseByIdentity', 'leaseByPath', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches',
   ].sort();
-  const SCALARS = ['appliedSequence', 'appliedJournalId', 'appliedDigest', 'revisionNo', 'coveredEnds'];
+  /** The scalars `clone()` deliberately does NOT copy, each with its reason. None today: every scalar field is carried by value. */
+  const NOT_COPIED: Record<string, string> = {};
+  const isCollection = (v: unknown): boolean =>
+    v instanceof Map || Array.isArray(v) || (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype);
   const collectionsOf = (b: DelegationCheckpointBuilder): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
-    for (const [name, v] of Object.entries(b)) {
-      if (v instanceof Map || Array.isArray(v) || (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype)) out[name] = v;
-    }
+    for (const [name, v] of Object.entries(b)) if (isCollection(v)) out[name] = v;
     return out;
   };
+  /** Every own field that is not a collection, derived from the instance as the collections are, so a new scalar joins the census itself. */
   const scalarsOf = (b: DelegationCheckpointBuilder): Record<string, unknown> => {
-    const entries = Object.entries(b) as [string, unknown][];
-    return Object.fromEntries(SCALARS.map((k) => [k, entries.find(([n]) => n === k)?.[1]]));
+    const out: Record<string, unknown> = {};
+    for (const [name, v] of Object.entries(b)) if (!isCollection(v) && !Object.hasOwn(NOT_COPIED, name)) out[name] = v;
+    return out;
   };
   const sizeOf = (v: unknown): number => (v instanceof Map ? v.size : Array.isArray(v) ? v.length : Object.keys(v as object).length);
 
@@ -399,7 +402,8 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
       [sessionStart(1), A0], [wfLaunchAt(2, 'wf_run1', 'task_1', 'toolu_wf1'), A0 + 1000], [notificationAt(3, 'toolu_wf1', 'task_1'), A0 + 2000],
     ]);
     const cp0 = recoverDelegation(null, covered).state.checkpoint;
-    const stale = { ...cp0, activities: cp0.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)) };
+    // revision 1, so the builder's revisionNo is off its initial 0 and a clone() that forgot it would red (the derived scalar census).
+    const stale = { ...cp0, revision: 1, activities: cp0.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)) };
     const b = DelegationCheckpointBuilder.from(stale);
     for (const r of covered) b.observeRecord(r);
     // Folded: an agent that opens, a bare occurrence of another (a candidate), a start-less stop (a stop-only candidate) and a pending Bash Pre.
@@ -430,13 +434,17 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
     return b;
   }
 
-  it('RB-CLONE: (i) clone() copies each of the 17 collections as a new object equal by value, and the scalars by value (mutants MCL(F))', () => {
+  it('RB-CLONE: (i) clone() copies each of the 17 collections as a new object equal by value, and every scalar by value (mutants MCL(F), MCL-s)', () => {
     const b = populated();
     const own = collectionsOf(b);
     expect(Object.keys(own).sort(), 'the builder\'s Map, Array and plain-object fields are exactly the 17 collections clone() must copy').toEqual(COLLECTIONS);
     for (const name of COLLECTIONS) expect(sizeOf(own[name]), `the fixture fills ${name}`).toBeGreaterThan(0);
     const coveredEnds = scalarsOf(b)['coveredEnds'];
     expect(typeof coveredEnds === 'number' && coveredEnds > 0, `coveredEnds (${String(coveredEnds)}) counts the run a covered notification ended`).toBe(true);
+    // Every scalar the fixture holds differs from a new builder's, so a scalar clone() forgot would read back as the default and red below.
+    const fresh = scalarsOf(new DelegationCheckpointBuilder());
+    expect(Object.keys(scalarsOf(b)).sort(), 'a new builder has the same scalar fields').toEqual(Object.keys(fresh).sort());
+    for (const [name, v] of Object.entries(scalarsOf(b))) expect(v, `the fixture moves ${name} off its initial value`).not.toEqual(fresh[name]);
     const c = b.clone();
     const copy = collectionsOf(c);
     expect(Object.keys(copy).sort(), 'the clone has the same collection fields').toEqual(COLLECTIONS);
@@ -444,7 +452,7 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
       expect(copy[name], `clone().${name} equals the original by value`).toEqual(own[name]);
       expect(copy[name], `clone().${name} is a new object, not the original's`).not.toBe(own[name]);
     }
-    expect(scalarsOf(c), 'the scalars are carried by value').toEqual(scalarsOf(b));
+    expect(scalarsOf(c), 'every scalar, derived from the instance, is carried by value').toEqual(scalarsOf(b));
   });
 
   it('RB-CLONE: (ii) replaceRows(build()) keeps each journal-derived field equal by value (mutants MCL-r(F))', () => {
