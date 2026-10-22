@@ -655,11 +655,12 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
     expect(readFileSync(join(out2, 'release-main.state'), 'utf8')).toBe('built true\ntag v0.0.2\n');
   });
 
-  it('W25-R18: an unwritable summary never fails the run and prints no shell error', () => {
+  it('W25-R18: an unwritable summary or output file never fails the run and prints no shell error', () => {
     const home = mkTmp('ccrc-relmain-w25r18-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
     const out = join(home, 'out');
-    const d = run(root, home, ['decide', '--out', out], 0, { GITHUB_STEP_SUMMARY: home });
+    // The step's output file is unwritable too: set_output must not fail the run either.
+    const d = run(root, home, ['decide', '--out', out], 0, { GITHUB_STEP_SUMMARY: home, GITHUB_OUTPUT: home });
     expect(d.code).toBe(0);
     expect(readFileSync(join(out, 'release-main.decision'), 'utf8')).toBe('same-as v0.0.1\n');
     expect(d.stdout).toContain(L.skip('v0.0.1', 2, 'v0.0.2'));
@@ -800,11 +801,16 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
 
   it('W25-R24: the token and the workflow-command files are not passed to the helper\'s environment', () => {
     const home = mkTmp('ccrc-relmain-w25r24-');
-    const leak = "process.stdout.write(process.env.GH_TOKEN || process.env.GITHUB_OUTPUT ? 'changed 1 \"leak\"\\n' : 'unchanged 0\\n');";
+    const names = ['GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'];
+    const leak = `const n = ${JSON.stringify(names)}.filter((k) => process.env[k]);\nprocess.stdout.write(n.length ? 'changed 1 "leak ' + n.join(',') + '"\\n' : 'unchanged 0\\n');\n`;
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, scope: leak });
     const out = join(home, 'out');
-    const d = run(root, home, ['decide', '--out', out], 0, { GH_TOKEN: 'fixture-token', GITHUB_OUTPUT: join(home, 'output') });
+    const env: NodeJS.ProcessEnv = {};
+    for (const k of names) env[k] = join(home, `val-${k}`);
+    env.GH_TOKEN = 'fixture-token';
+    const d = run(root, home, ['decide', '--out', out], 0, env);
     expect(d.code, d.stderr).toBe(0);
+    expect(d.stdout).not.toContain('leak');
     expect(readFileSync(join(out, 'release-main.decision'), 'utf8')).toBe('same-as v0.0.1\n');
     expect(readFileSync(join(home, 'gh-env'), 'utf8')).toBe('GH_TOKEN=fixture-token\n');
   });
