@@ -1,8 +1,9 @@
-// Refined's phone header, gauges and `+ New` (W2 Task S5, D-5471), in a real Chrome over the production build.
+// Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, D-6466), in a
+// real Chrome over the production build.
 //
 // What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Inbox count and five lanes, the
 // header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
-// line, the gauges sit in two columns, the `+ New` clears the last card once the list is scrolled to its end and sits
+// line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its end and sits
 // above the home indicator, a toast's host sits above it, and the page does not scroll sideways. At 900, 1280 and 1920
 // no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round `+` (S11).
 //
@@ -76,7 +77,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .accounts-compact-gauge').length === 5
+        await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 5
           && document.querySelector('.ref-phone-head [aria-label="Inbox, 120 unread"]') !== null
           && document.querySelectorAll('.proj-card').length > 0 && document.querySelector('.ref-fab') !== null, undefined, { timeout: 20_000 });
         await page.waitForTimeout(200); // the FAB's ResizeObserver publishes
@@ -110,9 +111,9 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const sub = document.querySelector<HTMLElement>('.ref-phone-sub .fleet-count');
           if (sub === null) out.push('no readout');
           else if (sub.getClientRects().length !== 1) out.push('the readout wraps');
-          const lefts = new Set([...document.querySelectorAll<HTMLElement>('.ref-phone-head .accounts-compact-gauge')]
+          const lefts = new Set([...document.querySelectorAll<HTMLElement>('.ref-phone-head .account-gauge')]
             .map((g) => Math.round(g.getBoundingClientRect().left)));
-          if (lefts.size !== 2) out.push(`the gauges sit in ${lefts.size} columns`);
+          if (lefts.size !== 2) out.push(`the cards sit in ${lefts.size} columns`);
           const fab = document.querySelector<HTMLElement>('.ref-fab')!.getBoundingClientRect();
           if (fab.height < 43.5) out.push(`+ New is ${Math.round(fab.height)} tall`);
           if (fab.bottom > window.innerHeight - 8) out.push('+ New sits on the home indicator');
@@ -182,4 +183,82 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
       await ctx.close();
     }
   }, 60_000);
+});
+
+/** One lane of the 17-lane fixture and what its card must show. */
+interface LaneCase { acct: Record<string, unknown>; label: string; windows: string[]; counted: boolean[] }
+
+/** 17 lanes: one rolled over, one signed out, one never read, one with a long label, a few with a window but no reset,
+ *  the rest reading both windows with a reset ahead. `counted` is, per shown window, whether a countdown must print. */
+function seventeen(): { fixture: AppFixture; cases: LaneCase[] } {
+  const cases: LaneCase[] = Array.from({ length: 17 }, (_, i) => {
+    const base = {
+      wrapper: `w${i}`, five: 20 + i * 4, seven: 10 + i * 3, ts: nowSec - 60, fiveResetAt: nowSec + 7200 as number | null,
+      sevenResetAt: nowSec + 3 * 86400 as number | null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+    } as Record<string, unknown>;
+    let label = `lane-${String.fromCharCode(97 + i)}`;
+    let counted = [true, true];
+    if (i === 0) { Object.assign(base, { five: 0, fiveRolledOver: true, fiveResetAt: nowSec - 60 }); counted = [false, true]; }
+    if (i === 1) base.authDead = true;
+    if (i === 2) { Object.assign(base, { five: null, seven: null, fiveResetAt: null, sevenResetAt: null }); counted = []; }
+    if (i === 3) label = 'lane-with-a-very-long-name-q';
+    if (i === 4) { Object.assign(base, { seven: null, fiveResetAt: null, sevenResetAt: null }); counted = [false]; }
+    if (i === 5) { Object.assign(base, { five: null, fiveResetAt: null, sevenResetAt: null }); counted = [false]; }
+    const windows = [base.five !== null ? '5h' : null, base.seven !== null ? '7d' : null].filter((w): w is string => w !== null);
+    return { acct: base, label, windows, counted };
+  });
+  return {
+    cases,
+    fixture: {
+      ...FIXTURE,
+      api: {
+        ...FIXTURE.api,
+        '/api/accounts': {
+          accounts: cases.map((c) => c.acct),
+          projected: null,
+          roster: cases.map((c, i) => ({ id: `w${i}`, label: c.label, hue: 'cyan', homeAble: true, hidden: false })),
+        },
+      },
+    },
+  };
+}
+
+describe("with 17 lanes the phone's strip keeps every card readable", () => {
+  for (const theme of THEMES) {
+    for (const width of [360, 390]) {
+      it(`with 17 lanes at 360 and 390 each card shows its lane's windows and a countdown where the window has a reset, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
+        const { fixture, cases } = seventeen();
+        const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, fixture);
+        try {
+          await page.goto(server!.origin + '/');
+          await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 17, undefined, { timeout: 20_000 });
+          const faults = await page.evaluate((expected) => {
+            const out: string[] = [];
+            const cards = [...document.querySelectorAll<HTMLElement>('.ref-phone-head .account-gauge')];
+            if (cards.length !== expected.length) out.push(`${cards.length} cards, not ${expected.length}`);
+            for (const [i, card] of cards.entries()) {
+              const want = expected[i];
+              if (want === undefined) continue;
+              const rows = [...card.querySelectorAll<HTMLElement>('.acct-row')];
+              const wins = rows.map((r) => r.querySelector('.acct-win')?.textContent ?? '');
+              if (wins.join() !== want.windows.join()) out.push(`${want.label} shows [${wins}], not [${want.windows}]`);
+              for (const [j, row] of rows.entries()) {
+                const reset = row.querySelector('.acct-reset')?.textContent ?? '';
+                if (want.counted[j] === true && (reset === '' || reset === '↻ —')) out.push(`${want.label}'s ${wins[j]} row prints no countdown (${JSON.stringify(reset)})`);
+              }
+              if (card.getBoundingClientRect().right > window.innerWidth + 0.5) out.push(`${want.label}'s card runs past the viewport`);
+            }
+            const lefts = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left)));
+            if (lefts.size !== 2) out.push(`the cards sit in ${lefts.size} columns`);
+            if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
+            return out;
+          }, cases.map((c) => ({ label: c.label, windows: c.windows, counted: c.counted })));
+          expect(faults).toEqual([]);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }, 60_000);
+    }
+  }
 });

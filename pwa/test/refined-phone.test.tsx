@@ -2,8 +2,8 @@
 //
 // What a person on a phone sees first, held through `App` in the Refined skin: one header row of the wordmark and four
 // icon doors (each a registry command, each named by its word, a badged one by its count too), one mono readout under
-// it from `fleetSummary`, the lane gauges as a grid, and an extended `+ New` in the thumb's corner that publishes its
-// height so a toast clears it. jsdom applies no media queries and no layout, so a width is a `matchMedia` stub that
+// it from `fleetSummary`, the full accounts strip (each lane's 5h and 7d rows, the strip one `go-accounts` door), and an
+// extended `+ New` in the thumb's corner that publishes its height so a toast clears it. jsdom applies no media queries and no layout, so a width is a `matchMedia` stub that
 // answers every `min-width` and `max-width` query against one number, and what this file counts is what is MOUNTED;
 // what is visible at each width is the per-width render pass.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,7 @@ const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
+const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/CompactGauges');
 
 /** A Docs visit whose actions are inert: the up door reads only the page. */
 const docsVisit = (): DocsVisit => ({
@@ -183,20 +184,36 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it('the gauges grid has one gauge per lane, two columns, the grid one door to /accounts', async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, the strip one door to /accounts carrying go-accounts", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
     render(<App />);
-    const grid = await within(head()).findByRole('link', { name: /^account usage.* — open accounts$/ });
-    await within(grid).findByText('lane-a');
-    expect(grid).toHaveAttribute('data-compact', 'grid');
-    expect(grid).toHaveAttribute('data-command', 'go-accounts');
-    expect(grid.querySelectorAll('.accounts-compact-gauge')).toHaveLength(lanes.length);
-    // One readout of the lanes on the page: the grid replaces the phone's strip.
+    const strip = await within(head()).findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    await within(strip).findByText('lane-a');
+    expect(strip).toHaveClass('accounts-strip');
+    expect(strip).toHaveAttribute('data-command', 'go-accounts');
+    const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
+    expect(cards).toHaveLength(lanes.length);
+    const windows = (card: HTMLElement): string[] => [...card.querySelectorAll('.acct-win')].map((w) => w.textContent ?? '');
+    expect(windows(cards[0]!)).toEqual(['5h', '7d']);
+    expect(windows(cards[1]!)).toEqual(['5h']);
+    expect(windows(cards[2]!)).toEqual(['7d']);
+    // One readout of the lanes on the page: the full strip is the phone's, and no compact grid sits beside it.
     expect(document.querySelectorAll('.accounts-strip, .accounts-compact')).toHaveLength(1);
-    const css = readFileSync(path.join(SRC, 'fleet', 'fleet.css'), 'utf8');
-    expect(css).toMatch(/\.accounts-compact\[data-compact='grid'\] \.accounts-compact-lanes \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+    // The strip is a command door: the layer navigates.
+    fireEvent.click(strip);
+    expect(location.pathname).toBe('/accounts');
+  });
+
+  it('the phone header mounts no compact grid', async () => {
+    const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null)];
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    atWidth(390);
+    render(<App />);
+    await within(head()).findByText('lane-a');
+    expect(document.querySelector('.accounts-compact')).toBeNull();
+    expect(head().querySelector('[data-compact]')).toBeNull();
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {
