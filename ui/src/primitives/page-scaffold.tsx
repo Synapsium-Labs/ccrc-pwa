@@ -64,8 +64,9 @@ export interface PageScaffoldProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   title: ReactNode;
   /** Back, when the screen has one: its accessible label, what it does, and
    *  the screen's hook class for its tests. The desktop shell hides it inside
-   *  the detail pane (shell.css, `.back-btn`). */
-  back?: { label: string; onClick: () => void; className?: string };
+   *  the detail pane (shell.css, `.back-btn`). `data-command` is the
+   *  registry command it stands for, when it is one (the app's `doorMark`). */
+  back?: { label: string; onClick: () => void; className?: string; 'data-command'?: string };
   /** Controls at the header's right, after the title. */
   actions?: ReactNode;
   /** The wide column (`--page-max-wide`): a board, not a reading column. */
@@ -93,7 +94,7 @@ export function PageScaffold({
       <header className={PAGE_HEAD}>
         <div className={cn(PAGE_HEAD_ROW, nav !== undefined ? COLUMN.wide : column)}>
           {back !== undefined && (
-            <BackButton className={back.className} aria-label={back.label} onClick={back.onClick}>‹</BackButton>
+            <BackButton className={back.className} aria-label={back.label} onClick={back.onClick} data-command={back['data-command']}>‹</BackButton>
           )}
           <span className={PAGE_CARET} aria-hidden="true">❯</span>
           <h1 className={PAGE_TITLE}>{title}</h1>

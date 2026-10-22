@@ -15,6 +15,7 @@ import type { ReactNode } from 'react';
 import { Door, Icon, SETTINGS_GLYPH } from '@ccrc/ui';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
+import { PoolLag } from './poolLag';
 import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
@@ -35,11 +36,7 @@ export function FleetHead(
         {chrome && <span className="wordmark">ccrc</span>}
         <div className="fleet-head-right">
           {countLine !== null && <span className="fleet-count">{countLine}</span>}
-          {poolLag !== null && (
-            <span className="pool-epoch-lag" data-testid="pool-epoch-lag" title="account-pool projection lag">
-              {poolLag}
-            </span>
-          )}
+          {poolLag !== null && <PoolLag text={poolLag} />}
           {chrome && (
             <>
               {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a

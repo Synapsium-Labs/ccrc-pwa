@@ -23,6 +23,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { backToFleet } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
@@ -257,7 +258,7 @@ export function AccountsScreen(): ReactNode {
 
   return (
     // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
-    <PageScaffold title="Accounts" back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'accounts-back' }}>
+    <PageScaffold title="Accounts" back={backToFleet('accounts-back')}>
 
       {projectionLine !== null && <p className="accounts-projection">{projectionLine}</p>}
 

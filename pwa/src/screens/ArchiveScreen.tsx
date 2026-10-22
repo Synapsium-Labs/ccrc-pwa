@@ -5,7 +5,7 @@
 // manifest ws-archive measured on the box rather than from an estimate here.
 import type { ReactNode } from 'react';
 import { BareRow, EmptyState, PageScaffold, Section } from '@ccrc/ui';
-import { navigate } from '../lib/router';
+import { backToFleet } from '../command/door';
 import { humanBytes } from '../lib/format';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
@@ -63,7 +63,7 @@ export function ArchiveScreen({
   const { count } = summary;
   // The page scaffold (D-5102). Archive drew no header before, so a phone had
   // no way back but the browser's own; it has Back and a title now, empty or not.
-  const back = { label: 'Back to fleet', onClick: () => navigate('/') };
+  const back = backToFleet();
   if (count === 0) {
     return (
       <PageScaffold title="Archive" back={back}>
