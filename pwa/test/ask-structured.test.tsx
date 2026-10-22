@@ -1047,13 +1047,21 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     await act(async () => { await Promise.resolve(); });
     expect(send).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: /^In-process/ }), 'a landed send holds the sheet busy').toBeDisabled();
+    // The pane echoes the typed words in the free-text row (typing changes the screen's id): the held surface now shows the
+    // very row the send typed, so only the ask ending, not a pane that moved on, can release it.
+    const typed: Dialog = {
+      ...fx.dialog!, id: 'dlg-typed', options: fx.dialog!.options.map((o) => (o.index === 4 ? { ...o, label: 'Memcached' } : o)),
+    };
+    act(() => store.getState().apply({ type: 'dialog', dialog: typed }));
+    expect(screen.getByRole('button', { name: /^In-process/ })).toBeDisabled();
 
     act(() => {
       store.getState().apply({ type: 'ask_cleared' });
       store.getState().apply({ type: 'dialog_cleared' });
     });
     act(() => {
-      for (const frame of fx.frames) store.getState().apply(frame);
+      store.getState().apply({ type: 'dialog', dialog: typed });
+      store.getState().apply({ type: 'ask', ask: fx.ask!, key: 'ask-key-next' });
     });
     expect(panel()?.getAttribute('data-state')).toBe('open');
     expect(screen.getByRole('button', { name: /^In-process/ }), 'rows locked by a send that ended').toBeEnabled();
