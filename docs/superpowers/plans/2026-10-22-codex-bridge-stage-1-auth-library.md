@@ -14,17 +14,18 @@ state `needs-signin`, never a sign-in inside a request.
 
 **Architecture:** one module, `ccd/ccgpt-auth.py`, placed as the fifth GPT-lane file at
 `~/.local/bin/ccgpt-auth.py`, beside the shim. Python callers load it by file path; bash callers run it as a CLI
-(`python3 -IS ~/.local/bin/ccgpt-auth.py <verb>`); the one node-side consumer (history redaction) reaches it
-through that CLI too. The lane's LiteLLM tier reaches it through ccrc's existing LiteLLM patch
-(`_rt_patch_source`, `ccd/ccgpt-runtime`), which gains an authenticator part: when the tier's environment names the
-library, LiteLLM's `Authenticator.get_access_token` and `get_account_id` call the library, LiteLLM's own file write
-is disabled, and its device-code sign-in raises. Beside each credential the library keeps three files of its own:
-a lock, a checkpoint and a non-secret status file.
+(`python3 -IS ~/.local/bin/ccgpt-auth.py <verb>`); the one node-side consumer (history redaction) asks the tree's
+copy for the paths through that CLI and reads the files itself, as a secret source. The lane's LiteLLM tier reaches
+it through ccrc's existing LiteLLM patch (`_rt_patch_source`, `ccd/ccgpt-runtime`), which gains an authenticator
+part: when the tier's environment names the library, LiteLLM's `Authenticator.get_access_token` and
+`get_account_id` call the library, LiteLLM's own file write is disabled, and its device-code sign-in raises. Beside
+each credential the library keeps three files of its own: a lock, a checkpoint and a non-secret status file.
 
-**Tech Stack:** Python 3.9+ standard library only (`fcntl`, `json`, `os`, `threading`, `urllib.request`), no
-virtual environment; bash (`ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-models-probe`, `ccd/ccd-history-sweep`);
-the runtime's LiteLLM patch (Python inside a bash heredoc); one `.mjs` emitter (`shared/generate.mjs`); vitest in
-`server/`, which spawns `python3 -I` drivers against a local fake token endpoint.
+**Tech Stack:** Python 3.9+ standard library only (`fcntl`, `hashlib`, `json`, `os`, `threading`,
+`urllib.request`), no virtual environment; bash (`ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-models-probe`,
+`ccd/ccd-history-sweep`); the runtime's LiteLLM patch (Python inside a bash heredoc); one `.mjs` emitter
+(`shared/generate.mjs`) and the history sweep (`ccd/history/sweep.mjs`); vitest in `server/`, which spawns
+`python3 -I` drivers against a local fake token endpoint.
 
 **Spec:** `docs/superpowers/specs/2026-10-15-codex-bridge-design.md` — §2.6 (the design), §2.8 (Stage 1), §4 (the
 ownership-rule amendment), §5 (the auth-library tests). The bridge (`direct` mode, Stage 2), the `siwc` upstream,
@@ -33,8 +34,8 @@ its credential file, its paste-the-callback sign-in, `ccrc codex consent`, the h
 and tests it.
 
 **Branch:** two PRs, one per wave, each cut from `origin/main` after the previous one merged. Every line number
-below is at `e990cc46d`, the commit this plan was written against; where an anchor moved, find the quoted text, not
-the number.
+below is at `e990cc46d`, the commit this plan was written against (`origin/main` at `11b7096d3` has the same `ccd/`,
+`server/test/`, `shared/`, `deploy/` and spec trees); where an anchor moved, find the quoted text, not the number.
 
 **Merge order: the docs first.** This plan is not on `e990cc46d`. It lands in a docs PR, which merges BEFORE wave
 1's branch is cut ("Before Task 1", Step 1, checks).
@@ -56,10 +57,18 @@ the number.
    HOMEs only and a local fake token endpoint, never OpenAI.
 7. Departures from the spec are `D-TBD-<slug>` entries in "## Deviations found"; the controller issues numbers.
 8. Rollout notes for the operator at the end, not tasks.
+9. **Sequencing (measured by the controller, 2026-10-22).** R-O9 closed on 2026-10-19: Part B was verified and its
+   daily cron was deleted. Stage 0's measured windows were applied on 2026-10-22 at about 10:48Z: 400000 on both
+   lanes' class models, measured offline to move proactive compaction from 167k to 367k. Stage 0 is independent of
+   the bridge (spec Figure 5), so nothing holds wave 2's rollout back once wave 2 has landed.
+10. **A library that fails to load fails closed.** With `CCRC_CODEX_AUTH_LIB` set and the library failing to import,
+    every token request is a 401 `auth-library-absent`, and LiteLLM's `_write_auth_file` is a no-op whether or not
+    the library loaded (Task 6).
 
-**What was measured to write this plan** (`e990cc46d`, plus the LiteLLM 1.105.0 source in the installed runtime;
-1.104.0's `authenticator.py` is byte-identical; the pinned range is `litellm[proxy]>=1.101.0,<1.110`,
-`ccd/ccgpt-runtime:135`). Credential contents were never read; live modes were read with `stat` only.
+**What was measured to write this plan** (`e990cc46d`, plus the LiteLLM 1.105.0 source in the installed runtime,
+`Version: 1.105.0` in its `METADATA`; 1.104.0's `authenticator.py` is byte-identical; the pinned range is
+`litellm[proxy]>=1.101.0,<1.110`, `ccd/ccgpt-runtime:135`). Credential contents were never read; live modes were
+read with `stat` only.
 - **The in-request device flow is LiteLLM's.** `Authenticator.get_access_token` (`litellm/llms/chatgpt/
   authenticator.py:55-76`) falls from a failed refresh into a 5-minute cooldown wait and then `_login_device_code`
   (`:153-173`), which writes `device_code_requested_at` into the file, prints a code into the tier's log and polls
@@ -69,21 +78,38 @@ the number.
 - **Every LiteLLM "read" can write.** `get_account_id` (`:78-90`) and `_is_token_expired` (`:113-122`) merge a
   derived field back; `_write_auth_file` (`:106-111`) truncates in place with no tmp file, fsync, rename or lock;
   `_read_auth_file` (`:96-104`) reads a torn file as no file. So no reader may go through LiteLLM's class.
+- **LiteLLM's expiry rule** (`:113-122`): a numeric stored `expires_at` is used with the 60 s skew; otherwise the
+  access token's `exp` claim (`_get_expires_at`, `:124-129`); expired only when neither exists.
+- **LiteLLM's messages carry the token answer.** `Device code response missing fields: {data}` (`:200`),
+  `Token exchange response missing fields: {data}` (`:292`) and `Refresh response missing fields: {data}` (`:330`).
+  The exchange requires `access_token`, `refresh_token` and `id_token` (`:286-290`); the refresh requires
+  `access_token` and `id_token` (`:326-328`).
 - **ccrc already ships a patch into that runtime.** `_rt_patch_source` (`ccd/ccgpt-runtime:1023-1203`) is written into
   each generation's site-packages beside a `.pth`, loaded under `-I` by every interpreter the generation starts, and
-  applied lazily by a meta-path finder when its target module loads. Its bytes are hashed into the stamp's
+  applied lazily by a meta-path finder when its target module loads (`_Finder`, `:1165-1192`: it wraps
+  `exec_module`, so a module already loaded is never patched again). Its bytes are hashed into the stamp's
   `probeSha256`, so an edit rebuilds each box's runtime once, and the behaviour probe (`:692-1013`) is its
-  acceptance test. It touches no authenticator today.
+  acceptance test. The probe imports the authenticator at `:794`, before any scenario, scrubs only `CHATGPT_`,
+  `LITELLM_` and `OPENAI_` variables (`:752-753`), denies every socket by an audit hook (`:742-748`), and exits at its
+  first `fail` (`:783-786`). It touches no authenticator today.
 - **The callers.** The tier (`ccd/ccrc:13005-13008`); the usage poller's `_unattended(Authenticator)().
   get_access_token()` (`ccd/ccgpt-usage.py:656`); the models probe's same guard plus `get_account_id()`
   (`ccd/ccrc-models-probe:293-297`); `ccrc codex login`'s unguarded `Authenticator().get_access_token()`
   (`ccd/ccrc:13464-13481`); existence checks in `ccrc codex start` (`:13179-13182`) and the doctor
-  (`ccd/ccrc-doctor-checks:7068-7083`, which checks no mode although its comment says so); account removal's wait
+  (`ccd/ccrc-doctor-checks:7079-7083`, which checks no mode although its comment says so); account removal's wait
   for an in-flight poll (`ccd/ccrc:24544`). The spec's "models probe's older arm" is already deleted on `main`
   (ownership spec §23.2; `server/test/models-probe.test.ts:894`): nothing to do there.
 - **`-I` hides a sibling module.** Under `-I` (which implies `-P` on 3.11+) neither the script's directory nor
   `PYTHONPATH` is on `sys.path`, measured with system `python3` and the runtime's interpreter alike; the probe runs
   its program from stdin and has no `__file__`. So every Python caller loads the library by explicit path.
+- **`flock` and modes, measured with `python3 -I` (3.12.3) on the fleet box.** Two `os.open` calls on one path in one
+  process: after the first takes `flock(LOCK_EX|LOCK_NB)`, the second's raises `BlockingIOError`, so a lock file
+  opened per call already excludes threads. Under umask 0022, `os.open(…, 0o600)` makes 0600 with or without
+  `os.fchmod`; under umask 0277 it makes 0400 and `fchmod(0o600)` makes 0600; `mkdir(0o700)` makes 0500; a lock file
+  created 0400 refuses a second `O_RDWR` open with `EACCES`; `O_NOFOLLOW` on a symlink raises `ELOOP`.
+- **The token endpoint's error body is unmeasured.** The scratchpad's copy of `codex-rs` holds `codex-api`, `core`,
+  `models-manager`, `protocol` and `responses-api-proxy` only, no login or refresh code; nothing else on the box
+  is Codex's own source (open question 3).
 
 ## Global Constraints
 
@@ -97,40 +123,57 @@ the number.
   "Every credential file is registered in history's secret sources." And the figure: "take the lock (poll 50 ms, up
   to 60 s)", "re-read under the lock", "write tmp at 0600, fsync, rename, fsync the directory", "A failed write keeps
   the new token in memory and retries, so a full disk loses nothing."
-- **The rule this stage changes.** Ownership spec §9's closing sentence, "Nothing in ccrc … ever reads the contents of
-  an OAuth file", becomes "exactly one ccrc library, `ccd/ccgpt-auth.py`, reads and writes them" (spec §2.6, D15).
-  The tests that pin the old rule are changed in the task that changes the code they pin, each named in that task,
-  never deleted without a replacement that pins the new rule.
+- **The rule this stage changes.** Ownership spec §9's closing sentence (`:497-498`), "Nothing in ccrc … ever reads
+  the contents of an OAuth file", becomes "exactly one ccrc library, `ccd/ccgpt-auth.py`, reads and writes them;
+  history's redaction reads them as secret sources and never writes them" (spec §2.6, D15). The tests that pin the
+  old rule are changed in the task that changes the code they pin, each named in that task, never deleted without a
+  replacement that pins the new rule.
 - **The library imports nothing outside the standard library, and never LiteLLM.** It runs on Python 3.9 or later
   (Apple's `python3` on a macOS box can be 3.9): no `match`, no parenthesised context managers, no PEP 604 unions
   evaluated at runtime (use `typing.Optional`). Task 1 pins it with `ast.parse(..., feature_version=(3, 9))`.
-- **One definition of every name.** The credential's file name, the three side-file names, the six states, the
-  error-code sets, the skew, the lock bounds and the endpoints are module constants in `ccd/ccgpt-auth.py` and are
-  spelled nowhere else in shipped code: bash and node ask the CLI (`paths`, `secret-files`, `status`).
-  `server/test/single-definition.test.ts` gains the row (Task 5).
+- **One definition of every name.** The three side-file names, the six states, the error-code sets, the skew, the
+  lock bounds, the timeouts and the endpoints are module constants in `ccd/ccgpt-auth.py`, and the side-file names
+  are spelled nowhere else in shipped code: bash and node ask the CLI (`paths`, `secret-files`, `status`).
+  `server/test/single-definition.test.ts` gains the row for the three side-file names (Task 5), which excludes
+  `server/test`, `docs` and `README.md` (prose). The credential's own name, `auth.json`, is `CREDENTIAL_NAME` in the
+  library and is already spelled in today's bash, tests and README; no new bash spelling of it is added (a remedy
+  names the path `paths` answers), and the row does not cover it.
 - **Two locks, legitimately different** (the consolidation rule's catalogue: a different resource and process set).
   `_codex_lock` (`~/.ccrc/codex/<id>/.lock`, `ccd/ccrc:12812`) serialises tier starts and stops, held for up to the
-  readiness bound; the library's `auth.json.lock` serialises credential writes, held for milliseconds, and is taken
-  by a long-lived tier inside a request, which must never wait out a start. Folding them would make every refresh
-  wait behind a 90-second start. The order, where both are taken (account removal), is `_codex_lock` first.
+  readiness bound; the library's `auth.json.lock` serialises credential writes, held for one refresh (at most the
+  token request's timeout), and is taken by a long-lived tier inside a request, which must never wait out a start.
+  Folding them would make every refresh wait behind a 90-second start. The order, where both are taken (account
+  removal), is `_codex_lock` first.
 - **The litellm request path changes only where the credential is read.** The shim (`ccd/ccgpt-proxy.py`) is not
   edited, so the behaviour probe's `SHIM_OUT` and everything the probe gates on stays byte-identical; the patch's
   stream part is not edited.
-- **Fixture HOMEs and a fake endpoint only.** Every test runs against a `mkTmp` HOME. Every token, device-code and
-  exchange request in a test goes to an in-process node server on `127.0.0.1:0` (`server/test/codexAuthFixture.ts`,
-  Task 1), reached through `CCRC_CODEX_AUTH_BASE`, which the library accepts ONLY for a loopback `http://` URL
-  (`127.0.0.1`, `localhost`, `::1`, the poller's `_LOOPBACK_HOSTS` rule, `ccd/ccgpt-usage.py:137`). No test reads a
-  real credential, and no step runs a library verb against the live HOME. Synthetic JWTs are BUILT at runtime from
-  JSON claims (`syntheticJwt`), never written as literals, so no token-shaped string lands in the tree.
+- **Fixture HOMEs and a fake endpoint only; no test can reach a live endpoint.** Every test runs against a `mkTmp`
+  HOME. Every token, device-code and exchange request in a test goes to an in-process node server on `127.0.0.1:0`
+  (`server/test/codexAuthFixture.ts`, Task 1), reached through `CCRC_CODEX_AUTH_BASE`, which the library accepts ONLY
+  for a loopback `http://` URL (`127.0.0.1`, `localhost`, `::1`, the poller's `_LOOPBACK_HOSTS` rule,
+  `ccd/ccgpt-usage.py:139`). **Every harness that can spawn library code sets `CCRC_CODEX_AUTH_BASE`** to a
+  `fakeAuthServer` or, when the case needs no answer, to `CLOSED_AUTH_BASE = "http://127.0.0.1:1"` (port 1: a
+  non-root process cannot bind it, so no fake answers there): `runAuthDriver` (Task 1), and `ghContainedEnv`
+  (`server/test/ccdWsHelpers.ts:377`) and `containedSpawnOptions` (`server/test/ccgptHarness.ts:100`) unless the
+  caller's env names one (Task 6). No spawned library process runs without the override in any test. Every reader
+  test (poller, probe, start, status, doctor) that plants a present credential runs against a `fakeAuthServer` and
+  asserts `requests.length === 0`. No test reads a real credential, and no step runs a library verb against the live
+  HOME. Synthetic JWTs are BUILT at runtime from JSON claims (`syntheticJwt`), never written as literals, so no
+  token-shaped string lands in the tree.
 - **A test that talks to an in-process server spawns asynchronously** (`spawn`, never `spawnSync`): a synchronous
   child deadlocks against a server on the same event loop (measured, `server/test/ccgpt-usage.test.ts:462`).
 - **Commands.** From `server/`, foreground, timeout at least 600000 ms, one file per command:
   `./node_modules/.bin/vitest run test/<file>.test.ts`. Never a bare `npx vitest`. Load-sensitive suites re-run alone
-  before a red is called a break.
+  before a red is called a break. vitest's own per-test bound is 20 s on Linux (`server/vitest.config.ts:87`), so no
+  case may wait out a real 30 s timeout.
 - **Mutation discipline.** Every guard ships with a row that goes red when the guard is removed or weakened. Run each
   row one at a time on the shipped file, restore it, prove the restore with `git diff --exit-code -- <file>`, and
   record `<row> → <n> failed (<titles>)` in the task's commit body; the counts below are predictions, measure them.
+  A guard no test can observe says so in its task as "no row possible, reviewed by reading", with the reason.
   The rows' scratch notes go in `.superpowers/sdd/codex-bridge-s1/` (gitignored; check with `git check-ignore`).
+- **No message formats a token answer.** No `AuthError` sentence, stderr line, warning or status field includes a
+  token answer's body, a token, a token's hash or a JWT segment; the warnings of the patch (`_write_auth_file`, a
+  library load failure) never format their arguments. Task 3 and Task 4 pin it.
 - **Public repository.** Lanes are `lane-a`/`lane-b` in prose and the fixtures' own ids (`codex-a`) in tests, read off
   the fixture by position as the files already do. No hostnames, addresses, absolute home paths, account names or
   private project names. The OAuth client id the library uses is copied from LiteLLM 1.105.0's `CHATGPT_CLIENT_ID`
@@ -140,10 +183,12 @@ the number.
   never calls the allocator: a further departure is written `D-TBD-<slug>` and named in the task's report (worker
   clause 11).
 - **No new WARN, no new doctor check name.** The doctor's new rows are FAIL lines inside the existing `codex` check
-  (Task 9): a running soak gate allow-lists WARNs by name (Stage 0's constraint).
+  (Task 9): a running soak gate allow-lists WARNs by name (Stage 0's constraint). History's existing
+  `redact-source-unreadable` WARN may name a codex authDir (Task 10); it is not a new name.
 - **Not touched:** `ccd/ccgpt-proxy.py`, `exec.bridge`/`exec.upstream`, ccd placement, the PWA, `agent/src/
   whitelist.ts`, `shared/api.ts`'s account-deny lists (D-6202), `_acct_credential`'s `codex-lane` refusal,
-  `uninstall --purge`'s treatment of an authDir (kept), Node floor `>=22.16.0`.
+  `uninstall --purge`'s treatment of an authDir (kept), Node floor `>=22.16.0`, the stand-in package
+  `server/test/fixtures/pystub/` (`PYSTUB_DIR`, pinned minimal by `ccgpt-harness.test.ts:130-146`).
 - Plan and spec prose at most 120 characters a line (code blocks and table rows exempt). Commit on the workspace's
   own branch, never a separate feature branch.
 
@@ -157,21 +202,24 @@ the task that owns the code.
    `unreadable`, never `absent` and never `needs-signin`; nothing is written. Pinned in Task 1 ("a torn credential
    reads unreadable after its retries, never absent").
 2. **A credential of another shape at the backend path**: the Codex CLI's own `auth.json`
-   (`{OPENAI_API_KEY, tokens:{…}}`) copied into the authDir, or a file carrying `"family": "siwc"`. Expected: reads
-   `foreign-family`, every write refuses `foreign-family` with the file's bytes and mtime unchanged, and
+   (`{OPENAI_API_KEY, tokens:{…}}`), its API-key form (`{OPENAI_API_KEY, tokens: null}`), a file carrying
+   `"family": "siwc"`, or a test fixture of no known shape. Expected: reads `foreign-family`, every write refuses
+   `foreign-family` with the file's bytes and mtime unchanged, a sign-in refuses before any device-code request, and
    `ccrc codex start` refuses `credential-unusable`. Pinned in Task 1, Task 2 ("refuses to write over another
-   family's file") and Task 8.
+   family's file"), Task 4 and Task 8.
 3. **An idle lane whose access token expired** (litellm mode: only the tier refreshes, on its next request).
    Expected: the poller and the probe refuse `token-expired`, make no token request, publish nothing and keep the
    catalogue; `ccrc codex start` still starts; the next tier request refreshes. Pinned in Task 7 ("an expired token
-   is never refreshed by a reader").
+   is never refreshed by a reader"). The refresh token's own idle lifetime is unmeasured (Known limits).
 4. **The operator signs the lane in again after `needs-signin`, while its tier runs.** Expected: the next request
    uses the new credential with no restart, because a status file's `needs-signin` binds the credential identity it
-   was measured on. Pinned in Task 3 ("a new credential clears needs-signin") and Task 6.
+   was measured on, and an unsaved in-memory record binds the identity of the file it would replace. Pinned in Task 2
+   ("a credential changed under an unsaved record is kept"), Task 3 ("a new credential clears needs-signin") and
+   Task 6.
 5. **A phone sign-in abandoned or killed by the pane's 600 s bound** (`CCRC_AUTH_TIMEOUT`,
    `ccd/ccd-account-auth:45`), shorter than the device code's 15 minutes. Expected: nothing is written into the
-   authDir (no marker, no checkpoint, no status change), so the tier is unaffected. Pinned in Task 4 ("an abandoned
-   sign-in writes nothing").
+   authDir (no marker, no lock file, no checkpoint, no status change), so the tier is unaffected. Pinned in Task 4
+   ("an abandoned sign-in writes nothing").
 
 ---
 
@@ -179,25 +227,28 @@ the task that owns the code.
 
 | File | Change | Task |
 |---|---|---|
-| `ccd/ccgpt-auth.py` | new: the library and its CLI | 1-4 |
-| `server/test/codexAuthFixture.ts` | new: fake auth server, `syntheticJwt`, `plantBackendCredential`, `runAuthDriver` | 1 |
-| `server/test/fixtures/codexauth/driver.py` | new: loads the library by path, runs one action, optional faults | 1 |
+| `ccd/ccgpt-auth.py` | new: the library and its CLI | 1-4, 6 |
+| `server/test/codexAuthFixture.ts` | new: fake auth server, `syntheticJwt`, `plantBackendCredential`, `runAuthDriver`, `CLOSED_AUTH_BASE` | 1 |
+| `server/test/fixtures/codexauth/driver.py` | new: loads the library by path, runs a sequence of ops, optional faults | 1 |
 | `server/test/codex-auth-lib.test.ts` | new: reading, lock, commit, checkpoint, refresh, race, status | 1-3 |
 | `server/test/codex-auth-cli.test.ts` | new: sign-in and the CLI verbs | 4 |
-| `ccd/ccrc` | `_inst_bins` (T5); `_codex_auth_lib`, `_codex_auth*` helpers, `_codex_start_tier`, `_codex_started_json` (T6); `_codex_login`, `_codex_cmd_start`, `_codex_cmd_status` (T8); `_acct_remove` codex arm, `_acct_remove_usage` comment, `_uninst_tree_bins` (T5, T9) | 5, 6, 8, 9 |
+| `ccd/ccrc` | `_inst_bins` (T5); `_codex_auth_lib`, `_codex_start_tier`, `_codex_started_json` (T6); `_models_probe_codex_env` (T7); `_codex_auth*`, `_codex_login`, `_codex_cmd_start`, `_codex_cmd_status` (T8); `_codex_auth_hold`, `_acct_remove` codex arm, `_acct_remove_usage` comment (T9); `_uninst_tree_bins` (T5) | 5-9 |
 | `deploy/deploy.sh` | one `install_atomic` line | 5 |
-| `server/test/codexLaneFixture.ts` | `GPT_LANE_BINS` gains the library; `authStubSource` retired from the poller/probe paths | 5, 7 |
-| `server/test/install-census.test.ts`, `ccrc-uninstall.test.ts`, `single-definition.test.ts` | the fifth lane file; the name row | 5 |
+| `server/test/codexLaneFixture.ts` | `GPT_LANE_BINS` and `plantCodexBins` gain the library (T5); `plantLaneAuth` plants a backend credential (T7); `authStubSource` retired from the poller/probe paths (T7) | 5, 7 |
+| `server/test/installTreeFixture.ts` | `TREE_FILES` gains `ccd/ccgpt-auth.py` | 5 |
+| `ccd/ccrc-doctor-checks` | `CODEX_LANE_BINS` and its sentences (T5); `_fix_codex` step 4 (T6); `_dr_cx_lane`, `_check_codex`'s loaded guard (T9) | 5, 6, 9 |
+| `server/test/install-census.test.ts`, `ccrc-uninstall.test.ts`, `ccrc-install.test.ts`, `ccrc-doctor.test.ts`, `single-definition.test.ts` | the fifth lane file; the name row | 5 |
 | `ccd/ccgpt-runtime` | the patch's authenticator part; the probe's auth scenario | 6 |
-| `server/test/ccgpt-runtime.test.ts`, `ccrc-codex.test.ts` | the patch, the tier env, the started record | 6, 8 |
+| `server/test/ccdWsHelpers.ts`, `ccgptHarness.ts`, `ccgpt-harness.test.ts` | the `CCRC_CODEX_AUTH_BASE` default and its pin | 6 |
+| `server/test/ccgpt-runtime.test.ts`, `ccrc-codex.test.ts`, `ccrc-doctor.test.ts` | the patch, the tier env, the started record, `--fix` restart | 6, 8 |
 | `ccd/ccgpt-usage.py`, `ccd/ccrc-models-probe` | read through the library; the guard copies deleted | 7 |
-| `server/test/ccgpt-usage.test.ts`, `models-probe.test.ts`, `ccrc-models.test.ts` | the old-rule pins changed | 7 |
+| `server/test/ccgpt-usage.test.ts`, `models-probe.test.ts`, `ccrc-models.test.ts`, `ccrc-install.test.ts`, `ccrc-uninstall.test.ts` | the old-rule pins changed; the healthy-lane fixture | 7 |
 | `ccd/ccd-account-auth` | one comment | 8 |
-| `ccd/ccrc-doctor-checks`, `server/test/ccrc-doctor.test.ts` | `_dr_cx_lane` reads status and mode | 9 |
-| `server/test/ccrc-account.test.ts` | removal takes the library lock | 9 |
-| `shared/generate.mjs`, `ccd/ccd-history-sweep`, `ccd/history/lib.mjs`, `ccd/history/sweep.mjs` | `_ccrc_auth_dir`; the sweep registers each credential | 10 |
-| `server/test/roster-generate.test.ts`, `gen-accounts.test.ts`, `history-recall.test.ts` | the emitter; C49 flipped | 10 |
-| `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` | inline markers; new §24 | 11 |
+| `server/test/ccrc-codex-launcher.test.ts` | a needs-signin lane | 8 |
+| `server/test/ccrc-doctor.test.ts`, `ccrc-account.test.ts` | `_dr_cx_lane` reads status and mode; removal takes the library lock | 9 |
+| `shared/generate.mjs`, `ccd/ccd-history-sweep`, `ccd/history/lib.mjs`, `ccd/history/sweep.mjs` | `_ccrc_auth_dir`; the sweep registers each credential; `--unanswered` | 10 |
+| `server/test/roster-generate.test.ts`, `gen-accounts.test.ts`, `history-recall.test.ts`, `history-lib.test.ts`, `history-sweep.test.ts` | the emitter; C49 flipped; the sweep's grammar | 10 |
+| `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` | inline markers; "four executables"; new §24 | 11 |
 | `docs/superpowers/specs/2026-10-18-accounts-connect-design.md`, `README.md` | the rule's sentences | 11 |
 
 ## The library's contract (read this before any task)
@@ -205,48 +256,71 @@ the task that owns the code.
 Every task's Interfaces block refers to these names. `ccd/ccgpt-auth.py` is loaded under the module name
 `ccgpt_auth`.
 
-**Files, beside the credential** (`paths_for(auth_dir)`; `auth_dir` is absolute):
+**Files, beside the credential** (`paths_for(auth_dir)`; `auth_dir` is absolute). Every file and a created authDir
+get their mode by `os.fchmod`/`os.chmod` after creation, so a umask that removes owner bits (0277) changes nothing:
 
 | Name | Constant | What it is |
 |---|---|---|
 | `auth.json` | `CREDENTIAL_NAME` | the credential, LiteLLM's format, mode 0600 |
-| `auth.pending.json` | `PENDING_NAME` | the checkpoint: the next credential, written and fsynced before the rename that commits it; exists only between those two steps, or after a crash between them |
-| `auth.json.lock` | `LOCK_NAME` | the lock: `flock(2)` on this file, never on the credential, whose inode a rename replaces |
+| `auth.pending.json` | `PENDING_NAME` | the checkpoint: the next credential, written and fsynced before the rename that commits it; exists only between those two steps, or after a crash between them; 0600 |
+| `auth.json.lock` | `LOCK_NAME` | the lock: `flock(2)` on this file, never on the credential, whose inode a rename replaces; 0600 |
 | `auth.status.json` | `STATUS_NAME` | the non-secret status, mode 0600 |
 
 **The backend format** (LiteLLM's `_build_auth_record`, `authenticator.py:343-354`): `access_token`, `refresh_token`,
 `id_token` (strings), `expires_at` (integer epoch seconds or null), `account_id` (string or null). The library always
-writes all five, deriving `expires_at` from the access token's `exp` claim (falling back to `now + expires_in` from
-the token answer) and `account_id` from the `https://api.openai.com/auth` claim's `chatgpt_account_id` (id token
-first, then access token), so LiteLLM never needs its write-back. It writes no other key (so no
-`device_code_requested_at`). JWTs are decoded without a signature check (spec §2.6: trusted through TLS).
+writes all five, deriving `expires_at` from the access token's `exp` claim (never a hard-coded lifetime; falling back
+to `now + expires_in` from the token answer only when the token carries no `exp`) and `account_id` from the
+`https://api.openai.com/auth` claim's `chatgpt_account_id` (id token first, then access token), so LiteLLM never needs
+its write-back. It writes no other key (so no `device_code_requested_at`). JWTs are decoded without a signature
+check (spec §2.6: trusted through TLS).
 
-**Families.** `family_of(obj) -> Optional[str]`: a string `family` key → that value; a `tokens` object (the Codex
-CLI's shape) → `"codex-cli"`; any of `access_token`, `refresh_token`, `id_token`, `device_code_requested_at` at the
-top level → `FAMILY_BACKEND = "chatgpt-backend"`; an empty object → `None` (unclaimed, writable). A write to a backend
-handle over a file whose family is neither `None` nor `FAMILY_BACKEND` raises `ForeignFamily`.
+**Families.** `family_of(obj) -> Optional[str]`, its arms in this order:
+1. `{}` → `None` (unclaimed, writable). An absent file has no object and is unclaimed too.
+2. a string `family` key → that value;
+3. a `tokens` key: an object → `"codex-cli"`; any other value (`null` included) → `FAMILY_UNKNOWN = "unknown"`;
+4. any of `access_token`, `refresh_token`, `id_token`, `device_code_requested_at` at the top level →
+   `FAMILY_BACKEND = "chatgpt-backend"`;
+5. anything else (an object with none of those keys, a non-object JSON value) → `"unknown"`.
+
+A write to a backend handle refuses `ForeignFamily` over any family other than `None` and `FAMILY_BACKEND`, and
+refuses `Unreadable` over a file that reads `unreadable` under the lock: neither is ever overwritten.
 
 **Readings.** `Reading(NamedTuple)`: `credential` (one of `"present"`, `"absent"`, `"unreadable"`,
 `"foreign-family"`, `"incomplete"`), `access_token`, `refresh_token`, `account_id`, `expires_at`, `family`,
 `identity` (`(st_ino, st_mtime_ns, st_size)` of the file read, or `None`) and `detail` (a sentence, never a token).
-`incomplete` is a backend-family file with no access or no refresh token, for example the marker an abandoned
-LiteLLM device flow leaves.
+- `absent`: no file (`identity` None), or `{}` (`identity` set, `detail` says the file is an empty object).
+- `incomplete`: a backend-family object with no string `access_token` or no string `refresh_token`, for example the
+  marker an abandoned LiteLLM device flow leaves. Refused as not signed in; a sign-in may write over it.
+- `foreign-family`: any family other than `None` and backend, `"unknown"` included.
+- `present`: a backend object with both tokens. `expires_at` is the file's number, else derived IN MEMORY from the
+  access token's `exp` (never written back), else null; `account_id` likewise.
+
+**The unsaved record.** When `commit_record` cannot write, the process keeps `(record, identity)` in a per-process map
+keyed by authDir, where `identity` is that of the file the record was to replace, measured under the lock. `read`
+answers from it (`present`) while the file's identity still equals that identity; when the identity has changed (a
+sign-in, a restore), the record is dropped with one stderr line naming the authDir and no token. Only
+`retry_unsaved`, called inside `held`, writes it.
 
 **States** (`STATES`, the status file's `state`): `ok`, `needs-signin`, `limit-paused`, `ineligible`,
 `plan-disabled`, `config-error`. Stage 1 produces `ok`, `needs-signin` and `config-error`; the other three are the
 bridge's (Stage 2 and 3) and are only accepted by the reader.
 
 **Status file** (`version` 1): `{"version": 1, "family": "chatgpt-backend", "state": …, "expiresAt": int|null,
-"lastRefreshAt": int|null, "lastErrorCode": str|null, "lastRequestId": str|null, "consent": null, "credential":
-{"ino": int, "mtimeNs": int, "size": int}, "unsaved": bool, "updatedAt": int}`. `consent` is always null in Stage 1
-(D22's writer is Stage 3). It never holds a token, a token's hash or a JWT segment. It is written only under the lock,
-by `ensure_fresh` and `sign_in_device`, tmp + fsync + rename at 0600.
+"lastRefreshAt": int|null, "lastErrorCode": str|null, "lastRequestId": str|null, "consent": null, "identity":
+{"ino": int, "mtimeNs": int, "size": int}, "configHash": str, "unsaved": bool, "updatedAt": int}`. `consent` is
+always null in Stage 1 (D22's writer is Stage 3). `configHash` is `CONFIG_HASH`, the sha256 hex of
+`CLIENT_ID + "\n" + AUTH_BASE + "\n" + TOKEN_PATH` (the library's own constants, never the override). `lastErrorCode`
+is the OAuth `error` code only when it matches `CODE_RE = ^[a-z0-9_.-]{1,64}$`, else `"unrecognised"`;
+`lastRequestId` is kept only when it matches `^[A-Za-z0-9_.:-]{1,128}$`, else null. It never holds a token, a token's
+hash, a JWT segment or `account_id`. It is written only under the lock, by `ensure_fresh` and `sign_in_device`,
+tmp + `fchmod` 0600 + fsync + rename.
 
 **Errors.** `class AuthError(Exception)` with `.word` (a refusal word) and `str()` a sentence naming the remedy and no
 secret. Subclasses: `NotSignedIn` (`not-logged-in`), `NeedsSignin` (`needs-signin`), `ConfigError`
 (`config-error`), `ForeignFamily` (`foreign-family`), `Unreadable` (`credential-unusable`), `RefreshFailed`
-(`refresh-failed`, transient: network, timeout, 5xx, unknown codes), `LockTimeout` (`auth-lock-busy`),
-`EndpointRefused` (`auth-endpoint-refused`, a non-loopback `CCRC_CODEX_AUTH_BASE`).
+(`refresh-failed`, transient: network, timeout, 5xx, a redirect, unknown or absent codes), `LockTimeout`
+(`auth-lock-busy`), `EndpointRefused` (`auth-endpoint-refused`, a non-loopback `CCRC_CODEX_AUTH_BASE`),
+`LoginFailed` (`login-failed`). `HeldReentry(RuntimeError)` is NOT an `AuthError`: it is a programming error.
 
 ---
 
@@ -269,16 +343,18 @@ Cut the workspace branch from `origin/main`. Make the scratch directory and prov
 
 - [ ] **Step 2: Measure the base**
 
-From `server/`, run each file this wave touches (wave 1: `single-definition`, `install-census`, `ccrc-uninstall`,
-`ccrc-install`; wave 2: `ccgpt-runtime`, `ccrc-codex`, `ccrc-codex-launcher`, `ccgpt-usage`, `models-probe`,
-`ccrc-models`, `ccrc-doctor`, `ccrc-account`, `roster-generate`, `gen-accounts`, `history-lib`, `history-recall`,
-`session-hook -t 'every line citation is anchored'`) and keep each `Tests` line for the whole-branch checks.
+From `server/`, run each file this wave touches and keep each `Tests` line for the whole-branch checks. Wave 1:
+`single-definition`, `install-census`, `ccrc-uninstall`, `ccrc-install`, `ccrc-update`, `ccrc-doctor`. Wave 2:
+`ccgpt-runtime`, `ccgpt-harness`, `ccrc-codex`, `ccrc-codex-launcher`, `ccgpt-usage`, `models-probe`,
+`ccrc-models`, `ccrc-install`, `ccrc-uninstall`, `ccrc-doctor`, `ccrc-account`, `roster-generate`, `gen-accounts`,
+`history-lib`, `history-recall`, `history-sweep`, `session-hook -t 'every line citation is anchored'`.
 
 ---
 
 # Wave 1 — the library (one PR; inert on a live box)
 
-**What it delivers:** `ccd/ccgpt-auth.py` with its tests, placed on every non-server box as the fifth GPT-lane file.
+**What it delivers:** `ccd/ccgpt-auth.py` with its tests, placed on every non-server box as the fifth GPT-lane file,
+and the doctor comparing and restoring it like the other four.
 **PR boundary:** one PR on the workspace branch, cut after the docs PR merged; it ends when Task 5 is green.
 **Effect on a live box:** a new file in `~/.local/bin`; nothing calls it, so nothing a lane runs changes.
 
@@ -292,66 +368,85 @@ From `server/`, run each file this wave touches (wave 1: `single-definition`, `i
 
 **Interfaces:**
 - Produces (Python): `paths_for(auth_dir: str) -> Paths` (`Paths(NamedTuple)`: `credential, pending, lock, status`);
-  `family_of(obj: object) -> Optional[str]`; `claims_of(jwt: str) -> dict` (`{}` on anything undecodable);
-  `read(auth_dir: str) -> Reading` (never writes, never touches the network; a JSON parse failure is re-read up to
+  `family_of(obj: object) -> Optional[str]` (the contract's five arms); `claims_of(jwt: str) -> dict` (`{}` on
+  anything undecodable); `read(auth_dir: str) -> Reading` (never writes, never locks, never touches the network;
+  answers the unsaved record first when its identity still matches; a JSON parse failure is re-read up to
   `READ_RETRIES = 3` times, `READ_RETRY_S = 0.05` apart, then answers `unreadable`; an `OSError` other than ENOENT is
-  `unreadable`; a non-regular file is `unreadable` without being opened); `expired(r: Reading, within_s: float =
-  EXPIRY_SKEW_S, now: Optional[float] = None) -> bool` (`EXPIRY_SKEW_S = 60`, LiteLLM's skew; a null `expires_at`
-  is expired, LiteLLM's rule); the `AuthError` family.
+  `unreadable`; a non-regular file, a symlink included, is `unreadable` by `lstat` without being opened, and the open
+  is `O_RDONLY|O_NOFOLLOW`); `expired(r: Reading, within_s: float = EXPIRY_SKEW_S, now: Optional[float] = None) ->
+  bool` (`EXPIRY_SKEW_S = 60`, LiteLLM's skew; `r.expires_at` is already the file's number or the `exp`-derived one,
+  so a null means neither exists, and that is expired, LiteLLM's rule `authenticator.py:113-122`); the `AuthError`
+  family and `HeldReentry`.
 - Produces (TS, `codexAuthFixture.ts`): `syntheticJwt(claims: object): string`; `plantBackendCredential(dir: string,
-  o: {expiresIn?: number; accountId?: string | null; refresh?: string; mode?: number; extra?: object}): {access:
-  string; refresh: string; id: string}`; `fakeAuthServer(script: AuthScript): Promise<{base: string; requests:
-  AuthRequest[]; close(): Promise<void>}>` (routes `/oauth/token`, `/api/accounts/deviceauth/usercode`,
-  `/api/accounts/deviceauth/token`; `AuthScript` gives each route a queue of `{status, body, delayMs?, headers?}`
-  answers, and the token route rejects a refresh token it already redeemed with `400 {"error":
-  "refresh_token_reused"}`); `runAuthDriver(home: string, action: object, env?: object): Promise<{status: number;
-  stdout: string; stderr: string}>` (spawns `python3 -I driver.py`, async).
-- `driver.py` reads one JSON action from argv (`{"lib": <path>, "op": "read"|"ensure_fresh"|"sign_in"|…, "authDir":
-  …, "faults": [...]}`), loads the library with `importlib.util.spec_from_file_location("ccgpt_auth", lib)` after
-  `sys.dont_write_bytecode = True`, applies faults by monkeypatching (`"enospc-writes:N"` makes the first N
-  `os.write` calls on a path ending `auth.pending.json` raise `OSError(ENOSPC)`; `"die-before-rename"` makes
-  `os.replace` onto the credential call `os._exit(9)`; `"barrier:<path>"` waits for a file before the action), prints
-  one JSON result (a `Reading` with every token field replaced by its length) and exits 0, or 1 with
-  `{"error": word}`.
+  o: {expiresIn?: number; accountId?: string | null; refresh?: string; mode?: number; extra?: object;
+  storedExpiresAt?: number | null}): {access: string; refresh: string; id: string}` (`expiresIn` defaults to 3600,
+  so a planted credential is fresh unless a case says otherwise; `storedExpiresAt` overrides the file's
+  `expires_at` without changing the token's `exp`); `CLOSED_AUTH_BASE = 'http://127.0.0.1:1'`;
+  `fakeAuthServer(script: AuthScript): Promise<{base: string; requests: AuthRequest[]; close(): Promise<void>}>`
+  (routes `/oauth/token`, `/api/accounts/deviceauth/usercode`, `/api/accounts/deviceauth/token`; `AuthScript` gives
+  each route a queue of `{status, body, delayMs?, headers?}` answers, and the token route rejects a refresh token it
+  already redeemed with `400 {"error": "refresh_token_reused"}`); `runAuthDriver(home: string, action: object,
+  env?: object, o?: {timeoutMs?: number}): Promise<{status: number; stdout: string; stderr: string; timedOut:
+  boolean}>` (spawns `python3 -I driver.py`, async, with `CCRC_CODEX_AUTH_BASE` defaulting to `CLOSED_AUTH_BASE`
+  unless `env` names one; kills the child with SIGKILL past `timeoutMs`, default 10000, and reports `timedOut`).
+- `driver.py` reads one JSON action from argv (`{"lib": <path>, "authDir": …, "ops": [ {"op": "read" |
+  "commit" | "held-retry" | "recover" | "ensure_fresh" | "sign_in" | "wait", …}, … ], "faults": [...],
+  "consts": {…}}`), loads the library with `importlib.util.spec_from_file_location("ccgpt_auth", lib)` after
+  `sys.dont_write_bytecode = True`, sets each `consts` entry on the module (for example `TOKEN_TIMEOUT_S`,
+  `LOCK_WAIT_S`, `DEVICE_TIMEOUT_S`, `CLIENT_ID`), runs the ops in order in ONE process (`wait` blocks until a named
+  file exists), and prints one JSON line per op (a `Reading` with every token field replaced by its length, or
+  `{"error": word}`); it exits 0, or 1 when an op raised. Faults, applied by monkeypatching: the driver wraps
+  `os.open` to map each fd opened on a path ending `auth.pending.json` to that path, so `"enospc-writes:N"` makes
+  the first N `os.write` calls on such an fd raise `OSError(ENOSPC)`, `"enospc-fsync:N"` the first N `os.fsync`
+  calls on such an fd, and `"enospc-replace:N"` the first N `os.replace` calls onto the credential;
+  `"die-before-rename"` makes `os.replace` onto the credential call `os._exit(9)`; `"uid:<n>"` makes the library's
+  `os.getuid` answer `<n>`.
 
 - [ ] **Step 1: Write the failing tests** in `codex-auth-lib.test.ts`, `describe('reading a credential (codex-bridge
   spec §2.6)')`:
   - `'reads a present backend credential: account id from the id token, expiry from the access token'` — plant with
     `accountId: 'acct-fixture-1'`, `expiresIn: 3600`; expect `credential: 'present'`, `family: 'chatgpt-backend'`,
     `account_id: 'acct-fixture-1'`, `expires_at` within 5 s of now+3600.
-  - `'derives account_id in memory when the file has none, and never writes it back'` — plant `accountId: null`
-    with the claim present in the id token; expect the derived id and the file's lstat (ino, mtimeMs, size) unchanged.
-  - `'absent is absent, and an empty authDir is absent'`.
+  - `'derives account_id and expires_at in memory when the file has none, and never writes them back'` — plant
+    `accountId: null`, `storedExpiresAt: null` with both claims present in the tokens; expect the derived id, an
+    `expires_at` equal to the access token's `exp`, `expired` false, and the file's lstat (ino, mtimeMs, size)
+    unchanged.
+  - `'absent is absent, and an empty object is absent with its identity'` — no file: `identity` null; `{}`:
+    `credential: 'absent'`, `identity` set.
   - `'a torn credential reads unreadable after its retries, never absent'` — write `'{"access_token": "x'`; expect
     `credential: 'unreadable'` and the bytes unchanged. (Review Focus 1.)
-  - `'a FIFO at the credential path reads unreadable at once, without opening it'` — `mkfifo`; the driver returns
-    within 2 s.
-  - `it.each` over `{tokens:{…}, OPENAI_API_KEY:'x'}` → `codex-cli` and `{family:'siwc'}` → `siwc`:
-    `'another family's file reads foreign-family (%s)'`. (Review Focus 2.)
+  - `it.each` over a FIFO and a symlink to a planted credential: `'a non-regular file at the credential path reads
+    unreadable at once, without opening it (%s)'` — the driver returns within 2 s, `timedOut` false.
+  - `it.each` over `{tokens:{…}, OPENAI_API_KEY:'x'}` → `codex-cli`, `{family:'siwc'}` → `siwc`, `{OPENAI_API_KEY:'x',
+    tokens: null}` → `unknown`, `{fixture:'x'}` → `unknown` and `[1]` → `unknown`: `'another family's file reads
+    foreign-family (%s)'`. (Review Focus 2.)
   - `'a LiteLLM device marker alone reads incomplete'` — `{device_code_requested_at: 1}`.
-  - `'expired: inside the 60 s skew is expired, a null expires_at is expired'`.
+  - `'expired: inside the 60 s skew is expired; no stored expires_at and no exp claim is expired'`.
   - `'no reading carries a token in detail'` — for every case above, `detail` contains none of the planted strings.
   - `'the library runs on Python 3.9: ast.parse with feature_version (3, 9)'` — spawn `python3 -I -c` that parses
     the file with `feature_version=(3, 9)`, and walks the tree to refuse any `BinOp` with `BitOr` inside an
     annotation or a call to `isinstance` (a PEP 604 union evaluated at runtime).
   - `'imports only the standard library, never litellm'` — load the module under `python3 -I -S` (no site-packages
     at all) and expect it to load; and its source contains no `litellm` import.
+  - `'runAuthDriver names a loopback CCRC_CODEX_AUTH_BASE unless told otherwise, and kills a child past its bound'` —
+    an op that prints the variable reads `CLOSED_AUTH_BASE`; a `wait` on a file that never appears with
+    `timeoutMs: 500` answers `timedOut: true`.
 
 - [ ] **Step 2: Run to see them fail**
 
 Run: `./node_modules/.bin/vitest run test/codex-auth-lib.test.ts`
-Expected: FAIL, every case, with the driver's `FileNotFoundError` for `ccd/ccgpt-auth.py`.
+Expected: FAIL, every library case, with the driver's `FileNotFoundError` for `ccd/ccgpt-auth.py`; the
+`runAuthDriver` case passes once the fixture exists.
 
 - [ ] **Step 3: Write the constants, `paths_for`, `family_of`, `claims_of`, `Reading`, `read`, `expired` and the
   error classes in `ccd/ccgpt-auth.py`**
 
 The module docstring states the rule this file holds ("exactly one ccrc library reads and writes a Codex lane's
-credential", spec §2.6) and the three side files. `read` is `lstat` (non-regular → `unreadable`), `open` with
-`O_RDONLY|O_NOFOLLOW`, `json.load`, retry on `ValueError`. Endpoint constants (`AUTH_BASE =
-"https://auth.openai.com"`, `TOKEN_PATH = "/oauth/token"`, `DEVICE_CODE_PATH = "/api/accounts/deviceauth/usercode"`,
-`DEVICE_TOKEN_PATH = "/api/accounts/deviceauth/token"`, `DEVICE_VERIFY_PATH = "/codex/device"`, `CLIENT_ID`) are
+credential", spec §2.6) and the three side files. Endpoint constants (`AUTH_BASE = "https://auth.openai.com"`,
+`TOKEN_PATH = "/oauth/token"`, `DEVICE_CODE_PATH = "/api/accounts/deviceauth/usercode"`, `DEVICE_TOKEN_PATH =
+"/api/accounts/deviceauth/token"`, `DEVICE_VERIFY_PATH = "/codex/device"`, `CLIENT_ID`) and `CONFIG_HASH` are
 defined here for Task 3; `auth_base()` reads `CCRC_CODEX_AUTH_BASE` and raises `EndpointRefused` for anything but a
-loopback `http://` URL.
+loopback `http://` URL, and `auth_base_source()` answers `"default"` or `"override"`.
 
 - [ ] **Step 4: Run to see them pass**
 
@@ -360,11 +455,15 @@ Expected: PASS.
 
 - [ ] **Step 5: Measure the mutation rows**
 - R1 (`read`: treat `ValueError` as absent) → 1 failed (a torn credential reads unreadable…).
-- R2 (`read`: drop the regular-file test) → 1 failed (a FIFO …), by the driver's timeout.
+- R2 (`read`: drop the `lstat` regular-file test) → 2 failed (a non-regular file … (FIFO) by `timedOut`, (symlink)).
+  The `O_NOFOLLOW` flag on the open guards only a swap between `lstat` and `open`: no row possible, reviewed by
+  reading.
 - R3 (`family_of`: drop the `tokens` arm) → 1 failed (… foreign-family (codex-cli)).
-- R4 (`read`: write the derived `account_id` back) → 1 failed (derives account_id in memory…).
-- R5 (`expired`: treat null `expires_at` as valid) → 1 failed (expired: …).
+- R4 (`read`: write the derived `account_id` back) → 1 failed (derives account_id and expires_at in memory…).
+- R5 (`expired`: treat a null `expires_at` as valid) → 1 failed (expired: …).
 - R6 (add `import litellm` at the top of the module) → 1 failed (imports only the standard library…).
+- R7 (`family_of`: answer `None` for an unknown shape) → 3 failed (… foreign-family (unknown) ×3).
+- R8 (`read`: drop the `exp` derivation of `expires_at`) → 1 failed (derives account_id and expires_at …).
 
 - [ ] **Step 6: Commit**
 
@@ -379,48 +478,68 @@ git commit -m "codex-auth: read a lane's credential, its family and its claims (
 ### Task 2: the lock, the commit, the checkpoint and a full disk
 
 **Files:**
-- Modify: `ccd/ccgpt-auth.py` (`held`, `commit_record`, `recover_pending`, the in-memory unsaved record)
+- Modify: `ccd/ccgpt-auth.py` (`held`, `commit_record`, `retry_unsaved`, `recover_pending`, the unsaved map)
 - Test: `server/test/codex-auth-lib.test.ts`
 
 **Interfaces:**
-- Consumes: `paths_for`, `read`, `family_of`, `ForeignFamily`, `LockTimeout` (Task 1).
+- Consumes: `paths_for`, `read`, `family_of`, `ForeignFamily`, `Unreadable`, `LockTimeout`, `HeldReentry` (Task 1).
 - Produces:
-  - `held(auth_dir: str, wait_s: float = LOCK_WAIT_S)` — a context manager. It takes a per-path `threading.Lock`
-    first (so two threads of one process never both reach `flock`, which is per open file description), then opens
-    the lock file `O_RDWR|O_CREAT|O_NOFOLLOW` at 0600 and polls `fcntl.flock(fd, LOCK_EX|LOCK_NB)` every
-    `LOCK_POLL_S = 0.05` until `LOCK_WAIT_S = 60.0`; past it, `LockTimeout`. Released on exit and by the kernel on
-    process death, so a crash never leaves a stale lock.
-  - `commit_record(auth_dir: str, record: dict) -> bool` — caller holds `held`. Refuses `ForeignFamily` when the
-    current file's family is neither `None` nor backend. Writes the checkpoint: unlink any old one, `os.open(pending,
-    O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600)`, `os.fchmod(fd, 0o600)` (umask-proof: neither the tier's unit nor
-    the poller's sets one), write, `os.fsync`; then `os.replace(pending, credential)` and fsync the directory. Creates
-    a missing authDir at 0700 and leaves an existing one's mode alone (an adopted authDir keeps its mode, today's A4
-    rule). Returns `True` when the record is on disk. On `OSError` it keeps `record` as this process's unsaved record
-    for that path, unlinks a partial checkpoint, and returns `False`.
-  - The unsaved record: `read` answers from it (`credential: "present"`) while it is held, and every library call on
-    that path first retries `commit_record` with it; a successful retry clears it.
+  - `held(auth_dir: str, wait_s: float = LOCK_WAIT_S)` — a context manager. Exclusion is `flock` alone: each `held`
+    opens the lock file afresh (`O_RDWR|O_CREAT|O_NOFOLLOW`, then `os.fchmod(fd, 0o600)`), so two threads of one
+    process are two open file descriptions and exclude each other (measured above), and polls
+    `fcntl.flock(fd, LOCK_EX|LOCK_NB)` every `LOCK_POLL_S = 0.05` until `LOCK_WAIT_S = 60.0`; past it,
+    `LockTimeout`. A symlink or other non-regular file at the lock path raises `Unreadable` (`ELOOP`). There is no
+    `threading.Lock` for exclusion. A thread-local guard refuses entering `held` for a path this thread already
+    holds, AT ONCE, with `HeldReentry` (a second open in the same thread would otherwise wait on its own lock).
+    Released on exit and by the kernel on process death, so a crash never leaves a stale lock.
+  - `commit_record(auth_dir: str, record: dict) -> bool` — caller holds `held`. Re-reads the file under the lock:
+    `unreadable` refuses `Unreadable`, a family other than `None` and backend refuses `ForeignFamily`, both with the
+    file untouched. Writes the checkpoint: unlink any old one (a symlink there is unlinked, never followed),
+    `os.open(pending, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600)`, `os.fchmod(fd, 0o600)` (umask-proof under a umask
+    that removes owner bits, measured above), write, `os.fsync`; then `os.replace(pending, credential)` and fsync
+    the directory. Creates a missing authDir with `mkdir` then `chmod 0700`, and leaves an existing one's mode alone
+    (an adopted authDir keeps its mode, today's A4 rule). Returns `True` when the record is on disk. On an
+    `OSError` anywhere in that sequence (open, write, fsync, replace, the directory fsync) it keeps `(record,
+    identity-measured-under-the-lock)` as this process's unsaved record for that path, unlinks a partial checkpoint,
+    and returns `False`.
+  - `retry_unsaved(auth_dir: str) -> str` — caller holds `held`, called right after `recover_pending`. `"none"`
+    (no record); `"dropped"` (the file's identity is no longer the record's: dropped with one stderr line, no token);
+    `"written"` (`commit_record` succeeded; the record is cleared); `"still-unsaved"`.
   - `recover_pending(auth_dir: str) -> str` — caller holds `held`. `"none"`; `"promoted"` (a checkpoint that parses
     as a backend record with both tokens, and whose mtime is not older than the credential's, is renamed into place
     and the directory fsynced); `"discarded"` (any other checkpoint is unlinked).
 
 - [ ] **Step 1: Write the failing tests**, `describe('the lock and the commit (codex-bridge spec §2.6, figure 4)')`:
-  - `'a commit leaves the credential at 0600 under a 022 umask, and no checkpoint behind'`.
-  - `'a new authDir is created 0700; an adopted 0755 authDir keeps 0755'`.
+  - `'under a 0277 umask every file is 0600 and a new authDir 0700: credential, checkpoint and lock'` — the driver
+    runs with `os.umask(0o277)`; a commit into a missing authDir, then a commit with `die-before-rename` (the
+    checkpoint left behind); expect the credential, the checkpoint and the lock file at 0600 and the authDir at 0700.
+    (Task 3 adds the status file to this case.)
+  - `'an adopted 0755 authDir keeps 0755'`.
   - `'a commit replaces the inode, and the lock file's inode is unchanged across it'` — the reason the lock is a
     separate file.
-  - `'refuses to write over another family's file: bytes and mtime unchanged'` — `codex-cli` and `siwc` files; the
-    driver answers `{"error": "foreign-family"}`. (Review Focus 2.)
+  - `it.each` over a `codex-cli`, a `siwc` and an `unknown` file: `'refuses to write over another family's file:
+    bytes and mtime unchanged (%s)'` — the driver answers `{"error": "foreign-family"}`. (Review Focus 2.)
+  - `'refuses to write over a file that reads unreadable under the lock'` — a torn file; `credential-unusable`, bytes
+    unchanged.
+  - `'a symlink at the lock path is refused, and its target is untouched'`.
+  - `'a symlink at the checkpoint path is unlinked, never followed: its target is untouched'`.
   - `'held: a second process waits, and takes the lock once the first releases'` — driver A holds 500 ms; driver B
     reports a wait between 400 and 2000 ms.
-  - `'held: past its bound the second process answers auth-lock-busy'` — `wait_s` 0.3 via the action; A holds 2 s.
+  - `'held: past its bound the second process answers auth-lock-busy'` — `consts.LOCK_WAIT_S` 0.3; A holds 2 s.
   - `'held: a holder killed with SIGKILL releases at once'`.
+  - `'held: re-entered in the same thread it raises HeldReentry at once, never waits'` — `consts.LOCK_WAIT_S` 5; the
+    op answers within 1 s with the `HeldReentry` name.
   - `'a crash after the checkpoint and before the rename is recovered by the next holder'` — fault
     `die-before-rename`; then `recover_pending` answers `promoted` and the credential reads the new tokens.
   - `'a partial checkpoint is discarded, and the credential is unchanged'`.
   - `'a checkpoint older than the credential is discarded, never promoted'`.
-  - `'a full disk loses nothing: the new record is served from memory and written once the disk frees'` — fault
-    `enospc-writes:2`, op `commit-then-read-twice`: the first commit returns `false`, the in-process read answers the
-    new tokens, the file still holds the old ones, the third attempt writes them; no checkpoint left.
+  - `it.each` over `enospc-writes:1`, `enospc-fsync:1` and `enospc-replace:1`: `'a full disk loses nothing (%s):
+    read answers from memory, and a held retry writes it'` — ops `commit` (answers `false`), `read` (the new tokens;
+    the file still holds the old ones), `held-retry` (`written`); the file then holds the new tokens and no checkpoint
+    is left.
+  - `'a credential changed under an unsaved record is kept'` — ops `commit` (fails, `enospc-writes:1`), `wait`
+    (the test plants a new credential, then the barrier file), `read` (the NEW credential, and one stderr line naming
+    the authDir and no token), `held-retry` (`dropped`); the file still holds the planted credential. (Review Focus 4.)
 
 - [ ] **Step 2: Run to see them fail**
 
@@ -428,20 +547,30 @@ Run: `./node_modules/.bin/vitest run test/codex-auth-lib.test.ts`
 Expected: FAIL, the new cases, with `AttributeError: module 'ccgpt_auth' has no attribute 'held'` (or
 `commit_record`); Task 1's cases still pass.
 
-- [ ] **Step 3: Write `held`, `commit_record`, `recover_pending` and the unsaved record**
+- [ ] **Step 3: Write `held`, `commit_record`, `retry_unsaved`, `recover_pending` and the unsaved map**
 
 - [ ] **Step 4: Run to see them pass** — same command; Expected: PASS.
 
 - [ ] **Step 5: Measure the mutation rows**
-- L1 (`commit_record`: drop `os.fchmod`) → 1 failed (… 0600 under a 022 umask …).
+- L1 (`commit_record`: drop `os.fchmod`) → 1 failed (under a 0277 umask … credential …).
 - L2 (`held`: `flock` the credential instead of the lock file) → 1 failed (… lock file's inode is unchanged …) and
   the wait case.
-- L3 (`held`: drop the `threading.Lock`) → no file red possible from two processes; measured by the Task 6
-  in-process case, named there (state "no row here").
-- L4 (`commit_record`: drop the family refusal) → 2 failed (refuses to write over another family's file, both).
+- L3 (`held`: drop the re-entry guard) → 1 failed (held: re-entered in the same thread …), by the 1 s bound.
+- L4 (`commit_record`: drop the family refusal) → 3 failed (refuses to write over another family's file ×3).
 - L5 (`commit_record`: write the credential in place, no checkpoint) → 1 failed (a crash after the checkpoint …).
 - L6 (`recover_pending`: drop the mtime test) → 1 failed (a checkpoint older than the credential …).
-- L7 (`commit_record`: drop the unsaved record on `OSError`) → 1 failed (a full disk loses nothing …).
+- L7 (`commit_record`: drop the unsaved record on `OSError`) → 3 failed (a full disk loses nothing ×3).
+- L8 (`commit_record`: catch `OSError` around the write only) → 2 failed (a full disk … (enospc-fsync),
+  (enospc-replace)).
+- L9 (`read`/`retry_unsaved`: drop the identity bind) → 1 failed (a credential changed under an unsaved record …).
+- L10 (`commit_record`: overwrite an `unreadable` file) → 1 failed (refuses to write over a file that reads
+  unreadable …).
+- L11 (`held`: open the lock without `O_NOFOLLOW`) → 1 failed (a symlink at the lock path …).
+- L12 (`commit_record`: open the checkpoint `O_TRUNC` without the unlink, `O_EXCL` and `O_NOFOLLOW`) → 1 failed (a
+  symlink at the checkpoint path …).
+- L13 (`commit_record`: `mkdir(0o700)` without the `chmod`) → 1 failed (under a 0277 umask … authDir 0700).
+- The two fsyncs (the file, the directory): no row possible, reviewed by reading; a lost fsync is observable only
+  through a power cut, which no harness here makes.
 
 - [ ] **Step 6: Commit** — `git add ccd/ccgpt-auth.py server/test/codex-auth-lib.test.ts` and
   `git commit -m "codex-auth: the lock, the atomic commit and its checkpoint (codex-bridge Stage 1, Task 2)"`.
@@ -459,41 +588,46 @@ Expected: FAIL, the new cases, with `AttributeError: module 'ccgpt_auth' has no 
 - Produces:
   - `NEEDS_SIGNIN_CODES = frozenset({"invalid_grant", "invalid_refresh_token", "token_expired",
     "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused"})`,
-    `CONFIG_ERROR_CODES = frozenset({"invalid_client"})`.
+    `CONFIG_ERROR_CODES = frozenset({"invalid_client"})`, `TOKEN_TIMEOUT_S = 30.0`.
   - `classify_error(status: int, body: bytes) -> Tuple[str, Optional[str]]` — `("needs-signin" | "config-error" |
-    "transient", code)`. The code is read from `body` as JSON `error` (a string), `error.code`, or top-level `code`,
-    in that order; the body's shape is unmeasured (open question 3), so all three are read. No code, a 5xx or an
-    unknown code is `transient`.
+    "transient", code)`. The code is the documented OAuth `error` field of a JSON object body, read only when it is
+    a string (D-TBD-error-code-from-oauth-field, open question 3); `code` is that name bounded by `CODE_RE`
+    (`"unrecognised"` otherwise), and `None` when the body has no string `error`. The body itself is never kept,
+    logged or formatted. No code, a 5xx and an unknown code are `transient`.
   - `token_request(refresh_token: str) -> Tuple[dict, Optional[str]]` — the one network call of a refresh: `POST
     auth_base() + TOKEN_PATH`, JSON body `{client_id, grant_type: "refresh_token", refresh_token, scope: "openid
-    profile email"}` (LiteLLM's, `authenticator.py:304-312`), timeout 30 s, redirects refused. Returns the answer and
-    the request id (`x-request-id`, else `request-id`, else None). Raises `NeedsSignin`, `ConfigError` or
-    `RefreshFailed` carrying `.code` and `.request_id`.
+    profile email"}` (LiteLLM's, `authenticator.py:304-312`), timeout `TOKEN_TIMEOUT_S`, redirects refused (an
+    opener whose redirect handler raises, so a 3xx is `RefreshFailed` and its `Location` is never fetched). Returns
+    the answer and the request id (`x-request-id`, else `request-id`, else None, bounded as the status file says).
+    Raises `NeedsSignin`, `ConfigError` or `RefreshFailed` carrying `.code` and `.request_id`.
   - `ensure_fresh(auth_dir: str, *, within_s: float = EXPIRY_SKEW_S, lane: Optional[str] = None) -> Reading` — the
-    refresher's door. The algorithm the spec's figure fixes, with this plan's three additions (checkpoint,
-    needs-signin binding, unsaved record):
+    refresher's door. The algorithm the spec's figure fixes, with this plan's additions (checkpoint, needs-signin and
+    config-error binding, unsaved record):
 
 ```text
-r = read(auth_dir)                                   # answers the unsaved record first, if one is held
+r = read(auth_dir)                                   # answers the unsaved record first, if one is bound
 not present           -> raise for r (NotSignedIn / Unreadable / ForeignFamily / NeedsSignin for incomplete)
-not expired(r)        -> return r                    # no lock, no network
-status says needs-signin or config-error for r.identity -> raise it   # never retried
+not expired(r) and no unsaved record -> return r     # no lock, no network
+status bars r         -> raise it                    # never retried; see read_status for "bars"
 with held(auth_dir):
-    recover_pending(auth_dir)
-    r = read(auth_dir); same three checks            # another process may have refreshed: return its token
+    recover_pending(auth_dir); retry_unsaved(auth_dir)
+    r = read(auth_dir); same three checks            # another process may have refreshed or failed: obey it
     answer, rid = token_request(r.refresh_token)     # on error: write_status(state, code, rid, r.identity); raise
     rec = merge(r, answer)                           # refresh_token and id_token default to the old ones
     saved = commit_record(auth_dir, rec)
-    write_status(ok, lastRefreshAt=now, expiresAt, lastRequestId=rid, unsaved=not saved, credential=new identity)
+    write_status(ok, lastRefreshAt=now, expiresAt, lastRequestId=rid, unsaved=not saved, identity=new identity)
     return reading of rec
 ```
 
-  - `merge` requires `access_token` in the answer (`RefreshFailed("refresh-response-incomplete")` otherwise) and,
-    unlike LiteLLM (`authenticator.py:326-332`), keeps the old `id_token` when the answer has none, so a new refresh
-    token is never thrown away for a missing field.
-  - `read_status(auth_dir: str) -> Optional[dict]` — the file when it parses, is `version` 1 and its `credential`
-    identity matches the current file; else `None`. `write_status(auth_dir, **fields)` — under `held` only, tmp +
-    fsync + rename at 0600; a failure is swallowed and named on stderr once (the status is never worth a refresh).
+  - `merge` requires `access_token` in the answer (`RefreshFailed("refresh-response-incomplete")` otherwise, with a
+    sentence that names no field value) and, unlike LiteLLM (`authenticator.py:326-332`), keeps the old `id_token`
+    and the old `refresh_token` when the answer has none, so a credential is never thrown away for a missing field.
+  - `read_status(auth_dir: str) -> Optional[dict]` — the file when it parses, is `version` 1 and its `identity`
+    matches the current file; else `None`. A status "bars" a reading when it is current and its state is
+    `needs-signin`, or `config-error` with a `configHash` equal to `CONFIG_HASH`; a `config-error` under another
+    hash is stale (the library's config changed), so the next call retries once. `write_status(auth_dir, **fields)`
+    — under `held` only, tmp + `fchmod` 0600 + fsync + rename; a failure is swallowed and named on stderr once (the
+    status is never worth a refresh).
 
 - [ ] **Step 1: Write the failing tests**, `describe('the refresh (codex-bridge spec §2.6, §5)')`, each against
   `fakeAuthServer`:
@@ -502,25 +636,42 @@ with held(auth_dir):
   - `'two processes racing a refresh make exactly one token request'` — two drivers behind one barrier, the server
     delaying its answer 300 ms; `requests.length === 1`, both drivers answer the same new access token length, the
     file holds the new refresh token, and neither driver saw `refresh_token_reused`. (Spec §5.)
+  - `'two processes racing into invalid_grant make exactly one token request'` — the server answers the first
+    request 400 `{"error": "invalid_grant"}`; both drivers answer `needs-signin`; `requests.length === 1`.
+  - `'a needs-signin credential answers at once while another process holds the lock'` — driver A holds the lock 5 s;
+    driver B's `ensure_fresh` on a credential whose status bars it answers `needs-signin` within 1 s, no request.
   - `'a crash between the token answer and the commit is recovered from the checkpoint'` — fault
     `die-before-rename` on driver A; driver B then answers the new tokens with zero further requests. (Spec §5.)
-  - `'a full disk loses nothing: the refresh is served from memory, written later, and asked for once'` — fault
-    `enospc-writes:1`, op `ensure_fresh-twice`; one request in total. (Spec §5.)
+  - `'a full disk loses nothing: the refresh is served from memory, written by the next call, and asked for once'` —
+    fault `enospc-writes:1`, ops `ensure_fresh`, `ensure_fresh`; one request in total; the second call writes the
+    record (the unsaved record takes it into `held` though the token is valid); no checkpoint left. (Spec §5.)
   - `it.each([...NEEDS_SIGNIN_CODES])` `'%s lands in needs-signin, and is never retried'` — the server answers 400
     `{"error": code}`; the driver answers `needs-signin`; status `state: needs-signin`, `lastErrorCode: code`; a second
     `ensure_fresh` makes no request. (Spec §5.)
-  - `'invalid_client lands in config-error'`.
-  - `it.each` over the three body shapes (`{error}`, `{error:{code}}`, `{code}`): `'the code is read from %s'`.
-  - `it.each` over 500, 503, a dropped connection and a 31 s delay: `'%s is transient: refresh-failed, the state is
-    unchanged and the next call tries again'`.
+  - `'invalid_client lands in config-error, and a changed library config retries once'` — 400
+    `{"error": "invalid_client"}`; a second call makes no request; a third call with `consts.CLIENT_ID` changed makes
+    exactly one.
+  - `it.each` over `{error:{code:'invalid_grant'}}` and `{code:'invalid_grant'}`: `'%s carries no OAuth error string:
+    transient, lastErrorCode null'`.
+  - `it.each` over a 129-character `error`, one with a control character, and one with an upper-case letter:
+    `'an error code outside CODE_RE is stored as unrecognised (%s)'` — and the status file holds none of the raw
+    string.
+  - `it.each` over 500, 503, a dropped connection and a 1 s delay with `consts.TOKEN_TIMEOUT_S` 0.5: `'%s is
+    transient: refresh-failed, the state is unchanged and the next call tries again'`.
+  - `'a 302 from the token route is refresh-failed, and its Location receives nothing'` — the `Location` is a second
+    `fakeAuthServer`, whose `requests` stays empty.
   - `'a new credential clears needs-signin'` — after a `needs-signin`, plant a new credential (new inode); the next
     `ensure_fresh` refreshes it. (Review Focus 4.)
   - `'an answer with no id_token keeps the old one; one with no refresh_token keeps the old one'`.
-  - `'an answer with no access_token is refresh-failed and writes nothing'`.
+  - `'an answer with no access_token is refresh-failed, writes nothing, and names none of the tokens it carried'` —
+    the answer carries a new `refresh_token` and `id_token`; driver stdout and stderr, the error's sentence and
+    `auth.status.json` contain neither, nor any JWT segment of them.
+  - `'a 400 whose body echoes the submitted refresh token leaks it nowhere'` — the same four places.
   - `'a non-loopback CCRC_CODEX_AUTH_BASE is refused before any request'` — `http://example.invalid` and
     `https://127.0.0.1.example.invalid`; `auth-endpoint-refused`, and the fake server (bound anyway) saw nothing.
-  - `'the status file never holds a token or a JWT segment'` — after every case above, no planted or issued token,
-    and no `.`-separated segment of one, occurs in `auth.status.json`.
+  - `'the status file never holds a token, a JWT segment or the account id'` — after every case above, no planted or
+    issued token, no `.`-separated segment of one and no `account_id` occurs in `auth.status.json`.
+  - Task 2's 0277-umask case gains `auth.status.json` at 0600.
 
 - [ ] **Step 2: Run to see them fail** — Expected: FAIL, the new cases, `has no attribute 'ensure_fresh'`.
 
@@ -529,16 +680,26 @@ with held(auth_dir):
 - [ ] **Step 4: Run to see them pass** — Expected: PASS.
 
 - [ ] **Step 5: Measure the mutation rows**
-- F1 (`ensure_fresh`: drop the re-read under the lock) → 1 failed (two processes racing …: 2 requests, and
-  `refresh_token_reused`).
-- F2 (`ensure_fresh`: take no lock) → the same case.
-- F3 (`ensure_fresh`: drop the status check before the lock) → 6 failed (each code … never retried).
+- F1 (`ensure_fresh`: drop the re-read under the lock) → 2 failed (two processes racing a refresh …: 2 requests and
+  `refresh_token_reused`; racing into invalid_grant …).
+- F2 (`ensure_fresh`: take no lock) → the same cases.
+- F3 (`ensure_fresh`: drop the status check before the lock) → 1 failed (a needs-signin credential answers at once
+  …), by its 1 s bound.
+- F3b (`ensure_fresh`: drop the status check under the lock) → 1 failed (… racing into invalid_grant …: 2 requests).
 - F4 (`classify_error`: drop `refresh_token_reused` from the set) → 1 failed.
-- F5 (`classify_error`: read only the string `error` shape) → 2 failed (the code is read from …).
+- F5 (`classify_error`: read `error.code` and `code` too) → 2 failed (… carries no OAuth error string ×2).
 - F6 (`read_status`: drop the identity match) → 1 failed (a new credential clears needs-signin).
 - F7 (`merge`: LiteLLM's rule, raise on a missing `id_token`) → 1 failed.
+- F7b (`merge`: drop the `refresh_token` default) → 1 failed (… one with no refresh_token keeps the old one).
 - F8 (`auth_base`: accept any `http://` host) → 1 failed (a non-loopback … refused …).
 - F9 (`ensure_fresh`: skip `recover_pending`) → 1 failed (a crash between the token answer …).
+- F10 (`ensure_fresh`: skip `retry_unsaved`) → 1 failed (a full disk loses nothing: the refresh is served …).
+- F11 (`read_status`: drop the `configHash` test) → 1 failed (invalid_client … retries once).
+- F12 (`token_request`: follow redirects) → 1 failed (a 302 …).
+- F13 (`RefreshFailed`: format the answer body into its sentence) → 2 failed (… no access_token … names none …;
+  a 400 whose body echoes …).
+- F14 (`classify_error`: store the raw code unbounded) → 3 failed (an error code outside CODE_RE … ×3).
+- F15 (`write_status`: no `fchmod`) → 1 failed (under a 0277 umask … status file).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex-auth: one locked refresh, its error states and the status file
   (codex-bridge Stage 1, Task 3)"` with the test and library files added.
@@ -554,41 +715,66 @@ with held(auth_dir):
 **Interfaces:**
 - Consumes: Tasks 1-3.
 - Produces:
-  - `sign_in_device(auth_dir: str, *, lane: str, out=sys.stdout, timeout_s: float = DEVICE_TIMEOUT_S) -> str` —
-    `"already-signed-in"` when `read` is `present` and the status is not `needs-signin` for it (no network: in litellm
-    mode a sign-in never refreshes, ruling 1); otherwise the device flow, LiteLLM's protocol
-    (`authenticator.py:153-299`): `POST DEVICE_CODE_PATH {client_id}`, print exactly LiteLLM's four lines with the
-    verify URL and the code (the pane, `ccd/ccd-account-auth:731`, publishes the first `XXXX-XXXX` run and the first
-    `https://` run, so nothing code-shaped is printed before them), poll `DEVICE_TOKEN_PATH` every
-    `max(interval, 5)` s up to `DEVICE_TIMEOUT_S = 900` (403/404 pending), exchange at `TOKEN_PATH` form-encoded with
-    `urllib.parse.urlencode` (`grant_type=authorization_code`, `code`, `redirect_uri=<base>/deviceauth/callback`,
-    `client_id`, `code_verifier`), then under `held`: `commit_record` and `write_status(ok)`. Returns `"signed-in"`.
-    NOTHING is written before the exchange answers, so no cooldown marker exists.
-  - `status_report(auth_dir: str) -> dict` — `read_status` when it is current, else computed from `read`
-    (`source: "file" | "computed"`), plus `credential`, `mode` (octal string), `modeOk` (owner-readable and no group
-    or other bits), `ownerOk` (owned by this uid). Never writes, never touches the network.
+  - `sign_in_device(auth_dir: str, *, lane: str, out=sys.stdout, timeout_s: float = DEVICE_TIMEOUT_S) -> str`, in
+    this order:
+    1. `read` (no lock, nothing written). `unreadable` refuses `Unreadable` and `foreign-family` refuses
+       `ForeignFamily`, both with ZERO requests.
+    2. When a checkpoint exists (`lstat`), `held`: `recover_pending`, `retry_unsaved`; then `read` again. Otherwise
+       nothing is locked here, so an abandoned sign-in creates no lock file.
+    3. `"already-signed-in"`, with no network, when the reading is `present` and no status bars it as
+       `needs-signin` or `config-error` (in litellm mode a sign-in never refreshes, ruling 1). Its sentence says:
+       "if the lane's refresh token is dead, the lane's next request records needs-signin; run this again then".
+    4. Otherwise the device flow, LiteLLM's protocol (`authenticator.py:153-299`): `POST DEVICE_CODE_PATH
+       {client_id}`, print exactly LiteLLM's four lines with the verify URL and the code (the pane,
+       `ccd/ccd-account-auth:731`, publishes the first `XXXX-XXXX` run and the first `https://` run, so nothing
+       code-shaped is printed before them), poll `DEVICE_TOKEN_PATH` every `max(interval, 5)` s up to
+       `DEVICE_TIMEOUT_S = 900` (403/404 pending), exchange at `TOKEN_PATH` form-encoded with
+       `urllib.parse.urlencode` (`grant_type=authorization_code`, `code`, `redirect_uri=<base>/deviceauth/callback`,
+       `client_id`, `code_verifier`), redirects refused on all three. The exchange's answer must carry
+       `access_token`, `refresh_token` and `id_token` (ruling R8); otherwise `LoginFailed` with a sentence that names
+       no field value. NOTHING is written before the exchange answers, so no cooldown marker exists.
+    5. Under one `held`: `recover_pending`, `retry_unsaved`, `read` again with step 1's refusals, then
+       `commit_record`, retried up to `SIGNIN_COMMIT_TRIES = 3` times `0.5` s apart; a commit that never lands
+       raises `LoginFailed` ("the disk is full; nothing was saved; sign in again once it frees") with the old file
+       unchanged; on success `write_status(ok)`. Returns `"signed-in"`.
+    When `auth_base_source()` is `"override"`, `sign_in_device` prints one stderr line naming
+    `CCRC_CODEX_AUTH_BASE` and its URL before the first request.
+  - `status_report(auth_dir: str) -> dict` — never writes, never touches the network. Exactly these keys: `source`
+    (`"file"` when `read_status` is current, else `"computed"` from `read`), `family`, `state`, `credential` (the
+    reading's word), `expiresAt`, `lastRefreshAt`, `lastErrorCode`, `lastRequestId`, `unsaved`, `updatedAt` (null
+    when computed), `mode` (octal string), `modeOk` (owner-readable and no group or other bits), `ownerOk` (owned by
+    `os.getuid()`), `authBase` (`auth_base_source()`). Never `account_id`, never a token.
   - `main(argv: List[str]) -> int`, run when the file is executed. Verbs (each takes `--auth-dir <absolute>`; a
     relative one is usage):
     - `status [--lane <id>]` → one JSON object (`status_report`) on stdout, rc 0.
-    - `signin --lane <id>` → the device lines on stdout; rc 0 with `ccgpt-auth: <id>: signed-in|already-signed-in`, or
-      rc 1 with `ccgpt-auth: <word>: <sentence>` on stderr.
+    - `signin --lane <id>` → the device lines on stdout; rc 0 with `ccgpt-auth: <id>: signed-in|already-signed-in`
+      (the latter with step 3's sentence), or rc 1 with `ccgpt-auth: <word>: <sentence>` on stderr.
     - `paths` → `{"credential", "pending", "lock", "status", "lockWaitS"}`, rc 0.
     - `secret-files` → the credential and checkpoint paths, one per line, rc 0.
     - rc 2 and one usage line for anything else. No verb ever prints a token.
 
-- [ ] **Step 1: Write the failing tests** in `codex-auth-cli.test.ts`:
+- [ ] **Step 1: Write the failing tests** in `codex-auth-cli.test.ts` (every case against a `fakeAuthServer`):
   - `'signin: prints LiteLLM's lines, polls through pending, writes 0600 and status ok'` — fake server: usercode, two
     403s, then the code; the credential holds the exchanged tokens.
   - `'signin: the first code-shaped and URL-shaped runs are the device code and the verify URL'` — the pane's rule.
-  - `'signin: already-signed-in with no request when the credential is present and not needs-signin'`.
-  - `'signin: a needs-signin credential is signed in again'`.
+  - `'signin: already-signed-in with no request when the credential is present and not barred, naming the dead-token
+    route'` — rc 0, the sentence pinned, `requests.length === 0`.
+  - `it.each` over `needs-signin` and `config-error`: `'signin: a %s credential is signed in again'`.
   - `'an abandoned sign-in writes nothing'` — SIGTERM the CLI during the poll: the authDir's listing and every file's
-    lstat are unchanged, and no checkpoint exists. (Review Focus 5.)
-  - `'signin: a timeout is login-failed after DEVICE_TIMEOUT_S, writing nothing'` — the test passes `timeout_s` 1
-    through the driver.
-  - `'signin refuses a foreign-family file and leaves it'`.
+    lstat are unchanged, and no lock file, checkpoint or status file exists. (Review Focus 5.)
+  - `'signin: a timeout is login-failed after DEVICE_TIMEOUT_S, writing nothing'` — `consts.DEVICE_TIMEOUT_S` 1.
+  - `it.each` over a `codex-cli`, an `unknown` and an `unreadable` file: `'signin refuses %s before any device-code
+    request, and leaves the file'` — `requests.length === 0`, bytes and mtime unchanged.
+  - `'signin: a checkpoint left by a crashed sign-in is promoted before the already-signed-in decision'`.
+  - `'signin on a full disk is login-failed, and the old file is unchanged'` — fault `enospc-writes:3`; rc 1
+    `login-failed`, the sentence names the disk, no checkpoint left.
+  - `'signin: an exchange answer without refresh_token is login-failed and leaks it nowhere'` — the answer carries
+    `access_token` and `id_token`; stdout, stderr and the authDir hold neither token nor a JWT segment.
+  - `'signin: an override is named on stderr once, and status says authBase override'`.
   - `'status: computed when no status file exists; file once one does; modeOk false for 0640 and 0000'`.
-  - `'paths and secret-files name the four files beside the credential'`.
+  - `'status: ownerOk false when the file is not this uid's'` — fault `uid:<uid+1>`.
+  - `'status: exactly the listed keys, never account_id'`.
+  - `'paths names four files; secret-files names the credential and the checkpoint'`.
   - `'no verb prints a token'` — every verb above, stdout and stderr, contain no issued token or JWT segment.
   - `'a relative --auth-dir and an unknown verb are usage, rc 2'`.
 
@@ -604,8 +790,17 @@ with held(auth_dir):
   writes nothing).
 - S2 (`sign_in_device`: drop the already-signed-in arm) → 1 failed.
 - S3 (`status_report`: `modeOk` ignores group bits) → 1 failed (status: … 0640 …).
-- S4 (`main status`: include `access_token`) → 1 failed (no verb prints a token).
+- S4 (`main status`: include `access_token`) → 2 failed (no verb prints a token; exactly the listed keys).
 - S5 (`main`: accept a relative `--auth-dir`) → 1 failed.
+- S6 (`sign_in_device`: check the family only at commit) → 3 failed (signin refuses … before any device-code
+  request ×3).
+- S7 (`sign_in_device`: ignore `commit_record`'s `False`) → 1 failed (signin on a full disk …).
+- S8 (`sign_in_device`: treat `config-error` as signed in) → 1 failed (… a config-error credential is signed in
+  again).
+- S9 (exchange: require only `access_token`) → 1 failed (an exchange answer without refresh_token …).
+- S10 (`status_report`: `ownerOk` always true) → 1 failed (status: ownerOk false …).
+- S11 (`sign_in_device`: skip the checkpoint step) → 1 failed (a checkpoint left by a crashed sign-in …).
+- S12 (`sign_in_device`: drop the override line) → 1 failed (an override is named on stderr once …).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex-auth: the device-code sign-in and the CLI (codex-bridge Stage 1,
   Task 4)"`.
@@ -615,42 +810,58 @@ with held(auth_dir):
 ### Task 5: placing the library as the fifth GPT-lane file
 
 **Files:**
-- Modify: `ccd/ccrc` — `_inst_bins`'s one non-server block (`:15379-15385`: a fifth `_inst_atomic
+- Modify: `ccd/ccrc` — `_inst_bins`'s one non-server block (`:15379-15384`: a fifth `_inst_atomic
   "$tree/ccd/ccgpt-auth.py" "$bin/ccgpt-auth.py" 755`, placed FIRST, because the others will depend on it, and
-  `lane_bins` gains `, ccgpt-auth.py`); `_uninst_tree_bins`' `rm -f` list (`:25238-25251`) and its closing sentence
-  (`:25258`); the paragraph above the list (`:25202-25210`: "five placed executables").
+  `lane_bins` gains `ccgpt-auth.py` first); `_uninst_tree_bins`' `rm -f` list (`:25238-25251`) and its closing
+  sentence (`:25258`); the paragraph above the list (`:25202-25210`: "five placed executables").
 - Modify: `deploy/deploy.sh:873-876` (one `install_atomic ccd/ccgpt-auth.py .local/bin/ccgpt-auth.py 755`, first).
-- Modify: `server/test/codexLaneFixture.ts:140` (`GPT_LANE_BINS` gains `'ccgpt-auth.py'`, first) and the copy helper
-  at `:142-151` copies it beside the shim.
+- Modify: `ccd/ccrc-doctor-checks` — `CODEX_LANE_BINS` (`:7004`) gains `ccgpt-auth.py` first, `_inst_bins`' order;
+  the "four GPT-lane executables" comment (`:6997`), the missing-file FAIL's "every Codex lane needs all four"
+  (`:7023`) and the PASS text "the four GPT-lane executables match the shipped tree" (`:6750`) say five. `_dr_cx_bins`
+  and `_fix_codex` then compare and restore the library with the other four, unedited.
+- Modify: `server/test/codexLaneFixture.ts:140` (`GPT_LANE_BINS` gains `'ccgpt-auth.py'`, first) and `plantCodexBins`
+  (`:145-158`) copies it beside the shim.
+- Modify: `server/test/installTreeFixture.ts:59-69` — `TREE_FILES` gains `'ccd/ccgpt-auth.py'` first among the lane
+  files, in this commit (the list's own rule: no earlier than the commit that writes its source); its comment's
+  "four" becomes five.
 - Test: `server/test/install-census.test.ts`, `server/test/ccrc-uninstall.test.ts`,
-  `server/test/single-definition.test.ts`
+  `server/test/single-definition.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-doctor.test.ts`
 
 **Interfaces:**
-- Produces: `~/.local/bin/ccgpt-auth.py` on every non-server box, 0755, placed and removed exactly like
-  `ccgpt-usage.py`; `GPT_LANE_BINS` with five names. Not added to `TOOLCHAIN_EXECUTABLES`
+- Produces: `~/.local/bin/ccgpt-auth.py` on every non-server box, 0755, placed, compared, restored and removed exactly
+  like `ccgpt-usage.py`; `GPT_LANE_BINS` with five names. Not added to `TOOLCHAIN_EXECUTABLES`
   (`deploy/gen-wrappers.mjs:214-219`), like the other two `.py` files.
 
 - [ ] **Step 1: Write the failing tests**
   - `single-definition.test.ts`, appended at the end of the file: `'the auth library's side-file names are spelled
     only in ccd/ccgpt-auth.py'` — `git grep -l -e auth.pending.json -e auth.status.json -e auth.json.lock --
-    ':!server/test' ':!docs'` equals `['ccd/ccgpt-auth.py']`.
+    ':!server/test' ':!docs' ':!README.md'` equals `['ccd/ccgpt-auth.py']`.
   - `install-census.test.ts`: the existing census (it reads `_inst_atomic` calls and `rm -f` operands) goes red on its
     own once Task 5's `_inst_atomic` exists without its `rm -f`; add the assertion `'the GPT-lane block places five
-    files, ccgpt-auth.py first'` to its `gptGateBlock()` case.
+    files, ccgpt-auth.py first'` to its `gptGateBlock()` case (`:1297`).
   - `ccrc-uninstall.test.ts`: the existing "removes every executable it placed" case gains `ccgpt-auth.py` through
     `GPT_LANE_BINS`.
+  - `ccrc-install.test.ts`: the fixture-tree case (`:1496-1520`) and the gate pin (`:1523-1536`) read `GPT_LANE_BINS`
+    and go red until `TREE_FILES` and `_inst_bins` carry the library; their titles' and comments' "four" become five
+    (`:1496`, `:1515`, `:1530`, `:2171`).
+  - `ccrc-doctor.test.ts`: `'compares exactly GPT_LANE_BINS'` (`:11895-11899`) goes red on its own; the PASS text pin
+    (`:11917`) and the "all four" pins (`:11988`, `:12009`, `:12028`) say five; new `'a drifted placed ccgpt-auth.py
+    FAILs, and --fix restores it from the shipped tree'` and `'a missing ccgpt-auth.py FAILs by name'`.
 
-- [ ] **Step 2: Run to see them fail** — the three files; Expected: FAIL on the new assertions only.
+- [ ] **Step 2: Run to see them fail** — the five files, `ccrc-doctor` with `-t 'GPT_LANE_BINS\|ccgpt-auth\|four
+  GPT-lane\|all four'`; Expected: FAIL on the new and re-worded assertions only.
 
-- [ ] **Step 3: Make the placement edits listed under Files.**
+- [ ] **Step 3: Make the placement and doctor edits listed under Files.**
 
-- [ ] **Step 4: Run to see them pass** — Expected: PASS; `ccrc-install.test.ts` is left to CI's selection (check the
-  PR's `select tests` summary lists it; if not, run it here, alone).
+- [ ] **Step 4: Run to see them pass** — the same five files in full, and `ccrc-update.test.ts` (it builds trees
+  from `installFixtureTree`); Expected: PASS against each file's base `Tests` line.
 
 - [ ] **Step 5: Measure the mutation rows**
 - P1 (drop the `_inst_atomic` line) → install-census red (placed by neither lane) and the new block case.
 - P2 (drop the `rm -f` operand) → install-census red (placed but never removed) and the uninstall case.
 - P3 (spell `auth.status.json` in `ccd/ccrc` in a message) → the single-definition row.
+- P4 (drop `ccgpt-auth.py` from `CODEX_LANE_BINS`) → `compares exactly GPT_LANE_BINS` and the two new doctor cases.
+- P5 (drop the `TREE_FILES` entry) → ccrc-install's fixture-tree case, and every install from the fixture tree.
 
 - [ ] **Step 6: Commit** — `git commit -m "install: place ccgpt-auth.py as the fifth GPT-lane file (codex-bridge
   Stage 1, Task 5)"`.
@@ -676,13 +887,24 @@ operator notes.
   `litellm.llms.chatgpt.authenticator`, and a new `_patch_authenticator(module)`; the header's THE PATCH paragraph
   (`:33-58`) says the patch now has two parts. `_rt_probe_source` (`:692-1013`): one auth scenario.
 - Modify: `ccd/ccrc` — `_codex_auth_lib()` beside `_codex_shim_file` (`:11953`): `$HOME/.local/bin/ccgpt-auth.py`;
-  `_codex_start_tier`'s litellm arm (`:13005-13008`) adds `"CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)"` and
-  `"CCRC_CODEX_LANE=$id"`, and refuses `auth-library-absent` (with `ccrc update` as the remedy) when that file is not
-  a regular readable file, before the spawn; `_codex_started_json`'s litellm `code` (`:12620-12630`) becomes the
-  sha256 of the stamp's bytes followed by the library's bytes, so `_codex_tier_stale` reads a library change as stale
-  and `_inst_codex_tiers` restarts the tier.
+  `_codex_start_tier`'s litellm arm adds `"CCRC_CODEX_AUTH_LIB=$(_codex_auth_lib)"` and `"CCRC_CODEX_LANE=$id"` to the
+  spawn (`:13005-13008`), and refuses `auth-library-absent` (remedy `ccrc update`) when that file is not a regular
+  readable file, placed after the runtime check (`:12976-12979`) and BEFORE the `_codex_started_json` call
+  (`:12980`), so a missing library never reads as `runtime-absent … no readable stamp`; `_codex_started_json`'s
+  litellm `code` (`:12620-12630`) becomes the sha256 of the stamp's bytes followed by the library's bytes, and its
+  header comment (`:12608-12614`) says so, so `_codex_tier_stale` reads a library change as stale and
+  `_inst_codex_tiers` restarts the tier.
+- Modify: `ccd/ccrc-doctor-checks` — `_fix_codex`: step 1's restart test (`:6877-6882`) gains
+  `|| [ "$dst" = "$(_codex_auth_lib)" ]`; `_codex_auth_lib` joins its loaded-function list (`:6816-6818`); the
+  header's step 4 (`:6784-6791`, "one of the two files a running tier's identity is computed from") names three, and
+  the step-4 messages' "(the shim or the runtime)" name the library too.
 - Modify: `ccd/ccgpt-auth.py` — `tier_access_token`.
-- Test: `server/test/ccgpt-runtime.test.ts`, `server/test/ccrc-codex.test.ts`
+- Modify: `server/test/ccdWsHelpers.ts` — `ghContainedEnv` (`:377`) returns `CCRC_CODEX_AUTH_BASE:
+  CLOSED_AUTH_BASE` unless the env it was given names one. It is an environment value, not a poison: only the auth
+  library reads it, so it moves no other code path (the opt-in rule above `:384` is about poisons).
+- Modify: `server/test/ccgptHarness.ts` — `containedSpawnOptions` (`:100`) does the same.
+- Test: `server/test/ccgpt-runtime.test.ts`, `server/test/ccrc-codex.test.ts`, `server/test/ccrc-doctor.test.ts`,
+  `server/test/ccgpt-harness.test.ts`
 
 **Interfaces:**
 - Consumes: `read`, `ensure_fresh`, `AuthError` (wave 1).
@@ -693,61 +915,95 @@ operator notes.
     ccrc, by the build's default probe scenarios, or by anything else keeps stock behaviour (a rollback stays safe).
     When it is set, on the authenticator module's load:
     - `_login_device_code` and `_wait_for_access_token` are replaced by functions that raise the module's
-      `GetAccessTokenError(status_code=401, message="needs-signin: … run ccrc codex login <lane>")`. This kill does
-      not depend on the library loading.
-    - The library is loaded once per process from that path (`spec_from_file_location`, `dont_write_bytecode`). If
-      that fails, the patch says so on stderr once and leaves LiteLLM's own refresh in place, with the device flow
-      still killed.
+      `GetAccessTokenError(status_code=401, message="needs-signin: … run ccrc codex login <lane>")`, and
+      `_write_auth_file` by a no-op that warns once on stderr without formatting its argument. These three hold
+      whether or not the library loads.
+    - The library is loaded once per process from that path (`spec_from_file_location`, `dont_write_bytecode`).
+      **If that fails, the part fails closed (ruling 10):** one stderr line naming the path and the exception's type
+      (never its arguments), and `get_access_token` raises `GetAccessTokenError(status_code=401,
+      message="auth-library-absent: … run ccrc update")` on every call; LiteLLM's own refresh is never reached.
     - When it loads: `get_access_token(self)` → `tier_access_token(self.token_dir, lane)`, mapping `AuthError` to
       `GetAccessTokenError(status_code=401, message=f"{e.word}: {e}")`; `get_account_id(self)` →
-      `read(self.token_dir).account_id`; `_write_auth_file` → a no-op that warns once (every legitimate write is the
-      library's). A credential file name other than `auth.json` (`CHATGPT_AUTH_FILE` reaching the tier) raises
-      `config-error` rather than reading the wrong file.
+      `read(self.token_dir).account_id`. A credential file name other than `auth.json` (`CHATGPT_AUTH_FILE` reaching
+      the tier, so `self.auth_file` is not `<token_dir>/auth.json`) raises the 401 with `config-error` rather than
+      reading the wrong file.
     - Each replaced attribute carries `_ccrc_auth = True`; a class missing any of the five names is left stock with a
       stderr line, and the probe below refuses such a generation.
-  - The probe's auth scenario (its own `fail` names: `auth-patch-not-applied`, `auth-device-flow-alive`): with
-    `CCRC_CODEX_AUTH_LIB` pointing at a stub module the probe writes into its temp dir (answering
-    `("probe-not-a-secret", "probe")` from `tier_access_token`, and raising for a second token dir), the
-    authenticator's five attributes carry `_ccrc_auth`, `get_access_token` answers the stub's token, the raising dir
-    surfaces as `GetAccessTokenError` with status 401, and `_login_device_code` raises with zero network attempts on
-    the probe's audit hook. The probe's existing scenarios run unchanged.
+  - The probe's auth scenario (its own `fail` names: `auth-patch-not-applied`, `auth-device-flow-alive`), placed
+    right after the transformation imports (`:799-803`) and before the `translate` block. It runs in a FRESH
+    interpreter (`subprocess.run([sys.executable, "-I", "-c", AUTH_SCENARIO], env=…)`, the generation's own
+    interpreter, so its `.pth` loads the patch there), with `CCRC_CODEX_AUTH_LIB` set only in that child's
+    environment, pointing at a stub module written into the probe's temp dir (answering `("probe-not-a-secret",
+    "probe")` from `tier_access_token`, and raising `AuthError` for a second token dir). The parent's scenarios are
+    therefore unarmed and unchanged. The child installs the probe's socket-denying audit hook and checks that the
+    authenticator's five attributes carry `_ccrc_auth`, that `get_access_token` answers the stub's token, that the
+    raising dir surfaces as `GetAccessTokenError` with status 401, and that `_login_device_code` raises with zero
+    network attempts.
 
 - [ ] **Step 1: Write the failing tests**
-  - `ccgpt-runtime.test.ts`, a new describe `'the patch's authenticator part (codex-bridge Stage 1)'`, running the
-    patch source against the stand-in `server/test/fixtures/pystub/litellm/llms/chatgpt/authenticator.py` (extended
-    with `_write_auth_file`, `get_account_id`, `token_dir` and a `common_utils.GetAccessTokenError`) and the REAL
-    library, with `fakeAuthServer`:
+  - `ccgpt-runtime.test.ts`, a new describe `'the patch's authenticator part (codex-bridge Stage 1)'`, in layer (e)'s
+    style: a real `python3 -m venv` whose site-packages hold the patch's `.pth` and a stand-in `litellm` package
+    written into a `mkTmp` tree inside this describe (an `authenticator.py` with LiteLLM's five names, `token_dir`,
+    `auth_file` and its read-path write-backs, and a `common_utils.GetAccessTokenError`), never into `PYSTUB_DIR`,
+    and the REAL library, with `fakeAuthServer`:
     - `'inert without CCRC_CODEX_AUTH_LIB: the stand-in's own methods run'`.
     - `'with it: an expiring token is refreshed by the library, under its lock, with one request'`.
-    - `'with it: two threads asking at once make one request'` (the in-process race; row L3 is measured here).
+    - `'with it: two threads asking at once make one request'` (the in-process race, held by `flock` alone).
     - `'with it: a dead token is a 401 GetAccessTokenError naming needs-signin, and no device flow starts'`.
     - `'with it: LiteLLM's write is disabled: the stand-in's write-backs leave the file unchanged'`.
-    - `'with it, and a library that fails to load: the device flow is still killed'`.
+    - `'with it, and a library that fails to load: every token request is a 401 auth-library-absent, the stand-in's
+      refresh is never called, the device flow is killed and the file is unchanged'`.
+    - `'with it, and CHATGPT_AUTH_FILE naming another file: a 401 config-error, and neither file is read'`.
     - `'a stand-in missing one of the five names is left stock, said on stderr'`.
-  - `ccgpt-runtime.test.ts`: the probe-source pin (whatever case hashes or greps the probe) gains
-    `'the probe gates on the authenticator part: auth-patch-not-applied and auth-device-flow-alive are its names'`.
+    - `'the warnings format no argument'` — the stderr of the two cases above that warn holds none of the planted
+      tokens.
+  - `ccgpt-runtime.test.ts`, the probe: `'the probe's auth scenario runs in CI: over a stand-in with the five names
+    and stub transformation modules, it raises no auth-* FAIL and the probe's one FAIL is translate'` (the same venv,
+    the stand-in package also carrying `chat/transformation.py` and `responses/transformation.py` with the two class
+    names); `'with the device-flow kill removed from a copy of patch-source, the probe FAILs auth-device-flow-alive'`;
+    and the probe-source pin gains `'the probe gates on the authenticator part: auth-patch-not-applied and
+    auth-device-flow-alive are its names'`. The deletion-only layer (b) cases stop at `transformation-import`,
+    before the scenario, and stay unchanged.
   - `ccrc-codex.test.ts`, beside the tier-start cases: `'the litellm tier is started with CCRC_CODEX_AUTH_LIB and
-    CCRC_CODEX_LANE'`; `'the shim tier is not'`; `'no library: auth-library-absent, nothing started'`;
-    `'a library change makes the litellm tier stale'` (`_codex_tier_stale` answers 0 after the fixture's library copy
-    changes).
+    CCRC_CODEX_LANE'` (the sorted env-set pin at `:2943-2944` gains the two names); `'the shim tier is not'`;
+    `'no library: auth-library-absent, nothing started, and no stamp sentence'`; `'a library change makes the litellm
+    tier stale'` (`_codex_tier_stale` answers 0 after the fixture's library copy changes). The record pins at `:1298`
+    (`'each tier's record names the RESOLVED generation …'`) and `:2987-2988` change to `sha256(stamp ‖ library)`;
+    their fixtures (`planted()`, `:1248`, and the life box's `plantCodexBins`) carry the library copy.
+  - `ccrc-doctor.test.ts`: `'--fix restoring a drifted ccgpt-auth.py asks _inst_codex_tiers, like the shim'`.
+  - `ccgpt-harness.test.ts`: `'every contained env names a loopback CCRC_CODEX_AUTH_BASE'` — `ghContainedEnv` and
+    `containedSpawnOptions` answer `CLOSED_AUTH_BASE` by default and keep a caller's own value.
 
-- [ ] **Step 2: Run to see them fail** — `ccgpt-runtime.test.ts`, then `ccrc-codex.test.ts`; Expected: FAIL on the
-  new cases only (`_ccrc_auth` missing; no `CCRC_CODEX_AUTH_LIB` in the recorded unit env).
+- [ ] **Step 2: Run to see them fail** — `ccgpt-runtime.test.ts`, `ccrc-codex.test.ts`, `ccgpt-harness.test.ts`,
+  `ccrc-doctor.test.ts -t 'fix'`; Expected: FAIL on the new and changed cases only (`_ccrc_auth` missing; no
+  `CCRC_CODEX_AUTH_LIB` in the recorded unit env; the record's old hash).
 
-- [ ] **Step 3: Write `tier_access_token`, the patch's authenticator part, the probe scenario and the
-  `ccd/ccrc` edits.**
+- [ ] **Step 3: Write `tier_access_token`, the patch's authenticator part, the probe scenario, the `ccd/ccrc` and
+  `ccd/ccrc-doctor-checks` edits and the two harness defaults.**
 
-- [ ] **Step 4: Run to see them pass** — both files; Expected: PASS, and every pre-existing `ccgpt-runtime` case
-  green (the stream part and `SHIM_OUT` are untouched).
+- [ ] **Step 4: Run to see them pass** — the four files; Expected: PASS, and every pre-existing `ccgpt-runtime` case
+  green (the stream part and `SHIM_OUT` are untouched). The harness default changes `ccdWsHelpers.ts`, so CI selects
+  its dependents widely: check the PR's `select tests` summary. When a throwaway LiteLLM 1.105.0 venv is at hand
+  (never the live runtime's interpreter), also run `CCRC_TEST_LITELLM_PY=<its python>
+  ./node_modules/.bin/vitest run test/ccgpt-runtime.test.ts` and record its `Tests` line in the commit; say so when
+  it was not run.
 
 - [ ] **Step 5: Measure the mutation rows**
 - T1 (patch: drop the device-flow kill) → 2 failed (a dead token …; a library that fails to load …).
 - T2 (patch: apply without checking `CCRC_CODEX_AUTH_LIB`) → 1 failed (inert without …).
-- T3 (patch: leave `_write_auth_file` stock) → 1 failed (LiteLLM's write is disabled …).
+- T3 (patch: leave `_write_auth_file` stock) → 2 failed (LiteLLM's write is disabled …; a library that fails to load
+  …).
 - T4 (`_codex_start_tier`: drop `CCRC_CODEX_AUTH_LIB`) → 1 failed.
-- T5 (`_codex_started_json`: hash the stamp alone) → 1 failed (a library change makes … stale).
-- T6 (probe: drop the auth scenario) → 1 failed (the probe gates on the authenticator part …).
-- L3 (from Task 2: drop the `threading.Lock`) → 1 failed (two threads asking at once …).
+- T5 (`_codex_started_json`: hash the stamp alone) → 3 failed (a library change makes … stale; the `:1298` and
+  `:2987` record pins).
+- T6 (probe: drop the auth scenario) → 2 failed (the probe gates on …; with the device-flow kill removed … FAILs
+  auth-device-flow-alive, which now FAILs `translate` instead).
+- T7 (patch: fall back to LiteLLM's refresh when the library fails to load) → 1 failed (… fails to load …).
+- T8 (patch: read `self.auth_file` whatever its name) → 1 failed (… CHATGPT_AUTH_FILE …).
+- T9 (`_codex_start_tier`: drop the library refusal) → 1 failed (no library: auth-library-absent …).
+- T10 (`_fix_codex`: drop the library arm of the restart test) → 1 failed (--fix restoring a drifted ccgpt-auth.py …).
+- T11 (`ghContainedEnv`: drop the default) → 1 failed (every contained env names …).
+- T12 (patch: format the warning's argument) → 1 failed (the warnings format no argument).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex: the tier refreshes through the auth library; its device flow is
   gone (codex-bridge Stage 1, Task 6)"`.
@@ -758,21 +1014,26 @@ operator notes.
 
 **Files:**
 - Modify: `ccd/ccgpt-usage.py` — delete the `from litellm … import Authenticator` (`:231`) and the whole
-  unattended-guard block (`:234-297`); `_require_logged_in` (`:396-416`) and `main` (`:636-664`) read through the
+  unattended-guard block (`:234-297`); `_require_logged_in` (`:398-417`) and `main` (`:636-664`) read through the
   library loaded from `os.path.join(os.path.dirname(os.path.realpath(__file__)), "ccgpt-auth.py")`;
   `_fetch_headers` (`:470-545`) sends `ChatGPT-Account-Id` when the reading has one, and keeps
   `originator: codex_cli_rs` (D-TBD-poller-keeps-codex-originator); its docstring's D-3160 paragraph says why the
   header is now sent.
+- Modify: `ccd/ccrc` — `_models_probe_codex_env` (`:10475-10492`) also exports `CCRC_MODELS_AUTH_LIB="$(
+  _codex_auth_lib)"`: a probe-specific name, so the runtime interpreter's patch is never armed by it, and the
+  placed path has one spelling (`_codex_auth_lib`).
 - Modify: `ccd/ccrc-models-probe` — `_fetch_codex_lane` (`:174-325`): the `[ ! -f … auth.json ]` test (`:184-187`)
-  goes (the library decides absence); the stdin program loads the library from `CCRC_CODEX_AUTH_LIB`, which the bash
-  half exports as `$HOME/.local/bin/ccgpt-auth.py` (the probe runs from the tree, and the library it must agree with
-  is the placed one), and deletes its guard copy (`:213-276`). `ccd/ccrc`'s `_models_probe_codex_env`
-  (`:10475-10492`) is unchanged.
-- Modify: `server/test/codexLaneFixture.ts` — the probe-runtime wrapper's audit hook (`:1915-1925`) records, for every
-  `open` of a file named `auth.json`, the nearest calling frame's file name; `writeAuthStub`/`authStubSource` stay
-  only for the tests that still need LiteLLM's stand-in (Task 6), and the poller/probe tests plant
-  `plantBackendCredential` instead.
-- Test: `server/test/ccgpt-usage.test.ts`, `server/test/models-probe.test.ts`, `server/test/ccrc-models.test.ts`
+  goes (the library decides absence); the bash half refuses `auth-library-absent` (remedy `ccrc update`) when
+  `CCRC_MODELS_AUTH_LIB` is unset or not a regular readable file, and passes it to the stdin program, which loads the
+  library from it and deletes its guard copy (`:213-276`).
+- Modify: `server/test/codexLaneFixture.ts` — `plantLaneAuth` (`:1692-1696`) plants `plantBackendCredential`'s
+  synthetic backend credential (fresh, mode 0600) instead of `{"fixture": …}`, which now reads `foreign-family`
+  (family `unknown`); its comment no longer says "checks EXISTENCE only". The probe-runtime wrapper's audit hook
+  (`:1916-1940`) records, for every `open` of a file named `auth.json`, the nearest calling frame's file name;
+  `writeAuthStub`/`authStubSource` stay only for the tests that still need LiteLLM's stand-in.
+- Test: `server/test/ccgpt-usage.test.ts`, `server/test/models-probe.test.ts`, `server/test/ccrc-models.test.ts`, and,
+  for `plantLaneAuth`'s healthy-lane callers, `server/test/ccrc-install.test.ts` (`:7251`, `:8662`, `:8775`),
+  `server/test/ccrc-uninstall.test.ts` (`:2424`), `server/test/ccrc-doctor.test.ts` (`:1547`, `:12150`)
 
 **Interfaces:**
 - Consumes: `read`, `expired`, `read_status` (wave 1).
@@ -782,8 +1043,9 @@ operator notes.
 |---|---|---|
 | `absent` | `not-logged-in` (unchanged) | `ccrc codex login <id>` |
 | `incomplete`, or status `needs-signin` for this credential | `login-required` (unchanged word) | `ccrc codex login <id>` |
-| `present` and expired | `token-expired` (new) | none needed: "the lane's tier refreshes it on its next request" |
-| `unreadable`, `foreign-family`, status `config-error` | `credential-unusable` (new) | `ccrc doctor` |
+| `present` and expired | `token-expired` (new) | none needed: "the lane's tier refreshes it on its next request; if its refresh token is dead, that request records needs-signin" |
+| `unreadable`, `foreign-family` | `credential-unusable` (new) | `ccrc doctor` |
+| status `config-error` | `credential-unusable` (new) | `ccrc update`, then `ccrc codex login <id>` |
 | the library cannot be loaded | `auth-library-absent` (new; replaces `runtime-api-moved` here) | `ccrc update` |
 
 - [ ] **Step 1: Change the old-rule pins and write the new tests (red first)**
@@ -794,33 +1056,45 @@ operator notes.
     imports LiteLLM's Authenticator'`: neither file contains `authenticator import` or `_unattended`.
   - `models-probe.test.ts:894` `'… reads no auth.json …'`: the count of non-comment lines naming `auth.json` in
     `ccd/ccrc-models-probe` goes from 3 to 0.
-  - `models-probe.test.ts:741`, `:785` and the cooldown case: `not-logged-in` answered by the library; a dead
-    credential is `login-required` with zero requests at `fakeAuthServer` and the credential's lstat unchanged.
+  - `models-probe.test.ts`'s codex `beforeEach` (`:697-712`) copies `ccd/ccgpt-auth.py` into the fixture
+    `~/.local/bin` and passes `CCRC_MODELS_AUTH_LIB` naming it; its `'{}'` credential now reads `absent`. `:741`,
+    `:785` and the cooldown case: `not-logged-in` answered by the library; a dead credential is `login-required` with
+    zero requests at `fakeAuthServer` and the credential's lstat unchanged. New: `'no CCRC_MODELS_AUTH_LIB:
+    auth-library-absent'`.
   - New: `'an expired token is never refreshed by a reader: token-expired, no request, the catalogue kept'` in
-    `models-probe.test.ts` and in `ccgpt-usage.test.ts` (nothing published). (Review Focus 3.)
+    `models-probe.test.ts` and in `ccgpt-usage.test.ts` (nothing published); both against a `fakeAuthServer` with
+    `requests.length === 0`. (Review Focus 3.)
   - `ccgpt-usage.test.ts:106-130` (the helper's "contents never read" note), `:145`, `:189`: the stub becomes a planted
     backend credential; `:1059` becomes `'a dead credential: login-required at once, no token request, nothing
     published'`; `:1120` (`runtime-api-moved`) becomes `'no library beside the publisher: auth-library-absent'`.
+    `publisherEnv` (`:281-288`) runs through `containedSpawnOptions`, so its `CCRC_CODEX_AUTH_BASE` is a
+    `fakeAuthServer` in the new cases and `CLOSED_AUTH_BASE` elsewhere.
   - New in `ccgpt-usage.test.ts`: `'sends ChatGPT-Account-Id, and originator stays codex_cli_rs'`;
     `'loads the library the way production does: a copy beside it, under -I, with no PYTHONPATH'` (copies both files
     into a fixture `~/.local/bin` and runs `python3 -I` there).
   - `ccrc-models.test.ts:1549`, `:1584`, `:1653`, `:1708` (a poisoned ambient `CHATGPT_TOKEN_DIR` never reaches a
     non-codex row; `not-logged-in` with no interpreter): re-measure. The non-codex rows are unchanged; the codex
     `not-logged-in` case now runs the interpreter, so its "no interpreter ran" assertion becomes "no request was made
-    and nothing under the authDir was written".
+    and nothing under the authDir was written". Its `plantCodexBins` callers carry the library from Task 5.
+  - The healthy-lane suites (`ccrc-install`, `ccrc-uninstall`, `ccrc-doctor`, `ccrc-models`): no assertion changes;
+    each is run against its base `Tests` line before and after the `plantLaneAuth` edit.
 
-- [ ] **Step 2: Run to see them fail** — the three files; Expected: FAIL on the changed and new cases.
+- [ ] **Step 2: Run to see them fail** — `ccgpt-usage`, `models-probe`, `ccrc-models`; Expected: FAIL on the changed
+  and new cases.
 
-- [ ] **Step 3: Make the two readers' edits.**
+- [ ] **Step 3: Make the two readers' edits, `_models_probe_codex_env`'s export and the `plantLaneAuth` edit.**
 
-- [ ] **Step 4: Run to see them pass** — Expected: PASS.
+- [ ] **Step 4: Run to see them pass** — the three files; Expected: PASS. Then `ccrc-install`, `ccrc-uninstall` and
+  `ccrc-doctor`, each against its base `Tests` line (the after run of the fixture edit), alone.
 
 - [ ] **Step 5: Measure the mutation rows**
-- U1 (poller: call `ensure_fresh` instead of `read`) → 1 failed (an expired token is never refreshed by a reader …).
+- U1 (poller: call `ensure_fresh` instead of `read`) → 1 failed (an expired token is never refreshed by a reader …),
+  on a recorded request at the fake server.
 - U2 (probe: the same) → 1 failed.
 - U3 (poller: drop the account-id header) → 1 failed.
 - U4 (probe: open `auth.json` itself for `account_id`) → 1 failed (… only the library opens auth.json).
 - U5 (poller: load the library by bare `import`) → 1 failed (loads the library the way production does …).
+- U6 (probe: drop the `CCRC_MODELS_AUTH_LIB` test) → 1 failed (no CCRC_MODELS_AUTH_LIB …).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex: the usage poller and the models probe read through the auth
   library (codex-bridge Stage 1, Task 7)"`.
@@ -834,23 +1108,26 @@ operator notes.
   "$(_codex_auth_lib)"`; rc 3 with `auth-library-absent` when the file or `python3` is missing) and
   `_codex_auth_status <id>` (sets `CX_AUTH_JSON`, `CX_AUTH_CRED` and `CX_AUTH_STATE` from `status --auth-dir
   "$HOME/$CX_AUTH" --lane <id>`, read with jq). `_codex_login` (`:13464-13481`) runs `_codex_auth signin --auth-dir
-  "$HOME/$CX_AUTH" --lane "$id"` under `umask 077` and no longer needs the runtime; its header comment (`:13416-13463`)
-  is rewritten (the library signs in; it writes nothing before the exchange; success is its rc 0). `_codex_cmd_start`
-  (`:13179-13182`) reads `_codex_auth_status` before the lane lock, as today's test does. `_codex_cmd_status`
-  (`:13335-13441`) adds an `auth` field (the status report minus `mode`/`ownerOk`) to its JSON.
+  "$HOME/$CX_AUTH" --lane "$id"` under `umask 077` and no longer needs the runtime; its header comment (`:13415-13463`)
+  is rewritten (the library signs in; it writes nothing before the exchange; success is its rc 0).
+  `_codex_cmd_start` (`:13173-13182`) reads `_codex_auth_status` before the lane lock, as today's test does.
+  `_codex_cmd_status` (`:13335-13413`) adds an `auth` field (the status report minus `mode`/`ownerOk`) to its JSON.
 - Modify: `ccd/ccd-account-auth:1090-1100` (the comment "ccrc still never opens it").
+- Modify: `server/test/ccrc-codex.test.ts:1595` — the life box's inline `{"fixture": …}` plant becomes
+  `plantBackendCredential` (it is the healthy-lane plant every start case reads, not a refusal case).
 - Test: `server/test/ccrc-codex.test.ts`, `server/test/ccrc-codex-launcher.test.ts`
 
 **Interfaces:**
 - Consumes: the CLI's `signin` and `status` (Task 4).
 - Produces: `ccrc codex start`'s refusals, before anything starts: `not-logged-in` (`absent` or `incomplete`, the
   sentence no longer says "existence is all ccrc checks"), `needs-signin` (status `needs-signin`, remedy `ccrc codex
-  login <id>`), `credential-unusable` (`unreadable`, `foreign-family`, `config-error`, remedy `ccrc doctor`),
-  `auth-library-absent`. An expired `present` credential starts (the tier refreshes). `ccrc codex login`'s answers:
-  `logged in` (rc 0, either `signed-in` or `already-signed-in`), `login-failed` (rc 1, the library's word in the
-  sentence).
+  login <id>`), `credential-unusable` (`unreadable` or `foreign-family`, remedy `ccrc doctor`; `config-error`, remedy
+  `ccrc update`, then `ccrc codex login <id>`), `auth-library-absent`. An expired `present` credential starts (the
+  tier refreshes). `ccrc codex login`'s answers: `logged in` (rc 0, either `signed-in` or `already-signed-in`, the
+  latter with the library's dead-token sentence), `login-failed` (rc 1, the library's word in the sentence).
 
-- [ ] **Step 1: Change the old-rule pins and write the new tests**
+- [ ] **Step 1: Change the old-rule pins and write the new tests** (login cases against a `fakeAuthServer` passed as
+  `CCRC_CODEX_AUTH_BASE`; start and status cases against one with `requests.length === 0`)
   - `ccrc-codex.test.ts:3327` A1 becomes `'A1: signs in through the library over the roster's authDir, against the
     fake endpoint, with no runtime'`; `:3369` A2 becomes `'A2: login-failed when the library's sign-in fails, and
     nothing is written'`; `:3380` A3 becomes `'A3: an abandoned LiteLLM marker (incomplete) is signed in again'`;
@@ -859,13 +1136,14 @@ operator notes.
     (what login writes is what start reads).
   - New: `'start refuses needs-signin and credential-unusable before the lane lock, and starts an expired token'`;
     `'start refuses a foreign-family credential: credential-unusable, the file untouched'` (Review Focus 2);
-    `'status --json carries auth.state and auth.credential'`.
-  - The `not-logged-in` cases at `:1595` and `:2092` re-measured against the new sentence.
+    `'start names ccrc update then ccrc codex login for config-error'`; `'status --json carries auth.state,
+    auth.credential and auth.authBase'`.
+  - The `not-logged-in` refusal at `:2092` re-measured against the new sentence.
   - `ccrc-codex-launcher.test.ts`: a launch on a `needs-signin` lane exits with that refusal and execs nothing.
 
 - [ ] **Step 2: Run to see them fail** — both files; Expected: FAIL on the changed and new cases.
 
-- [ ] **Step 3: Make the `ccd/ccrc` and `ccd/ccd-account-auth` edits.**
+- [ ] **Step 3: Make the `ccd/ccrc`, `ccd/ccd-account-auth` and `:1595` edits.**
 
 - [ ] **Step 4: Run to see them pass** — Expected: PASS. Then `session-hook.test.ts -t 'every line citation is
   anchored'` (this task moves `ccd/ccrc` lines; the S6-R11 procedure re-anchors, no D-number).
@@ -874,6 +1152,7 @@ operator notes.
 - C1 (`_codex_cmd_start`: back to `[ -f auth.json ]`) → 2 failed (start refuses needs-signin …; foreign-family …).
 - C2 (`_codex_login`: run LiteLLM's `Authenticator` again) → A1, A5.
 - C3 (`_codex_cmd_status`: drop `auth`) → 1 failed.
+- C4 (`_codex_cmd_start`: the `ccrc doctor` remedy for config-error) → 1 failed (start names ccrc update …).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex: login signs in through the auth library; start reads its status
   (codex-bridge Stage 1, Task 8)"`.
@@ -883,19 +1162,25 @@ operator notes.
 ### Task 9: the doctor reads the status and the mode; account removal takes the library lock
 
 **Files:**
-- Modify: `ccd/ccrc-doctor-checks` — `_dr_cx_lane` (`:7068-7084`): after the authDir's directory tests, one
-  `_codex_auth_status "$id"`; FAIL (`_dr_cx_fail`) on: credential `absent`/`incomplete` (remedy `ccrc codex login`),
-  `needs-signin`, `unreadable`/`foreign-family`, `config-error`, `modeOk` false (remedy `chmod 600 ~/<authDir>/
-  auth.json`), `ownerOk` false, and `auth-library-absent` (remedy `ccrc update`). PASS keeps the words `signed in`.
-  `_check_codex`'s header (`:6586-6587`) and `_fix_codex`'s "WHAT IT NEVER DOES" (`:6797-6798`) are reworded: the
-  doctor reads the library's non-secret status and the file's mode; `--fix` still performs no OAuth and writes nothing
-  under an authDir.
+- Modify: `ccd/ccrc-doctor-checks` — `_dr_cx_lane` (`:7063-7084`): after the authDir's directory tests, one
+  `_codex_auth_status "$id"`; FAIL (`_dr_cx_fail`), each with its remedy, on: credential `absent`/`incomplete`
+  (`ccrc codex login <id>`), `needs-signin` (`ccrc codex login <id>`), `unreadable`/`foreign-family`
+  (`move it aside, then ccrc codex login <id>`), `config-error` (`ccrc update`, then `ccrc codex login <id>`),
+  `modeOk` false (`chmod 600 <the credential path _codex_auth paths answers>`), `ownerOk` false, and
+  `auth-library-absent` (`ccrc update`). PASS keeps the words `signed in`. `_check_codex`'s loaded-function guard
+  (`:6614-6624`) gains `_codex_auth_status` and `_codex_auth`. `_check_codex`'s header (`:6586-6587`) and
+  `_fix_codex`'s "WHAT IT NEVER DOES" (`:6797-6798`) are reworded: the doctor reads the library's non-secret status
+  and the file's mode; `--fix` still performs no OAuth and writes nothing under an authDir.
 - Modify: `ccd/ccrc` — new `_codex_auth_hold <id>` / `_codex_auth_release` (modelled on `_codex_lock`,
   `:12812-12843`): the lock path and bound come from `_codex_auth paths` (`lock`, `lockWaitS`), an absent authDir holds
   nothing and answers 0, a missing `flock` answers 0 with nothing held (as `_codex_lock` does), a timeout answers 1.
-  `_acct_remove`'s codex arm (`:9151-9153`) takes it after `_codex_lock` and releases it after `_codex_stop_lane`; a
-  timeout refuses `codex-reap-failed` with nothing removed. `_acct_remove_usage`'s comment (`:24486-24500`) says the
-  poll no longer writes the credential, and why the wait is kept (D-TBD-removal-keeps-usage-wait).
+  `_codex_lock`'s rule carries over: `CX_AUTH_LOCK_FD` is closed in any spawn made while it is held, so no child
+  inherits the lock (no row possible today: between hold and release removal spawns only short-lived stop commands,
+  `ccd/ccrc:9151-9184`, reviewed by reading). `_acct_remove`'s codex arm (`:9151-9153`) takes it after
+  `_codex_lock` and releases it after `_codex_stop_lane`; a timeout refuses `codex-reap-failed` with nothing removed.
+  `_acct_remove_usage`'s comment (`:24486-24500`) says the poll no longer writes the credential, keeps its two
+  limits-row sentences (`:24480`, `:24492-24493`), and says the wait stays for that reason
+  (D-TBD-removal-keeps-usage-wait).
 - Test: `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-account.test.ts`
 
 **Interfaces:**
@@ -905,10 +1190,14 @@ operator notes.
 - [ ] **Step 1: Change the old-rule pins and write the new tests**
   - `ccrc-doctor.test.ts:12088` keeps its title and pins the new sentence (no "existence is all ccrc checks").
   - `ccrc-doctor.test.ts:12100` `'PASSes a 0000-mode auth.json …'` becomes `'FAILs a 0000-mode and a 0644-mode
-    auth.json, naming chmod 600'`.
-  - New: `'FAILs needs-signin, credential-unusable and auth-library-absent, each with its remedy'`;
-    `'PASS still reads signed in, for a present credential whether or not its token expired'`; `'no new WARN line and
-    no new check name'` (the `codex` check's output has only PASS/FAIL lines in every case above).
+    auth.json, naming chmod 600 and the credential's path'`.
+  - New, one case per arm, each with its remedy: `'FAILs needs-signin'`, `'FAILs a foreign-family credential'`,
+    `'FAILs config-error naming ccrc update then ccrc codex login'`, `'FAILs auth-library-absent'` and `'FAILs a
+    credential this user does not own'` — the last two by placing, at the fixture `~/.local/bin/ccgpt-auth.py`, a
+    stub that answers `status` with a canned report (`ownerOk: false`), or by its absence; `'PASS still reads signed
+    in, for a present credential whether or not its token expired'`; `'no new WARN line and no new check name'` (the
+    `codex` check's output has only PASS/FAIL lines in every case above); `'a check table sourced without ccrc names
+    the missing _codex_auth_status'`.
   - `:13130-13134` and `:13552` (`_fix_codex` leaves a second lane's 0000 credential lstat-unchanged): unchanged, and
     must stay green.
   - `ccrc-account.test.ts`: new `'removal takes the auth library's lock around the stop: a holder makes it wait, then
@@ -926,6 +1215,11 @@ operator notes.
 - [ ] **Step 5: Measure the mutation rows**
 - D1 (doctor: drop the mode arm) → 1 failed (FAILs a 0000-mode and a 0644-mode …).
 - D2 (doctor: drop the `needs-signin` arm) → 1 failed.
+- D2b (doctor: drop the `unreadable`/`foreign-family` arm) → 1 failed.
+- D2c (doctor: drop the `config-error` arm) → 1 failed.
+- D2d (doctor: drop the `auth-library-absent` arm) → 1 failed.
+- D2e (doctor: drop the `ownerOk` arm) → 1 failed.
+- D2f (doctor: drop `_codex_auth_status` from the loaded guard) → 1 failed (a check table sourced without ccrc …).
 - D3 (removal: do not take `_codex_auth_hold`) → 1 failed (removal takes the auth library's lock …).
 - D4 (removal: proceed on a hold timeout) → 1 failed.
 
@@ -941,18 +1235,25 @@ operator notes.
   one arm per codex row, `printf '%s\n' "<dqEscaped authDir>"`, after `_ccrc_secrets_file` (`:308-312`, `:359-362`),
   reading both producers' shapes (`a.exec.authDir` from `parseRoster`, `a.authDir` from `rosterFromJson`'s
   `codexTopology`, `shared/roster-json.mjs:523-529`) as `secretsArms` does; its doc block beside `_ccrc_secrets_file`'s.
-- Modify: `ccd/ccd-history-sweep:52-71` — when `declare -F _ccrc_auth_dir` and the library is present, for each
-  account with an authDir, append each line of `python3 -IS "$HOME/.local/bin/ccgpt-auth.py" secret-files --auth-dir
-  "$HOME/<dir>"` to `secrets`. A missing library adds nothing (the sweep never fails on it).
+- Modify: `ccd/ccd-history-sweep:52-79` — when `declare -F _ccrc_auth_dir`, for each account with an authDir, run the
+  TREE's copy, `python3 -IS "$HOME/ccrc/ccd/ccgpt-auth.py" secret-files --auth-dir "$HOME/<dir>"` (the tree the shim
+  already runs `sweep.mjs` from, `:79`), and append each line to `secrets`. When it cannot answer (no file, no
+  `python3`, a non-zero rc), the shim prints one stderr line naming the lane and its authDir and passes
+  `--unanswered "$HOME/<dir>"`, never nothing.
+- Modify: `ccd/history/sweep.mjs` — `parseSweepArgv` (`:98-118`) and `USAGE` (`:92`) accept `[--unanswered <path>]…`
+  after `--roster-unreadable` and before `--secrets` (an op's arguments also stop there), returned as `unanswered`;
+  `secretsStep` (`:5701-5716`) appends each to `loaded.unreadable`, so `redact_unreadable` and the doctor's existing
+  `redact-source-unreadable` WARN name the authDir.
 - Modify: `ccd/history/lib.mjs:1605-1611` and `ccd/history/sweep.mjs:5633` — the two "never names an authDir"
   sentences: the frozen list still names none (an authDir is per-row roster data), and the roster half now brings
   each codex lane's credential and checkpoint.
 - Test: `server/test/roster-generate.test.ts`, `server/test/gen-accounts.test.ts`, `server/test/history-recall.test.ts`,
-  `server/test/history-lib.test.ts`
+  `server/test/history-lib.test.ts`, `server/test/history-sweep.test.ts`
 
 **Interfaces:**
 - Consumes: the CLI's `secret-files` (Task 4).
-- Produces: `_ccrc_auth_dir <id>` in `accounts.sh` (HOME-relative authDir, or nothing at rc 0).
+- Produces: `_ccrc_auth_dir <id>` in `accounts.sh` (HOME-relative authDir, or nothing at rc 0); `parseSweepArgv`'s
+  `unanswered: string[]`.
 
 - [ ] **Step 1: Change the old-rule pins and write the new tests**
   - `roster-generate.test.ts`, beside the `_ccrc_secrets_file` cases (`:328-396`): `'_ccrc_auth_dir is emitted always,
@@ -961,14 +1262,21 @@ operator notes.
   - `history-recall.test.ts:4084` C49's title becomes `'C49: gateway keys and each codex credential redacted by
     roster (Task 18; codex-bridge Stage 1)'`; `:4128` flips: the value under the authDir's `auth.json` is redacted
     (`expand` no longer prints it, a pair holds it), and a 0000 `auth.json` IS listed in `redact_unreadable` (it is now
-    a source). A file elsewhere under the authDir (the status file) is still never loaded.
+    a source). A file elsewhere under the authDir (the status file) is still never loaded. The history box links
+    `~/ccrc` to the repository (`server/test/historyHelpers.ts:91`), so the tree's library answers with no extra
+    fixture.
+  - New C49 variant: `'C49b: when the library cannot answer, the codex authDir is an unreadable redaction source'` —
+    a `python3` stub first on PATH that exits 1; `redact_unreadable` names the authDir, and the shim's stderr holds
+    one line naming it.
+  - `history-sweep.test.ts:410` `'parseSweepArgv: the shim's grammar, exactly'`: every expected object gains
+    `unanswered: []`, plus one argv with two `--unanswered` paths and one with `--unanswered` and no path (bad-args).
   - `history-lib.test.ts:3624` keeps its list and its `not.toMatch(/auth[_-]?dir|oauth/i)`: the frozen list is
     unchanged, and must stay green. The two rewritten comments are prose; `git grep` them across `server/test` first,
     and update any test that quotes them in this commit.
 
-- [ ] **Step 2: Run to see them fail** — the four files; Expected: FAIL on the new and flipped cases.
+- [ ] **Step 2: Run to see them fail** — the five files; Expected: FAIL on the new and flipped cases.
 
-- [ ] **Step 3: Make the emitter, sweep-shim and comment edits.**
+- [ ] **Step 3: Make the emitter, sweep-shim, sweep and comment edits.**
 
 - [ ] **Step 4: Run to see them pass** — Expected: PASS; also `single-definition.test.ts` (the emitter's
   single-source rows) green.
@@ -977,6 +1285,8 @@ operator notes.
 - H1 (sweep shim: drop the `secret-files` loop) → C49 red.
 - H2 (emitter: skip the arm for `rosterFromJson`'s shape) → gen-accounts byte agreement red.
 - H3 (emitter: emit only when a codex row exists) → 1 failed (… emitted always …).
+- H4 (sweep shim: pass nothing when the library cannot answer) → C49b red.
+- H5 (`secretsStep`: ignore `unanswered`) → C49b red.
 
 - [ ] **Step 6: Commit** — `git commit -m "history: redact each codex lane's credential through the auth library's
   secret-files (codex-bridge Stage 1, Task 10)"`.
@@ -987,18 +1297,24 @@ operator notes.
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` — inline `(amended: §24)` markers on §9's
-  closing sentence (`:498-499`), §9 items 2-3 (`:478-489`), §12's doctor row (`:593`), §19.7 (`:909`), §20.1's
+  closing sentence (`:497-498`), §9 items 2-3 (`:478-489`), §12's doctor row (`:593`), §19.7 (`:909`), §20.1's
   account-id and device-flow sentences (`:982-997`), §21.3 (`:1130-1138`), §21.7 (`:1159-1164`) and §21.8
-  (`:1166-1170`); and a new `## 24. Amendments (codex-bridge Stage 1)` after §23.8, in §21-§23's shape: 24.1 "Exactly
-  one ccrc library reads and writes a codex lane's credential" (the rule, its three side files, who reads and who
-  refreshes per mode); 24.2 "The tier's device flow ends" (the patch's authenticator part; what an older ccrc's tier
-  still does); 24.3 "The doctor reads the status and the mode"; 24.4 "Account removal takes the library's lock";
-  24.5 "History redacts the credential"; 24.6 "Who holds each mutation-table row Stage 1 changed" (a table: §18's
-  rows at `:765`, `:774`, `:775`, `:794` and §23.5's `:1325-1326`, each with its new holder test from Tasks 1-10).
+  (`:1166-1170`); the "four executables" sentences (`:16`, `:547`, `:620`) say five; and a new
+  `## 24. Amendments (codex-bridge Stage 1)` after §23.8, in §21-§23's shape: 24.1 "Exactly one ccrc library reads
+  and writes a codex lane's credential" (the rule as Global Constraints words it, history's read-only redaction
+  included, its three side files, who reads and who refreshes per mode); 24.2 "The tier's device flow ends" (the
+  patch's authenticator part, its fail-closed load; what an older ccrc's tier still does); 24.3 "The doctor reads the
+  status and the mode"; 24.4 "Account removal takes the library's lock"; 24.5 "History redacts the credential"; 24.6
+  "Who holds each mutation-table row Stage 1 changed" (a table: §18's rows at `:765`, `:774`, `:775`, `:794` and
+  §23.5's `:1325-1326`, each with its new holder test from Tasks 1-10).
 - Modify: `docs/superpowers/specs/2026-10-18-accounts-connect-design.md:59`, `:143` — one blockquote note each:
   "Amended by the codex-bridge spec §2.6 (Stage 1, 2026-10-22): the auth library reads and writes it."
-- Modify: `README.md` — the Codex-lane section that describes sign-in and the doctor's codex check: the library, its
-  three side files, `needs-signin`, and that `ccrc codex login` no longer needs the runtime.
+- Modify: `README.md` — the doctor table's `codex` row (`:608`: five executables; the library's status and the file's
+  mode instead of "for existence and mode only"); the `ccrc models` paragraph (`:1846-1852`: the probe reads through
+  the library and never refreshes; `token-expired`, `credential-unusable` and `auth-library-absent`); the usage
+  publisher's sentence (`:2077-2078`: `token-expired` and the library's words, not "neither used nor refreshed"); and
+  the Codex-lane section that describes sign-in: the library, its three side files, `needs-signin`, and that
+  `ccrc codex login` no longer needs the runtime.
 - Modify (comments only, any not already reworded by Tasks 6-10): `ccd/ccrc:13179-13180`'s and the doctor's remaining
   "existence is all ccrc checks" sentences, found with `git grep -n 'never reads one\|never opens the file\|existence
   and mode only' -- ccd`.
@@ -1006,13 +1322,13 @@ operator notes.
 - [ ] **Step 1: Measure what pins the prose.** `git grep -n` each sentence this task rewrites across `server/test`;
   for each hit, the test is updated in this task's commit to the new sentence (a red first). Expected, from the map:
   no test pins the ownership spec's or the accounts-connect spec's text; the README's `ccrc codex` lines may be pinned
-  by `readme-*`/docs-parity suites (memory: README API citations are test-pinned) — run them.
+  by `readme-*`/docs-parity suites (README API citations are test-pinned) — run them.
 
-- [ ] **Step 2: Make the edits**, then confirm: `git grep -n 'never reads one\|never opens the file' -- ccd` prints
-  nothing.
+- [ ] **Step 2: Make the edits**, then confirm: `git grep -n 'never reads one\|never opens the file' -- ccd` and
+  `git grep -n 'neither used nor refreshed' -- README.md` print nothing.
 
-- [ ] **Step 3: Run** every suite Step 1 named, and `docs-parity` if it exists for `ccd/ccrc` comment anchors.
-  Expected: PASS.
+- [ ] **Step 3: Run** every suite Step 1 named, `single-definition.test.ts` (the README may name the side files; the
+  row excludes it), and `docs-parity` if it exists for `ccd/ccrc` comment anchors. Expected: PASS.
 
 - [ ] **Step 4: Commit** — `git commit -m "docs: exactly one ccrc library reads and writes a codex credential
   (codex-bridge Stage 1, Task 11)"`.
@@ -1033,8 +1349,10 @@ operator notes.
   `git diff origin/main -- . | grep -nE '^\+.*(/ho[m]e/|/Us[e]rs/|\.ts\.n[e]t|100\.[0-9]+\.[0-9]+\.[0-9]+)' || echo
   clean` → `clean`; and `git diff origin/main -- . | grep -nE '^\+.*eyJ[A-Za-z0-9_-]{10,}' || echo clean` → `clean`
   (no token-shaped literal). Read every changed prose line once for lane, host or account names.
-- [ ] **Step 4: No test reached OpenAI.** `git diff origin/main -- server/test | grep -n 'openai.com' || echo clean` →
-  only the constant-reading assertion of Task 1, if any; every network test names `fakeAuthServer`.
+- [ ] **Step 4: No test can reach a live endpoint.** `git diff origin/main -- server/test | grep -n 'auth\.openai\.com'
+  || echo clean` → only the constant-reading assertion of Task 1, if any (the claim key `https://api.openai.com/auth`
+  in `syntheticJwt`'s claims is not an endpoint); `'every contained env names a loopback CCRC_CODEX_AUTH_BASE'`
+  (Task 6) and `runAuthDriver`'s default case (Task 1) green; every network test names `fakeAuthServer`.
 - [ ] **Step 5: Report** the wave-done with every task's measured mutation rows, any further `D-TBD-<slug>`, and the
   PR's selected-tests summary.
 
@@ -1044,39 +1362,56 @@ operator notes.
 
 Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes are for wave 2's release.
 
-1. **When.** Stage 1 changes the LiteLLM tier the GPT-lane soak measures. If R-O9 (the soak's final sample) has not
-   closed, decide first whether this rollout waits for it (open question 1).
+1. **When.** Nothing holds it back: R-O9 closed on 2026-10-19 and Stage 0's windows were applied on 2026-10-22
+   (ruling 9). A tier restart cuts the lane's in-flight requests, so pick a quiet window.
 2. **What moves, fleet box.** `ccrc update --to vX.Y.Z` (or `ccrc rollout --to vX.Y.Z`, fleet box first): it places
    `ccgpt-auth.py` and the new poller and probe; the patch edit makes `ccgpt-runtime check` answer `probe-moved`, so the
    update rebuilds the Codex runtime once (a pip install from the package index, bounded by `CCRC_RUNTIME_PIP_S`);
-   `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A restart cuts the
-   lane's in-flight requests, so pick a quiet window or pause auto-update for the lane window (ownership spec §21.11).
+   `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A restart that lands
+   while the tier is inside a refresh's token round trip can spend the refresh token
+   (D-TBD-tier-stop-takes-no-auth-lock), so a quiet window or a paused auto-update for the lane window (ownership
+   spec §21.11) matters twice.
    `accounts.sh` gains `_ccrc_auth_dir`; until the server box is updated, the two boxes' generated roster digests
    differ, so update the server box promptly after.
 3. **What moves, server box.** Nothing of the lane (a server box places no GPT-lane file); `accounts.sh` regenerates.
-4. **Verify, per lane:** `ccrc codex status lane-a --json | jq .auth` reads `state: "ok"`, `credential: "present"`;
-   `ccrc doctor` keeps `codex: … signed in`; after the first expiry, `auth.lastRefreshAt` moves (the tier refreshed
-   through the library) and the authDir holds `auth.json.lock` and `auth.status.json`. The tier's log carries no
-   `Enter code:` line from then on. The status file's `expiresAt - lastRefreshAt` is the backend's access-token
-   lifetime, measured for the first time (open question 5).
+4. **Verify, per lane:** `ccrc codex status lane-a --json | jq .auth` reads `state: "ok"`, `credential: "present"`,
+   `authBase: "default"`; `ccrc doctor` keeps `codex: … signed in`; after the first expiry, `auth.lastRefreshAt` moves
+   (the tier refreshed through the library) and the authDir holds `auth.json.lock` and `auth.status.json`. The tier's
+   log carries no `Enter code:` line from then on. The status file's `expiresAt - lastRefreshAt` is the backend's
+   access-token lifetime, measured for the first time (open question 5).
 5. **Watch:** an idle lane's usage row and models catalogue go stale once its access token expires
-   (`token-expired`), until the lane's next request; a `needs-signin` lane answers 401 at once instead of hanging.
+   (`token-expired`), until the lane's next request; a `needs-signin` lane answers 401 at once instead of hanging. On
+   a lane left idle, watch `auth.lastRefreshAt`: no process refreshes it until a request arrives, and whether its
+   refresh token outlives a long idle is unmeasured (D-TBD-idle-litellm-lane-has-no-refresher).
 6. **Undo:** `ccrc rollback --to <previous>` (or `ccrc update --to <previous>`). The older tree's `ccgpt-runtime`
    rebuilds the older patch, and its tiers start without `CCRC_CODEX_AUTH_LIB`, so LiteLLM's own auth, device flow
    included, returns. The credential stays in LiteLLM's format with all five keys, so the older code reads it as is;
-   the lock and status files beside it are ignored. A checkpoint left by a crash just before the rollback would be
-   ignored by the older code: check the authDir holds no `auth.pending.json` first.
+   the lock and status files beside it are ignored. The older code ignores a checkpoint too: when the authDir holds
+   an `auth.pending.json` before the rollback, run `ccrc codex login <id>` first (it promotes the checkpoint under
+   the lock), or let one request through the lane.
 
 ## Known limits and Later
 
-- In litellm mode an idle lane's readers cannot refresh (ruling 1); Stage 2's bridge is the designated refresher and
-  its idle-lane timer covers it.
+- In litellm mode an idle lane's readers cannot refresh (ruling 1). A lane that stays on `litellm` has no idle
+  refresher from Stage 1 until it leaves LiteLLM (Stage 4, lane by lane): Stage 2 flips one lane (lane-b on the
+  reference fleet) to `direct`, and only that lane gains the bridge's idle-lane timer
+  (D-TBD-idle-litellm-lane-has-no-refresher).
 - The PWA does not show the status yet: the agent's read whitelist does not admit an authDir
   (D-TBD-pwa-reads-status-later).
 - Revocation on account removal, a retired-refresher doctor check, the SIWC file and sign-in, `ccrc codex consent`,
   the host id and `ccrc auth import` are later stages.
 - An older ccrc's tier (before its restart) still truncates the credential in place; the library's read retries and
   its checkpoint's mtime test exist for that window.
+- Only account removal takes the library lock around a tier stop (D-TBD-tier-stop-takes-no-auth-lock).
+
+## Open questions
+
+3. **The token endpoint's error-body shape.** Unmeasured: no copy of Codex's login or refresh code is on the box
+   (What was measured). Until it is measured, the library classifies by the documented OAuth `error` field only,
+   records the raw code name (never the body) bounded by `CODE_RE`, and maps an unknown or absent code to `transient`
+   (D-TBD-error-code-from-oauth-field).
+5. **The backend access-token lifetime.** Unmeasured, and not hard-coded: the library reads `exp` from the token.
+   Rollout note 4 measures it for the first time.
 
 ## Deviations found
 
@@ -1089,12 +1424,13 @@ report.
 - **Departs from:** spec §2.6, "In `litellm` mode LiteLLM, which ignores the lock, is the only refresher".
 - **What changed:** LiteLLM's tier stays the only refreshing process, but through the patch its `get_access_token`
   is the library's `ensure_fresh`, which takes the lock, re-reads and commits atomically; LiteLLM's own write is
-  disabled (Task 6).
+  disabled, and a library that fails to load fails closed (Task 6).
 - **Why:** with LiteLLM's own refresh, two requests in one tier can both refresh (each builds a new `Authenticator`),
   and its in-place truncate can be read torn; its read-path write-backs can overwrite a newer token with an older one.
   Ruling 4 allows ccrc's patch mechanism, and spec §2.8 says Stage 1 ends the race.
 - **Cost if wrong:** the patch depends on five LiteLLM names; a LiteLLM that moves one fails the build probe, so that
-  generation never becomes current.
+  generation never becomes current. A placed library that fails to import makes the lane answer 401
+  `auth-library-absent` until `ccrc update`.
 
 ### D-TBD-poller-keeps-codex-originator — the poller sends the account id, not yet `originator: ccrc`
 
@@ -1109,23 +1445,28 @@ report.
 - **Departs from:** spec §5, "a crash between the token request and the write is recoverable from the checkpoint",
   which defines no checkpoint.
 - **What changed:** the checkpoint is `auth.pending.json`, written and fsynced before the rename that commits it
-  (Task 2). A crash after it is durable is recovered by the next holder; a crash after the token answer and before the
-  checkpoint is durable is not recoverable by any file, and the next refresh then answers `needs-signin` if the old
-  refresh token was spent.
-- **Cost if wrong:** a sign-in after a crash inside a window of milliseconds.
+  (Task 2). A crash after it is durable is recovered by the next refresh, or by the next sign-in, under the lock. A
+  death between sending the token request and the checkpoint being durable is not recoverable by any file: if the
+  server already rotated the refresh token, the next refresh answers `needs-signin`.
+- **Cost if wrong:** a sign-in after the refresher dies inside one token round trip (bounded by `TOKEN_TIMEOUT_S`,
+  30 s); a tier restart in that window, such as `_inst_codex_tiers` at a rollout, is the likeliest cause.
 
 ### D-TBD-config-error-state — a sixth state for `invalid_client`
 
 - **Departs from:** spec §2.6, which lists five states and calls `invalid_client` "a configuration error".
-- **What changed:** `config-error` is a sixth status state (Task 3), refused by start and failed by the doctor.
-- **Why:** a sign-in does not cure it, so it must not read `needs-signin`; none of the five fits.
+- **What changed:** `config-error` is a sixth status state (Task 3), bound to the library's own config hash, refused
+  by start and failed by the doctor with `ccrc update`, then `ccrc codex login <id>`; `signin` treats it like
+  `needs-signin`.
+- **Why:** a sign-in alone does not cure it, so it must not read `needs-signin`; none of the five fits.
+- **Cost if wrong:** a reader older than this word does not know it; the bridge's Stage 2 reader must add it.
 
 ### D-TBD-library-is-one-module — one file, not a package
 
 - **Departs from:** D18's "a stdlib package beside" the shim.
 - **What changed:** Stage 1's library is one module file, `ccgpt-auth.py`, placed as the fifth GPT-lane file.
 - **Why:** every install path (`_inst_atomic`, `install_atomic`, the uninstall list and their census) places single
-  files; a directory needs new paths in all four. Stage 2's bridge package may absorb the module.
+  files; a directory needs new paths in all four.
+- **Cost if wrong:** a later move into Stage 2's bridge package, with its own placement change.
 
 ### D-TBD-status-computed-when-absent — start and the doctor read a computed status when no file exists
 
@@ -1135,28 +1476,63 @@ report.
   (Task 4).
 - **Why:** a status file is written only under the lock by the refresher and sign-in; a reader that wrote one would be
   a second writer.
+- **Cost if wrong:** the library opens the credential on each such `status` call, in the caller's process.
 
 ### D-TBD-removal-keeps-usage-wait — removal takes the lock and keeps its wait for a poll
 
 - **Departs from:** spec §2.6's caller table ("waits for an in-flight poll" → "takes the library lock").
 - **What changed:** removal takes the library lock around the stop and still waits for an in-flight poll (Task 9).
-- **Why:** the wait's reason (the poll writing the credential) is gone, but removing it changes pinned behaviour this
-  stage does not need to change.
+- **Why:** the wait had two reasons (`ccd/ccrc:24479-24480`, `:24492-24493`). One is gone: the poll no longer writes
+  the credential. The other stands: a poll still running writes again the `~/.cc-limits` row the removal deletes.
 - **Cost if wrong:** up to `CCRC_ACCT_USAGE_WAIT_S` of waiting at removal.
 
 ### D-TBD-revocation-later — no revocation at removal
 
 - **Departs from:** spec §2.6's caller table ("offers revocation").
 - **Why:** no revocation endpoint for this credential is measured or sourced in the tree.
+- **Cost if wrong:** a removed lane's refresh token stays valid upstream until it lapses.
 
 ### D-TBD-retired-refresher-check-later — the doctor's retired-refresher FAIL waits for a retirement
 
 - **Departs from:** spec §2.6's caller table ("fails if a retired refresher is enabled again").
 - **Why:** Stage 1 retires no refresher process; the check lands with Stage 2's flip, when LiteLLM is retired on a
   `direct` lane.
+- **Cost if wrong:** an old poller or probe placed again goes unnoticed except by the doctor's byte comparison.
 
 ### D-TBD-pwa-reads-status-later — the PWA does not read the status in Stage 1
 
 - **Departs from:** spec §2.6, "The doctor, the PWA and `ccrc codex start` read that".
 - **Why:** the status file sits beside the credential, which the agent's read whitelist does not admit
   (`agent/src/whitelist.ts:58-80`); widening it is its own reviewed change.
+- **Cost if wrong:** the operator sees `needs-signin` only in the doctor and the CLI.
+
+### D-TBD-error-code-from-oauth-field — the error code is read from the OAuth `error` field only
+
+- **Departs from:** nothing in the spec states the body's shape; spec §2.6 names the codes, and this entry records
+  the unmeasured assumption (open question 3).
+- **What changed:** `classify_error` reads the code from a JSON object's string `error` field only, stores the name
+  (never the body) bounded by `CODE_RE`, and treats an absent or unknown code as `transient` (Task 3).
+- **Why:** no copy of Codex's login or refresh code is reachable on the box, and LiteLLM never parses the body
+  (`authenticator.py:315-324`).
+- **Cost if wrong:** a backend that nests the code (`{error:{code}}`) reads every dead token as `transient`: the
+  tier answers `refresh-failed` on each request instead of recording `needs-signin`.
+
+### D-TBD-idle-litellm-lane-has-no-refresher — a litellm lane is refreshed only by its own requests
+
+- **Departs from:** spec §2.6's idle-lane timer, which is the bridge's and covers a `direct` lane only.
+- **What changed:** Stage 1 ends the poller's refresh (`ccd/ccgpt-usage.py:647-656`, every 15 minutes today), so a
+  lane on `litellm` is refreshed only when a request reaches its tier, until it leaves LiteLLM (Stage 4).
+- **Why:** ruling 1: in litellm mode the readers only read.
+- **Cost if wrong:** the backend refresh token's idle lifetime is unmeasured; a lane idle longer than it comes back
+  `needs-signin` and needs a sign-in. Rollout note 5 watches `lastRefreshAt`.
+
+### D-TBD-tier-stop-takes-no-auth-lock — only removal takes the library lock around a tier stop
+
+- **Departs from:** spec §2.6's lock rule as applied to stops: `_inst_codex_tiers`' restart, `ccrc codex stop` and
+  `_uninst_codex` stop a tier without the library lock.
+- **What changed:** `_codex_stop_tier` takes no library lock; removal takes it around `_codex_stop_lane` (Task 9).
+- **Why:** a stop holding it would wait up to `LOCK_WAIT_S` behind a refresh, and a second hold of the same file in
+  one shell would wait on itself (`_codex_lock`'s ONE LEVEL rule, `ccd/ccrc:12796-12802`), since removal already
+  holds it around `_codex_stop_lane`.
+- **Cost if wrong:** a stop that lands inside a refresh's token round trip can spend the refresh token, and the lane
+  then needs a sign-in (D-TBD-checkpoint-is-the-pending-file).
