@@ -275,7 +275,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
     - a merge that touches only paths outside the six rules that the build does not read either: `agent/CLAUDE.md`, `ui/README.md`, `pwa/design/`, `.design-sync/`, `.superpowers/`, `.github/pull_request_template.md`, root dotfiles such as `.gitignore`, and the vitest configs. Also `pwa/test`, which pwa's `tsc` does read;
     - a docs merge while the highest tag has no published release: an in-flight or failed `release.yml` minor, or an orphan tag left by a failed cleanup;
     - a docs merge while `gh` or the API is down;
-    - a docs merge whose base predates the helper (the first one or two after this lands, until a release carries `deploy/release-scope.mjs`).
+    - a docs merge whose base predates the helper. This wave's own merge changes `deploy/`, so it releases, and its release carries `deploy/release-scope.mjs`; so only a docs merge landing while that release run is still in flight or has failed hits this (corrected after the whole-branch review: the first docs-only merge after a successful release here should skip).
 
     None of these is a classifier miss, and the coordinator should not read one as a miss during the live proof.
   - **Release notes.** The next release's notes list the skipped `docs(…)` commits under "Behind the scenes", within `NOTES_BUDGET_BYTES`. That is correct: the release contains them.
@@ -285,6 +285,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - What this does not claim (corrected by D-6405): that the `npm ci` step reaches no token. The checkout's persisted credential and the job's OIDC request token reach it, as they did before this wave.
   - The cache: a skipped merge runs no npm. With `setup-node`'s `cache: npm` the post step would then try to save an `~/.npm` that, on a cache miss, does not exist, and it can fail the job. `setup-node` therefore runs only on `if: steps.decide.outputs.build != 'false'`. An absent output (`decide` did not write one) still sets up the toolchain, so the build path is the default.
   - `decide` writes `build=false` to `$GITHUB_OUTPUT` only when it records `same-as`, and `build=true` otherwise. The prepare step reads the decision file, not the output.
+  - After the whole-branch review: the `decide` step carries `continue-on-error: true`, so a crashed `decide` fails toward releasing (its output is absent, `setup-node` runs, and `prepare` finds no decision and releases). Pin W25-Y2 holds the line.
 - **D-6402.** `unchanged` needs the base's classifier to agree. After HEAD's helper answers `unchanged`, `measure_change` writes `git show <base>:deploy/release-scope.mjs` into a fresh `mktemp -d` directory and asks that copy the same question. It skips only if both answer `unchanged`.
   - A merge that changes the classifier changes `deploy/`, so the old helper answers `changed`, whatever HEAD's copy says. A defect in HEAD's `notShipped` cannot vouch for its own merge. Once that merge has released, its helper is the next base's, so later merges rest on D-6396's guard and on review, not on this rule (corrected after Task 2's security review). Nor does the rule hold against a hostile merge: `release-main.sh` and the workflow run from HEAD, so a merge that edits `decide` can force a skip whatever either helper says. It guards against an accidental classifier defect.
   - A base with no helper (every tag cut before this wave) is unmeasured, and the merge releases.
@@ -776,6 +777,8 @@ Every blocker and major was taken. The lines below record the findings, or the p
   - Wave 23's PR #1137 also edits README in disjoint lines. The second to land measures `git merge-tree` and absorbs only on a conflict.
 
 ## Worker revision for the rulings (2026-10-22)
+
+After the whole-branch review (ready to merge, no Critical or Important finding), one fix wave took two of its minors: the guard's `importEscapes` and `linkEscapes` now also report a read that resolves to the repository root or to an ancestor of a `NOT_SHIPPED` tree (D-6396; new W25-G5 and W25-G6 cases), and `decide` fails toward releasing (D-6401's last bullet). D-6400's first-merges bullet was corrected.
 
 The worker applied the rulings above to the body before Task 1. Readings 2 and 6 and the review notes keep their drafted text as history.
 - Reading 6: D-6398, Task 3 (its interfaces, rows W25-T1 to T7 and the mutation rows), the Goal, the Architecture, the Review Focus, the Risk notes, D-6391's test-tree bullet, D-6400's gate-evidence bullets, Task 4's README `:756-760` and CLAUDE.md wording, and the spec delta note now say that `release-stable.sh` refuses every untagged HEAD and never promotes a contained release.
