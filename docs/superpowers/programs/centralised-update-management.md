@@ -2678,6 +2678,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         size ANOMALY. 17 of 54 passes filed an attempt; no /health miss. STATUS: fleet and server v0.0.544, newest
         v0.0.549, stable v0.0.502, intent dev/auto=off, backups fleet 228M/server 15508M, disk free fleet 153G/work
         volume 14G/server 16G.
+      - 2026-10-22 00:55: no tap this hour. v0.0.550 to v0.0.552 were released (PWA work, a growth-check clean-up, and
+        a `ccd` logging change), none in the broker, all unapplied. 16 of 55 passes filed an attempt, and `stallMid`
+        reached 26.2 s at 00:41:45, the largest yet (block 37.3 s, `cpAttempts` 774); no /health miss. The server has
+        15931M free. STATUS: fleet and server v0.0.544, newest v0.0.552, stable v0.0.502, intent dev/auto=off, backups
+        fleet 228M/server 15508M, disk free fleet 156G/work volume 14G/server 16G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
