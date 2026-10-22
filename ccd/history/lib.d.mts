@@ -568,7 +568,8 @@ export function asOfBinds(cut: AsOfCut): {
 };
 // --- W2-2a Task 3: the as-of cut's node, epoch and entry statements (W2-D35, W2-D36, W2-D38). Each binds asOfBinds' names plus one JSON array.
 /** Of the node ids at :asof_nodes, those the cut hides (column node_id). A leaf other than N's is hidden when its boundary entry is,
- *  or when it has a summary row (summaryRowFor's pick over its holding copy) and that row is (D-6282); a node is hidden when a leaf
+ *  or when it has a summary row (summaryRowFor's pick over its holding copy) and that row is (D-6282), or when its stored
+ *  summary_blob_id is not NULL and the pick is NULL or names another blob (D-6284); a node is hidden when a leaf
  *  under it is, and when a condensed node at or below it has no leaf below it, however deep (R4 at every depth, D-6283). */
 export function asOfHiddenNodesSql(): string;
 /** Of the node ids at :asof_nodes, each non-condensed node's summary row as the store gives it (columns node_id, entry_id; entry_id NULL

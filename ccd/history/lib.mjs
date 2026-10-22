@@ -4500,7 +4500,10 @@ const ASOF_PICK_CTES = `
  *    over the boundary's transcript's files (a live copy first, then the lowest file_id, among those holding the boundary),
  *    and the row is the boundary's `anchor_uuid` row of that copy (an echo row never), or, when the anchor names the boundary
  *    itself, the first non-echo compact summary after the boundary in it. A leaf with no pick (a raw leaf) is judged by its
- *    boundary alone (an absent or empty anchor names no row). N's own leaf is exempt from the summary arm: its summary is
+ *    boundary alone (an absent or empty anchor names no row). A leaf whose stored `summary_blob_id` is not NULL is also hidden
+ *    when its read-time pick is NULL or names an entry whose `blob_id` is another blob (D-6284): the read doors print the
+ *    stored blob, so a pick that no longer names it cannot vouch for it, and the rule fails closed. A leaf with a NULL
+ *    `summary_blob_id` is judged as before. N's own leaf is exempt from the summary arms: its summary is
  *    asof_summary, which the predicate shows, and a cut that names none judges N's leaf by its boundary, N itself;
  *  - any node is hidden when a leaf under it is hidden, whenever the node was formed: the walk goes down node_children
  *    (UNION, so a cycle ends it) and never reads `created_ms`;
@@ -4514,6 +4517,10 @@ export function asOfHiddenNodesSql() {
   // leaf's summary row, and the last HAVING term's summary clause applies the predicate to it. history-lib's seeded
   // equivalence case holds that pick to pickHoldingCopy plus summaryRowFor over several copies and every anchor shape;
   // history-recall's D-6282 describe holds the clause at each read door.
+  // D-6284 (history-w2-asof-leaf-stored-summary): the read doors print a leaf's STORED summary (nodes.summary_blob_id), which
+  // derivation took from the same pick and nothing moves afterwards, so a leaf that has one is also hidden when the read-time
+  // pick is NULL or names another blob: the second summary arm below. history-lib's seeded case holds the stored blob to the
+  // SQL pick's; history-recall's D-6284 describe holds the arm at each read door.
   // D-6283 (history-w2-asof-leafless-descendant): asof_up and the middle HAVING term hide a node over a leafless condensed
   // descendant; history-recall's D-6283 case holds them, including a cycle.
   return `WITH RECURSIVE asof_down(top, node_id) AS (
@@ -4537,7 +4544,9 @@ export function asOfHiddenNodesSql() {
     HAVING sum(asof_n.kind <> 'condensed') = 0
       OR sum(asof_n.kind = 'condensed' AND d.node_id NOT IN (SELECT node_id FROM asof_up)) > 0
       OR sum(asof_n.kind <> 'condensed' AND NOT coalesce(asof_b.entry_id IS NOT NULL AND (${asOfEntrySql('asof_b')})
-        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_s.entry_id IS NULL OR (${asOfEntrySql('asof_s')})), 0)) > 0`;
+        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_s.entry_id IS NULL OR (${asOfEntrySql('asof_s')}))
+        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_n.summary_blob_id IS NULL
+          OR (asof_s.entry_id IS NOT NULL AND asof_s.blob_id = asof_n.summary_blob_id)), 0)) > 0`;
 }
 
 /** A leaf's summary row as the store gives it: of the node ids bound as a JSON array at `:asof_nodes`, each non-condensed
@@ -8738,13 +8747,14 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
  *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
- *  a version that adds a table a verb needs adds it here, in the same PR. blobs_fts is a virtual table the sweep
+ *  a version that adds a table a verb needs adds it here, in the same PR (an as-of cut reads memberships and boundaries
+ *  through asOfHiddenNodesSql's CTEs, so grep, expand and tree list both). blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
-  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships']),
+  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships', 'boundaries']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
-  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
-  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships']),
+  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships', 'boundaries']),
+  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'memberships', 'boundaries']),
 });
 
 /** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this

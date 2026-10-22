@@ -11171,7 +11171,7 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   };
-  type Tally = { leaves: number; picked: number; multiCopy: number; liveAndRetired: number; self: number; selfPicked: number; other: number; echoAnchor: number; missing: number; none: number; noCopy: number };
+  type Tally = { leaves: number; picked: number; multiCopy: number; liveAndRetired: number; self: number; selfPicked: number; other: number; echoAnchor: number; missing: number; none: number; noCopy: number; sharedBlob: number };
 
   /** Every seeded store's leaves compared: the disagreements, and what shapes the run covered. */
   async function compare(trials: number): Promise<{ bad: string[]; tally: Tally }> {
@@ -11179,7 +11179,7 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
     const { DatabaseSync } = await import('node:sqlite');
     const sql = l.asOfSummaryPickSql();
     const bad: string[] = [];
-    const tally: Tally = { leaves: 0, picked: 0, multiCopy: 0, liveAndRetired: 0, self: 0, selfPicked: 0, other: 0, echoAnchor: 0, missing: 0, none: 0, noCopy: 0 };
+    const tally: Tally = { leaves: 0, picked: 0, multiCopy: 0, liveAndRetired: 0, self: 0, selfPicked: 0, other: 0, echoAnchor: 0, missing: 0, none: 0, noCopy: 0, sharedBlob: 0 };
     for (let t = 0; t < trials; t += 1) {
       const rnd = mulberry(1000 + t);
       const ri = (n: number): number => Math.floor(rnd() * n);
@@ -11187,10 +11187,10 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
       const db = new DatabaseSync(':memory:');
       db.exec(`CREATE TABLE ingest_files (file_id INTEGER PRIMARY KEY, source_key TEXT NOT NULL DEFAULT '', transcript_pk INTEGER NOT NULL);
         CREATE TABLE entries (entry_id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, transcript_pk INTEGER NOT NULL, type TEXT NOT NULL,
-          is_compact_summary INTEGER NOT NULL DEFAULT 0, provenance TEXT NOT NULL, ts_ms INTEGER);
+          is_compact_summary INTEGER NOT NULL DEFAULT 0, provenance TEXT NOT NULL, ts_ms INTEGER, blob_id INTEGER);
         CREATE TABLE memberships (file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, line INTEGER NOT NULL, PRIMARY KEY (file_id, entry_id));
         CREATE TABLE boundaries (entry_id INTEGER PRIMARY KEY, transcript_pk INTEGER NOT NULL, anchor_uuid TEXT);
-        CREATE TABLE nodes (node_id TEXT PRIMARY KEY, kind TEXT NOT NULL, boundary_entry_id INTEGER);`);
+        CREATE TABLE nodes (node_id TEXT PRIMARY KEY, kind TEXT NOT NULL, boundary_entry_id INTEGER, summary_blob_id INTEGER);`);
       const nT = 1 + ri(2);
       const nF = 1 + ri(4);
       const nE = 4 + ri(8);
@@ -11204,8 +11204,9 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
       for (let e = 1; e <= nE; e += 1) {
         const x = { e, uuid: `u${e}`, type: of(['user', 'assistant', 'system']), prov: of(['operator', 'harness', 'model']) };
         ents.push(x);
-        db.prepare('INSERT INTO entries (entry_id, uuid, transcript_pk, type, is_compact_summary, provenance, ts_ms) VALUES (?, ?, ?, ?, ?, ?, 100)')
-          .run(x.e, x.uuid, 1 + ri(nT), x.type, rnd() < 0.4 ? 1 : 0, x.prov);
+        // blob_id comes from a pool half the size of the entries, so entries share blobs and a blob's equality is not an entry's (D-6284)
+        db.prepare('INSERT INTO entries (entry_id, uuid, transcript_pk, type, is_compact_summary, provenance, ts_ms, blob_id) VALUES (?, ?, ?, ?, ?, ?, 100, ?)')
+          .run(x.e, x.uuid, 1 + ri(nT), x.type, rnd() < 0.4 ? 1 : 0, x.prov, 1 + ri(Math.ceil(nE / 2)));
       }
       for (const { f } of files) {   // each copy holds its own subset, in its own order (a Fisher-Yates shuffle)
         const mem = ents.filter(() => rnd() < 0.7);
@@ -11219,7 +11220,7 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
         const anchor = arm === 'none' ? null : arm === 'empty' ? '' : arm === 'self' ? b.uuid : arm === 'other' ? other.uuid : 'nope';
         const tp = 1 + ri(nT);
         db.prepare('INSERT INTO boundaries VALUES (?, ?, ?)').run(b.e, tp, anchor);
-        db.prepare('INSERT INTO nodes VALUES (?, ?, ?)').run(`L${b.e}`, 'native_leaf', b.e);
+        db.prepare('INSERT INTO nodes (node_id, kind, boundary_entry_id) VALUES (?, ?, ?)').run(`L${b.e}`, 'native_leaf', b.e);
         leaves.push({ id: `L${b.e}`, e: b.e, uuid: b.uuid, tp, anchor, arm });
       }
       const got = new Map<string, number | null>();
@@ -11240,6 +11241,14 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
           want = cut.cut.summaryEntryId;
         }
         const have = got.has(x.id) ? got.get(x.id)! : 'no row';
+        // D-6284: derivation stores the picked entry's blob_id, NULL with no pick (derive.mjs's insNode), and nothing moves it
+        // afterwards, so the stored value is written from the JS pick, and the entry the SQL pick returns must carry the same blob.
+        const blobOf = (entry: number | null | string): number | null => entry === null || entry === 'no row' ? null
+          : (db.prepare('SELECT blob_id AS b FROM entries WHERE entry_id = ?').get(entry) as unknown as { b: number }).b;
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobOf(want), x.id);
+        const stored = (db.prepare('SELECT summary_blob_id AS b FROM nodes WHERE node_id = ?').get(x.id) as unknown as { b: number | null }).b;
+        if (blobOf(have) !== stored) bad.push(`trial ${t} ${x.id} (${x.arm}): the SQL pick's blob is ${String(blobOf(have))}, the stored summary_blob_id ${String(stored)}`);
+        if (want !== null && db.prepare('SELECT 1 FROM entries WHERE blob_id = ? AND entry_id <> ?').get(blobOf(want)!, want) !== undefined) tally.sharedBlob += 1;
         tally.leaves += 1;
         if (want !== null) tally.picked += 1;
         const holding = fl.filter((f) => holds(f.f));
@@ -11271,5 +11280,6 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
     expect(tally.echoAnchor, 'anchor on an echo row').toBeGreaterThanOrEqual(10);
     expect(tally.missing + tally.none, 'anchors that name no row').toBeGreaterThanOrEqual(60);
     expect(tally.noCopy, 'no copy holds the boundary').toBeGreaterThanOrEqual(5);
+    expect(tally.sharedBlob, 'D-6284: picks whose blob another entry shares, so the blob comparison is not the entry comparison').toBeGreaterThanOrEqual(100);
   });
 });

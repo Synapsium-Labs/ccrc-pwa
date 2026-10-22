@@ -6133,6 +6133,99 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
     expect(at(c(1)), 'CONTROL: a stored row that is no boundary is still refused').toEqual(REFUSED);
   }, HEAVY);
 
+  /** The store half over a writer's plant, for cut-A8 to cut-A10: `at` answers asOfCutOf on a fresh read handle. */
+  async function storeHalf(): Promise<{
+    at(asof: string): unknown; w: RDatabaseSync; close(): void;
+    one<T>(sql: string, ...a: Array<string | number>): T; all<T>(sql: string, ...a: Array<string | number>): T[];
+  }> {
+    const mod = (await GRX.recall()) as unknown as { asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown };
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile) as RDatabaseSync;
+    return {
+      at: (asof) => { const db = rH.openStoreRO(box); try { return mod.asOfCutOf({ db }, asof); } finally { db.close(); } },
+      w, close: () => store.closeWriter(w),
+      one: <T,>(sql: string, ...a: Array<string | number>): T => w.prepare(sql).get(...a) as unknown as T,
+      all: <T,>(sql: string, ...a: Array<string | number>): T[] => w.prepare(sql).all(...a) as unknown as T[],
+    };
+  }
+
+  it('cut-A8: the store half reads N\'s holding copy in file order: a NULL-ts boundary takes T_N from the stamped row BEFORE it, not one after it (F1, W2-D33)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    const was = h.one<{ ts_ms: number }>('SELECT ts_ms FROM entries WHERE entry_id = ?', nId).ts_ms;
+    try {
+      expect(Number(h.w.prepare('UPDATE entries SET ts_ms = NULL WHERE entry_id = ?').run(nId).changes), 'CONTROL: the plant took, N has no stamp of its own').toBe(1);
+      // T_N from the fixture's own rows, by a query with its own ORDER BY m.line: the newest stamp at or before N's line
+      const before = h.one<{ ts_ms: number }>(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line < ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`, cut.holdingFileId, cut.boundaryLine).ts_ms;
+      const after = h.all<{ ts_ms: number }>(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line > ? AND e.ts_ms IS NOT NULL ORDER BY m.line`, cut.holdingFileId, cut.boundaryLine).map((r) => Number(r.ts_ms));
+      expect(h.one<{ ts_ms: number | null }>('SELECT ts_ms FROM entries WHERE entry_id = ?', nId).ts_ms, 'CONTROL: N\'s ts_ms IS NULL').toBeNull();
+      expect(Number(before), 'CONTROL: the stamp before N is the tool_result\'s, an earlier time than N\'s old stamp').toBe(
+        Number(h.one<{ ts_ms: number }>('SELECT ts_ms FROM entries WHERE uuid = ?', c(6)).ts_ms));
+      expect(Number(before), 'CONTROL: it is not the cut the fixture had with N\'s own stamp').not.toBe(cut.tsCut);
+      expect(after.length, 'CONTROL: stamped rows follow N in the copy').toBeGreaterThan(0);
+      expect(after.some((t) => t > Number(before)), 'CONTROL: one of them carries a LATER stamp, the answer a reversed walk would give').toBe(true);
+      expect(h.at(c(7)), 'T_N is the stamp before N').toEqual({ ok: true, cut: { ...cut, tsCut: Number(before) } });
+    } finally {
+      h.w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(was, nId);
+      h.close();
+    }
+    const db = rH.openStoreRO(box);
+    try { expect(Number((db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(c(7)) as { ts_ms: number }).ts_ms), 'CONTROL: restored').toBe(cut.tsCut); } finally { db.close(); }
+  }, HEAVY);
+
+  it('cut-A9: the store half reads N\'s holding copy in file order: a self-anchored boundary\'s summary is the first compact summary AFTER it, not one before it (F1, W2-D33)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    const was = h.one<{ anchor_uuid: string }>('SELECT anchor_uuid FROM boundaries WHERE entry_id = ?', nId).anchor_uuid;
+    try {
+      expect(Number(h.w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(c(7), nId).changes), 'CONTROL: N is anchored on itself').toBe(1);
+      expect(Number(h.w.prepare('UPDATE entries SET is_compact_summary = 1 WHERE uuid = ?').run(c(2)).changes), 'CONTROL: a compact summary BEFORE N in the copy').toBe(1);
+      const compact = h.all<{ uuid: string; entry_id: number; line: number }>(`SELECT e.uuid AS uuid, e.entry_id AS entry_id, m.line AS line
+        FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND e.is_compact_summary = 1 AND NOT (e.type = 'user' AND e.provenance = 'harness') ORDER BY m.line`, cut.holdingFileId);
+      expect(compact.map((r) => r.uuid), 'CONTROL: non-echo compact summaries on both sides of N, in file order').toEqual([c(2), c(8)]);
+      expect(Number(compact[0]!.line) < cut.boundaryLine && cut.boundaryLine < Number(compact[1]!.line), 'CONTROL: before N, then after N').toBe(true);
+      const firstAfter = h.one<{ entry_id: number }>(`SELECT e.entry_id AS entry_id FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+        WHERE m.file_id = ? AND m.line > ? AND e.is_compact_summary = 1 AND NOT (e.type = 'user' AND e.provenance = 'harness')
+        ORDER BY m.line LIMIT 1`, cut.holdingFileId, cut.boundaryLine).entry_id;
+      expect(Number(firstAfter), 'the independent query names the row after N').toBe(Number(compact[1]!.entry_id));
+      expect(h.at(c(7)), 'the summary is the first compact summary after N').toEqual({ ok: true, cut: { ...cut, summaryEntryId: Number(firstAfter) } });
+    } finally {
+      h.w.prepare('UPDATE entries SET is_compact_summary = 0 WHERE uuid = ?').run(c(2));
+      h.w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(was, nId);
+      h.close();
+    }
+    expect(h.at(c(7)), 'CONTROL: restored, the store half cuts as it did').toEqual({ ok: true, cut });
+  }, HEAVY);
+
+  it('cut-A10: the store half picks N\'s holding copy among the files that HOLD N: a live file with a lower id that lacks N changes nothing (F3, W2-D39)', async () => {
+    const h = await storeHalf();
+    const nId = Number(cut.boundaryEntryId);
+    let planted: number | null = null;
+    try {
+      const tpk = h.one<{ n: number }>('SELECT transcript_pk AS n FROM boundaries WHERE entry_id = ?', nId).n;
+      const lowest = h.one<{ n: number }>('SELECT min(file_id) AS n FROM ingest_files').n;
+      planted = Number(lowest) - 1;
+      expect(Number(h.w.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 4242, 4242, '', ?, 'live', 1)")
+        .run(planted, tpk).changes), 'CONTROL: the plant took').toBe(1);
+      const mine = h.all<{ file_id: number; source_key: string; held: number }>(`SELECT f.file_id AS file_id, f.source_key AS source_key,
+          EXISTS (SELECT 1 FROM memberships m WHERE m.file_id = f.file_id AND m.entry_id = ?) AS held
+        FROM ingest_files f WHERE f.transcript_pk = ? ORDER BY f.file_id`, nId, tpk);
+      expect(mine[0], 'CONTROL: the planted file is N\'s transcript\'s lowest id, live, and holds nothing').toEqual({ file_id: planted, source_key: '', held: 0 });
+      expect(mine.length, 'CONTROL: the transcript has other files').toBeGreaterThan(1);
+      expect(mine.filter((f) => f.held === 1).map((f) => Number(f.file_id)), 'CONTROL: the real holder is another file, and it is the cut\'s').toContain(cut.holdingFileId);
+      expect(Number(planted) < cut.holdingFileId, 'CONTROL: the planted id is below the holder\'s').toBe(true);
+      expect(h.at(c(7)), 'the cut is the cut before the plant').toEqual({ ok: true, cut });
+    } finally {
+      if (planted !== null) h.w.prepare('DELETE FROM ingest_files WHERE file_id = ?').run(planted);
+      h.close();
+    }
+    const db = rH.openStoreRO(box);
+    try { expect(db.prepare('SELECT count(*) AS n FROM ingest_files WHERE file_id = ?').get(planted!), 'CONTROL: removed').toEqual({ n: 0 }); } finally { db.close(); }
+  }, HEAVY);
+
   it('cut-B1: expand <uuid> of a hidden row is exit 3 with no reason; a kept NULL-ts row still expands', async () => {
     for (const u of [c(3), c(9), c(11)]) {
       const r = await expand({ target: u });
@@ -6844,16 +6937,23 @@ describe.skipIf(process.platform === 'darwin')('D-6282: a leaf other than N is h
     expect(r3.blocks.join('\n')).toContain('zqw2d36gist3');
   }, 2 * HEAVY);
 
-  it('CONTROLs: the same leaves are visible once their summary rows are stamped at or before T_N; a leaf with no pick is judged by its boundary alone; an anchor on the boundary itself picks the first summary after it', async () => {
+  it('CONTROLs: the same leaves are visible once their summary rows are stamped at or before T_N; a leaf with no stored summary and no pick is judged by its boundary alone; an anchor on the boundary itself picks the first summary after it', async () => {
     const seen = async (): Promise<number[]> => Promise.all([L[0]!, L[1]!].map(async (id) => (await under(cut, describeOf(id))).exit));
     expect(await seen(), 'both are hidden to begin with').toEqual([3, 3]);
     const stamped = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(2)], 'UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(90), sum(2)], seen);
     expect(stamped, 'leaf 2\'s summary row stamped at or before T_N: leaf 2 shows, leaf 1 stays hidden').toEqual([3, 0]);
     const nulled = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(1)], 'UPDATE entries SET ts_ms = NULL WHERE uuid = ? AND ? IS NOT NULL', [sum(1), 1], seen);
     expect(nulled, 'leaf 1\'s summary row stamped: leaf 1 shows, leaf 2 stays hidden').toEqual([0, 3]);
+    // A leaf with no stored summary_blob_id (a raw leaf as derivation writes one) and no pick is judged by its boundary alone (D-6282);
+    // one whose stored blob is kept while its pick goes is hidden, the D-6284 rule (history-recall's D-6284 describe below pins it).
+    const blobless = <T,>(f: () => Promise<T>): Promise<T> => patched('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?', [L[1]!],
+      'UPDATE nodes SET summary_blob_id = (SELECT blob_id FROM entries WHERE uuid = ?) WHERE node_id = ?', [sum(2), L[1]!], f);
     const raw = await patched('UPDATE boundaries SET anchor_uuid = NULL WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], () => blobless(seen));
+    expect(raw, 'no stored summary and no anchor, no pick (a raw leaf): leaf 2 is judged by its boundary alone and shows').toEqual([3, 0]);
+    const rawKept = await patched('UPDATE boundaries SET anchor_uuid = NULL WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2)],
       'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
-    expect(raw, 'no anchor, no pick (a raw leaf): leaf 2 is judged by its boundary alone and shows').toEqual([3, 0]);
+    expect(rawKept, 'CONTROL: the same with its stored summary kept (D-6284): the pick is gone, so leaf 2 is hidden').toEqual([3, 3]);
     const self = await patched('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2), bnd(2)],
       'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
     expect(self, 'the anchor names the boundary itself: the pick is the first summary row after it, leaf 2\'s own, hidden').toEqual([3, 3]);
@@ -6861,10 +6961,147 @@ describe.skipIf(process.platform === 'darwin')('D-6282: a leaf other than N is h
     const kindOf = db.prepare('SELECT provenance FROM entries WHERE uuid = ?').get(sum(2)) as { provenance: string };
     db.close();
     const echo = await patched('UPDATE entries SET provenance = ? WHERE uuid = ?', ['harness', sum(2)],
+      'UPDATE entries SET provenance = ? WHERE uuid = ?', [kindOf.provenance, sum(2)], () => blobless(seen));
+    expect(echo, 'the anchored row is an echo row (user, harness), which summaryRowFor refuses: no pick, and (no stored summary) leaf 2 shows').toEqual([3, 0]);
+    const echoKept = await patched('UPDATE entries SET provenance = ? WHERE uuid = ?', ['harness', sum(2)],
       'UPDATE entries SET provenance = ? WHERE uuid = ?', [kindOf.provenance, sum(2)], seen);
-    expect(echo, 'the anchored row is an echo row (user, harness), which summaryRowFor refuses: no pick, and leaf 2 shows').toEqual([3, 0]);
+    expect(echoKept, 'CONTROL: the same with its stored summary kept (D-6284): leaf 2 is hidden').toEqual([3, 3]);
     expect(await seen(), 'CONTROL: the store is put back').toEqual([3, 3]);
   }, 2 * HEAVY);
+
+  // ── review 778's F2 and F7 (D-6284): a leaf's STORED summary, and a summary row outside N's holding copy ─────────────────
+  // Nested here for the fixture: leaf 3 is the target. Its boundary is stamped at or before T_N and its summary row S3 before T_N,
+  // so under ASOF=4 it is visible (the CONTROL of each case). Each case plants the later state of the store by SQL, as cut-A7
+  // does, and puts it back: the sweep retires a copy on an inode recycle and ingests the live one that replaces it, and
+  // derivation never re-derives a boundary that has a node, so the stored summary_blob_id outlives the copy that named it.
+  describe('D-6284: a leaf other than N is hidden when its stored summary is no longer the read-time pick\'s (review 778 F2), and when its summary row sits outside N\'s holding copy, stamped after T_N (F7)', () => {
+    type Seen = { describe: unknown[]; tree: string[]; node: unknown[]; expand: unknown[]; grep: unknown[]; gist: boolean };
+    const VISIBLE = (): Seen => ({ describe: [0, undefined], tree: [L[2]!, L[3]!].sort(), node: [0, undefined], expand: [0, undefined], grep: [L[2]], gist: true });
+    const HIDDEN = (): Seen => ({ describe: [3, undefined], tree: [L[3]!], node: [3, undefined], expand: [3, undefined], grep: [null], gist: false });
+    /** Leaf 3 at every door cheap to check: describe, tree (leaves 3 and 4 only: the other two are the D-6282 describe's), grep --node, expand, a grep hit on its ask row, and whether its gist is printed. */
+    async function observe(c: LCut | null | undefined): Promise<Seen> {
+      const d = await under(c, describeOf(L[2]!));
+      const t = await under(c, treeOf);
+      const n = await GRX.grepArgs(['--node', L[2]!, 'zqw2d36ask3']);
+      const g = await GRX.grepArgs(['zqw2d36ask3']);
+      const gr = await under(c, (rc) => R.runGrep(rc, g));
+      return {
+        describe: ans(d), tree: leafIds(t).filter((id) => id === L[2] || id === L[3]), node: ans(await under(c, (rc) => R.runGrep(rc, n))), expand: ans(await under(c, expandOf(L[2]!))),
+        grep: gr.items.map((i) => i['node_id']), gist: [d, t, gr].some((r) => all(r).includes('zqw2d36gist3')),
+      };
+    }
+    /** `f` with `plant` applied to the store, then every undo run in reverse order and the store closed. */
+    async function planted<T>(plant: (w: RDatabaseSync, undo: Array<() => void>) => void, f: () => Promise<T>): Promise<T> {
+      const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+      const undo: Array<() => void> = [];
+      try { plant(w, undo); return await f(); } finally { for (const u of undo.reverse()) u(); w.close(); }
+    }
+    const idOf = (w: RDatabaseSync, uuid: string): number => Number((w.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(uuid) as { n: number }).n);
+    /** A new live copy of the cut's holding copy's transcript, empty; its undo removes its memberships and then it. */
+    function newCopy(w: RDatabaseSync, undo: Array<() => void>): number {
+      const fb = Number((w.prepare('SELECT max(file_id) AS n FROM ingest_files').get() as { n: number }).n) + 1;
+      expect(Number(w.prepare(`INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version)
+        SELECT ?, 777, 777, '', transcript_pk, status, parser_version FROM ingest_files WHERE file_id = ?`).run(fb, cut.holdingFileId).changes), 'CONTROL: the live copy took').toBe(1);
+      undo.push(() => { w.prepare('DELETE FROM memberships WHERE file_id = ?').run(fb); w.prepare('DELETE FROM ingest_files WHERE file_id = ?').run(fb); });
+      return fb;
+    }
+    function retire(w: RDatabaseSync, undo: Array<() => void>): void {
+      expect(Number(w.prepare("UPDATE ingest_files SET source_key = 'retired' WHERE file_id = ?").run(cut.holdingFileId).changes), 'CONTROL: the first copy is retired').toBe(1);
+      undo.push(() => { w.prepare("UPDATE ingest_files SET source_key = '' WHERE file_id = ?").run(cut.holdingFileId); });
+    }
+    /** What the store says of leaf 3's pick: its entry id (NULL for none), whether the cut shows that row, and the stored blob against the pick's. */
+    function pickOfLeaf3(): { entry: number | null; shown: boolean | null; stored: number | null; pickBlob: number | null } {
+      const db = rH.openStoreRO(box);
+      try {
+        const pick = db.prepare(libRead.asOfSummaryPickSql()).get({ asof_nodes: JSON.stringify([L[2]]) }) as unknown as { entry_id: number | null };
+        const entry = pick.entry_id === null ? null : Number(pick.entry_id);
+        const shown = entry === null ? null
+          : db.prepare(libRead.asOfVisibleEntriesSql()).all({ ...libRead.asOfBinds(cut), asof_entries: JSON.stringify([entry]) }).length === 1;
+        const stored = (db.prepare('SELECT summary_blob_id AS b FROM nodes WHERE node_id = ?').get(L[2]!) as { b: number | null }).b;
+        const pickBlob = entry === null ? null : Number((db.prepare('SELECT blob_id AS b FROM entries WHERE entry_id = ?').get(entry) as { b: number }).b);
+        return { entry, shown, stored: stored === null ? null : Number(stored), pickBlob };
+      } finally { db.close(); }
+    }
+
+    it('the stored summary names a blob the read-time pick no longer finds: copy F_a, which held leaf 3\'s summary row, is retired and a live copy without it holds the boundary (a NULL pick)', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      const before = pickOfLeaf3();
+      expect([before.shown, before.stored !== null, before.stored === before.pickBlob], 'CONTROL: the pick is shown and is the stored blob').toEqual([true, true, true]);
+      const sumId = ((): number => { const w = rH.openStoreRO(box); try { return Number((w.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(sum(3)) as { n: number }).n); } finally { w.close(); } })();
+      await planted((w, undo) => {
+        const fb = newCopy(w, undo);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, line FROM memberships WHERE file_id = ? AND entry_id <> ?').run(fb, cut.holdingFileId, sumId);
+        retire(w, undo);
+      }, async () => {
+        const now = pickOfLeaf3();
+        expect([now.entry, now.stored === before.stored], 'CONTROL: the read-time pick is NULL, the stored blob is what derivation stored').toEqual([null, true]);
+        expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+        expect(await observe(cut), 'under ASOF=4 leaf 3 is hidden at every door and its gist is printed nowhere').toEqual(HIDDEN());
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 3 * HEAVY);
+
+    it('the read-time pick names another blob than the stored one: a self-anchored leaf 3 whose live copy holds a different compact summary after its boundary, stamped at or before T_N (a pick the cut shows)', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      const before = pickOfLeaf3();
+      const other = 'ffffffff-0000-4000-8000-000000000001';
+      await planted((w, undo) => {
+        const b3 = idOf(w, bnd(3));
+        expect(Number(w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(bnd(3), b3).changes), 'CONTROL: leaf 3 is anchored on its own boundary').toBe(1);
+        undo.push(() => { w.prepare('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = ?').run(sum(3), b3); });
+        expect(Number(w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id)
+          SELECT ?, transcript_pk, type, ?, 1, provenance, prov_version, struct_rank_ns, struct_file_id, (SELECT blob_id FROM entries WHERE uuid = ?)
+          FROM entries WHERE uuid = ?`).run(other, msOf(35), sum(1), sum(3)).changes), 'CONTROL: a second compact summary, another blob').toBe(1);
+        undo.push(() => { w.prepare('DELETE FROM entries WHERE uuid = ?').run(other); });
+        const fb = newCopy(w, undo);
+        const line = Number((w.prepare('SELECT line AS n FROM memberships WHERE file_id = ? AND entry_id = ?').get(cut.holdingFileId, b3) as { n: number }).n);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, CASE WHEN line > ? THEN line + 1 ELSE line END FROM memberships WHERE file_id = ?').run(fb, line, cut.holdingFileId);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(fb, idOf(w, other), line + 1);
+        retire(w, undo);
+      }, async () => {
+        const now = pickOfLeaf3();
+        const db = rH.openStoreRO(box);
+        try {
+          expect(now.entry, 'CONTROL: the read-time pick is the second summary row').toBe(Number((db.prepare('SELECT entry_id AS n FROM entries WHERE uuid = ?').get(other) as { n: number }).n));
+        } finally { db.close(); }
+        expect(now.shown, 'CONTROL: the cut shows that row, so the D-6282 arm alone keeps leaf 3').toBe(true);
+        expect([now.stored === before.stored, now.pickBlob !== now.stored], 'CONTROL: the stored blob is unchanged and is not the pick\'s').toEqual([true, true]);
+        expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+        expect(await observe(cut), 'under ASOF=4 leaf 3 is hidden at every door and its gist is printed nowhere').toEqual(HIDDEN());
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 3 * HEAVY);
+
+    it('F7: a summary row outside N\'s holding copy, stamped after T_N, hides its leaf whose boundary the cut shows; stamped at or before T_N it does not', async () => {
+      expect(await observe(cut), 'CONTROL: before the plant, leaf 3 is visible under ASOF=4').toEqual(VISIBLE());
+      let b3 = 0;
+      let s3 = 0;
+      await planted((w, undo) => {
+        b3 = idOf(w, bnd(3));
+        s3 = idOf(w, sum(3));
+        const fb = newCopy(w, undo);
+        w.prepare('INSERT INTO memberships (file_id, entry_id, line) SELECT ?, entry_id, line FROM memberships WHERE file_id = ?').run(fb, cut.holdingFileId);
+        const gone = w.prepare('SELECT entry_id, line FROM memberships WHERE file_id = ? AND entry_id IN (?, ?)').all(cut.holdingFileId, b3, s3) as unknown as Array<{ entry_id: number; line: number }>;
+        expect(gone.length, 'CONTROL: N\'s holding copy held the boundary and the summary row').toBe(2);
+        w.prepare('DELETE FROM memberships WHERE file_id = ? AND entry_id IN (?, ?)').run(cut.holdingFileId, b3, s3);
+        undo.push(() => { for (const g of gone) w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(cut.holdingFileId, g.entry_id, g.line); });
+      }, async () => {
+        const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+        try {
+          const held = (e: number): unknown => w.prepare('SELECT count(*) AS n FROM memberships WHERE file_id = ? AND entry_id = ?').get(cut.holdingFileId, e);
+          expect([held(b3), held(s3)], 'CONTROL: neither the boundary nor the summary row is in N\'s holding copy').toEqual([{ n: 0 }, { n: 0 }]);
+          expect(await observe(cut), 'summary row stamped at or before T_N: leaf 3 shows (the stamp is what hides it below)').toEqual(VISIBLE());
+          expect(Number(w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(msOf(90), s3).changes), 'CONTROL: the plant took').toBe(1);
+          try {
+            expect(msOf(90), 'CONTROL: stamped after T_N').toBeGreaterThan(cut.tsCut);
+            expect(await observe(undefined), 'CONTROL: with no cut leaf 3 is visible at every door').toEqual(VISIBLE());
+            expect(await observe(cut), 'stamped after T_N, outside the holding copy: leaf 3 is hidden at every door').toEqual(HIDDEN());
+          } finally { w.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(msOf(34), s3); }
+        } finally { w.close(); }
+      });
+      expect(await observe(cut), 'CONTROL: the store is put back').toEqual(VISIBLE());
+    }, 4 * HEAVY);
+  });
 });
 
 // ── W2-2a Task 4 (W2-D37, W2-D38): the remaining doors of the as-of cut ──────────────────────────────────────────
