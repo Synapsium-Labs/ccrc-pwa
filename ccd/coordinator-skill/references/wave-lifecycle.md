@@ -753,10 +753,10 @@ whole time, which is the only prevention this ordering rule buys.
    terminal state, never merge. Here, with no cross-project `producerSha` to
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
-   MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
-   `--admin` where the repository's ruleset requires it) for exactly this
-   reason — and on a native-queue project it lands with the same binding, as
+   MERGED with `headRefOid` equal to it — the coordinator lands every PR with
+   `--match-head-commit <handoffCommit>`, by the route §5b reads from the
+   repository's own rules, for exactly this reason — and on a native-queue
+   project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
@@ -774,17 +774,18 @@ whole time, which is the only prevention this ordering rule buys.
    if wave N+1 depends on that code, wait for the same merge proof before
    redispatching.
 
-   **Landing on a native-queue project** (one whose `main` requires GitHub's
-   merge queue — measure it before each landing, never from memory: from a
-   checkout of its repository,
-   `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq 'any(.[]; .type == "merge_queue")'`
-   answers `true`): the producer LANDS BEFORE IT CLOSES. Once its review is
+   **Landing on a native-queue project** (one whose base branch requires
+   GitHub's merge queue — measure it before each landing, never from memory:
+   the landing verdict (§5b) answers `ROUTE Q`, reading the PR's own base,
+   never the literal `main`): the producer LANDS BEFORE IT CLOSES. Once its review is
    clean and wave N+1 is open — or, on the programme's LAST wave, which has
    no wave N+1, once its review is clean (its close is SKILL.md step 7's and
    §6's) — advance the producer's run to `merging` (§4 — from
    `awaiting-review`, re-measured). Enqueue only a PR whose required checks
-   have all passed — `gh pr checks <pr> --required` exits 0 (8 is pending, 1
-   is failed): for any other PR gh arms auto-merge instead of queueing it,
+   have all passed — every required name the verdict discovered passes on the
+   head, and `gh pr checks <pr> --required` exits 0 (8 is pending, 1
+   is failed only when the verdict reads a required name red): for any other
+   PR gh arms auto-merge instead of queueing it,
    and prints the same "will be added to the merge queue … when ready" line
    either way. On `8`, wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
@@ -1048,6 +1049,104 @@ fi
 say "ROUTE $route method=$method admin=$admin strict=$strict"
 )
 ```
+
+Run it once the review is clean and the run is at `merging` (§4), in the
+order step 3 gives for route Q, and again after every wait. Its first word
+decides what this session does, and nothing else does:
+
+- `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land
+  as "Landing on a native-queue project" (step 3) says, with no method flag
+  and never `--admin`, the read-back and the disarm rule included.
+- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check
+  has passed on the head. Merge from your own session with exactly
+  `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>`
+  being the line's `<m>`; on a merge-commits-only repository that is exactly
+  `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.
+- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is
+  required and nothing waits. The same spelling as route G.
+- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the
+  approval licence holds (below), and the spelling gains `--admin`.
+- `strict=yes` — a strict-protection repository: clause 15's land-sync applies
+  as it does today. `strict=no` — it does not. `strict=unknown` comes only under
+  read 3b: on a direct route the verdict has already stopped on a head behind
+  the base, and route Q needs no strictness, since the queue tests the merged
+  group itself.
+- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does
+  (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a
+  different head fails the proof, and that is reported, never closed on.
+- `WAIT pending: <names>` — a reported required check is still running. Wait
+  in the foreground, `gh pr checks <pr> --required --watch`, again if the call
+  times out while a reported required check is still pending, then run the
+  verdict again — never by ending your turn: no mail comes when checks finish.
+- `WAIT not-reported: <names>` — a required name nothing has reported on the
+  head yet, whatever `gh pr checks <pr> --required` exits: it judges only the
+  checks that have reported, and its `--watch` returns at once when every
+  reported one is green. Wait on every check instead,
+  `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its
+  timeout at 600000, never repeated, whatever it exits or however it ends: a
+  check that is not required and never completes must not hold the wait open.
+  Then run the verdict again with `BOUND_S=300` on the line before it, and the
+  Bash tool's timeout at 600000. It reads read 5 again every 30 seconds for at
+  most 300 seconds.
+  **The bound is five minutes after the last of the PR's reported checks finished.**
+  If the watch was cut off at its timeout, the five minutes start there instead:
+  fifteen minutes in all at most.
+  A name it still reads as not reported is the stop `not-reported`.
+- `RED <names>` — a required check is red on the head, each name with its
+  kind. If it is the PR's own, that is the existing fix-round rule (step 3:
+  on route Q disarm first, then a fix round to the owning worker on the
+  `merging → working` edge). If it is not the PR's own and its kind is
+  `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
+  then the verdict again. One of kind `[app <id>]` or `[status]` that is not
+  the PR's own, which no rerun here reaches, or one still red after the one
+  rerun, is the stop `red-unreachable`.
+- `STOP <reason>: <what it read>` — a stop (below).
+- Anything else — no line at all (the run was cut off or did not parse), more
+  than one line, or a first word this list does not name — is the stop
+  `verdict-unread`: say what the run printed, and never land, enqueue or choose
+  a route by hand.
+
+**The approval licence.** `--admin` is licensed on a direct route only, and
+only when all three hold, each read fresh for this landing: an approval the
+fleet cannot give is required and missing (a `pull_request` rule's, or classic
+protection's, `required_approving_review_count` above 0, and `reviewDecision`
+not `APPROVED`); every required check has passed on the head; and `--admin`
+cannot skip a gate — no other gate applies, no review conversation must be
+resolved that an admin could skip (a `pull_request` rule's
+`required_review_thread_resolution`, or classic
+`required_conversation_resolution` without `enforce_admins`), classic required
+checks carry `enforce_admins`, and every ruleset carrying required checks
+answers `current_user_can_bypass: never`, an unreadable answer, or a rule that
+names no ruleset, counting as able to bypass. The verdict weighs all three: it answers `admin=licensed`, and only
+then the spelling is
+`gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.
+
+Without a missing approval `--admin` is never passed; under read 3b it is
+never used; and it is never a fallback: a fallback is `--admin` after a
+refusal, and this licence is decided before the merge, from reads. An approval
+kept in classic protection with `enforce_admins` on binds an admin too, so
+`--admin` does not help there, and GitHub's refusal is the stop.
+
+**On every route** the merge is proven as step 3 proves it: MERGED, with
+`headRefOid` equal to `handoffCommit`. A refused merge on route G or U is
+read, reported and stopped on, and never retried with another method, with
+`--admin` or with `--auto`. This session writes no setting to make a route
+work: no ruleset, no branch protection, no merge-method or auto-merge setting
+(clause 15).
+
+**A stop.** A stop leaves the run where it is (at `merging` or
+`awaiting-review`), enqueues nothing, merges nothing and changes nothing. Say
+in your turn's text which stop fired and what it read, for the operator:
+every stop goes to the operator, never to another route. The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
+`unknown-rule-type`, `method-set-empty`, `rebase-only`,
+`queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
+`unverifiable`, `not-reported`, `licence-fails`. Three stops no read decides are
+yours to name: `red-unreachable` (above), `verdict-unread` (above) and `github-refused`, a merge GitHub
+refused for a rule it enforces at merge and this session does not verify —
+reviews, signatures, deployments, code scanning, required workflows — which
+this session never works around. Not a stop: a required check red on the head
+that is the PR's own; that goes to the fix-round rule, on route G exactly as
+on route Q.
 
 ## 6 — Final merge
 

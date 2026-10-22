@@ -123,7 +123,9 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
+  // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
+  // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is licensed only.
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set, with `--admin` only under the approval licence and never as a fallback, and a refused merge is a stop, never retried. It closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -310,7 +312,7 @@ describe('the coordinator skill: its contract', () => {
       .toBe(licensed);
   });
 
-  it('binds the exact SHA in every `gh pr merge` it spells — and the native-queue spelling carries no --squash and no --admin (landing-order wave 2)', () => {
+  it('binds the exact SHA in every `gh pr merge` it spells, with at most one method flag, and --admin only in the licence (landing-order waves 2 and 3e)', () => {
     // DERIVED: every backtick code span in the whole corpus that runs
     // `gh pr merge`. #178 put `--match-head-commit <handoffCommit>` into the
     // coordinator's merge "for exactly this reason" — the exact-SHA merge proof
@@ -321,18 +323,32 @@ describe('the coordinator skill: its contract', () => {
     const DISARM = /^gh pr merge <(?:n|pr)> --disable-auto$/;
     const spans = [...allSkillText.matchAll(/`([^`\n]*\bgh pr merge\b[^`\n]*)`/g)].map((m) => m[1]!)
       .filter((s) => !DISARM.test(s));
-    expect(spans.length, 'fewer gh pr merge spellings than the three this corpus carries (clause 15, the queue landing, #178\'s squash merge) — a landing spelling was dropped, or this pin went blind').toBeGreaterThanOrEqual(3);
+    expect(spans.length, 'fewer gh pr merge spellings than the five this corpus carries (clause 15 twice, the queue landing, the direct landing, merge commits only) — a landing spelling was dropped, or this pin went blind').toBeGreaterThanOrEqual(5);
     for (const s of spans) {
       expect(s, `\`${s}\` merges without binding the exact SHA`).toContain('--match-head-commit <handoffCommit>');
+      // Route Q spells no method flag; routes G and U spell exactly one (spec §5.7.4).
+      const flags = s.match(/--(?:squash|merge|rebase|<method>)(?=\s|$)/g) ?? [];
+      expect(flags.length, `\`${s}\` spells more than one method flag`).toBeLessThanOrEqual(1);
+      expect(s, `\`${s}\` lands with --auto, which arms rather than lands`).not.toContain('--auto');
     }
+    // Route Q, word for word as wave 2 left it: clause 15's and the queue landing's.
     expect(spans).toContain('gh pr merge <n> --match-head-commit <handoffCommit>');
     expect(spans).toContain('gh pr merge <pr> --match-head-commit <handoffCommit>');
-    // The title's other half. `--admin` is never a landing spelling; `--squash`
-    // belongs to #178's non-queue spelling ONLY, so the native-queue spellings
-    // (every other span) carry neither.
-    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin').toEqual([]);
-    expect(spans.filter((s) => s.includes('--squash')), 'a native-queue gh pr merge spelling carries --squash')
-      .toEqual(['gh pr merge <pr> --squash --match-head-commit <handoffCommit>']);
+    // Routes G and U, and a merge-commits-only repository's exact spelling (spec §5.7.4, §12).
+    expect(spans).toContain('gh pr merge <n> --<method> --match-head-commit <handoffCommit>');
+    expect(spans).toContain('gh pr merge <pr> --<method> --match-head-commit <handoffCommit>');
+    expect(spans).toContain('gh pr merge <pr> --merge --match-head-commit <handoffCommit>');
+    // #178's fixed squash is gone: a squash is whatever the method set gives, never a spelling of its own.
+    expect(spans.filter((s) => s.includes('--squash')), 'a gh pr merge spelling fixes --squash').toEqual([]);
+    // `--admin` is spelled once, as the approval licence's direct spelling, inside the licence paragraph alone.
+    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin outside the licence')
+      .toEqual(['gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>']);
+    const wl = refs('wave-lifecycle.md');
+    const lic = wl.indexOf('**The approval licence.**');
+    expect(lic, 'wave-lifecycle.md lost the approval licence paragraph').toBeGreaterThanOrEqual(0);
+    const at = wl.indexOf('`gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`');
+    expect(at, 'the licensed spelling is not inside the approval licence paragraph').toBeGreaterThan(lic);
+    expect(at).toBeLessThan(wl.indexOf('\n\n', lic));
   });
 
   it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
@@ -350,8 +366,12 @@ describe('the coordinator skill: its contract', () => {
     expect(para, `the paragraph no longer names ${merged}`).toContain('`' + merged + '`');
     expect(para, `the paragraph no longer names ${dequeued}`).toContain('`' + dequeued + '`');
     // Whether the project requires the queue is MEASURED at each landing: it
-    // changes when the operator turns the queue on or rolls it back.
-    expect(para).toContain('.type == "merge_queue"');
+    // changes when the operator turns the queue on or rolls it back. Since wave
+    // 3e the measure is the landing verdict, on the PR's own base (spec §5.7.6).
+    expect(para).toContain('the landing verdict (§5b) answers `ROUTE Q`');
+    expect(para, 'the queue test reads the literal main again').not.toContain('rules/branches/main');
+    // The discovered required set gates the enqueue too, not only --required.
+    expect(para).toContain('every required name the verdict discovered passes on the head');
     // gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required
     // checks have not passed, and prints the same line either way — so the
     // enqueue waits on them, the entry is read back, and an armed request is
@@ -2864,5 +2884,105 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
       expect(reliedOn.has(q),
         `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
     }
+  });
+});
+
+// Landing-order wave 3e (spec 2026-09-23 §5.7): the route comes from the repository's own rules. The verdict block
+// itself is RUN by `coordinator-landing-verdict.test.ts`; this describe holds the prose that acts on each line it
+// prints, derived from the block wherever the block is the source, so a line the block learns to print and the prose
+// never handles is a red here.
+describe('the landing route from the repository\'s own rules (landing-order wave 3e, spec §5.7)', () => {
+  const wl = refs('wave-lifecycle.md');
+  const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
+  const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
+  const fence = /```bash\n([\s\S]*?)```/;
+  const block = fence.exec(sec)?.[1] ?? '';
+  const prose = flat(sec.replace(fence, ''));
+
+  it('§5b carries the verdict block and prose around it', () => {
+    expect(at, 'wave-lifecycle.md lost §5b').toBeGreaterThanOrEqual(0);
+    expect(block).toContain('# The landing verdict');
+    expect(prose.length, '§5b says nothing about what to do with the verdict').toBeGreaterThan(2000);
+  });
+
+  it('acts on every line the block can print', () => {
+    const words = [...new Set([...block.matchAll(/say "([A-Z]+(?: [a-z-]+(?=:))?)/g)].map((m) => m[1]!))];
+    const routes = [...new Set([...block.matchAll(/\broute=([A-Z])\b/g)].map((m) => m[1]!))].sort();
+    expect(routes).toEqual(['G', 'Q', 'U']);
+    expect(words.sort()).toEqual(['MERGED', 'RED', 'ROUTE', 'STOP', 'WAIT not-reported', 'WAIT pending']);
+    for (const w of words.filter((x) => x !== 'ROUTE')) expect(prose, `§5b never says what \`${w}\` means`).toContain('`' + w);
+    for (const r of routes) expect(prose, `§5b never says what \`ROUTE ${r}\` means`).toContain('`ROUTE ' + r);
+    // The licence and strictness words: the block's own literals, and the prose's handling of each.
+    for (const [a, src] of [['admin=licensed', 'admin=licensed'], ['admin=never', 'admin=never'],
+      ['strict=yes', '"yes"'], ['strict=unknown', '"unknown"']] as const) {
+      expect(block, `the block never prints ${a}`).toContain(src);
+      expect(prose, `§5b never says what \`${a}\` means`).toContain('`' + a + '`');
+    }
+  });
+
+  it('lists exactly the stops the block prints, and the two no read decides', () => {
+    const printed = [...new Set([...block.matchAll(/stop "([a-z0-9-]+):/g)].map((m) => m[1]!))].sort();
+    const lead = 'The verdict stops with one of these reasons: ';
+    const i = prose.indexOf(lead);
+    expect(i, '§5b no longer lists the verdict\'s stops').toBeGreaterThanOrEqual(0);
+    const listed = [...prose.slice(i + lead.length, prose.indexOf('.', i)).matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]!).sort();
+    expect(listed).toEqual(printed);
+    expect(printed).toEqual(['auto-merge-off', 'licence-fails', 'method-set-empty', 'not-at-head', 'not-reported',
+      'queue-method-not-allowed', 'read-3b-unknowable', 'rebase-only', 'two-queue-methods', 'unknown-rule-type',
+      'unreadable', 'unverifiable']);
+    expect(prose).toContain('Three stops no read decides are yours to name: `red-unreachable`');
+    expect(prose).toContain('`verdict-unread` (above) and `github-refused`');
+    expect(prose).toContain('is the stop `verdict-unread`: say what the run printed');
+  });
+
+  it('says what a stop does, and what is not one (spec §5.7.5)', () => {
+    expect(prose).toContain('A stop leaves the run where it is (at `merging` or `awaiting-review`), enqueues nothing, merges nothing and changes nothing.');
+    expect(prose).toContain('which stop fired and what it read');
+    expect(prose).toContain('never to another route');
+    expect(prose).toContain('Not a stop: a required check red on the head that is the PR\'s own');
+  });
+
+  it('fixes one bounded foreground wait for a required name that has not reported, and states its bound (spec §5.7.3)', () => {
+    const poll = /POLL_S=\$\{POLL_S:-(\d+)\}/.exec(block)?.[1];
+    expect(poll, 'the block lost its poll interval default').toBeTruthy();
+    expect(block, 'the block waits by default; only BOUND_S may start the wait').toContain('BOUND_S=${BOUND_S:-0}');
+    expect(prose).toContain('`gh pr checks <pr> --required --watch`');
+    expect(prose).toContain(`\`gh pr checks <pr> --watch --interval ${poll}\``);
+    // The every-check watch runs ONCE: a non-required check that never completes must not hold the wait open.
+    expect(prose).toContain('once, as one Bash call with its timeout at 600000, never repeated');
+    expect(prose).toContain('`BOUND_S=300`');
+    expect(prose).toContain(`every ${poll} seconds for at most 300 seconds`);
+    expect(prose).toContain('The bound is five minutes after the last of the PR\'s reported checks finished.');
+    expect(prose).toContain('fifteen minutes in all at most');
+    expect(prose).toContain('never by ending your turn');
+  });
+
+  it('licenses --admin narrowly, never as a fallback, and never retries a refused merge (spec §5.7.4)', () => {
+    expect(prose).toContain('`--admin` is licensed on a direct route only');
+    expect(prose).toContain('Without a missing approval `--admin` is never passed; under read 3b it is never used');
+    expect(prose).toContain('a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads');
+    expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
+    expect(prose).toContain('This session writes no setting to make a route work');
+    // Today's sentence, read literally, passed --admin over a required check an admin may skip: withdrawn.
+    expect(allSkillText).not.toContain('where the repository\'s ruleset requires it');
+  });
+
+  it('keeps route Q word for word in clause 15 and adds the merge-method settings to what it never writes (spec §5.7.6)', () => {
+    expect(CONTRACT[14]).toContain('On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it');
+    expect(CONTRACT[14]).toContain('never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch`');
+    expect(CONTRACT[14]).toContain('with `--admin` only under the approval licence and never as a fallback');
+  });
+
+  it('SKILL.md step 6 sends every landing to the verdict', () => {
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(flat(skill.slice(start, skill.indexOf('**Same project:**', start))))
+      .toContain('Every producer lands by the route the landing verdict reads from the rules of its repository (`references/wave-lifecycle.md` §5b)');
+  });
+
+  it('SKILL.md step 7 sends the last wave\'s landing to the verdict', () => {
+    const seven = skill.indexOf('7. **Final merge:**');
+    expect(seven, 'SKILL.md lost step 7').toBeGreaterThanOrEqual(0);
+    expect(flat(skill.slice(seven, skill.indexOf('\n## ', seven))))
+      .toContain('The last wave\'s producer lands by the route the landing verdict reads (`references/wave-lifecycle.md` §5b).');
   });
 });
