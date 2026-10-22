@@ -2913,7 +2913,7 @@ export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
   'unanswerable', 'unanswerable-untimed',
-  'writer-input-over-cap', 'writer-input-unrenderable',
+  'writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -4132,7 +4132,7 @@ export const FIDELITY_EMPTY_PARTS = Object.freeze({ summary: '', kept: Object.fr
  *    fact: string, fact_raw: string, question: string, source_entry_uuid: string, repo_roots: string[] }} FrozenEntry */
 /** @typedef {{ code: number|null, signal: string|null, skipped: boolean, tokens: number, result: boolean }} WriterRun */
 /** @typedef {{ state: 'question', qid: string, entry: FrozenEntry, run: WriterRun }
- *    | { state: 'discard', qid: string, why: 'over-decode-cap' | 'writer-input-over-cap' }
+ *    | { state: 'discard', qid: string, why: 'over-decode-cap' | 'writer-input-over-cap' | 'writer-input-unrenderable' | 'writer-fact-unplaced' }
  *    | { state: 'discard', qid: string, why: 'writer-malformed' | 'writer-leak', run: WriterRun }} WriterAnswer */
 
 /** `length` code points of `cps` from `start`, joined. */
@@ -4141,8 +4141,8 @@ const cpSlice = (cps, start, length) => cps.slice(start, start + length).join(''
 /** The excerpt around the raw fact (W2-D72). Pure. The window holds `firstWindow` code points (never fewer than the fact
  *  has), centred on the fact's FIRST occurrence and clamped to the text's ends, then `pairLine` on its own line. While
  *  the excerpt's UTF-8 is over WRITER_EXCERPT_MAX_BYTES the window shrinks around the same centre, never below the fact;
- *  a fact that cannot fit is `writer-input-over-cap`. A fact absent from `base` is a TypeError: W2-D67 discards such a
- *  candidate before the writer.
+ *  a fact that cannot fit is `writer-input-over-cap`. A fact absent from `base` is a TypeError of this pure function;
+ *  writerInputOf never reaches it (it places the fact by factSpellingIn first, D-6309).
  *  @param {{ base: string, factRaw: string, firstWindow: number, pairLine: string | null }} p
  *  @returns {{ state: 'text', excerpt: string } | { state: 'discard', why: 'writer-input-over-cap' }} */
 export function windowExcerpt({ base, factRaw, firstWindow, pairLine }) {
@@ -4179,11 +4179,21 @@ function writerField(field, idx) {
   return redactForSpawn({ text, rawLen: field.rawLen }, idx);
 }
 
+/** Where the raw fact sits in the redacted base (D-6309): its raw spelling, else its JSON-escaped spelling (a span row is
+ *  rendered as JSON, so a command with a `"`, a backslash or a control character occurs only escaped), else null. Pure.
+ *  @param {string} base  @param {string} factRaw  @returns {string | null} the spelling that occurs in `base` */
+export function factSpellingIn(base, factRaw) {
+  if (typeof factRaw !== 'string' || factRaw === '') return null;
+  if (base.includes(factRaw)) return factRaw;
+  const escaped = JSON.stringify(factRaw).slice(1, -1);
+  return escaped !== factRaw && base.includes(escaped) ? escaped : null;
+}
+
 /** The writer's input for one candidate (W2-D72), every field redacted whole BEFORE any window (W2-D54). Pure.
  *  @param {WriterItem} item  @param {string} writerInput 'excerpt' or 'leaf-span' (WRITER_INPUTS)
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx the run's pair index
  *  @returns {{ state: 'input', input: { v: 1, kind: string, fact: string, excerpt: string } }
- *    | { state: 'discard', why: 'over-decode-cap' | 'writer-input-over-cap' }} */
+ *    | { state: 'discard', why: 'over-decode-cap' | 'writer-input-over-cap' | 'writer-input-unrenderable' | 'writer-fact-unplaced' }} */
 export function writerInputOf(item, writerInput, idx) {
   if (!WRITER_INPUTS.includes(writerInput)) throw new TypeError(`writerInputOf: writer_input ${JSON.stringify(writerInput)} is not one of ${WRITER_INPUTS.join(', ')}`);
   if (!FACT_KINDS.includes(item.kind)) throw new TypeError(`writerInputOf: kind ${JSON.stringify(item.kind)} is not one of ${FACT_KINDS.join(', ')}`);
@@ -4210,7 +4220,10 @@ export function writerInputOf(item, writerInput, idx) {
     base = texts.join('\n');
     firstWindow = Number.MAX_SAFE_INTEGER;
   }
-  const w = windowExcerpt({ base, factRaw: item.fact_raw, firstWindow, pairLine });
+  // D-6309: a fact neither spelling of which occurs is a counted drop, never windowExcerpt's TypeError after --out and spend.
+  const spelled = factSpellingIn(base, item.fact_raw);
+  if (spelled === null) return { state: 'discard', why: 'writer-fact-unplaced' };
+  const w = windowExcerpt({ base, factRaw: spelled, firstWindow, pairLine });
   if (w.state === 'discard') return w;
   return { state: 'input', input: { v: 1, kind: item.kind, fact: item.fact, excerpt: w.excerpt } };
 }

@@ -8167,8 +8167,9 @@ describe('W2-5a Task 6: the writer input, W2-D72 and W2-D54', () => {
     expect(ex2).toContain(W6_CMD);
   });
 
-  it('a raw fact absent from its redacted leaf is a TypeError, never an empty excerpt', () => {
-    expect(() => replay.writerInputOf(w6Item({ leaf: w6Field('some other command') }), 'excerpt', W6_IDX)).toThrow(/does not occur/);
+  it('a raw fact absent from its redacted text is a TypeError of the pure windowExcerpt, never an empty excerpt; writerInputOf answers a counted discard instead (D-6309)', () => {
+    expect(() => replay.windowExcerpt({ base: 'some other command', factRaw: W6_CMD, firstWindow: 4000, pairLine: null })).toThrow(/does not occur/);
+    expect(replay.writerInputOf(w6Item({ leaf: w6Field('some other command') }), 'excerpt', W6_IDX)).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
     expect(() => replay.writerInputOf(w6Item(), 'whole-session' as never, W6_IDX)).toThrow(/writer_input "whole-session" is not one of/);
   });
 
@@ -8754,6 +8755,44 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     const plain = await source('quiz', plainAsked);
     expect(plain.r.counts.drops.redaction).toEqual({});
     expect(plainAsked.map((a) => a.item.fact)).toEqual([sb.cmd]);
+  }, 600_000);
+
+  // D-6309: the leaf-span base is JSON-rendered, so a command with a quote never occurs verbatim in it.
+  it('D-6309: under leaf-span a quoted command is placed by its JSON-escaped spelling and a question is produced through the real writerInputOf; a fact neither spelling of which occurs is a counted writer-fact-unplaced, never a throw', async () => {
+    const quoted = 'git commit -m "fixture build wip"';
+    const qb = w6SourceBox('ccrc-w5a6-source-quoted-', quoted);
+    const through = (idx: never, asked: Asked[], tamper: boolean) => ({
+      ask: async (section: string, item: Record<string, any>) => {
+        const fed = tamper ? { ...item, fact_raw: `${item.fact_raw} but never in the text` } : item;
+        const made = replay.writerInputOf(fed as never, 'leaf-span', idx) as { state: string; why?: string; input?: { excerpt: string } };
+        const qid = replay.qidOf(item as never) as string;
+        if (made.state === 'discard') return { state: 'discard', qid, why: made.why };
+        asked.push({ section, item: { ...item, excerpt: made.input!.excerpt } });
+        return fakeWriter([]).ask(section, item);
+      },
+    });
+    const run = async (tamper: boolean): Promise<{ r: Sourced; asked: Asked[] }> => {
+      const rs = replay.openReplayStore(qb.box.home) as unknown as { idx: never; close(): void };
+      try {
+        const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
+        const asked: Asked[] = [];
+        const r = await replay.sourceQuiz({
+          mode: 'quiz', rs, home: qb.box.home, out, writer: through(rs.idx, asked, tamper), seedHex: 'ab'.repeat(32),
+          exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
+          configDirs: [], top: qb.box.home,
+        } as never) as unknown as Sourced;
+        return { r, asked };
+      } finally {
+        rs.close();
+      }
+    };
+    const ok = await run(false);
+    expect(ok.r.entries.map((e) => e.fact), 'a question is produced for the quoted command').toEqual([quoted]);
+    expect(ok.asked[0]!.item['excerpt'], 'the excerpt holds the escaped spelling').toContain(JSON.stringify(quoted).slice(1, -1));
+    expect(ok.asked[0]!.item['excerpt'], 'CONTROL: the raw spelling occurs nowhere in the JSON-rendered span').not.toContain(quoted);
+    const lost = await run(true);
+    expect(lost.r.entries).toEqual([]);
+    expect(lost.r.counts.drops.writer, 'counted').toEqual({ 'writer-fact-unplaced': 1 });
   }, 600_000);
 
   // D-6305: a failed writer run is counted apart from a malformed reply; the writer-malformed drop is their sum.
@@ -10191,5 +10230,39 @@ describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', ()
     const pair = { ...c, pair: { name: 'Bash', input: { text: 'x', rawLen: 1, value: deep } } };
     expect(replay.writerInputOf(pair as never, 'excerpt', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
     expect(replay.FACT_DROP_REASONS.slice(16, 18), 'appended in place after writer-input-over-cap (R5)').toEqual(['writer-input-over-cap', 'writer-input-unrenderable']);
+  });
+});
+
+describe('W2-5a fix wave, D-6309: the leaf-span base is JSON, so a fact is placed by its raw or its escaped spelling, and never throws', () => {
+  const mineOf = (use: Record<string, unknown>) => (w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('fw9', String(use['name']), use['input'] as Record<string, unknown>)] }]))).candidates as unknown as Array<Record<string, any>>);
+
+  it.each([
+    ['a path with a backslash', { name: 'Read', input: { file_path: '/home/u/tree/dir\\name.txt' } }, 'path'],
+    ['a command with a quote', { name: 'Bash', input: { command: 'git commit -m "fixture wip build"' } }, 'command'],
+    ['a command with a newline and a tab', { name: 'Bash', input: { command: 'echo first line &&\n\techo second line' } }, 'command'],
+  ])('%s is placed in the span\'s JSON by its escaped spelling under leaf-span, and by its raw one under excerpt', (_what, use, kind) => {
+    const c = mineOf(use).find((x) => x.kind === kind)!;
+    const span = replay.writerInputOf(c as never, 'leaf-span', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(span.state).toBe('input');
+    expect(span.input.excerpt).toContain(JSON.stringify(c.fact_raw).slice(1, -1));
+    expect(replay.factSpellingIn(span.input.excerpt, c.fact_raw)).toBe(JSON.stringify(c.fact_raw).slice(1, -1));
+    const ex = replay.writerInputOf(c as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(ex.state, 'CONTROL: the excerpt\'s leaf is the raw string').toBe('input');
+    expect(ex.input.excerpt).toContain(c.fact_raw);
+  });
+
+  it('factSpellingIn: the raw spelling first, the escaped one second, else null', () => {
+    expect(replay.factSpellingIn('a "b" c', '"b"')).toBe('"b"');
+    expect(replay.factSpellingIn('a \\"b\\" c', '"b"')).toBe('\\"b\\"');
+    expect(replay.factSpellingIn('a b c', '"b"')).toBeNull();
+    expect(replay.factSpellingIn('anything', '')).toBeNull();
+  });
+
+  it('a fact made unplaceable is a counted writer-fact-unplaced under either input, and FACT_DROP_REASONS appends it in place', () => {
+    const c = mineOf({ name: 'Bash', input: { command: 'npm run fixture-build-all' } }).find((x) => x.kind === 'command')!;
+    for (const w of ['excerpt', 'leaf-span']) {
+      expect(replay.writerInputOf({ ...c, fact_raw: 'never in the text' } as never, w, FW_IDX), w).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
+    }
+    expect(replay.FACT_DROP_REASONS.slice(16, 19), 'R5').toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced']);
   });
 });
