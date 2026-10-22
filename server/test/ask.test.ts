@@ -32,6 +32,13 @@ const USER_TEXT = JSON.stringify({
   message: { role: 'user', content: 'something else entirely' },
 });
 
+/** An `assistant` line of message `messageId` that carries a text block: the shape Claude Code logs for a block that
+ *  follows the tool_use inside ONE message (`ASK` above is message `msg_1`). */
+const ASSISTANT_TEXT = (messageId: string) => JSON.stringify({
+  type: 'assistant', uuid: 'a2', timestamp: '2026-07-26T15:00:05Z',
+  message: { id: messageId, role: 'assistant', content: [{ type: 'text', text: 'Waiting on your pick.' }] },
+});
+
 const fileWith = (lines: string[]): string => {
   const dir = mkTmp('ccrc-ask-');
   const f = path.join(dir, 't.jsonl');
@@ -75,6 +82,23 @@ describe('readPendingAsk', () => {
     // No tool_result anywhere — but the conversation moved on, so the menu is not
     // on screen. This is a real shape: session killed while the menu was up.
     expect(await readPendingAsk(localIO, fileWith([ASK('t1'), USER_TEXT]))).toBeNull();
+  });
+
+  // D-6324: Claude Code can log a text block AFTER the tool_use inside the same message, as its own line. It is that
+  // message's trailing block, not the conversation moving on, so the pending ask must still read.
+  it('a trailing text block of the AskUserQuestion\'s own message does not hide the pending ask', async () => {
+    const qs = await readPendingAsk(localIO, fileWith([ASK('t1'), ASSISTANT_TEXT('msg_1')]));
+    expect(qs).toHaveLength(1);
+    expect(qs![0]!.question).toBe('Which colour?');
+  });
+
+  it('a later assistant message still does', async () => {
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), ASSISTANT_TEXT('msg_2')]))).toBeNull();
+    // The same message's trailing block does not excuse a later message after it.
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), ASSISTANT_TEXT('msg_1'), ASSISTANT_TEXT('msg_2')]))).toBeNull();
+    // A user line carrying the same id is not an assistant block.
+    const userSameId = JSON.stringify({ type: 'user', uuid: 'u2', message: { id: 'msg_1', role: 'user', content: 'hello' } });
+    expect(await readPendingAsk(localIO, fileWith([ASK('t1'), userSameId]))).toBeNull();
   });
 
   it('parses an input larger than the chat stream’s 4000-char cap', async () => {

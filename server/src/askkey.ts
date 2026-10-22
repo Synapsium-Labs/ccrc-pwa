@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
-import type { HookState } from './hookstate.js';
+import type { DialogAsk, DialogMulti, HookAsk, HookAskQuestion } from '../../shared/api.js';
+import type { HookState, HookStateRawRead } from './hookstate.js';
+import { pairMatches } from './transcript/ask.js';
 import type { PushPayload } from './push.js';
 
 /**
@@ -21,6 +22,43 @@ export function askKey(ask: HookAsk | null): string | null {
   if (q === undefined) return null;
   const material = JSON.stringify([q.question, q.options.map((o) => o.label)]);
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
+}
+
+/** What a stream's last pane reading shows of the menu on screen: the transcript-aligned question (`Dialog.ask`) and,
+ *  for an unparsed multiSelect menu, its labels (`Dialog.multi`). `sessionws.ts`'s `DialogSeen` satisfies it. */
+export interface MenuEvidence {
+  ask: DialogAsk | null;
+  multi?: DialogMulti;
+}
+
+/**
+ * D-6324: keep an AGED hook envelope on the per-session stream while the pane's menu is that envelope's call.
+ *
+ * `foldHookStateRead` drops an envelope older than `HOOKSTATE_FRESH_MS`, which cleared the sheet's structured copy at
+ * 30 minutes under a question still on screen. True only when the raw read is the current session's, `waiting`, a
+ * questions envelope, and SOME question of it is the menu on screen (every question, not only the first that `askKey`
+ * hashes: the pane may be on the second): a parsed menu by its question text and option labels (a `null` entry is a row
+ * the transcript alignment already forgave), an unparsed multi menu by its labels through `pairMatches`.
+ *
+ * Legitimately different from the 30-minute cut every other reader of the envelope keeps (the fleet card, the push
+ * body, the coordinator hold, `answerAsk`'s read): only the per-session stream holds a live menu measurement and its
+ * transcript alignment in the same tick. Raising `HOOKSTATE_FRESH_MS` instead would widen all of them, the key-based
+ * answer gate included.
+ */
+export function keepAgedAsk(raw: HookStateRawRead, menu: MenuEvidence): boolean {
+  if (!raw.ok || raw.identity !== 'current' || raw.state.state !== 'waiting') return false;
+  const ask = raw.state.ask;
+  if (ask === null || !('questions' in ask)) return false;
+  return ask.questions.some((q) => {
+    if (menu.ask !== null) {
+      const shown = menu.ask;
+      return shown.question === q.question && shown.options.length === q.options.length
+        && shown.options.every((o, i) => o === null || o.label === q.options[i]!.label);
+    }
+    const multi = menu.multi;
+    return multi !== undefined && multi.options.length === q.options.length
+      && multi.options.every((o, i) => pairMatches(o.label, q.options[i]!.label));
+  });
 }
 
 /**

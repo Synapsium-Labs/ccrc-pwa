@@ -61,9 +61,10 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
   const lines = chunk.data.split('\n');
   if (from > 0) lines.shift();   // the tail almost certainly cut a line in half
 
-  let found: { at: number; id: string; questions: AskQuestion[] } | null = null;
+  let found: { at: number; id: string; messageId: string | null; questions: AskQuestion[] } | null = null;
   const answered = new Set<string>();
-  const conversationalAt: number[] = [];
+  // Each conversational line's position, and its message id when it is an assistant line that carries one.
+  const conversational: { at: number; assistantMessageId: string | null }[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -72,25 +73,29 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
     try { parsed = JSON.parse(line); } catch { continue; }
     // `null` and bare primitives are valid JSON, so the catch above never sees them.
     if (parsed === null || typeof parsed !== 'object') continue;
-    const o = parsed as { type?: unknown; message?: { content?: unknown } | null };
+    const o = parsed as { type?: unknown; message?: { id?: unknown; content?: unknown } | null };
     const type = typeof o.type === 'string' ? o.type : '';
-    if (CONVERSATIONAL.has(type)) conversationalAt.push(i);
+    const messageId = typeof o.message?.id === 'string' ? o.message.id : null;
+    if (CONVERSATIONAL.has(type)) conversational.push({ at: i, assistantMessageId: type === 'assistant' ? messageId : null });
     const content = o.message?.content;
     if (!Array.isArray(content)) continue;
     for (const b of content as Array<Record<string, unknown> | null>) {
       if (b?.type === 'tool_result' && typeof b.tool_use_id === 'string') answered.add(b.tool_use_id);
       if (b?.type === 'tool_use' && b.name === 'AskUserQuestion' && typeof b.id === 'string') {
         const questions = parseQuestions(b.input);
-        if (questions) found = { at: i, id: b.id, questions };
+        if (questions) found = { at: i, id: b.id, messageId, questions };
       }
     }
   }
 
   if (found === null) return null;
   if (answered.has(found.id)) return null;
-  // Gate 2: nothing conversational after it. Line positions, not message ids —
-  // one assistant message spans consecutive lines (thinking, thinking, tool_use).
-  if (conversationalAt.some((at) => at > found!.at)) return null;
+  // Gate 2: nothing conversational after it. Line positions decide, with one exception by message id (D-6324): an
+  // `assistant` line whose message id is the AskUserQuestion line's own is that message's trailing block (a text block
+  // logged after the tool_use), not the conversation moving on. Any other later line, a later assistant message
+  // included, still counts. Without it the alignment answered null for about 2% of answered asks.
+  const own = found.messageId;
+  if (conversational.some((c) => c.at > found!.at && (own === null || c.assistantMessageId !== own))) return null;
   return found.questions;
 }
 

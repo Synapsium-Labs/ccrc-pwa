@@ -15,9 +15,9 @@ import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
-import { readHookState } from './hookstate.js';
-import { askKey } from './askkey.js';
-import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { foldHookStateRead, readHookStateRawMeasured } from './hookstate.js';
+import { askKey, keepAgedAsk } from './askkey.js';
+import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
@@ -649,15 +649,20 @@ export class SessionStream {
   /** Read this session's hookstate and send `ask` / `ask_cleared` when the
    *  hook-sourced envelope appears, changes (JSON-compare), or goes away —
    *  null, stale, or the file itself missing all read the same here: nothing
-   *  fresh to report. `readHookState` already gates freshness and identity
+   *  fresh to report. `foldHookStateRead` gates freshness and identity
    *  (uuid match against the registry), so a null return covers all three
-   *  uniformly — this frame just tracks the transition, not the reason. */
+   *  uniformly — this frame just tracks the transition, not the reason.
+   *  D-6324: ONE raw read per tick feeds both the fold and `keepAgedAsk`, which
+   *  keeps an envelope past the 30-minute cut while this tick's menu
+   *  (`seenDialog`, set by `checkDialog` just before) is that envelope's call. */
   private async checkHookAsk(uuid: string): Promise<void> {
     if (this.stopped) return;
-    const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
+    const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
     if (this.stopped) return;
+    const read = foldHookStateRead(raw, Date.now());
+    const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    const ask = hs?.ask ?? null;
+    const ask = hs?.ask ?? (raw.ok && keepAgedAsk(raw, this.seenDialog) ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
@@ -1091,6 +1096,8 @@ export interface DialogSeen {
   id: string | null;
   ask: DialogAsk | null;
   raw: string | null;
+  /** An unparsed multiSelect menu's labels (`Dialog.multi`), the evidence `keepAgedAsk` reads (D-6324). */
+  multi?: DialogMulti;
 }
 
 /**
@@ -1132,7 +1139,7 @@ export function nextDialogFrame(
   const repainted = !dialog.parsed && prev.raw !== dialog.raw;
   if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }

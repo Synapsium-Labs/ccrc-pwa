@@ -434,7 +434,7 @@ const streamWith = async (opts: {
   answeredDuringCapture?: readonly { step: number; next: Dialog | null }[];
   /** The same, handled while poll `step`'s stat of the transcript is in flight (the capture before it is older). */
   answeredDuringStat?: readonly { step: number; next: Dialog | null }[];
-}): Promise<{ frames: any[]; askReads: number; marks: number[] }> => {
+}): Promise<{ frames: any[]; askReads: number; hookReads: number; marks: number[] }> => {
   const home = mkTmp('ccrc-ask-');
   seedRoster(home);
   seed(home);
@@ -474,8 +474,13 @@ const streamWith = async (opts: {
   // below still pin that it is paid once per stream. `readFileFrom` calls
   // straight into `localIO`'s own, so nothing is counted twice.
   let askReads = 0;
+  let hookReads = 0; // reads of this session's hookstate file, to pin one per tick (D-6324)
   const io: FleetIO = {
     ...localIO,
+    readFileMeasured: (p) => {
+      if (p === hookFile) hookReads += 1;
+      return localIO.readFileMeasured(p);
+    },
     readFileFrom: (p, off) => {
       if (p === file) askReads += 1;
       return localIO.readFileFrom(p, off);
@@ -524,7 +529,7 @@ const streamWith = async (opts: {
     stream.stop();
     rmSync(home, { recursive: true, force: true });
   }
-  return { frames, askReads, marks };
+  return { frames, askReads, hookReads, marks };
 };
 
 /** A complete, valid hookstate body — `session-hook.sh`'s own shape, same
@@ -647,6 +652,99 @@ describe('hook ask envelope frames', () => {
   it('does not resend ask_cleared on later ticks once the first check already sent it', async () => {
     const { frames } = await streamWith({ hookstateSequence: [null, null, null] });
     expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  });
+
+  // D-6324: the structured copy outlives the 30-minute cut while the pane's menu is that question. Every age is an
+  // absolute 31 minutes before the clock, never relative to HOOKSTATE_FRESH_MS, so raising the constant is caught.
+  describe('an aged envelope is kept while its menu is up (D-6324)', () => {
+    const AGED_MS = 31 * 60_000;
+    const aged = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      hookBody({ updatedAt: Date.now() - AGED_MS, ...over });
+    /** The envelope session-hook.sh would have copied for the 2-column fixture's call: the transcript's own
+     *  `questions`, keeping `question` and each option's `label`/`description` and dropping `preview`. */
+    const ENVELOPE = (() => {
+      for (const line of fixture('transcript-ask-2col.jsonl').split('\n')) {
+        if (line.trim() === '') continue;
+        const content = JSON.parse(line)?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const b of content) {
+          if (b?.name !== 'AskUserQuestion') continue;
+          return {
+            questions: (b.input.questions as { question: string; options: { label: string; description?: string }[] }[]).map((q) => ({
+              question: q.question,
+              options: q.options.map((o) => ({ label: o.label, description: o.description })),
+            })),
+          };
+        }
+      }
+      throw new Error('fixture holds no AskUserQuestion');
+    })();
+    const MENU = { pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl') };
+    const asks = (frames: any[]) => frames.filter((f) => f.type === 'ask');
+    const cleared = (frames: any[]) => frames.filter((f) => f.type === 'ask_cleared');
+
+    it('a stream that connects 31 minutes after the hook wrote the ask still receives it while its menu is up', async () => {
+      const { frames } = await streamWith({ ...MENU, hookstate: aged({ ask: ENVELOPE }) });
+      expect(asks(frames)).toHaveLength(1);
+      expect(asks(frames)[0].ask).toEqual(ENVELOPE);
+      expect(asks(frames)[0].key).toBe(askKey(ENVELOPE));
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an open stream sends no ask_cleared at 31 minutes while its menu is up', async () => {
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('keeps an aged multiSelect envelope while its unparsed multi menu is up', async () => {
+      const multi = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const { frames } = await streamWith({
+        pane: fixture('cc300-ask-multiselect-tools-open.txt'),
+        hookstateSequence: [aged({ ask: multi }), aged({ ask: multi })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('ask_cleared follows once the menu leaves the pane', async () => {
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, MENU.pane, ''],
+        transcript: MENU.transcript,
+        hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+      expect(frames.indexOf(asks(frames)[0])).toBeLessThan(frames.indexOf(cleared(frames)[0]));
+    });
+
+    it('an aged envelope is not kept while a different menu is up', async () => {
+      const { frames } = await streamWith({ pane: fixture('model-confirm.txt'), hookstate: aged({ ask: ENVELOPE }) });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(0);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged approval envelope clears at 31 minutes as today', async () => {
+      const approval = { approval: { tool: 'Bash', summary: 'rm -rf build/' } };
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: approval }), aged({ ask: approval })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged session reads its hookstate once per tick', async () => {
+      const { hookReads } = await streamWith({
+        ...MENU,
+        hookstateSequence: [aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(hookReads).toBe(3); // start() plus two ticks
+    });
   });
 });
 

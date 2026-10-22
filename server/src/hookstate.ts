@@ -375,8 +375,9 @@ const RAW_FAILURE_FOLD: Record<Extract<HookStateRawRead, { ok: false }>['reason'
 
 /** The aged door's ONE decision over the raw read (`readHookStateMeasured`): the identity cut, the age cut, and the
  *  fold of `absent`/`malformed` into `no-state` (`RAW_FAILURE_FOLD`). The unaged door that once
- *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. */
-function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
+ *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. The session stream
+ *  folds its own raw read through it too (D-6324), so it can keep the raw read for `keepAgedAsk`. */
+export function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
   if (!raw.ok) return RAW_FAILURE_FOLD[raw.reason];
   if (raw.identity !== 'current') return NO_STATE;
   // The age cut's clock is the later of the file's `updatedAt` and its `aliveAt` (D-4041): a main-thread wait that a
