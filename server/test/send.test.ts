@@ -2224,7 +2224,8 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
 
   /** A pane that answers by what was done to it: empty, then our text once typed, then `afterEnter` capture by
    *  capture (the last repeats; `null` is a failed capture) once an Enter was pressed. */
-  function enterRig(o: { enterCode: number; afterEnter: (string | null)[]; before?: string }) {
+  function enterRig(o: { enterCode: number; afterEnter?: (string | null)[]; before?: string }) {
+    const afterEnter = o.afterEnter ?? [EMPTY];
     let typed = false;
     let entered = false;
     let post = 0;
@@ -2238,7 +2239,7 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
       }
       if (args[0] === 'capture-pane') {
         if (!entered) return { code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
-        const pane = o.afterEnter[Math.min(post++, o.afterEnter.length - 1)] ?? null;
+        const pane = afterEnter[Math.min(post++, afterEnter.length - 1)] ?? null;
         return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
       }
       return { code: 0, stdout: '', stderr: '' };
@@ -2260,6 +2261,20 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
     expect(await send(tmux)).toEqual({ ok: true });
   });
 
+  it('a box that reads blind through both Enters and then reads OTHER text is ok too', async () => {
+    // Other non-empty text that does not start with ours is what a taken turn and a busy session's queue hint look like.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [...Array(2 * SUBMIT_TRIES).fill(null), '❯ some other text\n'] });
+    expect(await send(tmux)).toEqual({ ok: true });
+  });
+
+  it('submitEnter ("Send it") under a failed capture mid-watch presses one Enter, no second key, and answers ok', async () => {
+    // The rescue route shares the watch: a dropped read no longer ends its proof, and it never presses again.
+    const { tmux, calls } = fakeTmux(['❯ a stuck draft\n', null, null, '❯ \n']);
+    const res = await submitEnter({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a stuck draft');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
+  });
+
   it('a failed Enter press whose box still holds our text is enter-ignored', async () => {
     const { tmux } = enterRig({ enterCode: 1, afterEnter: [OURS] });
     expect(await send(tmux)).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello there', submittable: true });
@@ -2274,8 +2289,9 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
   });
 
   it("a box holding someone else's text still refuses", async () => {
-    // A human's draft is in the box before the send; the Enter press fails. Nothing is pressed or typed over it.
-    const { tmux, calls } = enterRig({ enterCode: 1, afterEnter: [EMPTY], before: '❯ a human mid-sentence\n' });
+    // Pins the guard BEFORE anything is typed: the box holds a human's draft, so the send refuses `draft-present` with no
+    // key sent, even on a rig whose Enter would fail. (What the proof reads AFTER an Enter is the cases above and below.)
+    const { tmux, calls } = enterRig({ enterCode: 1, before: '❯ a human mid-sentence\n' });
     expect(await send(tmux)).toMatchObject({ ok: false, error: 'draft-present', draft: 'a human mid-sentence' });
     expect(sendKeysCalls(calls)).toEqual([]);
   });

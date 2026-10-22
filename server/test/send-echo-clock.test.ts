@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { sendPrompt, ECHO_BUDGET_MS, ECHO_POLL_MS, ECHO_TRIES } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -102,5 +105,95 @@ describe('sendPrompt waits for the echo by a budget as well as a poll count (D-6
     expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect((ECHO_TRIES * (ECHO_POLL_MS + 600))).toBeGreaterThan(ECHO_BUDGET_MS);   // the budget is spent before the floor
     expect(r.polls()).toBe(ECHO_TRIES);
+  });
+});
+
+// D-6366 fix round: a shape the call can prove is its own ends the echo wait at the ECHO_TRIES floor. The text arm's
+// 24-character needle can never match a paste chip or a row-capped box's marker row, so without this exit those
+// messages would always wait out the whole budget before their Enter.
+describe('a proven own shape ends the echo wait at the floor (D-6366)', () => {
+  const panes = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const fixture = (name: string): string => readFileSync(path.join(panes, name), 'utf8');
+  const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
+  /** The probe's text generator (see send-paste-chip.test.ts), so the text is exactly what the recorded pane was typed from. */
+  function recorded(n: number, tag: string): string {
+    let t = `${tag} Reply with only the word OK and use no tools.`;
+    for (let i = 0; t.length < n; i++) t += ' ' + WORDS[i % WORDS.length];
+    const end = ` END-${tag}`;
+    return (t.slice(0, n - end.length) + end).slice(0, n);
+  }
+  const lines = (k: number, w: number, tag: string): string =>
+    Array.from({ length: k }, (_, j) => recorded(w, `${tag}L${String(j).padStart(2, '0')}`)).join('\n');
+
+  /** The recorded empty box, then `typed` once the literal is sent, then the empty box after an Enter; free sleep. */
+  function paneRig(typed: string) {
+    const empty = fixture('cc300-paste-empty-box.txt');
+    const submitted = fixture('cc300-paste-submitted.txt');
+    let isTyped = false;
+    let entered = false;
+    let echoPolls = 0;
+    const keys: string[] = [];
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) isTyped = true;
+        else { keys.push(args.at(-1)!); if (args.at(-1) === 'Enter') entered = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (isTyped && !entered && args.includes('-e')) echoPolls++;
+        return { code: 0, stdout: entered ? submitted : isTyped ? typed : empty, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { d: { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async () => {} }, keys, polls: () => echoPolls };
+  }
+
+  it('an own paste chip is submitted after ECHO_TRIES polls, not the budget', async () => {
+    const r = paneRig(fixture('cc300-paste-chip-1000.txt'));
+    const res = await sendPrompt(r.d, 'x', recorded(1000, 'c1000'));
+    expect(res).toEqual({ ok: true });
+    expect(r.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+    expect(r.polls()).toBe(ECHO_TRIES);
+  });
+
+  it('an own row-capped box is submitted after ECHO_TRIES polls, not the budget', async () => {
+    const r = paneRig(fixture('cc300-paste-tall-40-lines.txt'));
+    const res = await sendPrompt(r.d, 'x', lines(40, 80, 'tall40'));
+    expect(res).toEqual({ ok: true });
+    expect(r.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+    expect(r.polls()).toBe(ECHO_TRIES);
+  });
+});
+
+// D-6366 fix round: the proof's blind polls (failed captures) get a wall deadline. A hung tmux makes each capture fail
+// only after its own timeout, so counting polls alone would make the proof cost 16 timeouts where base cost 4.
+describe('with every capture failing after 10 s the proof ends within base\'s bound (D-6366)', () => {
+  it('with every capture failing after 10 s, the proof ends within base\'s bound', async () => {
+    const HUNG_MS = 10_000;
+    let t = 0;
+    let entered = false;
+    let typed = false;
+    let firstEnterAt = 0;
+    let capturesAfterEnter = 0;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'send-keys') {
+        if (args.includes('-l')) typed = true;
+        if (args.at(-1) === 'Enter') { if (!entered) firstEnterAt = t; entered = true; t += HUNG_MS; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (!entered) return { code: 0, stdout: typed ? '❯ hello from the lane\n' : '❯ \n', stderr: '' };
+        capturesAfterEnter++;
+        t += HUNG_MS;
+        return { code: 1, stdout: '', stderr: 'timed out' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const d = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms: number) => { t += ms; }, now: () => t };
+    const res = await sendPrompt(d, 'x', 'hello from the lane');
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    // Base: one capture per watch (a failed one ends it) and the final read's two: four after the first Enter.
+    expect(capturesAfterEnter).toBe(4);
+    expect(t - firstEnterAt).toBeLessThanOrEqual(65_000);
   });
 });

@@ -83,6 +83,9 @@ interface FakeOpts {
   blindAfterType?: { kind: 'no-box' | 'dead'; captures: number };
   /** D-6366: from the first Enter, this many captures fail (a link drop), then the pane reads normally again. */
   blindAfterEnter?: number;
+  /** D-6366: called before every capture once an Enter has been pressed, with the number of Enters so far and the
+   *  number of captures since the latest one (from 1): an event landing between the proof's polls and its final read. */
+  afterEnter?: (enters: number, k: number, s: Cc) => void;
   /** D-6011: each swallowed Enter hides the held-stash indicator from this many following captures. */
   hideAfterSwallow?: number;
 }
@@ -121,9 +124,12 @@ function fakeCc(o: FakeOpts = {}) {
   let literals = 0;
   let blind = 0;
   let blindEnter = 0;
+  let enters = 0;
+  let sinceEnter = 0;
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'capture-pane') {
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
+      if (enters > 0) o.afterEnter?.(enters, ++sinceEnter, s);
       if (blindEnter > 0) { blindEnter--; return { code: 1, stdout: '', stderr: "can't find pane" }; }
       if (blind > 0) {
         blind--;
@@ -155,6 +161,8 @@ function fakeCc(o: FakeOpts = {}) {
         if (nonBlank(s.box)) { s.stash = s.box; s.box = []; }
         else if (s.stash !== null && (o.popWorks ?? true)) { s.box = s.stash; s.stash = null; }
       } else if (key === 'Enter') {
+        enters++;
+        sinceEnter = 0;
         if (swallow > 0) { swallow--; s.hideIndicator = o.hideAfterSwallow ?? 0; return { code: 0, stdout: '', stderr: '' }; }
         if (!nonBlank(s.box)) return { code: 0, stdout: '', stderr: '' };
         const sent = s.box.join('\n');
@@ -697,15 +705,15 @@ describe("onDraft: 'stash' (D-5911)", () => {
   });
 
   describe('D-6366: a lost reply after Enter on the stash paths', () => {
-    // Captures fail through both Enter watches (SUBMIT_TRIES polls each), so the proof is decided by the final read.
-    // `restoreOnSubmit: false` keeps the retry Enter, pressed after a blind watch as before, off a restored draft.
-    const BLIND = 2 * SUBMIT_TRIES;
+    // Captures fail through the whole Enter watch (SUBMIT_TRIES polls) and no retry Enter follows a watch that read no
+    // box, so the proof is decided by the final read.
+    const BLIND = SUBMIT_TRIES;
 
     it('around our own stash: a final read without our text runs the restore check and pops the stash', async () => {
       const human = 'a half typed note of the human';
       const f = fakeCc({ box: [human], restoreOnSubmit: false, blindAfterEnter: BLIND });
       const res = await send(f, 'hello from the lane');
-      expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter', 'Enter', 'C-s']);
+      expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter', 'C-s']);
       expect(res).toEqual({ ok: true, draftRestore: 'restored' });
       expect(f.state.history).toEqual(['hello from the lane']);
       expect(f.state.box).toEqual([human]);
@@ -728,9 +736,64 @@ describe("onDraft: 'stash' (D-5911)", () => {
     it('over a stash already held: a final read without our text is ok', async () => {
       const f = fakeCc({ box: [], stash: ['an earlier human note'], restoreOnSubmit: false, blindAfterEnter: BLIND });
       const res = await send(f, 'hello from the lane');
-      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter', 'Enter']);
+      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter']);
       expect(f.state.history).toEqual(['hello from the lane']);
       expect(res).toEqual({ ok: true });
+    });
+  });
+
+  describe('D-6366 fix round: a blind watch buys no retry Enter, and the final read judges three ways', () => {
+    const human = 'a half typed note of the human';
+
+    it('an all-blind watch never presses a retry Enter onto a restored draft (around our own stash)', async () => {
+      // Default `restoreOnSubmit: true`: Claude Code gives the human's draft back at OUR submit, so a retry Enter
+      // would submit it. The first Enter landed; its watch read nothing.
+      const f = fakeCc({ box: [human], blindAfterEnter: SUBMIT_TRIES });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('an all-blind watch never presses a retry Enter onto a restored draft (over a stash already held)', async () => {
+      const f = fakeCc({ box: [], stash: [human], blindAfterEnter: SUBMIT_TRIES });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('a maybe-restored final read offers no draft and no submittable (around our own stash)', async () => {
+      // Both Enters are swallowed (the watches read our text), then a restore render lands between the last poll and
+      // the final read: the box is a prefix of the stashed draft, which may be the human's. "Send it" must never get a
+      // draft to press Enter on, and the send is not delivered.
+      // Our text and the stashed draft share the 24-character needle and differ after it, so the watches read `ours`.
+      const stashed = 'please summarise the open issues instead of what I said';
+      const f = fakeCc({
+        box: [stashed], swallowEnters: 2,
+        afterEnter: (n, k, s) => { if (n === 2 && k === SUBMIT_TRIES + 1) s.box = ['please summarise the open iss']; },
+      });
+      const res = await send(f, 'please summarise the open pull requests');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
+      expect(f.state.history).toEqual([]);
+    });
+
+    it('a maybe-restored final read offers no draft and no submittable (over a stash already held)', async () => {
+      // Both Enters swallowed; at the final read our text is still the box but the held-stash indicator does not parse.
+      const f = fakeCc({
+        box: [], stash: ['an earlier human note'], swallowEnters: 2,
+        afterEnter: (n, k, s) => { if (n === 2 && k === SUBMIT_TRIES + 1) s.hideIndicator = 2; },
+      });
+      const res = await send(f, 'hello from the lane');
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
+      expect(f.state.history).toEqual([]);
     });
   });
 
