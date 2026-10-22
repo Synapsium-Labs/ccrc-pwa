@@ -2683,6 +2683,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         reached 26.2 s at 00:41:45, the largest yet (block 37.3 s, `cpAttempts` 774); no /health miss. The server has
         15931M free. STATUS: fleet and server v0.0.544, newest v0.0.552, stable v0.0.502, intent dev/auto=off, backups
         fleet 228M/server 15508M, disk free fleet 156G/work volume 14G/server 16G.
+      - 01:15: mail 7808, the broker's attempt fix merged (#1097, prerelease v0.0.553): an attempt's ID now hashes its
+        decision, so a growing evidence list no longer files a new attempt on every pass. On the first pass after a
+        rollout it collapses the repeats on file (one long pass, perhaps one /health miss, and a log line naming how
+        many rows it removed). The probe now reads that count, any `delegation attempt collapse failed` line (an
+        ANOMALY), and, from v0.0.553 on, passes that still file an attempt. Baseline before it: `cpAttempts` 780, and
+        7 to 38 attempt-filing passes an hour. This hour's /health miss (about 01:16) fell on one (`stallMid` 21.7 s).
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
