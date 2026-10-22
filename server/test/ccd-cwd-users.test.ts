@@ -696,15 +696,17 @@ describe.skipIf(!LINUX)('a cwd link that vanished: confirmed by a second read, i
 
   /** A tid that `os.listdir` lists AFTER the leader's own 4242 on the file system the fake table lives on, as /proc's
    *  `task/` lists its leader first. The probe asks a pass's tids in its listing's order, and a fixture directory lists
-   *  in its file system's order (ext4's is a hash order), so a trace that needs the leader asked first takes this tid. */
+   *  in its file system's order (ext4's is a hash order), so a trace that needs the leader asked first takes this tid.
+   *  It offers 1023 tids (4243 on, less the 4300 W1 starts later): one file system measured hashes 4242 after all of
+   *  4243..4258, and one that hashes it after every tid offered is about one in a thousand, which the CONTROL names. */
   const afterLeader = (): string => {
     const at = path.join(h.home, 'order');
-    const names = Array.from({ length: 16 }, (_, i) => String(4243 + i));
+    const names = Array.from({ length: 1024 }, (_, i) => String(4243 + i)).filter((n) => n !== '4300');
     fs.mkdirSync(path.join(at, '4242'), { recursive: true });
     for (const n of names) fs.mkdirSync(path.join(at, n));
     const order = h.sh(`python3 -I -c 'import os, sys; print(" ".join(os.listdir(sys.argv[1])))' "${at}"`).trim().split(' ');
     const t = order.slice(order.indexOf('4242') + 1).find((n) => names.includes(n));
-    expect(t, `the CONTROL: no tid lists after the leader’s on this file system (${order.join(' ')})`).toBeDefined();
+    expect(t, `the CONTROL: no tid lists after the leader’s on this file system (4242 lists ${order.indexOf('4242') + 1} of ${order.length})`).toBeDefined();
     return t ?? '';
   };
 
