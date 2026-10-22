@@ -241,6 +241,19 @@ These twenty numbers, starting at D-6346, were issued to run 775. This plan defi
 - **D-6359.** `_upd_report`'s downgrade branch tells a thinned own backup from one that never held a `coord.db`. When `$UPD_BACKUP_DIR/coord.db` is absent and `$UPD_BACKUP_DIR/coordination-thinned.json` is present, it prints `update: rollback:   (this run's backup no longer holds coord.db: a later ccrc run thinned it; 'ccrc coordination-snapshot validate --from <dir>' says when and by which verb — restore from a backup that still carries one)`, never "(no coord.db existed before this run …)". Why: no overloaded absence at a seam. The case is narrow (a keep of at least 2 and D-6358 both have to be beaten by concurrent backups inside one sweep window), but the old line would then be false.
 - **D-6360.** `_bak_data_keep` reads `CCRC_BACKUP_DATA_KEEP` from the process environment, else from `~/.ccrc/ccrc.env` through `_box_env_value`, else defaults to 3. Why: thinning cannot be undone, and a console-driven move (`--detach --from pwa`) or the watchdog runs under the user manager's environment, so an operator's shell setting would not reach it; `ccrc.env` is where a box's own facts live, and `_upd_deadline_ms` already reads its knob this way.
 
+- **D-6361.** `CCRC_BACKUP_KEEP` reads `~/.ccrc/ccrc.env` too, exactly as D-6360 makes `CCRC_BACKUP_DATA_KEEP` do. This supersedes Reading 8's asymmetry by an operator directive of 2026-10-22, relayed by the broker's coordinator in mail 8002: "I don't understand why anything related to CCrc shouldn't survive restarts etc as it should all be part if ccrc config???".
+  - Today `_bak_prune` (ccd/ccrc:23567) and `_bak_gc` (:23726) read `${CCRC_BACKUP_KEEP:-10}` from the process environment only. A console move sees the user manager's environment, a `ccrc rollout` over ssh sees neither, and a value in `ccrc.env` is never read.
+  - **The rule:** a set process environment wins; else `ccrc.env`'s value, through `_box_env_value` (:3161, the one reader); else 10. The same `_keep_ok`/`_keep_why` validation applies to either source, and an invalid value refuses exactly as it does today.
+  - **One spelling:** both read sites call the same small reader (beside `_bak_data_keep`), never two copies.
+  - **Documented:** both keys go in `deploy/ccrc.env.example`, each with its default, its range and the precedence. The `update` and `backup` usage paragraphs and README's sentence replace "read from the process environment only".
+  - **Rows:**
+    - `ccrc.env` alone sets the keep;
+    - the environment wins over `ccrc.env`;
+    - an invalid `ccrc.env` value refuses with nothing pruned;
+    - an unreadable `ccrc.env` refuses rather than falling to 10, because an undecidable config must not widen what is deleted;
+    - the reader is called from both sites.
+    Each row goes red when its arm is deleted.
+
 ## File structure
 
 - `deploy/coordination-snapshot.mjs`:
@@ -741,3 +754,15 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
 - **Live claims at dispatch.** Claim 2212 (run 774) holds `README.md`, and claim 2210 (run 722) holds `ccd/ccrc`. The coordinator has asked both coordinators for consent to this plan's hunks. Until the coordinator mails a consent, or the claim ends:
   - Group A is taken without `README.md`; the README edits wait.
   - Group B waits.
+
+### Ruling of 2026-10-22, later the same day: settings live in ccrc config (D-6361)
+
+- **Reading 8 is superseded.** The operator directed that ccrc's settings live in ccrc's own config and survive restarts (D-6361 quotes the directive).
+  - `CCRC_BACKUP_KEEP` now reads `~/.ccrc/ccrc.env` exactly as the new knob does: a set process environment wins, and an unreadable file refuses.
+  - Both keys are documented in `deploy/ccrc.env.example`.
+- **Where it goes.** Task 3 carries it, in the functions it already edits (`_bak_prune`, `_bak_gc`, and the reader beside `_bak_data_keep`), plus `deploy/ccrc.env.example`.
+  - Claim that file with Group B. No live claim names it at the time of this ruling.
+  - The README and usage sentences that say "read from the process environment only" change in the same commit.
+- **Reserve.** D-6361 is this ruling's. The worker's reserve is now 6362 to 6365.
+- **Growth.** The cap rule is unchanged: stop and report if the `ccd/ccrc` count passes 39.
+- **Not this wave.** The other operator-facing tunables with the same shape (`CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S` and whatever a census finds) are wave 24's. It plans a census of every `CCRC_*` read in `ccd/ccrc` and the deploy units, and a guard that keeps the census true.
