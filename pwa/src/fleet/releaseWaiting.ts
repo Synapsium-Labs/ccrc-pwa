@@ -4,7 +4,8 @@
 // name different releases or spell what the nodes run two ways. `bannerRelease` and `updateBannerText` moved here
 // unchanged from UpdateBanner.tsx (D-6327, behaviour-neutral); the arrow predicate itself stays `pendingTag`
 // (shared/update-arrow.ts).
-import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
+import { isReleaseTag, type FleetHealth, type UpdateChannel, type UpdatesView } from '../../../shared/api';
+import { compareReleaseTags } from '../../../shared/semver';
 import { nodeVersion } from '../../../shared/update-arrow';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { isPlaceableInstant } from '../lib/format';
@@ -80,4 +81,17 @@ export function releaseWaitingWords(view: UpdatesView): string | null {
 export function releaseWaitingDoorName(view: UpdatesView): string | null {
   const release = bannerRelease(view);
   return release === null ? null : `Update ${tagAvailable(release.tag)}, open Settings › Updates`;
+}
+
+/** The release the fleet's update line shows, given the highest tag the operator dismissed on this device (`null` when
+ *  none): {@link bannerRelease}'s answer unless it is hidden. A HIGH-WATER MARK, as the push is: a dismissal hides that
+ *  tag and any older one (a release withdrawn after a newer one was seen); only a STRICTLY newer waiting tag shows
+ *  again. Tags compare in semver order (`v0.0.10` is newer than `v0.0.9`; string order says the opposite). A tag that
+ *  is no release tag cannot be compared, so it is never read as hidden. Settings › Updates never calls this: it reads
+ *  {@link bannerRelease} and so always lists the waiting release. */
+export function shownRelease(view: UpdatesView, dismissed: string | null): { tag: string; channel: UpdateChannel } | null {
+  const release = bannerRelease(view);
+  if (release === null || dismissed === null) return release;
+  if (!isReleaseTag(release.tag) || !isReleaseTag(dismissed)) return release;
+  return compareReleaseTags(release.tag, dismissed) === 1 ? release : null;
 }

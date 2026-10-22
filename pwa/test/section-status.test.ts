@@ -1,10 +1,11 @@
 // Each Settings section's status line and tone (settings Task R2b1; spec §3.2's table; D-5503). Pure: a view in,
 // a line out. A read that has not landed is a skeleton, a failed one "could not be read", and neither is folded
 // into a status.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CollectLaneView, StallWatchView, UpdatesView } from '../../shared/api';
 import type { SettingsView } from '../src/screens/settings/SettingsDataProvider';
 import { sectionStatus, UNREAD_STATUS, type SectionStatus } from '../src/screens/settings/sectionStatus';
+import { dismissRelease, resetDismissalForTests } from '../src/fleet/releaseDismissal';
 import { boxToken, node, updatesView } from './settingsViewFixture';
 
 const noop = (): void => {};
@@ -36,6 +37,23 @@ const waiting = (): UpdatesView => updatesView({
 });
 
 describe('Updates', () => {
+  afterEach(() => { window.localStorage.clear(); resetDismissalForTests(); });
+
+  it("Settings › Updates' index line shows the waiting release while it is dismissed", () => {
+    // The dismissal is the fleet line's alone (D-6327, part b): Settings lists the release whatever was hidden.
+    window.localStorage.clear();
+    resetDismissalForTests();
+    const w = waiting();
+    const view = settings({ updates: { view: w, failure: null, seq: 1, reload: () => 0 } });
+    const before = of('updates', view);
+    dismissRelease('v0.0.10');
+    expect(window.localStorage.getItem('ccrc-release-dismissed'), 'the release IS dismissed on this device').toBe('v0.0.10');
+    const after = of('updates', view);
+    expect(text(after)).toBe('↑ v0.0.10 available · fleet runs v0.0.9');
+    expect(tone(after)).toBe('attention');
+    expect(after).toEqual(before);
+  });
+
   it('reads the version, the channel and auto-install when nothing waits, calm', () => {
     const s = of('updates', settings());
     expect(text(s)).toBe('v0.0.9 · Stable · Auto-install off');

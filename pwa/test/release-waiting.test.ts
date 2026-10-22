@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { bannerRelease, releaseWaitingDoorName, releaseWaitingWords, updateBannerText } from '../src/fleet/releaseWaiting';
+import { bannerRelease, releaseWaitingDoorName, releaseWaitingWords, shownRelease, updateBannerText } from '../src/fleet/releaseWaiting';
 
 const NOW = Date.now();
 const FLEET_ID = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
@@ -260,5 +260,30 @@ describe('releaseWaitingWords (D-6327)', () => {
     const newest = view({ nodes: [fleetNode({ desiredTag: 'v0.0.9' }), serverNode({ desiredTag: 'v0.0.10' })] });
     expect(releaseWaitingDoorName(newest)).toBe('Update v0.0.10 available, open Settings › Updates');
     expect(releaseWaitingDoorName(view({ catalogue: { lastOkAt: null, lastError: null } }))).toBeNull();
+  });
+});
+
+describe('shownRelease — the dismissal as a high-water mark (D-6327, part b)', () => {
+  const only = (tag: string): UpdatesView => view({ nodes: [fleetNode({ desiredTag: tag }), serverNode({ desiredTag: tag })] });
+
+  it('a dismissed tag hides; a newer one shows; the same and an older one stay hidden (v0.0.10 shows after v0.0.9)', () => {
+    // The same tag stays hidden.
+    expect(shownRelease(only('v0.0.9'), 'v0.0.9')).toBeNull();
+    // A newer waiting tag shows again; v0.0.10 is newer than v0.0.9 though it sorts before it as a string.
+    expect(shownRelease(only('v0.0.10'), 'v0.0.9')).toEqual({ tag: 'v0.0.10', channel: 'stable' });
+    expect(shownRelease(only('v0.0.9'), 'v0.0.8')).toEqual({ tag: 'v0.0.9', channel: 'stable' });
+    // An older waiting tag (a release withdrawn after a newer one was dismissed) stays hidden, as does the string-order
+    // trap: v0.0.9 is OLDER than the dismissed v0.0.10.
+    expect(shownRelease(only('v0.0.9'), 'v0.0.10')).toBeNull();
+    expect(shownRelease(only('v0.0.7'), 'v0.0.9')).toBeNull();
+  });
+
+  it('nothing dismissed shows the waiting tag; nothing waiting shows nothing', () => {
+    expect(shownRelease(view(), null)).toEqual(bannerRelease(view()));
+    expect(shownRelease(view(), null)).toEqual({ tag: 'v0.0.9', channel: 'stable' });
+    const none = view({ nodes: [fleetNode({ desiredTag: 'v0.0.7' }), serverNode({ desiredTag: 'v0.0.7' })] });
+    expect(shownRelease(none, null)).toBeNull();
+    expect(shownRelease(none, 'v0.0.1')).toBeNull();
+    expect(shownRelease(view({ catalogue: { lastOkAt: null, lastError: null } }), null)).toBeNull();
   });
 });
