@@ -357,7 +357,8 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
     expect(label.textContent).not.toMatch(/\(/);
     const tag = label.querySelector('.chip');
     expect(tag?.textContent).toBe('Recommended');
-    expect(tag?.previousSibling?.textContent, 'the tag comes after the label').toBe('Redis');
+    expect(tag?.previousSibling?.textContent, 'a space, then the tag, after the label').toBe(' ');
+    expect(tag?.previousSibling?.previousSibling?.textContent).toBe('Redis');
     // Only the option that carried it wears it.
     expect(document.querySelectorAll('.opt-label .chip')).toHaveLength(1);
     expect(dom()).not.toContain('(Recommended)');

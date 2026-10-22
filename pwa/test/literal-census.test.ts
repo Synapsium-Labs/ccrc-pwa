@@ -53,7 +53,7 @@
 //
 // Baseline: 4 passed.
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { parseTs, isSpecifier } from './literalWalker';
