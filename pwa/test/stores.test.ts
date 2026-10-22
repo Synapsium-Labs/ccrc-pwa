@@ -1212,8 +1212,8 @@ describe('session store connect()', () => {
   // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
   // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
   // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
-  // `disconnect()`, so the reset has to live in the open handler too: a drop and a backoff reconnect, driven here
-  // through the socket's own close event and its timer.
+  // `disconnect()`, so the reset lives in the socket's state (`onState`: down, connecting; every open follows one of
+  // them): a drop and a backoff reconnect, driven here through the socket's own close event and its timer.
   it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
     vi.useFakeTimers();
     const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
