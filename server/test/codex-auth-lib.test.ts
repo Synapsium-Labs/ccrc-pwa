@@ -6,7 +6,7 @@
 // `syntheticJwt`; no token-shaped literal is written here.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -64,7 +64,9 @@ const FOREIGN: Array<[string, unknown, string]> = [
 ];
 
 describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
-  it('reads a present backend credential: account id from the id token, expiry from the access token', async () => {
+  // What this case checks is the STORED account id and expiry (the planting writes both into the file, and the
+  // file's values win); the derivation from the tokens is the next case's.
+  it('reads a present backend credential: its stored account id and expiry', async () => {
     const home = mkTmp('codex-auth-present-');
     const dir = laneDir(home);
     const t = plantBackendCredential(dir, { accountId: 'acct-fixture-1', expiresIn: 3600 });
@@ -132,6 +134,87 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     expect(lstatKey(p)).toBe(before);
   });
 
+  it('a torn credential made whole while the read waits is re-read and reads present; READ_RETRIES is read when called', async () => {
+    const home = mkTmp('codex-auth-heal-');
+    const dir = laneDir(home);
+    const torn = '{"access_token": "x';
+    const p = writeCred(dir, torn);
+    // Two whole credentials, each renamed over the torn one (atomically: a rename is never seen half-done).
+    plantBackendCredential(join(home, 'whole-1'));
+    plantBackendCredential(join(home, 'whole-2'));
+    // The driver prints the `paths` line and starts the read at once; the heal lands 150 ms later, after the read's
+    // first attempt and well inside its first READ_RETRY_S (1 s) wait. A read with no re-read answers unreadable.
+    const run = async (whole: string, consts: object): Promise<Record<string, any>> => {
+      let healed: Promise<void> = Promise.resolve();
+      const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'paths' }, { op: 'read' }], consts }, {}, {
+        onLine: (line) => {
+          if (line.op === 'paths') {
+            healed = new Promise((resolve) => { setTimeout(() => { renameSync(credPath(join(home, whole)), p); resolve(); }, 150); });
+          }
+        },
+      });
+      await healed;
+      expect(r.status, r.stderr).toBe(0);
+      return driverLines(r.stdout)[1];
+    };
+    const healedRead = await run('whole-1', { READ_RETRY_S: 1.0 });
+    expect(healedRead.credential, 'the torn file was re-read after READ_RETRY_S').toBe('present');
+    writeCred(dir, torn);
+    const noRetry = await run('whole-2', { READ_RETRY_S: 1.0, READ_RETRIES: 0 });
+    expect(noRetry.credential, 'READ_RETRIES 0, set on the module, means no re-read').toBe('unreadable');
+  });
+
+  // Root opens a 0000 file, so the case cannot measure anything there.
+  it.skipIf(process.getuid?.() === 0)('a credential whose own mode refuses the open reads unreadable with its identity, naming chmod 600', async () => {
+    const home = mkTmp('codex-auth-eacces-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir, { mode: 0o000 });
+    const p = credPath(dir);
+    const before = lstatKey(p);
+    const line = await readAt(home, dir);
+    expect(line.credential, 'an EACCES is unreadable, never absent').toBe('unreadable');
+    expect(line.identity).toMatchObject({ ino: Number(lstatSync(p).ino), size: lstatSync(p).size });
+    expect(line.detail).toMatch(/EACCES.*chmod 600/);
+    expect(lstatKey(p)).toBe(before);
+    chmodSync(p, 0o600);
+  });
+
+  it('a non-finite expiry is no expiry, and a file or a claim nested past the parser\'s limit never raises', async () => {
+    const home = mkTmp('codex-auth-nonfinite-');
+    // Python's json.loads accepts NaN and 1e400 (inf); JSON.stringify cannot write either, so these are raw text.
+    const rawJwt = (payload: string): string =>
+      `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(payload).toString('base64url')}.sig-fixture`;
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const raw = (access: string, stored: string): string =>
+      `{"access_token": "${access}", "refresh_token": "rtok-fixture-nf", "expires_at": ${stored}}`;
+    writeCred(join(home, 'nan'), raw(rawJwt('{"exp": NaN}'), 'NaN'));
+    writeCred(join(home, 'inf'), raw(rawJwt('{"exp": 1e400}'), 'Infinity'));
+    writeCred(join(home, 'nan-stored'), raw(rawJwt(`{"exp": ${exp}}`), 'NaN'));
+    writeCred(join(home, 'deep-claims'), raw(rawJwt('['.repeat(100000)), 'null'));
+    writeCred(join(home, 'deep-file'), '['.repeat(200000));
+    const at = (name: string): string => join(home, name);
+    const r = await runAuthDriver(home, {
+      authDir: at('nan'),
+      ops: [
+        { op: 'read' }, { op: 'expired' },
+        { op: 'read', authDir: at('inf') }, { op: 'expired', authDir: at('inf') },
+        { op: 'read', authDir: at('nan-stored') },
+        { op: 'read', authDir: at('deep-claims') },
+        { op: 'read', authDir: at('deep-file') },
+      ],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const [nan, nanExpired, inf, infExpired, nanStored, deepClaims, deepFile] = driverLines(r.stdout);
+    expect(nan).toMatchObject({ credential: 'present', expires_at: null });
+    expect(nanExpired.result, 'a NaN expiry is expired, never fresh forever').toBe(true);
+    expect(inf).toMatchObject({ credential: 'present', expires_at: null });
+    expect(infExpired.result).toBe(true);
+    expect(nanStored, 'a stored NaN falls through to the exp claim').toMatchObject({ credential: 'present', expires_at: exp });
+    expect(deepClaims).toMatchObject({ credential: 'present', expires_at: null, account_id: null });
+    expect(deepFile.credential).toBe('unreadable');
+    expect(deepFile.detail).toMatch(/nested too deeply/);
+  });
+
   it.each(['fifo', 'symlink'])('a non-regular file at the credential path reads unreadable at once, without opening it (%s)', async (kind) => {
     const home = mkTmp('codex-auth-nonreg-');
     const dir = laneDir(home);
@@ -149,6 +232,38 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     const [line] = driverLines(r.stdout);
     expect(line.credential).toBe('unreadable');
     expect(line.detail).toMatch(/not a regular file/);
+  });
+
+  // The unsaved map is only ever filled by Task 2's writers; this case fills it directly, in a process of its own, to
+  // pin what `read` compares it against: an absent file (identity None) matches a record bound to None, and nothing
+  // else does.
+  it.each(['absent', 'fifo', 'symlink'])('an unsaved record bound to an absent file is served only while the file is absent (%s)', (kind) => {
+    const home = mkTmp('codex-auth-unsaved-');
+    const dir = laneDir(home);
+    mkdirSync(dir, { recursive: true });
+    if (kind === 'fifo') {
+      const mk = spawnSync('mkfifo', [credPath(dir)]);
+      expect(mk.status, String(mk.stderr)).toBe(0);
+    } else if (kind === 'symlink') {
+      const elsewhere = join(home, 'elsewhere');
+      plantBackendCredential(elsewhere);
+      symlinkSync(credPath(elsewhere), credPath(dir));
+    }
+    const code = [
+      'import importlib.util, json, os, sys',
+      'sys.dont_write_bytecode = True',
+      'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+      'mod = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(mod)',
+      'mod._UNSAVED[os.path.normpath(sys.argv[2])] = ({"access_token": "atok-fixture-u", "refresh_token": "rtok-fixture-u"}, None)',
+      'print(mod.read(sys.argv[2]).credential)',
+    ].join('\n');
+    const r = spawnSync(PY as string, ['-I', '-c', code, AUTH_LIB, dir], {
+      encoding: 'utf8', cwd: home, timeout: 5000,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe(kind === 'absent' ? 'present' : 'unreadable');
   });
 
   it.each(FOREIGN)('another family\'s file reads foreign-family (%s)', async (_name, content, family) => {
@@ -289,9 +404,7 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     const src = readFileSync(AUTH_LIB, 'utf8');
     expect(src).not.toMatch(/^\s*(?:from\s+litellm\b|import\s+(?:[\w.]+\s*,\s*)*litellm\b)/m);
   });
-});
 
-describe.skipIf(!PY)('the fixtures (codex-bridge Stage 1, Task 1)', () => {
   it('runAuthDriver names a loopback CCRC_CODEX_AUTH_BASE unless told otherwise, and kills a child past its bound', async () => {
     const home = mkTmp('codex-auth-driver-');
     const saved = process.env.CCRC_CODEX_AUTH_BASE;
@@ -312,7 +425,9 @@ describe.skipIf(!PY)('the fixtures (codex-bridge Stage 1, Task 1)', () => {
     expect(w.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
   });
+});
 
+describe.skipIf(!PY)('the fixtures (codex-bridge Stage 1, Task 1)', () => {
   it('fakeAuthServer answers each route from its queue, and rejects a refresh token it already redeemed', async () => {
     const srv = await fakeAuthServer({
       token: [{ status: 200, body: { access_token: 'first' } }, { status: 503, body: 'down' }],

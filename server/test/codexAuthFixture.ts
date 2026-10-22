@@ -188,14 +188,19 @@ const TMP_ROOT = (() => {
 
 /** Spawn `python3 -I driver.py <action>` ASYNCHRONOUSLY (a synchronous child deadlocks against a server on this
  *  event loop), in the fixture `home`, which is its cwd and its HOME. `action.lib` defaults to this tree's library.
- *  The env is built from scratch: PATH, then the caller's `env`, then HOME and PYTHONDONTWRITEBYTECODE; and
- *  CCRC_CODEX_AUTH_BASE is CLOSED_AUTH_BASE unless `env` names one. Past `timeoutMs` (default 10000) the child is
- *  killed with SIGKILL and `timedOut` is true. */
+ *  The env is built from scratch: PATH and TMPDIR (this run's temp parent, so a temp file the library makes stays
+ *  inside it), then the caller's `env`, then HOME; and CCRC_CODEX_AUTH_BASE is CLOSED_AUTH_BASE unless `env` names
+ *  one. No PYTHON* variable is set: `-I` implies `-E`, which ignores them all, so the driver's own
+ *  `sys.dont_write_bytecode = True` is what keeps a `.pyc` out of the tree. `onLine` is called with each JSON line as
+ *  the driver prints it (one per op, flushed), so a case can act between two ops. Past `timeoutMs` (default 10000)
+ *  the child is killed with SIGKILL and `timedOut` is true; `status` is then null (a child a signal ended has no
+ *  exit code). */
 export function runAuthDriver(
   home: string,
   action: object,
   env: Record<string, string> = {},
-  o: { timeoutMs?: number } = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  o: { timeoutMs?: number; onLine?: (line: Record<string, any>) => void } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   const resolved = path.resolve(home);
   if (!resolved.startsWith(TMP_ROOT + path.sep)) {
@@ -206,10 +211,10 @@ export function runAuthDriver(
   if (!py) throw new Error('runAuthDriver called with no python3 — guard with pythonOrSkip() first');
   const childEnv: Record<string, string> = {
     PATH: process.env.PATH ?? '/usr/bin:/bin',
+    TMPDIR: tmpdir(),
     CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
     ...env,
     HOME: resolved,
-    PYTHONDONTWRITEBYTECODE: '1',
   };
   const full = { lib: AUTH_LIB, ...action };
   return new Promise((resolve, reject) => {
@@ -220,7 +225,16 @@ export function runAuthDriver(
     let stderr = '';
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, o.timeoutMs ?? 10_000);
-    child.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
+    let seen = 0;
+    child.stdout.on('data', (c: Buffer) => {
+      stdout += c.toString();
+      if (!o.onLine) return;
+      for (let nl = stdout.indexOf('\n', seen); nl !== -1; nl = stdout.indexOf('\n', seen)) {
+        const text = stdout.slice(seen, nl);
+        seen = nl + 1;
+        if (text.trim() !== '') o.onLine(JSON.parse(text) as Record<string, unknown>);
+      }
+    });
     child.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
     child.once('error', (err) => { clearTimeout(timer); reject(err); });
     child.once('close', (code) => { clearTimeout(timer); resolve({ status: code, stdout, stderr, timedOut }); });

@@ -27,6 +27,7 @@ import base64
 import errno
 import hashlib
 import json
+import math
 import os
 import stat
 import time
@@ -213,7 +214,8 @@ def family_of(obj: object) -> Optional[str]:
 
 def claims_of(jwt: str) -> dict:
     """A JWT's payload claims, decoded WITHOUT a signature check (spec §2.6: an ID token received directly from the
-    token endpoint is trusted through TLS). `{}` on anything undecodable."""
+    token endpoint is trusted through TLS). `{}` on anything undecodable, a payload nested past the parser's recursion
+    limit included."""
     if not isinstance(jwt, str):
         return {}
     parts = jwt.split(".")
@@ -222,14 +224,20 @@ def claims_of(jwt: str) -> dict:
     try:
         payload = parts[1] + "=" * (-len(parts[1]) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8"))
-    except (ValueError, UnicodeError, TypeError):
+    except (ValueError, UnicodeError, TypeError, RecursionError):
         return {}
     return claims if isinstance(claims, dict) else {}
 
 
+def _finite_number(value: object) -> bool:
+    """A JSON number usable as an epoch: not a bool, and finite (Python's `json.loads` accepts NaN and Infinity, and
+    a NaN expiry compares false both ways, so it would read as never expired)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _exp_of(token: Optional[str]) -> Optional[int]:
     exp = claims_of(token).get("exp") if isinstance(token, str) else None
-    if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+    if _finite_number(exp):
         return int(exp)
     return None
 
@@ -290,6 +298,7 @@ def _reading_of(obj: object, identity: Optional[Identity], where: str) -> Readin
             family,
         )
     assert isinstance(obj, dict)
+    # An empty string counts as no token: a token of no characters can never authenticate a request.
     access = _nonempty_str(obj.get("access_token"))
     refresh = _nonempty_str(obj.get("refresh_token"))
     if access is None or refresh is None:
@@ -301,7 +310,7 @@ def _reading_of(obj: object, identity: Optional[Identity], where: str) -> Readin
             family,
         )
     stored = obj.get("expires_at")
-    if isinstance(stored, (int, float)) and not isinstance(stored, bool):
+    if _finite_number(stored):
         expires_at = stored  # type: Optional[float]
     else:
         expires_at = _exp_of(access)
@@ -312,22 +321,43 @@ def _reading_of(obj: object, identity: Optional[Identity], where: str) -> Readin
                    "the credential at " + where + " is present")
 
 
-def _current_identity(path: str) -> Optional[Identity]:
+# What `_current_identity` answers for a path it cannot measure as a regular file: a path that cannot be stat'ed for
+# any reason but ENOENT, or a non-regular file. It equals no identity and not `None`, so an unsaved record bound to
+# an ABSENT file (identity None) is never served over a FIFO, a symlink or an unreadable path.
+_UNMEASURED = object()
+
+
+def _current_identity(path: str) -> object:
+    """The identity of the regular file at `path`; `None` ONLY when nothing is there (ENOENT); `_UNMEASURED`
+    otherwise."""
     try:
         st = os.lstat(path)
-    except OSError:
-        return None
-    return _identity(st) if stat.S_ISREG(st.st_mode) else None
+    except OSError as e:
+        return None if e.errno == errno.ENOENT else _UNMEASURED
+    return _identity(st) if stat.S_ISREG(st.st_mode) else _UNMEASURED
+
+
+def _remedy(e: OSError, auth_dir: str, opened: bool) -> str:
+    """The remedy for an `OSError` the read met, chosen by its errno: a symlink the open refused (ELOOP), a file whose
+    own mode refuses the open (EACCES or EPERM, once `lstat` succeeded), or a directory on the way that cannot be
+    searched (anything else, an `lstat` EACCES or ENOTDIR included)."""
+    if e.errno == errno.ELOOP:
+        return "the path is a symlink; move it aside and sign the lane in"
+    if opened and e.errno in (errno.EACCES, errno.EPERM):
+        return "fix its mode with chmod 600"
+    return "check the permissions of " + auth_dir + " and the directories above it"
 
 
 def read(auth_dir: str) -> Reading:
     """Read the lane's credential. Never writes, never locks, never touches the network.
 
     Answers the unsaved record first while its identity still matches the file. A non-regular file at the path, a
-    symlink included, is `unreadable` by `lstat`, without being opened; the open is `O_RDONLY|O_NOFOLLOW`, which
-    guards a swap between the two. A JSON parse failure (a file LiteLLM is rewriting in place) is re-read up to
+    symlink included, is `unreadable` by `lstat`, without being opened. The open is `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`,
+    so a file swapped in between the two never blocks the read: a symlink fails the open (ELOOP), and a FIFO opens at
+    once and is refused by the `fstat` that follows. A JSON parse failure (a file LiteLLM is rewriting in place) is re-read up to
     READ_RETRIES times, READ_RETRY_S apart, and then answers `unreadable`, never `absent`. Any `OSError` other than
-    ENOENT is `unreadable`."""
+    ENOENT is `unreadable`, its remedy chosen by errno. A file nested past the parser's recursion limit is
+    `unreadable` at once, with no re-read."""
     p = paths_for(auth_dir)
     where = p.credential
     unsaved = _UNSAVED.get(os.path.normpath(auth_dir))
@@ -347,22 +377,23 @@ def read(auth_dir: str) -> Reading:
             if e.errno == errno.ENOENT:
                 return _empty("absent", "no credential at " + where + "; sign the lane in")
             return _empty("unreadable", "the credential at " + where + " cannot be read (" + errno.errorcode.get(
-                e.errno or 0, "error") + "); fix its mode with chmod 600")
+                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=False))
         if not stat.S_ISREG(st.st_mode):
             return _empty("unreadable", "the credential path " + where + " is not a regular file; move it aside "
                           "and sign the lane in", _identity(st))
         try:
-            fd = os.open(where, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+            fd = os.open(where, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+                         | getattr(os, "O_CLOEXEC", 0))
         except OSError as e:
             if e.errno == errno.ENOENT:
                 return _empty("absent", "no credential at " + where + "; sign the lane in")
             return _empty("unreadable", "the credential at " + where + " cannot be opened (" + errno.errorcode.get(
-                e.errno or 0, "error") + "); fix its mode with chmod 600")
+                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=True), _identity(st))
         try:
             fst = os.fstat(fd)
             if not stat.S_ISREG(fst.st_mode):
-                return _empty("unreadable", "the credential path " + where + " is not a regular file",
-                              _identity(fst))
+                return _empty("unreadable", "the credential path " + where + " was replaced by a non-regular file "
+                              "while it was read; move it aside and sign the lane in", _identity(fst))
             identity = _identity(fst)
             chunks = []
             while True:
@@ -377,6 +408,9 @@ def read(auth_dir: str) -> Reading:
             os.close(fd)
         try:
             obj = json.loads(b"".join(chunks).decode("utf-8"))
+        except RecursionError:  # nested past the parser's limit: no re-read can heal it
+            return _empty("unreadable", "the credential at " + where + " is nested too deeply to parse; move it "
+                          "aside and sign the lane in", identity)
         except ValueError:  # JSONDecodeError and UnicodeDecodeError alike
             if attempt < retries:
                 attempt += 1
