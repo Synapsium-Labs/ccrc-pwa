@@ -256,12 +256,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   case at worst, so under load it fails as vitest's `Test timed out in <n>ms`, or as a `worktree-remove-failed` whose
   detail says a walk did not finish within its bound or, under process churn, that
   `the processes of this box could not be measured (/proc, exit 3)`; any other red is a real break, so re-run the
-  file alone first. `ccd-ws-expire-consent-branch` runs the real ws-expire verb end to end on git fixtures, and since
-  path-identity W3 its ladder asks the shared working-directory probe (`_ws_cwd_users`) of the real `/proc`, so under
-  load a case can fail as an unmeasured verdict whose detail says
-  `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a full run's shard, on the case
-  that makes a branch between the in-lock recompute and the pin, and green alone); any other red is a real break, so
-  re-run the file alone first.
+  file alone first. `ccd-ws-expire-consent-branch` (path-identity W3) runs the real ws-expire verb end to end on git
+  fixtures. Its ladder walked the real `/proc` before W3 too; W3 moved that walk onto the shared `_ws_cwd_users`
+  (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
+  verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
+  full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
