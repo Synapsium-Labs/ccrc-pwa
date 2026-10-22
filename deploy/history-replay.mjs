@@ -39,7 +39,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ASSIGNMENT_ARMS, FACT_KINDS, GATE_CODE_FILES, PILOT_SUBSTREAM, admitFact, collapseWs, familyKey, randInt, substream } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, OPUS_MODEL_RE, PILOT_SUBSTREAM, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, admitFact, collapseWs, familyKey, parseQuestionLine, randInt, substream } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -634,7 +634,7 @@ function sjResultText(content) {
 /** @typedef {{ id: string, name: string, input: unknown, result: string|null, isError: boolean|null }} ToolPair */
 /** @typedef {{ init: StreamInit|null, usage: StreamUsage, usageSource: 'result'|'assistant'|'none', toolPairs: ToolPair[],
  *    permissionDenials: unknown[]|null, result: { subtype: string|null, isError: boolean|null, numTurns: number|null,
- *    text: string|null }|null, assistantMessages: number, malformedLines: number }} StreamFacts */
+ *    text: string|null }|null, assistantMessages: number, malformedLines: number, firstCallUsage: StreamUsage|null }} StreamFacts */
 
 /** What one spawn's stream-json says (W2-D51). Never throws.
  *  @param {string} text the whole stream
@@ -710,9 +710,14 @@ export function readStreamJson(text) {
       };
     }
   }
+  // W2-5a Task 6: the FIRST call's usage, which the fidelity pilot's replay side reads (spec §10.2: "first-call input
+  // tokens"). It is the first message the stream showed, by first-seen message id, with the last usage its events
+  // carried. When that message carried none it is null, never a later message's usage.
+  const firstKey = messages.keys().next();
+  const firstCallUsage = firstKey.done ? null : messages.get(firstKey.value);
   return {
     init, usage, usageSource, toolPairs: [...pairs.values()], permissionDenials, result,
-    assistantMessages: messages.size, malformedLines,
+    assistantMessages: messages.size, malformedLines, firstCallUsage,
   };
 }
 
@@ -2854,6 +2859,7 @@ export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
   'unanswerable', 'unanswerable-untimed',
+  'writer-input-over-cap',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -4015,6 +4021,559 @@ export async function sampleFidelityBoundaries({ families, rng, n, admitBoundary
     }
   }
   return { boundaries: picked, drops };
+}
+
+// ── W2-5a Task 6: the question writer, the frozen lists, and the fidelity pilot's payloads and arithmetic ─────────────
+// (W2-D72, W2-D73, W2-D64, W2-D54, W2-D55, W2-D56; D-5779, D-5776)
+// The writer (W2-D72) is one spawn per candidate, in writer mode (`--tools ""`), through W2-4's contract and nothing else.
+// openWriter refuses a writer model that is not an exact Opus id, admits the account from the roster (W2-D52: a gateway
+// account is refused here, before any spawn), builds the limits and budget gate (W2-D55) and runs W2-D56's preflight
+// against the values it is handed (step 0a's output before part 1, part 1's after). Every ask runs that preflight again
+// and is a batch of one under the gate, so the soft budget overshoots by at most one run. The input is canonical
+// {v: 1, kind, fact, excerpt}. The excerpt is built in order: the raw leaf redacted WHOLE (W2-D54); then windowed to
+// WRITER_LEAF_WINDOW code points centred on the raw fact's first occurrence; then, for a tool_result, one line for its
+// paired tool_use, redacted whole and capped at WRITER_PAIR_CAP. Its UTF-8 bytes stay within WRITER_EXCERPT_MAX_BYTES,
+// the leaf window shrinking around the fact until they do. Under 'leaf-span' the base is leaf N's whole span, each leaf
+// redacted whole, within the same budget (D-5779 is void then). The reply goes through the gate's parseQuestionLine and
+// the question through the gate's admitFact; `writer-malformed` and `writer-leak` are never retried. Each ask's input
+// bytes are pinned beside its stream, so a resume never builds on a run made from other input.
+// The frozen lists (W2-D73) are exactly canonicalJson's bytes, with no trailing newline and entries sorted by qid. freeze
+// writes the quiz's and pilot-source the pilot's, through writeFrozenList, which never replaces a list it finds with a
+// different one. Every consumer loads a list through loadFrozenList, which checks the sha before it parses a byte.
+// The fidelity pilot (spec §10.2) has three stdins per boundary through Task 1's composer: the payload, the
+// empty-question run (which carries ANSWER_PROTOCOL as every composed stdin does, W2-D64, D-5776) and the user-text run.
+// The original side is read from the store's rows, and the arithmetic nets each side of its own fixed overhead. The
+// spawns, the tolerance and the verdict are W2-5b's. Nothing here reads the environment, opens a store or names a switch.
+
+/** The writer's leaf window, in code points (W2-D72). */
+export const WRITER_LEAF_WINDOW = 4000;
+/** The paired tool_use line's cap, in code points (W2-D72). */
+export const WRITER_PAIR_CAP = 2000;
+/** The excerpt's whole budget, in UTF-8 bytes: W2-D72's "8 KiB in all". */
+export const WRITER_EXCERPT_MAX_BYTES = 8192;
+/** Where a writer run and a frozen list belong: `<out>/quiz/…` and `<out>/pilot/…` (W2-D72, W2-D73). */
+export const WRITER_SECTIONS = Object.freeze(['quiz', 'pilot']);
+/** Each section's frozen-list kind (W2-D73). */
+export const FROZEN_LIST_KINDS = Object.freeze({ quiz: 'ccrc-history-w2-quiz', pilot: 'ccrc-history-w2-pilot' });
+/** A frozen list's file name under its section. */
+export const FROZEN_LIST_FILE = 'frozen.json';
+/** A frozen entry's keys, sorted as canonicalJson writes them (W2-D73). */
+export const FROZEN_ENTRY_KEYS = Object.freeze(['boundary_uuid', 'ccrc_id', 'fact', 'fact_raw', 'generation', 'kind', 'qid',
+  'question', 'repo_roots', 'source_entry_uuid', 'store_id']);
+/** The three fidelity runs per boundary, by stdin (spec §10.2's fidelity pilot; the spawns are W2-5b's). */
+export const FIDELITY_RUNS = Object.freeze(['payload', 'empty', 'user-text']);
+/** Task 1's composer over no summary and no kept member: the empty-question run's and the user-text run's parts. */
+export const FIDELITY_EMPTY_PARTS = Object.freeze({ summary: '', kept: Object.freeze([]) });
+
+/** @typedef {{ text: string, rawLen: number }} StoredField */
+/** @typedef {{ store_id: string, ccrc_id: string, generation: string, boundary_uuid: string, kind: string, fact: string,
+ *    fact_raw: string, source_entry_uuid: string, repo_roots: string[], leaf: StoredField,
+ *    pair: { name: string, input: StoredField } | null, span: StoredField[] }} WriterItem */
+/** @typedef {{ qid: string, store_id: string, ccrc_id: string, generation: string, boundary_uuid: string, kind: string,
+ *    fact: string, fact_raw: string, question: string, source_entry_uuid: string, repo_roots: string[] }} FrozenEntry */
+/** @typedef {{ code: number|null, signal: string|null, skipped: boolean, tokens: number, result: boolean }} WriterRun */
+/** @typedef {{ state: 'question', qid: string, entry: FrozenEntry, run: WriterRun }
+ *    | { state: 'discard', qid: string, why: 'over-decode-cap' | 'writer-input-over-cap' }
+ *    | { state: 'discard', qid: string, why: 'writer-malformed' | 'writer-leak', run: WriterRun }} WriterAnswer */
+
+/** `length` code points of `cps` from `start`, joined. */
+const cpSlice = (cps, start, length) => cps.slice(start, start + length).join('');
+
+/** The excerpt around the raw fact (W2-D72). Pure. The window holds `firstWindow` code points (never fewer than the fact
+ *  has), centred on the fact's FIRST occurrence and clamped to the text's ends, then `pairLine` on its own line. While
+ *  the excerpt's UTF-8 is over WRITER_EXCERPT_MAX_BYTES the window shrinks around the same centre, never below the fact;
+ *  a fact that cannot fit is `writer-input-over-cap`. A fact absent from `base` is a TypeError: W2-D67 discards such a
+ *  candidate before the writer.
+ *  @param {{ base: string, factRaw: string, firstWindow: number, pairLine: string | null }} p
+ *  @returns {{ state: 'text', excerpt: string } | { state: 'discard', why: 'writer-input-over-cap' }} */
+export function windowExcerpt({ base, factRaw, firstWindow, pairLine }) {
+  const at = typeof factRaw === 'string' && factRaw !== '' ? base.indexOf(factRaw) : -1;
+  if (at === -1) throw new TypeError('windowExcerpt: the raw fact does not occur in the redacted text it was mined from (W2-D67 discards that candidate first)');
+  const cps = Array.from(base);
+  const p = Array.from(base.slice(0, at)).length;
+  const L = Array.from(factRaw).length;
+  const tail = pairLine === null ? '' : `\n${pairLine}`;
+  let w = Math.min(cps.length, Math.max(firstWindow, L));
+  for (;;) {
+    const start = Math.min(Math.max(0, p + Math.floor(L / 2) - Math.floor(w / 2)), cps.length - w);
+    const excerpt = cpSlice(cps, start, w) + tail;
+    const over = Buffer.byteLength(excerpt, 'utf8') - WRITER_EXCERPT_MAX_BYTES;
+    if (over <= 0) return { state: 'text', excerpt };
+    if (w === L) return { state: 'discard', why: 'writer-input-over-cap' };
+    w = Math.max(L, w - Math.ceil(over / 4));   // a code point is at most 4 UTF-8 bytes: every step makes progress and keeps the fact
+  }
+}
+
+/** The writer's input for one candidate (W2-D72), every field redacted whole BEFORE any window (W2-D54). Pure.
+ *  @param {WriterItem} item  @param {string} writerInput 'excerpt' or 'leaf-span' (WRITER_INPUTS)
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx the run's pair index
+ *  @returns {{ state: 'input', input: { v: 1, kind: string, fact: string, excerpt: string } }
+ *    | { state: 'discard', why: 'over-decode-cap' | 'writer-input-over-cap' }} */
+export function writerInputOf(item, writerInput, idx) {
+  if (!WRITER_INPUTS.includes(writerInput)) throw new TypeError(`writerInputOf: writer_input ${JSON.stringify(writerInput)} is not one of ${WRITER_INPUTS.join(', ')}`);
+  if (!FACT_KINDS.includes(item.kind)) throw new TypeError(`writerInputOf: kind ${JSON.stringify(item.kind)} is not one of ${FACT_KINDS.join(', ')}`);
+  let base;
+  let firstWindow;
+  let pairLine = null;
+  if (writerInput === 'excerpt') {
+    const leaf = redactForSpawn(item.leaf, idx);
+    if (leaf.state === 'discard') return { state: 'discard', why: leaf.why };
+    base = leaf.text;
+    firstWindow = WRITER_LEAF_WINDOW;
+    if (item.pair !== null) {
+      const input = redactForSpawn(item.pair.input, idx);
+      if (input.state === 'discard') return { state: 'discard', why: input.why };
+      pairLine = cpSlice(Array.from(renderToolUseLine(item.pair.name, input.text)), 0, WRITER_PAIR_CAP);
+    }
+  } else {
+    const texts = [];
+    for (const f of item.span) {
+      const r = redactForSpawn(f, idx);
+      if (r.state === 'discard') return { state: 'discard', why: r.why };
+      texts.push(r.text);
+    }
+    base = texts.join('\n');
+    firstWindow = Number.MAX_SAFE_INTEGER;
+  }
+  const w = windowExcerpt({ base, factRaw: item.fact_raw, firstWindow, pairLine });
+  if (w.state === 'discard') return w;
+  return { state: 'input', input: { v: 1, kind: item.kind, fact: item.fact, excerpt: w.excerpt } };
+}
+
+/** The writer's stdin: its prompt, a blank line, the canonical input, one newline. Input is never an argument. */
+export function writerStdin(input) {
+  return `${WRITER_PROMPT}\n\n${canonicalJson(input)}\n`;
+}
+
+/** W2-D73's qid: the first 16 hex of the sha256 of the canonical six-tuple. A missing field is a TypeError.
+ *  @param {{ store_id: string, ccrc_id: string, generation: string, boundary_uuid: string, kind: string, fact: string }} e
+ *  @returns {string} */
+export function qidOf({ store_id, ccrc_id, generation, boundary_uuid, kind, fact }) {
+  for (const [k, v] of Object.entries({ store_id, ccrc_id, generation, boundary_uuid, fact })) {
+    if (typeof v !== 'string' || v === '') throw new TypeError(`qidOf: ${k} is a non-empty string, not ${JSON.stringify(v)}`);
+  }
+  if (!FACT_KINDS.includes(kind)) throw new TypeError(`qidOf: kind ${JSON.stringify(kind)} is not one of ${FACT_KINDS.join(', ')}`);
+  return sha256Hex(canonicalJson([store_id, ccrc_id, generation, boundary_uuid, kind, fact])).slice(0, 16);
+}
+
+/** Pin one ask's input bytes beside its stream: written when absent, compared when present. Different bytes refuse
+ *  `out-refused` (a resume never builds on a question written from other input); a path that is not a regular file
+ *  refuses as every read under --out does (D-5986). */
+function pinWriterInput(out, rel, text) {
+  const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
+  if (read.state === 'absent') { writePlain(out, rel, text); return; }
+  if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);
+  if (read.bytes.toString('utf8') !== text) refuse('out-refused', `writer-input-changed ${rel}`);
+}
+
+/** W2-D72, W2-D25: the writer is the exact Opus id, never an alias, refused `args-invalid` before any spawn. Before
+ *  part 1 no validator has read it yet. One function, so the sourcing subcommands can ask it before prepareOut makes
+ *  --out, and a refused model leaves no --out (R10); openWriter asks it again, for every other caller.
+ *  @param {unknown} model */
+function refuseWriterModel(model) {
+  if (typeof model !== 'string' || !EXACT_MODEL_ID_RE.test(model) || !OPUS_MODEL_RE.test(model)) {
+    refuse('args-invalid', `writer-model ${JSON.stringify(model)} is not an exact Opus model id`);
+  }
+}
+
+/** Open the question writer (W2-D72) on a claimed --out. In order, before any spawn: the model (an exact Opus id, else
+ *  `args-invalid`, refuseWriterModel), the roster and the account (W2-D52: `roster-invalid`, `account-refused`), the gate (W2-D55), then
+ *  W2-D56's preflight: the wrapper's sha (`wrapper-unmeasured`), the gate, `--version` (a spawn that spends nothing),
+ *  then `preflight` against `expected` (`claude-version-moved`, `tree-moved`, `wrapper-moved`, `code-changed` and the
+ *  four unmeasured words). Each ask runs the preflight again, pins its input, and runs ONE writer-mode job through
+ *  runBatch under the gate.
+ *  @param {{ home: string, accountId: string, model: string, settingsMode: string, writerInput: string, claim: object,
+ *    budget: number, limits: object, expected: object, allowCodeChange?: boolean, lang: string | undefined,
+ *    idx: import('../ccd/history/lib.mjs').PairIndex }} o
+ *  @returns {Promise<Readonly<{ launch: object, stamps: () => string[],
+ *    ask: (section: string, item: WriterItem) => Promise<WriterAnswer> }>>} */
+export async function openWriter(o) {
+  if (o === null || typeof o !== 'object' || !Object.hasOwn(o, 'lang')) {
+    throw new TypeError("openWriter: carries lang, the caller's LANG from main's env (undefined when unset)");
+  }
+  const { home, accountId, model, settingsMode, writerInput, claim, budget, limits, expected, lang, idx } = o;
+  if (!WRITER_INPUTS.includes(writerInput)) throw new TypeError(`openWriter: writer_input ${JSON.stringify(writerInput)} is not one of ${WRITER_INPUTS.join(', ')}`);
+  if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`openWriter: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
+  const { out } = requireClaim('openWriter', { claim }, []);
+  refuseWriterModel(model);
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, accountId, home);   // RP3-writer: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits });
+  const stamps = new Set();
+  const preflightNow = async () => {
+    const wrapperSha256 = wrapperSha(launch);   // wrapper-unmeasured before any spawn
+    gate();
+    const version = await measureClaudeVersion(launch, out, lang);
+    refuseIfStopping();
+    const verdict = preflight(expected, { version, stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() },
+      { allowCodeChange: o.allowCodeChange === true });
+    if (!verdict.ok) refuse(verdict.word, verdict.detail);
+    for (const s of verdict.stamps) stamps.add(s);
+  };
+  await preflightNow();
+  /** @param {string} section  @param {WriterItem} item  @returns {Promise<WriterAnswer>} */
+  const ask = async (section, item) => {
+    if (!WRITER_SECTIONS.includes(section)) throw new TypeError(`ask: section ${JSON.stringify(section)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+    const qid = qidOf(item);
+    const made = writerInputOf(item, writerInput, idx);
+    if (made.state === 'discard') return { state: 'discard', qid, why: made.why };
+    await preflightNow();
+    const dir = `${section}/writer`;
+    ensurePlainDir(out, dir);
+    pinWriterInput(out, `${dir}/${qid}.input.json`, `${canonicalJson(made.input)}\n`);
+    const job = { launch, mode: 'writer', model, settingsMode, stdin: writerStdin(made.input), out, name: `${dir}/${qid}`, lang };
+    const [done] = await runBatch([job], { concurrency: 1, gate, claim });
+    const run = { code: done.code, signal: done.signal, skipped: done.skipped, tokens: done.tokens, result: done.facts.result !== null };
+    const parsed = parseQuestionLine(done.facts.result?.text ?? '');
+    if (!parsed.ok) return { state: 'discard', qid, why: parsed.word, run };
+    const leak = admitFact(item.kind, item.fact, '', parsed.question, { repoRoots: item.repo_roots });
+    if (!leak.admitted) return { state: 'discard', qid, why: 'writer-leak', run };
+    const entry = {
+      qid, store_id: item.store_id, ccrc_id: item.ccrc_id, generation: item.generation, boundary_uuid: item.boundary_uuid,
+      kind: item.kind, fact: item.fact, fact_raw: item.fact_raw, question: parsed.question,
+      source_entry_uuid: item.source_entry_uuid, repo_roots: [...item.repo_roots],
+    };
+    return { state: 'question', qid, entry, run };
+  };
+  return Object.freeze({ launch, stamps: () => [...stamps].sort(), ask });
+}
+
+/** A frozen list's exact text (W2-D73): canonicalJson of the head and the entries sorted by qid, with no trailing
+ *  newline. The prompt and protocol shas are the texts this driver sends. Pure. A wrong qid, a repeated one, an unknown
+ *  kind, a key outside FROZEN_ENTRY_KEYS, or a writer model that is not an exact Opus id is a TypeError.
+ *  @param {string} section 'quiz' or 'pilot'
+ *  @param {{ writer_model: string, labeller: object }} head
+ *  @param {FrozenEntry[]} entries
+ *  @returns {string} */
+export function frozenListText(section, head, entries) {
+  if (!WRITER_SECTIONS.includes(section)) throw new TypeError(`frozenListText: section ${JSON.stringify(section)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  const { writer_model, labeller } = head ?? {};
+  if (typeof writer_model !== 'string' || !EXACT_MODEL_ID_RE.test(writer_model) || !OPUS_MODEL_RE.test(writer_model)) {
+    throw new TypeError(`frozenListText: writer_model ${JSON.stringify(writer_model)} is not an exact Opus model id`);
+  }
+  if (labeller === null || typeof labeller !== 'object' || Array.isArray(labeller)) throw new TypeError('frozenListText: labeller is an object');
+  if (!Array.isArray(entries)) throw new TypeError('frozenListText: entries is an array');
+  const seen = new Set();
+  for (const e of entries) {
+    const keys = e !== null && typeof e === 'object' && !Array.isArray(e) ? Object.keys(e).sort().join(',') : '';
+    if (keys !== FROZEN_ENTRY_KEYS.join(',')) throw new TypeError(`frozenListText: an entry's keys are ${keys}, not ${FROZEN_ENTRY_KEYS.join(',')}`);
+    for (const k of ['fact_raw', 'question', 'source_entry_uuid']) {
+      if (typeof e[k] !== 'string' || e[k] === '') throw new TypeError(`frozenListText: entry ${String(e.qid)} ${k} is a non-empty string`);
+    }
+    if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string' && r !== '')) {
+      throw new TypeError(`frozenListText: entry ${String(e.qid)} repo_roots is a list of non-empty strings`);
+    }
+    if (e.qid !== qidOf(e)) throw new TypeError(`frozenListText: entry ${String(e.qid)} is not qidOf its own six fields`);
+    if (seen.has(e.qid)) throw new TypeError(`frozenListText: qid ${e.qid} is repeated`);
+    seen.add(e.qid);
+  }
+  const sorted = [...entries].sort((a, b) => (a.qid < b.qid ? -1 : a.qid > b.qid ? 1 : 0));
+  return canonicalJson({
+    kind: FROZEN_LIST_KINDS[section], version: 1, writer_model, writer_prompt_sha256: WRITER_PROMPT_SHA256,
+    answer_protocol_sha256: ANSWER_PROTOCOL_SHA256, labeller, entries: sorted });
+}
+
+/** Write `<out>/<section>/frozen.json` (0600, tmp then rename, D-5986) and answer the sha256 of the bytes on disk. The
+ *  same bytes again are a no-op with the same sha; a different list over one already there refuses `out-refused`: a
+ *  frozen list is never replaced, and the remedy is a fresh --out.
+ *  @param {string} out  @param {string} section  @param {string} text frozenListText's answer  @returns {string} */
+export function writeFrozenList(out, section, text) {
+  if (!WRITER_SECTIONS.includes(section)) throw new TypeError(`writeFrozenList: section ${JSON.stringify(section)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  if (typeof text !== 'string' || text === '') throw new TypeError('writeFrozenList: text is frozenListText\'s answer');
+  ensurePlainDir(out, section);
+  const rel = `${section}/${FROZEN_LIST_FILE}`;
+  const have = readPlain(path.join(out, rel), OUT_JSON_CAP);
+  if (have.state === 'bad') refuse('out-refused', `${rel} ${badWord(have)}`);
+  if (have.state === 'absent') writePlain(out, rel, text);
+  else if (have.bytes.toString('utf8') !== text) refuse('out-refused', `${rel} holds another frozen list; a frozen list is never replaced (use a fresh --out)`);
+  return shaOfPlain(out, rel);
+}
+
+/** A frozen list as a consumer reads it (W2-D73): its bytes' sha256 checked BEFORE they are parsed (`quiz-sha-mismatch`),
+ *  then the bytes must be exactly the canonical list their own fields give (`input-invalid`). Read through readPlain
+ *  (D-5986), so a FIFO or a link refuses and is never waited on or followed.
+ *  @param {string} p  @param {string} sha256  @param {string} section  @returns {any} */
+export function loadFrozenList(p, sha256, section) {
+  if (!WRITER_SECTIONS.includes(section)) throw new TypeError(`loadFrozenList: section ${JSON.stringify(section)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  if (typeof sha256 !== 'string' || !SHA256_RE.test(sha256)) refuse('args-invalid', 'a frozen list sha256 is 64 lowercase hex');
+  const read = readPlain(path.resolve(p), OUT_JSON_CAP);
+  if (read.state === 'absent') refuse('input-invalid', 'frozen list unreadable ENOENT');
+  if (read.state === 'bad') refuse('input-invalid', `frozen list ${read.why === 'unreadable' ? `unreadable ${read.code}` : read.why}`);
+  const got = sha256Hex(read.bytes);
+  if (got !== sha256) refuse('quiz-sha-mismatch', `${section} frozen list: expected ${sha256}, measured ${got}`);
+  const text = read.bytes.toString('utf8');
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    refuse('input-invalid', 'frozen list not-json');
+  }
+  let again;
+  try {
+    again = frozenListText(section, { writer_model: doc?.writer_model, labeller: doc?.labeller }, doc?.entries);
+  } catch (e) {
+    if (e instanceof TypeError) refuse('input-invalid', `frozen list shape: ${e.message}`);
+    throw e;
+  }
+  if (again !== text) refuse('input-invalid', 'frozen list is not the canonical list its own fields give');
+  return doc;
+}
+
+/** A stored assistant row's first-call input (spec §10.2: input + cache_creation + cache_read), or null when its usage
+ *  cannot be read: an absent `input_tokens`, or any count that is not a non-negative safe integer. An absent cache count
+ *  is 0. Never 0 for an unreadable row. */
+export function usageInputOf(body) {
+  const u = body?.message?.usage;
+  if (u === null || typeof u !== 'object' || Array.isArray(u)) return null;
+  const count = (v, required) => (v === undefined && !required ? 0 : Number.isSafeInteger(v) && v >= 0 ? v : null);
+  const parts = [count(u.input_tokens, true), count(u.cache_creation_input_tokens, false), count(u.cache_read_input_tokens, false)];
+  return parts.includes(null) ? null : parts.reduce((a, b) => a + b, 0);
+}
+
+/** A stored user row's text: a string content as it is, a block list as its text blocks joined by newlines, null when it
+ *  holds none (the stream reader's own rule, sjResultText). */
+export function userTextOf(body) {
+  return sjResultText(body?.message?.content);
+}
+
+/** The fidelity pilot's original side, from the store's rows (each `{type, provenance, model, body, rawLen}`, in file
+ *  order): the epoch's first call (the first assistant row whose model is not synthetic), the operator rows before it
+ *  (their text is that call's user text), and the first non-synthetic assistant row after the summary row of N's holding
+ *  copy. Every missing piece answers `unmeasured` with its own reason. Pure. */
+export function originalSideOf({ epochRows, copyRows, summaryIndex }) {
+  const isCall = (r) => r.type === 'assistant' && typeof r.model === 'string' && !isSyntheticModel(r.model);
+  const firstAt = epochRows.findIndex(isCall);
+  if (firstAt === -1) return { state: 'unmeasured', why: 'epoch-first-call-absent' };
+  const firstInput = usageInputOf(epochRows[firstAt].body);
+  if (firstInput === null) return { state: 'unmeasured', why: 'epoch-first-usage-absent' };
+  const userRows = [];
+  for (const r of epochRows.slice(0, firstAt)) {
+    if (r.provenance !== 'operator') continue;
+    const text = userTextOf(r.body);
+    if (text !== null && text !== '') userRows.push({ text, rawLen: r.rawLen });
+  }
+  if (userRows.length === 0) return { state: 'unmeasured', why: 'epoch-first-user-text-absent' };
+  const post = copyRows.slice(summaryIndex + 1).find(isCall);
+  if (post === undefined) return { state: 'unmeasured', why: 'post-boundary-call-absent' };
+  const postInput = usageInputOf(post.body);
+  if (postInput === null) return { state: 'unmeasured', why: 'post-boundary-usage-absent' };
+  return { state: 'measured', firstInput, postInput, userRows };
+}
+
+/** The fidelity pilot's three stdins for one boundary, all through Task 1's composer: the reconstructed payload with an
+ *  empty question, which is reconstructPayload's own text, so its summary and kept members come redacted from the one
+ *  reconstruction and are never handed in as raw parts (W2-D54, W2-D75); the empty-question run (no summary, no kept
+ *  member); and the user-text run (the epoch's first-call operator text, redacted whole over the run's pair index, as
+ *  the question). Every one carries ANSWER_PROTOCOL as item 3 (W2-D64). A user row over the decode cap is discarded
+ *  (W2-D54), and a boundary reconstruction discards answers its own RECON_DISCARDS word.
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId  @param {Array<{ text: string, rawLen: number }>} userRows */
+export function fidelityStdins(rs, boundaryEntryId, userRows) {
+  if (!Array.isArray(userRows) || userRows.length === 0) throw new TypeError("fidelityStdins: the user-text run needs originalSideOf's userRows");
+  const texts = [];
+  for (const r of userRows) {
+    const t = redactForSpawn(r, rs.idx);
+    if (t.state === 'discard') return { state: 'discard', why: t.why };
+    texts.push(t.text);
+  }
+  const p = reconstructPayload(rs, boundaryEntryId, '');
+  if (p.state !== 'payload') return p;
+  return {
+    state: 'stdins',
+    stdins: Object.freeze({
+      payload: p.text,
+      empty: composePayload(FIDELITY_EMPTY_PARTS, ''),
+      'user-text': composePayload(FIDELITY_EMPTY_PARTS, texts.join('\n')),
+    }),
+  };
+}
+
+/** The fidelity figures for one boundary (spec §10.2): each side net of its own fixed overhead. The replay side's
+ *  overhead is the empty-question run's first-call input; the user text's tokens are the user-text run's less that; the
+ *  original's overhead is its epoch's first-call input less those tokens. `runs` are the three runs' StreamFacts. Any
+ *  piece that is missing or not positive answers `unmeasured` with its own reason, never a 0. Pure.
+ *  @param {{ original: { state: string, why?: string, firstInput?: number, postInput?: number },
+ *    runs: Record<string, StreamFacts> }} p */
+export function fidelityFigures({ original, runs }) {
+  if (original.state !== 'measured') return { state: 'unmeasured', why: original.why };
+  const first = {};
+  for (const k of FIDELITY_RUNS) {
+    const u = runs[k]?.firstCallUsage;
+    if (u === null || u === undefined) return { state: 'unmeasured', why: `${k}-first-call-absent` };
+    first[k] = u.input + u.cacheCreation + u.cacheRead;
+  }
+  const userTextTokens = first['user-text'] - first.empty;
+  if (userTextTokens <= 0) return { state: 'unmeasured', why: 'user-text-nonpositive' };
+  const originalOverhead = original.firstInput - userTextTokens;
+  if (originalOverhead < 0) return { state: 'unmeasured', why: 'original-overhead-negative' };
+  const originalPayload = original.postInput - originalOverhead;
+  if (originalPayload <= 0) return { state: 'unmeasured', why: 'original-payload-nonpositive' };
+  const replayPayload = first.payload - first.empty;
+  if (replayPayload <= 0) return { state: 'unmeasured', why: 'replay-payload-nonpositive' };
+  return {
+    state: 'measured', original_payload: originalPayload, replay_payload: replayPayload,
+    original_overhead: originalOverhead, replay_overhead: first.empty, user_text_tokens: userTextTokens,
+  };
+}
+
+// ── sourceQuiz: Tasks 1 to 6 composed, in W2-D71's lazy order ───────────────────────────────────────────────────
+/** The epoch reads sourceQuiz adds: a transcript's session uuid, and N's epoch's cwd and cwd_real (mining's paths). */
+const SOURCE_STMTS = new WeakMap();
+function sourceStmts(db) {
+  let s = SOURCE_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    transcript: db.prepare('SELECT cc_session_uuid FROM transcripts WHERE transcript_pk = ?'),
+    epoch: db.prepare('SELECT cwd, cwd_real FROM epochs WHERE session_pk = ? AND seq = ?'),
+  };
+  SOURCE_STMTS.set(db, s);
+  return s;
+}
+
+/** One node's sourcing run (W2-D71), Tasks 1 to 6 composed over the run's one open store (`rs`, R3):
+ *  - the store's admitted boundaries (Task 3), grouped into this node's families; no family list is taken in either
+ *    mode (R10);
+ *  - quiz mode: every local admitted family, less every pilot family and every control-held (store_id, ccrc_id) at any
+ *    generation (quizPopulation, W2-D71, W2-D77), never the census's active list, which feeds the assignment only
+ *    (W2-D73; the headless arm resolves a family from its epochs, W2-D40). The families come in quizFamilyOrderKey
+ *    order (the 'quiz-sample' substream seed hashed with familyKey, W2-D71 as amended 2026-10-22) and each family's
+ *    candidates from its own stream (familyRng), so a question's `rank`, [order key, candidate rank], is the walk over
+ *    every node's families and freeze merges the nodes in that order (R4, R10);
+ *  - pilot mode: the walk is this node's families on the pilot's one stream, the fidelity boundaries first (at most
+ *    one per family) and the usage questions after (W2-D71);
+ *  - a family's candidates are mined from each admitted boundary's leaf span (Tasks 1, 2), deduplicated, and given
+ *    their qid as `id` (W2-D73, R4);
+ *  - the stages, in QUIZ_STAGES order: redaction and the producer (Task 2), admission against B (Task 4, built once per
+ *    boundary, lazily), answerability (Task 5), the writer (`writer.ask`, this task's handle, R6) and the question's
+ *    own admission;
+ *  - per admitted question, the same-millisecond count over the CLI's family scope (Task 5), reported, never gating;
+ *  - the baseline record under `<out>/<mode>/baseline.json`, every B built or discarded (Task 4).
+ *  `top` is Baseline B's test seam; no subcommand passes it.
+ *  @param {{ mode: 'quiz' | 'pilot', rs: ReplayStore, home: string, out: string,
+ *    writer: { ask: (section: string, item: object) => Promise<WriterAnswer> }, seedHex: string,
+ *    exclude: { pilotFamilies: Array<{store_id: string, ccrc_id: string, generation: string}>, assignment: Array<object> },
+ *    plan: { target?: number, n_fidelity?: number, n_usage?: number, caps: { family: number, boundary: number, kind_per_family: number } },
+ *    configDirs: readonly string[], top?: string }} input
+ *  @returns {Promise<{ entries: Array<FrozenEntry & { rank: [string | number, number] }>, fidelity: Array<object>, counts: object,
+ *    asof_same_ms_hits: Record<string, unknown> }>} */
+export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude, plan, configDirs, top }) {
+  if (!WRITER_SECTIONS.includes(mode)) throw new TypeError(`sourceQuiz: mode ${JSON.stringify(mode)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  const storeId = rs.storeId;
+  const admission = admitStoreBoundaries(rs);
+  const local = new Map();
+  for (const b of admission.boundaries) {
+    if (!b.admitted) continue;
+    const key = familyKeyOf({ store_id: storeId, ccrc_id: b.ccrc_id, generation: b.generation });
+    if (!local.has(key)) local.set(key, { store_id: storeId, ccrc_id: b.ccrc_id, generation: b.generation, boundaries: [] });
+    local.get(key).boundaries.push(b);
+  }
+  const counts = { boundaries: admission.counts, mined: newDropCounts(), discards: {}, writer: { questions: 0, failed_runs: 0, malformed_replies: 0, leaks: 0 } };
+  const discard = (why) => { counts.discards[why] = (counts.discards[why] ?? 0) + 1; };
+  const byBoundary = new Map();   // boundary_uuid -> { row, spanEntryIds }
+  const baselines = new Map();    // boundary_uuid -> B
+  const scopes = new Map();       // family key -> transcript pks
+  const memo = new Map();         // leaf_key -> redacted leaf, for the run
+  const s = sourceStmts(rs.db);
+  const candidatesOf = (fam) => async () => {
+    if (fam === undefined) return [];
+    const mined = [];
+    for (const b of fam.boundaries) {
+      const span = spanRowsOf(rs, b.entry_id);
+      if (span.state !== 'span') { discard(span.why); continue; }
+      const t = s.transcript.get(b.transcript_pk);
+      const ep = t === undefined ? null : epochOfUuid(rs.db, t.cc_session_uuid);
+      const e = ep === null ? undefined : s.epoch.get(ep.session_pk, ep.seq);
+      const m = mineBoundary({
+        storeId, ccrcId: fam.ccrc_id, generation: fam.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms, rows: span.rows,
+        pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
+      });
+      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
+      if (m.state !== 'mined') { discard(m.why); continue; }
+      byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
+      mined.push(m);
+    }
+    return dedupeFamily(mined, counts.mined).map((c) => ({ ...c, id: qidOf(c) }));
+  };
+  const baselineFor = (c) => {
+    if (!baselines.has(c.boundary_uuid)) {
+      baselines.set(c.boundary_uuid, baselineOf(rs, byBoundary.get(c.boundary_uuid).row, { home, configDirs, budget: { bytes: 0 }, top }));
+    }
+    return baselines.get(c.boundary_uuid);
+  };
+  const keep = (c) => ({ keep: true, candidate: c });
+  const drop = (reason) => ({ keep: false, reason });
+  const stages = {
+    redaction: async (c) => { const r = screenRedaction(c, rs.idx, memo); return r === null ? keep(c) : drop(r); },
+    producer: async (c) => { const r = screenProducer(c); return r === null ? keep(c) : drop(r); },
+    'admit-baseline': async (c) => {
+      const b = baselineFor(c);
+      if (b.state !== 'built') return drop(b.why);
+      const r = screenBaseline(c, b.text);   // Task 2's one admission-against-B call (W2-D62)
+      return r === null ? keep(c) : drop(r);
+    },
+    answerable: answerableStage(rs.db, rs.idx, (c) => {
+      const b = byBoundary.get(c.boundary_uuid);
+      return { tsMs: b.row.ts_ms, transcriptPk: b.row.transcript_pk, spanEntryIds: b.spanEntryIds, factRaw: c.fact_raw };
+    }),
+    writer: async (c) => {
+      // The question's source is the one answerability found (W2-D73: the first source that passes).
+      const a = await writer.ask(mode, { ...c, source_entry_uuid: c.source.entryUuid });
+      if (a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false)) counts.writer.failed_runs += 1;
+      if (a.state === 'question' || a.why === 'writer-leak') return keep({ ...c, answer: a });
+      if (a.why === 'writer-malformed') counts.writer.malformed_replies += 1;
+      return drop(a.why);
+    },
+    'admit-question': async (c) => {
+      if (c.answer.state === 'question') { counts.writer.questions += 1; return keep(c); }
+      counts.writer.leaks += 1;
+      return drop('writer-leak');
+    },
+  };
+  const afterAdmit = sameMsReport(rs.db, (c) => {
+    const b = byBoundary.get(c.boundary_uuid);
+    const fk = familyKeyOf(c);
+    if (!scopes.has(fk)) scopes.set(fk, familyScopeOf(rs.db, c));
+    return { tsMs: b.row.ts_ms, holdingFileId: b.row.file_id, transcriptPks: scopes.get(fk), factRaw: c.fact_raw };
+  });
+  let rng;
+  let candidateRng;
+  let familyOrder;
+  let walk;
+  let fidelity = [];
+  const own = [...local.values()];   // this node's admitted families, each with its admitted boundaries
+  const walked = (f) => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, admitted: f.boundaries.length, candidates: candidatesOf(f) });
+  if (mode === 'quiz') {
+    // W2-D71's population over this node (R10): every local admitted family less the exclusions, never a census list.
+    rng = quizRng(seedHex);
+    candidateRng = (f) => familyRng(seedHex, 'quiz-sample', f);
+    familyOrder = (f) => quizFamilyOrderKey(seedHex, f);
+    const pop = quizPopulation(own.map((f) => ({ ...f, admitted: f.boundaries.length })),
+      { pilotFamilies: exclude.pilotFamilies, assignment: exclude.assignment });
+    counts.population = pop.excluded;
+    walk = pop.families.map(walked);
+  } else {
+    rng = pilotRng(seedHex);
+    const picked = await sampleFidelityBoundaries({
+      families: own.map((f) => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation,
+        boundaries: async () => f.boundaries.map((b) => ({ boundary_uuid: b.uuid, entry_id: b.entry_id })) })),
+      rng, n: plan.n_fidelity,
+      admitBoundary: async (b) => {
+        const p = reconstructPayload(rs, b.entry_id, '');
+        return p.state === 'payload' ? { keep: true } : { keep: false, reason: p.why };
+      },
+    });
+    counts.fidelity = picked.drops;
+    fidelity = picked.boundaries.map((p) => ({ store_id: storeId, ccrc_id: p.family.ccrc_id, generation: p.family.generation, boundary_uuid: p.boundary.boundary_uuid }));
+    walk = own.map(walked);
+  }
+  const target = mode === 'quiz' ? plan.target : plan.n_usage;
+  const sampled = await sampleQuestions({ families: walk, rng, quotas: { target, caps: plan.caps }, stages, afterAdmit, candidateRng, familyOrder });
+  counts.drops = sampled.drops;
+  counts.skips = sampled.skips;
+  writeBaselineRecord(out, mode, { storeId, rows: [...baselines.entries()].map(([u, b]) => baselineRow(u, b)) });
+  return {
+    entries: sampled.questions.map((q) => ({ ...q.answer.entry, rank: q.rank })),
+    fidelity, counts, asof_same_ms_hits: sampled.reports,
+  };
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

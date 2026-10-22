@@ -7312,7 +7312,7 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'an e
 ```
 
 Predicted, before any driver change:
-- Every `W2-5a Task 6` case fails, 43 failed. Each fails with `TypeError: replay.<name> is not a function` (`writerInputOf`, `windowExcerpt`, `writerStdin`, `openWriter`, `qidOf`, `frozenListText`, `usageInputOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`), or with `w6Box`'s first call to an absent export. The `sourceQuiz` describe's `beforeAll` builds its box (`w6SourceBox`) first, which proves the fixture: a throw there is the fixture's to fix.
+- Every `W2-5a Task 6` case fails but one, 42 failed and 1 passed (measured over a predicted 43 failed: the case `a raw fact absent from its redacted leaf is a TypeError` passes unguarded, because `replay.writerInputOf is not a function` is itself a `TypeError`). Each failure is `TypeError: replay.<name> is not a function` (`writerInputOf`, `windowExcerpt`, `writerStdin`, `openWriter`, `qidOf`, `frozenListText`, `usageInputOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`), or `w6Box`'s first call to an absent export. The `sourceQuiz` describe's `beforeAll` builds its box (`w6SourceBox`) first, which proves the fixture: a throw there is the fixture's to fix.
 - The `firstCallUsage` case fails on `expected undefined to deeply equal { input: 10, … }`.
 - The re-expected W2-4 case fails with the diff `+ firstCallUsage: null`.
 - No stub runs: no case reaches a spawn (the sourceQuiz box runs only the sweep).
@@ -8008,7 +8008,7 @@ T 'not an exact Opus id'
 # M10: admission is skipped (the writer always runs on the upstream account).
 mut "$D" "  const launch = admitAccount(json, roster, accountId, home);   // RP3-writer" "  const launch = admitAccount(json, roster, 'up-a', home);   // RP3-writer"
 T 'RP3-writer'
-# Expected RED (predicted): 4 failed; each refused account opens, and the stub logs a --version call.
+# Expected RED (measured 5 failed over a predicted 4): each refused account opens, and the stub logs a --version call; RP1-writer gen-a fails too, because admission is pinned to up-a and the generated account's wrapper and config dir are never used.
 
 # M11: the writer spawns in box mode (an arm's tools).
 mut "$D" "    const job = { launch, mode: 'writer', model," "    const job = { launch, mode: 'box', model,"
