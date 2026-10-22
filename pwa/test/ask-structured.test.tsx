@@ -211,6 +211,35 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
   });
 });
 
+describe('one sheet from the first question to the review (D-6325)', () => {
+  // The drawer is ONE container for every kind of surface: moving from the last question to the review (or back) changes
+  // what is inside it, never the drawer itself, so it keeps its entrance, its scroll and its focus. A remount would be a
+  // new panel node.
+  it.each([
+    [1, 8, 'Review your answers'],
+    [8, 1, 'Which cache should the service use?'],
+  ])('the panel is the same node moving from fixture %i to fixture %i', (from, to, heading) => {
+    const { store } = renderSheet(from);
+    const before = document.querySelector('[role="dialog"]');
+    expect(before).not.toBeNull();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: askFixture(to).dialog! });
+    });
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(document.querySelector('[role="dialog"]'), 'the sheet was remounted').toBe(before);
+  });
+
+  it('the panel is the same node moving from a question to an approval', () => {
+    const { store } = renderSheet(1);
+    const before = document.querySelector('[role="dialog"]');
+    act(() => {
+      store.getState().apply({ type: 'ask', key: 'ask-key-b', ask: { approval: { tool: 'Bash', summary: 'git status' } } });
+    });
+    expect(screen.getByRole('heading', { name: 'Bash' })).toBeInTheDocument();
+    expect(document.querySelector('[role="dialog"]'), 'the sheet was remounted').toBe(before);
+  });
+});
+
 describe('the tab strip (D-6325)', () => {
   it('the tab strip\'s labels are the structured headers, the pane\'s tab row only its marks', () => {
     const fx = askFixture(1);
