@@ -2896,10 +2896,13 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
 
   it('the own-words field looks disabled while it is', () => {
     expect(rule('.dlg-reply-input:disabled')).toMatch(/color:\s*var\(--syn-comment\)/);
-    // D-6325: the field draws no ruled box between the rows, so there is no frame left to dash; the muted ink says it.
-    expect(rule('.dlg-reply-input')).toMatch(/border:\s*0;/);
-    expect(rule('.dlg-reply-input:disabled')).not.toMatch(/border/);
+    // D-6325 (F4): the field keeps its own edge (the "no ruled box" is about the rows), so a disabled field's frame
+    // goes dashed, the cue that is not a colour, and the focus ring replaces the edge.
+    expect(rule('.dlg-reply-input')).toMatch(/border:\s*1px solid var\(--edge-subtle\);/);
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed;/);
+    expect(rule('.dlg-reply-input')).not.toMatch(/border-style/);
     expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
+    expect(css).toMatch(/\.dlg-reply-input:focus-visible \{[^}]*border-color:\s*transparent;/);
   });
 });
 
