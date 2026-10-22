@@ -2735,6 +2735,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         The move's backup is 1842M, so backups total 16763M and the server has 14668M free, further under the
         operator's line. STATUS: fleet and server v0.0.559, newest v0.0.560, stable v0.0.502, intent dev/auto=off,
         backups fleet 230M/server 16763M, disk free fleet 166G/work volume 39G/server 15G.
+      - 10:55: no tap. v0.0.561 (#1125) and v0.0.562 (a landing-order plan) were released, docs only, unapplied;
+        neither touches the broker's lane. The hourly `retired=` reads 0, as expected after the one-time retirement.
+        Server 14652M free. STATUS: fleet and server v0.0.559, newest v0.0.562, stable v0.0.502, intent dev/auto=off,
+        backups fleet 230M/server 16763M, disk free fleet 167G/work volume 37G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
