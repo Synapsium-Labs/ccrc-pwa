@@ -884,7 +884,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('unmeasured');
         expect(r.token).toBe('');
         expect(r.detail).toContain(`registry row(s) ${id} name a workdir that cannot be resolved`);
-        expect(r.detail).toContain('; a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed;');
+        expect(r.detail).toContain('; a \'..\' in it could not be walked the way that session\'s own cd walked it (it follows a'
+          + ' directory that does not exist now, or a path ccd could not enter logically), so where it leads was never placed,'
+          + ' even if it names this child;');
       } else {
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
         expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);
@@ -1625,8 +1627,10 @@ describe('the logical resolver places every row and the child by one call (spec 
     fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
   };
   const UNRESOLVED = 'name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered'
-    + ' or followed, or no longer exists, so its spelling no longer says where that session lives; a \'..\' in it follows a'
-    + ' directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place'
+    + ' or followed, or no longer exists, so its spelling no longer says where that session lives; a \'..\' in it could not be'
+    + ' walked the way that session\'s own cd walked it (it follows a directory that does not exist now, or a path ccd could'
+    + ' not enter logically), so where it leads was never placed, even if it names this child; or it holds a control'
+    + ' character), so ccd cannot place'
     + ' them against this child';
 
   it('an existing path through a symlinked ancestor resolves to its physical path', () => {

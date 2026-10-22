@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b34a08d0eab77fe3b7f72659e611f7ed6700b5c553c025c2be2bd9aed7a937ff
+# ccrc:generated 1 sha256=03c18a6713e3e95c4aabe68d3c6c8eb74d9d13e0ac65087ff93faa2fd951194b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29829,7 +29829,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   if _ws_reclaim_resolve "$wd"; then
     mine="$_WS_RESOLVED"; minebasis="$_WS_RESOLVE_BASIS"
     [[ "$mine" != //[!/]* ]] \
-      || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
+      || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — restore the link whose target opens with // to its original target, or stop the session and purge its row; never replace a link to clear this"
   else
     minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable if a directory on its path cannot be searched; never remove or replace what stands at this child's own workdir to clear this"
   fi
@@ -30098,13 +30098,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
   [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
   [[ -z "$unplaced" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), restore a link whose target opens with // to its original target, or stop that session and purge its row; never replace a link to clear this"
   [[ -z "$unproc" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, or one reached through a link into /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unleaf" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a leaf the act removes with $id cannot be measured ($unleaf), so whether a registry row lies at, inside or through it was never asked — make it searchable, or restore its root"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it could not be walked the way that session's own cd walked it (it follows a directory that does not exist now, or a path ccd could not enter logically), so where it leads was never placed, even if it names this child; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
   [[ -z "$unwalk" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }the identity walk of the registry rows did not answer for $unwalk, so whether a row lies at, inside or through $id's tree by device and inode, or a mount stands under it, was never asked — retry"
   [[ -z "$unmount" ]] \

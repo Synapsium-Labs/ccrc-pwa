@@ -799,7 +799,8 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
   // The sentence names every cause `_ws_reclaim_resolvable` answers 1 for, one clause each, and one remedy true of all
   // — and, since a row is placed only on a `complete` resolution, a row placed only by projection too (its path no
   // longer exists), so its first clause and its remedy say so.
-  const DOTDOT_CLAUSE = 'a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed';
+  const DOTDOT_CLAUSE = 'a \'..\' in it could not be walked the way that session\'s own cd walked it (it follows a directory that'
+    + ' does not exist now, or a path ccd could not enter logically), so where it leads was never placed, even if it names this child';
   const CNTRL_CLAUSE = 'or it holds a control character';
   const UNRESOLVED = 'name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered'
     + ' or followed, or no longer exists, so its spelling no longer says where that session lives;'
