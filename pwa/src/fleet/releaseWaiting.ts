@@ -64,10 +64,20 @@ export function updateBannerText(view: UpdatesView, health?: FleetHealth | null)
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 
+/** `v0.0.9 available`: the tag and its one verb, spelled here and nowhere else. */
+const tagAvailable = (tag: string): string => `${tag} available`;
+
 /** The words of the fleet's update line and of Settings' index line for the waiting release: `↑ v0.0.9 available`,
  *  or `null` when no release waits (`bannerRelease`'s answer, so the two surfaces never disagree). The one place the
  *  sentence is spelled; a caller appends its own suffix and never rebuilds it. */
 export function releaseWaitingWords(view: UpdatesView): string | null {
   const release = bannerRelease(view);
-  return release === null ? null : `↑ ${release.tag} available`;
+  return release === null ? null : `↑ ${tagAvailable(release.tag)}`;
+}
+
+/** The update line's accessible name, `Update v0.0.9 available, open Settings › Updates`: the same tag and verb as
+ *  {@link releaseWaitingWords}, with where the door goes. `null` when no release waits. */
+export function releaseWaitingDoorName(view: UpdatesView): string | null {
+  const release = bannerRelease(view);
+  return release === null ? null : `Update ${tagAvailable(release.tag)}, open Settings › Updates`;
 }

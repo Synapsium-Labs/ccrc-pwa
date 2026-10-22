@@ -29,7 +29,7 @@ import { ApiError, api, updateErrorText } from '../../lib/api';
 import {
   HaltLine, NodeList, ReleaseList, WhatsNewButton, catalogueLine, haltLineText, moveKey, releaseWindow, type MoveResult,
 } from '../updates';
-import { bannerRelease } from '../../fleet/UpdateBanner';
+import { bannerRelease } from '../../fleet/releaseWaiting';
 import { WhatsNewSheet, whatsNewReleases } from '../../fleet/WhatsNewSheet';
 import { haltingNodes, updateAllHaltedText } from '../../fleet/updateHalt';
 import '../../fleet/fleet.css';
@@ -126,8 +126,8 @@ function gateRefusalOf(err: unknown): string[] | null {
 }
 
 // THE ONE invalid-Date predicate (fix round 1) now lives in `fleet/useUpdatesView.ts` (imported above),
-// moved there in fix round 1's second pass (F13, item 8) so `UpdateBanner`'s `bannerRelease` can share it —
-// the banner used to decide "the catalogue was reached" with a bare `typeof … === 'number'`, which this
+// moved there in fix round 1's second pass (F13, item 8) so `releaseWaiting.ts`'s `bannerRelease` can share it —
+// the fleet's update line used to decide "the catalogue was reached" with a bare `typeof … === 'number'`, which this
 // screen's own `isPlaceableInstant` already refused (review F13). Used here by `catalogueLine`'s
 // classification of `lastOkAt` AND by every renderer that prints a clock or a date off a wire instant —
 // `clockTime`, `dayClock`, `releaseDate` — so there is exactly one place, shared by both surfaces, that
@@ -235,7 +235,7 @@ function UpdatesBody({ view, stale, now, reload }: {
     ? { key: moveFrom, line: moveLine.line } : null;
   // D-5611: the rollback sheet's target, for its withdrawn and unbundled lines.
   const rollbackTo = move !== null && move.intent.direction === 'rollback' ? move.intent.to : null;
-  // Updates' own "See what's new" (settings spec §4.1, D-5505): the banner's sheet, the banner's tag
+  // Updates' own "See what's new" (settings spec §4.1, D-5505): the fleet's update-line sheet, its tag
   // (`bannerRelease`), and its footer's Update all handing over to the one move sheet. One sheet at a time.
   const [whatsNew, setWhatsNew] = useState(false);
   const haltId = useId();

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { bannerRelease, releaseWaitingWords, updateBannerText } from '../src/fleet/releaseWaiting';
+import { bannerRelease, releaseWaitingDoorName, releaseWaitingWords, updateBannerText } from '../src/fleet/releaseWaiting';
 
 const NOW = Date.now();
 const FLEET_ID = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
@@ -253,5 +253,12 @@ describe('releaseWaitingWords (D-6327)', () => {
     expect(releaseWaitingWords(view({ nodes: [fleetNode({ desiredTag: 'v0.0.7' }), serverNode({ desiredTag: 'v0.0.7' })] }))).toBeNull();
     expect(releaseWaitingWords(view({ catalogue: { lastOkAt: null, lastError: null } }))).toBeNull();
     expect(releaseWaitingWords(view({ nodes: [] }))).toBeNull();
+  });
+
+  it('releaseWaitingDoorName is the line\'s accessible name: the waiting tag as the words spell it, and where the door goes', () => {
+    expect(releaseWaitingDoorName(view())).toBe('Update v0.0.9 available, open Settings › Updates');
+    const newest = view({ nodes: [fleetNode({ desiredTag: 'v0.0.9' }), serverNode({ desiredTag: 'v0.0.10' })] });
+    expect(releaseWaitingDoorName(newest)).toBe('Update v0.0.10 available, open Settings › Updates');
+    expect(releaseWaitingDoorName(view({ catalogue: { lastOkAt: null, lastError: null } }))).toBeNull();
   });
 });

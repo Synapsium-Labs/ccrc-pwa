@@ -11,7 +11,7 @@ import {
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
-import { UpdateBanner, updateBannerShows } from '../fleet/UpdateBanner';
+import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
@@ -32,6 +32,7 @@ import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { useFrameSet } from '../skins/frame';
+import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -140,6 +141,7 @@ export function FleetScreen({
   // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lane gauges
   // under it, so the strip below steps aside: one readout of the lanes at any width. And its own New session door.
   const Head = headChrome ? set?.Head ?? null : null;
+  const desk = useDesk();
   const Fab = set?.Fab ?? null;
 
   // Once, not three times in one interpolation: the footer's count and its
@@ -222,6 +224,9 @@ export function FleetScreen({
       {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
           (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}
       {banners && <FleetBanners />}
+      {/* The quiet update line (D-6327), where the banner sat, on a phone whose skin has no head of its own: Refined's
+          phone header holds its own, and at a desk both skins' bars hold it, so one instance is mounted at any width. */}
+      {Head === null && !desk && <UpdateIndicator form="row" />}
 
       {/* Its own poller, independent of `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
@@ -397,17 +402,12 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
-        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
-        // disables while it stands. Re-polls on every Ack.
+        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
+        // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {
           id: 'halt',
           shows: haltBannerShows(updates.view),
           node: <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />,
-        },
-        {
-          id: 'update',
-          shows: updateBannerShows(updates.view),
-          node: <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />,
         },
         // The substrate fault, said once (spec §4) — derived from the SAME injected store the rows render from,
         // so the banner and the chips can never disagree about which fleet they describe.

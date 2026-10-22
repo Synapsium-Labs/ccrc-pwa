@@ -167,7 +167,7 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
 // in L0 (`shared/update-arrow.ts`): BuildLine moved into @ccrc/ui, and a
 // design-system component cannot reach into this file — it owns the
 // `GET /api/updates` poll, and therefore the API client. They are re-exported
-// here, unchanged, so SettingsScreen, UpdateBanner, movePlan and their tests
+// here, unchanged, so SettingsScreen, UpdateIndicator, movePlan and their tests
 // keep the import they already have and there is still ONE definition.
 export { nodeVersion, pendingTag } from '../../../shared/update-arrow';
 

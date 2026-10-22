@@ -9,6 +9,7 @@ import { commandDoor } from '../../command/door';
 import { agentLink } from '../../fleet/agentLink';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
+import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 import { useFleetStore } from '../../stores/fleet';
 
 export function StatusBar(): ReactNode {
@@ -23,6 +24,7 @@ export function StatusBar(): ReactNode {
         {link.word}
       </span>
       <span className="ins-status-summary">{fleetSummary(sessions, runs).readout}</span>
+      <UpdateIndicator form="status" />
       <span className="ins-status-keys">
         <Keycap className="ins-status-key" aria-label="Open the command palette" {...commandDoor('open-palette')}>
           <Icon name="command" size={16} />K

@@ -622,6 +622,20 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)', 'var(--accent-tint)'],
     why: 'the theme row\'s label: unselected it inherits the settings page, selected its row paints --accent-tint',
   },
+  // ── the fleet's update line (UpdateIndicator.tsx, D-6327) ───────────────
+  // The quiet "↑ vX available" door and its stale words sit on whichever bar holds them, and set an ink on no ground of
+  // their own: Refined's app bar paints `--bg-surface` (shell.css `.shell-accounts`), Instrument's status bar and both
+  // skins' phone rows sit on the page (`--bg-page`: instrument.css `.ins-status`, the fleet column). Both are
+  // registered because the one rule moves between them with the skin and the width; grounding it on one would leave
+  // the other unmeasured. `--accent` and `--ink-tertiary` on those two are token pairs the gate already holds.
+  '.update-indicator-door': {
+    under: ['var(--bg-page)', 'var(--bg-surface)'],
+    why: "the fleet's update line: Refined's app bar paints --bg-surface, Instrument's status bar and the phone rows sit on --bg-page. Its selector names no painted ancestor",
+  },
+  '.update-indicator-stale': {
+    under: ['var(--bg-page)', 'var(--bg-surface)'],
+    why: "the stale words beside the update line's version, on the same two grounds as .update-indicator-door. Its selector names no painted ancestor",
+  },
   // ── the task card and the compaction card (PR #89) ──────────────────────
   // Seven rules that set a colour and paint no ground. Their hosts DO paint
   // one — `.task-card` and `.compaction` both set `background: var(--bg-surface)`
