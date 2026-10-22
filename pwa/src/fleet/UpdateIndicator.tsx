@@ -19,8 +19,9 @@
 //
 // ONE INSTANCE PER WIDTH, by who mounts it (never a media query): `status` in Instrument's status bar (mounted by the
 // frame at a desk only), `row` in Refined's banner slot under the bar at a desk (the ruled departure
-// `refined-desk-indicator-in-a-row-under-the-bar`: the bar has no room for it at 900), under Refined's phone header and
-// in Instrument's fleet column below the desk width. `bar` has no mount now; it stays a form of the type. A door runs its command (`commandDoor`), and navigates by nothing of its own.
+// `refined-desk-indicator-in-a-row-under-the-bar`: the bar has no room for it at 900), under Refined's phone header
+// and in Instrument's fleet column below the desk width. A door runs its command (`commandDoor`), and navigates by
+// nothing of its own.
 import type { ReactNode } from 'react';
 import { CloseButton, Door, toast } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
@@ -40,7 +41,7 @@ function dismiss(tag: string): void {
   toast(`${tag} is hidden until a newer release. Settings › Updates still lists it.`, 'info');
 }
 
-export type UpdateIndicatorForm = 'bar' | 'status' | 'row';
+export type UpdateIndicatorForm = 'status' | 'row';
 
 export function UpdateIndicator({ form }: { form: UpdateIndicatorForm }): ReactNode {
   const { updates, health } = useFleetChrome();

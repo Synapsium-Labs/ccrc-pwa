@@ -148,6 +148,11 @@ describe('UpdateIndicator (D-6327)', () => {
     expect(el.closest('.shell-banners'), 'Refined 900: in the banner slot under the bar').not.toBeNull();
     expect(el.closest('header.shell-accounts'), 'Refined 900: not in the app bar').toBeNull();
     expect(el).toHaveAttribute('data-form', 'row');
+    const slot = el.closest('.shell-banners')!;
+    expect(slot.lastElementChild, 'Refined 900: the row is the last of the banner slot').toBe(el);
+    for (const banner of slot.querySelectorAll('.banner-slot')) {
+      expect(banner.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, 'Refined 900: after every banner').toBeTruthy();
+    }
     cleanup();
     // The same on a session route (the bars are on every route, and the fleet column sits beside the session).
     el = await mount(REFINED, 900, SESSION);
@@ -244,7 +249,7 @@ const waitingAt = (tag: string): UpdatesView => ({
 describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)', () => {
   it('the dismiss control is named for its tag', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(waiting());
-    for (const form of ['bar', 'status', 'row'] as const) {
+    for (const form of ['status', 'row'] as const) {
       const { container } = renderFleet(<UpdateIndicator form={form} />);
       const x = await screen.findByRole('button', { name: DISMISS });
       expect(x, `${form}: beside the door, in the same line`).toBe(container.querySelector('.update-indicator')!.querySelector('button[aria-label="Dismiss v0.0.9"]'));
@@ -307,7 +312,7 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
     // And in the next page load, which keeps storage and loses the page's own mark.
     cleanup();
     resetDismissalForTests();
-    const third = renderFleet(<UpdateIndicator form="bar" />);
+    const third = renderFleet(<UpdateIndicator form="status" />);
     await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
     expect(third.container.innerHTML).toBe('');
   });
