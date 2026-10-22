@@ -1275,8 +1275,9 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     } else {
       expect(o.verdict, o.detail).toBe('reclaimable');
     }
-    // A literal refusal still outranks the hold that outside row raises (M1): a row
-    // naming the child's own spelling, and one naming a path inside it through that spelling.
+    // A literal refusal still outranks the hold that outside row raises, where it raises one (M1): it raises one only
+    // where the child resolves to `//`; where `pwd -P` collapses the `//` the row is plainly outside and holds
+    // nothing. A row naming the child's own spelling, and one naming a path inside it through that spelling.
     for (const [id, spelled, says] of [['demo-twin', wt, 'also named by registry row(s) demo-twin'],
       ['demo-nested', path.join(wt, 'server'), 'registry row(s) demo-nested rooted inside']] as const) {
       otherRow(id, spelled);
