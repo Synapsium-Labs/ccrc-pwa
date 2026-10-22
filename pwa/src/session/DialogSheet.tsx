@@ -137,21 +137,32 @@
 // reasons: the boxes repaint under the same id while the server ticks them,
 // and an `ask_cleared` mid-commit hands the same set and call to the scraped
 // sheet.
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+//
+// D-6325 (plan docs/superpowers/plans/2026-10-22-desktop-polish.md, Task T1b): every surface below is chosen by ONE pure
+// function, `askSource` (`askLive.ts`), and renders its answer; no string the pane painted reaches an
+// AskUserQuestion. This file stays the one controller and the one sender, and its branches are now: nothing; the
+// approval and the structured question (both `EnvelopeSheet`, the hook's envelope or the transcript's copy of the
+// question); the review (one render here for every source of copy); a question this screen cannot read (it says so and
+// offers the terminal); a menu that is no ask (its parsed rows, `Claude needs a choice`); and an unparsed pane (the
+// terminal). The history above describes the scraped sheet that took over when the envelope aged out; that sheet, its
+// preamble, its raw well and its own-words machinery are gone, and a hand-off on `ask_cleared` now lands on the
+// structured sheet from the transcript's copy, or on the unreadable one. The own-words text, the picks and the senders
+// stay HERE, so that hand-off (and a change of source) keeps them.
+
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
-import { parseAskTabs, reviewRows } from '../../../shared/ask-menu';
-import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
+import { parseAskTabs } from '../../../shared/ask-menu';
+import { OptionRow, Sheet, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskEyebrow, AskReview, AskTabs, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, escapeHidesOnly, keyed, lit, ownWordsRow,
-  picksBusy, wordsBusy, type PickCall, type Picks, type Words, type WordsCall,
+  AskHeader, AskReview, AskTabs, REVIEW_TITLE, escapeHidesOnly, keyed, lit, picksBusy, wordsBusy, type Asker,
+  type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
-  askScreen, chatRow, freeTextSlot, headerTab, isUsableAsk, paneQuestion, paneTicks, picksUncommitted, questionKey,
-  slotHolds,
+  askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, slotHolds,
 } from './askLive';
-import { keyTabs, multiKeys, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
+import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskKeys } from './useAskKeys';
 import { api, ApiError } from '../lib/api';
@@ -195,28 +206,32 @@ export interface DialogSheetProps {
    * `0` is inert, so an ordinary mount never un-dismisses anything.
    */
   raise?: number;
+  /** D-6325, R4: who asks (the session, its project, and the held line while a coordinator holds the question), for the
+   *  header every surface draws. Null or absent: no who line. */
+  asker?: Asker | null;
 }
 
 
-export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetProps): ReactNode {
+export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const dialog = useStore((s) => s.dialog);
   /** Decision `ask-answer-returns-next-screen`: an answer route's `next`, into the store (`applyAnswered`). */
   const applyAnswered = (answeredId: string, next: Dialog | null): void => useStore.getState().applyAnswered(answeredId, next);
   const hookAsk = useStore((s) => s.ask);
+  const askFrameSeen = useStore((s) => s.askFrameSeen);
+  // D-6325: what an ask surface may show, decided once per render and before any branch returns (hooks run every
+  // render). Everything below renders from it.
+  const source = askSource({ ask: hookAsk, dialog, askFrameSeen });
 
   // The option index whose answer is in flight (null = none).
   const [answering, setAnswering] = useState<number | null>(null);
-  // The identity of whichever content — a scraped dialog's id, or a
-  // stringified hook envelope (HookAsk carries no id of its own; see
-  // `askKey` below) — the user waved away with a scrim tap, Esc, or swipe.
-  // It stays hidden until something with a DIFFERENT identity arrives. One
-  // slot serves both sheets below: only one is ever open at a time (the
-  // envelope preference), and sharing it means a dismissal survives the
-  // moment display hands off from one to the other.
+  // The identity of whichever content — a pane dialog's id, or a stringified hook envelope (HookAsk carries no id of
+  // its own; see `askKey` below) — the user waved away with a scrim tap, Esc, or swipe. It stays hidden until something
+  // with a DIFFERENT identity arrives. One slot serves both kinds of surface: only one is ever open at a time, and
+  // sharing it means a dismissal survives the moment display hands off from one to the other.
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   // D-5089: the pane dialog that was live when the operator hid the ENVELOPE.
-  // The envelope's own key is a hash of its JSON, which no scraped dialog id
+  // The envelope's own key is a hash of its JSON, which no pane dialog id
   // ever equals, so without this the hand-off on `ask_cleared` re-opened the
   // very question the operator had just waved away.
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
@@ -226,17 +241,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const [own, setOwn] = useState(NO_WORDS);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
   const [pick, setPick] = useState(NO_PICK);
-  // The raw "full question" view.
-  const [details, setDetails] = useState(false);
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
   // any other: it refuses the others and the dismissal while it runs.
   const [tabbing, setTabbing] = useState(false);
-
-  // Remember the last dialog so the sheet has content to animate out with
-  // after dialog_cleared empties the store.
-  const lastRef = useRef<Dialog | null>(null);
-  if (dialog !== null) lastRef.current = dialog;
-  const shown = dialog ?? lastRef.current;
 
   // A new question (or a cleared one) invalidates the in-flight marker.
   // D-5090: and ends an own-words answer that LANDED, the same way, unless the new frame is that send's own typed row
@@ -272,7 +279,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   };
 
   // D-286: the transcript asked for this sheet back. Clearing the dismissal
-  // is the WHOLE effect — the sheet then opens on exactly the envelope the
+  // is the WHOLE effect — the sheet then opens on exactly the surface the
   // store still holds, through the same `open` computation as always, so the
   // raise cannot conjure a sheet for a question that is no longer live.
   useEffect(() => {
@@ -281,10 +288,37 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     setDismissedDialogId(null);
   }, [raise]);
 
-  const open = dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId;
+  // Dismissal, per kind of surface. The hook's envelope has no id of its own: a hash of its JSON stands in for one
+  // (`askKey`). Content equality is exactly what should reopen or stay dismissed here: session-hook.sh rewrites the
+  // whole file on every relevant transition, so two reads that serialize the same string ARE the same question or
+  // approval as far as this sheet cares, and a genuinely new one always serializes differently (a new question string,
+  // a new tool/summary pair, an added/removed option, …). Decision `ask-envelope-dismissal-per-screen`: a hide hides
+  // the SCREEN that was showing, never the rest of the ask. The envelope's JSON is the same for every question and the
+  // review (the hook writes them all at once), so keying on it alone kept a sheet hidden on question 2 hidden through
+  // the review: no Submit anywhere but the terminal. A screen is a QUESTION, or the review (`askScreen`), never a raw
+  // dialog id: typing into the free-text row in the terminal, or a mid-redraw grab, repaints the same question under a
+  // new id, and must not put a modal back over the terminal the operator is typing in. Only a different question or the
+  // review opens it again; a screen the sheet cannot place (no menu, an unparsed grab) never does.
+  // Every other surface (the transcript's copy, the review without an envelope, a menu, an unreadable ask, the
+  // terminal) is the pane's, and keeps the pane dialog's id as its identity, as the scraped sheet always did.
+  const envelope = isUsableAsk(hookAsk) ? hookAsk : null;
+  const hooked = envelope !== null
+    && (source.kind === 'approval' || (source.kind === 'structured' && source.from === 'hook') || source.kind === 'review');
+  const askKey = hooked ? JSON.stringify(envelope) : null;
+  // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
+  const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
+  const open = hooked
+    ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
+    : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId;
 
   const hide = (): void => {
-    if (lastRef.current !== null) setDismissedKey(lastRef.current.id);
+    if (hooked) {
+      setDismissedKey(askKey);
+      setDismissedScreen(screenNow);
+      setDismissedDialogId(dialog?.id ?? null);
+    } else if (dialog !== null) {
+      setDismissedKey(dialog.id);
+    }
   };
 
   const close = (): void => {
@@ -306,12 +340,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     } catch (err) {
       setAnswering(null);
       // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
-      // news, not a failure: the scraped sheet renders straight from `dialog`, so it re-renders with the new one
-      // right after this and "showing the latest" is literally true there — but the envelope sheet renders
-      // `hookAsk`, not `dialog`, and a 409 there changes nothing on screen: N1, that copy would read as a lie on
-      // that branch, so it says what actually happened instead.
+      // news, not a failure where the sheet renders straight from `dialog` (a menu, which re-renders with the new one
+      // right after this and "showing the latest" is literally true) — but the structured sheet renders Claude's own
+      // copy, not `dialog`, and a 409 there changes nothing on screen: N1, that copy would read as a lie on that
+      // branch, so it says what actually happened instead.
       const stale = err instanceof ApiError && err.message === 'stale-dialog';
-      toast(dialogRefusal(err, isUsableAsk(hookAsk)), stale ? undefined : 'error');
+      toast(dialogRefusal(err, source.kind === 'structured'), stale ? undefined : 'error');
     }
   };
 
@@ -407,94 +441,40 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const picksHeld = dialog?.multi !== undefined && pick.id === dialog.id && pick.call === null
     && picksUncommitted(dialog.multi, pick.picked);
 
-  // The scraped sheet's keyboard (decision `ask-sheet-keyboard-model`), worked out before any branch below returns,
-  // since the hook runs on every render. The envelope sheet keys its own screen.
-  const enveloped = isUsableAsk(hookAsk);
-  const ask = shown?.ask;
-  // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
-  // matched the question; else, after this sheet's own text call, that call's row less one, but only while the pane
-  // shows the question the call was made for (`questionKey`: its title and every other row; the stranded retry needs
-  // it, since only the placeholder tells itself apart from an option); else unknown, and only the empty placeholder
-  // row is the slot. A call never speaks for another question, so a refusal that outlives its own cannot hide a later
-  // question's option or offer its placeholder as a row. That row, and the `Chat about this` row, are never option
-  // rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
-  const n = ask !== undefined
-    ? ask.options.length
-    : own.call !== null && shown !== null && showsQuestion(shown, own.call) ? own.call.row - 1 : null;
-  const slot = shown !== null && shown.parsed ? freeTextSlot(shown, n) : { kind: 'none' as const };
-  const chat = shown !== null && shown.parsed ? chatRow(shown) : undefined;
-  const slotRow = slot.kind === 'none' ? null : slot.index;
-  const optionRows = shown === null ? [] : shown.options.filter((o) => o.index !== slotRow && o.index !== chat?.index);
-  const review = shown === null ? null : reviewRows(shown);
-  const tabRow = shown === null ? null : parseAskTabs(shown.raw);
-  // Where the sheet is in the ask: the review, or the question the transcript's header names on the tab row.
-  const place = review !== null || tabRow === null ? null : headerTab(tabRow.tabs, ask?.header);
-  const tabs = keyTabs(tabRow?.tabs.length ?? null, place, review !== null, picksHeld);
-  const boxed = shown !== null && !shown.parsed && shown.multi !== undefined && shown.title.trim() !== '';
-  const keyScreen: KeyScreen | null = enveloped || shown === null ? null
-    : review !== null ? reviewKeys(review.submit, review.cancel, tabs)
-      : boxed ? multiKeys(shown.multi!.options.map((o) => o.index), tabs)
-        : shown.parsed ? questionKeys(
-          optionRows.map((o) => o.index), ownWordsRow(slot, own.text, own.call), chat?.index ?? null, tabs,
-        ) : null;
-  const cursor = shown === null ? null : shown.multi !== undefined ? shown.multi.cursor : shown.selectedIndex;
+  // The keyboard of the surfaces this file renders itself (decision `ask-sheet-keyboard-model`): the review's two rows,
+  // and a menu's parsed rows. The structured sheet keys its own screen, so every other kind switches the hook off.
+  // Worked out before any branch below returns, since the hook runs on every render.
+  const tabCount = dialog === null ? null : (parseAskTabs(dialog.raw)?.tabs.length ?? null);
+  const keyScreen: KeyScreen | null = source.kind === 'review'
+    ? reviewKeys(source.rows.submit, source.rows.cancel, keyTabs(tabCount, null, true, picksHeld))
+    : source.kind === 'menu' ? questionKeys(source.options.map((o) => o.index), null, null, null) : null;
   const keys = useAskKeys({
-    screenId: shown?.id ?? null,
+    screenId: dialog?.id ?? null,
     screen: keyScreen,
-    start: typeof cursor === 'number' ? rowKey(cursor) : cursor === 'commit' ? 'commit' : null,
+    start: dialog === null ? null : rowKey(dialog.selectedIndex),
     open,
     onAnswer: (k) => void answer(k),
     onToggle: toggle,
     onTab: (to) => void moveTab(to),
   });
-  /** The strip over the scraped sheet's screen, where the pane paints a tab row. */
-  const strip = tabRow !== null && (
-    <AskTabs
-      tabs={tabRow.tabs}
-      active={place}
-      onReview={review !== null}
-      held={picksHeld}
-      busy={locked}
-      onGo={(to) => void moveTab(to, place === null ? undefined : place + 1)}
-    />
-  );
 
-  // The hook envelope wins DISPLAY the moment it is USABLE — see the file
-  // header (fix round 1's I4). It can be non-null while `shown` is still null
-  // (the envelope arrived first), so this has to come before the
-  // `shown === null` bailout.
-  if (enveloped) {
-    // A hash of the envelope's JSON stands in for an identity HookAsk
-    // doesn't carry. Content equality is exactly what should reopen or stay
-    // dismissed here: session-hook.sh rewrites the whole file on every
-    // relevant transition, so two reads that serialize the same string ARE
-    // the same question/approval as far as this sheet cares, and a
-    // genuinely new one always serializes differently (a new question
-    // string, a new tool/summary pair, an added/removed option, …).
-    const askKey = JSON.stringify(hookAsk);
-    // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
-    const screenNow = 'approval' in hookAsk ? (dialog === null ? null : 'approval') : askScreen(hookAsk, dialog);
+  if (source.kind === 'none') return null;
+
+  // The approval, and Claude's own question (the hook's envelope, or the transcript's copy once that has aged out): one
+  // sheet, the one hardened sender (`EnvelopeSheet`), whose SEND goes through the functions above.
+  if (source.kind === 'approval' || source.kind === 'structured') {
     return (
       <EnvelopeSheet
         id={id}
-        ask={hookAsk}
+        ask={source.kind === 'approval' ? { approval: source.approval } : { questions: source.questions }}
+        from={source.kind === 'structured' ? source.from : 'hook'}
+        asker={asker}
         dialog={dialog}
         answering={answering}
         words={words}
         picks={picks}
-        // Decision `ask-envelope-dismissal-per-screen`: a hide hides the SCREEN that was showing, never the rest of the
-        // ask. The envelope's JSON is the same for every question and the review (the hook writes them all at once), so
-        // keying on it alone kept a sheet hidden on question 2 hidden through the review: no Submit anywhere but the
-        // terminal. A screen is a QUESTION, or the review (`askScreen`), never a raw dialog id: typing into the
-        // free-text row in the terminal, or a mid-redraw grab, repaints the same question under a new id, and must not
-        // put a modal back over the terminal the operator is typing in. Only a different question or the review
-        // opens it again; a screen the sheet cannot place (no menu, an unparsed grab) never does.
-        open={!(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))}
-        onHide={() => {
-          setDismissedKey(askKey);
-          setDismissedScreen(screenNow);
-          setDismissedDialogId(dialog?.id ?? null);
-        }}
+        open={open}
+        onHide={hide}
         onSelectOption={(optionIndex) => void answer(optionIndex)}
         onOpenTerminal={onOpenTerminal}
         tabbing={tabbing}
@@ -504,50 +484,57 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     );
   }
 
-  if (shown === null) return null;
-
-  // D-5091: a multiSelect question the server read as one (`Dialog.multi`) is
-  // answered with the same boxes the envelope sheet offers (`MultiPick`), so
-  // the hand-off on `ask_cleared` changes nothing the operator reads or can
-  // do: its title, its boxes, the same set and the same commit. (D-5089 only
-  // named it here, with the envelope's several-answers line.) One whose title
-  // came back blank keeps the generic dead end below: a sheet with no
-  // accessible name.
-  if (boxed && shown.multi !== undefined) {
+  // The review screen an ask ends on (D-5089), one render for every source of copy (D-6325): titled `Review your
+  // answers` and answered by the pane's own rows, never the pane's words. The strip is drawn when the structured copy
+  // and the pane's tab row agree on the count (`summary` carries the marks only then).
+  if (source.kind === 'review') {
+    if (dialog === null) return null; // unreachable: the review is the pane's, so `askSource` had a dialog
+    const chips = source.summary.length > 0 && source.summary.every((q) => q.answered !== null)
+      ? source.summary.map((q) => ({ header: q.header, answered: q.answered === true }))
+      : null;
     return (
-      <Sheet
-        open={open}
-        onClose={close}
-        onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskEyebrow header={shown.ask?.header} />}
-        title={paneQuestion(shown).question}
-      >
-        <div ref={keys.root} hidden />
-        {strip}
-        <MultiPick
-          multi={shown.multi}
-          dialogId={shown.id}
-          picks={picks}
-          locked={answering !== null || wordsBusy(own.call) || tabbing}
-          keys={keys}
-        />
+      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskHeader asker={asker} />} title={REVIEW_TITLE}>
+        <div
+          data-source={envelope !== null ? 'hook' : dialog.ask !== undefined ? 'transcript' : undefined}
+          className="ask-envelope"
+          ref={keys.root}
+        >
+          {chips !== null && (
+            <AskTabs
+              tabs={chips}
+              active={null}
+              onReview
+              held={picksHeld}
+              busy={locked}
+              onGo={(to) => void moveTab(to)}
+            />
+          )}
+          <AskReview
+            dialogId={dialog.id}
+            selectedIndex={dialog.selectedIndex}
+            rows={source.rows}
+            summary={source.summary}
+            answering={answering}
+            locked={locked}
+            onAnswer={(k) => void answer(k)}
+            keys={keys}
+          />
+        </div>
       </Sheet>
     );
   }
 
-  if (!shown.parsed) {
+  // Ask evidence on the pane and no copy of the question that fully lines up: the surface says so and offers the
+  // terminal. Nothing the pane painted is shown, and nothing is offered to tap.
+  if (source.kind === 'ask-unreadable') {
     return (
       <Sheet
         open={open}
         onClose={close}
         onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskEyebrow />}
-        title="Answer this one in the terminal"
+        eyebrow={<AskHeader asker={asker} />}
+        title="Claude is asking a question this screen can't read yet."
       >
-        <p className="dlg-copy">
-          This question doesn't fit tappable options. Answer it in the terminal — the session picks up from there.
-        </p>
-        <Well className="dlg-raw">{shown.raw}</Well>
         <TerminalCta
           onOpen={() => {
             hide();
@@ -559,164 +546,65 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     );
   }
 
-  // D-5089: the review screen an ask ends on, the same as the envelope sheet
-  // renders it (`AskReview`), so an ask whose envelope aged out can still be
-  // submitted from here. Titled `Review your answers`, never the pane's title,
-  // which on this screen is the tab row (or, on a tall review, an answer).
-  if (review !== null) {
+  // A pane nothing could be read off, with no sign of an ask: only the terminal can answer it.
+  if (source.kind === 'terminal-only') {
     return (
-      <Sheet open={open} onClose={close} onEscapeKeyDown={escapeHidesOnly} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
-        <div ref={keys.root} hidden />
-        {strip}
-        <AskReview dialog={shown} answering={answering} locked={locked} onAnswer={(k) => void answer(k)} keys={keys} />
+      <Sheet
+        open={open}
+        onClose={close}
+        onEscapeKeyDown={escapeHidesOnly}
+        eyebrow={<AskHeader kicker="Claude is waiting" asker={asker} />}
+        title="Claude is waiting on the terminal."
+      >
+        <TerminalCta
+          onOpen={() => {
+            hide();
+            onOpenTerminal?.();
+          }}
+          onLater={close}
+        />
       </Sheet>
     );
   }
 
-  // The transcript's copy for this menu (`ask`, above), when the two could be matched.
-  // Nothing validates the question server-side beyond it being a string, so a
-  // blank one has to degrade to the scraped pane rather than replace it: `??`
-  // would keep the empty string and leave the sheet with no question on it at
-  // all — no title, no preamble, and a dialog with no accessible name.
-  const question = ask?.question.trim() ?? '';
-  // D-5089: without that copy, the pane's own question and what it painted above it, never the ask's raw tab row, and
-  // never the question twice (a wrapped one titled whole, not by its last row).
-  const painted = paneQuestion(shown);
-  const rows = optionRows;
+  // A menu that is no AskUserQuestion (a plan approval, a TUI prompt): no copy of it exists but the pane's parse, so its
+  // title and rows are the one place pane text is shown (D-6325), and the foot line says only what a tap does. Its rows
+  // are answered by their printed index, exactly as they always were.
   return (
     <Sheet
       open={open}
       onClose={close}
       onEscapeKeyDown={escapeHidesOnly}
-      eyebrow={<AskEyebrow header={ask?.header} />}
-      title={question || painted.question}
+      eyebrow={<AskHeader kicker="Claude needs a choice" asker={asker} />}
+      title={source.title || 'Claude needs a choice'}
     >
       <div ref={keys.root} hidden />
-      {strip}
-      {/* The scraped preamble is a lossy copy of the question — once the real
-          one is the title it would only say it twice. Keyed off the question
-          actually shown, so a blank one keeps the pane's copy. */}
-      {!question && painted.preamble !== '' && (
-        <p className="dlg-body">{painted.preamble}</p>
-      )}
       <div className="opts">
-        {rows.map((o) => {
+        {source.options.map((o) => {
           const selected = lit(keys, o.index);
           const waiting = answering === o.index;
-          // By POSITION, never by matching text: the keystroke is o.index
-          // whatever the transcript happens to call this row. `null` (the
-          // position the server could not confirm) reads like a missing one —
-          // every field below falls back to the pane's own copy.
-          const rich = ask?.options[o.index - 1];
-          const label = rich?.label ?? o.label;
-          // An empty description is not an override either — fall back to the
-          // sub-text the pane scraped rather than dropping both.
-          const description = rich?.description || o.description;
           return (
-            // Keyed by the (pane-derived) dialog id as well as the index so a
-            // new question opens its own previews instead of inheriting the
-            // last one's folded state. The id is stable across arrow moves.
-            <Fragment key={`${shown.id}:${o.index}`}>
-              <OptionRow
-                {...keyed(keys, o.index)}
-                selected={selected}
-                glyph={selected ? '❯' : ''}
-                index={o.index}
-                label={label}
-                sublabel={description}
-                disabled={locked}
-                busy={waiting}
-                onClick={() => void answer(o.index)}
-                // The optimistic "answering…" is this package's marker, not the
-                // row's: it is a fact about a keystroke in flight to a pane.
-                // It takes the slot the ↵ would have had, never both.
-                marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
-                enter={!waiting && selected ? '↵' : undefined}
-              />
-              {rich?.preview && (
-                <OptionPreview text={rich.preview} defaultOpen={selected} />
-              )}
-            </Fragment>
+            <OptionRow
+              key={`${dialog?.id ?? ''}:${o.index}`}
+              {...keyed(keys, o.index)}
+              selected={selected}
+              glyph={selected ? '❯' : ''}
+              index={o.index}
+              label={o.label}
+              sublabel={o.description}
+              disabled={locked}
+              busy={waiting}
+              onClick={() => void answer(o.index)}
+              // The optimistic "answering…" is this package's marker, not the
+              // row's: it is a fact about a keystroke in flight to a pane.
+              // It takes the slot the ↵ would have had, never both.
+              marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+              enter={!waiting && selected ? '↵' : undefined}
+            />
           );
         })}
       </div>
-
-      {/* Answer in your own words, through the free-text row (D-5090), in that row's place. A multiSelect commit still
-          running (D-5091) locks it as an option's answer does. */}
-      <OwnWords
-        slot={slot}
-        chat={chat?.label ?? null}
-        words={words}
-        locked={answering !== null || picksBusy(pick.call) || tabbing}
-        keys={keys}
-      />
-      {chat && (
-        <ChatRow
-          row={chat}
-          selectedIndex={shown.selectedIndex}
-          answering={answering}
-          disabled={locked}
-          onAnswer={(k) => void answer(k)}
-          keys={keys}
-        />
-      )}
-
-      {/* Some menus render a side-box of detail the tappable rows can't carry —
-          the raw view shows the whole question exactly as the terminal does. */}
-      <button
-        type="button"
-        className={`dlg-details-toggle ${EYEBROW}`}
-        onClick={() => setDetails((d) => !d)}
-        aria-expanded={details}
-      >
-        {details ? 'Hide full question' : 'Show full question'}
-      </button>
-      {details && <Well className="dlg-raw">{shown.raw}</Well>}
-
-      {/* Own words are named only where the field is offered (the two-column layout, a row already holding other
-          text, and a menu that is no AskUserQuestion offer none). */}
-      <p className="sheet-foot">
-        {ownWordsRow(slot, own.text, own.call) !== null ? 'tap an option, or answer in your own words' : 'tap an option'}
-      </p>
+      <p className="sheet-foot">Choose an option</p>
     </Sheet>
-  );
-}
-
-/** An option's worked example, folded away under its row and opened for the
- *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
- *  rule code blocks follow. Capped at --well-max with internal scroll. */
-function OptionPreview({
-  text,
-  defaultOpen,
-}: {
-  text: string;
-  defaultOpen: boolean;
-}): ReactNode {
-  const [open, setOpen] = useState(defaultOpen);
-  // Names the region this toggle owns, so aria-expanded is about something a
-  // screen reader can then be taken to.
-  const previewId = useId();
-  return (
-    <div className="opt-preview-wrap">
-      <button
-        type="button"
-        className="opt-preview-toggle"
-        aria-expanded={open}
-        aria-controls={previewId}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {/* The caret is decoration, like .opt-glyph and .opt-enter: inside the
-            name it reads out as "black down-pointing small triangle preview",
-            and the announced NAME would change on every toggle on top of the
-            state change the toggle already announces. */}
-        <span aria-hidden="true">{open ? '▾' : '▸'} </span>
-        preview
-      </button>
-      {open && (
-        <Well id={previewId} className="opt-preview">
-          {text}
-        </Well>
-      )}
-    </div>
   );
 }

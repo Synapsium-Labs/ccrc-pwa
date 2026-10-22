@@ -1,7 +1,11 @@
 // What a live AskUserQuestion pane is showing, read for the sheet (D-5089, plan
 // docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1): which of the envelope's questions the pane is painting,
-// the one its title names when labels cannot say, the review screen an ask ends on and its summary, the free-text
-// row under a question's options, and the `Chat about this` row under that.
+// the one its title names when labels cannot say, the review screen an ask ends on, the free-text row under a
+// question's options, and the `Chat about this` row under that.
+//
+// D-6325: `askSource` (below) decides what an ask surface may SHOW, and nothing here hands the pane's text to a
+// renderer any more. `paneQuestion` and `reviewSummary`, which did, are deleted: the functions that remain read the pane
+// only to say WHICH of Claude's own questions is up and where its cursor and tabs are, facts of position.
 //
 // PURE: it imports `shared/api`'s types and `shared/ask-menu`'s rules, and nothing else; no React, no store. Both
 // sheets read it (the envelope's and the scraped one), so the two cannot disagree about what is on screen.
@@ -18,23 +22,25 @@
 // - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
 //   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
 //   `Submit` and lands on the review (D-5091).
-import type { Dialog, DialogAsk, DialogMulti, HookAsk, HookAskQuestion } from '../../../shared/api';
+import type { AskOption, Dialog, DialogAsk, DialogMulti, HookAsk, HookAskQuestion } from '../../../shared/api';
 import {
   ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
   COMMIT_LAST_RE,
   FREE_TEXT_PLACEHOLDER_RE,
-  REVIEW_HEADING_RE,
-  REVIEW_READY_RE,
   parseAskTabs,
   reviewRows,
   type AskTab,
   type ReviewRows,
 } from '../../../shared/ask-menu';
 
-/** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm). */
+/** One of Claude's own questions as a surface renders it (D-6325): the hook envelope's question, or the transcript's copy
+ *  of one. The transcript's options may carry a `preview` (an option's worked example), which the hook's never do. */
+export type StructuredQuestion = Omit<HookAskQuestion, 'options'> & { options: readonly AskOption[] };
+
+/** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm), or of the transcript's copy. */
 export interface AskQuestions {
-  readonly questions: readonly HookAskQuestion[];
+  readonly questions: readonly StructuredQuestion[];
 }
 
 /** Mirrors server/src/transcript/ask.ts's `pairMatches`/`norm`: normalize by
@@ -73,7 +79,7 @@ const prefixMatches = (a: string, b: string): boolean => {
  *  tap and a row never by a set of ticks. Against the boxes the count must be
  *  EQUAL, not merely covered: they are the question's own options, where a
  *  parsed menu's rows run on past them (the free-text row, `Chat about this`). */
-export function questionCorresponds(q: HookAskQuestion, dialog: Dialog | null): boolean {
+export function questionCorresponds(q: StructuredQuestion, dialog: Dialog | null): boolean {
   if (dialog === null) return false;
   if (q.multiSelect === true || dialog.multi !== undefined) {
     const boxes = dialog.multi?.options;
@@ -150,78 +156,15 @@ export function isAskReview(dialog: Dialog | null): boolean {
   return reviewRows(dialog) !== null;
 }
 
+/** The word of the review's Submit row, and of the transcript's Answer control while that review is up (D-6325): fixed
+ *  words, never the pane's own label. */
+export const SUBMIT_ANSWERS = 'Submit answers';
+
 /** The transcript's Answer control's word for the live pane menu (decision `ask-answer-control-says-submit`): while
- *  it is an ask's review screen, the pane's own Submit row (`Submit answers`), so a hidden sheet is one labelled click
- *  from Submit; otherwise undefined, the control's own `Answer`. It still only raises the sheet. */
+ *  it is an ask's review screen, `Submit answers` (D-6325: the fixed word, not the pane's label), so a hidden sheet is
+ *  one labelled click from Submit; otherwise undefined, the control's own `Answer`. It still only raises the sheet. */
 export function answerControlLabel(dialog: Dialog | null): string | undefined {
-  const rows = reviewRows(dialog);
-  return rows === null ? undefined : dialog?.options.find((o) => o.index === rows.submit)?.label.trim();
-}
-
-/** Mirrors server/src/pane/dialog.ts's `isRule`: a line of `─` (spaces allowed), at least 8 wide. */
-const isRule = (line: string): boolean => {
-  const t = line.trim();
-  return t.length >= 8 && [...t].every((c) => c === '─' || c === ' ');
-};
-
-/**
- * The review screen's summary, as the pane paints it: the warning line when a question was skipped, then each answered
- * question and its answer. Read from `dialog.raw`, never `body`: `body` is cut at `parseDialog`'s 20-row climb, and a
- * review with long answers is taller (`cc300-ask-review-4q-long` keeps only the last answers in its body).
- *
- * The lines after the nearest tab row or rule above the LAST ready line (the same words said in chat above the box
- * are earlier), up to that line; with neither above it, from the top of the capture, which the review then fills.
- * The `Review your answers` heading is dropped (it becomes the sheet's title), blank edges are trimmed, and the indent
- * every line shares is removed. Everything else is verbatim, trailing space aside. Empty when no ready line is painted.
- */
-export function reviewSummary(dialog: Dialog): string[] {
-  const lines = dialog.raw.split('\n').map((l) => l.trimEnd());
-  let ready = -1;
-  for (let i = lines.length - 1; i >= 0 && ready < 0; i--) if (REVIEW_READY_RE.test(lines[i]!.trim())) ready = i;
-  if (ready < 0) return [];
-  let from = 0;
-  for (let i = ready - 1; i >= 0; i--) {
-    const t = lines[i]!.trim();
-    if (ASK_TAB_ROW_RE.test(t) || isRule(t)) {
-      from = i + 1;
-      break;
-    }
-  }
-  let out = trimBlankEdges(lines.slice(from, ready));
-  if (out.length > 0 && REVIEW_HEADING_RE.test(out[0]!.trim())) out = trimBlankEdges(out.slice(1));
-  const indent = Math.min(...out.filter((l) => l !== '').map((l) => l.length - l.trimStart().length));
-  return Number.isFinite(indent) && indent > 0 ? out.map((l) => l.slice(indent)) : out;
-}
-
-/**
- * The pane's question, and what the pane painted above it, for a sheet that has no transcript copy to title it with
- * (the scraped sheet once the envelope ages out, D-5089): `body` without the ask's chrome.
- *  - The tab row (`←` … `→`) is dropped: it is the ask's navigation, which a capture shows without the colour that
- *    marks the active tab.
- *  - The question is the LAST line reading the title, and is dropped from the preamble (it is the sheet's title). A
- *    question too long for one row is painted as rows under a `│ ` bar with the title its last row: the question is
- *    then those rows joined, bars stripped, so the sheet titles the whole question rather than its tail.
- *  - Everything else stays, verbatim (a one-question ask's header line, a permission prompt's command), blank edges
- *    trimmed. A body that never paints the title keeps the title as the question and the whole body.
- */
-export function paneQuestion(dialog: Dialog): { question: string; preamble: string } {
-  const lines = (dialog.body ?? '').split('\n').map((l) => l.trimEnd()).filter((l) => !ASK_TAB_ROW_RE.test(l.trim()));
-  const title = dialog.title.trim();
-  let at = -1;
-  for (let i = lines.length - 1; i >= 0 && at < 0; i--) if (title !== '' && lines[i]!.trim() === title) at = i;
-  if (at < 0) return { question: dialog.title, preamble: trimBlankEdges(lines).join('\n') };
-  let from = at;
-  if (WRAP_BAR_RE.test(lines[at]!)) while (from > 0 && WRAP_BAR_RE.test(lines[from - 1]!)) from--;
-  const question = lines.slice(from, at + 1).map((l) => l.replace(WRAP_BAR_RE, '').trim()).join(' ');
-  return { question, preamble: trimBlankEdges([...lines.slice(0, from), ...lines.slice(at + 1)]).join('\n') };
-}
-
-function trimBlankEdges(lines: string[]): string[] {
-  let a = 0;
-  let b = lines.length;
-  while (a < b && lines[a] === '') a++;
-  while (b > a && lines[b - 1] === '') b--;
-  return lines.slice(a, b);
+  return reviewRows(dialog) === null ? undefined : SUBMIT_ANSWERS;
 }
 
 /** `s` with the box-drawing characters (U+2500 to U+257F) taken out and the ends trimmed (D-6325). A pane can paint a
@@ -382,7 +325,7 @@ export type AskSource =
    *  (a position fact; null when the tab row does not line up with the questions); never a pane line. */
   | { kind: 'review'; rows: ReviewRows; summary: { header: string; answered: boolean | null }[] }
   /** Claude's own question: the hook's envelope, or the transcript's copy when every row aligned. */
-  | { kind: 'structured'; questions: readonly HookAskQuestion[]; from: 'hook' | 'transcript' }
+  | { kind: 'structured'; questions: readonly StructuredQuestion[]; from: 'hook' | 'transcript' }
   /** Ask evidence and no structured copy that fully aligns: the surface says so and offers the terminal. */
   | { kind: 'ask-unreadable' }
   /** A menu with no ask evidence (a plan approval, a TUI prompt): the only variant that carries pane text, because no
@@ -400,17 +343,41 @@ export interface AskSourceInput {
   askFrameSeen: boolean;
 }
 
-/** The transcript's copy of the question as a hook-shaped one, or null while any row did not align (a `null` option)
- *  or the question is blank. A `preview` is dropped: `HookAskQuestion` has none, and the sheet never showed it. */
-function transcriptQuestion(a: DialogAsk | undefined): HookAskQuestion | null {
+/** The transcript's copy of the question as a structured one, or null while any row did not align (a `null` option) or
+ *  the question is blank. An option's `preview` is kept (D-6325): it is Claude's own worked example for that row, and
+ *  the surface draws it under the row as the scraped sheet did. */
+function transcriptQuestion(a: DialogAsk | undefined): StructuredQuestion | null {
   if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;
-  const q: HookAskQuestion = {
+  const q: StructuredQuestion = {
     question: a.question,
     multiSelect: a.multiSelect,
-    options: a.options.map((o) => (o!.description === undefined ? { label: o!.label } : { label: o!.label, description: o!.description })),
+    options: a.options.map((o) => {
+      const { label, description, preview } = o!;
+      return {
+        label,
+        ...(description === undefined ? {} : { description }),
+        ...(preview === undefined ? {} : { preview }),
+      };
+    }),
   };
   if (a.header !== undefined) q.header = a.header;
   return q;
+}
+
+/** A question's header chip, or `Question <n>` (1-based) for one with none: the one name the tab strip and the review's
+ *  summary give a question (D-6325). */
+export function questionHeader(q: { header?: string }, index: number): string {
+  return q.header !== undefined && q.header.trim() !== '' ? q.header.trim() : `Question ${index + 1}`;
+}
+
+/** The tab strip's chips (D-6325, R3): each structured question's header, with the pane's mark of whether it is
+ *  answered, by position. The pane's tab row says only HOW MANY tabs there are and which are answered; the words are
+ *  Claude's. Null (no strip) unless the pane paints a tab row with exactly one tab per question. */
+export function tabChips(
+  questions: readonly { header?: string }[], paneTabs: readonly AskTab[] | null,
+): { header: string; answered: boolean }[] | null {
+  if (paneTabs === null || paneTabs.length !== questions.length) return null;
+  return questions.map((q, i) => ({ header: questionHeader(q, i), answered: paneTabs[i]!.answered }));
 }
 
 /** Is the pane showing an ask at all (D-6325)? A `Dialog.ask` (even partly aligned), a `Dialog.multi` (a multiSelect
@@ -457,7 +424,7 @@ export function askSource({ ask, dialog, askFrameSeen }: AskSourceInput): AskSou
       kind: 'review',
       rows,
       summary: questions.map((q, i) => ({
-        header: q.header !== undefined && q.header.trim() !== '' ? q.header.trim() : `Question ${i + 1}`,
+        header: questionHeader(q, i),
         answered: marks === null ? null : marks[i]!.answered,
       })),
     };

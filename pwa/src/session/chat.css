@@ -1024,6 +1024,16 @@ button.metachip:active {
   letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
+/* Who is asking, and the held line, in the sheet eyebrow's slot (AskParts.tsx's `AskHeader`, D-6325): each on a line
+   of its own and in normal case, where the eyebrow's own type is small caps. */
+.ask-who,
+.ask-held {
+  display: block;
+  margin-top: var(--sp-1);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  letter-spacing: normal;
+  text-transform: none;
+}
 /* An option's worked example, folded under its row (open on the preselected
    one). The toggle keeps a full touch target — this is a phone. */
 .opt-preview-wrap {

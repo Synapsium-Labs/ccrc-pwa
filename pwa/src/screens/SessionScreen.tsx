@@ -21,6 +21,9 @@ import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
+import { heldAskLine } from '../session/askWords';
+import { heldCoordinatorWords } from '../session/sessionHeaderView';
+import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
@@ -331,6 +334,12 @@ export function SessionScreen({
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = liveStatus(status, live);
+  // D-6325: who asks, for the header of every ask surface. The held line comes from the header's own gated words
+  // (`heldCoordinatorWords`: only a `working` row), so a dead or idle row that keeps a stale `withCoordinator` shows none.
+  const heldWords = heldCoordinatorWords(live, status);
+  const asker = live === null
+    ? null
+    : { session: sessionLabel(live), project: live.project, held: heldWords === null ? null : heldAskLine(heldWords.short) };
   const dead = effectiveStatus === 'dead';
   const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
@@ -661,7 +670,7 @@ export function SessionScreen({
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} />
+      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} asker={asker} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}

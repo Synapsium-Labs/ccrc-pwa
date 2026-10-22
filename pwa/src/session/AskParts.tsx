@@ -15,14 +15,20 @@
 // D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
 // rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
-import { useEffect, useId, useRef, type ReactNode } from 'react';
-import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
-import { Button, EYEBROW, FOCUS_RING, OptionRow } from '@ccrc/ui';
-import { reviewRows, type AskTab } from '../../../shared/ask-menu';
+//
+// D-6325: every surface here renders from `askSource`, so no part draws a string the pane painted. The header names who
+// asks (`AskHeader`, one for every kind of surface), the review is one render for every source of copy (`AskReview`,
+// fixed words over the structured headers), the tab strip's chips carry the structured headers (`AskTabs`), and the
+// option preview (`OptionPreview`) lives here beside the rows it opens under.
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import type { Dialog, DialogMulti } from '../../../shared/api';
+import { Button, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Well } from '@ccrc/ui';
+import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
 import type { AskKeys } from './useAskKeys';
 import {
-  commitsToReview, paneTicks, reviewSummary, slotHolds, slotHoldsPart, wantedTicks, type FreeTextSlot,
+  SUBMIT_ANSWERS, commitsToReview, paneTicks, slotHolds, slotHoldsPart, wantedTicks, type AskSource,
+  type FreeTextSlot, type StructuredQuestion,
 } from './askLive';
 import {
   MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsCount, ownWordsHeld,
@@ -43,21 +49,39 @@ export const SEVERAL_ANSWERS =
  *  (measured, `cc300-ask-review-cancelled`: "User declined to answer questions"). */
 const CANCEL_DECLINES_ALL = 'Declines every question in this ask — nothing you answered is sent.';
 
+/** The review's Cancel row, whatever the pane calls it (D-6325). */
+const CANCEL_ANSWERS = 'Cancel';
+
+/** Who is asking (D-6325, R4): the session as `sessionLabel` names it, its project, and, while a coordinator holds the
+ *  question, the sentence that says so (`heldAskLine`) — null otherwise. Built by `SessionScreen` from the fleet row. */
+export interface Asker {
+  readonly session: string;
+  readonly project: string;
+  readonly held: string | null;
+}
+
 /**
- * The sheet's kicker: `claude is asking`, the question's header chip when it has one, and `n of N` when the sheet
- * knows which of several questions it is showing. Only the envelope sheet knows that: the pane marks its active tab
- * by colour alone, which a plain capture cannot see, so the scraped sheet passes no `progress`.
+ * The header of every ask surface, inside the sheet's eyebrow slot (D-6325, R4): the kicker (`Claude is asking`, in
+ * sentence case), the question's header chip when it has one, and `n of N` when the sheet knows which of several
+ * questions it is showing. Only the structured sheet knows that: the pane marks its active tab by colour alone, which a
+ * plain capture cannot see. Then, each on a line of its own and in normal case, who asks (`ws-a · project-a`) and, while
+ * a coordinator holds the question, the held line. One header for approval, review, structured, unreadable, menu and
+ * terminal-only alike, so a surface never forgets to say which session wants an answer.
  */
-export function AskEyebrow({
+export function AskHeader({
+  kicker = 'Claude is asking',
   header,
   progress,
+  asker,
 }: {
+  kicker?: string;
   header?: string;
   progress?: { n: number; of: number };
+  asker?: Asker | null;
 }): ReactNode {
   return (
     <>
-      claude is asking
+      {kicker}
       {header && (
         <>
           {' '}
@@ -70,6 +94,8 @@ export function AskEyebrow({
           <span>{`${progress.n} of ${progress.of}`}</span>
         </>
       )}
+      {asker && <span className="ask-who">{`${asker.session} · ${asker.project}`}</span>}
+      {asker?.held && <span className="ask-held">{asker.held}</span>}
     </>
   );
 }
@@ -96,21 +122,28 @@ export const lit = (keys: AskKeys | undefined, k: number, selectedIndex?: number
   keys !== undefined ? keys.hl === rowKey(k) : selectedIndex === k;
 
 /**
- * The review screen an ask ends on: the pane's summary, then the pane's own two rows. `Submit answers` is `answer(1)`
- * and sends every answer; `Cancel` is `answer(2)` and says first that it declines them all.
- *
- * The summary is `reviewSummary`'s, read from `dialog.raw` (never `body`, which a tall review loses its top answers
- * from), in `.dlg-body`: pre-wrap, breaks anywhere, and scrolls at 38vh, so a 1000-character answer wraps and the two
- * rows stay reachable under it at every width.
+ * The review screen an ask ends on (D-6325): fixed words, whatever the source of copy. Under `Review your answers` it
+ * lists each question by its header, with the pane's mark of whether it is answered when that is known (`summary`,
+ * built by `askSource` from the structured copy; never a line the pane painted), then two rows: `Submit answers`
+ * answers the pane's submit row, and `Cancel` its cancel row and says first that it declines them all. The rows are the
+ * pane's by POSITION (`rows`, from `reviewRows`): the digit printed there is the one answered.
  */
 export function AskReview({
-  dialog,
+  dialogId,
+  selectedIndex,
+  rows,
+  summary,
   answering,
   locked,
   onAnswer,
   keys,
 }: {
-  dialog: Dialog;
+  /** The pane screen's id, which keys the rows so a new screen starts them afresh. */
+  dialogId: string;
+  /** The pane's cursor row: the highlight when the sheet's keys are off. */
+  selectedIndex: number;
+  rows: ReviewRows;
+  summary: Extract<AskSource, { kind: 'review' }>['summary'];
   /** The option index whose answer is in flight, as the sheet's own rows read it. */
   answering: number | null;
   /** Another send is in flight (an own-words call, D-5090), so no row may start one. */
@@ -119,32 +152,40 @@ export function AskReview({
   /** The sheet's keyboard (`useAskKeys`), whose digits include this screen's `1` and `2`. */
   keys?: AskKeys;
 }): ReactNode {
-  const summary = reviewSummary(dialog);
-  // Submit and Cancel by LABEL (`reviewRows`, decision `ask-review-lenient-arm`), and only those two: a review with
-  // anything numbered painted after its rows still offers exactly the pane's own two, each under its printed digit.
-  const rows = reviewRows(dialog);
-  const shown = rows === null ? [] : dialog.options.filter((o) => o.index === rows.submit || o.index === rows.cancel);
   const disabled = locked || answering !== null;
   // Claude Code's own keys on this screen (decision `ask-review-digit-keys`, the operator's ruling "Match Claude Code"):
   // `1` submits every answer and `2` cancels AT ONCE, which declines the whole ask, exactly as in the terminal. The
   // Cancel row keeps saying so (`CANCEL_DECLINES_ALL`). They are the sheet's keyboard now (`useAskKeys`, decision
   // `ask-sheet-keyboard-model`), with ↑/↓ wrapping between the two rows and ← back to the last question.
+  const shown = [
+    { index: rows.submit, label: SUBMIT_ANSWERS, sublabel: undefined },
+    { index: rows.cancel, label: CANCEL_ANSWERS, sublabel: CANCEL_DECLINES_ALL },
+  ];
   return (
     <>
-      {summary.length > 0 && <p className="dlg-body">{summary.join('\n')}</p>}
+      {summary.length > 0 && (
+        <ul className={`dlg-copy ${RESET_LIST} gap-1`} aria-label="Your questions">
+          {summary.map((q, i) => (
+            <li key={i}>
+              {q.header}
+              {q.answered !== null && <span>{q.answered ? ' · Answered' : ' · Not answered yet'}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="opts">
         {shown.map((o) => {
-          const selected = lit(keys, o.index, dialog.selectedIndex);
+          const selected = lit(keys, o.index, selectedIndex);
           const waiting = answering === o.index;
           return (
             <OptionRow
-              key={`${dialog.id}:${o.index}`}
+              key={`${dialogId}:${o.index}`}
               {...keyed(keys, o.index)}
               selected={selected}
               glyph={selected ? '❯' : ''}
               index={o.index}
               label={o.label}
-              sublabel={o.index === rows?.cancel ? CANCEL_DECLINES_ALL : undefined}
+              sublabel={o.sublabel}
               disabled={disabled}
               busy={waiting}
               onClick={() => onAnswer(o.index)}
@@ -168,7 +209,7 @@ export function OtherQuestions({
   questions,
   shown,
 }: {
-  questions: readonly HookAskQuestion[];
+  questions: readonly StructuredQuestion[];
   /** The question the sheet is showing, as an index into `questions`; every other one is listed. */
   shown: number;
 }): ReactNode {
@@ -488,7 +529,7 @@ export function MultiPick({
   dialogId: string;
   /** The envelope's copy for the boxes, by position (`questionCorresponds` matched them one for one); the pane's own
    *  labels and descriptions otherwise. */
-  copy?: HookAskQuestion['options'];
+  copy?: StructuredQuestion['options'];
   picks: Picks;
   /** Another send is in flight (an option's answer, or own words). */
   locked: boolean;
@@ -546,7 +587,9 @@ export const TABS_HELD = 'Commit your picks with Next first, or untick them, to 
 
 /**
  * The ask's tab strip (decision `ask-tab-strip`): one chip per question, its header and whether the pane marks it
- * answered (`☒`) or not yet (`☐`), then `✔ Submit`, read off the pane's own tab row (`parseAskTabs`). The chip of the
+ * answered (`☒`) or not yet (`☐`), then `✔ Submit`. D-6325: the header is Claude's own (`Question <n>` when a question
+ * has none); the pane's tab row (`parseAskTabs`) supplies only the count and the marks, and no strip is drawn unless the
+ * two counts agree (`tabChips`). The chip of the
  * screen showing is marked current. A chip MOVES THE PANE there (`POST /dialog/tab`), the same move the arrow keys make,
  * and the sheet follows the screen the pane lands on: a sheet-local view of another question could not answer it, since
  * answers are positional on the live menu. Each chip is named `Go to …` for a screen reader: `✔ Submit` reaches the
@@ -566,7 +609,8 @@ export function AskTabs({
   busy,
   onGo,
 }: {
-  tabs: readonly AskTab[];
+  /** One chip per question: Claude's own header for it, and the pane's mark of whether it is answered (`tabChips`). */
+  tabs: readonly { header: string; answered: boolean }[];
   /** The question showing (0-based), or null when the sheet cannot tell or the review is showing. */
   active: number | null;
   onReview: boolean;
@@ -619,5 +663,45 @@ export function AskTabs({
       </div>
       {held && <p className="dlg-copy">{TABS_HELD}</p>}
     </>
+  );
+}
+
+/** An option's worked example, folded away under its row and opened for the
+ *  preselected one. Fixed-width ASCII: it scrolls, it never wraps — the same
+ *  rule code blocks follow. Capped at --well-max with internal scroll.
+ *  D-6325: moved here from `DialogSheet.tsx`, where the scraped rows it served were; the structured rows draw it now. */
+export function OptionPreview({
+  text,
+  defaultOpen,
+}: {
+  text: string;
+  defaultOpen: boolean;
+}): ReactNode {
+  const [open, setOpen] = useState(defaultOpen);
+  // Names the region this toggle owns, so aria-expanded is about something a
+  // screen reader can then be taken to.
+  const previewId = useId();
+  return (
+    <div className="opt-preview-wrap">
+      <button
+        type="button"
+        className="opt-preview-toggle"
+        aria-expanded={open}
+        aria-controls={previewId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {/* The caret is decoration, like .opt-glyph and .opt-enter: inside the
+            name it reads out as "black down-pointing small triangle preview",
+            and the announced NAME would change on every toggle on top of the
+            state change the toggle already announces. */}
+        <span aria-hidden="true">{open ? '▾' : '▸'} </span>
+        preview
+      </button>
+      {open && (
+        <Well id={previewId} className="opt-preview">
+          {text}
+        </Well>
+      )}
+    </div>
   );
 }

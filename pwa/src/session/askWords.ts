@@ -15,6 +15,11 @@ import {
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
 
+/** The held line of an ask surface's header (D-6325, R4): said while a coordinator holds the question, so the operator
+ *  knows why nothing has answered yet and that answering is still theirs. `short` is the coordinator's short name
+ *  (`withCoordinatorWords`), the header's own words. */
+export const heldAskLine = (short: string): string => `Its coordinator, ${short}, may answer first. You can still answer.`;
+
 /** The one fact all three dialog routes refuse with first (`stale-dialog`): the pane no longer shows the question the
  *  sheet answered. Each table says it in these words, then what that meant for its own send. */
 const MOVED_ON = 'That question moved on in the terminal';
