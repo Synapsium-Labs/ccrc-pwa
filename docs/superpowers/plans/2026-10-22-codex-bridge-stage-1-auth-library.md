@@ -642,7 +642,7 @@ Expected: FAIL, the new cases, with `AttributeError: module 'ccgpt_auth' has no 
     §2.6); `needs-signin` on any 401, whatever its code or body (Codex's rule); `needs-signin` for `invalid_grant` on
     a 400 (Codex's rule); `needs-signin` for any other code in `NEEDS_SIGNIN_CODES`, whatever the status; otherwise
     `transient`: no code, an unknown code, and `invalid_grant` on a status other than 400 or 401
-    (D-TBD-error-classified-like-codex).
+    (D-6382).
   - `token_request(refresh_token: str) -> Tuple[dict, Optional[str]]` — the one network call of a refresh: `POST
     auth_base() + TOKEN_PATH`, JSON body `{client_id, grant_type: "refresh_token", refresh_token, scope: "openid
     profile email"}` (LiteLLM's, `authenticator.py:304-312`), timeout `TOKEN_TIMEOUT_S`, redirects refused (an
@@ -1120,7 +1120,7 @@ operator notes.
   unattended-guard block (`:234-297`); `_require_logged_in` (`:398-417`) and `main` (`:636-664`) read through the
   library loaded from `os.path.join(os.path.dirname(os.path.realpath(__file__)), "ccgpt-auth.py")`;
   `_fetch_headers` (`:470-545`) sends `ChatGPT-Account-Id` when the reading has one, and keeps
-  `originator: codex_cli_rs` (D-TBD-poller-keeps-codex-originator); its docstring's D-3160 paragraph says why the
+  `originator: codex_cli_rs` (D-6373); its docstring's D-3160 paragraph says why the
   header is now sent.
 - Modify: `ccd/ccrc` — `_models_probe_codex_env` (`:10475-10492`) also exports `CCRC_MODELS_AUTH_LIB="$(
   _codex_auth_lib)"`: a probe-specific name, so the runtime interpreter's patch is never armed by it, and the
@@ -1301,7 +1301,7 @@ operator notes.
   `_codex_lock` and releases it after `_codex_stop_lane`; a timeout refuses `codex-reap-failed` with nothing removed.
   `_acct_remove_usage`'s comment (`:24486-24500`) says the poll no longer writes the credential, keeps its two
   limits-row sentences (`:24480`, `:24492-24493`), and says the wait stays for that reason
-  (D-TBD-removal-keeps-usage-wait).
+  (D-6378).
 - Modify: `server/test/ccrc-doctor.test.ts` — the fixture `python3` is a presence stub that runs the real interpreter
   only for the box-token check's two programs (`BT_PY_ARM`, `:1151-1159`, stubbed at `:1185`), on a PATH with no
   system directory (`containedPath`, `:941-948`), so `_codex_auth status` would print nothing in every healthy codex
@@ -1504,7 +1504,7 @@ Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes
    update rebuilds the Codex runtime once (a pip install from the package index, bounded by `CCRC_RUNTIME_PIP_S`);
    `_inst_codex_tiers` then restarts each lane's LiteLLM tier (stale generation and library hash). A restart that lands
    while the tier is inside a refresh's token round trip can spend the refresh token
-   (D-TBD-tier-stop-takes-no-auth-lock), so a quiet window or a paused auto-update for the lane window (ownership
+   (D-6384), so a quiet window or a paused auto-update for the lane window (ownership
    spec §21.11) matters twice.
    `accounts.sh` gains `_ccrc_auth_dir`; until the server box is updated, the two boxes' generated roster digests
    differ, so update the server box promptly after.
@@ -1517,7 +1517,7 @@ Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes
 5. **Watch:** an idle lane's usage row and models catalogue go stale once its access token expires
    (`token-expired`), until the lane's next request; a `needs-signin` lane answers 401 at once instead of hanging. On
    a lane left idle, watch `auth.lastRefreshAt`: no process refreshes it until a request arrives, and whether its
-   refresh token outlives a long idle is unmeasured (D-TBD-idle-litellm-lane-has-no-refresher).
+   refresh token outlives a long idle is unmeasured (D-6383).
 6. **Undo:** `ccrc rollback --to <previous>` (or `ccrc update --to <previous>`). The older tree's `ccgpt-runtime`
    rebuilds the older patch, and its tiers start without `CCRC_CODEX_AUTH_LIB`, so LiteLLM's own auth, device flow
    included, returns. The credential stays in LiteLLM's format with all five keys, so the older code reads it as is;
@@ -1530,20 +1530,20 @@ Nothing here is run by an agent. Wave 1 changes nothing a lane runs; these notes
 - In litellm mode an idle lane's readers cannot refresh (ruling 1). A lane that stays on `litellm` has no idle
   refresher from Stage 1 until it leaves LiteLLM (Stage 4, lane by lane): Stage 2 flips one lane (lane-b on the
   reference fleet) to `direct`, and only that lane gains the bridge's idle-lane timer
-  (D-TBD-idle-litellm-lane-has-no-refresher).
+  (D-6383).
 - The PWA does not show the status yet: the agent's read whitelist does not admit an authDir
-  (D-TBD-pwa-reads-status-later).
+  (D-6381).
 - Revocation on account removal, a retired-refresher doctor check, the SIWC file and sign-in, `ccrc codex consent`,
   the host id and `ccrc auth import` are later stages.
 - An older ccrc's tier (before its restart) still truncates the credential in place; the library's read retries and
   its checkpoint's mtime test exist for that window.
-- Only account removal takes the library lock around a tier stop (D-TBD-tier-stop-takes-no-auth-lock).
+- Only account removal takes the library lock around a tier stop (D-6384).
 
 ## Open questions
 
 3. **The token endpoint's error-body shape.** Closed in fix round 2: measured from Codex's own login and refresh
    source (What was measured), and `classify_error` reads and classifies the code as Codex does (Task 3,
-   D-TBD-error-classified-like-codex).
+   D-6382).
 5. **The backend access-token lifetime.** Unmeasured, and not hard-coded: the library reads `exp` from the token.
    Rollout note 4 measures it for the first time.
 
@@ -1553,7 +1553,7 @@ Every entry is unnumbered: the controller issues the numbers and replaces each s
 comment that cites it. A further departure found while executing is written `D-TBD-<slug>` and named in the task's
 report.
 
-### D-TBD-tier-refresh-runs-the-library — in litellm mode the tier's refresh is the library's code
+### D-6372 — in litellm mode the tier's refresh is the library's code
 
 - **Departs from:** spec §2.6, "In `litellm` mode LiteLLM, which ignores the lock, is the only refresher".
 - **What changed:** LiteLLM's tier stays the only refreshing process, but through the patch its `get_access_token`
@@ -1566,7 +1566,7 @@ report.
   generation never becomes current. A placed library that fails to import makes the lane answer 401
   `auth-library-absent` until `ccrc update`.
 
-### D-TBD-poller-keeps-codex-originator — the poller sends the account id, not yet `originator: ccrc`
+### D-6373 — the poller sends the account id, not yet `originator: ccrc`
 
 - **Departs from:** spec §2.6's caller table ("sends the account id and `originator: ccrc`").
 - **What changed:** Stage 1 adds `ChatGPT-Account-Id` and keeps `originator: codex_cli_rs` (Task 7).
@@ -1574,7 +1574,7 @@ report.
   lane-b); a 15-minute poller would take that step unmeasured.
 - **Cost if wrong:** one header, changed in Stage 2.
 
-### D-TBD-checkpoint-is-the-pending-file — what "recoverable from the checkpoint" covers
+### D-6374 — what "recoverable from the checkpoint" covers
 
 - **Departs from:** spec §5, "a crash between the token request and the write is recoverable from the checkpoint",
   which defines no checkpoint.
@@ -1585,7 +1585,7 @@ report.
 - **Cost if wrong:** a sign-in after the refresher dies inside one token round trip (bounded by `TOKEN_TIMEOUT_S`,
   30 s); a tier restart in that window, such as `_inst_codex_tiers` at a rollout, is the likeliest cause.
 
-### D-TBD-config-error-state — a sixth state for `invalid_client`
+### D-6375 — a sixth state for `invalid_client`
 
 - **Departs from:** spec §2.6, which lists five states and calls `invalid_client` "a configuration error".
 - **What changed:** `config-error` is a sixth status state (Task 3), bound to the library's own config hash, refused
@@ -1594,7 +1594,7 @@ report.
 - **Why:** a sign-in alone does not cure it, so it must not read `needs-signin`; none of the five fits.
 - **Cost if wrong:** a reader older than this word does not know it; the bridge's Stage 2 reader must add it.
 
-### D-TBD-library-is-one-module — one file, not a package
+### D-6376 — one file, not a package
 
 - **Departs from:** D18's "a stdlib package beside" the shim.
 - **What changed:** Stage 1's library is one module file, `ccgpt-auth.py`, placed as the fifth GPT-lane file.
@@ -1602,7 +1602,7 @@ report.
   files; a directory needs new paths in all four.
 - **Cost if wrong:** a later move into Stage 2's bridge package, with its own placement change.
 
-### D-TBD-status-computed-when-absent — start and the doctor read a computed status when no file exists
+### D-6377 — start and the doctor read a computed status when no file exists
 
 - **Departs from:** spec §2.6, "The doctor, the PWA and `ccrc codex start` read that, never the secret."
 - **What changed:** the bash callers never read the secret; when no current status file exists (a credential no
@@ -1612,7 +1612,7 @@ report.
   a second writer.
 - **Cost if wrong:** the library opens the credential on each such `status` call, in the caller's process.
 
-### D-TBD-removal-keeps-usage-wait — removal takes the lock and keeps its wait for a poll
+### D-6378 — removal takes the lock and keeps its wait for a poll
 
 - **Departs from:** spec §2.6's caller table ("waits for an in-flight poll" → "takes the library lock").
 - **What changed:** removal takes the library lock around the stop and still waits for an in-flight poll (Task 9).
@@ -1620,27 +1620,27 @@ report.
   the credential. The other stands: a poll still running writes again the `~/.cc-limits` row the removal deletes.
 - **Cost if wrong:** up to `CCRC_ACCT_USAGE_WAIT_S` of waiting at removal.
 
-### D-TBD-revocation-later — no revocation at removal
+### D-6379 — no revocation at removal
 
 - **Departs from:** spec §2.6's caller table ("offers revocation").
 - **Why:** no revocation endpoint for this credential is measured or sourced in the tree.
 - **Cost if wrong:** a removed lane's refresh token stays valid upstream until it lapses.
 
-### D-TBD-retired-refresher-check-later — the doctor's retired-refresher FAIL waits for a retirement
+### D-6380 — the doctor's retired-refresher FAIL waits for a retirement
 
 - **Departs from:** spec §2.6's caller table ("fails if a retired refresher is enabled again").
 - **Why:** Stage 1 retires no refresher process; the check lands with Stage 2's flip, when LiteLLM is retired on a
   `direct` lane.
 - **Cost if wrong:** an old poller or probe placed again goes unnoticed except by the doctor's byte comparison.
 
-### D-TBD-pwa-reads-status-later — the PWA does not read the status in Stage 1
+### D-6381 — the PWA does not read the status in Stage 1
 
 - **Departs from:** spec §2.6, "The doctor, the PWA and `ccrc codex start` read that".
 - **Why:** the status file sits beside the credential, which the agent's read whitelist does not admit
   (`agent/src/whitelist.ts:58-80`); widening it is its own reviewed change.
 - **Cost if wrong:** the operator sees `needs-signin` only in the doctor and the CLI.
 
-### D-TBD-error-classified-like-codex — `invalid_grant` means `needs-signin` on a 400 or a 401 only
+### D-6382 — `invalid_grant` means `needs-signin` on a 400 or a 401 only
 
 - **Departs from:** spec §2.6, "`invalid_grant`, `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
   `refresh_token_invalidated` and `refresh_token_reused` all mean `needs-signin`", which names no status.
@@ -1654,7 +1654,7 @@ report.
 - **Cost if wrong:** a dead token answered `invalid_grant` with a status other than 400 or 401 reads `transient`:
   the tier answers `refresh-failed` on each request instead of recording `needs-signin`; Codex reads it the same way.
 
-### D-TBD-idle-litellm-lane-has-no-refresher — a litellm lane is refreshed only by its own requests
+### D-6383 — a litellm lane is refreshed only by its own requests
 
 - **Departs from:** spec §2.6's idle-lane timer, which is the bridge's and covers a `direct` lane only.
 - **What changed:** Stage 1 ends the poller's refresh (`ccd/ccgpt-usage.py:647-656`, every 15 minutes today), so a
@@ -1663,7 +1663,7 @@ report.
 - **Cost if wrong:** the backend refresh token's idle lifetime is unmeasured; a lane idle longer than it comes back
   `needs-signin` and needs a sign-in. Rollout note 5 watches `lastRefreshAt`.
 
-### D-TBD-tier-stop-takes-no-auth-lock — only removal takes the library lock around a tier stop
+### D-6384 — only removal takes the library lock around a tier stop
 
 - **Departs from:** spec §2.6's lock rule as applied to stops: `_inst_codex_tiers`' restart, `ccrc codex stop` and
   `_uninst_codex` stop a tier without the library lock.
@@ -1672,4 +1672,4 @@ report.
   one shell would wait on itself (`_codex_lock`'s ONE LEVEL rule, `ccd/ccrc:12796-12802`), since removal already
   holds it around `_codex_stop_lane`.
 - **Cost if wrong:** a stop that lands inside a refresh's token round trip can spend the refresh token, and the lane
-  then needs a sign-in (D-TBD-checkpoint-is-the-pending-file).
+  then needs a sign-in (D-6374).
