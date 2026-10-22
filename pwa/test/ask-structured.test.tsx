@@ -142,7 +142,8 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
     const { onOpenTerminal } = renderSheet(n);
     expect(screen.getByRole('heading', { name: CANT_READ })).toBeInTheDocument();
     expect(document.querySelectorAll('.opt')).toHaveLength(0);
-    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(screen.queryByLabelText('Your own answer')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Other/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Open terminal/ }));
     expect(onOpenTerminal).toHaveBeenCalledOnce();
@@ -389,7 +390,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
     expect(labels.slice(0, 3)).toEqual(['Fast path', 'Recommended reading', 'Read the (Recommended) docs first']);
     const tagged = [...document.querySelectorAll('.opt-label .chip')].map((c) => c.closest('.opt'));
     expect(tagged).toHaveLength(1);
-    expect(tagged[0]?.querySelector('.opt-label')?.textContent).toBe('Fast pathRecommended');
+    expect(tagged[0]?.querySelector('.opt-label')?.textContent).toBe('Fast path Recommended');
     expect(tagged[0]?.querySelector('.opt-desc')?.textContent).toBe('Skips the cache.');
   });
 
@@ -447,6 +448,22 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
     fireEvent.click(chat);
     expect(option).toHaveBeenCalledWith(ID, 'dlg-a1', 5);
     expect(option).toHaveBeenCalledTimes(1);
+  });
+
+  it('a chosen Other does not outlive its screen: a new screen with nothing kept starts closed, one with text keeps it open', () => {
+    const { fx, store } = renderSheet(1);
+    fireEvent.click(rowOf(/^Other/));
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    // The same question repainted under a new id (typing in the terminal, a mid-redraw grab): no text and no call are
+    // kept here, so the choice is spent and the field is closed again.
+    act(() => store.getState().apply({ type: 'dialog', dialog: { ...fx.dialog!, id: 'dlg-a1-repaint' } }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(rowOf(/^Other/)).toBeInTheDocument();
+    // Chosen again, with text typed: a repaint under another new id keeps the field open, text and all.
+    fireEvent.click(rowOf(/^Other/));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+    act(() => store.getState().apply({ type: 'dialog', dialog: { ...fx.dialog!, id: 'dlg-a1-repaint-2' } }));
+    expect(screen.getByRole('textbox')).toHaveValue('Memcached');
   });
 
   it('a refused send keeps the field open with the text, and says why', async () => {

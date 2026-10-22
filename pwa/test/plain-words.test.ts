@@ -4,17 +4,28 @@
 // row", the terminal is "the pane". They are right inside the code and wrong on the screen, where the operator knows a
 // question, an "Other" option and "the terminal". This census walks the TypeScript syntax tree of the files an ask
 // surface's words live in and refuses a forbidden word in any position an operator reads. It reuses
-// `literal-census.test.ts`'s walker (`parseTs`, `isSpecifier`) rather than copying it.
+// the walker `literal-census.test.ts` also uses (`literalWalker.ts`: `parseTs`, `isSpecifier`, one copy, a helper module so
+// that importing it registers no tests) rather than copying it.
 //
 // WHAT IT SCANS, by POSITION and never by shape (a class string that happens to say "pane" is not copy):
 //   - JSX text;
-//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label` and `sublabel`;
+//   - the string values of the attributes `aria-label`, `title`, `placeholder`, `alt`, `label`, `sublabel` and `kicker`;
+//   - a string that is a parameter's default (`function H({ kicker = '…' })`);
 //   - a string in a JSX child expression (`{cond ? 'a' : 'b'}`);
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
 //     not: a private constant is rendered all the same), and a top-level function's returned strings;
 //   - the sentence values of a `Record` table (a top-level const typed `Record<…>`);
 //   - the first argument of `toast(…)`, which is a sentence the operator reads.
 // It never scans `className`, `data-*`, object keys, import specifiers, route literals or comments.
+//
+// WIDER THAN THE PLAN'S LIST, ON PURPOSE (D-6325, T1b; T3a and T3d extend this file and inherit the choice). The plan
+// names JSX text, six attributes, exported sentence constants and Record values. This scan also reads private top-level
+// constants, strings a top-level function returns, parameter defaults, strings in JSX child expressions and the first
+// argument of `toast(...)`. The reason is that the sentences an operator reads are not kept only where the plan looked:
+// `ROW_HOLDS_OTHER` and its siblings are private constants rendered through `{…}`, `cursorPlace` and `ownWordsCount`
+// return their sentences, and the kicker `Claude is asking` was a parameter default, which a narrower walk cannot see. A
+// word the narrow rule would have missed is caught, and the measured cost is nothing: no position added here produced a
+// false positive on the tree. Narrow it only by a change that says which sentence it then leaves unseen.
 //
 // WHOLE WORDS, case-insensitive, except the exact lowercase literal `claude is asking` (the sentence-case
 // `Claude is asking` is the new kicker and is right). A word leaves the list only by a change that says why.
@@ -24,7 +35,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import ts from 'typescript';
-import { isSpecifier, parseTs } from './literal-census.test';
+import { isSpecifier, parseTs } from './literalWalker';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');
 const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts');
@@ -96,7 +107,7 @@ function returned(fn: ts.Node): ts.Node[] {
   return out;
 }
 
-const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel']);
+const SENTENCE_ATTRS = new Set(['aria-label', 'title', 'placeholder', 'alt', 'label', 'sublabel', 'kicker']);
 
 /** One operator-visible string: where it is, which position kind found it, and what it says. */
 export interface Visible {
@@ -146,6 +157,9 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
     }
     if (ts.isJsxExpression(n) && n.parent !== undefined && (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent))) {
       n.forEachChild(underChild);
+    }
+    if (only === undefined && (ts.isParameter(n) || ts.isBindingElement(n)) && n.initializer !== undefined) {
+      for (const v of leaves(n.initializer)) add(v, 'a parameter default');
     }
     if (ts.isCallExpression(n) && n.expression.getText(src) === 'toast') {
       for (const v of leaves(n.arguments[0])) add(v, 'a toast');
@@ -237,6 +251,9 @@ describe('the scanner reads positions, not shapes', () => {
     ['a returned sentence', 'export function f(x: boolean) { if (x) return "own-words"; return "ok"; }'],
     ['a Record table value', 'const T: Readonly<Record<string, string>> = { a: "fine", b: "the envelope" };'],
     ['a toast', 'toast("claude is asking");'],
+    ['a kicker attribute', 'export const A = () => <AskHeader kicker="claude is asking" />;'],
+    ['a parameter default', 'export function H({ kicker = "claude is asking" }: { kicker?: string }) { return kicker; }'],
+    ['a plain parameter default', 'export const H = (kicker: string = "the pane") => kicker;'],
   ])('flags %s', (_name, code) => {
     expect(scan(code).length).toBe(1);
   });

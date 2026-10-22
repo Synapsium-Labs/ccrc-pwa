@@ -160,6 +160,9 @@ describe('label over description, and the tag (D-6325)', () => {
     const label = document.querySelector('.opt-label')!;
     expect(label.firstChild?.textContent).toBe('Redis');
     expect(label.lastElementChild).toBe(screen.getByTestId('tag'));
+    // A space between them, so the accessible name reads "Redis Recommended" and not "RedisRecommended".
+    expect(label.textContent).toBe('Redis Recommended');
+    expect(screen.getByRole('button', { name: /^Redis Recommended/ })).toBeInTheDocument();
     expect(label.compareDocumentPosition(document.querySelector('.opt-desc')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
