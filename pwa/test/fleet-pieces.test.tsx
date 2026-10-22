@@ -9,7 +9,8 @@ import type { AccountUsage, AuthStatus, FleetHealth, FleetSession, NodeWire, Run
 import { BANNER_ORDER, BannerStack, LOCAL_BANNERS, type BannerRank } from '../src/fleet/BannerStack';
 import { fleetSummary } from '../src/fleet/fleetSummary';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
-import { COMPACT_FIT, compactDoorLabel, compactReading, overflowCount } from '../src/fleet/CompactGauges';
+import { COMPACT_FIT, CompactGauges, compactDoorLabel, compactReading, hiddenGauges } from '../src/fleet/CompactGauges';
+import { DOOR_EVENT } from '../src/command/door';
 import { FleetHostBanner, fleetHostBannerShows } from '../src/fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../src/fleet/HaltBanner';
 import { UpdateBanner, updateBannerShows } from '../src/fleet/UpdateBanner';
@@ -257,8 +258,15 @@ describe('the compact gauges', () => {
     expect(within(door).queryByText('lane-off')).toBeNull();
     // One door: nothing inside it is a control of its own.
     expect(container.querySelectorAll('[role="link"], a, button')).toHaveLength(1);
+    // The group is the `go-accounts` door (W2 Task S4b): it asks the command layer, which navigates.
+    expect(door).toHaveAttribute('data-command', 'go-accounts');
+    const ran: string[] = [];
+    const hear = (e: Event): void => { ran.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, hear);
     fireEvent.click(door);
-    expect(location.pathname).toBe('/accounts');
+    fireEvent.keyDown(door, { key: 'Enter' });
+    window.removeEventListener(DOOR_EVENT, hear);
+    expect(ran).toEqual(['go-accounts', 'go-accounts']);
   });
 
   it('led fits more than bar; grid places every lane, two to a row, with no +n', async () => {
@@ -297,10 +305,40 @@ describe('the compact gauges', () => {
   });
 
   it('the fit is measured: a gauge below the first line wrapped out of the box and counts into +n', () => {
-    expect(overflowCount([])).toBe(0);
-    expect(overflowCount([10, 10, 10])).toBe(0);
-    expect(overflowCount([10, 10, 28, 28])).toBe(2);
-    expect(overflowCount([10, 10.5, 28])).toBe(1);
+    const at = (...tops: number[]): { top: number; right: number }[] => tops.map((top) => ({ top, right: 100 }));
+    expect(hiddenGauges([], 200)).toEqual([]);
+    expect(hiddenGauges(at(10, 10, 10), 200)).toEqual([false, false, false]);
+    expect(hiddenGauges(at(10, 10, 28, 28), 200)).toEqual([false, false, true, true]);
+    expect(hiddenGauges(at(10, 10.5, 28), 200)).toEqual([false, false, true]);
+  });
+
+  // The first gauge cannot wrap (it opens the line), so in a row narrower than its floor it was squeezed and its
+  // reading cut, and the "+n" never said it (W2 Task S4b review: the bar at 900 drew a meter with no number). A gauge
+  // whose right edge passes the row's is hidden too, and counts into +n, the first one included.
+  it('the fit is measured: a gauge whose right edge passes the row\'s is hidden and counts into +n, the first one too', () => {
+    expect(hiddenGauges([{ top: 10, right: 629 }], 593)).toEqual([true]);
+    expect(hiddenGauges([{ top: 10, right: 593.5 }, { top: 28, right: 400 }], 593)).toEqual([false, true]);
+  });
+
+  it('a row too narrow for its first gauge hides that gauge and says every lane in +n, first', () => {
+    const six = [lane('lane-a', 100, 50), lane('lane-b', 88, 50), lane('lane-c', 76, 50), lane('lane-d', 40, 50), lane('lane-e', 30, 50), lane('lane-f', 20, 50)];
+    // jsdom lays nothing out: the row is 84 wide and the first gauge, which opens its line, ends 36 past it; the
+    // rest wrapped below. The bar places four lanes (COMPACT_FIT), so two more are capped.
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const box = (left: number, top: number, right: number): DOMRect =>
+        ({ left, top, right, bottom: top + 18, width: right - left, height: 18, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+      if (this.classList.contains('accounts-compact-lanes')) return box(509, 10, 593);
+      if (this.classList.contains('accounts-compact-gauge')) {
+        return this === this.parentElement?.firstElementChild ? box(509, 10, 629) : box(509, 28, 629);
+      }
+      return box(0, 0, 0);
+    });
+    const { container } = render(<CompactGauges compact="bar" lanes={six} roster={[]} placeholder={null} />);
+    const gauges = [...container.querySelectorAll('.accounts-compact-gauge')];
+    expect(gauges).toHaveLength(4);
+    expect(gauges.map((g) => g.hasAttribute('data-clipped'))).toEqual([true, true, true, true]);
+    expect(container.querySelector('.accounts-compact-more')).toHaveTextContent('+6');
+    expect(container.querySelector('.accounts-compact')).toHaveAttribute('data-lanes-hidden');
   });
 
   it('the door\'s name carries the fullest lane\'s reading', () => {

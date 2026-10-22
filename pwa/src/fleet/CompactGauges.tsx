@@ -5,13 +5,17 @@
 // FIT IS MEASURED, NOT COUNTED. In `bar` and `led` the lanes sit in one row that wraps, and the row is one line tall
 // and clips: a gauge that does not fit whole wraps out of sight instead of shrinking under its floor or painting over
 // its neighbour. Each gauge has a floor (a 6ch name, the meter, a 5ch reading), so a name truncates before a gauge
-// wraps. After layout the door counts the gauges that wrapped (`overflowCount`) and says them in the "+n", with the
-// lanes past `COMPACT_FIT`'s cap. `grid` (two columns, one row per two lanes) places every lane and measures nothing.
+// wraps. After layout the door counts the gauges that wrapped (`hiddenGauges`) and says them in the "+n", with the
+// lanes past `COMPACT_FIT`'s cap. The first gauge opens the line and cannot wrap, so in a row narrower than its floor
+// it is cut at the row's edge instead: a gauge whose right edge passes the row's is hidden and counted too (W2 Task
+// S4b), and when every placed gauge is hidden the "+n" stands alone at the start. Hiding is `visibility`, which moves
+// nothing, so the measure it follows from cannot change under it. `grid` (two columns, one row per two lanes) places
+// every lane and measures nothing.
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
-import { navigate } from '../lib/router';
+import { commandDoor } from '../command/door';
 import { limitBand, Meter } from '@ccrc/ui';
 import './fleet.css';
 
@@ -43,11 +47,12 @@ export function compactReading(a: Pick<AccountUsage, 'five' | 'seven' | 'fiveRol
   return binding.every((w) => w.rolled) ? 'reset' : `${pct}%`;
 }
 
-/** How many gauges wrapped out of the one-line row, from their top edges in order: every one below the first's line. */
-export function overflowCount(tops: readonly number[]): number {
-  if (tops.length === 0) return 0;
-  const line = tops[0]!;
-  return tops.filter((t) => t > line + 1).length;
+/** Which gauges the one-line row does not show whole, from their boxes in order: every one below the first's line
+ *  (it wrapped), and every one whose right edge passes the row's (it is cut; only the first can be, as it cannot wrap). */
+export function hiddenGauges(boxes: readonly { top: number; right: number }[], rowRight: number): boolean[] {
+  if (boxes.length === 0) return [];
+  const line = boxes[0]!.top;
+  return boxes.map((b) => b.top > line + 1 || b.right > rowRight + 1);
 }
 
 /** The door's bare name, the full strip's too: what it is and where it goes. */
@@ -73,16 +78,17 @@ export function CompactGauges({ compact, lanes, roster, placeholder }: {
   const placed = lanes.slice(0, COMPACT_FIT[compact]);
   const capped = lanes.length - placed.length;
   const row = useRef<HTMLSpanElement>(null);
-  const [wrapped, setWrapped] = useState(0);
+  const [hidden, setHidden] = useState<readonly boolean[]>([]);
   const measures = compact !== 'grid' && placeholder === null;
   const laneKey = placed.map((a) => a.wrapper).join(' ');
 
   useLayoutEffect(() => {
     const el = row.current;
-    if (!measures || el === null) { setWrapped(0); return undefined; }
+    if (!measures || el === null) { setHidden([]); return undefined; }
     const count = (): void => {
-      const tops = [...el.querySelectorAll<HTMLElement>('.accounts-compact-gauge')].map((g) => g.getBoundingClientRect().top);
-      setWrapped(overflowCount(tops));
+      const boxes = [...el.querySelectorAll<HTMLElement>('.accounts-compact-gauge')].map((g) => g.getBoundingClientRect());
+      const next = hiddenGauges(boxes, el.getBoundingClientRect().right);
+      setHidden((prev) => (prev.length === next.length && prev.every((h, i) => h === next[i]) ? prev : next));
     };
     count();
     // The "+n" appearing narrows the row, which may wrap one more gauge; the observer counts again, and it settles
@@ -93,22 +99,26 @@ export function CompactGauges({ compact, lanes, roster, placeholder }: {
     return () => ro.disconnect();
   }, [measures, laneKey]);
 
+  const wrapped = hidden.filter(Boolean).length;
   const more = capped + wrapped;
-  const open = (): void => navigate('/accounts');
-  // role="link" mirrors an <a> to /accounts: Enter activates, Space does not.
+  const allHidden = placed.length > 0 && wrapped === placed.length;
+  // The group is the `go-accounts` door (W2 Task S4b; the plan's door table): the command layer navigates, as the
+  // palette's "Go to Accounts" does. role="link" mirrors an <a> to /accounts: Enter activates, Space does not.
+  const door = commandDoor('go-accounts');
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    open();
+    door.onClick();
   };
   return (
     <div
       className="accounts-compact"
       data-compact={compact}
+      data-lanes-hidden={allHidden ? '' : undefined}
       role="link"
       tabIndex={0}
       aria-label={placeholder === null ? compactDoorLabel(placed, roster) : ACCOUNTS_DOOR_LABEL}
-      onClick={open}
+      {...door}
       onKeyDown={onKeyDown}
     >
       {placeholder !== null ? (
@@ -116,10 +126,10 @@ export function CompactGauges({ compact, lanes, roster, placeholder }: {
       ) : (
         <>
           <span className="accounts-compact-lanes" ref={row}>
-            {placed.map((a) => {
+            {placed.map((a, i) => {
               const pct = bindingPct(a);
               return (
-                <span key={a.wrapper} className="accounts-compact-gauge font-mono">
+                <span key={a.wrapper} className="accounts-compact-gauge font-mono" data-clipped={hidden[i] === true ? '' : undefined}>
                   <span className="accounts-compact-name min-w-0 truncate" style={{ color: `var(${accountColorVar(roster, a.wrapper)})` }}>
                     {accountLabel(roster, a.wrapper)}
                   </span>

@@ -3454,3 +3454,7 @@ button.proj-card-pool::before {
   font-variant-numeric: tabular-nums;
 }
 .accounts-compact-pct { min-width: 5ch; }
+/* A gauge the measure hid (`hiddenGauges`: wrapped, or cut at the row's edge) is not drawn, and moves nothing, so
+   the measure stays true; its lane is in the "+n". With every placed gauge hidden the "+n" leads (W2 Task S4b). */
+.accounts-compact-gauge[data-clipped] { visibility: hidden; }
+.accounts-compact[data-lanes-hidden] > .accounts-compact-more { order: -1; }

@@ -371,8 +371,8 @@ describe('focus after a switch is never on <body>', () => {
     // providers this case does not mount).
     function BarA(): ReactNode { return <button type="button">Bar A</button>; }
     function BarB(): ReactNode { return <button type="button">Bar B</button>; }
-    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Rail: null, Nav: null, StatusBar: null };
-    const b = { ...SKIN_SETS[INSTRUMENT], Bar: BarB, Rail: null, Nav: null, StatusBar: null };
+    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Banners: null, Rail: null, Nav: null, StatusBar: null };
+    const b = { ...SKIN_SETS[INSTRUMENT], Bar: BarB, Banners: null, Rail: null, Nav: null, StatusBar: null };
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('min-width: 900px'), media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
