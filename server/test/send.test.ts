@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_BUDGET_MS, ECHO_POLL_MS, SUBMIT_TRIES } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, refusalShape, ECHO_BUDGET_MS, ECHO_POLL_MS, SUBMIT_TRIES } from '../src/inject/send.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
@@ -2274,10 +2274,25 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
   });
 
   it("a box holding someone else's text still refuses", async () => {
-    // A human's draft is in the box before the send; every key press fails. Nothing is pressed or typed over it.
+    // A human's draft is in the box before the send; the Enter press fails. Nothing is pressed or typed over it.
     const { tmux, calls } = enterRig({ enterCode: 1, afterEnter: [EMPTY], before: '❯ a human mid-sentence\n' });
     expect(await send(tmux)).toMatchObject({ ok: false, error: 'draft-present', draft: 'a human mid-sentence' });
     expect(sendKeysCalls(calls)).toEqual([]);
+  });
+});
+
+// D-6366: the `/prompt` route's log line describes a refusal's box by its shape alone, never its text.
+describe('refusalShape (D-6366)', () => {
+  it('a paste-chip draft is one row and a chip', () => {
+    expect(refusalShape({ ok: false, error: 'draft-present', draft: '[Pasted text #1 +42 lines]' })).toBe('rows=1 chip');
+  });
+
+  it('a multi-row draft counts its rows and is no chip', () => {
+    expect(refusalShape({ ok: false, error: 'draft-present', draft: 'one\ntwo\nthree' })).toBe('rows=3 no-chip');
+  });
+
+  it('a refusal with no box reading says so', () => {
+    expect(refusalShape({ ok: false, error: 'not-alive' })).toBe('no-box-reading');
   });
 });
 

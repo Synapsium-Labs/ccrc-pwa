@@ -81,6 +81,8 @@ interface FakeOpts {
   /** D-6010: after the first typed literal, the next `blind` captures come back with no box (`no-box`) or fail
    *  (`dead`), then the pane reads normally again. */
   blindAfterType?: { kind: 'no-box' | 'dead'; captures: number };
+  /** D-6366: from the first Enter, this many captures fail (a link drop), then the pane reads normally again. */
+  blindAfterEnter?: number;
   /** D-6011: each swallowed Enter hides the held-stash indicator from this many following captures. */
   hideAfterSwallow?: number;
 }
@@ -118,9 +120,11 @@ function fakeCc(o: FakeOpts = {}) {
   let sinceSubmit = 0;
   let literals = 0;
   let blind = 0;
+  let blindEnter = 0;
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'capture-pane') {
       if (submits > 0) o.afterSubmit?.(++sinceSubmit, s);
+      if (blindEnter > 0) { blindEnter--; return { code: 1, stdout: '', stderr: "can't find pane" }; }
       if (blind > 0) {
         blind--;
         if (o.blindAfterType!.kind === 'dead') return { code: 1, stdout: '', stderr: "can't find pane" };
@@ -156,6 +160,7 @@ function fakeCc(o: FakeOpts = {}) {
         const sent = s.box.join('\n');
         s.history.push(sent);
         submits++;
+        if (submits === 1) blindEnter = o.blindAfterEnter ?? 0;
         s.box = [];
         if (o.runOnSubmit && !sent.startsWith('/')) s.running = true;
         if (s.stash !== null && (o.restoreOnSubmit ?? true)) { s.box = s.stash; s.stash = null; }
@@ -687,6 +692,44 @@ describe("onDraft: 'stash' (D-5911)", () => {
       const res = await send(f, 'hello from the lane');
       expect(f.keys).toEqual(['lit:hello from the lane', 'Enter']);
       expect(f.state.box).toEqual(['an earlier human note']);
+      expect(res).toEqual({ ok: true });
+    });
+  });
+
+  describe('D-6366: a lost reply after Enter on the stash paths', () => {
+    // Captures fail through both Enter watches (SUBMIT_TRIES polls each), so the proof is decided by the final read.
+    // `restoreOnSubmit: false` keeps the retry Enter, pressed after a blind watch as before, off a restored draft.
+    const BLIND = 2 * SUBMIT_TRIES;
+
+    it('around our own stash: a final read without our text runs the restore check and pops the stash', async () => {
+      const human = 'a half typed note of the human';
+      const f = fakeCc({ box: [human], restoreOnSubmit: false, blindAfterEnter: BLIND });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter', 'Enter', 'C-s']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+      expect(f.state.history).toEqual(['hello from the lane']);
+      expect(f.state.box).toEqual([human]);
+      expect(f.state.stash).toBeNull();
+    });
+
+    it('around our own stash: the loop\'s own classifier decides at the final read (a restored draft that begins with the needle)', async () => {
+      const human = 'hello world, and the rest of a half typed thought';
+      // The restore lands after the blind reads, on the final read: the box equals the stash and no indicator shows.
+      const f = fakeCc({
+        box: [human], restoreOnSubmit: false, blindAfterEnter: BLIND,
+        afterSubmit: (k, s) => { if (k === BLIND + 1 && s.stash !== null) { s.box = s.stash; s.stash = null; } },
+      });
+      const res = await send(f, 'hello world');
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+      expect(f.state.history).toEqual(['hello world']);
+      expect(f.state.box).toEqual([human]);
+    });
+
+    it('over a stash already held: a final read without our text is ok', async () => {
+      const f = fakeCc({ box: [], stash: ['an earlier human note'], restoreOnSubmit: false, blindAfterEnter: BLIND });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter', 'Enter']);
+      expect(f.state.history).toEqual(['hello from the lane']);
       expect(res).toEqual({ ok: true });
     });
   });
