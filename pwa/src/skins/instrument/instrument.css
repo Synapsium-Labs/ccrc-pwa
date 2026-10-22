@@ -364,6 +364,11 @@
   .ins-row .sess-line > :first-child {
     margin-top: 0;
   }
+  /* A row with no context fact (a main checkout) is one line, centred in the floor, so its lamp is centred with it: the
+     shared sheet's `align-self: start` would leave the lamp above the name's line (T2e fix round 1, F5). */
+  .ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child {
+    align-self: center;
+  }
   .ins-row .sess-actions {
     align-self: center;
     margin-top: 0;

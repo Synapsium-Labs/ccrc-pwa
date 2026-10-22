@@ -18,7 +18,9 @@
 // `browser/instrument-desk.browser.test.ts`'s. MUTATION TABLE (plan Task T2e Step 3; RUN, this suite alone):
 //   the dense block's media prelude without (pointer: fine) ... "nothing of the dense arrangement is declared outside the fine-pointer desk block"
 //                                                                 (and "under a fine pointer at a desk a status row is two lines on --row-h …")
-// The browser file's row, a literal 32px floor outside (pointer: fine), is that file's header's.
+//   the one-line row's lamp rule removed ..................... "under a fine pointer at a desk a status row is two lines on --row-h …"
+// The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
+// file's header's.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -445,6 +447,8 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The lamp and the actions button lose the three-line centring margin they carry from the shared sheet.
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
     expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
+    // A one-line row (no context fact) centres its lamp with its name (T2e fix round 1, F5).
+    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE)).toMatch(/align-self:\s*center/);
     mount();
     expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
@@ -460,9 +464,10 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
 
   it('nothing of the dense arrangement is declared outside the fine-pointer desk block', () => {
     // A coarse pointer, or a width below 900, keeps the shared sheet's `--tap-min` rows, group heads and toggle.
-    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line > :first-child', '.ins-row .sess-actions', '.ins-row .sess-meta--context',
+    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line > :first-child',
+      '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', '.ins-row .sess-actions', '.ins-row .sess-meta--context',
       '.ins-group-head', '.ins-toggle-option']) {
-      expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|grid-column|display:\s*grid/);
+      expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|grid-column|display:\s*grid|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
   });
