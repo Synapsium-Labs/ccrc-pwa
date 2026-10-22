@@ -5614,6 +5614,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       refuses an interrupted verified dir, as the walk does, and still exits 3 beside a refusal.
     - **Routing is unchanged.** The findings concentrate in one reader, and the ruling replaces it rather than patching
       it; another miss there raises the effort.
+  - **21:15 UTC: a new CodeQL alert on wave 25's tip (mail 8251; ruling 8262).** It is an incomplete string escape in a
+    test row the fix round added. The inputs are fixed literals, so nothing is exploitable, but it is a high alert in
+    this PR's code. The earlier alert reads fixed. It is not fixed now, because a push would move the tip under review
+    818. It rides the next round: a substring match that builds no regex. If 818 is clean, a one-commit round has a
+    short scoped review. The alert must read fixed before the merge, and nobody dismisses it. Run 774's README claim
+    has a new number; the coexistence consent is unchanged.
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
