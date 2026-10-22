@@ -221,7 +221,10 @@ describe('no input on open: a phone keyboard never rises unasked', () => {
       store.getState().apply({ type: 'ask', ask: CACHING_TRACING, key: null });
     });
     await settle();
-    expect(screen.getByLabelText('Answer in your own words')).toBeInTheDocument();
+    // D-6325: the free-text row is an `Other` row, and its field opens only when the row is chosen, so on open there is
+    // no input in the sheet at all, and the panel has the focus.
+    expect(screen.getByRole('button', { name: /^Other/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Your own answer')).toBeNull();
     const active = document.activeElement;
     expect(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement).toBe(false);
     expect(active).toBe(dialog());

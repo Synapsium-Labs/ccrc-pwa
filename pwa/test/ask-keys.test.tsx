@@ -216,24 +216,45 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('Chat\'s digit only highlights Chat (it declines the whole ask); the free-text row\'s digit focuses the field', async () => {
+  it('Chat\'s digit only highlights Chat (it declines the whole ask); the free-text row\'s digit chooses Other and puts the cursor in the field', async () => {
     pointer('fine');
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
+    // Other is a row of the list while its field is closed: a button, no field yet.
+    expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.keyDown(document.activeElement!, { key: '4' });
     expect(spy).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(row(/^Chat about this/));
+    expect(document.activeElement).toBe(row(/^Talk it over in the chat instead/));
     fireEvent.keyDown(document.activeElement!, { key: '3' });
-    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Answer in your own words' }));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Your own answer' }));
+    expect(spy, 'choosing Other answers nothing').not.toHaveBeenCalled();
   });
 
-  it('the own-words field keeps ←/→ and digits; ↑ leaves it for the last option', async () => {
+  it('↓ from the last option reaches the Other row, and Enter on it opens the field with the cursor in it', async () => {
+    pointer('fine');
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderAsk(q1());
+    await frame();
+    const user = userEvent.setup();
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(document.activeElement).toBe(row(/^Other/));
+    expect(document.activeElement).toHaveAttribute('aria-keyshortcuts', '3');
+    await user.keyboard('{Enter}');
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Your own answer' }));
+    expect(spy).not.toHaveBeenCalled();
+    // ↓ from the field is Chat; ↑ from Chat is the field again (the model's `words` row).
+    await user.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(row(/^Talk it over in the chat instead/));
+  });
+
+  it('the own-answer field keeps ←/→ and digits; ↑ leaves it for the last option', async () => {
     pointer('fine');
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
-    const field = screen.getByRole('textbox', { name: 'Answer in your own words' });
+    fireEvent.click(row(/^Other/));
+    const field = screen.getByRole('textbox', { name: 'Your own answer' });
     field.focus();
     fireEvent.keyDown(field, { key: 'ArrowRight' });
     fireEvent.keyDown(field, { key: '1' });
