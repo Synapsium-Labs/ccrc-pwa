@@ -28,15 +28,18 @@
 //
 // WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, never writes
 // outside the directory it is given (capture) or `~/.ccrc` (restore), and never touches a service: restore asks whether the
-// server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. While the marker stands,
+// server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. The one thing it deletes is the four snapshot
+// files (`SNAPSHOT_NAMES`) inside a backup directory it is told to thin, and only after it has written that directory's record (`THINNED_FILE`); it
+// deletes nothing else there, and nothing outside such a directory. While the marker stands,
 // delegation recovery (`recoverDelegationFromFiles`) refuses to run, and the server's boot refuses too (it exits 1 before opening coord.db, naming `recover`). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
 //
 // VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable (a tail it left out is one warning line on stderr), 1 refused or exhausted (no manifest, no partials).
-// `classify --from <dir>` prints `v1`, `legacy`, `none` or `invalid` and exits 0, 0, 1, 2. `validate --from <dir>` is `classify`
+// `classify --from <dir>` prints `v1`, `legacy`, `none`, `thinned` or `invalid` and exits 0, 0, 1, 1, 2 (`thinned`: the data set was dropped by design, D-6349). `validate --from <dir>` is `classify`
 // with its reasons: line 1 is `<word>: <reason>`, line 2 is `data: yes|no` (a v1 snapshot with any member present, or a legacy
 // one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
-// before any live mutation. `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. 70: usage, or the helper itself
+// before any live mutation (a `thinned` source is refused as `source-thinned`). `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. `thin --keep <n> --by <update|backup> ...`: drops the
+// data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the four snapshot files (D-6346, D-6348). 70: usage, or the helper itself
 // failed (an exception it did not name).
 import { createHash, randomBytes } from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -51,6 +54,10 @@ export const JOURNAL_FILE = 'delegation-events.log';
 export const CHECKPOINT_FILE = 'delegation-checkpoint.json';
 export const DB_FILE = 'coord.db';
 export const MANIFEST_FILE = 'coordination-snapshot.json';
+/** The record a thinning writes BEFORE it deletes the four snapshot files below (D-6348): it says the data set was dropped by design. */
+export const THINNED_FILE = 'coordination-thinned.json';
+/** The four names a thinning removes, and the only four it ever removes. Also the order in which a leftover is named. */
+export const SNAPSHOT_NAMES = Object.freeze([MANIFEST_FILE, JOURNAL_FILE, CHECKPOINT_FILE, DB_FILE]);
 /** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists, and so does the server's boot (it exits 1 before opening coord.db). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
 export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
@@ -65,6 +72,7 @@ export const SERVICE_UNIT = 'ccrc.service';
 
 const MANIFEST_FORMAT = 'ccrc-coordination-snapshot';
 const MARKER_FORMAT = 'ccrc-coordination-restore';
+const THINNED_FORMAT = 'ccrc-coordination-thinned';
 
 /** The helper itself cannot do its job (as opposed to a snapshot being bad): exit 70, never an answer about a snapshot. It has no
  *  string `code`, so `classify` does not mistake it for a system error on a snapshot's files. */
@@ -822,9 +830,56 @@ function readManifest(fs, p) {
   return m;
 }
 
-function exactKeys2(o, keys, what) {
-  for (const k of Object.keys(o)) if (!keys.includes(k)) refuse('manifest-invalid', `${what} has the unknown key ${JSON.stringify(k)}`);
-  for (const k of keys) if (!Object.hasOwn(o, k)) refuse('manifest-invalid', `${what} is missing ${JSON.stringify(k)}`);
+function exactKeys2(o, keys, what, code = 'manifest-invalid') {
+  for (const k of Object.keys(o)) if (!keys.includes(k)) refuse(code, `${what} has the unknown key ${JSON.stringify(k)}`);
+  for (const k of keys) if (!Object.hasOwn(o, k)) refuse(code, `${what} is missing ${JSON.stringify(k)}`);
+}
+
+/**
+ * Reads the thinning record (D-6348): one line of canonical JSON and an LF, exactly
+ * `{format, version: 1, thinnedAt, by, rule: {knob, keep}, source, capturedAt, dropped}`. Throws a `thinned-invalid` SnapError on any defect.
+ * @returns {{format: string, version: number, thinnedAt: string, by: 'update' | 'backup', rule: {knob: string, keep: number}, source: 'v1' | 'legacy', capturedAt: string | null, dropped: Array<{filename: string, bytes: number, sha256: string}>}}
+ */
+function readThinned(fs, p) {
+  const bad = (why) => refuse('thinned-invalid', why);
+  const st = fs.lstat(p);
+  if (st === null) bad('no record');
+  if (!st.isFile()) bad('the record is not a regular file');
+  const bytes = fs.readFile(p);
+  if (bytes === null) bad('no record');
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return bad('the record is not UTF-8'); }
+  if (!text.endsWith('\n') || text.slice(0, -1).includes('\n')) bad('the record is not one line and one LF');
+  const body = text.slice(0, -1);
+  let t;
+  try { t = JSON.parse(body); } catch { return bad('the record is not JSON'); }
+  if (findJsonDefect(body) !== null) bad('the record repeats a key');
+  if (!isRecord(t)) bad('the record is not an object');
+  exactKeys2(t, ['format', 'version', 'thinnedAt', 'by', 'rule', 'source', 'capturedAt', 'dropped'], 'the record', 'thinned-invalid');
+  if (t.format !== THINNED_FORMAT || t.version !== 1) bad('the record is not a ccrc-coordination-thinned version 1');
+  if (!isInstant(t.thinnedAt)) bad('thinnedAt is not an instant');
+  if (t.by !== 'update' && t.by !== 'backup') bad('by is neither update nor backup');
+  if (!isRecord(t.rule)) bad('rule is not an object');
+  exactKeys2(t.rule, ['knob', 'keep'], 'rule', 'thinned-invalid');
+  if (t.rule.knob !== 'CCRC_BACKUP_DATA_KEEP') bad('rule.knob is not CCRC_BACKUP_DATA_KEEP');
+  if (!Number.isSafeInteger(t.rule.keep) || t.rule.keep < 2 || t.rule.keep > 9999) bad('rule.keep is not a whole number from 2 to 9999');
+  if (t.source !== 'v1' && t.source !== 'legacy') bad('source is neither v1 nor legacy');
+  if (t.source === 'v1' ? (typeof t.capturedAt !== 'string' || Number.isNaN(Date.parse(t.capturedAt))) : t.capturedAt !== null) bad('capturedAt does not fit source');
+  if (!Array.isArray(t.dropped) || t.dropped.length === 0) bad('dropped is not a non-empty array');
+  const seen = new Set();
+  for (const d of t.dropped) {
+    if (!isRecord(d)) bad('a dropped entry is not an object');
+    exactKeys2(d, ['filename', 'bytes', 'sha256'], 'a dropped entry', 'thinned-invalid');
+    if (!SNAPSHOT_NAMES.includes(d.filename)) bad(`dropped names ${JSON.stringify(d.filename)}, which is not one of the four snapshot files`);
+    if (seen.has(d.filename)) bad(`dropped names ${d.filename} twice`);
+    seen.add(d.filename);
+    if (!Number.isSafeInteger(d.bytes) || d.bytes < 0 || !isHex64(d.sha256)) bad(`dropped ${d.filename} bytes or sha256 is malformed`);
+  }
+  if (t.source === 'legacy' && (t.dropped.length !== 1 || t.dropped[0].filename !== DB_FILE)) bad('a legacy record drops coord.db alone');
+  let canonical;
+  try { canonical = canonicalJson(t); } catch { return bad('the record is outside the canonical domain'); }
+  if (canonical !== body) bad('the record is not the canonical encoding of its own value');
+  return t;
 }
 
 /** Checks a v1 snapshot directory against its manifest, member by member and as a delegation pair. Throws a SnapError when it does not agree. */
@@ -857,10 +912,13 @@ function verifyV1(fs, from) {
 
 /**
  * Classifies a timestamp directory. `v1`: a valid manifest and everything it names. `legacy`: no manifest and no sidecars, a valid
- * coord.db with no `delegation_*` table. `none`: no coordination snapshot at all. `invalid`: anything else that claims to be
- * one. A PRESENT manifest that is invalid is `invalid` and never falls back to the DB beside it.
+ * coord.db with no `delegation_*` table. `none`: no coordination snapshot at all. `thinned`: a valid thinning record and none of the
+ * four snapshot files, by design (D-6349). `invalid`: anything else that claims to be one. A PRESENT manifest that is invalid is
+ * `invalid` and never falls back to the DB beside it. A thinning record is read FIRST: an unreadable one is `invalid`, one beside the
+ * whole set it lists is a thinning that never started (the dir classifies as it would without it), one beside part of that set is
+ * a thinning that did not finish (`invalid`).
  * `data` is true for a v1 snapshot with any member present and for a legacy one (validated, never inferred from file presence).
- * @returns {{kind: 'v1' | 'legacy' | 'none' | 'invalid', reason: string, manifest: object | null, data?: boolean}}
+ * @returns {{kind: 'v1' | 'legacy' | 'none' | 'thinned' | 'invalid', reason: string, manifest: object | null, data?: boolean, thinned?: object}}
  */
 export function classify(opts) {
   const v = classifyRaw(opts);
@@ -870,6 +928,28 @@ export function classify(opts) {
 function classifyRaw({ from, fs = realFs }) {
   const st = fs.lstat(from);
   if (st === null || !st.isDirectory()) return { kind: 'invalid', reason: 'the path is not a directory', manifest: null };
+  if (fs.lstat(path.join(from, THINNED_FILE)) !== null) {
+    let t;
+    try { t = readThinned(fs, path.join(from, THINNED_FILE)); } catch (err) {
+      if (err instanceof SnapError) return { kind: 'invalid', reason: `the thinning record is unreadable: ${err.message}`, manifest: null };
+      if (typeof err === 'object' && err !== null && typeof err.code === 'string') return { kind: 'invalid', reason: `unreadable (${err.code})`, manifest: null };
+      throw err;
+    }
+    if (t.dropped.every((d) => fs.lstat(path.join(from, d.filename)) !== null)) {
+      // Every name the record lists is still here: no delete happened, the data set is whole. The record is stale.
+      const v = classifyBody({ from, fs });
+      return { ...v, reason: `${v.reason} (${THINNED_FILE} beside it is a thinning that never started; the next thin removes it)` };
+    }
+    const left = SNAPSHOT_NAMES.find((n) => fs.lstat(path.join(from, n)) !== null);
+    if (left !== undefined) {
+      return { kind: 'invalid', reason: `a thinning did not finish: ${left} is still beside ${THINNED_FILE} (the next completed update or ccrc backup finishes it)`, manifest: null };
+    }
+    return { kind: 'thinned', reason: `thinned ${t.thinnedAt} by ccrc ${t.by} (CCRC_BACKUP_DATA_KEEP=${t.rule.keep}): its coordination data set was dropped by design`, manifest: null, data: false, thinned: t };
+  }
+  return classifyBody({ from, fs });
+}
+
+function classifyBody({ from, fs }) {
   if (fs.lstat(path.join(from, MANIFEST_FILE)) !== null) {
     try {
       const manifest = verifyV1(fs, from);
@@ -1049,6 +1129,7 @@ export function restore(opts) {
   const ccrcDir = path.join(opts.home, '.ccrc');
   // 1. The source is validated BEFORE anything live is touched, and must be a v1 snapshot.
   const verdict = classify({ from: opts.from, fs });
+  if (verdict.kind === 'thinned') refuse('source-thinned', `the snapshot was thinned by design: ${verdict.reason}`, { exit: 2 });
   if (verdict.kind !== 'v1') refuse('source-invalid', `the snapshot is ${verdict.kind}: ${verdict.reason}`, { exit: 2 });
   const manifest = verdict.manifest;
   // 2. The service must be MEASURED inactive. Active and unmeasurable both refuse.
@@ -1203,7 +1284,7 @@ export function recover(opts) {
 
 // ── The command line ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover';
+const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover | thin --keep <n> --by <update|backup> ...';
 
 function argValue(argv, flag) {
   const i = argv.indexOf(flag);
@@ -1222,7 +1303,7 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
       const v = classify({ from: path.resolve(from) });
       if (verb === 'classify') io.out(`${v.kind}\n`);
       else io.out(`${v.kind}: ${v.reason}\ndata: ${v.data === true ? 'yes' : 'no'}\n`);
-      return v.kind === 'v1' || v.kind === 'legacy' ? 0 : v.kind === 'none' ? 1 : 2;
+      return v.kind === 'v1' || v.kind === 'legacy' ? 0 : v.kind === 'none' || v.kind === 'thinned' ? 1 : 2;
     }
     if (typeof home !== 'string' || home === '' || !path.isAbsolute(home)) { io.err('coordination snapshot: HOME is not an absolute path\n'); return 70; }
     if (verb === 'capture') {

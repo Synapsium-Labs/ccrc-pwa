@@ -2590,8 +2590,8 @@ already running).
             ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
   coordination-snapshot
             validate --from <timestamp-directory>   classify a backup's coordination
-            snapshot (v1, legacy, none, invalid; exit 0, 0, 1, 2; usage or a helper
-            that cannot run: 70)
+            snapshot (v1, legacy, none, thinned, invalid; exit 0, 0, 1, 1, 2; thinned:
+            its data set was dropped by design; a helper that cannot run: 70)
             restore --from <timestamp-directory>   replace the live journal,
             checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
             one set; refuses unless ccrc.service is measured inactive

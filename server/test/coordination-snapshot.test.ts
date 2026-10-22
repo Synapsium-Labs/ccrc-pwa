@@ -2224,3 +2224,161 @@ describe('8C (#384): the temp-root collector\'s generation log is never part of 
     expect(dirListing(liveDir(f.home))).toContain(LOG_NAME);
   });
 });
+
+// ═══ Wave 23, Task 1: a thinned backup is its own word (D-6348, D-6349) ═════════════════════════════════════════════════
+
+describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
+  // The record the retention writes before it deletes the four snapshot files; built here by hand, never by the code under test.
+  const FOUR = ['coord.db', 'delegation-events.log', 'delegation-checkpoint.json', 'coordination-snapshot.json'] as const;
+  const RECORD = 'coordination-thinned.json';
+  const STALE_CLAUSE = ' (coordination-thinned.json beside it is a thinning that never started; the next thin removes it)';
+  const MEMBER_OF: Record<string, string> = { 'coord.db': 'coordDb', 'delegation-events.log': 'delegationJournal', 'delegation-checkpoint.json': 'delegationCheckpoint' };
+
+  const fullSnap = (ts = '20261014-120000'): { home: string; dir: string; manifest: any } => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 1 } });
+    return { home, ...snapshotOf(home, ts) };
+  };
+  const dropOf = (dir: string, name: string, manifest: any): { filename: string; bytes: number; sha256: string } => {
+    const key = MEMBER_OF[name];
+    if (key === undefined) { const b = readFileSync(path.join(dir, name)); return { filename: name, bytes: b.length, sha256: sha(b) }; }
+    return { filename: name, bytes: manifest.members[key].bytes, sha256: manifest.members[key].sha256 };
+  };
+  const recordOf = (dir: string, manifest: any, patch: Record<string, unknown> = {}): Record<string, unknown> => ({
+    format: 'ccrc-coordination-thinned',
+    version: 1,
+    thinnedAt: '2026-10-22T00:00:00.000Z',
+    by: 'update',
+    rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 },
+    source: 'v1',
+    capturedAt: manifest.capturedAt,
+    dropped: FOUR.filter((n) => existsSync(path.join(dir, n))).map((n) => dropOf(dir, n, manifest)),
+    ...patch,
+  });
+  const putRecord = (dir: string, value: unknown): void => writeFileSync(path.join(dir, RECORD), `${H.canonicalJson(value)}\n`);
+  /** A new dir holding the record (listing every member of `full`) and only the named snapshot files, copied from `full`. */
+  const assembled = (full: { home: string; dir: string; manifest: any }, ts: string, keep: readonly string[], patch: Record<string, unknown> = {}): string => {
+    const dir = snapDirOf(full.home, ts);
+    putRecord(dir, recordOf(full.dir, full.manifest, patch));
+    for (const n of keep) cpSync(path.join(full.dir, n), path.join(dir, n));
+    return dir;
+  };
+  const thinnedFx = (): { full: ReturnType<typeof fullSnap>; dir: string } => {
+    const full = fullSnap();
+    return { full, dir: assembled(full, '20261014-130000', []) };
+  };
+  const recordDir = (): { dir: string; value: any } => {
+    const full = fullSnap();
+    return { dir: snapDirOf(full.home, '20261014-140000'), value: recordOf(full.dir, full.manifest) };
+  };
+
+  it('W23-H1: a dir holding the record and none of the four names classifies thinned, exit 1, data: no, and the reason says when, by which verb and the knob', () => {
+    const { dir } = thinnedFx();
+    expect(classifyCli(dir)).toMatchObject({ status: 1, stdout: 'thinned\n' });
+    expect(classifyCli(dir, 'validate').stdout).toBe(
+      'thinned: thinned 2026-10-22T00:00:00.000Z by ccrc update (CCRC_BACKUP_DATA_KEEP=3): its coordination data set was dropped by design\ndata: no\n');
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'thinned', data: false });
+  });
+
+  it('W23-H2: the record beside some but not all of the names it lists is invalid, and says a thinning did not finish', () => {
+    const full = fullSnap();
+    let n = 0;
+    for (const name of FOUR) {
+      const copy = assembled(full, `20261014-15000${n++}`, [name]);
+      expect(H.classify({ from: copy }), name).toMatchObject({ kind: 'invalid' });
+      expect(H.classify({ from: copy }).reason, name).toBe(`a thinning did not finish: ${name} is still beside coordination-thinned.json (the next completed update or ccrc backup finishes it)`);
+      expect(classifyCli(copy), name).toMatchObject({ status: 2, stdout: 'invalid\n' });
+    }
+  });
+
+  describe('W23-H3: a record that is not one is invalid, never thinned', () => {
+    const cases: Array<[string, (dir: string, v: any) => void]> = [
+      ['not JSON', (d) => writeFileSync(path.join(d, RECORD), 'nope\n')],
+      ['no LF', (d, v) => writeFileSync(path.join(d, RECORD), H.canonicalJson(v))],
+      ['non-canonical key order', (d, v) => writeFileSync(path.join(d, RECORD), `${JSON.stringify(v)}\n`)],
+      ['an unknown key', (d, v) => putRecord(d, { ...v, extra: 1 })],
+      ['format wrong', (d, v) => putRecord(d, { ...v, format: 'ccrc-coordination-snapshot' })],
+      ['version 2', (d, v) => putRecord(d, { ...v, version: 2 })],
+      ['keep 1', (d, v) => putRecord(d, { ...v, rule: { ...v.rule, keep: 1 } })],
+      ['keep 10000', (d, v) => putRecord(d, { ...v, rule: { ...v.rule, keep: 10000 } })],
+      ['by deploy', (d, v) => putRecord(d, { ...v, by: 'deploy' })],
+      ['by a rollback', (d, v) => putRecord(d, { ...v, by: 'rollback' })],
+      ['source legacy naming more than coord.db', (d, v) => putRecord(d, { ...v, source: 'legacy', capturedAt: null })],
+      ['source v1 with capturedAt null', (d, v) => putRecord(d, { ...v, capturedAt: null })],
+      ['an empty dropped', (d, v) => putRecord(d, { ...v, dropped: [] })],
+      ['a dropped filename outside the four', (d, v) => putRecord(d, { ...v, dropped: [...v.dropped, { filename: 'agent-dist', bytes: 1, sha256: 'a'.repeat(64) }] })],
+      ['a duplicate filename', (d, v) => putRecord(d, { ...v, dropped: [...v.dropped, v.dropped[0]] })],
+      ['a symlink at coordination-thinned.json', (d) => { writeFileSync(path.join(d, 'elsewhere'), 'x\n'); symlinkSync(path.join(d, 'elsewhere'), path.join(d, RECORD)); }],
+    ];
+    for (const [name, make] of cases) {
+      it(name, () => {
+        const { dir, value } = recordDir();
+        make(dir, value);
+        const v = H.classify({ from: dir });
+        expect(v.kind, name).toBe('invalid');
+        expect(v.reason, name).toMatch(/^the thinning record is unreadable: /);
+        expect(classifyCli(dir), name).toMatchObject({ status: 2, stdout: 'invalid\n' });
+      });
+    }
+  });
+
+  it('W23-H4: restore refuses a thinned source as source-thinned, exit 2, and the live set is byte-identical', () => {
+    const { home, dir, oldState } = restoreFixture();
+    const manifest = JSON.parse(readFileSync(path.join(dir, 'coordination-snapshot.json'), 'utf8'));
+    putRecord(dir, recordOf(dir, manifest));
+    for (const n of FOUR) rmSync(path.join(dir, n));
+    const before = dirListing(liveDir(home));
+    let asked = 0;
+    const r = outcome(() => H.restore({ home, from: dir, probe: () => { asked++; return 'inactive'; } }));
+    expect(r).toMatchObject({ ok: false, code: 'source-thinned' });
+    expect(asked).toBe(0);
+    const cli = spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'restore', '--from', dir], { env: { HOME: home, PATH: '' }, encoding: 'utf8' });
+    expect(cli.status).toBe(2);
+    expect(cli.stderr).toMatch(/^coordination snapshot: source-thinned: /);
+    expect(liveState(home)).toEqual(oldState);
+    expect(dirListing(liveDir(home))).toEqual(before);
+  });
+
+  it('W23-H5: the four words keep their exits beside the fifth', () => {
+    const full = fullSnap();
+    const legacy = snapDirOf(full.home, '20261014-160001');
+    plantDb(path.join(legacy, 'coord.db'), { tables: ['claims'] });
+    const none = snapDirOf(full.home, '20261014-160002');
+    const thinned = assembled(full, '20261014-160003', []);
+    const invalid = snapDirOf(full.home, '20261014-160004');
+    writeFileSync(path.join(invalid, 'coordination-snapshot.json'), '{');
+    const table: Array<[string, string, number]> = [[full.dir, 'v1', 0], [legacy, 'legacy', 0], [none, 'none', 1], [thinned, 'thinned', 1], [invalid, 'invalid', 2]];
+    for (const [dir, word, status] of table) {
+      expect(classifyCli(dir), word).toMatchObject({ status, stdout: `${word}\n` });
+      const v = classifyCli(dir, 'validate');
+      expect(v.status, word).toBe(status);
+      expect(v.stdout.startsWith(`${word}: `), word).toBe(true);
+    }
+  });
+
+  it('W23-H6: with the record removed again, a thinned dir is exactly what an older helper sees: none, exit 1, and the pre-filter names are all absent', () => {
+    const { dir } = thinnedFx();
+    rmSync(path.join(dir, RECORD));
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'none' });
+    expect(classifyCli(dir)).toMatchObject({ status: 1, stdout: 'none\n' });
+    for (const n of FOUR) expect(existsSync(path.join(dir, n)), n).toBe(false);
+  });
+
+  it('W23-H7: a record beside the whole set it lists is stale: the dir classifies v1, exit 0, data: yes, and the reason names the thinning that never started; the same for a legacy dir', () => {
+    const full = fullSnap();
+    putRecord(full.dir, recordOf(full.dir, full.manifest));
+    const v = H.classify({ from: full.dir });
+    expect(v).toMatchObject({ kind: 'v1', data: true });
+    expect(v.reason.endsWith(STALE_CLAUSE), v.reason).toBe(true);
+    expect(classifyCli(full.dir, 'validate')).toMatchObject({ status: 0 });
+    expect(classifyCli(full.dir, 'validate').stdout).toMatch(/\ndata: yes\n$/);
+    const legacy = snapDirOf(full.home, '20261014-170000');
+    plantDb(path.join(legacy, 'coord.db'), { tables: ['claims'] });
+    const db = readFileSync(path.join(legacy, 'coord.db'));
+    putRecord(legacy, recordOf(legacy, full.manifest, { source: 'legacy', capturedAt: null, dropped: [{ filename: 'coord.db', bytes: db.length, sha256: sha(db) }] }));
+    const l = H.classify({ from: legacy });
+    expect(l).toMatchObject({ kind: 'legacy', data: true });
+    expect(l.reason.endsWith(STALE_CLAUSE), l.reason).toBe(true);
+    expect(classifyCli(legacy)).toMatchObject({ status: 0, stdout: 'legacy\n' });
+  });
+});
