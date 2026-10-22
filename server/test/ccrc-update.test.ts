@@ -14185,6 +14185,71 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       }
     });
 
+    // D-6365's ONE positive rule (review 806, F1 and F4), asked of `_bak_data_keep` directly, a row per shape on each side.
+    const K = 'CCRC_BACKUP_DATA_KEEP';
+    const bytes = (...parts: (string | number[])[]): Buffer =>
+      Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : Buffer.from(p))));
+    const REFUSED: readonly (readonly [string, Buffer])[] = [
+      ['+=', bytes(`${K}+=9999\n`)],
+      [':=', bytes(`${K}:=9999\n`)],
+      ['a space before =', bytes(`${K} =9999\n`)],
+      ['a tab before =', bytes(`${K}\t=9999\n`)],
+      ['a UTF-8 NBSP before =', bytes(`${K} =9999\n`)],
+      ['a UTF-8 NBSP lead', bytes(` ${K}=9999\n`)],
+      ['a Latin-1 0xA0 lead', bytes([0xa0], `${K}=9999\n`)],
+      ['a 0xFF lead', bytes([0xff], `${K}=9999\n`)],
+      ['a vertical-tab lead', bytes(`\v${K}=9999\n`)],
+      ['an export of the knob', bytes(`export ${K}=9999\n`)],
+      ['the bare name with no =', bytes(`${K}\n`)],
+      ['an odd line beside a plain one', bytes(`${K}=4\nexport ${K}=9999\n`)],
+    ];
+    /** Each with the keep it reads: the line's value, or the default 3 where the line is not the knob's. */
+    const READ: readonly (readonly [string, Buffer, number])[] = [
+      ['a comment naming the knob', bytes(`# ${K}=9999\n`), 3],
+      ['a ;-comment naming the knob', bytes(`; ${K}=9999\n`), 3],
+      ['the _OLD suffix key', bytes(`${K}_OLD=9999\n`), 3],
+      ['an OLD_ prefix key', bytes(`OLD_${K}=9999\n`), 3],
+      ['a value that mentions the knob', bytes(`NOTE=see ${K}=4\n`), 3],
+      ['an export of another key whose value mentions the knob', bytes(`export NOTE=${K}=4\n`), 3],
+      ['CRLF', bytes(`${K}=4\r\n`), 4],
+      ['a tab lead', bytes(`\t${K}=4\n`), 4],
+      ['a CR lead', bytes(`\r${K}=4\n`), 4],
+      ['a quoted value', bytes(`${K}="4"\n`), 4],
+      ['an absent key', bytes('CCRC_BACKUP_KEEP=4\n'), 3],
+    ];
+    const UNTAKEN = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)\n`;
+    /** `_bak_data_keep` over a ccrc.env holding `text`, the whole shell under LC_ALL=`locale`. */
+    const dataKeep = (home: string, text: Buffer, locale: string): string => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
+      const r = sourced(home, '_bak_data_keep; echo "rc $? keep ${BAK_DATA_KEEP} why ${BAK_DATA_KEEP_WHY}"', { LC_ALL: locale });
+      expect(r.code, r.stderr).toBe(0);
+      return r.stdout;
+    };
+    /** The UTF-8 half's locale: C.UTF-8, else en_US.UTF-8, and only one `locale -a` lists; null skips that half, by name. */
+    const UTF8: string | null = (() => {
+      const flat = (l: string): string => l.trim().toLowerCase().replace(/-/g, '');
+      const listed = (spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '').split('\n').map(flat);
+      return ['C.UTF-8', 'en_US.UTF-8'].find((l) => listed.includes(flat(l))) ?? null;
+    })();
+
+    it.each(REFUSED)('W23-B17: %s refuses under LC_ALL=C, as unmeasured (D-6365, review 806 F1)', (_shape, text) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17r-'), text, 'C')).toBe(UNTAKEN);
+    });
+
+    it.each(READ)('W23-B17: %s reads as before under LC_ALL=C, never refused (D-6365, review 806 F1, F4)', (_shape, text, keep) => {
+      expect(dataKeep(freshUpdateBox('ccrc-fx-w23-b17a-'), text, 'C')).toBe(`rc 0 keep ${keep} why \n`);
+    });
+
+    it.skipIf(UTF8 === null)(`W23-B17: under a UTF-8 locale (${UTF8 ?? 'none: locale -a lists neither C.UTF-8 nor en_US.UTF-8, so this half is skipped'}) every shape answers as under LC_ALL=C, because the scan reads bytes (D-3833, D-6365, review 806 F1)`, () => {
+      const loc = UTF8!;
+      const charmap = spawnSync('locale', ['charmap'], { env: { ...process.env, LC_ALL: loc }, encoding: 'utf8' }).stdout ?? '';
+      expect(charmap.trim(), `${loc} is a UTF-8 locale on this runner`).toBe('UTF-8');
+      const home = freshUpdateBox('ccrc-fx-w23-b17u-');
+      for (const [shape, text] of REFUSED) expect(dataKeep(home, text, loc), shape).toBe(UNTAKEN);
+      for (const [shape, text, keep] of READ) expect(dataKeep(home, text, loc), shape).toBe(`rc 0 keep ${keep} why \n`);
+    });
+
     it.skipIf(process.getuid?.() === 0)('W23-B18: a ccrc.env that is there but cannot be read refuses, never falls back to the default: nothing pruned or thinned (D-6365)', () => {
       const four = NAMES.slice(0, 4);
       const home = box('ccrc-fx-w23-b18-');
@@ -14195,6 +14260,25 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       chmodSync(env, 0o000);
       const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"');
       chmodSync(env, 0o600);
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
+      expect(g.stdout).toMatch(/^rc 1$/m);
+      expect(g.stdout, 'no prune line and no thinning line').not.toMatch(/^update: backups: (pruned|thinned|coordination data sets)/m);
+      expect(fingerprint(home, four), 'no data set was touched').toEqual(before);
+    });
+
+    it.each([
+      ['a dangling link', (env: string): void => { symlinkSync(join(dirname(env), 'no-such.env'), env); }],
+      ['a directory', (env: string): void => { mkdirSync(env); }],
+    ] as const)('W23-B18: %s at ccrc.env cannot be read, so it refuses, never falls back to the default: nothing pruned or thinned (D-6365, review 806 F5)', (_shape, plant) => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b18x-');
+      plantFull(home, four);
+      const before = fingerprint(home, four);
+      const env = join(home, '.ccrc', 'ccrc.env');
+      rmSync(env, { force: true });
+      plant(env);
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"');
       expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
       expect(g.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing pruned or thinned$/m);
       expect(g.stdout).toMatch(/^rc 1$/m);

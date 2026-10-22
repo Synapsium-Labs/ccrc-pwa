@@ -1202,8 +1202,11 @@ data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_K
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
 units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
 `~/.ccrc/ccrc.env`; `0` and `1` are refused and an invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
-there but cannot be read, or that names the knob on a line the reader does not take (an `export`, a space before `=`, anything but
-spaces or tabs before the name): unmeasured is not unset (D-6365). A damaged data set is never thinned; its bytes stay as evidence (D-6364). The newest data set from
+there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces, tabs
+and CRs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
+`CCRC_BACKUP_DATA_KEEP=`, and refused when it names the knob any other way, `export CCRC_BACKUP_DATA_KEEP=` included: unmeasured
+is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+a dir is read on presence and size, so damage of the same length there is not seen (D-6350, D-6364). The newest data set from
 before a schema migration (a `coord.db` `user_version` lower than the newest kept set's) is kept as well, one at most, so the
 snapshot an older build's by-hand restore needs survives a failed migrating update (D-6358). A thinned dir holds
 `coordination-thinned.json`, written before anything is deleted, which says when, by which verb and by which rule;
