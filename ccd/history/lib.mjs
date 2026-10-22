@@ -4343,6 +4343,44 @@ export function headlessMarkerOf(read) {
   return parseHeadlessList(read.value);
 }
 
+/** W2-D46 step 1: the headless seam's rows before the store, in the ruled order (§8.2; W2-D45, W2-D46). It calls
+ *  W2-2a's recallSeamEngaged and decideSeamInPane and spells neither rule again (called, not folded). What the read
+ *  verbs measured:
+ *  - `recall`: CCRC_RECALL_SESSION, CCRC_RECALL_ARM and CCRC_RECALL_ASOF, each null when undefined (empty is unset);
+ *  - `paneSet`: whether TMUX_PANE is defined (W2-D45: defined is set, '' included); anything but false is a pane;
+ *  - `marker`: headlessMarkerOf's answer for the marker's one read (W2-D44), a parsed list or its headless-unarmed or
+ *    headless-malformed refusal, or null when the caller did not read it. The caller reads it only on the headless
+ *    path (the seam engaged, no pane), so neither the tmux path nor a pane reads it; a null marker past the pane row
+ *    is the caller's defect and throws.
+ *  The rows, each refusal exit 2, the first that applies winning:
+ *   1. no seam value set: `{ ok: true, path: 'tmux' }`, and nothing else is looked at;
+ *   2. a pane: headless-in-pane;
+ *   3. the marker's refusal as headlessMarkerOf gave it: headless-unarmed (absent) or headless-malformed (W2-D48);
+ *   4. SESSION unset, by recallSeamEngaged's own rule applied to SESSION alone: no-identity;
+ *   5. SESSION off ccd's id grammar: bad-id (idOk, before it is compared with anything);
+ *   6. SESSION on no list line, a marker with zero pairs included: headless-unlisted (W2-D44);
+ *   7. ARM outside RECALL_ARMS, empty and absent included: headless-arm-unknown (W2-D42, W2-D48);
+ *   8. ASOF off the UUID grammar, empty and absent included: asof-invalid, its pre-store half (W2-D42; D-5765).
+ *  Past them: `{ ok: true, path: 'headless', session, arm, asof, list }`, `list` the parsed marker's store line and
+ *  pairs, which decideAsOfFamily judges once the store is open (W2-D46 step 4). ARM=control is not decided here: its
+ *  exit 8 comes after admission and the recall-off check (step 6). Rows 1 and 2 cannot be swapped to any effect,
+ *  because decideSeamInPane refuses only an engaged seam. */
+export function decideHeadless({ recall, paneSet, marker }) {
+  const { session, arm, asof } = recall;
+  if (!recallSeamEngaged(recall)) return { ok: true, path: 'tmux' };
+  // W2-D45: decideSeamInPane reads only whether a pane is defined, so any pane is handed on as a defined, empty one.
+  const inPane = decideSeamInPane({ pane: paneSet === false ? null : '', recall });
+  if (!inPane.ok) return inPane;
+  if (marker === null) throw new TypeError('decideHeadless: the seam is engaged and the marker was not read');
+  if (!marker.ok) return marker;
+  if (!recallSeamEngaged({ session, arm: null, asof: null })) return refuseScope('no-identity');
+  if (!idOk(session)) return refuseScope('bad-id');
+  if (!marker.pairs.some((p) => p.ccrcId === session)) return refuseScope('headless-unlisted');
+  if (!RECALL_ARMS.includes(arm)) return refuseScope('headless-arm-unknown');
+  if (!UUID_RE.test(asof ?? '')) return refuseScope('asof-invalid');
+  return { ok: true, path: 'headless', session, arm, asof, list: { storeId: marker.storeId, pairs: marker.pairs } };
+}
+
 /** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The
  *  caller ran `tmux display-message -p -t "$TMUX_PANE" '#S'` bounded at
  *  TMUX_DEADLINE_MS, ALWAYS with `-t`, and passes what came back; `tmux` is
@@ -4371,6 +4409,94 @@ export function resolveGeneration({ envGen, regGen }) {
   if (typeof envGen === 'string' && UUID_RE.test(envGen)) return { value: envGen, via: 'env' };
   if (regGen.state === 'value' && UUID_RE.test(regGen.value.trim())) return { value: regGen.value.trim(), via: 'registry' };
   return { value: null, via: 'newest' };
+}
+
+// ── the env path's family (W2-2b; W2-D40, W2-D44, W2-D46 step 4) ──────────
+// On the headless seam's env path the family is the one CCRC_RECALL_ASOF's boundary sits in. The generation chain
+// above (CCRC_SESSION_GENERATION, then $REG/<id>.generation, then the id's newest family) is not read there, so
+// resolveGeneration stays the tmux path's alone, byte for byte. asOfFamilySql is the statement whose rows
+// decideAsOfFamily reads: the read verbs run it on the admitted store and pass its rows whole, once decideHeadlessStore
+// has passed the marker's store line.
+// D-5767 (history-w2-env-identity-from-asof)
+
+/** W2-D44's store line, the first row of W2-D46 step 4, judged once the store is open and BEFORE any ASOF row is read
+ *  (R3): the marker's store line must name this store's own meta store_id, else exit 2 headless-unlisted. `storeId` is
+ *  that meta value as the read verb read it, null when the meta table holds none, and null matches no store line (fail
+ *  closed). The read verbs call it before they run asOfFamilySql, so a marker written for another store causes no ASOF
+ *  query; decideAsOfFamily calls it as its own first row, so the rule is spelled once. D-5768 (history-w2-marker-grammar) */
+export function decideHeadlessStore({ list, storeId }) {
+  if (list.storeId !== storeId) return refuseScope('headless-unlisted');
+  return { ok: true };
+}
+
+/** The rows decideAsOfFamily reads (W2-D40), with one named parameter, `:asof`: the entries row whose uuid is :asof;
+ *  its boundaries row; the transcript the BOUNDARIES row names (D-6281: the column derivation spans with, never the
+ *  entries row's); every CONFIRMED epoch of that transcript's cc_session_uuid with its family; and the family that one
+ *  merged into, with its own merged_into (one hop, as recall.mjs's ownFamily follows it, so a longer chain is seen).
+ *  LEFT JOINs: one row per confirmed epoch, in (session_pk, seq) order; one row with NULL epoch and family columns when
+ *  there is none or no boundary; no row when no entry has the uuid. Ids, keys and launch facts only: no text is read. */
+export function asOfFamilySql() {
+  return `SELECT e.uuid AS uuid, e.entry_id AS entry_id, bd.entry_id AS boundary_entry_id, t.agent_id AS agent_id,
+      ep.cwd AS cwd, ep.cwd_real AS cwd_real,
+      s.session_pk AS session_pk, s.ccrc_id AS ccrc_id, s.generation AS generation, s.project AS project,
+      s.merged_into AS merged_into,
+      m.session_pk AS into_session_pk, m.ccrc_id AS into_ccrc_id, m.generation AS into_generation,
+      m.project AS into_project, m.merged_into AS into_merged_into
+    FROM entries e
+      LEFT JOIN boundaries bd ON bd.entry_id = e.entry_id
+      LEFT JOIN transcripts t ON t.transcript_pk = bd.transcript_pk
+      LEFT JOIN epochs ep ON ep.cc_session_uuid = t.cc_session_uuid AND ep.confirmed_ms IS NOT NULL
+      LEFT JOIN sessions s ON s.session_pk = ep.session_pk
+      LEFT JOIN sessions m ON m.session_pk = s.merged_into
+    WHERE e.uuid = :asof
+    ORDER BY ep.session_pk, ep.seq`;
+}
+
+/** One asOfFamilySql row's family after its one merged_into hop: its own family when that is not merged, else the family
+ *  it merged into when that one is not merged again; null for a chain or a hop to no row (fail closed). */
+function asOfRowFamily(r) {
+  if (r.merged_into === null) return { pk: r.session_pk, ccrcId: r.ccrc_id, generation: r.generation, project: r.project };
+  if (r.into_session_pk === null || r.into_merged_into !== null) return null;
+  return { pk: r.into_session_pk, ccrcId: r.into_ccrc_id, generation: r.into_generation, project: r.into_project };
+}
+
+/** W2-D40 with W2-D44's admission: the env path's family, decided at W2-D46 step 4, once the store is open. Inputs:
+ *  - `session`, `asof` and `list`: decideHeadless's answer (SESSION passed idOk and a list line, ASOF the UUID
+ *    grammar; `list` is `{ storeId, pairs }`, each pair `{ ccrcId, generation }`, '' for a legacy family);
+ *  - `storeId`: this store's own meta store_id as the read verb read it, null when the meta table holds none (never
+ *    an id read from the binding file in its place);
+ *  - `rows`: asOfFamilySql's rows for `asof`, whole.
+ *  No registry file and no environment variable is an input. The rows, the first that applies winning:
+ *   1. the marker's store line is not this store's: headless-unlisted (W2-D44): decideHeadlessStore's answer, which the
+ *      read verbs also take before they read any row (R3);
+ *   2. no entry has the uuid, the rows are another uuid's, or the entry has no boundaries row: asof-invalid;
+ *   3. the boundary's transcript is not a main one (agent_id ''): asof-invalid;
+ *   4. its cc_session_uuid is a confirmed epoch of a family whose merged_into hop lands on a merged row or on no row, of
+ *      no family, or of two or more families of any id: asof-invalid (fail closed: only a damaged store holds a chain,
+ *      and a transcript two families confirm has no one owner);
+ *   5. that one family's ccrc_id is not SESSION: asof-invalid;
+ *   6. (SESSION, that family's generation) is not a pair of the list: headless-unlisted.
+ *  Admitted: `{ ok: true, via: 'asof', generation, family: { ccrcId, project }, anchor }`. `generation` is an exact key
+ *  ('' for a legacy family, never null), so decideScope's own-id `--session` and the family read take it unchanged;
+ *  `family.project` is the family's stored project (W2-D41's guard); `anchor` is the ASOF epoch's cwd_real ?? cwd, the
+ *  env path's `--workspace` anchor in place of $REG/<id>.workdir (null when it carries neither). When one family confirms
+ *  the transcript through two epoch rows (only mid-merge: mergeFamily moves every epoch), the anchor is the first
+ *  row's. D-5767 (history-w2-env-identity-from-asof) */
+export function decideAsOfFamily({ session, asof, rows, list, storeId }) {
+  const store = decideHeadlessStore({ list, storeId });
+  if (!store.ok) return store;
+  const n = rows[0];
+  if (n === undefined || n.uuid !== asof || n.boundary_entry_id === null) return refuseScope('asof-invalid');
+  if (n.agent_id !== '') return refuseScope('asof-invalid');
+  const epochs = rows.filter((r) => r.session_pk !== null);
+  const fams = epochs.map(asOfRowFamily);
+  if (fams.some((f) => f === null)) return refuseScope('asof-invalid');
+  if (new Set(fams.map((f) => f.pk)).size !== 1) return refuseScope('asof-invalid');
+  const fam = fams[0];
+  if (fam.ccrcId !== session) return refuseScope('asof-invalid');
+  if (!list.pairs.some((p) => p.ccrcId === session && p.generation === fam.generation)) return refuseScope('headless-unlisted');
+  const at = epochs[0];
+  return { ok: true, via: 'asof', generation: fam.generation, family: { ccrcId: fam.ccrcId, project: fam.project }, anchor: at.cwd_real ?? at.cwd };
 }
 
 /** The harness check every read verb runs after the identity (§6.10 item 4,

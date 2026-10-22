@@ -537,8 +537,36 @@ export function formatHeadlessList(list: { storeId: string; pairs: readonly Head
 /** store.mjs readBounded's answer (store.d.mts's BoundedRead), restated so this file imports nothing. */
 export type HeadlessMarkerRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string };
 export function headlessMarkerOf(read: HeadlessMarkerRead): HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'>;
-export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
+// --- W2-2b Task 2: the headless seam's rows before the store (W2-D45, W2-D46 step 1)
+export function decideHeadless(i: {
+  recall: RecallSeamValues; paneSet: boolean; marker: HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'> | null;
+}):
+  | { ok: true; path: 'tmux' }
+  | { ok: true; path: 'headless'; session: string; arm: string; asof: string; list: { storeId: string; pairs: readonly HeadlessPair[] } }
+  | ScopeRefusal<'headless-in-pane' | 'headless-unarmed' | 'headless-malformed' | 'no-identity' | 'bad-id' | 'headless-unlisted'
+    | 'headless-arm-unknown' | 'asof-invalid'>;
+export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' | 'asof' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
+// --- W2-2b Task 2: the env path's family, from CCRC_RECALL_ASOF (W2-D40, W2-D44, W2-D46 step 4)
+/** The marker's store line against this store's meta store_id, before any ASOF row is read (R3). */
+export function decideHeadlessStore(i: { list: { storeId: string; pairs: readonly HeadlessPair[] }; storeId: string | null }):
+  { ok: true } | ScopeRefusal<'headless-unlisted'>;
+/** One row of asOfFamilySql's answer: the ASOF entry, its boundary's transcript, one confirmed epoch with its family,
+ *  and the family that one merged into (one hop). */
+export interface AsOfFamilyRow {
+  readonly uuid: string; readonly entry_id: number | bigint; readonly boundary_entry_id: number | bigint | null;
+  readonly agent_id: string | null; readonly cwd: string | null; readonly cwd_real: string | null;
+  readonly session_pk: number | bigint | null; readonly ccrc_id: string | null; readonly generation: string | null;
+  readonly project: string | null; readonly merged_into: number | bigint | null;
+  readonly into_session_pk: number | bigint | null; readonly into_ccrc_id: string | null; readonly into_generation: string | null;
+  readonly into_project: string | null; readonly into_merged_into: number | bigint | null;
+}
+export function asOfFamilySql(): string;
+export function decideAsOfFamily(i: {
+  session: string; asof: string; rows: readonly AsOfFamilyRow[]; list: { storeId: string; pairs: readonly HeadlessPair[] };
+  storeId: string | null;
+}): { ok: true; via: 'asof'; generation: string; family: { ccrcId: string; project: string }; anchor: string | null }
+  | ScopeRefusal<'headless-unlisted' | 'asof-invalid'>;
 export function decideHarness(p: Presence<string>):
   { ok: true; harness: string } | ScopeRefusal<'harness-unsupported' | 'harness-unreadable'>;
 export interface ScopeInputs {

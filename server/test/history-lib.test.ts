@@ -11487,3 +11487,298 @@ describe('W2-2b Task 1: RECALL_ARMS, the marker bounds, the marker grammar and i
     expect(read('absent')).toEqual(UNARMED);
   });
 });
+
+// ── W2-2b Task 2 (W2-D40, W2-D45, W2-D46): the headless seam's pure deciders ─────────────────────────────────────
+// decideHeadless takes the seam's rows before the store (W2-D46 step 1) and calls W2-2a's recallSeamEngaged and
+// decideSeamInPane (called, not folded); its marker is Task 1's headlessMarkerOf answer. decideAsOfFamily admits the
+// env path's family from CCRC_RECALL_ASOF at step 4, with the marker's store line and its pair, over asOfFamilySql's
+// rows. Pure, so it runs on darwin too; one case runs the statement on a real store's schema. Each refusal is pinned at
+// its step with the CONTROL one step later, and the order pair by pair. D-5767 (history-w2-env-identity-from-asof)
+describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsOfFamily, the seam\'s pure deciders (W2-D40, W2-D45, W2-D46)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Row = import('../../ccd/history/lib.mjs').AsOfFamilyRow;
+  type HIn = Parameters<Lib['decideHeadless']>[0];
+  type AIn = Parameters<Lib['decideAsOfFamily']>[0];
+  type Marker = HIn['marker'];
+  type Recall = HIn['recall'];
+  type Pair = { ccrcId: string; generation: string };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const S = 'w2b-demo';
+  const OTHER_ID = 'w2b-other';
+  const G1 = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const G2 = 'b2b2b2b2-2222-4222-8222-222222222222';
+  const STORE = 'c3c3c3c3-3333-4333-8333-333333333333';
+  const FOREIGN = 'c4c4c4c4-4444-4444-8444-444444444444';
+  const ASOF = 'd4d4d4d4-4444-4444-8444-444444444444';
+  const NONE: Recall = { session: null, arm: null, asof: null };
+  const TMUX = { ok: true, path: 'tmux' };
+  const refused = (reason: string): { ok: false; rc: number; reason: string } => ({ ok: false, rc: 2, reason });
+  /** A marker as Task 1's fold answers it, from the one formatter (W2-D44). */
+  const markerOf = (l: Lib, pairs: Pair[], storeId: string = STORE): Marker =>
+    l.headlessMarkerOf({ state: 'value', value: l.formatHeadlessList({ storeId, pairs }) });
+  /** The same marker text with its first LF made CRLF: a CR anywhere is malformed (W2-D44). */
+  const withCr = (l: Lib): Marker =>
+    l.headlessMarkerOf({ state: 'value', value: l.formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] }).replace('\n', '\r\n') });
+  /** A marker that throws when looked at: a row before the marker row never reads it. */
+  const UNTOUCHABLE = { get ok(): never { throw new Error('the marker was looked at'); } } as unknown as Marker;
+  /** A function's text in lib.mjs: its `export function <name>(` line through the next line that is exactly `}`. */
+  const fnText = (name: string): string => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((x) => x.startsWith(`export function ${name}(`));
+    return at < 0 ? '' : src.slice(at, src.indexOf('}', at) + 1).join('\n');
+  };
+  /** Every seam value set and valid, the treatment arm; and the marker that lists S under G1. */
+  const full = (l: Lib): Recall => ({ session: S, arm: l.RECALL_ARMS[1]!, asof: ASOF });
+  const listed = (l: Lib): Marker => markerOf(l, [{ ccrcId: S, generation: G1 }]);
+  /** decideHeadless's input with no pane: every value valid unless `recall` overrides it. */
+  const atOf = (l: Lib) => (recall: Partial<Recall>, marker: Marker = listed(l)): HIn =>
+    ({ recall: { ...full(l), ...recall }, paneSet: false, marker });
+  /** One confirmed epoch of (S, G1), not merged, on a main transcript, holding ASOF's boundary. */
+  const row = (o: Partial<Row> = {}): Row => ({
+    uuid: ASOF, entry_id: 40, boundary_entry_id: 40, agent_id: '', cwd: '/home/u/tree/a', cwd_real: '/home/u/tree/a-real',
+    session_pk: 1, ccrc_id: S, generation: G1, project: 'proj-a', merged_into: null,
+    into_session_pk: null, into_ccrc_id: null, into_generation: null, into_project: null, into_merged_into: null, ...o,
+  });
+  const LIST = { storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] };
+  const askOf = (l: Lib) => (o: Partial<AIn> = {}): unknown =>
+    l.decideAsOfFamily({ session: S, asof: ASOF, rows: [row()], list: LIST, storeId: STORE, ...o });
+  const admitted = (generation: string, anchor: string | null, ccrcId: string = S): unknown =>
+    ({ ok: true, via: 'asof', generation, family: { ccrcId, project: 'proj-a' }, anchor });
+
+  it('decideHeadless: each word at its step, each case the CONTROL of the one before it (W2-D46 step 1)', async () => {
+    const l = await lib();
+    const FULL = full(l);
+    const at = atOf(l);
+    const steps: Array<[string, HIn, unknown]> = [
+      ['1. no seam value set, no pane: the tmux path', { recall: NONE, paneSet: false, marker: null }, TMUX],
+      ['1. no seam value set, in a pane: today\'s tmux path', { recall: NONE, paneSet: true, marker: null }, TMUX],
+      ['2. the seam set in a pane', { recall: FULL, paneSet: true, marker: null }, refused('headless-in-pane')],
+      ['3. no marker', at({}, l.headlessMarkerOf({ state: 'absent' })), refused('headless-unarmed')],
+      ['3. a marker that cannot be read is never read as absent', at({}, l.headlessMarkerOf({ state: 'unreadable' })), refused('headless-malformed')],
+      ['3. a marker the grammar refuses', at({}, withCr(l)), refused('headless-malformed')],
+      ['4. SESSION unset', at({ session: null }), refused('no-identity')],
+      ['4. SESSION empty is unset', at({ session: '' }), refused('no-identity')],
+      ['5. SESSION off the id grammar', at({ session: '../w2b-demo' }), refused('bad-id')],
+      ['6. SESSION on no list line', at({ session: OTHER_ID }), refused('headless-unlisted')],
+      ['6. a marker with zero pairs lists nobody', at({}, markerOf(l, [])), refused('headless-unlisted')],
+      ['7. ARM absent', at({ arm: null }), refused('headless-arm-unknown')],
+      ['7. ARM empty', at({ arm: '' }), refused('headless-arm-unknown')],
+      ['7. ARM outside RECALL_ARMS', at({ arm: 'other' }), refused('headless-arm-unknown')],
+      ['7. ARM in another case', at({ arm: FULL.arm!.toUpperCase() }), refused('headless-arm-unknown')],
+      ['8. ASOF absent', at({ asof: null }), refused('asof-invalid')],
+      ['8. ASOF empty', at({ asof: '' }), refused('asof-invalid')],
+      ['8. ASOF off the UUID grammar', at({ asof: 'not-a-uuid' }), refused('asof-invalid')],
+      ['8. ASOF in upper case', at({ asof: ASOF.toUpperCase() }), refused('asof-invalid')],
+    ];
+    for (const [why, input, want] of steps) expect(l.decideHeadless(input), why).toEqual(want);
+    const passed = { ok: true, path: 'headless', session: S, asof: ASOF, list: { storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] } };
+    for (const arm of l.RECALL_ARMS) {
+      expect(l.decideHeadless(at({ arm })), `past every row, ARM ${arm}: its exit 8 is step 6's, not this decider's`).toEqual({ ...passed, arm });
+    }
+    for (const w of ['headless-in-pane', 'headless-unarmed', 'headless-malformed', 'no-identity', 'bad-id', 'headless-unlisted',
+      'headless-arm-unknown', 'asof-invalid']) expect(REASONS[w], `${w} is an exit-2 REASONS word`).toBe(EXIT.REFUSED);
+  });
+
+  it('decideHeadless: an input that fails two adjacent steps answers the earlier word, pair by pair', async () => {
+    const l = await lib();
+    const at = atOf(l);
+    // Rows 1 and 2 cannot be told apart by any input (decideSeamInPane refuses only an engaged seam).
+    const pairs: Array<[string, HIn, unknown]> = [
+      ['2 before 3: a pane, and no marker', { recall: full(l), paneSet: true, marker: l.headlessMarkerOf({ state: 'absent' }) }, refused('headless-in-pane')],
+      ['3 before 4: a refused marker, and no SESSION', at({ session: null }, withCr(l)), refused('headless-malformed')],
+      ['4 before 5: an empty SESSION, which idOk refuses too', at({ session: '' }), refused('no-identity')],
+      ['5 before 6: an id off the grammar, on no list line', at({ session: '../w2b-demo' }), refused('bad-id')],
+      ['6 before 7: an unlisted id, and an unknown ARM', at({ session: OTHER_ID, arm: 'other' }), refused('headless-unlisted')],
+      ['7 before 8: an unknown ARM, and an ASOF off the grammar', at({ arm: null, asof: 'not-a-uuid' }), refused('headless-arm-unknown')],
+    ];
+    for (const [why, input, want] of pairs) expect(l.decideHeadless(input), why).toEqual(want);
+  });
+
+  it('W2-D45: empty is unset, a set paneSet is a pane, and the marker is looked at only past the pane row', async () => {
+    const l = await lib();
+    const EMPTY: Recall = { session: '', arm: '', asof: '' };
+    for (const paneSet of [false, true]) {
+      expect(l.decideHeadless({ recall: EMPTY, paneSet, marker: UNTOUCHABLE }), `empty values, paneSet ${paneSet}`).toEqual(TMUX);
+      expect(l.decideHeadless({ recall: NONE, paneSet, marker: UNTOUCHABLE }), `no values, paneSet ${paneSet}`).toEqual(TMUX);
+    }
+    expect(l.decideHeadless({ recall: { ...NONE, asof: ASOF }, paneSet: true, marker: UNTOUCHABLE }), 'a pane').toEqual(refused('headless-in-pane'));
+    expect(l.decideHeadless({ recall: { ...NONE, asof: ASOF }, paneSet: undefined as unknown as boolean, marker: UNTOUCHABLE }),
+      'anything but false is a pane (fail closed)').toEqual(refused('headless-in-pane'));
+    expect(() => l.decideHeadless({ recall: { ...NONE, arm: 'x' }, paneSet: false, marker: UNTOUCHABLE }),
+      'CONTROL: one row past the pane, the marker is looked at').toThrow('the marker was looked at');
+    expect(() => l.decideHeadless({ recall: { ...NONE, session: S }, paneSet: false, marker: null }),
+      'a marker not read past the pane row is the caller\'s defect').toThrow(/the seam is engaged and the marker was not read/);
+  });
+
+  it('R1: decideHeadless calls W2-2a\'s recallSeamEngaged and decideSeamInPane, which stay exported, and spells neither rule, nor the marker\'s fold, again', async () => {
+    const body = fnText('decideHeadless');
+    expect(body, 'decideHeadless is found').toContain('export function decideHeadless({ recall, paneSet, marker }) {');
+    expect(body, 'row 1 is W2-D45\'s rule').toContain("  if (!recallSeamEngaged(recall)) return { ok: true, path: 'tmux' };");
+    expect(body, 'row 2 is W2-D39\'s rule').toContain("  const inPane = decideSeamInPane({ pane: paneSet === false ? null : '', recall });");
+    expect(body, 'row 3 is headlessMarkerOf\'s answer').toContain('  if (!marker.ok) return marker;');
+    expect(body, 'row 4 is W2-D45\'s rule on SESSION alone')
+      .toContain("  if (!recallSeamEngaged({ session, arm: null, asof: null })) return refuseScope('no-identity');");
+    for (const second of [/typeof pane/, /PANE_RE/, /=== ''|!== ''/, /\.length\b/, /headless-in-pane/, /\.state\b/]) {
+      expect(body, `no second spelling: ${String(second)}`).not.toMatch(second);
+    }
+    const l = await lib();
+    expect([typeof l.recallSeamEngaged, typeof l.decideSeamInPane], 'kept, not folded').toEqual(['function', 'function']);
+  });
+
+  it('decideAsOfFamily: each word at its step, each case the CONTROL of the one before it (W2-D40; W2-D44\'s store line and pair)', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    const NO_EPOCH: Partial<Row> = { cwd: null, cwd_real: null, session_pk: null, ccrc_id: null, generation: null, project: null };
+    const HOP = { into_session_pk: 1, into_ccrc_id: S, into_generation: G1, into_project: 'proj-a', into_merged_into: null };
+    const steps: Array<[string, unknown, unknown]> = [
+      ['1. the store line names another store', ask({ list: { ...LIST, storeId: FOREIGN } }), refused('headless-unlisted')],
+      ['1. this store\'s meta holds no store_id', ask({ storeId: null }), refused('headless-unlisted')],
+      ['2. no entry has the uuid', ask({ rows: [] }), refused('asof-invalid')],
+      ['2. the rows are another uuid\'s', ask({ rows: [row({ uuid: G2 })] }), refused('asof-invalid')],
+      ['2. the entry has no boundaries row', ask({ rows: [row({ boundary_entry_id: null })] }), refused('asof-invalid')],
+      ['3. the boundary\'s transcript is a sidechain', ask({ rows: [row({ agent_id: 'a1' })] }), refused('asof-invalid')],
+      ['3. the boundary names no transcript', ask({ rows: [row({ agent_id: null })] }), refused('asof-invalid')],
+      ['4. the merged_into hop lands on a merged row', ask({ rows: [row({ session_pk: 4, generation: '', merged_into: 1, ...HOP, into_merged_into: 9 })] }), refused('asof-invalid')],
+      ['4. the merged_into hop lands on no row', ask({ rows: [row({ session_pk: 4, generation: '', merged_into: 9 })] }), refused('asof-invalid')],
+      ['4. no confirmed epoch', ask({ rows: [row(NO_EPOCH)] }), refused('asof-invalid')],
+      ['4. two families confirm the transcript',
+        ask({ rows: [row(), row({ session_pk: 6, ccrc_id: OTHER_ID, generation: G2 })] }), refused('asof-invalid')],
+      ['5. the one family is another id\'s, though (SESSION, its generation) is a pair',
+        ask({ rows: [row({ ccrc_id: OTHER_ID })] }), refused('asof-invalid')],
+      ['6. (SESSION, the family\'s generation) is no pair', ask({ rows: [row({ session_pk: 2, generation: G2 })] }), refused('headless-unlisted')],
+      ['admitted: an exact key, and the anchor is cwd_real', ask(), admitted(G1, '/home/u/tree/a-real')],
+      ['admitted: the anchor falls back to cwd', ask({ rows: [row({ cwd_real: null })] }), admitted(G1, '/home/u/tree/a')],
+      ['admitted: an epoch with neither has no anchor', ask({ rows: [row({ cwd: null, cwd_real: null })] }), admitted(G1, null)],
+      ['admitted: one family through two epoch rows, one on a row merged into it, and the first row\'s anchor',
+        ask({ rows: [row(), row({ session_pk: 4, generation: '', merged_into: 1, ...HOP, cwd_real: '/home/u/tree/b' })] }), admitted(G1, '/home/u/tree/a-real')],
+      ['admitted: a legacy family, generation \'\'',
+        ask({ rows: [row({ generation: '' })], list: { storeId: STORE, pairs: [{ ccrcId: S, generation: '' }] } }), admitted('', '/home/u/tree/a-real')],
+    ];
+    for (const [why, got, want] of steps) expect(got, why).toEqual(want);
+    // R3: row 1 is its own decision, which the read verbs call before any ASOF row is read, and decideAsOfFamily's first row.
+    expect(l.decideHeadlessStore({ list: LIST, storeId: STORE }), 'CONTROL: this store\'s own line').toEqual({ ok: true });
+    expect(l.decideHeadlessStore({ list: { ...LIST, storeId: FOREIGN }, storeId: STORE }), 'another store\'s line').toEqual(refused('headless-unlisted'));
+    expect(l.decideHeadlessStore({ list: LIST, storeId: null }), 'no meta store_id matches no line').toEqual(refused('headless-unlisted'));
+    const body = fnText('decideAsOfFamily');
+    expect(body, 'decideAsOfFamily\'s first row is decideHeadlessStore').toContain('  const store = decideHeadlessStore({ list, storeId });');
+    expect(body, 'and it spells the store-line rule no second time').not.toContain('list.storeId !==');
+  });
+
+  it('decideAsOfFamily: an input that fails two adjacent steps answers the earlier word', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    expect(ask({ list: { ...LIST, storeId: FOREIGN }, rows: [] }), '1 before 2: a foreign store line, and no entry')
+      .toEqual(refused('headless-unlisted'));
+    expect(ask({ rows: [row({ session_pk: 6, ccrc_id: OTHER_ID, generation: G2 })] }),
+      '5 before 6: another id\'s family, whose generation is no pair of SESSION\'s').toEqual(refused('asof-invalid'));
+    // Rows 2 to 5 answer one word, so swapping two of them changes no answer: each is pinned by its own drop mutant.
+  });
+
+  it('decideAsOfFamily over asOfFamilySql on a real store: purge and reuse, legacy and merged families, the D-6281 shape, each refusal', async () => {
+    const l = await lib();
+    const home = mkTmp('ccrc-history-w2b-family-');
+    replayStore.createStore(home, { storeId: STORE });
+    const db = replayStore.openWriter(l.historyPaths(home).dbFile);
+    try {
+      const G3 = 'e3e3e3e3-3333-4333-8333-333333333333';
+      const G4 = 'e4e4e4e4-4444-4444-8444-444444444444';
+      const G5 = 'e5e5e5e5-5555-4555-8555-555555555555';
+      const G6 = 'e6e6e6e6-6666-4666-8666-666666666666';
+      const uuid = (k: number): string => `f0f0f0f0-0000-4000-8000-${String(k).padStart(12, '0')}`;
+      const fam = db.prepare('INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, ?, ?, ?)');
+      fam.run(1, S, G1, 'proj-a', 1000, null);
+      fam.run(2, S, G2, 'proj-a', 2000, null);              // S's newest family: the id was purged and reused
+      fam.run(3, 'w2b-legacy', '', 'proj-a', 500, null);
+      fam.run(5, 'w2b-merged', G3, 'proj-a', 600, null);
+      fam.run(4, 'w2b-merged', '', 'proj-a', 400, 5);       // a '' family merged into (w2b-merged, G3), still holding an epoch
+      fam.run(6, OTHER_ID, G4, 'proj-b', 700, null);
+      fam.run(9, 'w2b-chain', G6, 'proj-a', 320, null);
+      fam.run(8, 'w2b-chain', G5, 'proj-a', 310, 9);
+      fam.run(7, 'w2b-chain', '', 'proj-a', 300, 8);        // its one hop lands on a row merged again
+      const tr = db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, ?)');
+      for (const [tpk, k] of [[1, 101], [2, 102], [3, 103], [4, 104], [5, 105], [6, 106], [8, 108]] as const) tr.run(tpk, uuid(k), '');
+      tr.run(7, uuid(101), 'a1');                           // a sidechain of transcript 1's session
+      const ep = db.prepare(`INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, cwd_real, confirmed_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      const epoch = (pk: number, seq: number, k: number, cwd: string | null, real: string | null, confirmed: number | null): void => {
+        ep.run(pk, seq, uuid(k), EPOCH_CAUSES[0]!, DECLARED_BY[0]!, cwd, real, confirmed);
+      };
+      epoch(1, 1, 101, '/home/u/tree/a', '/home/u/tree/a-real', 1100);
+      epoch(2, 1, 102, '/home/u/tree/b', '/home/u/tree/b', 2100);
+      epoch(3, 1, 103, '/home/u/tree/l', null, 600);
+      epoch(4, 1, 104, null, null, 450);
+      epoch(1, 2, 105, null, null, 1200);
+      epoch(6, 1, 105, null, null, 800);                    // transcript 5 is confirmed by two families
+      epoch(1, 3, 106, null, null, null);                   // transcript 6's one epoch is unconfirmed
+      epoch(7, 1, 108, null, null, 350);
+      const blob = db.prepare("INSERT INTO blobs (blob_id, sha256, codec, raw_len) VALUES (?, ?, 'raw', 0)");
+      const ent = db.prepare(`INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+        struct_file_id, blob_id) VALUES (?, ?, ?, 'system', 'harness', 1, ?, 1, ?)`);
+      const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)');
+      /** Entry k on transcript `tpk`, with a boundaries row on `onTpk` (ord `ord`) unless that is null. */
+      const plant = (k: number, tpk: number, onTpk: number | null, ord = 1): string => {
+        blob.run(k, createHash('sha256').update(`w2b-family-${k}`).digest());
+        ent.run(k, uuid(k), tpk, k, k);
+        if (onTpk !== null) bnd.run(k, onTpk, ord);
+        return uuid(k);
+      };
+      const N1 = plant(1, 1, 1);
+      const N2 = plant(2, 2, 2);
+      const NL = plant(3, 3, 3);
+      const NM = plant(4, 4, 4);
+      const NB = plant(5, 5, 5);
+      const NU = plant(6, 6, 6);
+      const NS = plant(7, 7, 7);
+      const NP = plant(8, 1, null);                         // a plain row: no boundaries row
+      const NX = plant(9, 7, 1, 2);                         // D-6281: the entries row names the sidechain, the boundaries row the main transcript
+      const NC = plant(10, 8, 8);
+      const NZ = uuid(99);                                  // no entry has it
+      const own = (db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as unknown as { v: string }).v;
+      expect(own, 'CONTROL: the store is the one the marker names').toBe(STORE);
+      const pairs: Pair[] = [{ ccrcId: S, generation: G1 }, { ccrcId: 'w2b-legacy', generation: '' }, { ccrcId: 'w2b-merged', generation: G3 },
+        { ccrcId: OTHER_ID, generation: G4 }, { ccrcId: 'w2b-chain', generation: G5 }, { ccrcId: 'w2b-chain', generation: G6 }];
+      /** Step 1, then the statement, then step 4's decision, as Task 3 composes them. */
+      const admit = (session: string, asof: string, marker: Marker = markerOf(l, pairs)): unknown => {
+        const seam = l.decideHeadless({ recall: { session, arm: l.RECALL_ARMS[1]!, asof }, paneSet: false, marker });
+        if (!seam.ok || seam.path !== 'headless') throw new Error(`step 1 refused: ${JSON.stringify(seam)}`);
+        const rows = db.prepare(l.asOfFamilySql()).all({ asof: seam.asof }) as unknown as Row[];
+        return l.decideAsOfFamily({ session: seam.session, asof: seam.asof, rows, list: seam.list, storeId: own });
+      };
+      expect(admit(S, N1), 'purge and reuse: ASOF in G1\'s transcript reads G1, though S\'s newest family is G2')
+        .toEqual(admitted(G1, '/home/u/tree/a-real'));
+      expect(admit(S, N2), 'CONTROL: ASOF in G2\'s transcript, and (S, G2) is no pair').toEqual(refused('headless-unlisted'));
+      expect(admit(S, NX), 'D-6281: the boundaries row\'s transcript decides main, never the entries row\'s')
+        .toEqual(admitted(G1, '/home/u/tree/a-real'));
+      expect(admit('w2b-legacy', NL), 'a legacy family: \'\' is an exact key, and the anchor falls back to cwd')
+        .toEqual(admitted('', '/home/u/tree/l', 'w2b-legacy'));
+      expect(admit('w2b-merged', NM), 'a merged \'\' family is admitted as the family it merged into')
+        .toEqual(admitted(G3, null, 'w2b-merged'));
+      for (const [why, asof] of [['two families confirm its transcript', NB], ['its one epoch is unconfirmed', NU],
+        ['a sidechain boundary', NS], ['a plain row', NP], ['no entry', NZ]] as const) {
+        expect(admit(S, asof), why).toEqual(refused('asof-invalid'));
+      }
+      expect(admit('w2b-chain', NC), 'a hop that lands on a merged row').toEqual(refused('asof-invalid'));
+      expect(admit(OTHER_ID, N1), 'another id\'s family').toEqual(refused('asof-invalid'));
+      expect(admit(S, N1, markerOf(l, pairs, FOREIGN)), 'a marker for another store passes step 1 and is refused at admission')
+        .toEqual(refused('headless-unlisted'));
+    } finally { db.close(); }
+  });
+
+  it('the env path reads no registry or environment generation, and the tmux path\'s resolveGeneration is byte-identical (W2-D40; C48 stays tmux-only)', async () => {
+    for (const name of ['decideHeadless', 'decideHeadlessStore', 'asOfFamilySql', 'decideAsOfFamily']) {
+      const body = fnText(name);
+      expect(body.length, `${name} is found`).toBeGreaterThan(0);
+      expect(body, name).not.toMatch(/resolveGeneration|envGen|regGen|process\.env|CCRC_SESSION_GENERATION|\.workdir\b|newest/);
+    }
+    expect(fnText('resolveGeneration').split('\n'), 'resolveGeneration, byte for byte as at d119d6e90').toEqual([
+      'export function resolveGeneration({ envGen, regGen }) {',
+      "  if (typeof envGen === 'string' && UUID_RE.test(envGen)) return { value: envGen, via: 'env' };",
+      "  if (regGen.state === 'value' && UUID_RE.test(regGen.value.trim())) return { value: regGen.value.trim(), via: 'registry' };",
+      "  return { value: null, via: 'newest' };",
+      '}',
+    ]);
+    const l = await lib();
+    expect(l.resolveGeneration({ envGen: G2, regGen: { state: 'value', value: G1 } }), 'CONTROL: the tmux path still reads the env first')
+      .toEqual({ value: G2, via: 'env' });
+  });
+});
