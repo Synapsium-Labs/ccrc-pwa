@@ -893,13 +893,44 @@ r1=$(gh pr view "$PR" --json baseRefName,headRefOid,state,reviewDecision) || sto
 base=$(jq -r .baseRefName <<<"$r1") && head=$(jq -r .headRefOid <<<"$r1") && state=$(jq -r .state <<<"$r1") \
   || stop "unreadable: read 1"
 [[ $base =~ ^[A-Za-z0-9._/-]+$ ]] || stop "unreadable: read 1 gave no usable base"
+case "$state" in OPEN|CLOSED|MERGED) ;; *) stop "unreadable: read 1" ;; esac
 [ "$state" = MERGED ] && say "MERGED head=$head"
 [ "$state" = CLOSED ] && stop "not-at-head: the PR is CLOSED"
 [ "$head" = "$HC" ] || stop "not-at-head: the PR head is $head"
 
+# Read 1's reviews, in API order (oldest first), every page. A malformed page, an empty answer or a failed call is a
+# stop, never "no requests". An entry with no user is a deleted account: its identity is its own review id.
+rv=$(gh api --paginate "repos/{owner}/{repo}/pulls/$PR/reviews" | jq -sc '
+  def sint: type == "number" and . == floor and . > 0 and . <= 9007199254740991;
+  if length > 0 and all(.[]; type == "array")
+     and all(.[][]; type == "object" and (.id | sint) and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED",
+       "COMMENTED", "PENDING")) and (.user == null or (.user.id | sint)))
+  then flatten(1) else error("malformed") end') || stop "unreadable: read 1's reviews"
+# Per identity, the latest opinionated review (COMMENTED and PENDING neither clear nor replace one); the requests that
+# stand are the review ids of the identities whose kept review requests changes. Only numbers reach the key.
+sel=$(jq -nc --argjson rv "$rv" --argjson pr "$r1" '
+  {summary: ($pr.reviewDecision == "CHANGES_REQUESTED"),
+   reviews: ([reduce $rv[] as $e ({}; if $e.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+       then .[if $e.user == null then "r:\($e.id)" else "u:\($e.user.id)" end] = $e else . end)
+     | .[] | select(.state == "CHANGES_REQUESTED") | .id] | unique)}') || stop "unreadable: read 1's reviews"
+key=$(jq -c --arg pr "$PR" --arg head "$HC" '{pr: $pr, head: $head, summary, reviews}' <<<"$sel") \
+  || stop "unreadable: read 1's reviews"
+standing=$(jq -r '.summary or (.reviews | length > 0)' <<<"$sel") || stop "unreadable: read 1's reviews"
+# A requested change stops every route. Only the operator's answer to that stop, ignore, skips it: CR_IGNORE holds
+# the exact key printed here, set for this one invocation (a convention check, not authentication). It skips nothing
+# else, and a summary-only request with no review id to name is never skipped.
+if [ "$standing" = true ]; then
+  [ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ] && jq -e '.reviews | length > 0' <<<"$sel" >/dev/null \
+    || stop "changes-requested: operator decision required; key=$key"
+fi
+
 # Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop.
-rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc 'add // []') \
-  || stop "unreadable: read 2"
+rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc '
+  if length > 0 and all(.[]; type == "array")
+     and all(.[][]; type == "object" and (.type | type) == "string"
+       and (if .type | IN("pull_request", "merge_queue", "required_status_checks") then (.parameters | type) == "object" else true end)
+       and (if .type == "required_status_checks" then (.parameters.required_status_checks | type) == "array" else true end))
+  then flatten(1) else error("malformed") end') || stop "unreadable: read 2"
 unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_checks", "required_linear_history",
   "workflows", "code_scanning", "required_deployments", "required_signatures", "non_fast_forward", "deletion",
   "creation"] | unique | join(",")' <<<"$rules") || stop "unreadable: read 2"
@@ -909,7 +940,7 @@ unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_c
 r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
-  200) prot=$(jq -c . <<<"$b3") || stop "unreadable: read 3" ;;
+  200) prot=$(jq -ce 'if type == "object" then . else error("not an object") end' <<<"$b3") || stop "unreadable: read 3" ;;
   404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
        prot='{}' ;;
   401|403) via=3b
@@ -1017,19 +1048,18 @@ case "$w" in
   *) stop "unreadable: read 5" ;;
 esac
 
-# The route (§5.7.4), and the approval licence on a direct route only.
+# The route (§5.7.4), and the approval licence on a direct route only. A request that stands (and was ignored)
+# licenses nothing: while one stands the licence is never weighed, so admin stays never.
 if [ "$route" != Q ]; then
   if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
 fi
 admin=never
-need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
-  if (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
+need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" --arg standing "$standing" '
+  if $standing == "true" then "no"
+  elif (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
       or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0) | not then "no"
   elif $pr.reviewDecision == "REVIEW_REQUIRED" then "yes"
-  elif $pr.reviewDecision == "CHANGES_REQUESTED" then "changes-requested"
   else "no" end') || stop "unreadable: the approval"
-[ "$route" != Q ] && [ "$need" = changes-requested ] \
-  && stop "changes-requested: an approval is required and a review requests changes"
 if [ "$route" != Q ] && [ "$need" = yes ]; then
   [ "$via" = 3b ] && stop "read-3b-unknowable: an approval is missing and read 3 answered $c3"
   [ -z "$gates" ] || stop "licence-fails: an approval is missing and --admin could skip $gates"

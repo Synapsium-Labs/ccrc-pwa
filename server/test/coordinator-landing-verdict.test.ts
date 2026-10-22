@@ -1,7 +1,7 @@
 // Landing-order wave 3e (spec 2026-09-23 §5.7): the coordinator lands a PR by the route the repository's own rules
 // give, read fresh before each landing. `references/wave-lifecycle.md` §5b carries ONE fenced bash block, the landing
-// verdict: it makes reads 1 to 6 with gh and prints exactly one line, a route with its method and its licence, a
-// wait, a red, a merged PR to prove, or a stop with its reason. It never merges.
+// verdict: it makes reads 1 to 6 with gh (read 1 including the PR's reviews) and prints exactly one line, a route with
+// its method and its licence, a wait, a red, a merged PR to prove, or a stop with its reason. It never merges.
 //
 // This file extracts that block and RUNS it, against a stub gh that answers fixture JSON per read, with one case per
 // route and per stop the reads decide (§5.7.5). The fixture every case starts from is this repository as measured on
@@ -9,7 +9,7 @@
 // prose says what the coordinator does with each line, and this file is what holds the line itself in place.
 //
 // The stub is an executable `gh` first on PATH in a fixture HOME. It logs every argv and answers an argv it does not
-// know with exit 90, so a block that reached for anything but the six reads fails closed.
+// know with exit 90, so a block that reached for anything but its reads fails closed.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -30,7 +30,7 @@ const CLASSIC = ['test (server)', 'test (agent)', 'test (pwa)', 'build-pwa'];
 /** One gh answer. `raw` is written as is; otherwise `body` is JSON. A code other than 200 makes gh exit 1, as gh does
  *  on any non-2xx, with GitHub's error body on stdout (measured: gh prints it there and its message on stderr). */
 type Answer = { code: number; body?: unknown; raw?: string };
-type Key = 'pr' | 'rules' | 'protection' | 'branch' | 'repo' | 'compare' | 'checkruns' | 'status' | 'ruleset';
+type Key = 'pr' | 'reviews' | 'rules' | 'protection' | 'branch' | 'repo' | 'compare' | 'checkruns' | 'status' | 'ruleset';
 type Fixture = Partial<Record<Key, Answer | Answer[]>>;
 
 const ok = (body: unknown): Answer => ({ code: 200, body });
@@ -44,6 +44,7 @@ const runs = (...rs: unknown[]): Answer => ok({ total_count: rs.length, check_ru
  *  one App id with `enforce_admins` on, no approval required, and a head with no commit status at all. */
 const measured = (): Fixture => ({
   pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: '' }),
+  reviews: ok([]),
   rules: ok([
     { type: 'pull_request', ruleset_source_type: 'Repository', ruleset_id: 11, parameters: {
       required_approving_review_count: 0, allowed_merge_methods: ['merge', 'squash', 'rebase'] } },
@@ -78,10 +79,15 @@ const bare = (): Fixture => ({
 const included = (a: Answer): string => a.raw ?? (`HTTP/2.0 ${a.code} X\nX-Github-Request-Id: 0\r\nX-Xss-Protection: 0\r\n\r\n`
   + JSON.stringify(a.body));
 
+// The reviews arm answers a call without --paginate with page 1 of the same fixture only (pages are one line each), as
+// GitHub does, so a block that drops --paginate reads the first page and a case with a request on page 2 goes red.
 const STUB = `#!/bin/sh
+first=
 printf '%s\\n' "$*" >> "$FX/calls"
 case "$*" in
   "pr view "*) k=pr ;;
+  "api --paginate repos/{owner}/{repo}/pulls/"*/reviews) k=reviews ;;
+  "api repos/{owner}/{repo}/pulls/"*/reviews) k=reviews; first=1 ;;
   "api --paginate repos/{owner}/{repo}/rules/branches/"*) k=rules ;;
   "api -i repos/{owner}/{repo}/branches/"*/protection) k=protection ;;
   "api repos/{owner}/{repo}/branches/"*) k=branch ;;
@@ -95,7 +101,7 @@ esac
 n=$(( $(cat "$FX/$k.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FX/$k.n"
 p="$FX/$k"; [ -f "$FX/$k.$n.out" ] && p="$FX/$k.$n"
 [ -f "$p.out" ] || { echo "fixture gh: no answer for $k" >&2; exit 91; }
-cat "$p.out"
+if [ -n "$first" ]; then head -n1 "$p.out"; else cat "$p.out"; fi
 rc=$(cat "$p.rc")
 [ "$rc" = 0 ] || echo "gh: fixture (HTTP $(cat "$p.code"))" >&2
 exit "$rc"
@@ -207,16 +213,6 @@ const ROUTES: Case[] = [
   ['route G: an approval is required and the reviewDecision is a word the block does not list, so nothing is licensed',
     with_(preQueue, (f) => ({ ...f, pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'SOMETHING_NEW' }) })),
     'ROUTE G method=squash admin=never strict=no'],
-  ['route U: no approval is required and a review requests changes, so the route is as it was and nothing is licensed',
-    with_(bare, { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
-    'ROUTE U method=squash admin=never strict=no'],
-  ['route Q: no approval is required and a review requests changes, so the queue route is as it was',
-    with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
-    'ROUTE Q method=squash admin=never strict=no'],
-  ['route Q: an approval is required and a review requests changes, which stops no queue landing',
-    with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')),
-      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
-    'ROUTE Q method=squash admin=never strict=no'],
   ['route G under read 3b: the check set from the branch view, strictness unknown', with_(via3b, {
     branch: ok({ name: 'main', protection: { enabled: true, required_status_checks: { enforcement_level: 'everyone',
       contexts: ['build-pwa'], checks: [{ context: 'build-pwa', app_id: 15368 }] } } }), checkruns: runs(run('build-pwa')) }),
@@ -330,22 +326,6 @@ const STOPS: Case[] = [
     checkruns: runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')),
     status: ok({ state: 'success', statuses: [{ context: 'test (server)', state: 'success' }] }) }),
     'STOP unverifiable: test (server) shows only as a commit status'],
-  ['changes-requested: a ruleset requires an approval and a review requests changes', with_(preQueue, (f) => ({ ...f,
-    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
-    'STOP changes-requested: an approval is required and a review requests changes'],
-  ['changes-requested: classic protection alone requires an approval and a review requests changes', with_(bare, {
-    protection: ok({ enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1 },
-      required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
-    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
-    'STOP changes-requested: an approval is required and a review requests changes'],
-  ['changes-requested is decided before the licence is weighed: another gate does not turn it into licence-fails',
-    with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }),
-      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
-    'STOP changes-requested: an approval is required and a review requests changes'],
-  ['changes-requested is decided before read 3b stops the licence: it is not read-3b-unknowable',
-    with_(via3b, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 })),
-      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
-    'STOP changes-requested: an approval is required and a review requests changes'],
   ['the approval licence fails: another gate an admin could skip', with_(preQueue, (f) => ({ ...f,
     ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }) })),
     'STOP licence-fails: an approval is missing and --admin could skip code_scanning'],
@@ -381,14 +361,230 @@ const LICENSED_NEVER: Case = ['the approval licence holds: every ruleset with re
   ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
   ruleset: ok({ id: 21, current_user_can_bypass: 'never' }) })), 'ROUTE G method=squash admin=licensed strict=no'];
 
-/** Every argv the block may send: the six reads (and the compare under read 3b), as GETs. */
+// ---- Requested changes on every route, and the operator's bounded ignore (fix round 1) ----
+// The shapes: a PR with a decision word, reviews with ids and users, the key the stop prints.
+const prWith = (decision: string | null, extra: Record<string, unknown> = {}): Answer =>
+  ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: decision, ...extra });
+const CR = 'CHANGES_REQUESTED';
+const rev = (id: number, state: string, user: number | null = 1): Record<string, unknown> =>
+  ({ id, state, user: user === null ? null : { id: user, login: 'reviewer-a' } });
+const withReviews = (base: () => Fixture, decision: string | null, ...rs: unknown[]) =>
+  with_(base, { pr: prWith(decision), reviews: ok(rs) });
+/** The key the stop prints and CR_IGNORE must equal: this field order, these types, compact (`pr` and `head` strings). */
+const keyOf = (summary: boolean, ...ids: number[]): string => JSON.stringify({ pr: '42', head: HC, summary, reviews: ids });
+const askLine = (summary: boolean, ...ids: number[]): string =>
+  `STOP changes-requested: operator decision required; key=${keyOf(summary, ...ids)}`;
+const gStop = 'STOP unreadable: read 1\'s reviews';
+const GOOD_Q = 'ROUTE Q method=squash admin=never strict=no';
+
+/** One route per row: its fixture with a required approving review count of zero, then of one, and the route's line. */
+const routeFixtures: [string, () => Fixture, () => Fixture, string][] = [
+  ['Q', measured, with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')) })), GOOD_Q],
+  ['G', thirdParty, with_(thirdParty, (f) => ({ ...f,
+    ...rules(pull({ allowed_merge_methods: ['merge'], required_approving_review_count: 1 }), rsc([{ context: 'ci/app', integration_id: 999 }])) })),
+    'ROUTE G method=merge admin=never strict=no'],
+  ['U', bare, with_(bare, { protection: ok({ enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1 },
+    required_linear_history: { enabled: false }, required_signatures: { enabled: false } }) }),
+    'ROUTE U method=squash admin=never strict=no'],
+];
+
+const REQUESTS: Case[] = [
+  ...routeFixtures.flatMap(([route, zero, positive]): Case[] => [
+    [`route ${route}: no approval is required and the summary says changes are requested: the early stop, whatever the route`,
+      with_(zero, { pr: prWith(CR) }), askLine(true)],
+    [`route ${route}: an approval is required and the summary says changes are requested: the same stop`,
+      with_(positive, { pr: prWith(CR) }), askLine(true)],
+    [`route ${route}: no approval is required and a review in the list requests changes, with an empty summary`,
+      with_(zero, { reviews: ok([rev(7, CR)]) }), askLine(false, 7)],
+    [`route ${route}: an approval is required, REVIEW_REQUIRED, and a review in the list requests changes`,
+      with_(positive, { pr: prWith('REVIEW_REQUIRED'), reviews: ok([rev(7, CR)]) }), askLine(false, 7)],
+  ]),
+  ['the summary and the list both say it: the key carries both', withReviews(measured, CR, rev(7, CR)), askLine(true, 7)],
+  ['a later approval by the same user clears an earlier request', withReviews(measured, '', rev(1, CR), rev(2, 'APPROVED')), GOOD_Q],
+  ['a later dismissal by the same user clears an earlier request', withReviews(measured, '', rev(1, CR), rev(2, 'DISMISSED')), GOOD_Q],
+  ['a later request by the same user replaces an earlier approval', withReviews(measured, '', rev(1, 'APPROVED'), rev(2, CR)),
+    askLine(false, 2)],
+  ['a later COMMENTED review does not clear a request', withReviews(measured, '', rev(1, CR), rev(2, 'COMMENTED')), askLine(false, 1)],
+  ['a later PENDING review does not clear a request', withReviews(measured, '', rev(1, CR), rev(2, 'PENDING')), askLine(false, 1)],
+  ['COMMENTED and PENDING together do not clear a request either',
+    withReviews(measured, '', rev(1, CR), rev(2, 'COMMENTED'), rev(3, 'PENDING')), askLine(false, 1)],
+  ['a comment-only review by another user clears nothing', withReviews(measured, '', rev(1, CR, 1), rev(2, 'COMMENTED', 2)), askLine(false, 1)],
+  ['two users: one approved and the other requests, the request stands', withReviews(measured, '', rev(1, 'APPROVED', 1), rev(2, CR, 2)),
+    askLine(false, 2)],
+  ['two users: one requests and the other approves, the other user\'s approval clears nothing',
+    withReviews(measured, '', rev(1, CR, 1), rev(2, 'APPROVED', 2)), askLine(false, 1)],
+  ['null users never clear each other: a deleted account\'s approval is its own identity', withReviews(measured, '',
+    rev(5, CR, null), rev(6, 'APPROVED', null)), askLine(false, 5)],
+  ['null users: two deleted accounts\' requests both stand, sorted', withReviews(measured, '', rev(9, CR, null), rev(3, CR, null)),
+    askLine(false, 3, 9)],
+  ['a review with no user key at all reads as a null user, keyed by its review id',
+    withReviews(measured, '', { id: 4, state: CR }, rev(5, 'APPROVED', null)), askLine(false, 4)],
+  ['the request ids are sorted numerically, not as text', withReviews(measured, '', rev(10, CR, 1), rev(9, CR, 2)), askLine(false, 9, 10)],
+  ['one user\'s repeated request counts once, at the latest review', withReviews(measured, '', rev(3, CR, 1), rev(4, CR, 1)), askLine(false, 4)],
+  ['reviews: every page is read: a request on page 2 stands', with_(measured, { reviews: pages([rev(1, 'APPROVED', 2)], [rev(2, CR, 1)]) }),
+    askLine(false, 2)],
+  ['reviews: every page is read: an approval on page 2 clears a request on page 1',
+    with_(measured, { reviews: pages([rev(1, CR, 1)], [rev(2, 'APPROVED', 1)]) }), GOOD_Q],
+  ['reviews: an entry whose user is a deleted account (user null) is valid', withReviews(measured, '', rev(1, 'COMMENTED', null)), GOOD_Q],
+  ['the early stop comes before a red required check', with_(measured, { reviews: ok([rev(7, CR)]), checkruns: runs(run('test (server)', 'failure'),
+    run('test (agent)'), run('test (pwa)'), run('build-pwa')) }), askLine(false, 7)],
+  ['the early stop comes before a pending required check', with_(measured, { reviews: ok([rev(7, CR)]), checkruns: runs(run('test (server)', null, 'in_progress'),
+    run('test (agent)'), run('test (pwa)'), run('build-pwa')) }), askLine(false, 7)],
+  ['the early stop comes before an unknown rule type', with_(measured, (f) => ({ ...f, reviews: ok([rev(7, CR)]),
+    ...rules(pull({}), queue('SQUASH'), { type: 'file_path_restriction', ruleset_id: 3, parameters: {} }) })), askLine(false, 7)],
+  ['the early stop comes before read 3b stops the licence, so it is not read-3b-unknowable',
+    with_(via3b, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 })), pr: prWith(CR) })), askLine(true)],
+  ['the early stop comes before the licence is weighed: another gate does not turn it into licence-fails',
+    with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }),
+      pr: prWith(CR) })), askLine(true)],
+  ['an already MERGED PR goes to its proof even with a request standing', with_(measured, { pr: prWith(CR, { state: 'MERGED' }),
+    reviews: ok([rev(7, CR)]) }), `MERGED head=${HC}`],
+  ['a head that is not handoffCommit stops on the head, not on a request', with_(measured, { pr: ok({ baseRefName: 'main',
+    headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: CR }), reviews: ok([rev(7, CR)]) }),
+    `STOP not-at-head: the PR head is ${'f'.repeat(40)}`],
+  // Unreadable reviews are never folded into "no requests".
+  ['reviews: gh fails', with_(measured, { reviews: fail(502) }), gStop],
+  ['reviews: gh exits 0 with empty stdout, which jq alone slurps into no pages', with_(measured, { reviews: { code: 200, raw: '' } }), gStop],
+  ['reviews: gh fails with empty stdout', with_(measured, { reviews: { code: 500, raw: '' } }), gStop],
+  ['reviews: a page that is an object, not an array', with_(measured, { reviews: { code: 200, raw: '{"message":"x"}' } }), gStop],
+  ['reviews: a page that is null', with_(measured, { reviews: { code: 200, raw: 'null' } }), gStop],
+  ['reviews: a single page that is an object whose values are reviews, not an array of them',
+    with_(measured, { reviews: { code: 200, raw: JSON.stringify({ a: rev(1, 'APPROVED') }) } }), gStop],
+  ['reviews: page 2 is malformed under a good page 1', with_(measured, { reviews: pages([rev(1, 'APPROVED')], 'x') }), gStop],
+  ['reviews: an unknown state', withReviews(measured, '', rev(1, 'WEIRD')), gStop],
+  ['reviews: a missing state', withReviews(measured, '', { id: 1, user: { id: 1 } }), gStop],
+  ['reviews: an entry that is not an object', withReviews(measured, '', 7), gStop],
+  ['reviews: a missing id', withReviews(measured, '', { state: 'APPROVED', user: { id: 1 } }), gStop],
+  ['reviews: an id of zero', withReviews(measured, '', rev(0, 'APPROVED')), gStop],
+  ['reviews: a negative id', withReviews(measured, '', rev(-3, 'APPROVED')), gStop],
+  ['reviews: a fractional id', withReviews(measured, '', rev(1.5, 'APPROVED')), gStop],
+  ['reviews: an id that is a string', withReviews(measured, '', { ...rev(1, 'APPROVED'), id: '1' }), gStop],
+  ['reviews: an id beyond the safe integers', withReviews(measured, '', { ...rev(1, 'APPROVED'), id: 2 ** 60 }), gStop],
+  ['reviews: a user without an id', withReviews(measured, '', { id: 1, state: 'APPROVED', user: { login: 'reviewer-a' } }), gStop],
+  ['reviews: a user id of zero', withReviews(measured, '', rev(1, 'APPROVED', 0)), gStop],
+  ['reviews: a user that is not an object', withReviews(measured, '', { id: 1, state: 'APPROVED', user: 'reviewer-a' }), gStop],
+  ['reviews: a malformed entry is unreadable even beside a clean summary', withReviews(measured, 'APPROVED', rev(0, CR)), gStop],
+];
+
+const keyFor = (summary: boolean, ...ids: number[]) => ({ CR_IGNORE: keyOf(summary, ...ids) });
+
+const IGNORES: Case[] = [
+  ['ignore: the exact key permits route Q, admin never', withReviews(measured, '', rev(7, CR)), GOOD_Q, keyFor(false, 7)],
+  ['ignore: the exact key permits route G, admin never', with_(thirdParty, { reviews: ok([rev(7, CR)]) }),
+    'ROUTE G method=merge admin=never strict=no', keyFor(false, 7)],
+  ['ignore: the exact key permits route U, admin never', with_(bare, { reviews: ok([rev(7, CR)]) }),
+    'ROUTE U method=squash admin=never strict=no', keyFor(false, 7)],
+  ['ignore: the exact key with the summary and the list both permits the landing', withReviews(measured, CR, rev(7, CR)), GOOD_Q, keyFor(true, 7)],
+  ['ignore: a key for another PR stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7),
+    { CR_IGNORE: JSON.stringify({ pr: '43', head: HC, summary: false, reviews: [7] }) }],
+  ['ignore: a key for another head stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7),
+    { CR_IGNORE: JSON.stringify({ pr: '42', head: 'f'.repeat(40), summary: false, reviews: [7] }) }],
+  ['ignore: a new request the key omits stops again', withReviews(measured, '', rev(7, CR, 1), rev(8, CR, 2)), askLine(false, 7, 8),
+    keyFor(false, 7)],
+  ['ignore: a request replaced by a new id stops again', withReviews(measured, '', rev(8, CR)), askLine(false, 8), keyFor(false, 7)],
+  ['ignore: a key naming a request that is gone stops again', withReviews(measured, '', rev(7, CR, 1)), askLine(false, 7), keyFor(false, 7, 8)],
+  ['ignore: a changed summary stops again', withReviews(measured, CR, rev(7, CR)), askLine(true, 7), keyFor(false, 7)],
+  ['ignore: a key whose summary the PR no longer has stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7), keyFor(true, 7)],
+  ['ignore: a malformed key stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7), { CR_IGNORE: '{' }],
+  ['ignore: a blank key stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7), { CR_IGNORE: '' }],
+  ['ignore: a key with its fields in another order stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7),
+    { CR_IGNORE: JSON.stringify({ head: HC, pr: '42', summary: false, reviews: [7] }) }],
+  ['ignore: a key with a numeric pr stops again', withReviews(measured, '', rev(7, CR)), askLine(false, 7),
+    { CR_IGNORE: JSON.stringify({ pr: 42, head: HC, summary: false, reviews: [7] }) }],
+  ['ignore: a summary-only request has no identified review and cannot be skipped', with_(measured, { pr: prWith(CR) }), askLine(true),
+    keyFor(true)],
+  ['ignore: a matching key does not excuse unreadable reviews', with_(measured, { reviews: fail(502) }), gStop, keyFor(false, 7)],
+  ['ignore: a key supplied with empty reviews stdout still stops unreadable', with_(measured, { reviews: { code: 200, raw: '' } }), gStop,
+    keyFor(false)],
+  ['ignore: REVIEW_REQUIRED, a request in the list, a required approval and the matching key still give admin never',
+    with_(preQueue, { reviews: ok([rev(7, CR)]) }), 'ROUTE G method=squash admin=never strict=no', keyFor(false, 7)],
+  ['ignore: the summary says changes requested, an approval is required, and the matching key gives admin never',
+    with_(preQueue, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), 'ROUTE G method=squash admin=never strict=no', keyFor(true, 7)],
+  ['ignore: a matching key does not bypass a red required check', with_(measured, { reviews: ok([rev(7, CR)]),
+    checkruns: runs(run('test (server)', 'failure'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
+    'RED test (server) [github-actions]', keyFor(false, 7)],
+  ['ignore: a matching key does not bypass a pending required check', with_(measured, { reviews: ok([rev(7, CR)]),
+    checkruns: runs(run('test (server)', null, 'in_progress'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
+    'WAIT pending: test (server)', keyFor(false, 7)],
+  ['ignore: a matching key does not bypass an unknown rule type', with_(measured, (f) => ({ ...f, reviews: ok([rev(7, CR)]),
+    ...rules(pull({}), queue('SQUASH'), { type: 'file_path_restriction', ruleset_id: 3, parameters: {} }) })),
+    'STOP unknown-rule-type: file_path_restriction', keyFor(false, 7)],
+  ['ignore: a matching key does not bypass a method-set stop', with_(bare, { reviews: ok([rev(7, CR)]), ...settings(false, false, true) }),
+    'STOP rebase-only: rebase is the only method left', keyFor(false, 7)],
+  ['ignore: a matching key does not bypass a head that is not handoffCommit', with_(measured, { reviews: ok([rev(7, CR)]),
+    pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: '' }) }),
+    `STOP not-at-head: the PR head is ${'f'.repeat(40)}`, keyFor(false, 7)],
+  ['ignore: a matching key never reaches the licence: another gate an admin could skip gives admin never, not licence-fails',
+    with_(preQueue, (f) => ({ ...f, reviews: ok([rev(7, CR)]),
+      ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }) })),
+    'ROUTE G method=squash admin=never strict=no', keyFor(false, 7)],
+];
+
+// The approval licence, its count half and its route-Q half.
+const LICENCE: Case[] = [
+  ['route U: no approval is required, the decision is REVIEW_REQUIRED and no request stands: nothing is licensed',
+    with_(bare, { pr: prWith('REVIEW_REQUIRED') }), 'ROUTE U method=squash admin=never strict=no'],
+  ['route Q: an approval is required and missing, REVIEW_REQUIRED, no request: the queue route is never licensed',
+    with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')), pr: prWith('REVIEW_REQUIRED') })),
+    GOOD_Q],
+];
+
+// Read 1's state, read 2's shape and read 3's body must be readable, not merely present.
+const prot200 = (body: string): Answer => ({ code: 200, raw: `HTTP/2.0 200 X\nX-Github-Request-Id: 0\r\n\r\n${body}` });
+const MALFORMED: Case[] = [
+  ['unreadable: read 1 gives no state', with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: HC, reviewDecision: '' }) }),
+    'STOP unreadable: read 1'],
+  ['unreadable: read 1 gives a null state', with_(measured, { pr: prWith('', { state: null }) }), 'STOP unreadable: read 1'],
+  ['unreadable: read 1 gives a state this block does not list', with_(measured, { pr: prWith('', { state: 'DRAFT' }) }),
+    'STOP unreadable: read 1'],
+  ['unreadable: read 1 gives a lowercase state', with_(measured, { pr: prWith('', { state: 'open' }) }), 'STOP unreadable: read 1'],
+  ['unreadable: read 1 gives an unknown state on a head that is not handoffCommit: the state is judged first',
+    with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'WEIRD', reviewDecision: '' }) }), 'STOP unreadable: read 1'],
+  ['unreadable: read 2 exits 0 with empty stdout', with_(measured, { rules: { code: 200, raw: '' } }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 is a page that is null', with_(measured, { rules: { code: 200, raw: 'null' } }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 is a page that is an object', with_(measured, { rules: { code: 200, raw: '{"message":"x"}' } }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a page that is not an array beside a good one', with_(measured, { rules: { code: 200, raw: '[]\n7' } }),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2 is a single page that is an object whose values are rules, not an array of them',
+    with_(measured, { rules: { code: 200, raw: JSON.stringify({ a: { type: 'deletion', ruleset_id: 3 } }) } }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a rule with no type', with_(measured, { rules: ok([{ ruleset_id: 3, parameters: {} }]) }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a rule whose type is null', with_(measured, { rules: ok([{ type: null, ruleset_id: 3 }]) }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a rule whose type is not a string', with_(measured, { rules: ok([{ type: 7, ruleset_id: 3 }]) }),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a rule that is not an object', with_(measured, { rules: ok(['pull_request']) }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a pull_request rule with no parameters', with_(measured, { rules: ok([{ type: 'pull_request', ruleset_id: 3 }]) }),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a merge_queue rule with null parameters', with_(measured, { rules: ok([{ type: 'merge_queue', ruleset_id: 3, parameters: null }]) }),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a required_status_checks rule with no parameters', with_(measured, {
+    rules: ok([{ type: 'required_status_checks', ruleset_id: 3 }]) }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a required_status_checks rule whose list is missing', with_(measured, {
+    rules: ok([{ type: 'required_status_checks', ruleset_id: 3, parameters: { strict_required_status_checks_policy: false } }]) }),
+    'STOP unreadable: read 2'],
+  ['unreadable: read 2 has a required_status_checks rule whose list is an object', with_(measured, {
+    rules: ok([{ type: 'required_status_checks', ruleset_id: 3, parameters: { required_status_checks: { context: 'x' } } }]) }),
+    'STOP unreadable: read 2'],
+  ['an unknown string type beside well-formed rules is still unknown-rule-type', with_(measured, (f) => ({ ...f,
+    ...rules(pull({}), queue('SQUASH'), { type: 'something_new', ruleset_id: 3 }) })), 'STOP unknown-rule-type: something_new'],
+  ['a genuine empty rule set is no rules, not unreadable', with_(bare, rules()), 'ROUTE U method=squash admin=never strict=no'],
+  ['unreadable: read 3 answers 200 with a null body', with_(measured, { protection: prot200('null') }), 'STOP unreadable: read 3'],
+  ['unreadable: read 3 answers 200 with an array body', with_(measured, { protection: prot200('[]') }), 'STOP unreadable: read 3'],
+  ['unreadable: read 3 answers 200 with a scalar body', with_(measured, { protection: prot200('7') }), 'STOP unreadable: read 3'],
+  ['unreadable: read 3 answers 200 with a string body', with_(measured, { protection: prot200('"x"') }), 'STOP unreadable: read 3'],
+  ['unreadable: read 3 answers 200 with an empty body', with_(measured, { protection: prot200('') }), 'STOP unreadable: read 3'],
+  ['read 3 answers 200 with a sparse object body: still readable', with_(bare, { protection: prot200('{}') }),
+    'ROUTE U method=squash admin=never strict=no'],
+];
+
+/** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
- *  the close of its `$(…)`, a pipe, or read 3's one `2>/dev/null` before that close. An allowlist, so a write under a
+ *  the close of its `$(…)` or a pipe; the one exception is the explicit alternative for read 3's own call, which may
+ *  carry exactly ` 2>/dev/null)` and nothing else may. An allowlist, so a write under a
  *  branch no case reaches is still a red: `gh pr review`, `gh api --method=PATCH …` and `gh api -XPATCH …` match none
  *  of it. It judges a LOGICAL line (see `ghSpelled`), so a write split over a `\` continuation cannot hide its flags
  *  on the next physical line. */
-const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\||\s+2>\/dev\/null\)))/;
+const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\|)|api -i "repos\/\{owner\}\/\{repo\}\/branches\/\$base\/protection" 2>\/dev\/null\))/;
 /** Every gh the block's text spells, each from the word `gh` to the end of its logical line: backslash continuations
  *  are joined first, so the whole call is judged and not only its first physical line. */
 const ghSpelled = (b: string): string[] => {
@@ -407,10 +603,31 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('reads and never writes: every gh the block spells is one of the reads, with no GraphQL and no rm', () => {
     expect(blocks).toHaveLength(1);
     const b = blocks[0]!;
-    expect(ghSpelled(b).length, 'the block spells fewer gh reads than its nine').toBeGreaterThanOrEqual(9);
+    expect(ghSpelled(b).length, 'the block spells fewer gh reads than its ten').toBeGreaterThanOrEqual(10);
     expect(ghOffenders(b), 'the block spells a gh that is not one of the reads').toEqual([]);
     expect(b).not.toContain('graphql');
     expect(b).not.toMatch(/\brm\s/);
+  });
+
+  it('redirects stderr exactly once: read 3\'s own call, with no exec redirect and none on the reviews read', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    const hits = b.split('\n').flatMap((l) => (l.match(/2>|&>/g) ?? []).map(() => l));
+    expect(hits, 'the block redirects stderr other than on read 3\'s one call').toHaveLength(1);
+    expect(hits[0]).toContain('branches/$base/protection');
+    expect(hits[0]).toMatch(/gh api -i "repos\/\{owner\}\/\{repo\}\/branches\/\$base\/protection" 2>\/dev\/null\)$/);
+    const reviews = ghSpelled(b).filter((l) => l.includes('/reviews'));
+    expect(reviews, 'the block spells the reviews read exactly once').toHaveLength(1);
+    expect(reviews[0]).toMatch(/^gh api --paginate "repos\/\{owner\}\/\{repo\}\/pulls\/\$PR\/reviews" \|/);
+  });
+
+  it('CR_IGNORE is read from the invoking shell only: the block never assigns, exports or defaults it', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    expect(b).toContain('CR_IGNORE');
+    expect(b).not.toMatch(/CR_IGNORE=/);
+    expect(b).not.toMatch(/CR_IGNORE:?[-=]/);
+    expect(b).not.toMatch(/\bexport\b/);
   });
 
   it('judges a gh call as one logical line: a write split over a backslash continuation is refused', () => {
@@ -441,7 +658,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER])('%s', (_name, fx, line, env) => {
+  it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
@@ -464,6 +681,31 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('reads the head\'s checks only once read 1 has shown the head is handoffCommit', () => {
     const r = verdict(with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: '' }) })());
     expect(r.calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision']);
+  });
+
+  it('reads the PR\'s reviews once, paginated, right after the head guard and before read 2; a MERGED PR reads none', () => {
+    const r = verdict(measured());
+    expect(r.calls.slice(0, 3)).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision',
+      'api --paginate repos/{owner}/{repo}/pulls/42/reviews', 'api --paginate repos/{owner}/{repo}/rules/branches/main']);
+    expect(r.calls.filter((c) => c.includes('/reviews'))).toHaveLength(1);
+    const merged = verdict(with_(measured, { pr: prWith(CR, { state: 'MERGED' }) })());
+    expect(merged.calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision']);
+  });
+
+  it('a request stops before read 2: no rules, protection, settings or check read follows the reviews', () => {
+    const r = verdict(with_(measured, { reviews: ok([rev(7, CR)]) })());
+    expect(r.out).toBe(`${askLine(false, 7)}\n`);
+    expect(r.calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision',
+      'api --paginate repos/{owner}/{repo}/pulls/42/reviews']);
+    const s = verdict(with_(measured, { reviews: ok([rev(7, CR)]) })(), keyFor(false, 7));
+    expect(s.out, `stderr: ${s.stderr}`).toBe(`${GOOD_Q}\n`);
+    expect(s.calls.filter((c) => c.includes('/reviews')), 'an ignore still reads and validates the reviews').toHaveLength(1);
+  });
+
+  it('prints safe identifiers only: a reviewer login never reaches the stop line', () => {
+    const r = verdict(with_(measured, { reviews: ok([rev(7, CR)]) })());
+    expect(r.out).not.toContain('reviewer-a');
+    expect(r.out.trim().split('\n')).toHaveLength(1);
   });
 
   it('weighs read 6 only for the licence, and only for a ruleset that carries required checks', () => {
