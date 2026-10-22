@@ -705,7 +705,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -13262,6 +13262,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
   const backupRoot = (home: string): string => join(home, 'ccrc-backups');
   const CP_REV1 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 1 });
   const CP_REV2 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 2 });
+  /** One whole journal record: the wave-23 rows plant it beside a checkpoint and a database, so a capture holds all three members. */
+  const W23_JOURNAL = Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({
+    sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+    entry: {
+      kind: 'evidence-accepted',
+      event: {
+        v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'lane-a-demo', parentIncarnation: 'g1',
+        claudeSessionId: '11111111-2222-3333-4444-555555555555', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+      },
+    },
+  })));
   const manifestOf = (dir: string): string => join(dir, 'coordination-snapshot.json');
 
   /** A `node` in front of the real one on PATH: it records which of the two helpers ran and, at the capture, what the backup
@@ -13282,6 +13293,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_STDERR" ]; then echo "Debugger listening on ws://127.0.0.1:0/fixture" >&2; fi',
       `    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_EXTRA" ]; then PATH='${updateEnv(home).PATH ?? ''}'; o="$(node "$@")"; r=$?; printf '%s\\nextra: line\\n' "$o"; exit $r; fi`,
       '    if [ "$3" = capture ]; then echo "present: $(ls -A "$5" | tr "\\n" " ")" >> "$HOME/node-order"; fi',
+      // Wave 23 (D-6346): `thin` answers FX_THIN_EXIT when it is set, and a copy of the report as it stands when it is asked.
+      '    if [ "$3" = thin ] && [ -f "$HOME/.ccrc/update.json" ]; then cp "$HOME/.ccrc/update.json" "$HOME/thin-saw-update.json"; fi',
+      '    if [ "$3" = thin ] && [ -n "$FX_THIN_EXIT" ]; then exit "$FX_THIN_EXIT"; fi',
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
       'esac',
       // On to whatever `node` the fixture box would otherwise have resolved (its verifier shim included), not the real one.
@@ -13313,7 +13327,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'delegation-checkpoint.json'), bytes);
   };
-  type Kind = 'v1-sidecars' | 'v1-empty' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'plain';
+  type Kind = 'v1-sidecars' | 'v1-empty' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'tree+v1-full' | 'plain';
   /** One timestamped backup dir of a given kind. 'v1-sidecars' is a REAL helper capture of a checkpoint (no journal, no DB). */
   const plantDir = (home: string, name: string, kind: Kind): string => {
     const dir = join(backupRoot(home), name);
@@ -13337,7 +13351,20 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       db.exec('CREATE TABLE fixture (x INTEGER)');
       db.close();
     }
-    if (kind === 'tree' || kind === 'tree+v1') mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+    if (kind === 'tree+v1-full') {
+      // A REAL capture of a live journal, checkpoint and database (the wave-23 rows count and thin these), plus a tree entry.
+      const mini = mkTmp('ccrc-fx-snap-full-');
+      mkdirSync(join(mini, '.ccrc'));
+      writeFileSync(join(mini, '.ccrc', 'delegation-checkpoint.json'), CP_REV1);
+      writeFileSync(join(mini, '.ccrc', 'delegation-events.log'), W23_JOURNAL);
+      plantCoordDb(mini);
+      const db = new DatabaseSync(join(dir, 'coord.db'));
+      db.exec('CREATE TABLE fixture (x INTEGER); INSERT INTO fixture VALUES (42);');
+      db.close();
+      const r = helper(mini, ['capture', '--dir', dir]);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    if (kind === 'tree' || kind === 'tree+v1' || kind === 'tree+v1-full') mkdirSync(join(dir, 'agent-dist'), { recursive: true });
     return dir;
   };
 
@@ -13740,6 +13767,398 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toMatch(/the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data;/);
       expect(r.stdout).not.toMatch(/the newest earlier coord\.db snapshot/);
+    });
+  });
+
+  // Wave 23 (centralised update, D-6346 to D-6360): after the prune an update and `ccrc backup` thin the coordination data set of every
+  // backup past the newest CCRC_BACKUP_DATA_KEEP that carry one. The helper's own rows are in `coordination-snapshot.test.ts`; these are the
+  // CALLER's: the knob, who thins and who does not, the lines, the exits, the report.
+  describe('W23: update and ccrc backup thin the data set past CCRC_BACKUP_DATA_KEEP (D-6346, D-6347, D-6350)', () => {
+    // Describe-local kill list for the lock holder of B4, the pruner describe's pattern.
+    const lingerers: string[] = [];
+    afterEach(() => {
+      for (const f of lingerers.splice(0)) {
+        if (!existsSync(f)) continue;
+        const pid = Number(readFileSync(f, 'utf8').trim());
+        if (!Number.isInteger(pid) || pid <= 1) continue;
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    });
+    const NAMES = ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000', '20250105-000000'];
+    /** A box whose update or backup takes a data-bearing backup of its own: a database and a checkpoint to capture. */
+    const box = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantCoordDb(home);
+      plantLiveCheckpoint(home);
+      return home;
+    };
+    const dirOf = (home: string, name: string): string => join(backupRoot(home), name);
+    const word = (home: string, name: string): string => helper(home, ['classify', '--from', dirOf(home, name)]).stdout.trim();
+    const listing = (home: string, name: string): string[] => readdirSync(dirOf(home, name)).sort();
+    const recordOf = (home: string, name: string): Record<string, unknown> =>
+      JSON.parse(readFileSync(join(dirOf(home, name), 'coordination-thinned.json'), 'utf8'));
+    /** Every entry of the named dirs, a file by its content digest: what "byte-identical" compares. */
+    const fingerprint = (home: string, names: string[]): Record<string, string[]> =>
+      Object.fromEntries(names.map((n) => [n, readdirSync(dirOf(home, n), { recursive: true, encoding: 'utf8' }).sort().map((f) => {
+        const p = join(dirOf(home, n), f);
+        return statSync(p).isFile() ? `${f}:${createHash('sha256').update(readFileSync(p)).digest('hex')}` : `${f}/`;
+      })]));
+    const plantFull = (home: string, names: string[] = NAMES): void => { for (const n of names) plantDir(home, n, 'tree+v1-full'); };
+    /** The line `thin` prints for a dir it thinned, led by `lead`. */
+    const thinLine = (lead: string, name: string, keep = 3): RegExp => new RegExp(
+      `^${lead} thinned ${name}: dropped its coordination data set \\(\\d+M: coord\\.db, delegation-events\\.log, delegation-checkpoint\\.json, coordination-snapshot\\.json\\); `
+      + `its code is kept, and coordination-thinned\\.json records when and why \\(CCRC_BACKUP_DATA_KEEP=${keep}\\)$`, 'm');
+    /** A REAL thinned dir at `name`: three full captures thinned at a keep of 2 in a scratch box, the oldest copied in. */
+    const plantThinned = (home: string, name: string): void => {
+      const t = mkTmp('ccrc-fx-w23-thinned-');
+      for (const n of ['30000101-000001', '30000101-000002', '30000101-000003']) plantDir(t, n, 'tree+v1-full');
+      const r = helper(t, ['thin', '--keep', '2', '--by', 'backup', '--own', dirOf(t, '30000101-000003'), '--dir', dirOf(t, '30000101-000002'), '--dir', dirOf(t, '30000101-000001')]);
+      expect(r.code, `${r.stderr}\n${r.stdout}`).toBe(0);
+      cpSync(dirOf(t, '30000101-000001'), dirOf(home, name), { recursive: true });
+      expect(listing(home, name)).toEqual(['agent-dist', 'coordination-thinned.json']);
+    };
+    /** The checkout's ccrc (or another file) sourced, then `script`, in the fixture box's environment. */
+    const sourced = (home: string, script: string, env: NodeJS.ProcessEnv = {}, ccrc: string = join(REPO, 'ccd', 'ccrc')): Result => {
+      const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', ccrc], { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const stubUpdate = (home: string): void => { packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' }); };
+
+    it('W23-B1: ccrc backup with five earlier full dirs and the default keeps three data sets (its own and the two newest earlier) and thins the other three, code kept, one line each, by backup', () => {
+      const home = box('ccrc-fx-w23-b1-');
+      plantFull(home);
+      const r = runBackup(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const thinned = ['20250103-000000', '20250102-000000', '20250101-000000'];
+      for (const n of thinned) {
+        expect(listing(home, n), n).toEqual(['agent-dist', 'coordination-thinned.json']);
+        expect(recordOf(home, n), n).toMatchObject({ by: 'backup', rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1' });
+        expect(r.stdout, n).toMatch(thinLine('backup:', n));
+      }
+      const at = thinned.map((n) => r.stdout.indexOf(`backup: thinned ${n}:`));
+      expect(at, 'newest first').toEqual([...at].sort((a, b) => a - b));
+      expect(r.stdout).toMatch(/^backup: coordination data sets: 3 kept, 3 thinned this run, 0 left as they are$/m);
+      for (const n of ['20250105-000000', '20250104-000000']) expect(helper(home, ['validate', '--from', dirOf(home, n)]).stdout, n).toMatch(/^v1: /);
+      expect(word(home, path.basename(ownDir(r))), 'this run\'s own').toBe('v1');
+    });
+
+    it('W23-B2: an update whose gate passes thins the same way, after its prune, under update: backups:, and its records say by update', () => {
+      const home = box('ccrc-fx-w23-b2-');
+      stubUpdate(home);
+      plantFull(home);
+      const r = runUpdate(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const n of ['20250103-000000', '20250102-000000', '20250101-000000']) {
+        expect(listing(home, n), n).toEqual(['agent-dist', 'coordination-thinned.json']);
+        expect(recordOf(home, n), n).toMatchObject({ by: 'update', rule: { keep: 3 } });
+        expect(r.stdout, n).toMatch(thinLine('update: backups:', n));
+      }
+      expect(r.stdout).toMatch(/^update: backups: coordination data sets: 3 kept, 3 thinned this run, 0 left as they are$/m);
+      expect(word(home, '20250105-000000')).toBe('v1');
+      expect(word(home, '20250104-000000')).toBe('v1');
+      expect(word(home, path.basename(announcedBackupDir(r.stdout, home))), 'this run\'s own').toBe('v1');
+    });
+
+    it('W23-B3: a CCRC_BACKUP_DATA_KEEP of 0, 1, 00, 10000, x or ٣ refuses: an update WARNs and prunes and thins nothing; ccrc backup dies after its backup', () => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b3-update-');
+      stubUpdate(home);
+      plantFull(home, four);
+      const before = fingerprint(home, four);
+      const u = runUpdate(home, [], { CCRC_BACKUP_DATA_KEEP: '1', CCRC_BACKUP_KEEP: '0' });
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing pruned or thinned$/m);
+      expect(u.stdout).not.toMatch(/^update: backups: (pruned|thinned)/m);
+      expect(fingerprint(home, four), 'every planted dir is byte-identical').toEqual(before);
+      for (const v of ['0', '1', '00', '10000', 'x', '٣']) {
+        const h = box('ccrc-fx-w23-b3-backup-');
+        plantFull(h, four);
+        const b4 = fingerprint(h, four);
+        const r = runBackup(h, [], { CCRC_BACKUP_DATA_KEEP: v, CCRC_BACKUP_KEEP: '0' });
+        expect(r.code, `${v}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+        expect(r.stderr, v).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='[^']*' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+        expect(r.stdout, v).toMatch(/^backup: \S+/m);
+        expect(readdirSync(backupRoot(h)), `${v}: the backup was taken first`).toHaveLength(5);
+        expect(fingerprint(h, four), v).toEqual(b4);
+      }
+    });
+
+    itLinux('W23-B4: a failed gate (exit 4), --no-gate, a --from restore child and another holder of update.lock thin nothing', () => {
+      const expectUntouched = (home: string, before: Record<string, string[]>, out: string, by: string): void => {
+        expect(fingerprint(home, NAMES), by).toEqual(before);
+        expect(out, by).not.toMatch(/thinned|thinning|coordination data sets/);
+      };
+      // The failed gate: P5's box.
+      const g = freshUpdateBox('ccrc-fx-w23-b4-gate-');
+      plantRestoreBox(g);
+      plantFull(g);
+      const gBefore = fingerprint(g, NAMES);
+      const gr = runUpdate(g);
+      expect(gr.code, `stderr: ${gr.stderr}\nstdout: ${gr.stdout}`).toBe(4);
+      expectUntouched(g, gBefore, gr.stdout, 'failed gate');
+      // --no-gate: P6's.
+      const n = freshUpdateBox('ccrc-fx-w23-b4-nogate-');
+      plantOldBox(n, { version: 'v1.0.0' });
+      stubUpdate(n);
+      plantFull(n);
+      const nBefore = fingerprint(n, NAMES);
+      const nr = runUpdate(n, ['--no-gate']);
+      expect(nr.code, `stderr: ${nr.stderr}\nstdout: ${nr.stdout}`).toBe(0);
+      expectUntouched(n, nBefore, nr.stdout, '--no-gate');
+      // Another holder of update.lock at prune time: P12's.
+      const l = freshUpdateBox('ccrc-fx-w23-b4-lock-');
+      plantOldBox(l, { version: 'v1.0.0' });
+      stubUpdate(l);
+      plantKillModeDropIn(l);
+      writeFileSync(join(l, 'fixture-sweep-hold-lock'), '');
+      plantFull(l);
+      const lBefore = fingerprint(l, NAMES);
+      const lr = runUpdate(l);
+      lingerers.push(join(l, 'sweep-lock-holder-pid'));
+      expect(lr.code, `stderr: ${lr.stderr}\nstdout: ${lr.stdout}`).toBe(0);
+      expect(lr.stdout).toMatch(/^update: backups: skipped — another ccrc run holds ~\/\.ccrc\/update\.lock; nothing was pruned$/m);
+      expectUntouched(l, lBefore, lr.stdout, 'lock holder');
+      // The arm-2 child: a REAL `ccrc update --no-gate --from restore` under the parent's lock (the FULL-flavour arm-2 box).
+      const c = freshUpdateBox('ccrc-fx-w23-b4-child-');
+      plantOldBox(c, { version: 'v1.0.0' });
+      writeFileSync(join(c, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+      packRelease(c, stubTree(c, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+      packRelease(c, fullTree(c, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+      writeFileSync(join(c, 'fixture-health-pin'), 'v1.0.0\n');
+      plantFull(c);
+      const cBefore = fingerprint(c, NAMES);
+      const cr = runUpdate(c);
+      expect(cr.code, `stderr: ${cr.stderr}\nstdout: ${cr.stdout}`).toBe(4);
+      expect(cr.stdout, 'the child really ran').toMatch(/^update: sweep: skipped — a --from restore run returns the supervisors' own build/m);
+      expectUntouched(c, cBefore, cr.stdout, 'restore child');
+    }, 240_000);
+
+    it('W23-B5: a dir named at or after this run\'s lock second is neither counted nor thinned', () => {
+      const home = box('ccrc-fx-w23-b5-');
+      plantFull(home, ['20250101-000000', '20250102-000000', '20250103-000000', '20250110-000001', '29991231-000000']);
+      const r = sourced(home, [
+        'R="$HOME/ccrc-backups"',
+        'UPD_BAK_FLOOR=20250110-000000; UPD_BACKUP_DIR="$R/20250110-000001"',
+        'CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep || { echo "knob: $BAK_DATA_KEEP_WHY"; exit 1; }',
+        '_bak_list; _bak_keepset; echo "keepset rc $?"',
+        '_bak_thin backup "row:"; echo "rc $?"',
+      ].join('\n'));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^keepset rc 0$/m);
+      expect(r.stdout).toMatch(thinLine('row:', '20250102-000000', 2));
+      expect(r.stdout).toMatch(thinLine('row:', '20250101-000000', 2));
+      expect(r.stdout).toMatch(/^row: coordination data sets: 2 kept, 2 thinned this run, 0 left as they are$/m);
+      expect(r.stdout).toMatch(/^rc 0$/m);
+      for (const n of ['29991231-000000', '20250110-000001', '20250103-000000']) expect(word(home, n), n).toBe('v1');
+      for (const n of ['20250102-000000', '20250101-000000']) expect(word(home, n), n).toBe('thinned');
+    });
+
+    it('W23-B6: own named below an earlier full dir (a clock stepped back) is still counted first', () => {
+      const home = box('ccrc-fx-w23-b6-');
+      plantFull(home, ['20250101-000000', '20250105-000000', '20250106-000000', '20250107-000000']);
+      const r = sourced(home, [
+        'R="$HOME/ccrc-backups"',
+        'UPD_BAK_FLOOR=20250110-000000; UPD_BACKUP_DIR="$R/20250101-000000"',
+        'CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep || exit 1',
+        '_bak_list; _bak_keepset; _bak_thin backup "row:"; echo "rc $?"',
+      ].join('\n'));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^rc 0$/m);
+      for (const n of ['20250101-000000', '20250107-000000']) expect(word(home, n), `${n} stays`).toBe('v1');
+      for (const n of ['20250105-000000', '20250106-000000']) expect(word(home, n), `${n} is thinned`).toBe('thinned');
+    });
+
+    it('W23-B7: the classifier failing stops the prune and the thinning alike', () => {
+      const home = box('ccrc-fx-w23-b7-');
+      plantFull(home);
+      const before = fingerprint(home, NAMES);
+      const r = runBackup(home, [], withShim(home, { FX_CLASSIFY_FAIL: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed/m);
+      expect(r.stdout).not.toMatch(/thinned|thinning/);
+      expect(nodeOrder(home)).not.toContain('helper thin');
+      expect(fingerprint(home, NAMES)).toEqual(before);
+    });
+
+    it('W23-B8: a thinned dir is never a snapshot keep: the next prune treats it as a code-only dir', () => {
+      const home = box('ccrc-fx-w23-b8-');
+      for (const n of ['20250101-000000', '20250102-000000', '20250103-000000']) plantThinned(home, n);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(existsSync(dirOf(home, '20250103-000000')), 'the newest earlier tree backup is kept by the tree keep').toBe(true);
+      expect(existsSync(dirOf(home, '20250102-000000'))).toBe(false);
+      expect(existsSync(dirOf(home, '20250101-000000'))).toBe(false);
+      expect(r.stdout).not.toMatch(/thinned|WARN/);
+    });
+
+    it('W23-B9: the helper failing (exit 70) or missing from the tree is one WARN line each, worded apart, and the run\'s exit is unchanged', () => {
+      const home = box('ccrc-fx-w23-b9-');
+      stubUpdate(home);
+      plantFull(home);
+      const u = runUpdate(home, [], withShim(home, { FX_THIN_EXIT: '70' }));
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: the coordination data set could not be thinned \(the helper exited 70\) — every backup it had not reached is untouched$/m);
+      for (const n of NAMES) expect(word(home, n), n).toBe('v1');
+      // The helper missing from the running tree. Only thinned dirs below the floor: a full one would stop `_bak_keepset`'s classifier first (B7's arm).
+      const h = freshUpdateBox('ccrc-fx-w23-b9-missing-');
+      plantOldBox(h, { version: 'v1.0.0' });
+      for (const n of ['20250101-000000', '20250102-000000']) plantThinned(h, n);
+      const tree = join(h, 'older-tree', 'ccd');
+      mkdirSync(tree, { recursive: true });
+      copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tree, 'ccrc'));
+      expect(existsSync(join(h, 'older-tree', 'deploy'))).toBe(false);
+      const m = sourced(h, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"', {}, join(tree, 'ccrc'));
+      expect(m.code, `stderr: ${m.stderr}\nstdout: ${m.stdout}`).toBe(0);
+      expect(m.stdout).toMatch(/^update: backups: WARN: deploy\/coordination-snapshot\.mjs is missing from this tree, so nothing was thinned$/m);
+      expect(m.stdout).not.toMatch(/could not be thinned|thinning skipped/);
+      expect(m.stdout).toMatch(/^rc 1$/m);
+    });
+
+    it('W23-B10: thin refusing (exit 3) makes _bak_gc return 1 with no WARN of its own, and the prune lines are unchanged', () => {
+      const run = (thinExit: string): Result => {
+        const home = box(`ccrc-fx-w23-b10-${thinExit}-`);
+        plantDir(home, '20250101-000000', 'plain');
+        plantFull(home, ['20250102-000000', '20250103-000000', '20250104-000000']);
+        return sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc update; echo "rc $?"',
+          { ...withShim(home, { FX_THIN_EXIT: thinExit }), CCRC_BACKUP_KEEP: '3', CCRC_BACKUP_DATA_KEEP: '2' });
+      };
+      const refused = run('3');
+      const quiet = run('0');
+      expect(refused.code, `stderr: ${refused.stderr}\nstdout: ${refused.stdout}`).toBe(0);
+      expect(refused.stdout).toMatch(/^rc 1$/m);
+      expect(quiet.stdout).toMatch(/^rc 0$/m);
+      expect(refused.stdout).not.toMatch(/could not be thinned|WARN/);
+      const pruned = (r: Result): string[] => r.stdout.split('\n').filter((l) => /^update: backups: pruned /.test(l));
+      expect(pruned(refused)).toHaveLength(1);
+      expect(pruned(refused)).toEqual(pruned(quiet));
+    });
+
+    it('W23-B11: a ccrc backup inside an update\'s unlocked sweep keeps that update\'s pre-update backup at the lowest keep', () => {
+      const home = box('ccrc-fx-w23-b11-');
+      plantFull(home, ['20250101-000000', '20250102-000000', '20250103-000000', '20250104-000000']);
+      // The update's report, as the sweep leaves it: another process's, `restarting`.
+      const report = '{"target":"v9.9.9","phase":"restarting","startedAt":1,"updatedAt":1,"detail":null,"from":"cli","pid":999999}\n';
+      writeFileSync(join(home, '.ccrc', 'update.json'), report);
+      const r = runBackup(home, [], { CCRC_BACKUP_DATA_KEEP: '2' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(word(home, '20250104-000000'), 'the update\'s own pre-update backup is the newest earlier data set, so it is counted').toBe('v1');
+      for (const n of ['20250101-000000', '20250102-000000', '20250103-000000']) expect(word(home, n), n).toBe('thinned');
+      expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8'), 'a backup writes no report').toBe(report);
+    });
+
+    it('W23-B12: the knob set only in ~/.ccrc/ccrc.env is honoured: 9999 thins nothing, and 1 there is refused like 1 in the environment', () => {
+      const four = NAMES.slice(0, 4);
+      const home = box('ccrc-fx-w23-b12-big-');
+      plantFull(home, four);
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=9999\n');
+      const r = runBackup(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).not.toMatch(/thinned|thinning/);
+      for (const n of four) expect(word(home, n), n).toBe('v1');
+      const bad = box('ccrc-fx-w23-b12-one-');
+      plantFull(bad, four);
+      writeFileSync(join(bad, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=1\n');
+      const b = runBackup(bad);
+      expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(1);
+      expect(b.stderr).toMatch(/^ccrc: CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999 — nothing was pruned or thinned$/m);
+      // The process environment wins over the file.
+      const e = box('ccrc-fx-w23-b12-env-');
+      plantFull(e, four);
+      writeFileSync(join(e, '.ccrc', 'ccrc.env'), 'CCRC_BACKUP_DATA_KEEP=1\n');
+      const er = runBackup(e, [], { CCRC_BACKUP_DATA_KEEP: '9999' });
+      expect(er.code, `stderr: ${er.stderr}\nstdout: ${er.stdout}`).toBe(0);
+      expect(er.stdout).not.toMatch(/thinned|thinning/);
+    });
+
+    it('W23-B13: a rollback by flip never thins, and _bak_thin reads a helper that predates thinning by name: one skipped line, rc 0, no WARN', () => {
+      const home = box('ccrc-fx-w23-b13-');
+      plantFull(home);
+      const before = fingerprint(home, NAMES);
+      const g = sourced(home, 'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; _bak_gc rollback; echo "rc $?"', { CCRC_BACKUP_DATA_KEEP: '2' });
+      expect(g.code, `stderr: ${g.stderr}\nstdout: ${g.stdout}`).toBe(0);
+      expect(g.stdout).not.toMatch(/thinned|thinning/);
+      expect(fingerprint(home, NAMES), 'a rollback touched no data set').toEqual(before);
+      // A tree whose helper has no `thin`: a stub that is not the real one.
+      const tree = join(home, 'older-tree');
+      mkdirSync(join(tree, 'ccd'), { recursive: true });
+      mkdirSync(join(tree, 'deploy'), { recursive: true });
+      copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tree, 'ccd', 'ccrc'));
+      writeFileSync(join(tree, 'deploy', 'coordination-snapshot.mjs'), '// a helper from before thinning\n');
+      const s = sourced(home, [
+        'UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; BAK_KEEP_DATA=""; CCRC_BACKUP_DATA_KEEP=2',
+        '_bak_data_keep || exit 1; _bak_list; _bak_thin update "update: backups:"; echo "rc $?"',
+      ].join('\n'), {}, join(tree, 'ccd', 'ccrc'));
+      expect(s.code, `stderr: ${s.stderr}\nstdout: ${s.stdout}`).toBe(0);
+      expect(s.stdout).toBe('update: backups: thinning skipped — this tree\'s coordination-snapshot helper predates it; nothing was thinned\nrc 0\n');
+      expect(fingerprint(home, NAMES)).toEqual(before);
+    });
+
+    it('W23-B14: on a downgrade, a thinned own backup is reported as thinned, never as one that held no coord.db', () => {
+      const home = box('ccrc-fx-w23-b14-');
+      const run = (setup: (dir: string) => void): Result => {
+        const dir = join(home, 'own-backup');
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+        setup(dir);
+        return sourced(home, `UPD_VERSION=v1.0.0; UPD_BACKUP_DIR="${dir}"; _upd_report "old" "v2.0.0"`);
+      };
+      const thinned = run((d) => writeFileSync(join(d, 'coordination-thinned.json'), '{}\n'));
+      expect(thinned.code, `stderr: ${thinned.stderr}`).toBe(0);
+      expect(thinned.stdout).toMatch(/^update: rollback:   \(this run's backup no longer holds coord\.db: a later ccrc run thinned it; 'ccrc coordination-snapshot validate --from \S+' says when and by which verb — restore from a backup that still carries one\)$/m);
+      expect(thinned.stdout).not.toContain('(no coord.db existed before this run');
+      const neither = run(() => undefined);
+      expect(neither.stdout).toMatch(/^update: rollback:   \(no coord\.db existed before this run — there is nothing to restore\)$/m);
+      expect(neither.stdout).not.toContain('no longer holds coord.db');
+    });
+
+    itLinux('W23-B15: a completed update re-stamps its report as restarting, pruning and thinning, before _bak_gc runs; a report another pid wrote is not re-stamped', () => {
+      const home = box('ccrc-fx-w23-b15-');
+      stubUpdate(home);
+      plantFull(home, ['20250101-000000']);
+      const r = runUpdate(home, [], withShim(home));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const saw = JSON.parse(readFileSync(join(home, 'thin-saw-update.json'), 'utf8')) as Record<string, unknown>;
+      expect(saw['phase']).toBe('restarting');
+      expect(saw['detail']).toBe('pruning and thinning ~/ccrc-backups');
+      expect(Number(saw['updatedAt'])).toBeGreaterThanOrEqual(Number(saw['startedAt']));
+      // A foreign report written mid-sweep (the sweep describe's knob) is left as it is.
+      const f = box('ccrc-fx-w23-b15-foreign-');
+      stubUpdate(f);
+      plantKillModeDropIn(f);
+      writeFileSync(join(f, 'fixture-sweep-units'), UNIT_LINES);
+      writeFileSync(join(f, 'fixture-sweep-active'), UNIT_LINES);
+      writeFileSync(join(f, 'fixture-sweep-foreign-report'), 'yes\n');
+      plantFull(f, ['20250101-000000']);
+      const fr = runUpdate(f, [], withShim(f));
+      expect(fr.code, `stderr: ${fr.stderr}\nstdout: ${fr.stdout}`).toBe(0);
+      const fsaw = JSON.parse(readFileSync(join(f, 'thin-saw-update.json'), 'utf8')) as Record<string, unknown>;
+      expect(fsaw).toEqual({ target: 'v9.9.9', phase: 'resolving', startedAt: 1, updatedAt: 1, detail: null, from: 'cli', pid: 999999 });
+    });
+
+    it('W23-B16: _bak_thin with an empty or unparsable floor returns 1 and passes nothing', () => {
+      for (const floor of ['', 'garbage', '20250110']) {
+        const home = box('ccrc-fx-w23-b16-');
+        plantFull(home, NAMES.slice(0, 3));
+        const r = sourced(home, `UPD_BAK_FLOOR='${floor}'; UPD_BACKUP_DIR=""; BAK_KEEP_DATA=""; CCRC_BACKUP_DATA_KEEP=2; _bak_data_keep; _bak_list; _bak_thin update "x:"; echo "rc $?"`, withShim(home));
+        expect(r.code, `${floor}: stderr: ${r.stderr}`).toBe(0);
+        expect(r.stdout, floor).toBe('rc 1\n');
+        expect(nodeOrder(home), floor).not.toContain('helper thin');
+        for (const n of NAMES.slice(0, 3)) expect(word(home, n), `${floor}: ${n}`).toBe('v1');
+      }
+    });
+
+    it('W23-S1: the own-dir and floor filter is spelled once, in _bak_ours, and _bak_keepset, _bak_removable and _bak_thin each call it', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      expect(src.split('= "$UPD_BACKUP_DIR" ]').length - 1, 'the own-dir clause').toBe(1);
+      expect(src.split('${UPD_BAK_FLOOR//-/}').length - 1, 'the floor comparison').toBe(1);
+      expect(body('_bak_ours'), 'the one spelling').toContain('= "$UPD_BACKUP_DIR" ]');
+      for (const fn of ['_bak_keepset', '_bak_removable', '_bak_thin']) expect(body(fn), fn).toMatch(/^ +.*_bak_ours "\$d"/m);
     });
   });
 
