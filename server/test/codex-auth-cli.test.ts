@@ -36,6 +36,8 @@ const DEAD_TOKEN_ROUTE = "if the lane's refresh token is dead, the lane's next r
 /** The pane's two rules (`ccd/ccd-account-auth`'s `_auth_user_code` and `_auth_url_of`). */
 const CODE_RUN = /[A-Z0-9]{4}-[A-Z0-9]{4}/;
 const URL_RUN = /https:\/\/\S+/;
+/** The library's own CLIENT_ID, read off its one definition (no second literal of it is written here). */
+const LIB_CLIENT_ID = /^CLIENT_ID = "([^"]+)"$/m.exec(readFileSync(AUTH_LIB, 'utf8'))?.[1];
 
 /** The status report's keys, exactly. */
 const REPORT_KEYS = [
@@ -119,7 +121,7 @@ function runCli(
 /** Run `main(argv)` in-process through the driver, with `consts` and `faults`; answers the op's line. */
 async function runMain(
   home: string, dir: string, argv: string[], o: { env?: Record<string, string>; consts?: object; faults?: string[] } = {},
-): Promise<{ rc: number; stdout: string; stderr: string }> {
+): Promise<{ rc: number; stdout: string; stderr: string; ms: number }> {
   const r = await runAuthDriver(home, {
     authDir: dir, ops: [{ op: 'main', argv }], consts: o.consts ?? {}, faults: o.faults ?? [],
   }, o.env ?? {}, { timeoutMs: 15_000 });
@@ -127,7 +129,7 @@ async function runMain(
   const lines = driverLines(r.stdout);
   expect(lines, r.stdout + r.stderr).toHaveLength(1);
   expect(lines[0].error, JSON.stringify(lines[0])).toBeUndefined();
-  return { rc: lines[0].rc, stdout: lines[0].stdout, stderr: lines[0].stderr };
+  return { rc: lines[0].rc, stdout: lines[0].stdout, stderr: lines[0].stderr, ms: lines[0].ms };
 }
 
 const statusOf = async (home: string, dir: string, env: Record<string, string> = {}): Promise<Record<string, any>> => {
@@ -168,13 +170,16 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       );
       const paths = srv.requests.map((q) => q.path);
       expect(paths).toEqual([AUTH_ROUTES.usercode, AUTH_ROUTES.deviceToken, AUTH_ROUTES.deviceToken, AUTH_ROUTES.deviceToken, AUTH_ROUTES.token]);
-      expect(srv.requests[0].form).toEqual({ client_id: expect.any(String) });
+      expect(LIB_CLIENT_ID).toEqual(expect.any(String));
+      expect(srv.requests[0].form).toEqual({ client_id: LIB_CLIENT_ID });
+      // LiteLLM posts the device-code request and the poll as JSON (`json=`); the fake would parse a form as well.
+      for (const q of srv.requests.slice(0, 4)) expect(q.headers['content-type']).toContain('application/json');
       for (const q of srv.requests.slice(1, 4)) expect(q.form).toEqual({ device_auth_id: 'dauth-fixture-1', user_code: USER_CODE });
       const ex = srv.requests[4];
       expect(ex.headers['content-type']).toContain('application/x-www-form-urlencoded');
       expect(ex.form).toEqual({
         grant_type: 'authorization_code', code: 'acode-fixture-1', redirect_uri: 'https://auth.openai.com/deviceauth/callback',
-        client_id: srv.requests[0].form?.client_id, code_verifier: 'cver-fixture-1',
+        client_id: LIB_CLIENT_ID, code_verifier: 'cver-fixture-1',
       });
       expect(lstatSync(credPath(dir)).mode & 0o7777).toBe(0o600);
       const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
@@ -182,6 +187,8 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id, account_id: 'acct-fixture-signin' });
       const st = JSON.parse(readFileSync(statusPath(dir), 'utf8')) as Record<string, unknown>;
       expect(st).toMatchObject({ state: 'ok', lastErrorCode: null, lastRequestId: 'req-fixture-signin', unsaved: false });
+      // D-TBD-signin-last-refresh (pending the controller's ruling): a sign-in records its own time as lastRefreshAt.
+      expect(typeof st.lastRefreshAt).toBe('number');
       expect(lstatSync(statusPath(dir)).mode & 0o7777).toBe(0o600);
       expect(existsSync(pendingPath(dir))).toBe(false);
     } finally {
@@ -354,9 +361,14 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     const key = lstatKey(credPath(dir));
     const srv = await fakeAuthServer(fullSignin(issued()));
     try {
-      const r = await runMain(home, dir, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
-        env: { CCRC_CODEX_AUTH_BASE: srv.base }, faults: ['enospc-writes:3'],
-      });
+      // A second op in the same process reads the file's own word: the sign-in's record is not kept in memory.
+      const run = await runAuthDriver(home, {
+        authDir: dir, faults: ['enospc-writes:3'],
+        ops: [{ op: 'main', argv: ['signin', '--auth-dir', dir, '--lane', 'codex-a'] }, { op: 'read' }],
+      }, { CCRC_CODEX_AUTH_BASE: srv.base }, { timeoutMs: 15_000 });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const [r, after] = driverLines(run.stdout);
+      expect(after).toMatchObject({ op: 'read', credential: 'incomplete' });
       expect(r.rc).toBe(1);
       expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: .*disk is full/m);
       expect(r.stdout).not.toContain('signed-in');
@@ -368,6 +380,129 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       await srv.close();
     }
   });
+
+  it('signin on a disk that frees after one failed write is signed-in', async () => {
+    const home = mkTmp('codex-auth-enospc1-');
+    const dir = laneDir(home);
+    plantMarker(dir);
+    const t = issued();
+    const srv = await fakeAuthServer(fullSignin(t));
+    try {
+      const r = await runMain(home, dir, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
+        env: { CCRC_CODEX_AUTH_BASE: srv.base }, faults: ['enospc-writes:1'],
+      });
+      expect(r.rc, r.stderr).toBe(0);
+      expect(r.stdout).toContain('ccgpt-auth: codex-a: signed-in');
+      const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
+      expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
+      expect(JSON.parse(readFileSync(statusPath(dir), 'utf8'))).toMatchObject({ state: 'ok', unsaved: false });
+      expect(existsSync(pendingPath(dir))).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it.each(['usercode', 'deviceToken', 'token'] as Array<keyof AuthScript>)(
+    'signin: a 302 from the %s route is login-failed, and its Location receives nothing',
+    async (route) => {
+      const home = mkTmp('codex-auth-redirect-');
+      const dir = laneDir(home);
+      plantMarker(dir);
+      const before = dirState(dir);
+      const elsewhere = await fakeAuthServer({});
+      const script = fullSignin(issued());
+      script[route] = [{ status: 302, headers: { location: `${elsewhere.base}/elsewhere` } }];
+      const srv = await fakeAuthServer(script);
+      try {
+        const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: .*redirect \(HTTP 302\)/m);
+        expect(elsewhere.requests).toHaveLength(0);
+        expect(srv.requests[srv.requests.length - 1]?.path).toBe(AUTH_ROUTES[route as keyof typeof AUTH_ROUTES]);
+        expect(dirState(dir)).toEqual(before);
+      } finally {
+        await srv.close();
+        await elsewhere.close();
+      }
+    },
+  );
+
+  // Both overrides are off the library's loopback list, yet both still lead only to this box's fake, so even a
+  // library that skipped the check could reach nothing past the loopback interface.
+  it.each([
+    ['an IPv4-mapped IPv6 host', (port: string) => `http://[::ffff:127.0.0.1]:${port}`],
+    ['an https:// URL', (port: string) => `https://127.0.0.1:${port}`],
+  ] as Array<[string, (port: string) => string]>)(
+    'signin with %s as CCRC_CODEX_AUTH_BASE is auth-endpoint-refused before any request',
+    async (_what, url) => {
+      const home = mkTmp('codex-auth-offlist-');
+      const dir = laneDir(home);
+      plantMarker(dir);
+      const before = dirState(dir);
+      const srv = await fakeAuthServer(fullSignin(issued()));
+      try {
+        const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
+          CCRC_CODEX_AUTH_BASE: url(new URL(srv.base).port),
+        });
+        expect(r.status).toBe(1);
+        expect(r.stderr).toMatch(/^ccgpt-auth: auth-endpoint-refused: /m);
+        expect(r.stdout).toBe('');
+        expect(srv.requests).toHaveLength(0);
+        expect(dirState(dir)).toEqual(before);
+      } finally {
+        await srv.close();
+      }
+    },
+  );
+
+  // The op's own elapsed time (the driver's `ms`, which leaves out the interpreter's start) covers two waits.
+  it.each([
+    ['an interval over the floor is waited', { DEVICE_POLL_MIN_S: 0.05 }, 0.5],
+    ['an interval under the floor is raised to it', { DEVICE_POLL_MIN_S: 0.5 }, 0.01],
+  ] as Array<[string, object, number]>)('signin: the poll waits max(interval, DEVICE_POLL_MIN_S): %s', async (_what, consts, interval) => {
+    const home = mkTmp('codex-auth-interval-');
+    const dir = laneDir(home);
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dauth-fixture-1', user_code: USER_CODE, interval } }],
+      deviceToken: [{ status: 403, body: {} }, { status: 403, body: {} }, deviceCodeAnswer()],
+      token: [exchangeAnswer(issued())],
+    });
+    try {
+      const r = await runMain(home, dir, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], {
+        env: { CCRC_CODEX_AUTH_BASE: srv.base }, consts,
+      });
+      expect(r.rc, r.stderr).toBe(0);
+      expect(srv.requests.filter((q) => q.path === AUTH_ROUTES.deviceToken)).toHaveLength(3);
+      expect(r.ms).toBeGreaterThanOrEqual(950);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it.each([
+    ['its own refresh token', (t: { access: string; refresh: string; id: string }) => t.refresh],
+    ["its access token's signature segment", (t: { access: string; refresh: string; id: string }) => t.access.split('.')[2]],
+    ['the submitted code_verifier', () => 'cver-fixture-1'],
+  ] as Array<[string, (t: { access: string; refresh: string; id: string }) => string]>)(
+    'signin: an exchange request id that echoes %s is not stored',
+    async (_what, echo) => {
+      const home = mkTmp('codex-auth-ridecho-');
+      const dir = laneDir(home);
+      const t = issued();
+      const srv = await fakeAuthServer({
+        usercode: [usercodeAnswer()], deviceToken: [deviceCodeAnswer()],
+        token: [{ ...exchangeAnswer(t), headers: { 'x-request-id': echo(t) } }],
+      });
+      try {
+        const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a'], { CCRC_CODEX_AUTH_BASE: srv.base });
+        expect(r.status, r.stderr).toBe(0);
+        expect(JSON.parse(readFileSync(statusPath(dir), 'utf8'))).toMatchObject({ state: 'ok', lastRequestId: null });
+        expect(readFileSync(statusPath(dir), 'utf8')).not.toContain(echo(t));
+      } finally {
+        await srv.close();
+      }
+    },
+  );
 
   it('signin: an exchange answer without refresh_token is login-failed and leaks it nowhere', async () => {
     const home = mkTmp('codex-auth-r8-');

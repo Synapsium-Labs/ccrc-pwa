@@ -1472,7 +1472,9 @@ def _poll_device(base: str, device_auth_id: str, user_code: str, interval: float
 def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Optional[str]]:
     """Exchange the authorization code at TOKEN_PATH, form-encoded as LiteLLM sends it. The answer must carry all three
     tokens (ruling R8: the sign-in exchange only; a refresh keeps the tokens its answer lacks); a refusal names the
-    missing fields' names, never a value. Answers the backend record and the answer's request id."""
+    missing fields' names, never a value. Answers the backend record and the answer's request id, which is dropped
+    when it echoes the submitted code or code_verifier or one of the answer's tokens (as `token_request` drops one that
+    echoes its refresh token), so the status file never holds one."""
     form = urllib.parse.urlencode({
         "grant_type": "authorization_code",
         "code": code,
@@ -1490,6 +1492,9 @@ def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Opt
     missing = [k for k in ("access_token", "refresh_token", "id_token") if _nonempty_str(answer.get(k)) is None]
     if missing:
         raise LoginFailed("the token exchange's answer carried no " + " and no ".join(missing) + "; " + _again(lane))
+    if rid is not None and any(_echoes(rid.lower(), s) for s in (code, verifier, answer["access_token"],
+                                                                 answer["refresh_token"], answer["id_token"])):
+        rid = None
     return _merge(_empty("absent", ""), None, answer, rid), rid
 
 
@@ -1528,7 +1533,9 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
        exchange answers, so a sign-in abandoned or killed at any point before leaves the authDir as it was.
     5. Under one `held`: settle a checkpoint and an unsaved record, refuse as in step 1, then commit, tried
        SIGNIN_COMMIT_TRIES times SIGNIN_COMMIT_RETRY_S apart; a commit that never lands is LoginFailed with the old
-       file unchanged and the sign-in's record not kept; on success the status is `ok`. Answers `"signed-in"`.
+       file unchanged and the sign-in's record not kept; on success the status is `ok`. A commit whose rename landed
+       and whose directory fsync failed is signed in, its status `ok` with `unsaved` true and its record kept, so the
+       next holder re-runs the commit. Answers `"signed-in"`.
     With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
@@ -1556,28 +1563,39 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     code, verifier = _poll_device(base, device_auth_id, user_code, interval, wait, lane)
     record, rid = _exchange(base, code, verifier, lane)
     key = _key(auth_dir)
+    fields = dict(lastRefreshAt=time.time(), lastRequestId=rid)  # kept with an unsaved record, as a refresh's are
     with held(auth_dir) as p:
         recover_pending(auth_dir)
         retry_unsaved(auth_dir)
         _refuse_signin(read(auth_dir))
         kept = _UNSAVED.get(key)  # an unsaved refresh `retry_unsaved` could not write: it stays as it was
-        saved = False
-        for attempt in range(int(SIGNIN_COMMIT_TRIES)):
-            if attempt:
-                time.sleep(float(SIGNIN_COMMIT_RETRY_S))
-            if commit_record(auth_dir, record):
-                saved = True
-                break
-        if not saved:
-            if kept is None:
-                _UNSAVED.pop(key, None)
-            else:
-                _UNSAVED[key] = kept
+        saved = landed = False
+        try:
+            for attempt in range(int(SIGNIN_COMMIT_TRIES)):
+                if attempt:
+                    time.sleep(float(SIGNIN_COMMIT_RETRY_S))
+                if commit_record(auth_dir, record, fields):
+                    saved = True
+                    break
+            if not saved:
+                # A try that failed only AFTER its rename (the directory's fsync) left the sign-in's record in place;
+                # `commit_record` keeps it bound to that file, so the next holder's `retry_unsaved` re-runs the
+                # commit, fsync included, as it does for a refresh's record.
+                on_disk = _read_file(auth_dir)
+                landed = (on_disk.access_token == record["access_token"]
+                          and on_disk.refresh_token == record["refresh_token"])
+        finally:
+            if not saved and not landed:  # the map gets back what it held before the commits, a raise included
+                if kept is None:
+                    _UNSAVED.pop(key, None)
+                else:
+                    _UNSAVED[key] = kept
+        if not saved and not landed:
             raise LoginFailed("the credential could not be written after " + str(SIGNIN_COMMIT_TRIES) + " tries: the "
                               "disk is full; nothing was saved; sign in again once it frees (ccrc codex login "
                               + lane + ")")
-        write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastRefreshAt=time.time(),
-                     lastErrorCode=None, lastRequestId=rid, identity=_current_identity(p.credential), unsaved=False)
+        write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastErrorCode=None,
+                     identity=_current_identity(p.credential), unsaved=not saved, **fields)
     return "signed-in"
 
 
