@@ -1,7 +1,9 @@
-// releaseWaiting — the ONE decision of which release waits, and the sentence that names it. Pure: no React, no
-// store, no API client. The fleet's update line and Settings › Updates both read these answers, so the two surfaces
-// cannot name different releases or spell what the nodes run two ways. Moved unchanged from UpdateBanner.tsx
-// (D-6327, behaviour-neutral); the arrow predicate itself stays `pendingTag` (shared/update-arrow.ts).
+// releaseWaiting — the ONE decision of which release waits, and the sentences that name it. It imports no component,
+// store or the fetch adapter directly (its one runtime import of `useUpdatesView.ts` is for `newestPending`). The
+// fleet's update line (UpdateIndicator) and Settings › Updates both read these answers, so the two surfaces cannot
+// name different releases or spell what the nodes run two ways. `bannerRelease` and `updateBannerText` moved here
+// unchanged from UpdateBanner.tsx (D-6327, behaviour-neutral); the arrow predicate itself stays `pendingTag`
+// (shared/update-arrow.ts).
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
 import { nodeVersion } from '../../../shared/update-arrow';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
@@ -60,4 +62,12 @@ export function updateBannerText(view: UpdatesView, health?: FleetHealth | null)
   const knownLocal = health != null && health.mode === 'local';
   const sides = knownLocal ? versionSides(rows) : remoteSides(rows);
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
+}
+
+/** The words of the fleet's update line and of Settings' index line for the waiting release: `↑ v0.0.9 available`,
+ *  or `null` when no release waits (`bannerRelease`'s answer, so the two surfaces never disagree). The one place the
+ *  sentence is spelled; a caller appends its own suffix and never rebuilds it. */
+export function releaseWaitingWords(view: UpdatesView): string | null {
+  const release = bannerRelease(view);
+  return release === null ? null : `↑ ${release.tag} available`;
 }

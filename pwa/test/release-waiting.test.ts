@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { bannerRelease, updateBannerText } from '../src/fleet/releaseWaiting';
+import { bannerRelease, releaseWaitingWords, updateBannerText } from '../src/fleet/releaseWaiting';
 
 const NOW = Date.now();
 const FLEET_ID = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
@@ -239,5 +239,19 @@ describe('releaseWaiting — the D-3313/D-3316 rule (fix round 1, widened fix ro
     const v = view({ catalogue: { lastOkAt: 1e20, lastError: null } });
     expect(updateBannerText(v)).toBeNull();
     expect(bannerRelease(v)).toBeNull();
+  });
+});
+
+describe('releaseWaitingWords (D-6327)', () => {
+  it('releaseWaitingWords names the waiting tag, and nothing when none waits', () => {
+    expect(releaseWaitingWords(view())).toBe('↑ v0.0.9 available');
+    // The newest pending tag in semver order, the same answer `bannerRelease` gives (v0.0.10 above v0.0.9).
+    const newest = view({ nodes: [fleetNode({ desiredTag: 'v0.0.9' }), serverNode({ desiredTag: 'v0.0.10' })] });
+    expect(releaseWaitingWords(newest)).toBe(`↑ ${bannerRelease(newest)!.tag} available`);
+    expect(releaseWaitingWords(newest)).toBe('↑ v0.0.10 available');
+    // Nothing waits: every node is on its desired tag, or the catalogue was never reached.
+    expect(releaseWaitingWords(view({ nodes: [fleetNode({ desiredTag: 'v0.0.7' }), serverNode({ desiredTag: 'v0.0.7' })] }))).toBeNull();
+    expect(releaseWaitingWords(view({ catalogue: { lastOkAt: null, lastError: null } }))).toBeNull();
+    expect(releaseWaitingWords(view({ nodes: [] }))).toBeNull();
   });
 });

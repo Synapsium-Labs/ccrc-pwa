@@ -8,7 +8,7 @@
 import type { NodeWire, NotifyMode, UpdatesView } from '../../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '../../../../shared/api';
 import { COLLECT_STATE_TEXT } from '../../fleet/collectLaneWords';
-import { bannerRelease } from '../../fleet/releaseWaiting';
+import { releaseWaitingWords } from '../../fleet/releaseWaiting';
 import { haltingNodes } from '../../fleet/updateHalt';
 import { readBoxTokenView } from '../../lib/api';
 import type { SettingsSectionId } from '../../lib/routes';
@@ -49,10 +49,10 @@ function fleetRuns(nodes: readonly NodeWire[]): { one: string } | { range: strin
 function updatesStatus(view: UpdatesView): SectionStatus {
   const nodes = Array.isArray(view.nodes) ? view.nodes : [];
   const runs = fleetRuns(nodes);
-  const waiting = bannerRelease(view);
+  const waiting = releaseWaitingWords(view);
   if (waiting !== null) {
     const fleet = runs === null ? '' : 'one' in runs ? ` · fleet runs ${runs.one}` : ` · nodes run ${runs.range}`;
-    return line(`↑ ${waiting.tag} available${fleet}`, 'attention');
+    return line(`${waiting}${fleet}`, 'attention');
   }
   const amber = haltingNodes(nodes).length > 0 || view.catalogue.lastError !== null || nodes.some((n) => n.reachable === false);
   if (runs !== null && 'range' in runs) return line(`Nodes run ${runs.range}`, amber ? 'amber' : 'calm');

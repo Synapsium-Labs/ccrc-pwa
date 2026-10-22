@@ -88,7 +88,7 @@ export function summaryFromSides(sides: { fleet: SummaryRow | null; server: Summ
  *  truthy or not-falsy, so a malformed non-boolean `reachable` on the wire never vouches either. Structural over
  *  any row shape carrying these three fields — the server's `NodeRow`, the wire's `NodeWire` — so
  *  neither type leaks into L0, the same discipline `versionSides`/`remoteSides` already keep on `role`.
- *  `server/src/watch.ts`'s `pushRelease`, `pwa/src/fleet/UpdateBanner.tsx`'s `updateBannerText`,
+ *  `server/src/watch.ts`'s `pushRelease`, `pwa/src/fleet/releaseWaiting.ts`'s `updateBannerText`,
  *  `BuildLine.tsx`'s `side()` guards and `FleetHostBanner.tsx`'s skew-arm `name()` all call this instead
  *  of computing the same three-clause fact inline — BuildLine's own inline form was narrower (`reachable`
  *  alone, missing the `measuredAt`/`stampRead` clauses) before this fix, which is exactly the kind of
