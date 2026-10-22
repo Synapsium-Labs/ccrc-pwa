@@ -188,7 +188,9 @@ thereafter: replay restores a checkpointed id verbatim and never re-selects it a
 Upstream ids: `agent_id`; workflow run id + worker index; `tool_use_id` where present. Display names
 are metadata only.
 For a workflow run id + worker index or a `tool_use_id`, that journal component stays the journal id of
-the first event naming the upstream id. For an activity keyed by `agent_id`, the activity opens only
+the first event naming the upstream id.
+A Bash `tool_use_id` opens its activity only at a PostToolUse. If a listing-carrying PreToolUse of the call is still pending, the call opens only when the PostToolUse's listing differs from the PreToolUse's as a set of names, or the PostToolUse carries none, and that PreToolUse is the identity record. A PreToolUse is pending until a PostToolUse decides it, or until a journal record is accepted `DELEGATION_BASH_PENDING_MS` after it, when it is forgotten and opens nothing. A PostToolUse that carries a listing and finds no pending PreToolUse (none was measured, it was shed, or it was forgotten) opens the call with itself as identity record. A call where neither side carries a listing opens nothing (amended 2026-10-21, operator ruling "open only on a change", D-6267; D-4649).
+For an activity keyed by `agent_id`, the activity opens only
 once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
 agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2), not a hook or spool
 event: it gains no journal event and no writer, and nothing of it is hashed. Whichever join is known

@@ -1379,6 +1379,17 @@ export function collapseDelegationAttempts(attempts: readonly DelegationAttemptR
   return { attempts: attempts.filter((a) => keep.has(a.attemptId)), removed: attempts.length - kept.size };
 }
 
+/** D-6267: whether two Bash worktree listings name the same admin records. SET semantics: order and duplicates are ignored. This is
+ *  exactly correlation's zero delta (`listingDeltaOf`, delegation-correlation.ts), so every window rung 4 can call `mine`
+ *  is an unequal one. The ONE definition: rule A's decision and the retirement fact both call it. */
+export function delegationListingsEqual(before: readonly string[], after: readonly string[]): boolean {
+  const b = new Set(before);
+  const a = new Set(after);
+  if (a.size !== b.size) return false;
+  for (const n of a) if (!b.has(n)) return false;
+  return true;
+}
+
 // ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────
 //
 // Pure arithmetic from the CHECKPOINT's `observationIntervals` and nothing else. The interval rows are checkpoint-owned: SQLite carries
@@ -1602,6 +1613,12 @@ export function isDelegationHealthKebab(v: string): boolean {
 
 /** The cursor retention: the read horizon plus 24 hours. */
 export const DELEGATION_CURSOR_RETENTION_HOURS = DELEGATION_SPOOL_LOOKBACK_HOURS + 24;
+/** D-6270: how long a start-less stop stays identity evidence: the cursor retention, i.e. the read horizon plus a day, so no line
+ *  written before the stop can still be accepted after it. Measured on journal `acceptedAt`, never a clock read. */
+export const DELEGATION_STOP_CANDIDATE_HORIZON_MS = DELEGATION_CURSOR_RETENTION_HOURS * DELEGATION_HOUR_MS;
+/** D-6267: how long a listing-carrying Bash PreToolUse waits for its PostToolUse before it is forgotten. Measured on journal
+ *  `acceptedAt`, never a clock read. */
+export const DELEGATION_BASH_PENDING_MS = 3_600_000;
 
 /** Whether a bucket's hour (epoch milliseconds, on an hour boundary) may be READ at `nowMs`: from the spool lookback up to the open
  *  hour. An hour older than that, a future hour and an instant that is not an hour boundary are never read. */

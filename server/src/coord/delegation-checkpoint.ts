@@ -9,8 +9,8 @@
 //     - the canonical checkpoint codec and its closed shape;
 //     - `assertDelegationCheckpointProjectable`: the SQLite constraints a checkpoint must satisfy, stated in code, so a
 //       checkpoint that no projection could ever accept is refused BEFORE it is durable;
-//     - `DelegationCheckpointBuilder`: the fold of journal records into checkpoint rows, the identity-candidate index, and the
-//       pruning holds. It is the ONE place a journal record becomes state, used by the live path and by replay alike, so
+//     - `DelegationCheckpointBuilder`: the fold of journal records into checkpoint rows, the journal-derived indexes (identity
+//       candidates, Bash-call facts, the Workflow launch index), and the pruning holds. It is the ONE place a journal record becomes state, used by the live path and by replay alike, so
 //       replay cannot differ from the live path (W3-M18);
 //     - `DelegationRecovery` / `recoverDelegation` / `recoverDelegationState`: the reconstruction phases (O2).
 //   IMPURE SHELL (below the banner): reading the files, the atomic checkpoint replacement, the SERIALIZED DURABLE APPLIER
@@ -45,6 +45,8 @@ import {
   assertDelegationCheckpointIdentity,
   assertWave3Leases,
   canonicalDelegationJson,
+  DELEGATION_BASH_PENDING_MS,
+  delegationListingsEqual,
   deriveDelegationLineageId,
   emptyDelegationCheckpoint,
   encodeDelegationNaturalKey,
@@ -500,8 +502,9 @@ export interface DelegationNamedUpstream {
   upstreamId: string;
   /**
    * A QUALIFYING JOIN (spec §5.2): an Agent launch response or a SubagentStart naming an agent, a Workflow launch response naming its
-   * run (ruling R44: the run's identity is checkpoint data from then on, so it never holds the journal), or a Bash call that carries a
-   * worktree listing. A bare `agent_id` is not one.
+   * run (ruling R44: the run's identity is checkpoint data from then on, so it never holds the journal). A bare `agent_id` is not one.
+   * A Bash PreToolUse or PostToolUse is never a join on its own: whether its call opens is decided across its two records by the
+   * builder (`foldBashCall`, D-6267).
    */
   join: boolean;
   /** The event ends it: a SubagentStop naming an agent, a launch response that reports `completed`, or a Bash PostToolUse. */
@@ -514,8 +517,9 @@ export interface DelegationNamedUpstream {
  * SubagentStart and a launch response QUALIFY, a bare occurrence is evidence that attaches once a join is known, and an unpaired stop
  * opens nothing. A Workflow PostToolUse launch response names its RUN and IS that run's join (the worker index is the meta's, so it
  * opens the run, never a worker). A Bash PreToolUse or
- * PostToolUse names its tool call, and is a join only when it carries a `listing` (the hook writes one only for a command that
- * mentions a worktree). Nothing else names anything: a ToolSearch, a parent Stop and a SessionEnd open no activity, whatever order
+ * PostToolUse names its tool call, and is never a join: a listing-carrying PreToolUse makes the call pending, and the builder opens it
+ * at its PostToolUse only on a changed listing or a listing on one side only (D-6267; the hook writes a listing only for a command
+ * that mentions a worktree). Nothing else names anything: a ToolSearch, a parent Stop and a SessionEnd open no activity, whatever order
  * they arrive in.
  */
 export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamedUpstream[] {
@@ -536,7 +540,7 @@ export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamed
     if (typeof launch === 'object' && launch !== null) note('workflow', launch.runId, true, launch.status === 'completed');
   }
   if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash') {
-    note('bash-worktree', event.toolUseId, Array.isArray(event.listing), event.eventKind === 'PostToolUse');
+    note('bash-worktree', event.toolUseId, false, event.eventKind === 'PostToolUse');
   }
   return [...found.values()];
 }
@@ -557,8 +561,50 @@ export interface DelegationActivityCandidate {
   endedAt: string | null;
 }
 
+/** D-6267: one Bash call's state in the builder. Never encoded: recovery rebuilds it from the retained journal, like `candidates`.
+ *  'pre': a measured PreToolUse with no decision yet. On an UNMAPPED key it is rule A's pending call: held, and aged. On a MAPPED key it
+ *  is an old-rule row's identity Pre: aged, never held. Same shape, same ageing.
+ *  'equal': that Pre, then a PostToolUse naming the same records. Kept on MAPPED keys only, until the retirement door takes it.
+ *  Anything else ("spoiled") is the entry DELETED. */
+export type DelegationBashCallFact =
+  | { kind: 'pre'; journalId: string; sequence: number; observedAt: string; lastObservedAt: string; listing: readonly string[]; acceptedAtMs: number }
+  | { kind: 'equal'; preJournalId: string };
+
 const maxInstant = (a: string, b: string): string => (a >= b ? a : b);
 const minInstant = (a: string, b: string): string => (a <= b ? a : b);
+
+/** D-6267: a due heap over journal-time deadlines (a cache only: every decision re-reads the map entry the heap names). */
+type DueEntry = readonly [dueMs: number, encoded: string];
+const dueLess = (a: DueEntry, b: DueEntry): boolean => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+function duePush(h: DueEntry[], e: DueEntry): void {
+  h.push(e);
+  for (let i = h.length - 1; i > 0;) {
+    const p = (i - 1) >> 1;
+    if (!dueLess(h[i]!, h[p]!)) break;
+    [h[i], h[p]] = [h[p]!, h[i]!];
+    i = p;
+  }
+}
+function duePop(h: DueEntry[]): DueEntry | undefined {
+  const top = h[0];
+  const last = h.pop();
+  if (top === undefined || last === undefined || h.length === 0) return top;
+  h[0] = last;
+  for (let i = 0; ;) {
+    const l = 2 * i + 1, r = l + 1;
+    let m = i;
+    if (l < h.length && dueLess(h[l]!, h[m]!)) m = l;
+    if (r < h.length && dueLess(h[r]!, h[m]!)) m = r;
+    if (m === i) break;
+    [h[i], h[m]] = [h[m]!, h[i]!];
+    i = m;
+  }
+  return top;
+}
+
+/** The listing a Bash PreToolUse or PostToolUse carries; undefined when it was unmeasured, shed, or not triggered. */
+const bashListingOf = (e: DelegationEventEnvelopeV1): readonly string[] | undefined =>
+  (e.eventKind === 'PreToolUse' || e.eventKind === 'PostToolUse') && e.toolName === 'Bash' && Array.isArray(e.listing) ? e.listing : undefined;
 
 // ── The builder: the one fold from journal records to checkpoint rows ───────────────────────────────────────────────
 
@@ -636,6 +682,8 @@ export class DelegationCheckpointBuilder {
   private leaseFacts = new Map<string, DelegationLeaseEntryFact>();
   private leaseByIdentity = new Map<string, string>();
   private leaseByPath = new Map<string, string>();
+  private bashCalls = new Map<string, DelegationBashCallFact>();   // D-6267
+  private bashDue: DueEntry[] = [];                                 // D-6267: a due heap over the 'pre' entries
   private appliedSequence = 0;
   private appliedJournalId: string | null = null;
   private appliedDigest: string | null = null;
@@ -678,6 +726,7 @@ export class DelegationCheckpointBuilder {
     b.mapping = { ...this.mapping }; b.intent = { ...this.intent }; b.leases = new Map(this.leases); b.lineage = new Map(this.lineage);
     b.cursors = new Map(this.cursors); b.intervals = new Map(this.intervals); b.candidates = new Map(this.candidates);
     b.leaseFacts = new Map(this.leaseFacts); b.leaseByIdentity = new Map(this.leaseByIdentity); b.leaseByPath = new Map(this.leaseByPath);
+    b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue];
     b.appliedSequence = this.appliedSequence; b.appliedJournalId = this.appliedJournalId; b.appliedDigest = this.appliedDigest;
     b.revisionNo = this.revisionNo;
     return b;
@@ -736,6 +785,7 @@ export class DelegationCheckpointBuilder {
   }
 
   private foldEvidence(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, replay: boolean): void {
+    const at = parseDelegationInstant(record.acceptedAt);
     if (replay) this.touchSession(e);
     for (const na of namedAgentsOf(e)) {
       const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId };
@@ -744,13 +794,15 @@ export class DelegationCheckpointBuilder {
       const mapped = Object.hasOwn(this.mapping, encoded) ? this.mapping[encoded] : undefined;
       if (mapped !== undefined) {
         if (replay) this.touchActivity(mapped, e, na);
+        if (na.sourceKind === 'bash-worktree') this.stepMappedBashFact(record, e, encoded, mapped, at);
         continue;
       }
-      // A Bash call with no listing mentions no worktree: it is not evidence of anything and must not hold the journal (every Bash call
-      // has a tool_use_id). It still ENDS the activity its listing-carrying twin opened, which the mapping branch above handles.
-      // DEVIATION D-4649 (spec §5.2 says a tool_use_id's identity is "the first event naming it"): a PreToolUse whose listing the hook
-      // dropped (`truncated`) is skipped here, so when its PostToolUse carries the listing the POST record is the identity.
-      if (na.sourceKind === 'bash-worktree' && !na.join) continue;
+      // A Bash call is decided across its two records (D-6267): see `foldBashCall` for an unmapped key and `stepMappedBashFact` for a
+      // mapped one. DEVIATION D-4649 survives as rule A's no-entry arm: a PreToolUse with no listing (shed or unmeasured) pends nothing,
+      // so a PostToolUse that carries one is the identity record. Every Bash record steps the call's fact on the observe path as on the
+      // replay path, so recovery learns from the covered journal which mapped calls were zero-delta; a fact survives only while it is
+      // pending or its key is mapped (D-6268).
+      if (na.sourceKind === 'bash-worktree') { this.foldBashCall(record, e, key, encoded, replay, at); continue; }
       const prior = this.candidates.get(encoded);
       const candidate: DelegationActivityCandidate = prior === undefined
         ? { key, journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt, lastObservedAt: e.observedAt, endedAt: na.ends ? e.observedAt : null }
@@ -761,6 +813,77 @@ export class DelegationCheckpointBuilder {
       }
       this.openFromCandidate(candidate, encoded);
     }
+    this.ageBashCalls(at);   // AFTER naming: a Post accepted at exactly the bound still consumes its own Pre (A11c)
+  }
+
+  /** D-6267: rule A, for a bash-worktree key the checkpoint does NOT map. `at` is the record's parsed acceptedAt. */
+  private foldBashCall(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, key: DelegationActivityNaturalKey, encoded: string, replay: boolean, at: number): void {
+    const listing = bashListingOf(e);              // undefined: unmeasured, shed, or not triggered
+    const f = this.bashCalls.get(encoded);         // on an unmapped key only ever 'pre': 'equal' lives on mapped keys alone
+    if (e.eventKind === 'PreToolUse') {
+      if (listing === undefined) return;
+      if (f === undefined) {
+        this.bashCalls.set(encoded, { kind: 'pre', journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt,
+          lastObservedAt: e.observedAt, listing, acceptedAtMs: at });
+        duePush(this.bashDue, [at + DELEGATION_BASH_PENDING_MS, encoded]);
+      } else if (f.kind === 'pre') {
+        // a second listing-carrying Pre: identity and ageing origin stay the FIRST's (§5.2 "first event naming"); the compared listing
+        // becomes the LATEST's, as the window builder's pre.set keeps the last
+        this.bashCalls.set(encoded, { ...f, listing, lastObservedAt: maxInstant(f.lastObservedAt, e.observedAt) });
+      }
+      return;
+    }
+    let c: Omit<DelegationActivityCandidate, 'sequence'>;
+    if (f !== undefined && f.kind === 'pre') {
+      this.bashCalls.delete(encoded);
+      if (listing !== undefined && delegationListingsEqual(f.listing, listing)) return;          // EQUAL: nothing opens
+      c = { key, journalId: f.journalId, observedAt: f.observedAt, lastObservedAt: maxInstant(f.lastObservedAt, e.observedAt), endedAt: e.observedAt };
+    } else {
+      if (listing === undefined) return;                                                           // nothing known on either side
+      c = { key, journalId: record.journalId, observedAt: e.observedAt, lastObservedAt: e.observedAt, endedAt: e.observedAt };   // D-4649, Post-only
+    }
+    if (!replay) refuse('fold-refused', `bash-worktree ${key.upstreamId} of (${key.parentId}, ${key.parentIncarnation}) opens at sequence ${record.sequence}, inside the applied journal, but the checkpoint holds no activity for it`);
+    this.openFromCandidate(c, encoded);
+  }
+
+  /** D-6267: a Bash record on a MAPPED key, after the mapping-first branch. Learns, from the journal alone, which old-rule rows were
+   *  zero-delta calls (D-6268 retires them). Never opens, never refuses, never touches a row. */
+  private stepMappedBashFact(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, encoded: string, activityId: string, at: number): void {
+    const listing = bashListingOf(e);
+    const f = this.bashCalls.get(encoded);
+    if (f === undefined) {
+      if (e.eventKind !== 'PreToolUse' || listing === undefined) return;
+      if (this.activities.get(activityId)?.identityJournalId !== record.journalId) return;   // only the row's own identity Pre
+      this.bashCalls.set(encoded, { kind: 'pre', journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt,
+        lastObservedAt: e.observedAt, listing, acceptedAtMs: at });
+      duePush(this.bashDue, [at + DELEGATION_BASH_PENDING_MS, encoded]);
+      return;
+    }
+    if (f.kind === 'pre' && e.eventKind === 'PostToolUse' && listing !== undefined && delegationListingsEqual(f.listing, listing)) {
+      this.bashCalls.set(encoded, { kind: 'equal', preJournalId: f.journalId });
+      return;
+    }
+    this.bashCalls.delete(encoded);      // spoiled: a second Pre, an unmeasured or differing Post, any record after the decision
+  }
+
+  /** D-6267: forgets every 'pre' entry whose Pre was accepted DELEGATION_BASH_PENDING_MS or more before this record. AFTER naming, so a
+   *  Post accepted at exactly the bound still consumes its own Pre (A11c). Pops due entries; re-reads each; never scans the map. */
+  private ageBashCalls(at: number): void {
+    for (let top = this.bashDue[0]; top !== undefined && top[0] <= at; top = this.bashDue[0]) {
+      duePop(this.bashDue);
+      const f = this.bashCalls.get(top[1]);
+      if (f !== undefined && f.kind === 'pre' && at - f.acceptedAtMs >= DELEGATION_BASH_PENDING_MS) this.bashCalls.delete(top[1]);
+    }
+  }
+
+  /** The Bash-call fact for an encoded natural key, if the builder holds one (read only; tests and the retirement door). */
+  bashCallFactOf(encoded: string): DelegationBashCallFact | undefined { return this.bashCalls.get(encoded); }
+  bashCallFactCount(): number { return this.bashCalls.size; }
+  /** The count of PENDING Bash calls: 'pre' entries on a key the checkpoint does not map (the ones `computeHolds` holds). */
+  pendingBashCallCount(): number {
+    let n = 0;
+    for (const [encoded, f] of this.bashCalls) if (f.kind === 'pre' && !Object.hasOwn(this.mapping, encoded)) n++;
+    return n;
   }
 
   private touchActivity(activityId: string, e: DelegationEventEnvelopeV1, na: DelegationNamedUpstream): void {
@@ -901,7 +1024,8 @@ export class DelegationCheckpointBuilder {
    *   - `open-lease`: each unreleased lease's creating record and its correlation evidence;
    *   - `open-lineage`: each open lineage edge's references (its lease's creating record and evidence, or its activity's identity record);
    *   - `identity-candidate`: the earliest retained record naming each AGENT no qualifying join has opened (a bare occurrence or an
-   *     unpaired stop). POSITION IS NOT COVERAGE (W3-M17): such a record stays held although the checkpoint has applied a later
+   *     unpaired stop), and the first listing-carrying PreToolUse of each PENDING Bash call on an unmapped key (D-6267; spec §5.12: its
+   *     identity event precedes its opening). POSITION IS NOT COVERAGE (W3-M17): such a record stays held although the checkpoint has applied a later
    *     sequence, until a checkpoint holds the ID. A Workflow run is never a candidate: its launch response is its join (R44).
    * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4).
    */
@@ -926,6 +1050,9 @@ export class DelegationCheckpointBuilder {
       }
     }
     for (const [encoded, c] of this.candidates) add({ journalId: c.journalId, reason: 'identity-candidate', ownerId: encoded });
+    for (const [encoded, f] of this.bashCalls) {
+      if (f.kind === 'pre' && !Object.hasOwn(this.mapping, encoded)) add({ journalId: f.journalId, reason: 'identity-candidate', ownerId: encoded });
+    }
     return sortedBy(holds.values(), (h) => `${h.reason}\u0000${h.journalId}\u0000${h.ownerId}`);
   }
 
