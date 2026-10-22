@@ -24,7 +24,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
-| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills | wave 3d | — | ruled 2026-10-21 (Decisions, 2026-10-21 16:41); to plan, now that wave 3d is merged |
+| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); its run and block open at dispatch |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
@@ -890,6 +890,31 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Next.** The deploy, by ccrc's updater, then the live proof as the plan's Task 6 says, read with one
     correction from the review: the deploy's first sweep may repeat one `merged` row for each merged workspace
     whose pre-wave-3d row's reason clause (its hold or its open run) has changed since, once each.
+- **2026-10-22 07:13 — §5.7's text approved; wave 3e planned.**
+  - **The approval.** The operator merged #1092 (the written §5.7 and this ledger's wave 3d record) on 2026-10-21
+    at 22:14 UTC, from GitHub and outside the queue, and confirmed on 2026-10-22 that the merge is the approval of
+    §5.7's text and that wave 3e is to be planned from it.
+  - **Wave 3d's live proof so far.** Both boxes run the release that carries #1096 since 2026-10-21 20:33 UTC.
+    Since the server's restart: no `dequeued:` notice, and no `merged` feed row written twice. Every queue merge
+    since then removed its PR with reason `merged`. The `merged … landed` reading waits for the next queue merge of
+    a bound PR, which at the latest is wave 3e's own.
+  - **The plan, prototype-first.** The decision §5.7 describes is code the coordinator runs, not prose it recalls:
+    one fenced block in `wave-lifecycle.md`'s new §5b makes reads 1 to 6 with `gh`, GETs only, and prints one line
+    (a route with its method and licence, a wait, a red, a merged PR to prove, or a stop with its reason). A new
+    test file runs it against a stub `gh`, one case per route and per stop, each with a mutation. Clause 15 and
+    the route prose name what each line means; the merge itself stays a spelling the coordinator types.
+  - **What the prototype's read-only runs on this repository found.** A large rules answer overflowed `jq`'s
+    argument list and an early draft fell through to route Q while a required check was red; the block now fails
+    closed. And `gh pr checks --required` exited 0 while a required check had not reported, so the text wave 2
+    wrote would have armed auto-merge instead of enqueueing; the wait now watches every check.
+  - **The coordinator's rulings on the draft.** Under read 3b the head-behind-the-base stop applies to the direct
+    routes only, since a queue tests the merged group itself. The new test file, a base name outside a safe
+    character set, a review-conversation rule an admin could skip, and a verdict that prints no line, two lines or
+    an unknown word are named departures: each adds a stop and never a merge. README's paraphrase of clause 15's
+    never-writes list gains the merge-method settings, and the skill's final-merge step points at §5b.
+  - **Review.** Three Opus lenses (spec fidelity, executability, safety) with a Sonnet refute pass per finding:
+    18 findings confirmed and folded, 2 refuted. Every mutation count in the plan is the prototype's, and the
+    worker re-measures each one.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -978,8 +1003,11 @@ landed`; no `dequeued:` notice names a PR that then reads merged; after the depl
 extra `merged` row per merged workspace whose pre-wave-3d row's reason clause has changed (review 759's F3); and no
 second `merged` row after a later restart.
 
-**Wave 3e is next to plan** (Decisions, 2026-10-21 16:41): the landing route from the repository's own rules
-(spec §5.7, skills only). Then wave 3f, the server's running-check fix.
+**Wave 3e is planned** (Decisions, 2026-10-22 07:13): the landing route from the repository's own rules (spec
+§5.7), in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md`. Three tasks: the landing
+verdict and the test that runs it; clause 15, the route prose, the licence, the stops and their pins; the gate,
+the PR, the deploy (`ccrc rollout --to` the prerelease that carries it, then the installed skill text verified in
+every home) and the live proof. Then wave 3f, the server's running-check fix.
 
 **Wave 3b (stage 3, `ccd-land-probe`)** stays planned, run 310 open.
 - **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned after wave 3e's plan (spec §11, item 12).
