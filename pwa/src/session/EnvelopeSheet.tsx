@@ -14,10 +14,8 @@
 // terminal). The review screen is rendered by `DialogSheet` for every source of copy, so it is not here, and `TerminalCta`'s
 // callers are now this sheet's dead end and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces.
 //
-// `TerminalCta` travels here because BOTH halves render it (the controller's
-// unparsed-scrape branch and this sheet's ungated one) and its own docstring
-// is about exactly that: copy written twice drifts in a way no type catches.
-// It is exported for the one caller left behind.
+// `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
+// its own docstring is about exactly that, copy written twice drifts in a way no type catches.
 //
 // The classes stay `dlg-*`: chat.css grounds them and these are their only
 // consumers. The shape moves, the ground stays.

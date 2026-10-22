@@ -1,9 +1,10 @@
 // The parts of an AskUserQuestion sheet that BOTH sheets render (D-5089, plan
 // docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2): the envelope's (`EnvelopeSheet.tsx`, while the hook's
-// envelope is fresh) and the scraped one (`DialogSheet.tsx`, which takes over when the envelope ages out and
-// `ask_cleared` arrives, 30 minutes into an unanswered ask). Written once here so the hand-off cannot change what the
-// operator sees mid-ask: the same eyebrow, the same review screen, the same sentence for a question the sheet cannot
-// answer yet.
+// envelope is fresh) and the scraped one (`DialogSheet.tsx`, which takes over when `ask_cleared` arrives). The
+// envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask ONLY when no menu corresponding to its
+// call is up (D-6324, Task T1a): while the pane shows such a menu, the review screen of a multi-question ask included,
+// the session stream keeps the aged envelope. Written once here so the hand-off cannot change what the operator sees
+// mid-ask: the same eyebrow, the same review screen, the same sentence for a question the sheet cannot answer yet.
 //
 // What is on the pane is read by `askLive.ts`; this file only renders it. Every row is `@ccrc/ui`'s `OptionRow`, and
 // every class here is one chat.css already grounds (`.dlg-*`, `.opts`, `.ask-envelope-more*`).

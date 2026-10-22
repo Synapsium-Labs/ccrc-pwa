@@ -114,8 +114,10 @@
 // the envelope also records the id of the pane dialog live at that moment
 // (`dismissedDialogId`), and the scraped sheet stays shut on that id, so an
 // ask the operator waved away does not pop back when `ask_cleared` hands the
-// same pane question over 30 minutes in. A new question has a new id and
-// opens; the `raise` nonce clears both slots.
+// same pane question over when it ages out. That age-out (30 minutes into an unanswered ask) is no longer certain
+// (D-6324, Task T1a): an aged envelope is kept on the session stream while the pane shows a menu that corresponds to
+// its call, the review screen of a multi-question ask included, so `ask_cleared` arrives only when no such menu is up.
+// A new question has a new id and opens; the `raise` nonce clears both slots.
 //
 // D-5090 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3):
 // own words answer an AskUserQuestion THROUGH its free-text row
