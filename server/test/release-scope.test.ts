@@ -195,7 +195,8 @@ describe('W25 the CLI over fixture repositories', () => {
 
 // ── The guard (D-6396) ────────────────────────────────────────────────────────────────────────────────────────────
 type Read = (rel: string) => string | null;
-interface Derived { inputs: string[]; fileDeps: Map<string, string> } // package name -> repo-relative package dir
+/** `fileDeps`: package name -> repo-relative package dir. `alias`: the repo-relative directory an `@/` specifier resolves into. */
+interface Derived { inputs: string[]; fileDeps: Map<string, string>; alias: string }
 
 const readCache = new Map<string, string | null>();
 const real: Read = (rel) => {
@@ -237,6 +238,29 @@ function resolveIn(dir: string, entry: string, what: string): string {
   return out === '.' ? '' : out;
 }
 
+/** The directory an `@/` specifier resolves into, derived twice: from the alias `pwa/vite.config.ts` names and from the
+ *  `paths` entry `ui/tsconfig.json` names. Throws when either is missing, is not the modelled shape, or they disagree. */
+function deriveAlias(read: Read): string {
+  const vite = read('pwa/vite.config.ts');
+  if (vite === null) throw new Error('pwa/vite.config.ts is unreadable');
+  const bare = stripTs(vite);
+  const keys = (bare.match(/(['"])@\1\s*:/g) ?? []).length;
+  const forms = [...bare.matchAll(/(['"])@\1\s*:\s*fileURLToPath\(\s*new URL\(\s*(['"])([^'"\n]+)\2\s*,\s*import\.meta\.url\s*\)\s*\)/g)];
+  if (keys !== 1 || forms.length !== 1) throw new Error(`pwa/vite.config.ts has ${keys} '@' alias keys, ${forms.length} in the modelled fileURLToPath(new URL(...)) shape: the derivation models exactly one`);
+  const fromVite = resolveIn('pwa', forms[0]![3]!, "pwa/vite.config.ts alias '@'");
+  const tsText = read('ui/tsconfig.json');
+  if (tsText === null) throw new Error('ui/tsconfig.json is unreadable');
+  const co = (JSON.parse(stripTs(tsText)) as { compilerOptions?: Record<string, unknown> }).compilerOptions ?? {};
+  const targets = ((co['paths'] ?? {}) as Record<string, string[]>)['@/*'];
+  if (!Array.isArray(targets) || targets.length !== 1 || !targets[0]!.endsWith('/*')) {
+    throw new Error('ui/tsconfig.json paths has no single "@/*" entry ending in /*: the alias cannot be derived');
+  }
+  const baseDir = typeof co['baseUrl'] === 'string' ? resolveIn('ui', co['baseUrl'], 'ui/tsconfig.json baseUrl') || '.' : 'ui';
+  const fromTs = resolveIn(baseDir, targets[0]!.slice(0, -2), 'ui/tsconfig.json paths "@/*"');
+  if (fromVite !== fromTs) throw new Error(`the '@' alias differs: pwa/vite.config.ts says ${fromVite || '.'}, ui/tsconfig.json says ${fromTs || '.'}`);
+  return fromVite;
+}
+
 /** build-release.sh's inputs, from its own text, the package scripts npm runs and the configs those read; throws on any shape it does not model. */
 function deriveReleaseInputs(read: Read): Derived {
   const sh = read('deploy/build-release.sh');
@@ -261,6 +285,12 @@ function deriveReleaseInputs(read: Read): Derived {
     if (/\$\{?ROOT\b/.test(line.replace(gitRoot, ''))) {
       throw new Error(`build-release.sh reads "$ROOT" in a shape this derivation does not model: ${line.trim()}`);
     }
+  }
+  // A dist source path: pkg and the rest of the path after `$ROOT/<pkg>/`, checked once the installed packages are known.
+  const distReads: { pkg: string; rest: string; line: string }[] = [];
+  for (const line of code) {
+    const m = /(?:\[ -[fd] |cp -a )"\$ROOT\/([a-z]+)\/(dist[^"]*)"/.exec(line);
+    if (m !== null) distReads.push({ pkg: m[1]!, rest: m[2]!, line: line.trim() });
   }
   const archives = code.filter((l) => /git -C "\$ROOT" archive\b/.test(l)).length;
   if (archives !== 1) throw new Error(`build-release.sh has ${archives} git archive lines, the derivation models exactly one`);
@@ -295,6 +325,11 @@ function deriveReleaseInputs(read: Read): Derived {
   const cds = (text.match(/\( cd "\$ROOT\//g) ?? []).length;
   if (cds !== installs.length) throw new Error(`build-release.sh has ${cds} ( cd "$ROOT/ lines, the npm ci parse matched ${installs.length}`);
   const installed = new Set(installs.map((m) => m[1]!));
+  for (const { pkg, rest, line } of distReads) {
+    if (!installed.has(pkg)) throw new Error(`build-release.sh reads ${pkg}/${rest}, but ${pkg} is not an installed package: ${line}`);
+    if (rest.split('/').includes('..')) throw new Error(`build-release.sh reads a dist path with a .. segment: ${line}`);
+    if (/[$`]/.test(rest)) throw new Error(`build-release.sh reads a dist path with an expansion, which the derivation does not model: ${line}`);
+  }
   for (const m of installs) {
     const pkg = m[1]!;
     const model = SCRIPT_MODEL[pkg];
@@ -360,7 +395,7 @@ function deriveReleaseInputs(read: Read): Derived {
     const n = path.posix.normalize(i).replace(/^\.\//, '').replace(/\/+$/, '');
     return n === '.' ? '' : n;
   };
-  return { inputs: [...new Set([...inputs].map(norm))].sort(), fileDeps };
+  return { inputs: [...new Set([...inputs].map(norm))].sort(), fileDeps, alias: deriveAlias(read) };
 }
 
 /** `input` is a path or '' for the repository root, which every file is under. */
@@ -401,6 +436,44 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[] {
 }
 
 const JS_EXT = /\.(?:[cm]?[jt]s|tsx)$/;
+
+/** `src` without its CSS block comments, string-aware (a quoted glob can hold the two characters that open or close one). An unterminated comment drops the rest. */
+function dropCssComments(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i]!;
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1;
+      if (j < src.length && src[j] === c) { out += src.slice(i, j + 1); i = j + 1; continue; }
+      out += c; i += 1; continue; // no closing quote on this line: a bare quote character
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      if (close < 0) return out;
+      i = close + 2;
+      continue;
+    }
+    out += c; i += 1;
+  }
+  return out;
+}
+
+/** `src` without its `<!-- -->` comments, found by indexOf: an unterminated comment drops the rest. */
+function dropHtmlComments(src: string): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = src.indexOf('<!--', at);
+    if (open < 0) return out + src.slice(at);
+    out += src.slice(at, open);
+    const close = src.indexOf('-->', open + 4);
+    if (close < 0) return out;
+    at = close + 3;
+  }
+}
+
 const strings = (src: string): string[] => [...src.matchAll(/(['"])([^'"\n]+)\1/g)].map((m) => m[2]!);
 
 /** The path-like values a source file names, by kind. HTML resolves a leading slash from the package dir and its public/. */
@@ -415,13 +488,16 @@ function specifiers(file: string, src: string): string[] {
     for (const m of bare.matchAll(/\bimport\.meta\.glob\(([^)]*)\)/g)) out.push(...strings(m[1]!));
     for (const m of src.matchAll(/^\s*\/\/\/\s*<reference\s+path=(['"])([^'"\n]+)\1/gm)) out.push(m[2]!);
   } else if (file.endsWith('.css')) {
-    // String-aware: a glob such as `docs/**/*.md` holds a `/**/` that is not a comment.
-    const bare = src.replace(/("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|\/\*[\s\S]*?\*\//g, (_m, str: string | undefined) => str ?? '');
+    const bare = dropCssComments(src);
+    // Forms that name a path by a route the extractors below do not follow: refused, not skipped.
+    for (const [re, form] of [[/\bsource\(/i, 'source('], [/@plugin\b/i, '@plugin'], [/@config\b/i, '@config'], [/@reference\b/i, '@reference']] as const) {
+      if (re.test(bare)) throw new Error(`${file} uses ${form}, which the derivation does not model`);
+    }
     for (const re of [
       /@import\s+(['"])([^'"\n]+)\1/g, /@source\s+(?:not\s+)?(['"])([^'"\n]+)\1/g, /\burl\(\s*(['"]?)([^'")\s]+)\1\s*\)/g,
     ]) for (const m of bare.matchAll(re)) out.push(m[2]!);
   } else if (file.endsWith('.html')) {
-    const bare = src.replace(/<!--[\s\S]*?-->/g, '');
+    const bare = dropHtmlComments(src);
     for (const m of bare.matchAll(/\b(?:src|href)\s*=\s*(['"])([^'"]*)\1/g)) out.push(m[2]!);
   }
   return out;
@@ -441,10 +517,15 @@ function importEscapes(d: Derived, files: string[], read: Read): string[] {
       if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value)) continue; // http:, https:, data:, mailto:, protocol-relative, fragment
       const candidates: string[] = [];
       const dep = [...d.fileDeps].find(([name]) => value.startsWith(`${name}/`));
-      if (value.startsWith('./') || value.startsWith('../')) candidates.push(path.posix.join(path.posix.dirname(file), value));
-      else if (dep !== undefined) candidates.push(path.posix.join(dep[1], value.slice(dep[0].length + 1)));
-      else if (file.endsWith('.html') && value.startsWith('/')) candidates.push(path.posix.join(pkg, value), path.posix.join(pkg, 'public', value));
-      else if (file.endsWith('.html') && value !== '') candidates.push(path.posix.join(path.posix.dirname(file), value));
+      // Relative: `./`, `../`, an exact `.` or `..` in JS, and every CSS path (Tailwind's resolver prefers a relative one).
+      const relative = value.startsWith('./') || value.startsWith('../') || (JS_EXT.test(file) && (value === '.' || value === '..')) || file.endsWith('.css');
+      if (relative) candidates.push(path.posix.join(path.posix.dirname(file), value));
+      if (value.startsWith('@/')) candidates.push(path.posix.join(d.alias, value.slice(2)));
+      if (dep !== undefined) candidates.push(path.posix.join(dep[1], value.slice(dep[0].length + 1)));
+      if (file.endsWith('.html') && !relative && dep === undefined) {
+        if (value.startsWith('/')) candidates.push(path.posix.join(pkg, value), path.posix.join(pkg, 'public', value));
+        else if (value !== '') candidates.push(path.posix.join(path.posix.dirname(file), value));
+      }
       for (const c of candidates) {
         const resolved = path.posix.normalize(cutGlob(c) || '.').replace(/\/+$/, '');
         if (reachesNotShipped(resolved)) out.add(`${file} -> ${resolved}`);
@@ -511,6 +592,7 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
     ['a second npm run build line', BUILDER, (t: string) => `${t}\n( cd "$ROOT/x" && npm run build )\n`, /\$ROOT/],
     ['a cp of a root file', BUILDER, (t: string) => `${t}\ncp -a "$ROOT/LICENSE" "$TOP/LICENSE"\n`, /"\$ROOT" in a shape/],
     ['a second git archive', BUILDER, (t: string) => `${t}\ngit -C "$ROOT" archive --format=tar HEAD -- docs | tar -x -C "$TOP"\n`, /git archive/],
+    ['the exact modelled git archive line twice', BUILDER, (t: string) => `${t}\n` + 'git -C "$ROOT" archive --format=tar HEAD -- "${PATHSPEC[@]}" | tar -x -C "$TOP"\n', /2 git archive lines/],
     ['git archive with an extra pathspec', BUILDER, (t: string) => t.replace('"${PATHSPEC[@]}" | tar', '"${PATHSPEC[@]}" docs | tar'), /git archive line differs/],
     ['an indented ( cd "$ROOT/ line the install parse never sees', BUILDER, (t: string) => `${t}\n  ( cd "$ROOT/docs" && npm ci --no-audit )\n`, /\( cd "\$ROOT\/ lines/],
     ['pwa postbuild reading docs', 'pwa/package.json', withJson((o) => { o['scripts']['postbuild'] = 'node scripts/embed-changelog.mjs ../docs/changelog.md'; }), /pwa\/package.json scripts/],
@@ -518,6 +600,13 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
     ['ui prepare script', 'ui/package.json', withJson((o) => { o['scripts']['prepare'] = 'node x.mjs'; }), /ui\/package.json scripts/],
     ['a file: dependency on docs', 'server/package.json', withJson((o) => { o['devDependencies']['x'] = 'file:../docs'; }), /outside the installed packages/],
     ['a tsconfig extends', 'server/tsconfig.json', (t: string) => t.replace('"compilerOptions": {', '"extends": "./base.json", "compilerOptions": {'), /extends/],
+    ['a cp from dist that climbs out to docs', BUILDER, (t: string) => `${t}\ncp -a "$ROOT/server/dist/../../docs" "$TOP/docs"\n`, /\.\. segment/],
+    ['a cp from dist that climbs out to server/test', BUILDER, (t: string) => `${t}\ncp -a "$ROOT/server/dist/../test" "$TOP/t"\n`, /\.\. segment/],
+    ['a cp from a dist of a package that is not installed', BUILDER, (t: string) => `${t}\ncp -a "$ROOT/docs/dist" "$TOP/x"\n`, /not an installed package/],
+    ['a test of a dist path with an expansion', BUILDER, (t: string) => `${t}\n[ -d "$ROOT/server/dist$SUB" ]\n`, /expansion/],
+    ['an @ alias that pwa and ui disagree on', 'pwa/vite.config.ts', (t: string) => t.replace("'../ui/src'", "'../docs'"), /alias differs/],
+    ['an @ alias ui/tsconfig.json no longer names', 'ui/tsconfig.json', (t: string) => t.replace('"@/*"', '"#/*"'), /cannot be derived/],
+    ['an @ alias pwa/vite.config.ts no longer names', 'pwa/vite.config.ts', (t: string) => t.replace("'@': fileURLToPath", "'~': fileURLToPath"), /'@' alias keys/],
     ['a vite publicDir', 'pwa/vite.config.ts', (t: string) => `${t}\nexport const w25 = { publicDir: '../docs', };\n`, /publicDir/],
   ])('W25-G4: %s throws instead of passing unread', (_name, rel, fn, shape) => {
     expect(() => deriveReleaseInputs(mutated(rel, fn))).toThrow(shape);
@@ -546,11 +635,37 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
       ['a css @source', { 'pwa/src/styles/w25.css': "@source '../../../docs/**/*.md';\n" }, 'docs'],
       ['a css @import', { 'pwa/src/styles/w25.css': "@import '../../../docs/a.css';\n" }, 'docs/a.css'],
       ['a css @source of the repository root', { 'pwa/src/styles/w25.css': "@source '../../../';\n" }, '.'],
+      ['an @/ import that climbs out of the alias to a docs file', { 'pwa/src/w25.ts': "import md from '@/../../docs/a.md?raw';\n" }, 'docs/a.md'],
+      ['a css @source of a bare .. (an ancestor of server/test)', { 'server/src/w25.css': "@source '..';\n" }, 'server'],
+      ['a css @import of a bare relative path into docs', { 'pwa/src/styles/w25.css': "@import '../../../docs/a.css';\n@import 'tailwindcss';\n" }, 'docs/a.css'],
+      ['a css url( of a bare relative path into docs', { 'pwa/src/styles/w25.css': ".a { background: url(../../../docs/a.png); }\n" }, 'docs/a.png'],
+      ['a css @import through the @ alias', { 'pwa/src/styles/w25.css': "@import '@/../../docs/a.css';\n" }, 'docs/a.css'],
+      ['a JS import of an exact ..', { 'deploy/w25.ts': "import x from '..';\n" }, '.'],
       ['an import.meta.glob of an ancestor of a tree rule', { 'pwa/src/w25.ts': "const m = import.meta.glob('../../server/**/*.ts');\n" }, 'server'],
     ])('%s is reported', (_name, add, resolved) => {
       const got = planted(add);
       expect(got.length).toBeGreaterThan(0);
       expect(got.join('\n')).toContain(`-> ${resolved}`);
+    });
+
+    it.each([
+      ['source(', "@import 'tailwindcss/utilities.css' layer(utilities) source('../../../');\n"],
+      ['@plugin', '@plugin "../../../docs/p.js";\n'],
+      ['@config', '@config "../../../docs/c.js";\n'],
+      ['@reference', '@reference "../../../docs/r.css";\n'],
+    ])('a css %s throws instead of passing unread', (form, css) => {
+      expect(() => planted({ 'pwa/src/styles/w25.css': css })).toThrow(new RegExp(form.replace(/[()@]/g, '\\$&')));
+    });
+
+    it('a path in a comment is not reported, and a quoted glob is not a comment', () => {
+      expect(planted({ 'pwa/src/styles/w25.css': "/* @import '../../../docs/a.css'; @plugin 'x'; */\n.a { color: red; }\n" })).toEqual([]);
+      expect(planted({ 'pwa/src/styles/w25.css': "@source '../../../docs/**/*.md';\n/* later */\n" }).join()).toContain('-> docs');
+      expect(planted({ 'pwa/src/styles/w25.css': ".a { content: 'it\\'s'; }\n/* unterminated @import '../../../docs/a.css';\n" })).toEqual([]);
+      const html = (body: string) => planted({}, { 'pwa/index.html': (t) => t.replace('</head>', `${body}</head>`) });
+      expect(html('<!-- <link rel="stylesheet" href="../docs/a.css"> -->')).toEqual([]);
+      expect(html('<!-- x --><link rel="stylesheet" href="../docs/a.css"><!-- y -->')).toEqual(['pwa/index.html -> docs/a.css']);
+      expect(html('<!-- unterminated <link rel="stylesheet" href="../docs/a.css">')).toEqual([]);
+      expect(html('<<!-- x -->!-- <link rel="stylesheet" href="../docs/a.css"> -->')).toEqual(['pwa/index.html -> docs/a.css']);
     });
 
     it('an html href is reported', () => {
