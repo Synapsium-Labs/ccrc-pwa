@@ -722,3 +722,22 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
 | scope-landing, minor: D-6346 and the floor | Fixed with the floor of 2. |
 | scope-landing, minor: citations in test files | Fixed: the constraint covers every added code and test line, and `citations` runs after each task. |
 | scope-landing, minor: a third spelling of the own-dir and floor filter | Fixed: `_bak_ours` (D-6357), S1. |
+
+## Coordinator rulings on this plan's readings (2026-10-22)
+
+- **Readings 1 to 8: as chosen.**
+  - The default is 3 and the lowest value 2 (D-6347).
+  - The manifest goes with the members (D-6348).
+  - The count verifies in full within its budget, and past the count presence and size decide (D-6350).
+  - There is one pre-migration keep (D-6358).
+  - An invalid knob stops the count prune too.
+  - The listing waits for a follow-up (D-6351).
+  - Rollback does not thin (D-6355).
+  - The new knob also reads `ccrc.env` (D-6360).
+- **The spec's retention prose is not amended in this wave.** This plan and README carry the rule, and the follow-up that lands the listing (D-6351) amends the spec with it.
+- **Context, not scope.** On 2026-10-22 the operator also set the server box's `CCRC_BACKUP_KEEP` to 5 for the delegation broker's soak, in the user manager's environment. That changes no task here: `CCRC_BACKUP_KEEP` keeps its documented environment-only rule.
+  - With 5 kept and the default of 3, thinning frees two data sets on the server box, about 3.5G at today's sizes.
+  - Without that setting it frees seven, as the table above says.
+- **Live claims at dispatch.** Claim 2212 (run 774) holds `README.md`, and claim 2210 (run 722) holds `ccd/ccrc`. The coordinator has asked both coordinators for consent to this plan's hunks. Until the coordinator mails a consent, or the claim ends:
+  - Group A is taken without `README.md`; the README edits wait.
+  - Group B waits.
