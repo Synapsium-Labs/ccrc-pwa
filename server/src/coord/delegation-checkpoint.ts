@@ -46,6 +46,7 @@ import {
   assertWave3Leases,
   canonicalDelegationJson,
   DELEGATION_BASH_PENDING_MS,
+  DELEGATION_STOP_CANDIDATE_HORIZON_MS,
   delegationListingsEqual,
   deriveDelegationLineageId,
   emptyDelegationCheckpoint,
@@ -568,6 +569,10 @@ export interface DelegationActivityCandidate {
   lastObservedAt: string;
   /** The event time of a stop or completed launch that named it before it opened, else null. */
   endedAt: string | null;
+  /** True while every record that named it is a SubagentStop: a start-less stop ages out after DELEGATION_STOP_CANDIDATE_HORIZON_MS (D-6270). */
+  stopOnly: boolean;
+  /** The `acceptedAt` of the latest naming record: journal data, never a clock read. */
+  lastAcceptedAt: string;
 }
 
 /** D-6267: one Bash call's state in the builder. Never encoded: recovery rebuilds it from the retained journal, like `candidates`.
@@ -708,6 +713,7 @@ export class DelegationCheckpointBuilder {
   private leaseByPath = new Map<string, string>();
   private bashCalls = new Map<string, DelegationBashCallFact>();   // D-6267
   private bashDue: DueEntry[] = [];                                 // D-6267: a due heap over the 'pre' entries
+  private stopDue: DueEntry[] = [];                                 // D-6270: a due heap over the stop-only candidates
   private workflowLaunches = new Map<string, DelegationWorkflowLaunchFact>();   // D-6269: first launch per (session, incarnation, tool-use id) wins
   private coveredEnds = 0;                                          // D-6269: rows a covered task notification changed in this builder's life
   private appliedSequence = 0;
@@ -752,7 +758,7 @@ export class DelegationCheckpointBuilder {
     b.mapping = { ...this.mapping }; b.intent = { ...this.intent }; b.leases = new Map(this.leases); b.lineage = new Map(this.lineage);
     b.cursors = new Map(this.cursors); b.intervals = new Map(this.intervals); b.candidates = new Map(this.candidates);
     b.leaseFacts = new Map(this.leaseFacts); b.leaseByIdentity = new Map(this.leaseByIdentity); b.leaseByPath = new Map(this.leaseByPath);
-    b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue];
+    b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue]; b.stopDue = [...this.stopDue];
     b.workflowLaunches = new Map(this.workflowLaunches); b.coveredEnds = this.coveredEnds;
     b.appliedSequence = this.appliedSequence; b.appliedJournalId = this.appliedJournalId; b.appliedDigest = this.appliedDigest;
     b.revisionNo = this.revisionNo;
@@ -818,6 +824,7 @@ export class DelegationCheckpointBuilder {
 
   private foldEvidence(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, replay: boolean): void {
     const at = parseDelegationInstant(record.acceptedAt);
+    this.ageStopCandidates(at);             // D-6270: BEFORE naming, so a join accepted at exactly the horizon opens from its own record (D-SC4)
     if (replay) this.touchSession(e);
     this.indexWorkflowLaunch(e);            // D-6269: before the naming loop, so a launch is indexed whether or not its join opens or refuses
     this.foldNotification(e, replay);       // D-6269
@@ -838,10 +845,17 @@ export class DelegationCheckpointBuilder {
       // pending or its key is mapped (D-6268).
       if (na.sourceKind === 'bash-worktree') { this.foldBashCall(record, e, key, encoded, replay, at); continue; }
       const prior = this.candidates.get(encoded);
+      const stop = e.eventKind === 'SubagentStop';
       const candidate: DelegationActivityCandidate = prior === undefined
-        ? { key, journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt, lastObservedAt: e.observedAt, endedAt: na.ends ? e.observedAt : null }
-        : { ...prior, lastObservedAt: maxInstant(prior.lastObservedAt, e.observedAt), endedAt: prior.endedAt ?? (na.ends ? e.observedAt : null) };
-      if (!na.join) { this.candidates.set(encoded, candidate); continue; }
+        ? { key, journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt, lastObservedAt: e.observedAt, endedAt: na.ends ? e.observedAt : null,
+            stopOnly: stop, lastAcceptedAt: record.acceptedAt }
+        : { ...prior, lastObservedAt: maxInstant(prior.lastObservedAt, e.observedAt), endedAt: prior.endedAt ?? (na.ends ? e.observedAt : null),
+            stopOnly: prior.stopOnly && stop, lastAcceptedAt: maxInstant(prior.lastAcceptedAt, record.acceptedAt) };
+      if (!na.join) {
+        this.candidates.set(encoded, candidate);
+        if (prior === undefined && candidate.stopOnly) duePush(this.stopDue, [at + DELEGATION_STOP_CANDIDATE_HORIZON_MS, encoded]);
+        continue;
+      }
       if (!replay) {
         refuse('fold-refused', `${na.sourceKind} ${na.upstreamId} of (${e.sessionId}, ${e.parentIncarnation}) has a qualifying join at sequence ${record.sequence}, inside the applied journal, but the checkpoint holds no activity for it`);
       }
@@ -913,7 +927,7 @@ export class DelegationCheckpointBuilder {
       }
       return;
     }
-    let c: Omit<DelegationActivityCandidate, 'sequence'>;
+    let c: Omit<DelegationActivityCandidate, 'sequence' | 'stopOnly' | 'lastAcceptedAt'>;
     if (f !== undefined && f.kind === 'pre') {
       this.bashCalls.delete(encoded);
       if (listing !== undefined && delegationListingsEqual(f.listing, listing)) return;          // EQUAL: nothing opens
@@ -944,6 +958,21 @@ export class DelegationCheckpointBuilder {
       return;
     }
     this.bashCalls.delete(encoded);      // spoiled: a second Pre, an unmeasured or differing Post, any record after the decision
+  }
+
+  /** D-6270: forgets every stop-only candidate named last at least DELEGATION_STOP_CANDIDATE_HORIZON_MS before this record's acceptance.
+   *  BEFORE naming, so a join accepted at exactly the horizon opens from its own record (D-SC4). Lazy re-check: a popped entry whose
+   *  candidate is gone or no longer stop-only is dropped; one whose last naming moved is re-filed at its new due time. Bare occurrences
+   *  never age (the meta door needs them), and any owner's record ages any owner's candidate. */
+  private ageStopCandidates(at: number): void {
+    for (let top = this.stopDue[0]; top !== undefined && top[0] <= at; top = this.stopDue[0]) {
+      duePop(this.stopDue);
+      const c = this.candidates.get(top[1]);
+      if (c === undefined || !c.stopOnly) continue;
+      const due = parseDelegationInstant(c.lastAcceptedAt) + DELEGATION_STOP_CANDIDATE_HORIZON_MS;
+      if (due <= at) this.candidates.delete(top[1]);
+      else duePush(this.stopDue, [due, top[1]]);
+    }
   }
 
   /** D-6267: forgets every 'pre' entry whose Pre was accepted DELEGATION_BASH_PENDING_MS or more before this record. AFTER naming, so a
@@ -978,8 +1007,9 @@ export class DelegationCheckpointBuilder {
     });
   }
 
-  /** `c` carries no `sequence`: opening never reads it, and a worker opened from its run's row has no candidate record to take one from. */
-  private openFromCandidate(c: Omit<DelegationActivityCandidate, 'sequence'>, encoded: string): string {
+  /** `c` carries no `sequence`, `stopOnly` or `lastAcceptedAt`: opening never reads them, and a worker opened from its run's row (or a Bash call
+   *  opened from its Pre) has no candidate record to take them from. */
+  private openFromCandidate(c: Omit<DelegationActivityCandidate, 'sequence' | 'stopOnly' | 'lastAcceptedAt'>, encoded: string): string {
     // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function, written
     // INTO this builder's own mapping (D-5833): the mapping is private to the builder, so there is no wrapper and no copy.
     const activityId = allocateDelegationActivityIdInto(this.mapping, c.key, c.journalId);
@@ -1140,10 +1170,10 @@ export class DelegationCheckpointBuilder {
    *   - `checkpoint-anchor`: the applied record, so the anchor can always be verified;
    *   - `open-lease`: each unreleased lease's creating record and its correlation evidence;
    *   - `open-lineage`: each open lineage edge's references (its lease's creating record and evidence, or its activity's identity record);
-   *   - `identity-candidate`: the earliest retained record naming each AGENT no qualifying join has opened (a bare occurrence or an
-   *     unpaired stop), and the first listing-carrying PreToolUse of each PENDING Bash call on an unmapped key (D-6267; spec §5.12: its
-   *     identity event precedes its opening). POSITION IS NOT COVERAGE (W3-M17): such a record stays held although the checkpoint has applied a later
-   *     sequence, until a checkpoint holds the ID. A Workflow run is never a candidate: its launch response is its join (R44).
+   *   - `identity-candidate`: the earliest retained record naming each AGENT no qualifying join has opened (a bare occurrence, or a
+   *     start-less stop until `DELEGATION_STOP_CANDIDATE_HORIZON_MS` passes, D-6270), and the first listing-carrying PreToolUse of each
+   *     PENDING Bash call on an unmapped key (D-6267; spec §5.12: its identity event precedes its opening). POSITION IS NOT COVERAGE
+   *     (W3-M17). A Workflow run is never a candidate: its launch response is its join (R44).
    * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4). A retired zero-delta Bash call needs none
    * either: neither of its records is a qualifying join, so nothing it named can open again (D-6268).
    */

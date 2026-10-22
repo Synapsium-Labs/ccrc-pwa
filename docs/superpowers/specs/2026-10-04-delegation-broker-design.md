@@ -210,6 +210,13 @@ evidence and opens no activity, and it attaches to the activity once a qualifyin
 the earliest event the activity id hashes. No reader decides this by whether `agent_type` is present
 (amended 2026-10-07 from the real-lane cross-check and reviews 318 and 324: ledger amendment
 `tool-agent-id-alone-is-unjoined-evidence`).
+A SubagentStop that names an `agent_id` before any qualifying join has opened it, and that no other
+kind of event names (a start-less stop: ledger `post-turn-subagentstop-is-unpaired`), stays identity
+evidence only until a journal record is accepted `DELEGATION_STOP_CANDIDATE_HORIZON_MS` (48 hours:
+the spool's read horizon plus a day) after the last record that named it. From then on it is no
+longer retained evidence for that id, exactly as if it had been pruned, and a later qualifying join
+opens the activity from its own record. A tool event naming the id keeps it ordinary evidence, which
+never expires this way (amended 2026-10-21, D-6270).
 The selected id is part of checkpointed applied state (§5.12). Reconstruction restores a checkpointed
 activity id verbatim and never re-selects an identity event (the event whose journal id the activity
 id hashes) for that activity from whatever journal suffix remains after pruning. It derives an id by

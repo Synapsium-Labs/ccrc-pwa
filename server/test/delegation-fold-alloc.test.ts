@@ -549,8 +549,9 @@ describe('RB-COST and D-SC-COST: the fold pops due entries and never scans a map
       spy.mockRestore();
     }
     // Measured (2026-10-22, base bc231bbcb): 50,000 records; at base the fold reads no instant and scans no candidate map (yielded 0, parses
-    // 0), and the 5,000 stop-only candidates never age (10,000 candidates remain). The bounds are the ruled ones: at the tip one parse per
-    // record for `at`, one per popped candidate, a re-file at most one more.
+    // 0), and the 5,000 stop-only candidates never age (10,000 candidates remain). Measured at the tip (D-6270): yielded 0, parses 55,000
+    // (one per record for `at`, plus one per popped stop entry), the 5,000 stop-only candidates gone at the first filler, the 5,000 bare
+    // ones kept. The bounds are the ruled ones: one parse per record for `at`, one per popped candidate, a re-file at most one more.
     expect(counting.yielded, `entries yielded by candidates' iterators over ${TOTAL} records`).toBeLessThanOrEqual(TOTAL);
     expect(parses, `parseDelegationInstant calls over ${TOTAL} records and ${BARE + STOPS} candidates`).toBeLessThanOrEqual(4 * TOTAL + 2 * (BARE + STOPS));
     const keys = [...counting.keys()];
