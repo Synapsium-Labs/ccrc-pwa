@@ -436,6 +436,21 @@ describe.skipIf(!LINUX)('the tail re-proves the tree, the rows and the main chec
     stoppedAt(r, X(a), 'worktree-remove-failed', 'worktree', `a tree stands again where the act proved none when it began, at ${wd}`);
     expect(keptFor(wd), 'keep_of was never asked of the tree').toEqual([]);
   }, 120_000);
+
+  it('E5: ws-expire, a nested checkout moved out of the archived tree with a link left in its parent path after its proof: worktree-remove-failed, and the moved checkout stands (I5’s mirror)', () => {
+    const a = makeArchived(h);
+    const realInner = fs.realpathSync(nestedBelow(a, 'sub'));
+    const sub = path.dirname(realInner);
+    const moved = path.join(h.home, 'moved-sub');
+    hook('at-nproof.sh', `mv "${sub}" "${moved}" && ln -s "${moved}" "${sub}";\n`);
+    const r = expireVerb(h, expiryToken(), { pre: `${WAIT} ${KEEP_HOOK} ${AT_NPROOF}` });
+    expect(fs.existsSync(path.join(h.home, 'at-nproof-ran')), 'the CONTROL: the checkout’s parent was moved and linked inside the tail').toBe(true);
+    stoppedAt(r, X(a), 'worktree-remove-failed', 'children', `the checkout is no longer proven inside the tree: ${sub} is a symbolic link`);
+    expect(fs.lstatSync(sub).isSymbolicLink(), 'the link stands where the parent was').toBe(true);
+    expect(fs.readFileSync(path.join(moved, 'inner', 'f'), 'utf8'), 'the moved checkout stands, with its files').toBe('nested work\n');
+    expect(h.git(a.main, 'branch', '--list', 'ws/nested'), 'its branch stands').toContain('ws/nested');
+    expect(keptFor(realInner), 'keep_of was never asked of the checkout').toEqual([]);
+  }, 120_000);
 });
 
 describe.skipIf(!LINUX)('CONTROLs: with nothing changed, every standing site is re-asked and the act completes', () => {
