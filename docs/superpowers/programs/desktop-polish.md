@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-10-15-ccrc-two-skins-design.md` (the two skins; this wave amends its §6 inline-answer row, D-6326)
 Plan: `docs/superpowers/plans/2026-10-22-desktop-polish.md`
 Home project: `ccrc-pwa`   Coordinator: the coordinator session of this wave   Workspace: **a fresh child per task**
-**Status:** under way (2026-10-22). The plan landed as #1129; rev 3 adds the operator's later notes.
+**Status:** under way (2026-10-22). The plan landed as #1129; rev 3, the operator's later notes, as #1138.
 
 **What this program is.** The operator reviewed the desktop experience (Refined, about 2000 px wide, a child
 session waiting on a question) and was "not super happy". They accepted a defect list in order ("Order accepted,
@@ -18,12 +18,12 @@ pressed in the console") and the slow first open of a new session. One task is o
 
 | # | task | scope | PRs | state |
 |---|---|---|---|---|
-| 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | — | dispatched, run 782 |
+| 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | #1133 | fix round 1 (review 796, R10), run 782 |
 | 2 | T1b (D-6325) | the ask is Claude's own question: who asks, plain words, Recommended tag, Other, one scroller, no pane text | — | dispatched, run 783 |
 | 3 | T1c (D-6326) | the ask answered inline in the pane at ≥900; a phone keeps the sheet | — | planned, after T1b |
 | 4 | T2a (D-6327) | the update banner becomes one quiet line, dismissible until a newer release | — | planned, after Step 1 and #1116's content |
 | 5 | T2b (D-6328) | no floating `+` at the desk in Instrument | — | planned, after #1116 |
-| 6 | T2c (D-6329) | gauges most free first in a full-width row; always a number with its window; never an empty bar | — | planned, ahead of the step order (Q1 ruled) |
+| 6 | T2c (D-6329) | gauges most free first in a full-width row; always a number with its window; never an empty bar | — | planned, run 802 (cap), ahead of the step order (Q1 ruled) |
 | 7 | T2d (D-6330) | Inbox and Runs counts show only what waits on the operator | — | planned, after Step 1 and #1116 |
 | 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | — | planned, run 788, ahead of the step order |
 | 18 | T2f (D-6371) | Instrument's desk column: no count line, no runs row, the chooser in project mode (Q5) | — | planned, after T2d |
@@ -31,18 +31,18 @@ pressed in the console") and the slow first open of a new session. One task is o
 | 10 | T3b (D-6332) | names whole where they fit; ⋯ revealed under a fine pointer | — | planned, after Step 2 |
 | 11 | T3c (D-6333) | the header names the session; chips never cut at the desk; doors carry words | — | planned, after Step 2 |
 | 12 | T3d (D-6334) | the inspector shows only sections with content and one honest routing line | — | planned, after Step 2 |
-| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | — | planned, run 784 (cap) |
+| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | — | dispatched, run 784 |
 | 14 | B2 (D-6367) | Retry resumes our own text | — | planned, after B1 |
 | 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | — | planned, run 785 (cap) |
-| 16 | B4 (D-6369) | the transcript search runs in parallel | — | dispatched, run 786 |
+| 16 | B4 (D-6369) | the transcript search runs in parallel | #1136 | awaiting review, run 786 (review run 798 waits on the cap) |
 | 17 | B5 (D-6370) | New session opens at once; an unprompted session says so | — | planned, after B4 and T1a |
-| 19 | S5 (W2, D-5471) | Refined's phone header and FAB, landed by a superseding PR for the unowned #1116 | — | planned, run 787 |
-| 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | — | planned |
+| 19 | S5 (W2, D-5471) | Refined's phone header and FAB, landed by a superseding PR for the unowned #1116 | #1139 | awaiting review, run 787 (review run 799 waits on the cap) |
+| 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | — | planned, run 801 (cap) |
 | 21 | T3e (D-6385) | the right-side inspector hides and shows, per device | — | planned, after T3c, T3d, T2e and #1116 |
-| 22 | T3f (D-6386) | Done above Working when grouped by status | — | planned |
+| 22 | T3f (D-6386) | Done above Working when grouped by status | — | planned, run 800 (cap) |
 | 23 | T4a (D-6387) | colour where the machine speaks: tool boxes, inline code, failed calls | — | planned, after T1c |
-| 24 | C1 (D-6388) | registry reads bounded | — | planned |
-| 25 | C0 | the console's responsiveness, measured (research, no PR) | — | planned |
+| 24 | C1 (D-6388) | registry reads bounded | — | planned, run 803 (cap) |
+| 25 | C0 | the console's responsiveness, measured (research, no PR) | — | running as the coordinator's own measurement (R11) |
 
 ## Decisions & deviations
 
@@ -83,21 +83,32 @@ pressed in the console") and the slow first open of a new session. One task is o
 - **R9 (2026-10-22)**, #1116 (W2 S5) has no run, claim or live session and has been red since 02:14Z; it blocks
   T2a, T2b, T2d and T2f and the operator's duplicate desk `+`. The coordinator takes it over: run 787 builds on its
   branch, fixes its reds and lands a superseding PR; #1116 is closed pointing at it once that merges.
+- **R10 (2026-10-22)**, T1a's review (run 796, at `2e4713b87`; the held-out panel confirmed all ten readings, nine
+  findings, one important) went back as fix round 1. Rulings: F1, an aged multi-question envelope is kept on the
+  pane's review screen (the plan's fixture 8; a third correspondence arm, under D-6324); F2, one unparsed mid-redraw
+  capture keeps the previous tick's decision; F3, F4, F5, F6, F9 and F8's README line are fixed; F7 is accepted as
+  an implementation detail of "labels match" (`alignAsk` owns how many rows may be forgiven, and the decider keeps no
+  second copy of that bound); F8's two PWA comments go to T1b, which edits those files. F1 and F4 corrected the plan
+  (its §Review log). A review run moves to `working` before its close (`REVIEW_RUN_TRANSITIONS`).
+- **R11 (2026-10-22)**, C0 runs as the coordinator's own read-only measurement, not a fleet run: the fleet's
+  concurrency cap was full, and C0 changes nothing. Its report decides whether C1 as planned is enough. Rev 3 landed
+  as #1138 (`09fcd6189`); T3f, S18, T2c and C1 were opened as runs 800 to 803 and wait on the cap with T2e and B3.
 - **Open with the operator:** Q2 to Q9 in the plan's §Operator questions (Q1 is ruled), each with a recommended
   default the tasks build until ruled.
 
 ## Carried constraints
 
-- #1116 (W2 S5) is open, blocked and unowned; run 787 takes it over (R9). T2a, T2b, T2d and T2f wait for it and do not
-  hold Step 3.
+- #1116 (W2 S5) is open, blocked and unowned; run 787's #1139 supersedes it (R9) and is in review. T2a, T2b, T2d and
+  T2f wait for its content and do not hold Step 3. #1116 is closed pointing at #1139 once that merges.
 - What the not-started skins tasks inherit is listed in the plan's §Carried into the skins plans.
 - The fleet box runs at a load average near 50 on 16 CPUs; dispatch at most the tasks a step needs, and run every
   suite under the plan's load rules.
 
 ## Next-wave brief
 
-As slots free, dispatch in this order: B1 (784), the S5 takeover (787), T2e (788), B3 (785), then T3f, S18, T2c, C1
-and C0. Each brief names the plan path, its task, the number it defines, the execution skill
+As slots free, dispatch in this order: the review runs 798 (B4) and 799 (S5), then T2e (788), B3 (785), T3f (800),
+S18 (801), T2c (802) and C1 (803). Each brief names the plan path, its task, the number it defines, the execution skill
 (superpowers:subagent-driven-development with superpowers:test-driven-development), the routing row (a worker on a
 spec'd plan), and the branch rule: commit on this workspace's own branch, never a separate feature branch. Step 1's
-T1c dispatches when T1b has merged.
+T1c dispatches when T1b has merged; T2a, T2b, T2d and T2f when #1139 (S5's content) has merged and their hunks are
+re-measured against it; B5 when B4 and T1a have merged; B2 when B1 has.
