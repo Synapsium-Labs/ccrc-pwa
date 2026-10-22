@@ -68,19 +68,19 @@ const ticks = (ids: string[], stubs = STUBS()): string =>
 // ── the characterization (green on D-6180's tip) ────────────────────────────
 
 describe('D-6181 characterization: the undelayed return home', () => {
-  it('today: four sessions with one home, home recovered on one tick → four affinity dispatches', () => {
+  it('flipped by the herd guard (was today: four dispatches): four sessions with one home, home recovered on one tick → one dispatch', () => {
     const ids = ['s-aaaa', 's-bbbb', 's-cccc', 's-dddd'];
     for (const id of ids) seed(id);
     sessionJson();
     ticks(ids);
-    expect(dispatches()).toEqual(ids.map((id) => `dispatch ${id} -> claude affinity`));
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
   });
 
-  it('today: an idle pane with a draft takes an affinity move', () => {
+  it('flipped by the draft stand-down (was today: a move): an idle pane with a draft takes no affinity move', () => {
     seed('s-aaaa'); sessionJson();
     ticks(['s-aaaa'], STUBS(DRAFT));
-    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
-    expect(swapLog()).toMatch(/auto-home s-aaaa: claude-a -> claude/);
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).not.toMatch(/auto-home s-aaaa/);
   });
 });
 
