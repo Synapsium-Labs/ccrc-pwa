@@ -1453,7 +1453,8 @@ describe('the envelope follows the pane (D-5089)', () => {
     });
 
     // `ask_cleared` while a multiSelect question is live: D-5091's hand-off case ("multiSelect boxes (D-5091)" below)
-    // answers it with the same boxes, where this one once only named it.
+    // pins that the surface is then the unreadable one, the terminal door and no boxes (the transcript's copy never
+    // rides an unparsed pane).
 
     it('a hidden envelope stays hidden when ask_cleared hands off the same pane question, and a new question opens it', () => {
       const drink = transcribed(pane('cc300-ask-q2-of-2-single'), FRUIT_DRINK.questions[1]!);
@@ -2418,9 +2419,8 @@ describe('multiSelect boxes (D-5091)', () => {
     });
 
     it('ask_cleared while a commit is in flight leaves the unreadable surface, and the pending call is the only call', async () => {
-      let resolve!: () => void;
-      const call = new Promise<DialogAnswered>((res) => { resolve = () => res({ ok: true }); });
-      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call);
+      const call = deferred();
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
       const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
       fireEvent.click(box('Tracing'));
       fireEvent.click(commit('Next'));
@@ -2428,7 +2428,10 @@ describe('multiSelect boxes (D-5091)', () => {
       act(() => store.getState().apply({ type: 'ask_cleared' }));
 
       noBoxes();
-      await act(async () => resolve());
+      // Dismissal is refused mid-commit on this surface too.
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      noBoxes();
+      await act(async () => call.resolve());
       noBoxes();
       expect(multi).toHaveBeenCalledTimes(1);
     });
@@ -2452,11 +2455,12 @@ describe('multiSelect boxes (D-5091)', () => {
 //
 // `Chat about this` and the review's `Cancel` each decline the WHOLE ask, so neither may be tapped while another send
 // is still landing: an own-words answer (D-5090) or a multiSelect commit (D-5091), whose next screen can reach the
-// sheet before the call answers. Both sheets: the envelope's, and the scraped one that takes over on `ask_cleared`.
+// sheet before the call answers. Both sheets: the envelope's, and the one that takes over on `ask_cleared` (the
+// transcript's copy of the question, or the review).
 // The handlers hold the same rule at the source, for two taps handled before React commits the first one's state.
 // And the guards that keep a send on its own row: own words only under the live question, the review told before any
 // question, the form holding back what Send holds back, the stranded retry's text fixed, the text sent trimmed, and
-// the scraped sheet's free-text row read from the transcript's option count.
+// the transcript's sheet's free-text row read from the transcript's option count.
 describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-5091)', () => {
   const TEXT = '- only in staging, sampled 10%';
   const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
@@ -2516,7 +2520,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, [chat()], 'transcript');
   });
 
-  it('Chat about this waits while a multiSelect commit is under way', () => {
+  it('Chat about this waits while a multiSelect commit is under way, on both sheets', () => {
     // The commit's next screen (question 1 of the same ask, `cc300-ask-q2-of-2-single`'s Which drink?, as the pane
     // paints it after a ← back) reaches the sheet before the commit answers. DERIVED sequence of recorded screens.
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
@@ -2527,6 +2531,21 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     expect(screen.getByRole('heading', { name: 'Which drink?' })).toBeInTheDocument();
     expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
     declineRowsWait(option, [chat()], 'envelope');
+    cleanup();
+
+    // The route to the transcript's sheet in production: the commit goes from the envelope's boxes, the next screen
+    // arrives as a PARSED pane carrying the transcript's copy of its question, then `ask_cleared` hands it over. The
+    // lock is the call's, so it survives the hand-off.
+    const next = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(next.store, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-q2-of-2-single'), 0));
+    act(() => next.store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    expect(document.querySelector('[data-source="transcript"]')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Which drink?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Tea/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Other/ })).toBeDisabled();
+    declineRowsWait(option, [chat()], 'transcript');
   });
 
   it('the review\'s Submit and Cancel wait while own words are being sent, on both sheets', () => {
@@ -2548,7 +2567,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, reviewRows(), 'scraped');
   });
 
-  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way', () => {
+  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way, on both sheets', () => {
     // The last question's commit lands on the review (measured: `-submit-open`, then `cc300-ask-review-multiselect`).
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
     const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
@@ -2558,6 +2577,17 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     show(envelope.store, pane('cc300-ask-review-multiselect'));
     expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
     declineRowsWait(option, reviewRows(), 'envelope');
+    cleanup();
+
+    // And after the hand-off: the review is a parsed pane, so `ask_cleared` leaves the review without an envelope, and
+    // the commit's lock is still on its rows.
+    const handed = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'));
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    show(handed.store, pane('cc300-ask-review-multiselect'));
+    act(() => handed.store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    declineRowsWait(option, reviewRows(), 'after ask_cleared');
   });
 
   it('the own-words field and Send wait while a tapped option\'s answer is under way, on both sheets', () => {
@@ -2900,7 +2930,7 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed;/);
     expect(rule('.dlg-reply-input')).not.toMatch(/border-style/);
     expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
-    expect(css).toMatch(/\.dlg-reply-input:focus-visible \{[^}]*border-color:\s*transparent;/);
+    expect(rule('.dlg-reply-input:focus-visible')).toMatch(/border-color:\s*transparent;/);
   });
 });
 
