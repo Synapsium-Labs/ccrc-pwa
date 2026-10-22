@@ -489,7 +489,7 @@ never touched.
 | promoted | when the child run is dispatched (§5.7 step 4), by the ephemeral rule |
 
 Terminal evidence: the activity's stop or completion event; workflow-run-ended evidence for `wf_*`
-leases (a paused workflow is not ended); or a parent proved dead — registry absent, or its supervisor
+leases (the task notification whose tool-use id and task id are the run's launch's, with a terminal status; an `unknown` status is not terminal, and a paused workflow is not ended; D-6269); or a parent proved dead — registry absent, or its supervisor
 measured dead outside its restart window for two passes, or a changed incarnation. A missing
 `SessionEnd` is never terminal evidence. `attached` and `tree-busy` defer and raise attention after
 24 h.

@@ -507,8 +507,19 @@ export interface DelegationNamedUpstream {
    * builder (`foldBashCall`, D-6267).
    */
   join: boolean;
-  /** The event ends it: a SubagentStop naming an agent, a launch response that reports `completed`, or a Bash PostToolUse. */
+  /** The event ends it: a SubagentStop naming an agent, a launch response that reports `completed`, or a Bash PostToolUse. A Workflow RUN is
+   *  also ended by its task notification, which names no upstream id and is folded by the builder (`foldNotification`, D-6269), never here. */
   ends: boolean;
+}
+
+/** D-6269: the run id a Workflow launch response names, or null when the event is not one. The ONE test of a qualifying Workflow launch,
+ *  shared by `namedAgentsOf` (which opens the run from it) and the builder's launch index, so an indexed launch is always a launch
+ *  whose join the naming loop accepted. */
+export function workflowLaunchRunId(event: DelegationEventEnvelopeV1): string | null {
+  if (event.eventKind !== 'PostToolUse' || event.toolName !== 'Workflow') return null;
+  const launch = event.launch;
+  if (typeof launch !== 'object' || launch === null || typeof launch.runId !== 'string' || launch.runId === '') return null;
+  return launch.runId;
 }
 
 /**
@@ -520,7 +531,7 @@ export interface DelegationNamedUpstream {
  * PostToolUse names its tool call, and is never a join: a listing-carrying PreToolUse makes the call pending, and the builder opens it
  * at its PostToolUse only on a changed listing or a listing on one side only (D-6267; the hook writes a listing only for a command
  * that mentions a worktree). Nothing else names anything: a ToolSearch, a parent Stop and a SessionEnd open no activity, whatever order
- * they arrive in.
+ * they arrive in. A UserPromptSubmit task notification names nothing here; the builder folds it (D-6269).
  */
 export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamedUpstream[] {
   const found = new Map<string, DelegationNamedUpstream>();
@@ -535,10 +546,8 @@ export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamed
     const launch = event.launch;
     if (typeof launch === 'object' && launch !== null) note('agent', launch.agentId, true, launch.status === 'completed');
   }
-  if (event.eventKind === 'PostToolUse' && event.toolName === 'Workflow') {
-    const launch = event.launch;
-    if (typeof launch === 'object' && launch !== null) note('workflow', launch.runId, true, launch.status === 'completed');
-  }
+  const runId = workflowLaunchRunId(event);
+  if (runId !== null && event.eventKind === 'PostToolUse' && event.toolName === 'Workflow') note('workflow', runId, true, event.launch?.status === 'completed');
   if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash') {
     note('bash-worktree', event.toolUseId, false, event.eventKind === 'PostToolUse');
   }
@@ -661,10 +670,25 @@ export type DelegationMetaOpenResult =
   /** Opening waits for at least one retained event naming the agent: a meta read alone chooses no identity record. */
   | { kind: 'waiting-for-evidence' };
 
+/** D-6269: what a retained Workflow launch response says of its run, keyed by the launch's (session, incarnation, tool-use id). Builder
+ *  state only: never persisted, never a row, rebuilt from the retained records like the candidates. */
+interface DelegationWorkflowLaunchFact { runEncoded: string; runId: string; taskId: string }
+
+/** D-6269: a worker index is the canonical decimal of a non-negative safe integer (the spelling `openWorkflowWorkerFromMeta` mints
+ *  `<runId>-<index>` with). The ONE definition, for a number (the meta's) and for the string after a run's id (a row's). */
+function isWorkerIndex(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0;
+  return typeof v === 'string' && /^(0|[1-9][0-9]*)$/.test(v) && Number.isSafeInteger(Number(v));
+}
+
+const sameActivity = (a: DelegationActivityRow, b: DelegationActivityRow): boolean =>
+  a.executionState === b.executionState && a.endedAt === b.endedAt && a.lastEventAt === b.lastEventAt;
+
 /**
  * The working form of a checkpoint. Rows are held in maps and treated as immutable values (an update REPLACES a row), so
  * `clone()` is shallow and cheap. The journal's records go in through `foldRecord` (a record past the applied position) or
- * `observeRecord` (a record the checkpoint already covers, read only for the identity-candidate index and the lease proof),
+ * `observeRecord` (a record the checkpoint already covers, read for the journal-derived indexes, the lease proof and a covered task
+ * notification, D-6269),
  * and `build()` comes out the other end sorted, hold-complete and validated. NOTHING here reads a clock or mints an ID that
  * the journal did not already name.
  */
@@ -684,6 +708,8 @@ export class DelegationCheckpointBuilder {
   private leaseByPath = new Map<string, string>();
   private bashCalls = new Map<string, DelegationBashCallFact>();   // D-6267
   private bashDue: DueEntry[] = [];                                 // D-6267: a due heap over the 'pre' entries
+  private workflowLaunches = new Map<string, DelegationWorkflowLaunchFact>();   // D-6269: first launch per (session, incarnation, tool-use id) wins
+  private coveredEnds = 0;                                          // D-6269: rows a covered task notification changed in this builder's life
   private appliedSequence = 0;
   private appliedJournalId: string | null = null;
   private appliedDigest: string | null = null;
@@ -727,6 +753,7 @@ export class DelegationCheckpointBuilder {
     b.cursors = new Map(this.cursors); b.intervals = new Map(this.intervals); b.candidates = new Map(this.candidates);
     b.leaseFacts = new Map(this.leaseFacts); b.leaseByIdentity = new Map(this.leaseByIdentity); b.leaseByPath = new Map(this.leaseByPath);
     b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue];
+    b.workflowLaunches = new Map(this.workflowLaunches); b.coveredEnds = this.coveredEnds;
     b.appliedSequence = this.appliedSequence; b.appliedJournalId = this.appliedJournalId; b.appliedDigest = this.appliedDigest;
     b.revisionNo = this.revisionNo;
     return b;
@@ -736,6 +763,9 @@ export class DelegationCheckpointBuilder {
   leaseView(): DelegationLeaseView {
     return { byIdentity: (k) => this.leaseByIdentity.get(k), byPath: (p) => this.leaseByPath.get(p) };
   }
+
+  /** D-6269: how many rows covered task notifications changed (in practice, ended) since this builder was made. */
+  coveredEndsCount(): number { return this.coveredEnds; }
 
   activityOf(activityId: string): DelegationActivityRow | undefined { return this.activities.get(activityId); }
   appliedPosition(): { sequence: number; journalId: string | null; digest: string | null } {
@@ -757,8 +787,10 @@ export class DelegationCheckpointBuilder {
     this.appliedDigest = record.digest;
   }
 
-  /** Reads a record the checkpoint ALREADY covers: only for the identity-candidate index and the lease proof. It changes no
-   *  row. An unmapped agent with a qualifying join in covered territory is a checkpoint that lost an activity. */
+  /** Reads a record the checkpoint ALREADY covers: for the journal-derived indexes (identity candidates, Bash-call facts, the Workflow
+   *  launch index) and the lease proof. It edits no row, with ONE exception: a covered task notification ends its run and that run's
+   *  workers, a no-op on a checkpoint built since the rule existed and a backfill on one built before it (D-6269). An unmapped agent with
+   *  a qualifying join in covered territory is a checkpoint that lost an activity. */
   observeRecord(record: DelegationJournalRecordV1): void {
     const entry = record.entry;
     if (entry.kind === 'evidence-accepted') this.foldEvidence(record, entry.event, false);
@@ -787,6 +819,8 @@ export class DelegationCheckpointBuilder {
   private foldEvidence(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, replay: boolean): void {
     const at = parseDelegationInstant(record.acceptedAt);
     if (replay) this.touchSession(e);
+    this.indexWorkflowLaunch(e);            // D-6269: before the naming loop, so a launch is indexed whether or not its join opens or refuses
+    this.foldNotification(e, replay);       // D-6269
     for (const na of namedAgentsOf(e)) {
       const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId };
       const encoded = encodeDelegationNaturalKey(key);
@@ -814,6 +848,52 @@ export class DelegationCheckpointBuilder {
       this.openFromCandidate(candidate, encoded);
     }
     this.ageBashCalls(at);   // AFTER naming: a Post accepted at exactly the bound still consumes its own Pre (A11c)
+  }
+
+  /** D-6269: indexes a Workflow launch response by its tool-use id. The first launch under a key wins. The guard is `namedAgentsOf`'s own
+   *  (`workflowLaunchRunId`), so an indexed launch is always a qualifying join: it opened its run in replay, or refused in observe. */
+  private indexWorkflowLaunch(e: DelegationEventEnvelopeV1): void {
+    const runId = workflowLaunchRunId(e);
+    if (runId === null || e.eventKind !== 'PostToolUse' || e.toolName !== 'Workflow' || e.launch === null) return;
+    const k = JSON.stringify([e.sessionId, e.parentIncarnation, e.toolUseId]);
+    if (this.workflowLaunches.has(k)) return;
+    this.workflowLaunches.set(k, {
+      runEncoded: encodeDelegationNaturalKey({ parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: 'workflow', upstreamId: runId }),
+      runId, taskId: e.launch.taskId,
+    });
+  }
+
+  /** D-6269: a task notification whose tool-use id and task id are a Workflow launch's. A terminal status (`completed`, `failed`,
+   *  `cancelled`) ends the run and its `<runId>-<n>` workers; `unknown` only touches `lastEventAt` (a paused workflow is not ended). An
+   *  Agent's notification is never touched (the index holds Workflow launches only), and one journaled before its launch is ignored. In
+   *  observe mode it is the one place a covered record edits a row. */
+  private foldNotification(e: DelegationEventEnvelopeV1, replay: boolean): void {
+    if (e.eventKind !== 'UserPromptSubmit') return;
+    const n = e.notification;
+    const L = this.workflowLaunches.get(JSON.stringify([e.sessionId, e.parentIncarnation, n.toolUseId]));
+    if (L === undefined || L.taskId !== n.taskId) return;
+    const runId = Object.hasOwn(this.mapping, L.runEncoded) ? this.mapping[L.runEncoded] : undefined;
+    const run = runId === undefined ? undefined : this.activities.get(runId);
+    if (run === undefined) return refuse('fold-refused', `the task notification of workflow run ${L.runId} of (${e.sessionId}, ${e.parentIncarnation}) finds no run row, although its launch was folded`);
+    const terminal = n.status !== 'unknown';
+    const changed: DelegationActivityRow[] = [];
+    const nextRun: DelegationActivityRow = terminal && run.executionState !== 'ended'
+      ? { ...run, executionState: 'ended', endedAt: maxInstant(e.observedAt, run.openedAt), lastEventAt: maxInstant(run.lastEventAt, e.observedAt) }
+      : { ...run, lastEventAt: maxInstant(run.lastEventAt, e.observedAt) };
+    if (!sameActivity(nextRun, run)) changed.push(nextRun);
+    if (terminal) {
+      // A worker of the run is exactly `<run id>-<canonical decimal>` under the same parent and incarnation: never a `-<digits>` suffix
+      // test, since live run ids themselves end in `-<digits>`. A RUN whose own id is another run's id plus `-<decimal>` would be read as
+      // that run's worker here; the observed run ids (`wf_<8 hex>-<suffix>`) never nest that way.
+      const prefix = `${run.upstreamId}-`;
+      for (const w of this.activities.values()) {
+        if (w.sourceKind !== 'workflow' || w.parentId !== run.parentId || w.parentIncarnation !== run.parentIncarnation || w.executionState === 'ended') continue;
+        if (!w.upstreamId.startsWith(prefix) || !isWorkerIndex(w.upstreamId.slice(prefix.length))) continue;
+        changed.push({ ...w, executionState: 'ended', endedAt: maxInstant(e.observedAt, w.openedAt), lastEventAt: maxInstant(w.lastEventAt, e.observedAt) });
+      }
+    }
+    for (const a of changed) this.activities.set(a.activityId, a);
+    if (!replay) this.coveredEnds += changed.length;
   }
 
   /** D-6267: rule A, for a bash-worktree key the checkpoint does NOT map. `at` is the record's parsed acceptedAt. */
@@ -940,7 +1020,7 @@ export class DelegationCheckpointBuilder {
    * exists only in this builder and must not escape until a checkpoint holding it has been atomically replaced (O1).
    */
   openWorkflowWorkerFromMeta(parentId: string, parentIncarnation: string, runId: string, workerIndex: number): DelegationMetaOpenResult {
-    if (typeof workerIndex !== 'number' || !Number.isSafeInteger(workerIndex) || workerIndex < 0) {
+    if (typeof workerIndex !== 'number' || !isWorkerIndex(workerIndex)) {
       refuse('bad-shape', `a workflow worker index is a non-negative safe integer, not ${String(workerIndex)}`);
     }
     const worker: DelegationActivityNaturalKey = { parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: `${runId}-${workerIndex}` };
@@ -1044,8 +1124,8 @@ export class DelegationCheckpointBuilder {
     return this.bashCalls.get(encoded)?.kind === 'equal';
   }
 
-  /** Replaces the ROWS from a checkpoint a checkpoint-only change produced, keeping the applied position, the identity candidates
-   *  and the lease facts (a change cannot move any of them). A candidate whose key the change mapped is no longer one. */
+  /** Replaces the ROWS from a checkpoint a checkpoint-only change produced, keeping the applied position and the journal-derived
+   *  indexes (identity candidates, lease facts, Bash-call facts, the Workflow launch index and the due heaps; a change cannot move any of them). A candidate whose key the change mapped is no longer one. */
   replaceRows(cp: DelegationCheckpointV1): void {
     // A COPY: the change that produced `cp` may still hold an alias to it, and an edit through that alias must not reach the rows
     // the applier now owns (R27).
@@ -1121,7 +1201,7 @@ export const DELEGATION_RECOVERY_PHASES = [
   'checkpoint-decode',      // the bytes, strictly, into a checkpoint (absent bytes are the empty checkpoint)
   'checkpoint-validate',    // identity invariants, the wave-3 lease guard, projectability
   'journal-validate',       // the grammar, both hashes, the chain, and the anchor triple
-  'identity-evidence',      // ALL retained evidence for agents the checkpoint does not hold, including records before the applied position
+  'identity-evidence',      // ALL retained evidence for agents the checkpoint does not hold, including records before the applied position, and the covered task notifications, which may end a workflow run the checkpoint left active
   'suffix-replay',          // the retained records after the applied position, folded by the builder
   'holds',                  // natural-key mappings restored verbatim and every pruning hold recomputed
   'final-validate',         // the checkpoint rebuilt and validated against the journal's lease entries and held evidence
@@ -1204,6 +1284,8 @@ export interface DelegationRecoveryReport {
   replayed: number;
   /** Records read. */
   scanned: number;
+  /** D-6269: the rows covered task notifications changed (in practice, ended): a backfill on a checkpoint built before the rule. */
+  coveredEnds: number;
   journal: DelegationJournalCoverage | null;
   facts: DelegationRecoveryFacts | null;
   /**
@@ -1216,7 +1298,7 @@ export interface DelegationRecoveryReport {
 
 /**
  * Incremental recovery: construct with the checkpoint's bytes (or null for none), `accept` the retained journal's records in
- * file order, then `finish`. Holds only the indexes (event IDs, identity candidates, lease facts, the Bash-call facts), never the records, so a journal
+ * file order, then `finish`. Holds only the indexes (event IDs, identity candidates, lease facts, the Bash-call facts, the Workflow launch index), never the records, so a journal
  * of millions of records recovers in bounded memory. `fail` records a failure the caller found while reading (a torn tail).
  */
 export class DelegationRecovery {
@@ -1327,7 +1409,8 @@ export class DelegationRecovery {
     }
     return {
       state, failure: this.failureNow, completedPhases: this.done, pruning: state.phase === 'ready' ? 'enabled' : 'disabled',
-      replayed: this.replayed, scanned: this.scanned, journal, facts, tailHeal: null,
+      replayed: this.replayed, scanned: this.scanned, coveredEnds: facts === null ? 0 : facts.builder.coveredEndsCount(),
+      journal, facts, tailHeal: null,
     };
   }
 }
@@ -1772,7 +1855,7 @@ export class DelegationDurability {
           this.failureNow = { phase: 'durable-application', code: 'tail-heal-failed' satisfies DelegationOwnFailureCode, detail: err instanceof Error ? err.message : String(err) };
           this.deps.warn?.(`ccrc-server: delegation journal tail heal failed: ${this.failureNow.detail}`);
           await this.reportQuarantineLocked();
-          return { ...report, state: this.current, failure: this.failureNow, facts: null, pruning: 'disabled' };
+          return { ...report, state: this.current, failure: this.failureNow, facts: null, pruning: 'disabled', coveredEnds: 0 };
         }
       }
       await this.reportQuarantineLocked();
@@ -1790,7 +1873,7 @@ export class DelegationDurability {
       // Recovery is the one moment the in-memory state may be ahead of the file: persist it through the same replacement. A
       // checkpoint of revision 0 with a journal behind it was never persisted (every persisted checkpoint has revision >= 1).
       // The applier stays NOT ready (`failureNow` still set, so pruning stays off) until the save has succeeded.
-      const needsSave = report.replayed > 0 || (report.state.checkpoint.revision === 0 && this.head !== null);
+      const needsSave = report.replayed > 0 || report.coveredEnds > 0 || (report.state.checkpoint.revision === 0 && this.head !== null);
       if (needsSave) {
         try {
           await this.commitLocked({ items: [], mutate: null, force: true, project: false });
@@ -1798,9 +1881,11 @@ export class DelegationDurability {
           // A failure inside steps 1 to 7 has already been marked by `commitLocked`; one BEFORE step 1 (the build, the encoding) has
           // not, and the replayed suffix is then unsaved: mark it here, so a recovery that could not save is never reported ready.
           if (this.failureNow === null || this.failureNow.code === ('recovering' satisfies DelegationOwnFailureCode)) this.fail(err);
-          return { ...report, state: this.current, failure: this.failureNow };
+          return { ...report, state: this.current, failure: this.failureNow, coveredEnds: 0 };   // nothing of the recovered state was saved
         }
       }
+      // Told only once the rows it names are durable (D-6269).
+      if (report.coveredEnds > 0) this.deps.warn?.(`ccrc-server: delegation recovery ended ${report.coveredEnds} activity row(s) from covered task notifications`);
       this.failureNow = null;
       await this.repairLocked();
       return { ...report, state: this.current };
