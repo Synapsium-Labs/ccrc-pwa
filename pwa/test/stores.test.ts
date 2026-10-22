@@ -319,50 +319,6 @@ describe('session store optimistic send', () => {
     expect(store.getState().ask).toBeNull();
   });
 
-  // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
-  // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
-  // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
-  // `disconnect()`, so the reset has to live in the open handler too: a drop and a backoff reconnect, driven here
-  // through the socket's own close event and its timer.
-  it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
-    vi.useFakeTimers();
-    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
-    expect(store.getState().askFrameSeen).toBe(false);
-
-    store.getState().connect();
-    lastSocket().open();
-    expect(store.getState().askFrameSeen).toBe(false);
-    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
-    expect(store.getState().askFrameSeen).toBe(false);   // a dialog frame says nothing about the envelope
-    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
-    expect(store.getState().askFrameSeen).toBe(true);
-
-    // The network drops; the socket schedules its own reconnect (no disconnect(), no new store).
-    const first = lastSocket();
-    first.onclose?.(new Event('close') as CloseEvent);
-    vi.advanceTimersByTime(60_000);
-    expect(lastSocket()).not.toBe(first);
-    expect(store.getState().askFrameSeen).toBe(true);    // nothing has opened yet: the old truth stands until it does
-    lastSocket().open();
-    expect(store.getState().askFrameSeen).toBe(false);
-    expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
-
-    // A frame that is not an ask or an ask_cleared does not set it; an ask_cleared does.
-    store.getState().apply({ type: 'dialog_cleared' });
-    expect(store.getState().askFrameSeen).toBe(false);
-    store.getState().apply({ type: 'ask_cleared' });
-    expect(store.getState().askFrameSeen).toBe(true);
-    expect(store.getState().ask).toBeNull();
-
-    // A second reconnect resets it again.
-    const second = lastSocket();
-    second.onclose?.(new Event('close') as CloseEvent);
-    vi.advanceTimersByTime(60_000);
-    lastSocket().open();
-    expect(store.getState().askFrameSeen).toBe(false);
-    store.getState().disconnect();
-  });
-
   it('disconnect() resets askFrameSeen with the ask it clears', () => {
     const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
     store.getState().apply({ type: 'ask_cleared' });
@@ -1250,6 +1206,50 @@ describe('session store connect()', () => {
 
     lastSocket().message(JSON.stringify({ type: 'status', status: 'busy', statusUpdatedAt: 123 }));
     expect(store.getState().status).toBe('busy');
+    store.getState().disconnect();
+  });
+
+  // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
+  // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
+  // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
+  // `disconnect()`, so the reset has to live in the open handler too: a drop and a backoff reconnect, driven here
+  // through the socket's own close event and its timer.
+  it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    store.getState().connect();
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    expect(store.getState().askFrameSeen).toBe(false);   // a dialog frame says nothing about the envelope
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    // The network drops; the socket schedules its own reconnect (no disconnect(), no new store).
+    const first = lastSocket();
+    first.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    expect(lastSocket()).not.toBe(first);
+    expect(store.getState().askFrameSeen).toBe(true);    // nothing has opened yet: the old truth stands until it does
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
+
+    // A frame that is not an ask or an ask_cleared does not set it; an ask_cleared does.
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    expect(store.getState().ask).toBeNull();
+
+    // A second reconnect resets it again.
+    const second = lastSocket();
+    second.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
     store.getState().disconnect();
   });
 });

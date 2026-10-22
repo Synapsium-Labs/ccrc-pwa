@@ -268,7 +268,7 @@ describe('Sheet', () => {
     // unchanged, and the wrapping guard above holds either way.
     it('titleScroll={false} drops the title\'s own cap and scroller; the default keeps both', () => {
       const { unmount } = render(
-        <Sheet open title="a question" titleScroll onClose={() => {}}><p>body</p></Sheet>,
+        <Sheet open title="a question" onClose={() => {}}><p>body</p></Sheet>,
       );
       expect(document.querySelector('.sheet-title')).toHaveClass('max-h-[38vh]', 'overflow-y-auto');
       unmount();

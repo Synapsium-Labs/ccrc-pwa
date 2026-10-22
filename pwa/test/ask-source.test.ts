@@ -6,7 +6,8 @@ import type { Dialog } from '../../shared/api';
 import { askSource, freeTextSlot, optionCopy, isUsableAsk, stripBox, type AskSource } from '../src/session/askLive';
 import { heldCoordinatorWords } from '../src/session/sessionHeaderView';
 import {
-  ASK_DEBRIS, ASKER_COORD, HOOK_QUESTIONS, askFixture, hookEnvelope, type AskFixture,
+  ASK_DEBRIS, ASKER_COORD, DEBRIS_LABEL, DEBRIS_PREAMBLE, DEBRIS_TITLE, HOOK_QUESTIONS, askFixture, hookEnvelope,
+  type AskFixture,
 } from './askFixtures';
 
 const sourceOf = (f: AskFixture): AskSource => askSource({ ask: f.ask, dialog: f.dialog, askFrameSeen: f.askFrameSeen });
@@ -111,6 +112,54 @@ describe('askSource: what an ask surface may show (D-6325)', () => {
     expect(src).toEqual({ kind: 'menu', title: 'Ready to code?', options: f.dialog!.options });
   });
 
+  it('a menu\'s title is only the first line of a two-line dialog.title', () => {
+    const f = askFixture(4);
+    f.dialog!.title = '  Ready to code?  \nsecond scraped line';
+    const src = sourceOf(f);
+    expect(src.kind).toBe('menu');
+    if (src.kind === 'menu') expect(src.title).toBe('Ready to code?');
+  });
+
+  // Step 7's evidence has five arms (the placeholder is covered above and by fixtures 3 and 10). Each case below is a
+  // dialog whose ONLY evidence is that arm, so deleting the arm from `hasAskEvidence` turns exactly it red.
+  describe('each kind of ask evidence alone is ask-unreadable', () => {
+    /** A parsed menu with two plain rows and nothing that says an ask is up. */
+    const bare = (): Dialog => ({
+      id: 'dlg-bare', title: DEBRIS_TITLE, body: DEBRIS_PREAMBLE,
+      options: [{ index: 1, label: DEBRIS_LABEL }, { index: 2, label: DEBRIS_LABEL }],
+      selectedIndex: 1, parsed: true, raw: `  1. ${DEBRIS_LABEL}\n  2. ${DEBRIS_LABEL}`,
+    });
+    const seen = (dialog: Dialog): AskSource => askSource({ ask: null, dialog, askFrameSeen: true });
+
+    it('the control: a bare parsed menu is menu', () => {
+      expect(seen(bare()).kind).toBe('menu');
+    });
+
+    it('a Dialog.ask with a null option', () => {
+      const d = bare();
+      d.ask = { question: 'Which one?', multiSelect: false, options: [{ label: 'A' }, null] };
+      expect(seen(d)).toEqual({ kind: 'ask-unreadable' });
+    });
+
+    it('a Dialog.multi on a raw with no tab row', () => {
+      const d = { ...bare(), parsed: false, options: [], multi: askFixture(9).dialog!.multi! };
+      expect(d.raw).not.toContain('←');
+      expect(seen(d)).toEqual({ kind: 'ask-unreadable' });
+    });
+
+    it('a Chat row alone', () => {
+      const d = bare();
+      d.options.push({ index: 3, label: 'Chat about this' });
+      expect(seen(d)).toEqual({ kind: 'ask-unreadable' });
+    });
+
+    it('a tab row in raw alone, indented', () => {
+      const d = bare();
+      d.raw = `      ←  ☐ Cache  ☐ Tracing  ✔ Submit  →   \n${d.raw}`;
+      expect(seen(d)).toEqual({ kind: 'ask-unreadable' });
+    });
+  });
+
   it('an unparsed pane with no ask evidence is terminal-only and carries no pane string', () => {
     const f = askFixture(5);
     const src = sourceOf(f);
@@ -167,7 +216,7 @@ describe('askSource: what an ask surface may show (D-6325)', () => {
   });
 });
 
-describe('optionCopy: a trailing (Recommended) becomes a flag (D-6325)', () => {
+describe('optionCopy', () => {
   it('strips one trailing (Recommended) and keeps \'Recommended reading\' whole', () => {
     expect(optionCopy('Redis (Recommended)')).toEqual({ label: 'Redis', recommended: true });
     expect(optionCopy('Redis (recommended)')).toEqual({ label: 'Redis', recommended: true });
