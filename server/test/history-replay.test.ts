@@ -8581,7 +8581,7 @@ function w6ErrorIf<T extends object>(on: boolean, row: T): T {
  *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
  *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
 function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
-  nl: { lines: string[]; token: string } | null = null): W6SourceBox {
+  nl: { lines: string[]; token: string } | null = null, legacy = false): W6SourceBox {
   const box = w5a1H.makeHistoryBox(prefix);
   const cwd = join(box.home, 'tree', 'demo');
   mkdirSync(cwd, { recursive: true });
@@ -8615,6 +8615,27 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
     if (t.code !== 0) throw new Error(`w6SourceBox: the sweep exited ${String(t.code)}: ${t.stderr}`);
   }
   if (!w6Indexed(box, u(2))) throw new Error('w6SourceBox: the command row was never indexed');
+  if (legacy) {
+    // D-6310: a second family from before generations (no generation on its registry row or its SessionStart line): the sweep
+    // stores its session with generation '', and its boundary is admitted like the first's.
+    const lu = (i: number): string => `a5a60002-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const lts = (i: number): string => new Date(Date.UTC(2026, 9, 2, 11, 0, i)).toISOString();
+    const lbase = { sessionId: lu(0), cwd };
+    const lrows = [
+      w5a1Fx.userRow({ ...lbase, uuid: lu(1), ts: lts(1), text: 'please rebuild the legacy package' }),
+      w5a1Fx.toolUseRow({ ...lbase, uuid: lu(2), ts: lts(2), parentUuid: lu(1), msgId: 'msg_w5a6l_2', toolUseId: 'toolu_01W5A6L', name: 'Bash', input: { command: 'make fixture-legacy-target --all' } }),
+      w5a1Fx.toolResultRow({ ...lbase, uuid: lu(3), ts: lts(3), parentUuid: lu(2), toolUseId: 'toolu_01W5A6L', content: 'built ok' }),
+      w5a1Fx.assistantRow({ ...lbase, uuid: lu(4), ts: lts(4), parentUuid: lu(3), msgId: 'msg_w5a6l_4', text: 'done with the legacy build' }),
+      w5a1Fx.boundaryRow({ ...lbase, uuid: lu(5), ts: lts(5), parentUuid: lu(4), trigger: 'manual', headUuid: lu(4), anchorUuid: lu(6), tailUuid: lu(4), allUuids: [lu(4)] }),
+      w5a1Fx.summaryRow({ ...lbase, uuid: lu(6), ts: lts(6), parentUuid: lu(5), text: '<summary>\n1. Primary Request and Intent:\n   legacy\n</summary>' }),
+      w5a1Fx.assistantRow({ ...lbase, uuid: lu(7), ts: lts(7), parentUuid: lu(6), msgId: 'msg_w5a6l_7', text: 'continuing after the legacy summary' }),
+    ];
+    w5a1H.seedFamily(box, { id: 'claude-a-w5a6l', project: 'demo', uuid: lu(0), rows: lrows.map((r) => JSON.stringify(r)).join('\n') + '\n' as unknown as object[], workdir: cwd });
+    for (let k = 0; k < 4 && (k === 0 || !w6Indexed(box, lu(2))); k += 1) {
+      const t = w5a1H.runSweep(box);
+      if (t.code !== 0) throw new Error(`w6SourceBox: the sweep exited ${String(t.code)}: ${t.stderr}`);
+    }
+  }
   // D-6308: the run's pair-index value, planted after every sweep so only pairIndexOf's read of it redacts it.
   if (nl !== null) writeFileSync(join(box.home, '.ccrc', 'w6nl.token'), `${nl.token}\n`, { mode: 0o600 });
   return { box, cwd, id, gen, cmd, sentinel, u };
@@ -8720,16 +8741,16 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     // The box's family is in no census and no assignment as a quiz family: sourceQuiz is handed no family list at all.
     const free = await source('quiz', []);
     expect(free.r.entries.map((x) => [x.ccrc_id, x.fact])).toEqual([[sb.id, sb.cmd]]);
-    expect(free.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 0 });
+    expect(free.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 0, legacy: 0 });
     const own = { store_id: free.storeId, ccrc_id: sb.id, generation: sb.gen };
     const asked: Asked[] = [];
     const pilot = await source('quiz', asked, { pilotFamilies: [own], assignment: [] });
     expect(pilot.r.entries, 'CONTROL: a pilot family is never quizzed').toEqual([]);
-    expect(pilot.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 1, 'control-id': 0 });
+    expect(pilot.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 1, 'control-id': 0, legacy: 0 });
     // Another generation of the same (store_id, ccrc_id) assigned control excludes every generation of it (W2-D77).
     const control = await source('quiz', asked, { pilotFamilies: [], assignment: [{ ...own, generation: '00000000-0000-4000-8000-0000000005a7', arm: 'control' }] });
     expect(control.r.entries, 'CONTROL: a control-held id is never quizzed').toEqual([]);
-    expect(control.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 1 });
+    expect(control.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 1, legacy: 0 });
     expect(asked, 'neither excluded family reached the writer').toEqual([]);
   }, 120_000);
 
@@ -8793,6 +8814,30 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     const lost = await run(true);
     expect(lost.r.entries).toEqual([]);
     expect(lost.r.counts.drops.writer, 'counted').toEqual({ 'writer-fact-unplaced': 1 });
+  }, 600_000);
+
+  // D-6310: a family from before generations (generation '') has no qid and no place in either walk; it is excluded and counted.
+  it('D-6310: a legacy family (generation \'\') beside a UUID family is excluded in both modes, fidelity sampling included, and counted; CONTROL: its boundary was admitted', async () => {
+    const lb = w6SourceBox('ccrc-w5a6-source-legacy-', undefined, false, null, null, true);
+    const db = w5a1H.openStoreRO(lb.box);
+    try {
+      const gens = db.prepare('SELECT generation FROM sessions ORDER BY session_pk').all().map((r) => String((r as { generation: string }).generation));
+      expect(gens.sort(), 'CONTROL: the store holds a legacy session beside the UUID one').toEqual(['', lb.gen]);
+    } finally {
+      db.close();
+    }
+    for (const mode of ['quiz', 'pilot'] as const) {
+      const asked: Asked[] = [];
+      const { r } = await source(mode, asked, { pilotFamilies: [], assignment: [] }, lb);
+      expect(r.counts.boundaries.admitted, `${mode}: CONTROL: both boundaries are admitted`).toBe(2);
+      expect(r.counts.population.legacy, `${mode}: the legacy family is counted`).toBe(1);
+      expect(r.entries.map((e) => e.generation), `${mode}: no entry carries ''`).toEqual([lb.gen]);
+      expect(r.entries.map((e) => e.fact)).toEqual([lb.cmd]);
+      expect(asked.map((a) => a.item['generation']), `${mode}: the writer was asked about the UUID family only`).toEqual([lb.gen]);
+      expect(r.fidelity.every((f) => f.generation !== ''), `${mode}: no fidelity boundary is the legacy family's`).toBe(true);
+    }
+    const plain = await source('quiz', []);
+    expect(plain.r.counts.population.legacy, 'CONTROL: the plain box has none').toBe(0);
   }, 600_000);
 
   // D-6305: a failed writer run is counted apart from a malformed reply; the writer-malformed drop is their sum.

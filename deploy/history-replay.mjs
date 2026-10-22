@@ -4633,7 +4633,11 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
   let familyOrder;
   let walk;
   let fidelity = [];
-  const own = [...local.values()];   // this node's admitted families, each with its admitted boundaries
+  // D-6310: a legacy family (a session from before generations, generation '') has no qid (qidOf needs a generation) and no
+  // place in either mode's walk, fidelity sampling included, so it is excluded here, counted, before anything is sampled.
+  const all = [...local.values()];
+  const own = all.filter((f) => f.generation !== '');   // this node's admitted families, each with its admitted boundaries
+  const legacy = all.length - own.length;
   const walked = (f) => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, admitted: f.boundaries.length, candidates: candidatesOf(f) });
   if (mode === 'quiz') {
     // W2-D71's population over this node (R10): every local admitted family less the exclusions, never a census list.
@@ -4642,7 +4646,7 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     familyOrder = (f) => quizFamilyOrderKey(seedHex, f);
     const pop = quizPopulation(own.map((f) => ({ ...f, admitted: f.boundaries.length })),
       { pilotFamilies: exclude.pilotFamilies, assignment: exclude.assignment });
-    counts.population = pop.excluded;
+    counts.population = { ...pop.excluded, legacy };
     walk = pop.families.map(walked);
   } else {
     rng = pilotRng(seedHex);
@@ -4655,6 +4659,7 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
         return p.state === 'payload' ? { keep: true } : { keep: false, reason: p.why };
       },
     });
+    counts.population = { legacy };
     counts.fidelity = picked.drops;
     fidelity = picked.boundaries.map((p) => ({ store_id: storeId, ccrc_id: p.family.ccrc_id, generation: p.family.generation, boundary_uuid: p.boundary.boundary_uuid }));
     walk = own.map(walked);
