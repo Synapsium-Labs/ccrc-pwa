@@ -2751,6 +2751,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         10 backups over it until the next console tap. Two more attempts were filed (12:17, 13:20), each with a block
         of about 6 s. Server 14590M free. STATUS: fleet and server v0.0.559, newest v0.0.564, stable v0.0.502, intent
         dev/auto=off, backups fleet 230M/server 16763M, disk free fleet 168G/work volume 21G/server 15G.
+      - 16:05: no tap. v0.0.565 to v0.0.567 (#1138, #1140, #1142) were released, docs and plans only, and v0.0.568
+        (#1126, a history wave's code), all unapplied; none touches the broker's lane or the snapshot helper. The
+        fleet's work volume fell under `ccd ws-add`'s 10G floor at about 15:50 (9.0G at 15:54, 10.4G at 16:07), and
+        that refused review run 806's dispatch. Server 14490M free. STATUS: fleet and server v0.0.559, newest
+        v0.0.568, stable v0.0.502, intent dev/auto=off, backups fleet 230M/server 16763M, disk free fleet 167G/work
+        volume 10G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
