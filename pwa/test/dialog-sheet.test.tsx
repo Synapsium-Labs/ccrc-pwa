@@ -67,11 +67,16 @@ const parsedDialog = (patch: Partial<Dialog> = {}): Dialog => ({
   ...patch,
 });
 
-const makeStore = () =>
-  createSessionStore(SESSION_ID, {
+// D-6325: an ask surface shows nothing until THIS connection's first `ask` or `ask_cleared` frame (`askFrameSeen`), so a
+// store that is to show a scraped dialog has been told "no envelope" first, as the stream tells it on connect.
+const makeStore = () => {
+  const store = createSessionStore(SESSION_ID, {
     makeSocket: fakeSocket,
     api: { prompt: vi.fn().mockResolvedValue(undefined) },
   });
+  act(() => store.getState().apply({ type: 'ask_cleared' }));
+  return store;
+};
 
 const renderWithDialog = (dialog: Dialog, onOpenTerminal = vi.fn()) => {
   const store = makeStore();
@@ -1419,6 +1424,7 @@ describe('own words go through the free-text row (D-5090)', () => {
   const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
     act(() => {
       if (dialog) store.getState().apply({ type: 'dialog', dialog });
       if (ask) store.getState().apply({ type: 'ask', ask, key: null });
@@ -2876,6 +2882,7 @@ describe('the sheet can always submit (the 2026-10-16 report)', () => {
   const CTA = /Open terminal to answer/;
   const render296 = (first: Dialog | null) => {
     const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
     act(() => {
       if (first) store.getState().apply({ type: 'dialog', dialog: first });
       store.getState().apply({ type: 'ask', ask: CC296_LONG, key: null });

@@ -128,6 +128,7 @@ function renderAsk(first: Dialog, envelope: typeof CC296_LONG | null = CC296_LON
     makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) },
   });
   act(() => {
+    store.getState().apply({ type: 'ask_cleared' });
     store.getState().apply({ type: 'dialog', dialog: first });
     if (envelope !== null) store.getState().apply({ type: 'ask', ask: envelope, key: null });
   });

@@ -189,7 +189,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
       options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }],
       selectedIndex: 1, parsed: true, raw: '❯ 1. Yes\n  2. No',
     };
-    act(() => { store.setState({ dialog }); });
+    act(() => { store.setState({ dialog, askFrameSeen: true }); });
 
     const { rerender } = render(<DialogSheet id="s" store={store} raise={0} />);
     expect(screen.getByText('Allow Bash?')).toBeInTheDocument();
@@ -212,7 +212,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
     const ask: HookAsk = { questions: [{ question: 'Which colour?', options: [{ label: 'Red' }] }] };
-    act(() => { store.setState({ ask }); });
+    act(() => { store.setState({ ask, askFrameSeen: true }); });
 
     render(<DialogSheet id="s" store={store} raise={0} />);
     fireEvent.click(document.querySelector('.sheet-scrim') as HTMLElement);
