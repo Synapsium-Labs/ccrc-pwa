@@ -99,7 +99,7 @@ export const SCOPE_SOURCES: readonly ['tmux'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
-export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick';
+export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick' | 'recall-off';
 export const JOURNAL_KINDS: readonly JournalKind[];
 export type JournalVerdict = 'family' | 'epoch-confirmed' | 'epoch-unconfirmed' | 'epoch-chained'
   | 'generation-joined' | 'rekeyed' | 'mapping' | 'bind' | 'drained';
@@ -122,6 +122,8 @@ export interface HistoryPaths {
   readonly journalFile: string;
   readonly backups: string; readonly storeId: string; readonly pending: string; readonly writer: string;
   readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
+  /** W2-D29: the headless-on switch (SWITCHES.headlessOn) and the recall-off directory (RECALL_OFF_DIR under the root). */
+  readonly headlessOn: string; readonly recallOffDir: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -272,6 +274,7 @@ export function isHistoryCommand(command: string): boolean;
 export function provenanceOf(row: Record<string, unknown>, ctx: { pairedToolUse: null | { name: string; command?: string } }): Provenance;
 export function ftsTextOf(body: unknown, kind: 'entry' | 'sidecar'): string;
 export function variantCauseOf(a: unknown, b: unknown): 'ccd-sanitize' | 'unknown';
+export function isSyntheticModel(model: unknown): boolean;
 export function backendOf(model: string | null | undefined): Backend;
 export function producerOf(modelsAfterSummary: readonly (string | null)[]): Backend;
 export function producerOfCopy(rows: readonly { type: string; model: string | null }[], summaryIndex: number): Backend;
@@ -508,6 +511,9 @@ export const SCOPE_KINDS: readonly ['family', 'project', 'workspace'];
 export const NODE_ID_DISPLAY_MIN: 6;
 export const HISTORY_NODE_ID_RE: RegExp;
 export const RECALL_OFF_DIR: 'recall-off';
+export const RECALL_OFF_META: 'recall_off:';
+export const RECALL_OFF_GAP_MS: number;
+export const RECALL_OFF_SCAN_MAX: number;
 export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
@@ -535,6 +541,27 @@ export function resolveScopedId(i: { wanted: string; inScope: readonly string[];
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
+
+// --- W2-1 Task 4: the recall-off presence record (W2-D30) and status's block (W2-D31)
+export const RECALL_OFF_KEYS: Readonly<{ seen: string; state: string; change: string; gap: string }>;
+export type RecallOffState = { s: 'value'; v: string } | { s: 'unreadable'; v: null };
+export function recallOffStateOf(
+  read: { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string },
+): RecallOffState | 'absent';
+export interface RecallOffRow { k: string; v: string }
+export interface RecallOffPlan {
+  seen: RecallOffRow; put: RecallOffRow[]; del: string[]; insert: RecallOffRow[];
+  records: Array<{ t: number; fields: JournalFields & { rk: 'change' | 'gap' } }>;
+  malformed: number;
+}
+export function planRecallOffObservation(i: {
+  seenRaw: string | null;
+  stateRows: ReadonlyArray<{ id: string; raw: string }>;
+  files: ReadonlyArray<{ id: string; state: RecallOffState | 'absent' }>;
+  startMs: number; endMs: number;
+}): RecallOffPlan;
+export function recallOffReplayRows(rec: JournalRecord): { insert: RecallOffRow; put: RecallOffRow | null; del: string | null };
+export function recallOffStatusOf(meta: Iterable<readonly [string, string]>): { seen_ms: number | null; files: number; unreadable: number };
 
 
 // --- W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10)
@@ -606,7 +633,7 @@ export type CursorOf<R extends CursorResource> = Extract<Cursor, { resource: R }
 export function encodeCursor(c: Cursor): string;
 export function decodeCursor<R extends CursorResource>(s: string, resource: R): CursorOf<R> | null;
 export function decideRelay(i: { status: number | null; signal: string | null; lastLine: string | null }):
-  { exit: number; reason?: string };
+  { exit: number; reason?: string; stated?: true };
 export function stripReadPrefix(text: string): string;
 export type ExploreKind = 'json' | 'csv' | 'tsv' | 'code';
 export function exploreKindOf(path: string | null): ExploreKind | null;
@@ -666,6 +693,8 @@ export function planSpans(i: { rows: readonly SpanRow[]; boundaries: readonly Sp
 export function decideLeafId(i: { ccrcId: string; ccUuid: string; spanStartUuid: string; boundaryUuid: string; plainBoundOther: boolean }): { id: string; forked: boolean };
 export const RAW_LEAF_GRACE_MS: number;
 export function eofAfterBoundary(i: { eofMs: number | null; boundaryTsMs: number | null }): boolean;
+/** W2-D33: moved from derive.mjs. Null for an undefined index, or when no row up to it has a stamp. */
+export function stampAtOrBefore(rows: readonly { readonly ts_ms: number | bigint | null }[], index: number | undefined): number | null;
 export function leafReady(i: { summaryStored: boolean; fileAtEofAfterBoundary: boolean }): boolean;
 export const FAN_IN: Readonly<{ leaf: 8; condensed: 4 }>;
 export interface FanInSlot { readonly nodeId: string | null; readonly final: boolean; readonly parented: boolean }
@@ -690,7 +719,8 @@ export type OpArgs =
   | { readonly op: 'backup' }
   | { readonly op: 'adopt' }
   | { readonly op: 'restore'; readonly name: string }
-  | { readonly op: 'rebuild'; readonly storeId: string | null };
+  | { readonly op: 'rebuild'; readonly storeId: string | null }
+  | { readonly op: 'recall-off'; readonly mode: 'write' | 'clear' | 'clear-all'; readonly id: string | null; readonly generation: string | null };
 export function parseOpVerbArgs(op: string, args: readonly string[]):
   { ok: true; args: OpArgs } | { ok: false; reason: 'bad-args' | 'bad-id' | 'older-than-floor' | 'restore-refused' };
 export function decideOpDoor(f: CliStoreFacts):
@@ -730,6 +760,7 @@ export type ReplayAction =
   | { do: 'verdict'; rec: JournalRecord }
   | { do: 'redact'; len: number; sha256: string; t: number }
   | { do: 'tick'; t: number; lagMs: number | null }
+  | { do: 'recall-off'; rec: JournalRecord }
   | { do: 'skip'; counter: 'journal_line_malformed' | 'journal_record_unknown' | 'journal_head_mismatch' };
 export interface ReplayState {
   storeId: string; file: string | null; recvMs: number;
@@ -799,7 +830,7 @@ export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; 
 export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
 export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };
 
-// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects, recall-off's B2 refusals
+// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects; W2-1: recall-off's write, decided
 export function paneOk(pane: unknown): boolean;
 export const TREE_DEPTH_DEFAULT: 2;
 export const TREE_DEPTH_MAX: 8;
@@ -823,10 +854,10 @@ export type ReadArgs =
 export function parseReadArgs(verb: string, argv: readonly string[]): ReadArgs;
 export function selectColumns(version: number, table: string, cols: readonly string[],
   schema?: Readonly<Record<number, SchemaVersionAdded>>, alias?: string | null): string;
-export type RecallOffPreflight =
-  | { done: true; exit: 2; reason: 'bad-args' | 'bad-id' | 'generation-unreadable' }
-  | { done: false; id: string };
-export function decideRecallOffPreflight(i: { args: readonly string[]; generation: Presence<string> | null }): RecallOffPreflight;
+export type RecallOffWrite =
+  | { ok: true; generation: string }
+  | { ok: false; rc: 2; reason: 'generation-unreadable' | 'generation-malformed' | 'generation-mismatch' };
+export function decideRecallOffWrite(i: { registry: Presence<string>; want: string | null }): RecallOffWrite;
 
 // --- W1-B2 Task 11: the --json scope's family bound
 export const SCOPE_FAMILIES_JSON_MAX: 3;

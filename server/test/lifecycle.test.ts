@@ -1102,7 +1102,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1335,6 +1335,26 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.root).toContain('mode 0700');
     const { OUT_MARKER } = await import('../../deploy/history-replay.mjs');
     expect(c!.root, 'the row names another marker than the driver writes').toContain(`marked by ${OUT_MARKER}`);
+  });
+
+  // ── ccrc history W2-1 (spec 2026-10-05 §9.4, O17's W2-1 half; W2-D9, W2-D28) ──────────────────────────────────────
+  // The replay eval's control arm. sweep.mjs's --op recall-off is its one writer (O13), through its temp recall-off/~tmp.<pid>,
+  // which the next recall-off pass removes; the operator verbs collect it, `recall-off --clear-all` at W2 close. The manifest is
+  // L0 and imports nothing, so the per-file bound is bound here to the code's own UUID grammar, as the B3 numbers are above.
+  it('declares history-recall-off: the eval\'s control arm, an O class sweep.mjs writes through --op recall-off, collected by the operator verbs', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-recall-off');
+    expect(c, 'shared/lifecycle.ts declares no history-recall-off class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (--op recall-off)']);
+    expect(c!.root).toContain('~/.ccrc/history/recall-off/<id>');
+    expect(c!.root, 'the row names its temp').toContain('recall-off/~tmp.<pid>');
+    expect(c!.collector).toContain('ccrc history recall-off <id> --clear');
+    expect(c!.collector).toContain('recall-off --clear-all at W2 close');
+    expect(c!.ruling).toBeNull();
+    const { UUID_RE } = await import('../../ccd/history/lib.mjs');
+    const g = '0189abcd-1234-4678-9abc-0123456789ab';
+    expect(UUID_RE.test(g), 'CONTROL: a generation the grammar takes').toBe(true);
+    expect(c!.tier).toContain(`at most ${Buffer.byteLength(`${g}\n`)} B`);
   });
 });
 

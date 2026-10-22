@@ -5116,12 +5116,11 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
-  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
-  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
-  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
-  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
-  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
-  // exemption below.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer, sweep.mjs's
+  // `--op recall-off` (recallOffPass, W2-1), and it has readers in more files than the exact-holders form can list (the
+  // read verbs and the drain through readBounded, the hook's bash read, the replay driver's lstat). W2-1
+  // (W2-D29) replaced B1's half-case with the last case below: one writer, the hook the one bash file naming it, and the
+  // writer's shape.
   const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['history-steer-off', ['ccd/history/lib.mjs']],
@@ -5266,16 +5265,55 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     }
   });
 
-  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
-    const W2_WRITER = 'ccd/history/sweep.mjs';
-    // CONTROL: the writer shapes this describe classifies are seen against this name too.
-    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
-    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
-    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
-    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
-      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
-      .map(rel).sort();
-    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
+  // W2-1 (W2-D29): recall-off/<id> has exactly one writer, sweep.mjs's recallOffPass, and every content reader reads it
+  // through store.mjs's readBounded, so no corpus line pairs a write verb (`open` included) with a recall-off needle but the
+  // writer's own. KNOWN WIDTH: a recall-off path held in a variable and written on a later line (`const p = recallOffPath(
+  // home, id);` then `unlinkSync(p)`) is invisible to the needle scan. Inside recallOffPass the writer-shape rule below
+  // closes it (every mutation there names `recallOffPath(` or `.recallOffDir` on its own line); outside it, nothing does.
+  it('recall-off/<id>: exactly one writer, sweep.mjs', () => {
+    const WRITER = 'ccd/history/sweep.mjs';
+    const NEEDLES = ['recall-off', 'recallOffPath', 'recallOffDir', 'RECALL_OFF_DIR'] as const;
+    const langOf = (f: string): 'bash' | 'mjs' => (BASH.includes(f) ? 'bash' : 'mjs');
+    const writesOff = (l: string, lang: 'bash' | 'mjs'): boolean => NEEDLES.some((n) => l.includes(n) && writes(l, lang, n));
+    // CONTROL: the classifier sees the planted writer shapes.
+    expect(writesOff('writeFileSync(recallOffPath(home, id), g);', 'mjs')).toBe(true);
+    expect(writesOff('    unlinkSync(`${P.recallOffDir}/${n}`);', 'mjs')).toBe(true);
+    expect(writesOff('touch "$H/recall-off/$id"', 'bash')).toBe(true);
+    // CONTROL: and not the two reads W2-D29 keeps, each read from the real file it lives in.
+    const SWEEP_MJS = path.join(HISTORY_DIR, 'sweep.mjs');
+    const reader = code(SWEEP_MJS).filter((l) => l.includes('readBounded(recallOffPath('));
+    expect(reader, 'sweep.mjs reads recall-off/<id> through readBounded on two lines, recallOffPresence and the tick scan (W2-D29, W2-D30)').toHaveLength(2);
+    const driver = code(path.join(ccrcRoot, 'deploy', 'history-replay.mjs')).filter((l) => l.includes('lstatSync(recallOffPath('));
+    expect(driver, 'the replay driver\'s one recall-off line (W2-D78 (ii))').toHaveLength(1);
+    for (const l of [...reader, ...driver]) expect(writesOff(l, 'mjs'), l.trim()).toBe(false);
+    const writers = CORPUS.filter((f) => code(f).some((l) => writesOff(l, langOf(f)))).map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13)').toEqual([WRITER]);
+    // W2-D29's CLI half: cli.mjs reaches recall-off/<id> only through the imported recallOffPresence, so it names no recallOffPath( at all
+    // (a read of its own there would be a second reader, which the needle scan above cannot see).
+    const cliNames = code(path.join(HISTORY_DIR, 'cli.mjs')).filter((l) => l.includes('recallOffPath('));
+    expect(cliNames.map((l) => l.trim()), 'cli.mjs names recallOffPath( : its one reader is sweep.mjs recallOffPresence (W2-D29)').toEqual([]);
+    expect(code(path.join(HISTORY_DIR, 'cli.mjs')).some((l) => l.includes('recallOffPresence(')), 'CONTROL: cli.mjs does call the one reader').toBe(true);
+    // The bash half: the hook reads recall-off/<id> and is the one bash file naming it; none of its lines writes it.
+    const bashNaming = BASH.filter((f) => code(f).some((l) => l.includes('/recall-off')));
+    expect(bashNaming.map(rel).sort()).toEqual(['ccd/session-hook.sh']);
+    for (const f of bashNaming) {
+      for (const l of code(f).filter((x) => x.includes('/recall-off'))) expect(writes(l, 'bash', 'recall-off'), `${rel(f)}: \`${l.trim()}\``).toBe(false);
+    }
+    // The writer shape: recallOffPass's body, from its declaration to the next line that is exactly `}`.
+    const lines = code(SWEEP_MJS);
+    const at = lines.findIndex((l) => /^export function recallOffPass\(/.test(l));
+    expect(at, 'sweep.mjs declares no recallOffPass').toBeGreaterThan(-1);
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(|\b(?:removeEntry|writeFileAtomic|mkdirDurable)\s*\(/;
+    const mutations = lines.slice(at + 1, end).filter((l) => VERB.test(l));
+    for (const l of mutations) {
+      expect(/recallOffPath\(|\.recallOffDir\b/.test(l), `recallOffPass: \`${l.trim()}\` names no recall-off path on its own line`).toBe(true);
+    }
+    for (const v of ['mkdirSync(', 'openSync(', 'renameSync(', 'unlinkSync(']) expect(mutations.some((l) => l.includes(v)), `recallOffPass makes no ${v}`).toBe(true);
+    // Every recall-off write in sweep.mjs is the executor's.
+    const outside = lines.filter((l, i) => (i <= at || i >= end) && writesOff(l, 'mjs')).map((l) => l.trim());
+    expect(outside, 'a recall-off write in sweep.mjs outside recallOffPass').toEqual([]);
   });
 });
 describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
@@ -5298,7 +5336,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): the check after a bind's bounds and stop words; EXPORT_BIND_BATCH moved here from sweep.mjs.
     'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
     // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
-    'SEGMENT_HEADER_BYTES'] as const;
+    'SEGMENT_HEADER_BYTES',
+    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
+    'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
+    // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META.
+    'RECALL_OFF_KEYS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5381,12 +5423,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
   });
 
-  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP, REDACT_SOURCES_META and RECALL_OFF_META are quoted once, at their declaration (H-149)', async () => {
     // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
     // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
     const l = await lib();
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META', 'RECALL_OFF_META'] as const) {
       const value = l[name];
       expect(typeof value, `${name} is a string`).toBe('string');
       const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
@@ -8312,5 +8354,96 @@ describe('path identity W2: the collect leaf words are spelled once, in shared/a
   it('the two words are spelled as a vocabulary in shared/api.ts alone', () => {
     const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders).toEqual(['shared/api.ts']);
+  });
+});
+
+// W2-1 Task 1 (W2-D33): the exports the deploy lane reads are each defined once. APPENDED after the last describe, for
+// the reason the CCRC HISTORY block above states; no import line is added. ALL_MJS, HISTORY_DIR, stallCode and rel are
+// that block's.
+describe('ccrc history: the deploy lane exports are each defined once (W2-D33; W2-1 Task 1)', () => {
+  const DEFINES = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\s*\\(`);
+  const definers = (name: string): string[] =>
+    ALL_MJS.filter((f) => stallCode(f).split('\n').some((l) => DEFINES(name).test(l))).map(rel).sort();
+  /** The body of the function whose head line `head` matches: from that line to the first line that is exactly `}`. */
+  const bodyOfFn = (src: string, head: RegExp): string => {
+    const lines = src.split('\n');
+    const at = lines.findIndex((l) => head.test(l));
+    if (at < 0) return '';
+    const end = lines.findIndex((l, i) => i > at && l === '}');
+    return lines.slice(at, end + 1).join('\n');
+  };
+  const DERIVE = path.join(HISTORY_DIR, 'derive.mjs');
+  const RECALL = path.join(HISTORY_DIR, 'recall.mjs');
+  const BLOB_SQL = ["'SELECT z FROM blobs WHERE blob_id = ?'", "'SELECT raw_len FROM blobs WHERE blob_id = ?'"] as const;
+
+  it('CONTROL: the definition pattern sees a declaration, exported or not, and never a call or an import', () => {
+    expect(DEFINES('stampAtOrBefore').test('export function stampAtOrBefore(rows, index) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('function stampAtOrBefore(copy, uuid) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('    fileAtEofAfterBoundary: eofAfterBoundary({ eofMs: holding.eof_ms, boundaryTsMs: stampAtOrBefore(copy.rows, copy.index.get(b.uuid)) }),')).toBe(false);
+    expect(DEFINES('stampAtOrBefore').test('  secretUnits, summaryParts, stampAtOrBefore,')).toBe(false);
+    expect(bodyOfFn('x\nfunction f(a) {\n  return a;\n}\ny', /^function f\(/)).toBe('function f(a) {\n  return a;\n}');
+    expect(bodyOfFn('x\n', /^function f\(/), 'an absent head reads as no body').toBe('');
+  });
+
+  it('stampAtOrBefore is defined in lib.mjs alone, and derive.mjs imports it from lib', () => {
+    expect(definers('stampAtOrBefore')).toEqual(['ccd/history/lib.mjs']);
+    const block = /^import \{\n([^}]*)\} from '\.\/lib\.mjs';$/m.exec(stallCode(DERIVE));
+    expect(block, 'derive.mjs has no multi-line named import from ./lib.mjs').not.toBeNull();
+    expect(block![1]!.split(',').map((s) => s.trim())).toContain('stampAtOrBefore');
+  });
+
+  it('each blob SELECT is spelled once in shipped code, inside blobReadStmts, and stmts takes both from it', () => {
+    for (const sql of BLOB_SQL) {
+      expect(ALL_MJS.filter((f) => stallCode(f).includes(sql)).map(rel), sql).toEqual(['ccd/history/derive.mjs']);
+      expect(stallCode(DERIVE).split(sql).length - 1, `${sql}: spelled more than once in derive.mjs`).toBe(1);
+    }
+    const reads = bodyOfFn(stallCode(DERIVE), /^export function blobReadStmts\(db\) \{$/);
+    for (const sql of BLOB_SQL) expect(reads, `${sql} is not in blobReadStmts`).toContain(sql);
+    expect((reads.match(/\.prepare\(/g) ?? []).length, 'blobReadStmts prepares exactly the two blob reads').toBe(2);
+    expect(bodyOfFn(stallCode(DERIVE), /^function stmts\(db\) \{$/)).toContain('...blobReadStmts(db),');
+  });
+
+  it('pickExpandBody is called once in shipped code, by expandEntryBody, and expandEntryText reads through expandEntryBody', () => {
+    const calls = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => /\bpickExpandBody\(/.test(l) && !DEFINES('pickExpandBody').test(l)).map(() => rel(f)));
+    expect(calls).toEqual(['ccd/history/recall.mjs']);
+    const src = stallCode(RECALL);
+    expect(bodyOfFn(src, /^export function expandEntryBody\(rc, e\) \{$/)).toMatch(/\bpickExpandBody\(/);
+    const text = bodyOfFn(src, /^function expandEntryText\(rc, e\) \{$/);
+    expect(text, 'expandEntryText is gone or its signature moved').not.toBe('');
+    expect(text).toContain('expandEntryBody(rc, e)');
+    expect(text, 'expandEntryText decodes no blob of its own').not.toMatch(/\bexpandBlob\(|\bexpandParse\(/);
+  });
+});
+
+// CCRC HISTORY W2-1 TASK 2 (W2-D17): isSyntheticModel is the one angle-bracket model test. APPENDED, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line. O14's `declares` reads const,
+// let and var only, so a function needs its own scan: lib.mjs declares it and no other .mjs under ccd/history, deploy
+// or shared does, and the angle-bracket test it holds is spelled on one code line of that corpus, its own.
+describe('ccrc history W2-1 Task 2: isSyntheticModel is declared once, in lib.mjs, and holds the one angle-bracket test (W2-D17)', () => {
+  const CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declaresFn = (name: string): RegExp =>
+    new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:(?:async\\s+)?function\\*?\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`);
+  const ANGLE_TEST = /startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/;
+
+  it('CONTROL: the corpus holds lib.mjs and the gate, and the two patterns see what they look for and nothing else', () => {
+    expect(CORPUS.map(rel)).toEqual(expect.arrayContaining(['ccd/history/lib.mjs', 'deploy/history-gate.mjs']));
+    expect(declaresFn('isSyntheticModel').test('export function isSyntheticModel(model) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('function isSyntheticModel(m) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test("const isSyntheticModel = (m) => m === '<x>';")).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('    if (isSyntheticModel(row[5])) continue;')).toBe(false);
+    expect(declaresFn('isSyntheticModel').test("import { EXIT, isSyntheticModel } from '../ccd/history/lib.mjs';")).toBe(false);
+    expect(ANGLE_TEST.test("  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');")).toBe(true);
+    expect(ANGLE_TEST.test("  if (leadText(content).trimStart().startsWith('<local-command-stdout>')) return 'harness';")).toBe(false);
+  });
+
+  it('lib.mjs is the one file of the corpus that declares isSyntheticModel', () => {
+    expect(CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declaresFn('isSyntheticModel').test(l))).map(rel).sort())
+      .toEqual(['ccd/history/lib.mjs']);
+  });
+
+  it('the angle-bracket model test is spelled on one code line of the corpus, the return of lib.mjs\'s isSyntheticModel', () => {
+    const hits = CORPUS.flatMap((f) => stallCode(f).split('\n').filter((l) => ANGLE_TEST.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits).toEqual(["ccd/history/lib.mjs: return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');"]);
   });
 });

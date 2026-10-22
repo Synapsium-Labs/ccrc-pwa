@@ -17,7 +17,7 @@ import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
   directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
-  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS, topicsOfColumn,
+  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS, topicsOfColumn, stampAtOrBefore,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
@@ -31,6 +31,18 @@ const LINE_PIECE = 64 * 1024;
 
 const DERIVE_STMTS = new WeakMap();
 const NODES_FTS_STMTS = new WeakMap();
+
+/** W2-D33: the two blob reads, prepared on `db`. `blobZ` reads the stored z, and its SQL is the text Task 21's fault
+ *  seam matches (preload-faults' HISTORY_TEST_THROW_BLOB); `blobLen` reads the raw_len B1's decode bound needs.
+ *  stmts(db) takes both from here, and the deploy lane's driver calls bodyOf(blobReadStmts(db), blobId, budget), so
+ *  each SQL text is spelled once. Not cached: stmts keeps its own set per connection, and a caller that reads many
+ *  blobs keeps this answer. */
+export function blobReadStmts(db) {
+  return {
+    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
+    blobLen: db.prepare('SELECT raw_len FROM blobs WHERE blob_id = ?'),
+  };
+}
 
 /** The prepared statements, one set per connection. Each names its columns. A row's copies are found through
  *  (file_id, entry_id), the memberships primary key: v1 has no index on entry_id alone, on purpose. `todo` and
@@ -79,8 +91,7 @@ function stmts(db) {
       WHERE m.file_id = ? ORDER BY m.line`),
     memberLine: db.prepare(`SELECT m.line AS line, e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
       WHERE m.file_id = ? AND m.entry_id = ?`),
-    blobZ: db.prepare('SELECT z FROM blobs WHERE blob_id = ?'),
-    blobLen: db.prepare('SELECT raw_len FROM blobs WHERE blob_id = ?'),
+    ...blobReadStmts(db),
     paths: db.prepare('SELECT path FROM file_paths WHERE file_id = ? ORDER BY path'),
     receipts: db.prepare('SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? ORDER BY ts_ms, event_key'),
     nodeBound: db.prepare('SELECT boundary_entry_id FROM nodes WHERE node_id = ?'),
@@ -158,8 +169,10 @@ export function summaryDirectionOf(db, ictx, summaryEntryId, fileId) {
  *  decode cap (or with no measured raw_len), which is never decoded whole. B1's unbrotli needs the stored raw_len as
  *  its bound and throws without it, as B1's own storedBody passes it. The blob's raw_len is read by a statement of
  *  its own so that blobZ keeps the SQL Task 21's fault seam matches. Its compressed bytes count against the run's
- *  byte budget, as the FTS backfill's do. */
-function bodyOf(s, blobId, budget) {
+ *  byte budget, as the FTS backfill's do. Exported for the deploy lane (W2-D33): its driver passes blobReadStmts(db)
+ *  as `s` and a `{ bytes }` object as `budget`. Its null still folds no row, a tombstone or a damaged blob, a body that
+ *  is not JSON or is JSON null, and an over-cap body alike. */
+export function bodyOf(s, blobId, budget) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
   const rawLen = s.blobLen.get(blobId)?.raw_len;
@@ -173,8 +186,10 @@ function textOf(s, blobId, budget) {
   return body === null ? null : ftsTextOf(body, 'entry');
 }
 
-/** A boundary's kept list (preservedMessages.allUuids, stored as its own blob by B1's ingest), as a set. */
-function keptOf(s, blobId, budget) {
+/** A boundary's kept list (preservedMessages.allUuids, stored as its own blob by B1's ingest), as a set. Exported
+ *  for the deploy lane (W2-D33), which never calls it (W2-D68): a NULL id, a tombstone and a body that is not an
+ *  array all answer an empty set here, so the driver reads the kept blob through bodyOf and tells them apart. */
+export function keptOf(s, blobId, budget) {
   if (blobId === null) return new Set();
   const v = bodyOf(s, blobId, budget);
   return new Set(Array.isArray(v) ? v.filter((u) => typeof u === 'string') : []);
@@ -199,16 +214,6 @@ function holdingCopy(s, pass, b) {
     fileId: Number(f.file_id), live: f.source_key === '', holds: s.member.get(f.file_id, b.entry_id) !== undefined,
   })));
   return fileId === null ? null : files.find((f) => Number(f.file_id) === fileId);
-}
-
-/** The newest stamped row's time at or before `uuid` in the copy's file order: the boundary's own time when it has
- *  one. lib's raw-leaf grace reads it (D-4690 (history-raw-leaf-grace)); null only when no row up to it has a time. */
-function stampAtOrBefore(copy, uuid) {
-  for (let i = copy.index.get(uuid); i >= 0; i -= 1) {
-    const t = copy.rows[i].ts_ms;
-    if (t !== null) return Number(t);
-  }
-  return null;
 }
 
 /** One copy's rows in file order, each of its boundaries' summary pick, and lib's spans over them. Kept for the
@@ -394,7 +399,7 @@ function deriveOne(db, ictx, kit, s, pass, b, budget) {
   const pick = copy.picks.get(b.uuid);
   const ready = leafReady({
     summaryStored: pick.uuid !== null,
-    fileAtEofAfterBoundary: eofAfterBoundary({ eofMs: holding.eof_ms, boundaryTsMs: stampAtOrBefore(copy, b.uuid) }),
+    fileAtEofAfterBoundary: eofAfterBoundary({ eofMs: holding.eof_ms, boundaryTsMs: stampAtOrBefore(copy.rows, copy.index.get(b.uuid)) }),
   });
   if (!ready) return 'waiting';
   const plain = leafId(ep.ccrc_id, b.cc_uuid, leaf.spanStartUuid);

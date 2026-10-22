@@ -1474,39 +1474,71 @@ function expandBlob(s, blobId, isSidecar) {
 
 /** A stored body: JSON for a parsed row, the line's text for a raw-only one. A body past B1's structure bound
  *  (jsonWithinStructureBound, B1's history-json-structure-bound: a raw-only blob can nest millions of levels) is
- *  never parsed: its text is shown as stored. */
-function expandParse(bytes) {
+ *  never parsed: its text is shown as stored. expandParseMeasured says which it was: `parsed` is false for that text,
+ *  so a stored body that is itself a JSON string (parsed, and a string) is never read as one that did not parse. */
+function expandParseMeasured(bytes) {
   const text = bytes.toString('utf8');
-  if (!xlib.jsonWithinStructureBound(bytes)) return text;
-  try { return JSON.parse(text); } catch { return text; }
+  if (!xlib.jsonWithinStructureBound(bytes)) return { parsed: false, value: text };
+  try { return { parsed: true, value: JSON.parse(text) }; } catch { return { parsed: false, value: text }; }
 }
 
-/** An entry's RAW text (lib's renderEntryText; every shown window of it is redacted by expandRenderItem): the
- *  unsanitised variant when the pair is ccd's own (DM2b), a tombstone as `pruned`. */
-function expandEntryText(rc, s, e) {
+function expandParse(bytes) {
+  return expandParseMeasured(bytes).value;
+}
+
+/** W2-D33: an entry's body as expand picks it, read by expandEntryText and by the deploy lane's driver (W2-5a's
+ *  mining and payload, W2-D65 and W2-D74), so that deploy/ holds no second decode. `rc` needs only
+ *  `{ db, version, schema }`: a read handle (store.mjs openReader), its user_version and SCHEMA_ADDED, at which the
+ *  statements' columns are read (DM44). `e` needs only `{ entry_id, blob_id }`. Answers
+ *  `{ state, body, primary, causes, blob }`:
+ *  - 'body': the primary parsed as JSON. `body` is lib's pickExpandBody over the primary and the entry's decodable
+ *    ccd-sanitize variants (the unsanitised side, DM2b), and `primary` is the parsed primary;
+ *  - 'unparseable': the primary decoded, but is past B1's structure bound or is not JSON. `body` and `primary` are
+ *    its text (lib's variantCauseOf reads arrays, so no variant is picked over a text);
+ *  - 'tombstone' (pruned_ms set, or no blob row), 'over-cap' (past expandBlobFits or B1's decode cap) and
+ *    'undecodable' (a NULL z with no pruned_ms, or bytes that do not decompress): `body` and `primary` are null.
+ *    Five words, not four: a damaged blob is not a pruned one (expandBlob's rule), and a caller counts them apart
+ *    (D-6238 (history-expand-body-five-states)).
+ *  `causes` is every variant row's cause but the primary blob's own. `blob` is expandBlob's own answer for the
+ *  primary, untouched, so expandEntryText keeps its words, the pruned date, raw_len and the bound. */
+export function expandEntryBody(rc, e) {
+  const s = expandStmts(rc);
   // The variant rows are read before the primary's bytes, so every answer names them: a pruned, too-large or undecodable
   // primary still lists its entry's variants and their true count (D-4596 (history-read-fixed-fields-fit-the-cap)).
   const rows = s.variants.all(e.entry_id).filter((v) => v.blob_id !== e.blob_id);
   const p = expandBlob(s, e.blob_id, false);
-  if (p.state !== 'bytes') return { ...p, causes: rows.map((v) => v.cause) };
-  const primary = expandParse(p.bytes);
+  if (p.state !== 'bytes') {
+    const state = p.state === 'pruned' ? 'tombstone' : p.state === 'too-large' ? 'over-cap' : 'undecodable';
+    return { state, body: null, primary: null, causes: rows.map((v) => v.cause), blob: p };
+  }
+  const m = expandParseMeasured(p.bytes);
+  const primary = m.value;
   const others = [];
   for (const v of rows.filter((x) => x.cause === 'ccd-sanitize')) {
     const vb = expandBlob(s, v.blob_id, false);
     if (vb.state === 'bytes') others.push({ body: expandParse(vb.bytes), cause: v.cause });
   }
   const body = others.length === 0 ? primary : xlib.pickExpandBody({ primary, variants: others });
+  return { state: m.parsed ? 'body' : 'unparseable', body, primary, causes: rows.map((v) => v.cause), blob: p };
+}
+
+/** An entry's RAW text (lib's renderEntryText; every shown window of it is redacted by expandRenderItem): the
+ *  unsanitised variant when the pair is ccd's own (DM2b), a tombstone as `pruned`. The body is expandEntryBody's
+ *  (W2-D33), and a primary that is not bytes keeps expandBlob's own words, its pruned date, raw_len and bound. */
+function expandEntryText(rc, e) {
+  const k = expandEntryBody(rc, e);
+  if (k.blob.state !== 'bytes') return { ...k.blob, causes: k.causes };
   let text;
   try {
-    text = xlib.renderEntryText(body);
+    text = xlib.renderEntryText(k.body);
   } catch (err) {
     if (!(err instanceof RangeError)) throw err;
     // A body nested past V8's JSON.stringify stack (about 4,500 levels, far inside B1's JSON_DEPTH_MAX) cannot be
     // rendered. Its primary blob's stored text is shown instead, through the same windows, so the page and the
     // cursor still move.
-    text = p.bytes.toString('utf8');
+    text = k.blob.bytes.toString('utf8');
   }
-  return { state: 'text', text, causes: rows.map((v) => v.cause), primary };
+  return { state: 'text', text, causes: k.causes, primary: k.primary };
 }
 
 /** A sidecar's bytes as RAW text. It is never redacted whole: a 64 MiB sidecar redacted whole peaked at 1,954 MiB
@@ -1578,7 +1610,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   const nameShownHere = isEntry ? null : nameShown(rc, it.name);
   const nameTok = isEntry ? null : tok(nameShownHere);
   const id = isEntry ? uuidShown : `${uuidShown}/${nameTok}`;
-  const t = isEntry ? expandEntryText(rc, s, e) : expandSidecarText(rc, s, it.blobId);
+  const t = isEntry ? expandEntryText(rc, e) : expandSidecarText(rc, s, it.blobId);
   const ts = e.ts_ms === null ? '-' : new Date(Number(e.ts_ms)).toISOString();
   const lead = isEntry
     ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)} ${ts}`

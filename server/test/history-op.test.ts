@@ -1563,7 +1563,7 @@ describe('W1-j and O34: the journal audit', () => {
     try {
       const skipped = runDriver(box, { offsetMs: offset, managedSettings: [] });
       expect(skipped.code, skipped.stderr).toBe(0);
-      expect(countOf(box, 'journal_outbox'), 'the flush could not append, so the row waits').toBe(1);
+      expect(q<{ n: number }>(box, `SELECT count(*) AS n FROM journal_outbox WHERE rec LIKE '%"k":"verdict"%'`)[0]!.n, 'the flush could not append, so the planted verdict waits (the tick\'s recall-off gap record, W2-D30, waits beside it)').toBe(1); expect(q<{ n: number }>(box, `SELECT count(*) AS n FROM journal_outbox WHERE rec LIKE '%"k":"recall-off"%'`)[0]!.n, 'exactly one recall-off record waits beside it').toBe(1);
       expect(counter(box, 'journal_write_failed'), 'the refusal was counted').toBeGreaterThan(0);
       expect(counter(box, 'journal_missing_verdict'), 'an in-flight verdict is not a missing one').toBe(0);
       expect(metaOf(box, 'journal_audit_ms'), 'the audit skipped').toBe(before);
@@ -2055,4 +2055,429 @@ describe('O58: the per-copy due rule is the census\'s default (W1-B2 Task 35; sp
     expect(Number(metaOf(box, 'export_due')), 'only the row held in B alone: U1 waits for its 180-day copy, U3 for its file').toBe(1);
     expect(Number(metaOf(box, 'export_overdue'))).toBe(0);
   });
+});
+
+// ── W2-1 Task 3: the recall-off verb through the shim (W2-D26, W2-D27, W2-D28; D-5763, D-5764) ─────────────────────
+// recall-off writes as invoked, with no dry run (D-5763), through the REAL shim, which execs the REAL sweep.mjs. Its one
+// writer is sweep.mjs's recallOffPass (O13). C64's rows for its two forms are here, both doors: the forms are reversible,
+// so the TTY and pane bumps never apply and every row runs piped (history-maint.test.ts's C64 table, GT_FORMS, excludes
+// them by its CONTROL). The mechanics are W2-D27's table under the lock (D-5764) and W2-D28's writer.
+const W21_G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+const w21Dir = (box: HistoryBox): string => path.join(paths(box).root, 'recall-off');
+interface W21Answer { code: number; reason: string | undefined; raw: string; stdout: string }
+/** A bound fleet box (a server box has no store) whose $REG/<ID>.generation is G1. */
+function w21Box(prefix: string, role: 'fleet' | 'server' = 'fleet'): HistoryBox {
+  const box = role === 'server' ? makeHistoryBox(prefix, { role: 'server' }) : boundBox(prefix);
+  plantSession(box, ID, { generation: G1 });
+  return box;
+}
+/** `ccrc history recall-off <args> --json`, piped: the envelope is stdout's last line, and its exit the process's. */
+function w21Cli(box: HistoryBox, args: string[], env: Record<string, string> = {}): W21Answer {
+  const r = runCli(box, ['recall-off', ...args, '--json'], { env });
+  const raw = `${r.stdout}${r.stderr}`;
+  expect(r.json, `the --json envelope is stdout's last line\n${raw}`).not.toBeNull();
+  expect(r.code, `the process exits with the envelope's exit\n${raw}`).toBe(r.json!['exit']);
+  const reason = r.json!['reason'];
+  return { code: r.code!, reason: typeof reason === 'string' ? reason : undefined, raw, stdout: r.stdout };
+}
+/** `ccd-history-sweep --op recall-off <args>`, piped: the last {"rc":…} line, and its rc the process's. */
+function w21Op(box: HistoryBox, args: string[], env: Record<string, string> = {}): W21Answer {
+  const r = runShim(box, ['--op', 'recall-off', ...args], { env });
+  const raw = `${r.stdout}${r.stderr}`;
+  const a = lastResult(r.stdout);
+  expect(r.code, `the process exits with the rc it printed\n${raw}`).toBe(a.rc);
+  return { code: a.rc, reason: a.reason, raw, stdout: r.stdout };
+}
+/** --clear-all's summary line, which precedes the result line. */
+function w21Summary(stdout: string): unknown {
+  const lines = stdout.trimEnd().split('\n');
+  const at = lines.findIndex((l) => l.startsWith('{"rc"') && l.includes('"cleared"'));
+  expect(at, `no --clear-all summary line in:\n${stdout}`).toBeGreaterThan(-1);
+  expect(at, 'the summary precedes the result line').toBeLessThan(lines.length - 1);
+  return JSON.parse(lines[at]!);
+}
+
+describe('W2-1 recall-off: C64, its two forms at both doors', () => {
+  const FORMS = [
+    { form: 'recall-off', args: [ID] },
+    { form: 'recall-off-clear-all', args: ['--clear-all'] },
+  ] as const;
+
+  it('CONTROL: the rows are the recall-off forms of WRITING_FORMS, reversible and not binding, each named by formOf from its own argv', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(FORMS.map((f) => f.form).sort()).toEqual(Object.keys(WRITING_FORMS).filter((k) => k.startsWith('recall-off')).sort());
+    for (const f of FORMS) {
+      expect(lib.formOf('recall-off', [...f.args]), f.form).toBe(f.form);
+      expect(WRITING_FORMS[f.form]!.irreversible, f.form).toBe(false);
+      expect(WRITING_FORMS[f.form]!.binding, f.form).toBe(false);
+    }
+  });
+
+  it('CLAUDECODE set: both forms answer apply-in-session at both doors and write nothing', () => {
+    const box = w21Box('ccrc-hist-w21-c64a-');
+    for (const f of FORMS) {
+      const before = snapshot(box);
+      const c = w21Cli(box, [...f.args], { CLAUDECODE: '1' });
+      expect([c.code, c.reason], `${f.form} via cli\n${c.raw}`).toEqual([2, 'apply-in-session']);
+      const d = w21Op(box, [...f.args], { CLAUDECODE: '1' });
+      expect([d.code, d.reason], `${f.form} via direct\n${d.raw}`).toEqual([2, 'apply-in-session']);
+      expect(snapshot(box), `${f.form}: nothing written`).toEqual(before);
+    }
+  }, 60_000);
+
+  it('history-off: both forms answer history-off at both doors, neither binding a store, and write nothing', () => {
+    const box = w21Box('ccrc-hist-w21-c64b-');
+    fs.writeFileSync(paths(box).off, '');
+    for (const f of FORMS) {
+      const before = snapshot(box);
+      const c = w21Cli(box, [...f.args]);
+      expect([c.code, c.reason], `${f.form} via cli\n${c.raw}`).toEqual([2, 'history-off']);
+      const d = w21Op(box, [...f.args]);
+      expect([d.code, d.reason], `${f.form} via direct\n${d.raw}`).toEqual([2, 'history-off']);
+      expect(snapshot(box), `${f.form}: nothing written`).toEqual(before);
+    }
+  }, 60_000);
+
+  it('piped, from a cc- pane: both forms pass every bump at both doors and write as invoked, with no dry run (D-5763); tmux is never asked', async () => {
+    const box = w21Box('ccrc-hist-w21-c64c-');
+    const hh = await import('./historyHelpers.js');
+    const pane = hh.withPane(box, ID);
+    for (const door of ['cli', 'direct'] as const) {
+      const run = (args: string[]): W21Answer => (door === 'cli' ? w21Cli(box, args, pane) : w21Op(box, args, pane));
+      const w = run([ID]);
+      expect([w.code, w.reason], `write via ${door}\n${w.raw}`).toEqual([0, undefined]);
+      expect(fs.readFileSync(path.join(w21Dir(box), ID), 'utf8'), `write via ${door}: written as invoked`).toBe(`${G1}\n`);
+      const c = run(['--clear-all']);
+      expect([c.code, c.reason], `clear-all via ${door}\n${c.raw}`).toEqual([0, undefined]);
+      expect(names(w21Dir(box)), `clear-all via ${door}: cleared as invoked`).toEqual([]);
+    }
+    expect(fs.existsSync(path.join(box.home, 'tmux-calls')), 'a reversible form never reads the pane').toBe(false);
+  }, 60_000);
+
+  it('the role gate: on a server box both doors answer 9 and write nothing; the direct door says store-create-refused-role', () => {
+    const box = w21Box('ccrc-hist-w21-role-', 'server');
+    const before = snapshot(box);
+    const c = w21Cli(box, [ID]);
+    expect([c.code, c.reason], c.raw).toEqual([9, undefined]);
+    const d = w21Op(box, [ID]);
+    expect([d.code, d.reason], d.raw).toEqual([9, undefined]);
+    expect(d.raw).toContain('history-sweep: store-create-refused-role');
+    expect(snapshot(box), 'nothing written').toEqual(before);
+  }, 60_000);
+});
+
+describe('W2-1 recall-off: the writer through the shim (W2-D27, W2-D28)', () => {
+  it('the write form makes recall-off/ 0700 and writes `<generation>\\n` at 0600, leaving no temp; a legacy family\'s file is empty', () => {
+    const box = w21Box('ccrc-hist-w21-w-');
+    const dir = w21Dir(box);
+    const w = w21Op(box, [ID]);
+    expect([w.code, w.reason], w.raw).toEqual([0, undefined]);
+    expect(w.stdout).toContain(`history-sweep: recall-off/${ID} written`);
+    expect(fs.lstatSync(dir).mode & 0o777).toBe(0o700);
+    expect(fs.lstatSync(path.join(dir, ID)).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(path.join(dir, ID), 'utf8')).toBe(`${G1}\n`);
+    const LEGACY = 'claude-a-legacy';   // no $REG/<id>.generation: the legacy '' family (§8.4)
+    expect(w21Op(box, [LEGACY]).code).toBe(0);
+    expect(fs.readFileSync(path.join(dir, LEGACY), 'utf8')).toBe('');
+    expect(fs.lstatSync(path.join(dir, LEGACY)).mode & 0o777).toBe(0o600);
+    expect(names(dir)).toEqual([ID, LEGACY].sort());
+  }, 60_000);
+
+  // [what, $REG/<id>.generation ('<dir>': a directory, which no read opens; '<link>': a link to a file holding G1, which the writer's readSmall
+  // follows, as the sweep's registry reads do (the CLI and the hook refuse one); null: absent), extra argv, rc, reason, the file after (null: none)]
+  const TABLE: ReadonlyArray<readonly [string, string | null, readonly string[], number, string | undefined, string | null]> = [
+    ['unreadable, no --generation', '<dir>', [], 2, 'generation-unreadable', null],
+    ['unreadable, --generation G1', '<dir>', ['--generation', G1], 2, 'generation-unreadable', null],
+    ['absent, no --generation: the legacy family', null, [], 0, undefined, ''],
+    ['absent, --generation G1', null, ['--generation', G1], 2, 'generation-mismatch', null],
+    ['empty, no --generation', '', [], 0, undefined, ''],
+    ['one LF, no --generation', '\n', [], 0, undefined, ''],
+    ['empty, --generation G1', '', ['--generation', G1], 2, 'generation-mismatch', null],
+    ['G1, no --generation', G1, [], 0, undefined, `${G1}\n`],
+    ['G1 and one LF, --generation G1', `${G1}\n`, ['--generation', G1], 0, undefined, `${G1}\n`],
+    ['G1, --generation G2', G1, ['--generation', W21_G2], 2, 'generation-mismatch', null],
+    ['G1 and two LFs', `${G1}\n\n`, [], 2, 'generation-malformed', null],
+    ['G1 upper-cased', G1.toUpperCase(), [], 2, 'generation-malformed', null],
+    ['a word, --generation G1', 'not-a-generation', ['--generation', G1], 2, 'generation-malformed', null],
+    ['a link to a file holding G1, no --generation', '<link>', [], 0, undefined, `${G1}\n`],
+  ];
+  it('W2-D27 under the lock, row by row: every refusal answers before any write, and every write holds the decided generation', () => {
+    const box = w21Box('ccrc-hist-w21-t-');
+    const reg = path.join(box.reg, `${ID}.generation`);
+    const target = path.join(box.home, 'generation-target');
+    fs.writeFileSync(target, G1);
+    for (const [what, plant, extra, rc, reason, content] of TABLE) {
+      fs.rmSync(w21Dir(box), { recursive: true, force: true });
+      fs.rmSync(reg, { recursive: true, force: true });
+      if (plant === '<dir>') fs.mkdirSync(reg);
+      else if (plant === '<link>') fs.symlinkSync(target, reg);
+      else if (plant !== null) fs.writeFileSync(reg, plant);
+      const before = snapshot(box);
+      const r = w21Op(box, [ID, ...extra]);
+      expect([r.code, r.reason], `${what}\n${r.raw}`).toEqual([rc, reason]);
+      if (content === null) expect(snapshot(box), `${what}: nothing written`).toEqual(before);
+      else expect(fs.readFileSync(path.join(w21Dir(box), ID), 'utf8'), what).toBe(content);
+    }
+  }, 120_000);
+
+  it('bad-args and bad-id at the direct door, before anything is written: an upper-case or padded --generation, --generation with --clear, --clear-all with more, no id, an id off the grammar', () => {
+    const box = w21Box('ccrc-hist-w21-ba-');
+    const before = snapshot(box);
+    const ROWS: ReadonlyArray<readonly [readonly string[], string]> = [
+      [[ID, '--generation', G1.toUpperCase()], 'bad-args'], [[ID, '--generation', ` ${G1}`], 'bad-args'],
+      [[ID, '--generation', G1, '--clear'], 'bad-args'], [['--clear-all', ID], 'bad-args'], [[], 'bad-args'],
+      [['../x', '--clear'], 'bad-id'],
+    ];
+    for (const [args, reason] of ROWS) {
+      const r = w21Op(box, [...args]);
+      expect([r.code, r.reason], `${JSON.stringify(args)}\n${r.raw}`).toEqual([2, reason]);
+    }
+    expect(snapshot(box), 'nothing written').toEqual(before);
+  }, 60_000);
+
+  it('stale ~tmp entries are removed by every form, a planted link among them never followed', () => {
+    const box = w21Box('ccrc-hist-w21-tmp-');
+    const dir = w21Dir(box);
+    const victim = path.join(box.home, 'victim');
+    fs.writeFileSync(victim, 'keep');
+    const plant = (): void => {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(dir, '~tmp.4242'), 'stale');
+      fs.symlinkSync(victim, path.join(dir, '~tmp.1'));
+    };
+    plant();
+    expect(w21Op(box, [ID]).code).toBe(0);
+    expect(names(dir), 'the write form').toEqual([ID]);
+    plant();
+    expect(w21Op(box, ['claude-a-other', '--clear']).code, 'a missing entry is rc 0').toBe(0);
+    expect(names(dir), 'the clear form').toEqual([ID]);
+    plant();
+    const all = w21Op(box, ['--clear-all']);
+    expect([all.code, all.reason], all.raw).toEqual([0, undefined]);
+    expect(w21Summary(all.stdout), 'the stale temps are gone before the listing').toEqual({ rc: 0, reason: null, cleared: 1, skipped: [] });
+    expect(names(dir)).toEqual([]);
+    expect(fs.readFileSync(victim, 'utf8'), 'no link followed').toBe('keep');
+  }, 60_000);
+
+  it('the executor follows no link: a link at recall-off/<id> is replaced or unlinked, never written through; a link at recall-off/ refuses every form, rc 1, writing nothing', () => {
+    const box = w21Box('ccrc-hist-w21-link-');
+    const dir = w21Dir(box);
+    const victim = path.join(box.home, 'victim');
+    fs.writeFileSync(victim, 'keep');
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.symlinkSync(victim, path.join(dir, ID));
+    expect(w21Op(box, [ID]).code).toBe(0);
+    expect(fs.lstatSync(path.join(dir, ID)).isFile(), 'the rename replaced the link').toBe(true);
+    expect(fs.readFileSync(path.join(dir, ID), 'utf8')).toBe(`${G1}\n`);
+    expect(fs.readFileSync(victim, 'utf8'), 'the write went through no link').toBe('keep');
+    fs.rmSync(path.join(dir, ID));
+    fs.symlinkSync(victim, path.join(dir, ID));
+    expect(w21Op(box, [ID, '--clear']).code).toBe(0);
+    expect(names(dir), 'the link itself is unlinked').toEqual([]);
+    expect(fs.readFileSync(victim, 'utf8'), 'its target is not').toBe('keep');
+    fs.rmdirSync(dir);
+    const elsewhere = path.join(box.home, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(elsewhere, dir);
+    for (const args of [[ID], [ID, '--clear'], ['--clear-all']]) {
+      const r = w21Op(box, args);
+      expect([r.code, r.reason], `${JSON.stringify(args)}\n${r.raw}`).toEqual([1, undefined]);
+      expect(r.stdout).toContain('history-sweep: recall-off: ~/.ccrc/history/recall-off is a link, not a directory this pass writes in; nothing written');
+    }
+    expect(names(elsewhere), 'nothing written through the link').toEqual([]);
+  }, 60_000);
+
+  // R3's other unusable directories: a recall-off/ that is a file or a FIFO, and a history root that is a link or a file.
+  // The root is lstat'ed before recall-off/ is, so a link at the root is refused, never followed into recall-off/.
+  it('an unusable history root or recall-off/ refuses every form, rc 1, writing nothing: recall-off/ a file or a FIFO, the root a link to a directory or a file', () => {
+    const box = w21Box('ccrc-hist-w21-root-');
+    const root = paths(box).root;
+    const dir = w21Dir(box);
+    const refusesEveryForm = (what: string, line: string): void => {
+      for (const args of [[ID], [ID, '--clear'], ['--clear-all']]) {
+        const before = snapshot(box);
+        const r = w21Op(box, args);
+        expect([r.code, r.reason], `${what}: ${JSON.stringify(args)}\n${r.raw}`).toEqual([1, undefined]);
+        expect(r.stdout, `${what}: ${JSON.stringify(args)}`).toContain(`history-sweep: recall-off: ${line}, not a directory this pass writes in; nothing written`);
+        expect(snapshot(box), `${what}: ${JSON.stringify(args)}: nothing written`).toEqual(before);
+      }
+    };
+    fs.writeFileSync(dir, '');
+    refusesEveryForm('recall-off/ a file', '~/.ccrc/history/recall-off is a file');
+    fs.rmSync(dir);
+    expect(spawnSync('mkfifo', [dir]).status, 'CONTROL: the FIFO was made').toBe(0);
+    refusesEveryForm('recall-off/ a FIFO', '~/.ccrc/history/recall-off is a FIFO, a socket or a device');
+    fs.rmSync(dir);
+    const moved = path.join(box.home, 'history-moved');      // outside ~/.ccrc, so snapshot() never walks it: checked by hand
+    fs.renameSync(root, moved);
+    fs.symlinkSync(moved, root);
+    refusesEveryForm('the root a link', '~/.ccrc/history is a link');
+    expect(fs.existsSync(path.join(moved, 'recall-off')), 'nothing made behind the link').toBe(false);
+    fs.rmSync(root);
+    fs.writeFileSync(root, '');
+    refusesEveryForm('the root a file', '~/.ccrc/history is a file');
+  }, 120_000);
+
+  it('the clear form: a missing entry, and a missing recall-off/, are rc 0 and make nothing; a directory at the entry is left, rc 1', () => {
+    const box = w21Box('ccrc-hist-w21-clear-');
+    const dir = w21Dir(box);
+    const none = w21Op(box, [ID, '--clear']);
+    expect([none.code, none.reason], none.raw).toEqual([0, undefined]);
+    expect(none.stdout, 'no recall-off/ answers the same line as a missing entry').toContain(`history-sweep: recall-off/${ID} was already absent`);
+    expect(fs.existsSync(dir), 'a clear never makes recall-off/').toBe(false);
+    fs.mkdirSync(dir);
+    const gone = w21Op(box, [ID, '--clear']);
+    expect([gone.code, gone.reason], gone.raw).toEqual([0, undefined]);
+    expect(gone.stdout).toContain(`history-sweep: recall-off/${ID} was already absent`);
+    fs.mkdirSync(path.join(dir, ID), { recursive: true });
+    const d = w21Op(box, [ID, '--clear']);
+    expect([d.code, d.reason], d.raw).toEqual([1, undefined]);
+    expect(d.stdout).toContain(`history-sweep: recall-off/${ID} is a directory, neither a file nor a link`);
+    expect(fs.lstatSync(path.join(dir, ID)).isDirectory(), 'left for the operator').toBe(true);
+  }, 60_000);
+
+  it('--clear-all lstats every entry, whatever its name: files and links unlinked, a directory and a FIFO skipped and named; its summary precedes the result; with no recall-off/ it makes none', () => {
+    const box = w21Box('ccrc-hist-w21-all-');
+    const dir = w21Dir(box);
+    const none = w21Op(box, ['--clear-all']);
+    expect([none.code, none.reason], none.raw).toEqual([0, undefined]);
+    expect(w21Summary(none.stdout)).toEqual({ rc: 0, reason: null, cleared: 0, skipped: [] });
+    expect(fs.existsSync(dir), 'clear-all never makes recall-off/').toBe(false);
+    const victim = path.join(box.home, 'victim');
+    fs.writeFileSync(victim, 'keep');
+    fs.mkdirSync(dir, { mode: 0o700 });
+    for (const n of [ID, 'claude-b-demo']) fs.writeFileSync(path.join(dir, n), `${G1}\n`);
+    fs.writeFileSync(path.join(dir, 'not an id'), '');                 // off the id grammar: lstat'ed all the same
+    fs.symlinkSync(victim, path.join(dir, 'claude-c-link'));
+    fs.mkdirSync(path.join(dir, 'claude-d-dir'));
+    expect(spawnSync('mkfifo', [path.join(dir, 'claude-e-fifo')]).status, 'CONTROL: the FIFO was made').toBe(0);
+    fs.writeFileSync(path.join(dir, '~tmp.77'), 'stale');
+    const r = w21Op(box, ['--clear-all']);
+    expect([r.code, r.reason], r.raw).toEqual([0, undefined]);
+    expect(w21Summary(r.stdout)).toEqual({ rc: 0, reason: null, cleared: 4, skipped: ['claude-d-dir', 'claude-e-fifo'] });
+    expect(names(dir)).toEqual(['claude-d-dir', 'claude-e-fifo']);
+    expect(fs.readFileSync(victim, 'utf8'), 'a link is unlinked, never followed').toBe('keep');
+  }, 60_000);
+
+  // The shim (umask 077) and runPass (process.umask(0o077)) both mask what a spawned pass makes, so the 0700 and 0600 the
+  // write form asserts through the shim would hold with no mode in the pass at all. Here the pass runs in this fork under
+  // umask 022, restored in `finally`, so only the pass's own modes can make 0700 and 0600 (vitest's pool is forks, where
+  // process.umask(mask) is allowed; history-replay.test.ts does the same).
+  it('in-process, under umask 022: recall-off/ is made 0700 and the file 0600 by the pass\'s own modes; the temp is recall-off/~tmp.<pid>, opened O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, and the directory is fsynced after the rename', async () => {
+    const box = w21Box('ccrc-hist-w21-flags-');
+    const sweep = await import('../../ccd/history/sweep.mjs');
+    const hh = await import('./historyHelpers.js');
+    const args = { op: 'recall-off', mode: 'write', id: ID, generation: null } as const;
+    expect(fs.existsSync(w21Dir(box)), 'CONTROL: recall-off/ is absent, so this pass makes it').toBe(false);
+    const umask = process.umask(0o022);
+    const first = (() => {
+      try { return hh.recordOpenFlags(() => sweep.recallOffPass(box.home, args, () => {})); } finally { process.umask(umask); }
+    })();
+    const { out, opens } = first;
+    expect(out).toEqual({ rc: 0 });
+    expect(fs.lstatSync(w21Dir(box)).mode & 0o777, 'the directory\'s mode is the pass\'s, not the umask\'s').toBe(0o700);
+    expect(fs.lstatSync(path.join(w21Dir(box), ID)).mode & 0o777, 'the file\'s mode is the pass\'s, not the umask\'s').toBe(0o600);
+    const tmp = opens.filter((o) => o.path === path.join(w21Dir(box), `~tmp.${process.pid}`));
+    expect(tmp, JSON.stringify(opens)).toHaveLength(1);
+    const want = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+    expect(tmp[0]!.flags & want).toBe(want);
+    const { dirs } = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, args, () => {}));
+    expect(dirs, 'the rename is made durable').toContain(w21Dir(box));
+    expect(fs.readFileSync(path.join(w21Dir(box), ID), 'utf8')).toBe(`${G1}\n`);
+  });
+
+  // D-6241: the stale-temp loop leaves a non-file at ~tmp.<name>, so one at the writer's OWN temp name makes its open fail with EEXIST;
+  // the failure path then unlinks the temp only when this pass created it, or it would remove the FIFO the loop chose to keep.
+  it('in-process: a FIFO at the writer\'s own temp name makes the write fail (the open answers EEXIST, which runOpPass answers rc 1), and the FIFO stays, with nothing written at recall-off/<id>', async () => {
+    const box = w21Box('ccrc-hist-w21-ownfifo-');
+    const sweep = await import('../../ccd/history/sweep.mjs');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    const own = path.join(dir, `~tmp.${process.pid}`);
+    expect(spawnSync('mkfifo', [own]).status, 'CONTROL: the FIFO was made').toBe(0);
+    const args = { op: 'recall-off', mode: 'write', id: ID, generation: null } as const;
+    expect(() => sweep.recallOffPass(box.home, args, () => {})).toThrow(/EEXIST/);
+    expect(fs.lstatSync(own).isFIFO(), 'the entry the stale loop kept is not removed by the failure path').toBe(true);
+    expect(fs.existsSync(path.join(dir, ID)), 'nothing was written at recall-off/<id>').toBe(false);
+  });
+
+  // r761 F6: M29 pins only the rename's directory fsync. Each other durability step is its own pass here, so its assertion sees only that
+  // pass's fsyncs: the root's, after recall-off/ is made (the write form's temp fsync is a file fd, which recordDirFsyncs does not record).
+  it('in-process: the root is fsynced after recall-off/ is made, and recall-off/ after --clear and after --clear-all (r761 F6)', async () => {
+    const box = w21Box('ccrc-hist-w21-fsyncs-');
+    const sweep = await import('../../ccd/history/sweep.mjs');
+    const hh = await import('./historyHelpers.js');
+    expect(fs.existsSync(w21Dir(box)), 'CONTROL: recall-off/ is absent, so the write form makes it').toBe(false);
+    const made = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'write', id: ID, generation: null }, () => {}));
+    expect(made.out).toEqual({ rc: 0 });
+    expect(made.dirs, 'the new recall-off/ is made durable in its parent').toContain(path.dirname(w21Dir(box)));
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'CONTROL: the file was written').toBe(true);
+    const cleared = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'clear', id: ID, generation: null }, () => {}));
+    expect(cleared.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'the entry is gone').toBe(false);
+    expect(cleared.dirs, 'the unlink is made durable in recall-off/').toContain(w21Dir(box));
+    const again = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'write', id: ID, generation: null }, () => {}));
+    expect(again.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'CONTROL: the file was written again').toBe(true);
+    const all = hh.recordDirFsyncs(() => sweep.recallOffPass(box.home, { op: 'recall-off', mode: 'clear-all', id: null, generation: null }, () => {}));
+    expect(all.out).toEqual({ rc: 0 });
+    expect(fs.existsSync(path.join(w21Dir(box), ID)), 'the entry is gone').toBe(false);
+    expect(all.dirs, 'the --clear-all unlinks are made durable in recall-off/').toContain(w21Dir(box));
+  });
+});
+
+// ── W2-1 Task 3, fix round 1: the writer names every entry it leaves, and an absent root is refused ─────────────────────
+describe('W2-1 recall-off: every entry the writer leaves is named, and an unusable path is refused (fix round 1)', () => {
+  it.skipIf(process.platform !== 'linux')('--clear-all names an entry whose name is not UTF-8: the listing decodes it lossily, lstat of the decoded name is absent, so it is skipped, never dropped', () => {
+    const box = w21Box('ccrc-hist-w21-utf8-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.writeFileSync(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0x63, 0xff, 0xfe])]), '');
+    fs.writeFileSync(path.join(dir, ID), `${G1}\n`);
+    const r = w21Op(box, ['--clear-all']);
+    expect([r.code, r.reason], r.raw).toEqual([0, undefined]);
+    const sum = w21Summary(r.stdout) as { cleared: number; skipped: string[] };
+    expect(sum.cleared, 'the valid entry is unlinked').toBe(1);
+    expect(sum.skipped, 'the entry whose name does not round-trip is named, not dropped').toHaveLength(1);
+  }, 60_000);
+
+  it('a FIFO named ~tmp.x survives a write, and --clear-all names it in skipped', () => {
+    const box = w21Box('ccrc-hist-w21-tmpfifo-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    expect(spawnSync('mkfifo', [path.join(dir, '~tmp.x')]).status, 'CONTROL: the FIFO was made').toBe(0);
+    const w = w21Op(box, [ID]);
+    expect([w.code, w.reason], w.raw).toEqual([0, undefined]);
+    expect(names(dir), 'the stale-temp loop unlinks files and links only').toEqual([ID, '~tmp.x'].sort());
+    expect(fs.lstatSync(path.join(dir, '~tmp.x')).isFIFO()).toBe(true);
+    const all = w21Op(box, ['--clear-all']);
+    expect([all.code, all.reason], all.raw).toEqual([0, undefined]);
+    expect(w21Summary(all.stdout)).toEqual({ rc: 0, reason: null, cleared: 1, skipped: ['~tmp.x'] });
+    expect(names(dir)).toEqual(['~tmp.x']);
+  }, 60_000);
+
+  it('an absent history root: all three forms answer rc 1 with the arm\'s line and write nothing', () => {
+    const box = makeHistoryBox('ccrc-hist-w21-noroot-');
+    expect(fs.existsSync(paths(box).root), 'CONTROL: this box has no history root').toBe(false);
+    for (const args of [[ID], [ID, '--clear'], ['--clear-all']]) {
+      const before = snapshot(box);
+      const r = w21Op(box, args);
+      expect([r.code, r.reason], `${JSON.stringify(args)}\n${r.raw}`).toEqual([1, undefined]);
+      expect(r.stdout, JSON.stringify(args)).toContain('history-sweep: recall-off: ~/.ccrc/history is absent, not a directory this pass writes in; nothing written');
+      expect(snapshot(box), `${JSON.stringify(args)}: nothing written`).toEqual(before);
+      expect(fs.existsSync(paths(box).root), `${JSON.stringify(args)}: no root made`).toBe(false);
+    }
+  }, 60_000);
+
+  it('a write over a directory at recall-off/<id>: rc 1, the directory is untouched, and no ~tmp.* is left behind', () => {
+    const box = w21Box('ccrc-hist-w21-overdir-');
+    const dir = w21Dir(box);
+    fs.mkdirSync(path.join(dir, ID), { recursive: true });
+    fs.writeFileSync(path.join(dir, ID, 'keep'), 'k');
+    const r = w21Op(box, [ID]);
+    expect([r.code, r.reason], r.raw).toEqual([1, undefined]);
+    expect(fs.lstatSync(path.join(dir, ID)).isDirectory(), 'the directory is untouched').toBe(true);
+    expect(names(path.join(dir, ID))).toEqual(['keep']);
+    expect(names(dir), 'the temp is removed on the failure path').toEqual([ID]);
+  }, 60_000);
 });

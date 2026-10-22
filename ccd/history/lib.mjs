@@ -52,6 +52,11 @@ const REASON_ROWS = [
     // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
     // mapping names a uuid another family already holds confirmed. Plan-chosen words.
     'roster-unreadable', 'uuid-claimed',
+    // `generation-malformed` and `generation-mismatch` (W2-1, W2-D27): recall-off's two refusals of the id's generation,
+    // decided under the shim's lock before any write: $REG/<id>.generation holds neither nothing nor one generation, or
+    // `--generation` names another than the registry's (or the registry holds none).
+    // D-5764 (history-w2-recall-off-generation-checks)
+    'generation-malformed', 'generation-mismatch',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -285,7 +290,9 @@ export const COVERAGE = Object.freeze(['this-box']);
 export const SCOPE_SOURCES = Object.freeze(['tmux']);
 export const VARIANT_CAUSES = Object.freeze(['ccd-sanitize', 'unknown']);
 export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);
-export const JOURNAL_KINDS = Object.freeze(['head', 'file', 'spool', 'verdict', 'redact', 'tick']);
+// W2-1 Task 4 (W2-D30): 'recall-off' carries the presence record's change and gap rows. JOURNAL_V stays 1, so a build
+// before W2-1 reads such a record as an unknown kind, skipped and counted (journal_record_unknown), never as newer.
+export const JOURNAL_KINDS = Object.freeze(['head', 'file', 'spool', 'verdict', 'redact', 'tick', 'recall-off']);
 export const JOURNAL_VERDICTS = Object.freeze([
   'family', 'epoch-confirmed', 'epoch-unconfirmed', 'epoch-chained', 'generation-joined',
   'rekeyed', 'mapping', 'bind', 'drained',
@@ -412,8 +419,10 @@ export function readBoxEnvValue(text, key) {
 
 // ── every path the history code forms (§5.2) ──────────────────────────────
 /** Absolute paths under one HOME, joined with '/' (no `node:path` in L1).
- *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL or SWITCHES — never a
- *  second spelling. `journalFile` is SQLite's rollback journal beside the DB
+ *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL, SWITCHES or
+ *  RECALL_OFF_DIR — never a second spelling; `recallOffDir` is the one place
+ *  RECALL_OFF_DIR is joined onto a path (W2-D29). `journalFile` is SQLite's
+ *  rollback journal beside the DB
  *  (`history.db-journal`), NOT the history journal: that is `journalDir`. */
 export function historyPaths(home) {
   const h = String(home).replace(/\/+$/, '');
@@ -438,9 +447,11 @@ export function historyPaths(home) {
     op: `${root}/op`,
     pass: `${root}/pass`,
     passDied: `${root}/pass-died`,
+    recallOffDir: `${root}/${RECALL_OFF_DIR}`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
+    headlessOn: `${h}/${SWITCHES.headlessOn}`,
     ccrcEnv: `${h}/.ccrc/ccrc.env`,
     accountsSh: `${h}/.ccrc/accounts.sh`,
     reg: `${h}/.cc-sessions`,
@@ -753,6 +764,30 @@ const VERDICT_SHAPES = Object.freeze({
   drained: shape({ file: drainingNameOk }),
 });
 
+// W2-1 Task 4 (W2-D30): a `recall-off` record is one change or gap row of the presence record, keyed by `rk` as a verdict is
+// by `kind`. A state is exactly `{s, v}`: `{s: 'value', v}`, v a generation ('' or a lowercase UUID) or `sha256:` and a
+// hex digest (recallOffStateOf), or `{s: 'unreadable', v: null}`. A change's `from` may also be 'unobserved' (no state row)
+// and its `to` 'absent' (no file); a gap's `from` is the last observation's start, or null when none is recorded.
+const RECALL_OFF_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+function isRecallOffState(x) {
+  if (x === null || typeof x !== 'object' || Array.isArray(x)) return false;
+  const keys = Object.keys(x).sort();
+  if (keys.length !== 2 || keys[0] !== 's' || keys[1] !== 'v') return false;
+  if (x.s === 'unreadable') return x.v === null;
+  return x.s === 'value' && typeof x.v === 'string' && (isGen(x.v) || RECALL_OFF_DIGEST_RE.test(x.v));
+}
+const RECALL_OFF_RKS = Object.freeze(['change', 'gap']);
+const RECALL_OFF_BASE = Object.freeze({ rk: oneOf(RECALL_OFF_RKS) });
+const RECALL_OFF_SHAPES = Object.freeze({
+  change: shape({
+    id: idOk,
+    from: (x) => x === 'unobserved' || isRecallOffState(x),
+    to: (x) => x === 'absent' || isRecallOffState(x),
+    prev_seen_ms: (x) => x === null || isMs(x),
+  }),
+  gap: shape({ from: (x) => x === null || isMs(x), to: isMs }),
+});
+
 /** Exactly the declared fields beyond `v`, `k`, `t`: none missing, none extra,
  *  each value in its grammar. */
 function fieldsOk(o, base, s) {
@@ -786,6 +821,12 @@ export function parseJournalRecord(line) {
     if (typeof o.kind !== 'string') return { kind: 'malformed' };
     if (!JOURNAL_VERDICTS.includes(o.kind)) return { kind: 'unknown' };
     return fieldsOk(o, VERDICT_BASE, VERDICT_SHAPES[o.kind]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
+  }
+  if (o.k === 'recall-off') {
+    if (typeof o.rk !== 'string') return { kind: 'malformed' };
+    // An rk this build does not know is a newer build's row kind: unknown, skipped and counted, never malformed (W2-1 Task 4).
+    if (!RECALL_OFF_RKS.includes(o.rk)) return { kind: 'unknown' };
+    return fieldsOk(o, RECALL_OFF_BASE, RECALL_OFF_SHAPES[o.rk]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
   }
   return fieldsOk(o, {}, RECORD_SHAPES[o.k]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
 }
@@ -1515,14 +1556,23 @@ export function variantCauseOf(a, b) {
   return sanitized > 0 ? 'ccd-sanitize' : 'unknown';
 }
 
+/** Whether a row's model name is Claude Code's own notice rather than any
+ *  backend's output: an angle-bracketed name (`<synthetic>`). NULL, empty and
+ *  every other name are not, so a row with no model stays a turn. The one
+ *  predicate (W2-D17): backendOf reads it for `unknown`, and
+ *  deploy/history-gate.mjs's turnsOf imports it to drop such rows. */
+export function isSyntheticModel(model) {
+  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');
+}
+
 /** A row's backend, from its model name alone (§6.2, `BACKENDS`). A name
  *  starting `claude` is `anthropic`; NULL, empty, or angle-bracketed
- *  (`<synthetic>`: Claude Code's own notices, no backend's output) is
+ *  (`<synthetic>`, isSyntheticModel: Claude Code's own notices) is
  *  `unknown`; any other name is `other`. Nothing is read from the roster.
  *  D-4196 */
 export function backendOf(model) {
   if (typeof model !== 'string' || model === '') return 'unknown';
-  if (model.startsWith('<') && model.endsWith('>')) return 'unknown';
+  if (isSyntheticModel(model)) return 'unknown';
   return model.startsWith('claude') ? 'anthropic' : 'other';
 }
 
@@ -4143,6 +4193,22 @@ export const HISTORY_NODE_ID_RE = /^[LN][0-9a-f]{20}$/;
  *  per-id files (§9.7). Spelled once; the W2 verb writes it, B2 only reads. */
 export const RECALL_OFF_DIR = 'recall-off';
 
+/** The recall-off presence record's meta-key prefix (W2-D30): its `state:<id>`,
+ *  `seen_ms`, `change:<ts_ms>:<id>` and `gap:<ts_ms>` rows are keyed under it in
+ *  the store's `meta` table, so the record needs no schema change (W2-D10). The
+ *  sweep writes them, status reads them, deploy/history-gate.mjs's
+ *  changedFamilies parses them and deploy/measure-history.py emits them raw.
+ *  Spelled once, here; measure-history.py's twin is held equal to it by
+ *  measure-history.test.ts (W2-D23). */
+export const RECALL_OFF_META = 'recall_off:';
+/** When the time since the presence record's last observation exceeds this,
+ *  the tick writes a gap row (W2-D30, chosen). */
+export const RECALL_OFF_GAP_MS = 10 * 60 * 1000;
+/** The most `recall-off/` entries one tick's scan reads (W2-D30, chosen): the
+ *  counted iteration stops there, and a capped directory writes nothing and
+ *  does not advance the record's seen time. */
+export const RECALL_OFF_SCAN_MAX = 4096;
+
 /** `tmux display-message` prints `#S`; ccd names every session `cc-<id>`, and
  *  the hook requires the same prefix (spec §8.2). decideOpGate's pane test
  *  spells the prefix too, for a different decision (an irreversible form). */
@@ -4328,10 +4394,10 @@ function validNodeId(id) {
 
 /** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
  *  path exists, so `../x` can never name a file outside the store
- *  (D-4170, C66). */
+ *  (D-4170, C66). The directory is historyPaths' recallOffDir (W2-D29). */
 export function recallOffPath(home, id) {
   if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
-  return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
+  return `${historyPaths(home).recallOffDir}/${id}`;
 }
 
 /** Whether `recall-off/<id>` holds this family (§9.7,
@@ -4351,6 +4417,142 @@ export function decideRecallOff({ file, generation }) {
   if (file.state === 'absent') return 'none';
   if (file.state !== 'value') return 'off';
   return file.value.trim() === generation ? 'off' : 'stale';
+}
+
+// ── W2-1 Task 4: the recall-off presence record (W2-D30) and status's block (W2-D31) ──────────────────────────────
+// The sweep observes recall-off/ once per tick (sweep.mjs recordRecallOff) and keeps what it saw in meta rows under
+// RECALL_OFF_META; no schema change. Every decision is here: the state a read is, the rows and journal records one
+// complete observation writes, the rows one journal record replays to, and what status reports.
+
+/** The presence record's meta keys (W2-D30): `seen`, the last complete observation's start in ms; `state` + id, one
+ *  file's state, absent while the file is; `change` + `<ts_ms>:<id>`, one transition `{from, to, prev_seen_ms}`; and
+ *  `gap` + `<ts_ms>`, one interval with no observation `{from, to}`. deploy/history-gate.mjs's parseRecallOffRow reads
+ *  the change and gap rows (W2-D23). */
+export const RECALL_OFF_KEYS = Object.freeze({
+  seen: `${RECALL_OFF_META}seen_ms`,
+  state: `${RECALL_OFF_META}state:`,
+  change: `${RECALL_OFF_META}change:`,
+  gap: `${RECALL_OFF_META}gap:`,
+});
+
+/** One recall-off/<id> read (store.mjs readBounded's answer) as the record keeps it (W2-D30). 'absent' has no state
+ *  row. An unreadable or over-cap read is `{s: 'unreadable', v: null}`, never absent (C67: a file that exists says the
+ *  id was assigned). A value is the text trimmed as decideRecallOff trims it, kept as it is when that is a generation
+ *  ('' or a lowercase UUID) and otherwise as `sha256:` and its hex digest, so a planted file's change is still seen and
+ *  a state row stays bounded whatever the file holds. */
+export function recallOffStateOf(read) {
+  if (read.state === 'absent') return 'absent';
+  if (read.state !== 'value') return { s: 'unreadable', v: null };
+  const t = read.value.trim();
+  return { s: 'value', v: isGen(t) ? t : `sha256:${sha256Hex(t)}` };
+}
+
+const RECALL_OFF_SEEN_RE = /^(?:0|[1-9][0-9]{0,15})$/;
+/** seen_ms as stored: a decimal ms within Date's range, else null. A value off that grammar, or past Date's last ms (so
+ *  `new Date(..).toISOString()` in status cannot throw), reads as never observed, the conservative reading: a null
+ *  prev_seen_ms reads as -Infinity downstream (W2-D23), and a null gap `from` reports the gap. */
+function recallOffSeenOf(raw) {
+  if (typeof raw !== 'string' || !RECALL_OFF_SEEN_RE.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n <= ROW_TS_MAX_MS ? n : null;
+}
+/** A state row's value, or null when it is off the grammar (isRecallOffState). */
+function recallOffStateRowOf(raw) {
+  let x;
+  try { x = JSON.parse(raw); } catch { return null; }
+  return isRecallOffState(x) ? x : null;
+}
+const recallOffById = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/** What one COMPLETE observation of recall-off/ writes (W2-D30), as data; the sweep writes it in one transaction.
+ *  - `seen`: seen_ms becomes the observation's start, `startMs`. Every row it writes is keyed by its end, `endMs`, and
+ *    every record's `t` is `endMs`: a change made during the scan lies in (prev_seen_ms, endMs], on the conservative
+ *    side of W2-3's drop test at both bounds.
+ *  - A gap row `{from, to: startMs}` when seen_ms is absent or off its grammar (`from` null: the first observation, or
+ *    the first after a rebuild) or more than RECALL_OFF_GAP_MS before `startMs` (`from` the old seen_ms).
+ *  - Changes are recorded only against state rows. A present file with no state row (or one off the grammar) is a change
+ *    from 'unobserved' with prev_seen_ms null; a state row whose file is not present (or read absent) is a change to
+ *    'absent' and its row is deleted; a state that differs is a change carrying the old seen_ms. An unchanged file writes
+ *    nothing. A state row whose key names no idOk id is deleted with no record (journalRecord would refuse its id).
+ *  - `insert` rows are written DO NOTHING; `put` and `del` are the state rows; `malformed` counts the rows off grammar. */
+export function planRecallOffObservation({ seenRaw, stateRows, files, startMs, endMs }) {
+  if (!isMs(startMs) || !isMs(endMs) || endMs < startMs) {
+    throw new TypeError(`planRecallOffObservation: startMs and endMs are ms, startMs <= endMs: ${JSON.stringify([startMs, endMs])}`);
+  }
+  for (const f of files) {
+    if (!idOk(f.id)) throw new TypeError(`planRecallOffObservation: not a session id: ${JSON.stringify(f.id)}`);
+  }
+  const prevSeen = recallOffSeenOf(seenRaw);
+  const plan = { seen: { k: RECALL_OFF_KEYS.seen, v: String(startMs) }, put: [], del: [], insert: [], records: [], malformed: 0 };
+  const row = (rk, k, body, fields) => {
+    plan.insert.push({ k, v: canonicalJson(body) });
+    plan.records.push({ t: endMs, fields: { rk, ...fields } });
+  };
+  const change = (id, from, to, prev) => {
+    const body = { from, to, prev_seen_ms: prev };
+    row('change', `${RECALL_OFF_KEYS.change}${endMs}:${id}`, body, { id, ...body });
+  };
+  if (prevSeen === null || startMs - prevSeen > RECALL_OFF_GAP_MS) {
+    const body = { from: prevSeen, to: startMs };
+    row('gap', `${RECALL_OFF_KEYS.gap}${endMs}`, body, body);
+  }
+  const prior = new Map();
+  for (const r of [...stateRows].sort(recallOffById)) {
+    if (!idOk(r.id)) {
+      plan.malformed += 1;
+      plan.del.push(`${RECALL_OFF_KEYS.state}${r.id}`);
+      continue;
+    }
+    const st = recallOffStateRowOf(r.raw);
+    if (st === null) plan.malformed += 1;
+    prior.set(r.id, st);
+  }
+  const present = new Set();
+  for (const f of [...files].sort(recallOffById)) {
+    if (f.state === 'absent') continue;
+    present.add(f.id);
+    const was = prior.get(f.id);
+    if (was === undefined || was === null) change(f.id, 'unobserved', f.state, null);
+    else if (canonicalJson(was) === canonicalJson(f.state)) continue;
+    else change(f.id, was, f.state, prevSeen);
+    plan.put.push({ k: `${RECALL_OFF_KEYS.state}${f.id}`, v: canonicalJson(f.state) });
+  }
+  for (const [id, was] of prior) {
+    if (present.has(id)) continue;
+    change(id, was ?? 'unobserved', 'absent', was === null ? null : prevSeen);
+    plan.del.push(`${RECALL_OFF_KEYS.state}${id}`);
+  }
+  return plan;
+}
+
+/** The rows one replayed `recall-off` record gives (W2-D30), byte for byte the rows the live plan wrote for it: the
+ *  change or gap row (inserted DO NOTHING), and for a change its state row, last-wins from `to` and deleted when `to` is
+ *  'absent'. seen_ms is never replayed, and nothing here reads the directory. */
+export function recallOffReplayRows(rec) {
+  if (rec.rk === 'gap') {
+    return { insert: { k: `${RECALL_OFF_KEYS.gap}${rec.t}`, v: canonicalJson({ from: rec.from, to: rec.to }) }, put: null, del: null };
+  }
+  const insert = { k: `${RECALL_OFF_KEYS.change}${rec.t}:${rec.id}`, v: canonicalJson({ from: rec.from, to: rec.to, prev_seen_ms: rec.prev_seen_ms }) };
+  const key = `${RECALL_OFF_KEYS.state}${rec.id}`;
+  return rec.to === 'absent' ? { insert, put: null, del: key } : { insert, put: { k: key, v: canonicalJson(rec.to) }, del: null };
+}
+
+/** status --json's `recall_off` (W2-D31), from the meta rows alone: the last complete observation's start, the files
+ *  it recorded present, and how many of them read unreadable. A state row off the grammar counts as unreadable: status
+ *  never reports a row it cannot read as a readable file. Counts only, never an id, so status stays identity-free. */
+export function recallOffStatusOf(meta) {
+  let seen = null;
+  let files = 0;
+  let unreadable = 0;
+  for (const [k, v] of meta) {
+    if (k === RECALL_OFF_KEYS.seen) seen = recallOffSeenOf(v);
+    else if (k.startsWith(RECALL_OFF_KEYS.state)) {
+      files += 1;
+      const st = recallOffStateRowOf(v);
+      if (st === null || st.s === 'unreadable') unreadable += 1;
+    }
+  }
+  return { seen_ms: seen, files, unreadable };
 }
 
 
@@ -5318,7 +5520,10 @@ export function decideRelay({ status, signal, lastLine }) {
   if (keys !== 'rc' && keys !== 'rc,reason') return internal;
   if (!Object.values(EXIT).includes(r.rc) || r.rc !== status) return internal;
   if (REASON_EXITS.has(r.rc)) return typeof r.reason === 'string' && Object.hasOwn(REASONS, r.reason) && REASONS[r.reason] === r.rc ? { exit: r.rc, reason: r.reason } : internal;
-  return r.reason === undefined ? { exit: r.rc } : internal;
+  if (r.reason !== undefined) return internal;
+  // A stated `{"rc":1}` is told apart from no result by a field, never a REASONS word (R3): the operator relay prints the arm's
+  // own line for a verb whose pass states its rc 1 (recall-off), and the generic words for a shim that gave nothing.
+  return r.rc === EXIT.INTERNAL ? { exit: EXIT.INTERNAL, stated: true } : { exit: r.rc };
 }
 
 // derived from lossless-claw src/large-files.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
@@ -5800,6 +6005,20 @@ export function decideLeafId({ ccrcId, ccUuid, spanStartUuid, boundaryUuid, plai
  *  the leaf raw for good. *Chosen*. D-4690 (history-raw-leaf-grace) */
 export const RAW_LEAF_GRACE_MS = 5 * 60 * 1000;
 
+/** The newest stamped row's time at or before row `index` of `rows`, in the order `rows` holds (a copy's file
+ *  order): row `index`'s own time when it has one, and a stamp of 0 is a time. Null when no row up to it has one,
+ *  and when `index` is undefined (derive.mjs passes what a copy's uuid map answers). Otherwise `index` is at most
+ *  `rows.length - 1`. Moved from derive.mjs, where it was private (W2-D33), so that W2-2a's as-of cut (W2-D34) reads
+ *  the one definition: lib cannot import derive.mjs, which imports lib. lib's raw-leaf grace reads it through
+ *  derive.mjs (D-4690 (history-raw-leaf-grace)). */
+export function stampAtOrBefore(rows, index) {
+  for (let i = index; i >= 0; i -= 1) {
+    const t = rows[i].ts_ms;
+    if (t !== null) return Number(t);
+  }
+  return null;
+}
+
 /** Whether the file holding a boundary was read to its end late enough to say its summary row is missing. `eofMs`
  *  is the holding file's ingest_files.eof_ms: the start of the last tick that left its cursor at end-of-file.
  *  `boundaryTsMs` is the boundary's time; derive.mjs passes the newest stamped row before a boundary that has none
@@ -5926,8 +6145,9 @@ function readOpFlags(args, spec) {
  *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
  *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
  *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
- *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. A verb B2 does not run
- *  (recall-off is W2's) is `bad-args`. */
+ *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. `recall-off` (W2-1, W2-D27;
+ *  D-5764 (history-w2-recall-off-generation-checks)) takes `<id> [--generation <uuid>]`, `<id> --clear`, or `--clear-all`
+ *  alone; `--generation` is a lowercase UUID on the write form only. Any other verb is `bad-args`. */
 export function parseOpVerbArgs(op, args) {
   const refuse = (reason) => ({ ok: false, reason });
   const ok = (a) => ({ ok: true, args: Object.freeze(a) });
@@ -5981,6 +6201,18 @@ export function parseOpVerbArgs(op, args) {
       const storeId = r.flags['--store-id'] ?? null;
       if (storeId !== null && !UUID_RE.test(storeId)) return refuse('bad-args');
       return ok({ op, storeId });
+    }
+    case 'recall-off': {
+      // Every shape error is bad-args, read before the id grammar, which is bad-id before any path is formed (C66).
+      if (args.length === 1 && args[0] === '--clear-all') return ok({ op, mode: 'clear-all', id: null, generation: null });
+      const r = readOpFlags(args, { '--generation': 'value', '--clear': 'bool' });
+      if (r === null || r.positional.length !== 1) return refuse('bad-args');
+      const generation = r.flags['--generation'] ?? null;
+      const clear = r.flags['--clear'] === true;
+      if (generation !== null && (clear || !UUID_RE.test(generation))) return refuse('bad-args');
+      const id = r.positional[0];
+      if (!idOk(id)) return refuse('bad-id');
+      return ok({ op, mode: clear ? 'clear' : 'write', id, generation });
     }
     default:
       return refuse('bad-args');
@@ -6342,6 +6574,10 @@ export function replayStep(state, r) {
       const before = typeof state.ticksBefore !== 'number' || rec.t < state.ticksBefore;
       return { state, actions: rec.t > state.ticksAfter && before ? [{ do: 'tick', t: rec.t, lagMs: rec.lag_ms }] : [] };
     }
+    case 'recall-off':
+      // W2-1 Task 4 (W2-D30): applied at its own position, so a state row is last-wins in journal order. The executor
+      // inserts the change or gap row DO NOTHING and never reads the directory; seen_ms is never replayed.
+      return { state, actions: [{ do: 'recall-off', rec }] };
     default:
       return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
   }
@@ -7142,7 +7378,7 @@ export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies })
   };
 }
 
-// ── recall: the read verbs' arguments, selects by store version, recall-off's B2 refusals (W1-B2 Task 10) ──
+// ── recall: the read verbs' arguments and selects by store version (W1-B2 Task 10); recall-off's write, decided (W2-1) ──
 //
 // THE ARGUMENT WHITELIST is one table per read verb: §8.2 builds the whitelist from that one list. These are
 // exit 2 bad-args before anything is measured:
@@ -7305,24 +7541,25 @@ export function selectColumns(version, table, cols, schema = SCHEMA_ADDED, alias
   }).join(', ');
 }
 
-/** `recall-off` in B2 (slug history-recall-off-preflight-b2, NEW): the verb that writes recall-off/<id> ships
- *  with W2 (§8.10), and B2 answers only its refusals, in this order:
- *   - an argv off `<id> [--clear]` or `--clear-all` is bad-args;
- *   - an id off ccd's grammar is bad-id, before any path is formed from it (C66);
- *   - then the caller reads $REG/<id>.generation (`generation` null asks it to): unreadable is
- *     generation-unreadable (C67);
- *   - anything else is bad-args, naming W2. */
-export function decideRecallOffPreflight(i) {
-  const a = i.args;
-  const done = (reason) => ({ done: true, exit: EXIT.REFUSED, reason });
-  if (a.length === 1 && a[0] === '--clear-all') return done('bad-args');
-  const shapeOk = a.length >= 1 && a.length <= 2 && typeof a[0] === 'string' && !a[0].startsWith('--')
-    && (a.length === 1 || a[1] === '--clear');
-  if (!shapeOk) return done('bad-args');
-  if (!idOk(a[0])) return done('bad-id');
-  if (i.generation === null) return { done: false, id: a[0] };
-  if (i.generation.state === 'unreadable') return done('generation-unreadable');
-  return done('bad-args');
+/** What `recall-off <id> [--generation G]` writes, decided under the shim's lock (W2-1, W2-D27; D-5764
+ *  (history-w2-recall-off-generation-checks)). `registry` is $REG/<id>.generation read raw now: absent, unreadable, or its
+ *  text (any other state, an over-cap read, is unreadable here too). `want` is the `--generation` argument, or null. One
+ *  trailing LF is trimmed and nothing else: ccd writes the field with no LF, and a padded value is not a generation.
+ *   - unreadable: generation-unreadable, with or without want (C67: a '' written then would put a pre-registered control
+ *     family in the treatment arm);
+ *   - absent, or empty after that trim: '' (the legacy family, §8.4; the hook's "absent or empty" reading), or
+ *     generation-mismatch when want names a generation;
+ *   - a UUID: it, when want is null or equals it; otherwise generation-mismatch;
+ *   - anything else: generation-malformed, with or without want.
+ *  A refusal is `{ ok: false, rc, reason }`, which the executor answers before any write. */
+export function decideRecallOffWrite({ registry, want }) {
+  const refuse = (reason) => ({ ok: false, rc: EXIT.REFUSED, reason });
+  if (registry.state !== 'absent' && registry.state !== 'value') return refuse('generation-unreadable');
+  const raw = registry.state === 'absent' ? '' : registry.value;
+  const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+  if (text === '') return want === null ? { ok: true, generation: '' } : refuse('generation-mismatch');
+  if (!UUID_RE.test(text)) return refuse('generation-malformed');
+  return want === null || want === text ? { ok: true, generation: text } : refuse('generation-mismatch');
 }
 
 

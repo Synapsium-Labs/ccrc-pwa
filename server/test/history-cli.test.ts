@@ -393,7 +393,7 @@ describe('ccrc history status (Linux)', () => {
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
     // proves the scan sees them all; a new write is a deliberate edit of this number and of the allowlist beside it.
     const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
-    expect(writes.length, 'the scan sees every stderr write').toBe(9);
+    expect(writes.length, 'the scan sees every stderr write').toBe(8);   // W2-1 removed the recall-off stub's one write with the stub
     expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
     // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalLines, the op relay's `text`, or
     // an EMPTY write (D-5022: the signal handler's and the exit's wait for stderr to drain write nothing, they only wait on a callback).
@@ -1292,5 +1292,154 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(item!.remedy).toContain(`chmod 0700 ${target}`);
     healthFs.chmodSync(target, 0o700);
     expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('mode-wrong');
+  });
+});
+
+// ── W2-1 Task 3: recall-off through the CLI door (W2-D26, W2-D27, W2-D28; D-5763, D-5764) ──────────────────────────
+// B2's stub answered only its refusals. Since W2-1 recall-off is an operator verb of the door that relays import, prune
+// and reparse: the CLI parses its argv (bad-args and bad-id spawn nothing), runs the gate, and spawns the shim, whose pass
+// decides the rest under the lock; the CLI relays the pass's lines and its result.
+describe('W2-1 recall-off: the CLI door relays the shim', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  function rBox(prefix: string): HistoryBox {
+    const box = makeHistoryBox(prefix);
+    expect(runSweep(box).code).toBe(0);
+    healthHh.plantSession(box, ID, { generation: G1 });
+    return box;
+  }
+
+  it('the write form runs the shim and relays its line, human on stdout and --json on stderr beside the envelope', () => {
+    const box = rBox('ccrc-hist-cli-w21a-');
+    const human = healthHh.runCli(box, ['recall-off', ID]);
+    expect(human.code, `${human.stdout}${human.stderr}`).toBe(0);
+    expect(human.stdout).toContain(`history-sweep: recall-off/${ID} written`);
+    expect(fs.readFileSync(hist(box, 'recall-off', ID), 'utf8')).toBe(`${G1}\n`);
+    const json = healthHh.runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(json.json, json.stdout).toMatchObject({ exit: 0 });
+    expect(json.stderr).toContain(`history-sweep: recall-off/${ID} written`);
+    expect(json.stdout.trim().split('\n'), 'stdout is the envelope alone').toHaveLength(1);
+  }, 60_000);
+
+  it('C16, spawned: the two new words reach the envelope as exit-2 reasons, and the human line names the word and the operator', () => {
+    const box = rBox('ccrc-hist-cli-w21b-');
+    const mm = healthHh.runCli(box, ['recall-off', ID, '--generation', G2, '--json']);
+    expect([mm.code, mm.json?.['reason']], `${mm.stdout}${mm.stderr}`).toEqual([2, 'generation-mismatch']);
+    fs.writeFileSync(path.join(box.reg, `${ID}.generation`), 'not-a-generation');
+    const mf = healthHh.runCli(box, ['recall-off', ID, '--json']);
+    expect([mf.code, mf.json?.['reason']], `${mf.stdout}${mf.stderr}`).toEqual([2, 'generation-malformed']);
+    const human = healthHh.runCli(box, ['recall-off', ID]);
+    expect(human.code).toBe(2);
+    expect(human.stderr).toContain('ccrc history recall-off: refused: generation-malformed; ');
+    expect(fs.existsSync(hist(box, 'recall-off')), 'every refusal comes before any write').toBe(false);
+  }, 60_000);
+
+  it('bad-args and bad-id are the CLI\'s own and spawn nothing; a valid form reaches the shim with its argv as typed', () => {
+    const box = rBox('ccrc-hist-cli-w21c-');
+    healthHh.stubShim(box, { stdout: '{"rc":0}\n', exit: 0 });
+    const ROWS: ReadonlyArray<readonly [readonly string[], string]> = [
+      [[ID, '--generation', G1.toUpperCase()], 'bad-args'], [[ID, '--generation', ` ${G1}`], 'bad-args'],
+      [[ID, '--generation', G1, '--clear'], 'bad-args'], [['--clear-all', ID], 'bad-args'],
+      [['--clear-all', '--generation', G1], 'bad-args'], [[], 'bad-args'], [['../x', '--clear'], 'bad-id'],
+    ];
+    for (const [args, word] of ROWS) {
+      const r = healthHh.runCli(box, ['recall-off', ...args, '--json']);
+      expect([r.code, r.json?.['reason']], JSON.stringify(args)).toEqual([2, word]);
+    }
+    expect(fs.existsSync(path.join(box.home, 'stub-shim-argv')), 'no refusal spawned the shim').toBe(false);
+    // CONTROL: a valid form does reach the stand-in.
+    const ok = healthHh.runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(ok.code, `${ok.stdout}${ok.stderr}`).toBe(0);
+    expect(fs.readFileSync(path.join(box.home, 'stub-shim-argv'), 'utf8')).toContain(`--op recall-off ${ID} --generation ${G1}`);
+  }, 60_000);
+
+  it('--clear-all relays its summary line, the operator\'s check at close: human on stdout, --json on stderr', () => {
+    const box = rBox('ccrc-hist-cli-w21d-');
+    expect(healthHh.runCli(box, ['recall-off', ID]).code).toBe(0);
+    fs.mkdirSync(hist(box, 'recall-off', 'claude-d-dir'));
+    const human = healthHh.runCli(box, ['recall-off', '--clear-all']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout).toContain('{"rc":0,"reason":null,"cleared":1,"skipped":["claude-d-dir"]}');
+    const json = healthHh.runCli(box, ['recall-off', '--clear-all', '--json']);
+    expect(json.json, json.stdout).toMatchObject({ exit: 0 });
+    expect(json.stderr).toContain('{"rc":0,"reason":null,"cleared":0,"skipped":["claude-d-dir"]}');
+  }, 60_000);
+
+  it('a designed rc 1 prints the arm\'s own line and one line naming the operator; an rc 1 with no result keeps the generic words (final wave B1)', () => {
+    const box = rBox('ccrc-hist-cli-w21e-');
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
+    expect(spawnSync('mkfifo', [hist(box, 'recall-off', ID)]).status).toBe(0);
+    const human = healthHh.runCli(box, ['recall-off', ID, '--clear']);
+    expect(human.code, `${human.stdout}${human.stderr}`).toBe(1);
+    expect(`${human.stdout}${human.stderr}`, 'the arm\'s own line, naming the entry').toContain(`recall-off/${ID}`);
+    expect(`${human.stdout}${human.stderr}`, 'no generic words after a result the relay received').not.toContain('gave no result');
+    expect(human.stderr, 'one line that names the operator (R-X-OPERATOR)').toContain('ccrc history recall-off: the history writer stopped, as the line above says; ccrc history\'s operator verbs are the operator\'s to run');
+    const json = healthHh.runCli(box, ['recall-off', ID, '--clear', '--json']);
+    expect([json.code, json.json?.['exit']], `${json.stdout}${json.stderr}`).toEqual([1, 1]);
+    // CONTROL: the same verb, an rc 1 and no result line (a shim that wrote something else): the generic words stay.
+    healthHh.stubShim(box, { stdout: 'not json\n', exit: 1 });
+    const bare = healthHh.runCli(box, ['recall-off', ID, '--clear']);
+    expect(bare.code).toBe(1);
+    expect(bare.stderr).toContain('ccrc history recall-off: internal error: the history writer gave no result');
+  }, 60_000);
+
+  it('a stated rc 1 from another verb keeps the generic words; only recall-off prints the stated line (r761 F3)', () => {
+    const box = rBox('ccrc-hist-cli-w21f-');
+    healthHh.stubShim(box, { stdout: '{"rc":1}\n', exit: 1 });
+    const other = healthHh.runCli(box, ['doctor', '--backup']);
+    // CONTROL: the verb reached the stand-in, so the words below are the CLI's own for a shim that stated rc 1.
+    expect(fs.readFileSync(path.join(box.home, 'stub-shim-argv'), 'utf8'), 'doctor --backup reached the shim').toContain('--op');
+    expect(other.code, `${other.stdout}${other.stderr}`).toBe(1);
+    expect(other.stderr, 'another verb: the generic words').toContain('ccrc history doctor: internal error: the history writer gave no result');
+    expect(other.stderr, 'another verb: not the recall-off line').not.toContain('as the line above says');
+    // CONTROL: the same stand-in under recall-off prints the stated line, so the difference is the verb.
+    const ro = healthHh.runCli(box, ['recall-off', ID]);
+    expect(ro.code, `${ro.stdout}${ro.stderr}`).toBe(1);
+    expect(ro.stderr).toContain('ccrc history recall-off: the history writer stopped, as the line above says');
+  }, 60_000);
+
+  it('README states the verb, its flag and its refusal words (W2-1)', () => {
+    const readme = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8');
+    expect(readme).toContain('`recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all`');
+    expect(readme).toContain('with no dry run');
+    for (const w of ['generation-mismatch', 'generation-malformed', 'generation-unreadable']) expect(readme).toContain(`\`${w}\``);
+  });
+});
+
+// ── W2-1 Task 4: status --json's recall_off block (W2-D31) ───────────────────────────────────────────────────────
+describe('status recall_off: the presence record, counts only (W2-D31; W2-1 Task 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  type RecallOffBlock = { seen_ms: number | null; files: number; unreadable: number };
+  const blockOf = (env: Envelope): RecallOffBlock => (env as unknown as { recall_off: RecallOffBlock }).recall_off;
+  const RID = 'claude-a-roffid';
+  const RID2 = 'claude-b-roffid';
+
+  it('after a write and a tick, seen_ms is later than the write; files and unreadable count the state rows; no id is printed', () => {
+    const box = boundBox('ccrc-hist-cli-roff-');
+    const dir = hist(box, 'recall-off');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, RID), `${G1}\n`, { mode: 0o600 });
+    fs.symlinkSync(path.join(box.home, 'nowhere'), path.join(dir, RID2));   // a link: unreadable, never absent
+    const wrote = fs.statSync(path.join(dir, RID)).mtimeMs;
+    const t = runSweep(box);
+    expect(t.code, t.stderr).toBe(0);
+    const s = status(box);
+    expect(s.code, s.stderr).toBe(0);
+    const ro = blockOf(s.env);
+    expect(Object.keys(ro).sort()).toEqual(['files', 'seen_ms', 'unreadable']);
+    expect(ro.seen_ms).toBeGreaterThan(wrote);
+    expect([ro.files, ro.unreadable]).toEqual([2, 1]);
+    expect(s.stdout, 'status is identity-free').not.toContain(RID);
+    expect(s.stdout).not.toContain(RID2);
+    const human = status(box, { args: ['status'] });
+    expect(human.code).toBe(0);
+    expect(human.stdout.split('\n')).toContain(`recall-off: seen=${new Date(ro.seen_ms!).toISOString()} files=2 unreadable=1`);
+  });
+
+  it('with no store read, the block is there and says nothing was observed', () => {
+    const shimOnly = makeHistoryBox('ccrc-hist-cli-roff-none-', { role: 'fleet', shim: true });
+    const s = status(shimOnly);
+    expect(s.code).toBe(6);
+    expect(blockOf(s.env)).toEqual({ seen_ms: null, files: 0, unreadable: 0 });
   });
 });

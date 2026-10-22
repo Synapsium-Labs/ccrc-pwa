@@ -6314,7 +6314,7 @@ describe('the cursor: opaque, versioned, ids only (spec 8.4)', () => {
 
 describe('decideRelay: the shim result the CLI relays (spec 8.4; O54 relay half, pure)', () => {
   it.each([
-    ['the lock held', { status: 75, signal: null, lastLine: null }, { exit: 4, reason: 'writer-busy' }], ['a refusal decided under the lock', { status: 2, signal: null, lastLine: '{"rc":2,"reason":"adopt-refused"}' }, { exit: 2, reason: 'adopt-refused' }], ['a store error', { status: 5, signal: null, lastLine: '{"rc":5,"reason":"store-unreachable"}' }, { exit: 5, reason: 'store-unreachable' }], ['done', { status: 0, signal: null, lastLine: '{"rc":0}' }, { exit: 0 }], ['no store on a server box', { status: 9, signal: null, lastLine: '{"rc":9}' }, { exit: 9 }], ['an internal error the sweep stated', { status: 1, signal: null, lastLine: '{"rc":1}' }, { exit: 1 }],
+    ['the lock held', { status: 75, signal: null, lastLine: null }, { exit: 4, reason: 'writer-busy' }], ['a refusal decided under the lock', { status: 2, signal: null, lastLine: '{"rc":2,"reason":"adopt-refused"}' }, { exit: 2, reason: 'adopt-refused' }], ['a store error', { status: 5, signal: null, lastLine: '{"rc":5,"reason":"store-unreachable"}' }, { exit: 5, reason: 'store-unreachable' }], ['done', { status: 0, signal: null, lastLine: '{"rc":0}' }, { exit: 0 }], ['no store on a server box', { status: 9, signal: null, lastLine: '{"rc":9}' }, { exit: 9 }], ['an internal error the sweep stated', { status: 1, signal: null, lastLine: '{"rc":1}' }, { exit: 1, stated: true }],
   ] as const)('%s', (_name, input, want) => expect(libOut.decideRelay(input)).toEqual(want));
   it.each([
     ['killed by a signal', { status: null, signal: 'SIGKILL', lastLine: '{"rc":0}' }], ['no result line', { status: 0, signal: null, lastLine: null }], ['not JSON', { status: 0, signal: null, lastLine: 'history-sweep: held' }], ['a status that disagrees with rc', { status: 0, signal: null, lastLine: '{"rc":2,"reason":"bad-args"}' }], ['a reason on exit 0', { status: 0, signal: null, lastLine: '{"rc":0,"reason":"bad-args"}' }], ['a reason on exit 3', { status: 3, signal: null, lastLine: '{"rc":3,"reason":"bad-args"}' }], ['exit 2 without a reason', { status: 2, signal: null, lastLine: '{"rc":2}' }], ['a reason of another code', { status: 2, signal: null, lastLine: '{"rc":2,"reason":"store-unbound"}' }], ['an extra key', { status: 0, signal: null, lastLine: '{"rc":0,"ok":true}' }], ['an rc outside EXIT', { status: 12, signal: null, lastLine: '{"rc":12}' }],
@@ -6500,8 +6500,8 @@ describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8
     expect(why('rebuild', [S])).toBe('bad-args');
   });
 
-  it('a verb B2 does not run is bad-args (recall-off ships in W2)', () => {
-    expect(why('recall-off', ['claude-demo'])).toBe('bad-args');
+  it('a verb this build does not run is bad-args, and recall-off parses since W2-1', () => {
+    expect(ok('recall-off', ['claude-demo'])).toEqual({ op: 'recall-off', mode: 'write', id: 'claude-demo', generation: null });
     expect(why('frobnicate', [])).toBe('bad-args');
   });
 });
@@ -10496,5 +10496,412 @@ describe('lib: the op marker names its process (D-5748)', () => {
   it('decideOpLive: no marker is no live pass, whatever is measured', async () => {
     const lib = await import('../../ccd/history/lib.mjs');
     expect(lib.decideOpLive(null, { procStart: '55555', bootId: BOOT, kill: 'ok' })).toBe(false);
+  });
+});
+
+// ── W2-1 Task 1 (W2-D33): stampAtOrBefore, moved from derive.mjs into lib, over plain (rows, index) ────────────
+// Pure, so it runs on darwin too. derive.mjs's raw-leaf grace reads it unchanged; W2-2a's as-of cut reads it (W2-D34).
+describe('stampAtOrBefore: the newest stamped row at or before an index (W2-D33; W2-1 Task 1)', () => {
+  type Stamped = { ts_ms: number | bigint | null };
+  const R = (...ts: Array<number | bigint | null>): Stamped[] => ts.map((t) => ({ ts_ms: t }));
+  const lib = async () => await import('../../ccd/history/lib.mjs');
+
+  it('answers the stamp of the row at the index when it has one', async () => {
+    expect((await lib()).stampAtOrBefore(R(100, 200, 300), 1)).toBe(200);
+  });
+
+  it('answers the newest stamp before a row that has none', async () => {
+    expect((await lib()).stampAtOrBefore(R(100, null, null, 400), 2)).toBe(100);
+  });
+
+  it('never reads a row after the index, so no stamp at or before it is null', async () => {
+    expect((await lib()).stampAtOrBefore(R(null, null, 300), 1)).toBeNull();
+  });
+
+  it('a stamp of 0 is a time', async () => {
+    expect((await lib()).stampAtOrBefore(R(0, null), 1)).toBe(0);
+  });
+
+  it('an index the uuid map does not hold is null, and a bigint stamp reads as a number', async () => {
+    const l = await lib();
+    expect(l.stampAtOrBefore(R(100), undefined), 'derive.mjs passes copy.index.get(uuid), undefined for a uuid the copy does not hold').toBeNull();
+    expect(l.stampAtOrBefore(R(7n), 0)).toBe(7);
+  });
+});
+
+// ── W2-1 Task 2: the shared names (W2-D29's paths, W2-D30's constants, W2-D17's predicate; W2-D10) ─────────────────
+// historyPaths names the recall-off directory and the headless-on switch, so recallOffPath joins one id onto
+// recallOffDir and RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs (W2-D29, first bullet). The
+// presence record's meta prefix and its two chosen bounds are lib's (W2-D30). isSyntheticModel is the one
+// angle-bracket test: backendOf reads it and deploy/history-gate.mjs imports it (W2-D17). The store schema does not
+// move (W2-D10): the presence record is meta rows.
+describe('W2-1 Task 2: the recall-off paths, the presence constants and isSyntheticModel', () => {
+  const LIB_SRC = (): string => readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8');
+  /** Comment lines dropped, so a sentence about a name is never counted as code. */
+  const codeOf = (text: string): string[] => text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+
+  it('historyPaths gains recallOffDir under the root and headlessOn from SWITCHES, and recallOffPath is recallOffDir/<id> (W2-D29)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const p = lib.historyPaths('/home/u');
+    expect(p.recallOffDir).toBe(`${p.root}/${lib.RECALL_OFF_DIR}`);
+    expect(p.recallOffDir).toBe('/home/u/.ccrc/history/recall-off');
+    expect(p.headlessOn).toBe(`/home/u/${lib.SWITCHES.headlessOn}`);
+    expect(lib.recallOffPath('/home/u', 'demo-a')).toBe(`${p.recallOffDir}/demo-a`);
+    expect(lib.historyPaths('/home/u/').recallOffDir, 'a trailing slash on HOME changes nothing').toBe(p.recallOffDir);
+    expect(() => lib.recallOffPath('/home/u', '../x'), 'the id is still checked before a path is formed (C66)').toThrow(TypeError);
+  });
+
+  it('RECALL_OFF_DIR is joined onto a path on one code line of lib.mjs, historyPaths\' recallOffDir, and recallOffPath reads it (W2-D29)', () => {
+    const code = codeOf(LIB_SRC());
+    expect(code.filter((l) => l.includes('${RECALL_OFF_DIR}')).map((l) => l.trim())).toEqual(['recallOffDir: `${root}/${RECALL_OFF_DIR}`,']);
+    expect(code.filter((l) => l.includes('historyPaths(home).recallOffDir}/${id}')), 'recallOffPath joins the id onto recallOffDir').toHaveLength(1);
+  });
+
+  it('the presence record\'s meta prefix and its two chosen bounds are W2-D30\'s', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.RECALL_OFF_META).toBe('recall_off:');
+    expect(lib.RECALL_OFF_GAP_MS).toBe(600_000);
+    expect(lib.RECALL_OFF_SCAN_MAX).toBe(4096);
+  });
+
+  // [label, model, synthetic]: an angle-bracketed name only. A null or empty model is not synthetic: that row stays a
+  // turn (W2-D17).
+  const SYNTHETIC: Array<[string, unknown, boolean]> = [
+    ['<synthetic>', '<synthetic>', true],
+    ['an empty pair of brackets', '<>', true],
+    ['an angle-bracketed phrase', '<a notice from the harness>', true],
+    ['a bare <', '<', false],
+    ['a bare >', '>', false],
+    ['an open bracket only', '<synthetic', false],
+    ['a close bracket only', 'synthetic>', false],
+    ['a leading space', ' <synthetic>', false],
+    ['a trailing space', '<synthetic> ', false],
+    ['empty', '', false],
+    ['null', null, false],
+    ['undefined', undefined, false],
+    ['a number', 7, false],
+    ['a claude name', 'claude-fixture-4', false],
+    ['another name', 'gpt-fixture-5', false],
+  ];
+  it.each(SYNTHETIC)('isSyntheticModel: %s', async (_label, model, want) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.isSyntheticModel(model)).toBe(want);
+  });
+
+  it('backendOf reads isSyntheticModel for its unknown, and its body spells no angle-bracket test of its own (W2-D17)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const [label, model, synthetic] of SYNTHETIC) {
+      if (synthetic) expect(lib.backendOf(model as string), label).toBe('unknown');
+    }
+    expect(lib.backendOf('claude-fixture-4'), 'CONTROL: a claude name is still anthropic').toBe('anthropic');
+    expect(lib.backendOf('<claude-fixture-4>'), 'an angle-bracketed claude name is synthetic first').toBe('unknown');
+    const src = LIB_SRC();
+    const at = src.indexOf('export function backendOf(model) {');
+    expect(at, 'backendOf is declared as the base declares it').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    expect(body).toContain('isSyntheticModel(model)');
+    expect(body).not.toMatch(/startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/);
+  });
+
+  it('W2-D10: the store schema stays at version 2 through W2 (the presence record is meta rows, never a table)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.SCHEMA_VERSION).toBe(2);
+  });
+});
+
+// ── W2-1 Task 3: recall-off's grammar and its decision under the lock (W2-D27; D-5764 (history-w2-recall-off-generation-checks)) ──
+// parseOpVerbArgs reads `recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all` for both doors, every
+// shape error bad-args before the id grammar's bad-id (C66). decideRecallOffWrite is W2-D27's table over $REG/<id>.generation
+// read raw (one trailing LF trimmed, nothing else) and the --generation argument. Both new refusal words are exit-2 REASONS (C16).
+describe('W2-1 recall-off: the grammar and the generation checks (D-5764)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  const RID = 'claude-a-demo';
+
+  it('C16, its two words: generation-malformed and generation-mismatch are exit-2 REASONS words, so REFUSALS holds them', () => {
+    expect(REASONS['generation-malformed']).toBe(EXIT.REFUSED);
+    expect(REASONS['generation-mismatch']).toBe(EXIT.REFUSED);
+    expect(REFUSALS).toEqual(expect.arrayContaining(['generation-unreadable', 'generation-malformed', 'generation-mismatch']));
+  });
+
+  it('REASON_ROWS lists the two words beside their departure, D-5764', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l.includes("'generation-malformed', 'generation-mismatch',"));
+    expect(at, 'REASON_ROWS lists the two words on one line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5764 (history-w2-recall-off-generation-checks)');
+  });
+
+  const READS: ReadonlyArray<readonly [string, readonly string[], Record<string, unknown>]> = [
+    ['the write form', [RID], { op: 'recall-off', mode: 'write', id: RID, generation: null }],
+    ['the write form with --generation', [RID, '--generation', G], { op: 'recall-off', mode: 'write', id: RID, generation: G }],
+    ['--generation before the id', ['--generation', G, RID], { op: 'recall-off', mode: 'write', id: RID, generation: G }],
+    ['--clear', [RID, '--clear'], { op: 'recall-off', mode: 'clear', id: RID, generation: null }],
+    ['--clear-all alone', ['--clear-all'], { op: 'recall-off', mode: 'clear-all', id: null, generation: null }],
+  ];
+  it.each(READS)('recall-off argv reads: %s', (_what, argv, args) => {
+    expect(libPlan.parseOpVerbArgs('recall-off', argv)).toEqual({ ok: true, args });
+  });
+
+  const REFUSES: ReadonlyArray<readonly [string, readonly string[], string]> = [
+    ['no id', [], 'bad-args'],
+    ['two ids', [RID, RID], 'bad-args'],
+    ['--generation with no value', [RID, '--generation'], 'bad-args'],
+    ['an upper-case UUID', [RID, '--generation', G.toUpperCase()], 'bad-args'],
+    ['a padded UUID', [RID, '--generation', ` ${G}`], 'bad-args'],
+    ['a word for a UUID', [RID, '--generation', 'not-a-uuid'], 'bad-args'],
+    ['--generation with --clear', [RID, '--generation', G, '--clear'], 'bad-args'],
+    ['--clear then --generation', [RID, '--clear', '--generation', G], 'bad-args'],
+    ['--generation twice', [RID, '--generation', G, '--generation', G], 'bad-args'],
+    ['--clear twice', [RID, '--clear', '--clear'], 'bad-args'],
+    ['--clear-all with an id', ['--clear-all', RID], 'bad-args'],
+    ['--clear-all with --generation', ['--clear-all', '--generation', G], 'bad-args'],
+    ['--clear-all twice', ['--clear-all', '--clear-all'], 'bad-args'],
+    ['an unknown flag', [RID, '--bogus'], 'bad-args'],
+    ['a shape error before a bad id', ['../x', '--generation', 'not-a-uuid'], 'bad-args'],
+    ['an id that climbs out', ['../x', '--clear'], 'bad-id'],
+    ['the id ..', ['..'], 'bad-id'],
+    ['an id with a slash', ['a/b', '--generation', G], 'bad-id'],
+  ];
+  it.each(REFUSES)('recall-off argv refuses: %s', (_what, argv, reason) => {
+    expect(libPlan.parseOpVerbArgs('recall-off', argv)).toEqual({ ok: false, reason });
+  });
+
+  const no = (reason: string): Record<string, unknown> => ({ ok: false, rc: EXIT.REFUSED, reason });
+  const yes = (generation: string): Record<string, unknown> => ({ ok: true, generation });
+  // [what, the registry read, --generation, the answer]
+  const DECIDES: ReadonlyArray<readonly [string, Record<string, unknown>, string | null, Record<string, unknown>]> = [
+    ['unreadable, no --generation', { state: 'unreadable' }, null, no('generation-unreadable')],
+    ['unreadable, --generation G', { state: 'unreadable' }, G, no('generation-unreadable')],
+    ['over the cap is unreadable', { state: 'over-cap' }, null, no('generation-unreadable')],
+    ['absent, no --generation: the legacy family', { state: 'absent' }, null, yes('')],
+    ['absent, --generation G', { state: 'absent' }, G, no('generation-mismatch')],
+    ['empty, no --generation', { state: 'value', value: '' }, null, yes('')],
+    ['one LF, no --generation', { state: 'value', value: '\n' }, null, yes('')],
+    ['empty, --generation G', { state: 'value', value: '' }, G, no('generation-mismatch')],
+    ['G, no --generation', { state: 'value', value: G }, null, yes(G)],
+    ['G and one LF, no --generation', { state: 'value', value: `${G}\n` }, null, yes(G)],
+    ['G, --generation G', { state: 'value', value: G }, G, yes(G)],
+    ['G, --generation G2', { state: 'value', value: G }, G2, no('generation-mismatch')],
+    ['G and two LFs', { state: 'value', value: `${G}\n\n` }, null, no('generation-malformed')],
+    ['G padded with a space', { state: 'value', value: ` ${G}` }, null, no('generation-malformed')],
+    ['G upper-cased', { state: 'value', value: G.toUpperCase() }, null, no('generation-malformed')],
+    ['a word, --generation G', { state: 'value', value: 'not-a-generation' }, G, no('generation-malformed')],
+    ['two LFs alone', { state: 'value', value: '\n\n' }, null, no('generation-malformed')],
+  ];
+  it.each(DECIDES)('decideRecallOffWrite: %s', async (_what, registry, want, answer) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.decideRecallOffWrite({ registry: registry as never, want })).toEqual(answer);
+  });
+});
+
+// ── W2-1 Task 4: the recall-off presence record (W2-D30), its journal records, and status's block (W2-D31) ────────────
+// lib decides every row the sweep's tick step writes: the state a read is, the rows and records one complete observation
+// writes, the rows one journal record replays to (byte for byte the live ones), and status's counts. The gate's own reader
+// (deploy/history-gate.mjs, W2-3) reads the rows back, so the two ends of W2-D30's keys are pinned against each other.
+import * as roLib from '../../ccd/history/lib.mjs';
+import * as roGate from '../../deploy/history-gate.mjs';
+
+describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', () => {
+  const K = roLib.RECALL_OFF_KEYS;
+  const GAP = roLib.RECALL_OFF_GAP_MS;
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  const X = 'claude-a-demo';
+  const Y = 'claude-b-demo';
+  const C = 'claude-c-demo';
+  const val = (v: string): { s: 'value'; v: string } => ({ s: 'value', v });
+  const UNREADABLE = { s: 'unreadable' as const, v: null };
+  const row = (id: string, st: object): { id: string; raw: string } => ({ id, raw: roLib.canonicalJson(st) });
+  type PlanIn = Parameters<typeof roLib.planRecallOffObservation>[0];
+  const plan = (o: Partial<PlanIn>): roLib.RecallOffPlan =>
+    roLib.planRecallOffObservation({ seenRaw: '1000', stateRows: [], files: [], startMs: 2000, endMs: 2005, ...o });
+  const changeOf = (p: roLib.RecallOffPlan, id: string): Array<Record<string, unknown>> => p.insert
+    .filter((r) => r.k.startsWith(K.change) && r.k.endsWith(`:${id}`)).map((r) => ({ k: r.k, ...(JSON.parse(r.v) as object) }));
+  const gapsOf = (p: roLib.RecallOffPlan): Array<Record<string, unknown>> => p.insert
+    .filter((r) => r.k.startsWith(K.gap)).map((r) => ({ k: r.k, ...(JSON.parse(r.v) as object) }));
+
+  it('RECALL_OFF_KEYS: the four keys, each under RECALL_OFF_META, frozen', () => {
+    const M = roLib.RECALL_OFF_META;
+    expect(K).toEqual({ seen: `${M}seen_ms`, state: `${M}state:`, change: `${M}change:`, gap: `${M}gap:` });
+    expect(Object.isFrozen(K)).toBe(true);
+  });
+
+  it('recallOffStateOf: a generation trimmed, unreadable and over-cap never absent, any other content a digest', () => {
+    expect(roLib.recallOffStateOf({ state: 'value', value: `${G1}\n` })).toEqual(val(G1));
+    expect(roLib.recallOffStateOf({ state: 'value', value: '' })).toEqual(val(''));
+    expect(roLib.recallOffStateOf({ state: 'unreadable' })).toEqual(UNREADABLE);
+    expect(roLib.recallOffStateOf({ state: 'over-cap' })).toEqual(UNREADABLE);
+    expect(roLib.recallOffStateOf({ state: 'absent' })).toBe('absent');
+    expect(roLib.recallOffStateOf({ state: 'value', value: ' not a generation \n' })).toEqual(val(`sha256:${roLib.sha256Hex('not a generation')}`));
+    expect(roLib.recallOffStateOf({ state: 'value', value: G1.toUpperCase() }), 'an uppercase UUID is no generation')
+      .toEqual(val(`sha256:${roLib.sha256Hex(G1.toUpperCase())}`));
+  });
+
+  it('the first observation ever: a gap from null, and a present file a change from unobserved with prev_seen_ms null', () => {
+    const p = plan({ seenRaw: null, files: [{ id: X, state: val(G1) }] });
+    expect(gapsOf(p)).toEqual([{ k: `${K.gap}2005`, from: null, to: 2000 }]);
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(val(G1)) }]);
+    expect(p.seen, 'seen_ms is the observation\'s START; its rows are keyed by its END').toEqual({ k: K.seen, v: '2000' });
+    expect(p.records).toEqual([
+      { t: 2005, fields: { rk: 'gap', from: null, to: 2000 } },
+      { t: 2005, fields: { rk: 'change', id: X, from: 'unobserved', to: val(G1), prev_seen_ms: null } },
+    ]);
+  });
+
+  it('an unchanged file is not flagged: no row, no record, no rewrite, and seen_ms still moves', () => {
+    const p = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: val(G1) }] });
+    expect([p.insert, p.records, p.put, p.del]).toEqual([[], [], [], []]);
+    expect(p.seen.v).toBe('2000');
+  });
+
+  it('one change row per transition: a new generation and a file gone carry the last observation, a new file null', () => {
+    const p = plan({ stateRows: [row(X, val(G1)), row(Y, val(G2))], files: [{ id: X, state: val(G2) }, { id: C, state: val(G1) }] });
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: val(G2), prev_seen_ms: 1000 }]);
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G2), to: 'absent', prev_seen_ms: 1000 }]);
+    expect(changeOf(p, C), 'a file with no state row is unobserved, whatever seen_ms says')
+      .toEqual([{ k: `${K.change}2005:${C}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(val(G2)) }, { k: `${K.state}${C}`, v: roLib.canonicalJson(val(G1)) }]);
+    expect(p.del).toEqual([`${K.state}${Y}`]);
+    expect(p.records.map((r) => r.fields.rk)).toEqual(['change', 'change', 'change']);
+  });
+
+  it('unreadable is never absent: an unreadable read is a change to unreadable, its state row kept', () => {
+    const p = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: UNREADABLE }] });
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: UNREADABLE, prev_seen_ms: 1000 }]);
+    expect(p.del).toEqual([]);
+    expect(p.put).toEqual([{ k: `${K.state}${X}`, v: roLib.canonicalJson(UNREADABLE) }]);
+    // CONTROL: a file gone between the listing and its read (readBounded answered absent) IS absent.
+    const gone = plan({ stateRows: [row(X, val(G1))], files: [{ id: X, state: 'absent' }] });
+    expect(changeOf(gone, X).map((c) => c['to'])).toEqual(['absent']);
+    expect([gone.put, gone.del]).toEqual([[], [`${K.state}${X}`]]);
+  });
+
+  it('a gap row when the last observation is more than RECALL_OFF_GAP_MS old, and none at exactly that age', () => {
+    const at = 10 * GAP;
+    expect(gapsOf(plan({ seenRaw: String(at - GAP - 1), startMs: at, endMs: at + 3 })))
+      .toEqual([{ k: `${K.gap}${at + 3}`, from: at - GAP - 1, to: at }]);
+    expect(gapsOf(plan({ seenRaw: String(at - GAP), startMs: at, endMs: at + 3 })), 'CONTROL: exactly the gap is no gap').toEqual([]);
+  });
+
+  it('after a rebuild (state rows replayed, seen_ms never replayed): a gap from null, no row for an unchanged file, null for a changed one', () => {
+    const p = plan({ seenRaw: null, stateRows: [row(X, val(G1)), row(Y, val(G1))], files: [{ id: X, state: val(G1) }, { id: Y, state: val(G2) }] });
+    expect(gapsOf(p).map((g) => g['from'])).toEqual([null]);
+    expect(changeOf(p, X), 'unchanged since before the rebuild: no change row').toEqual([]);
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: val(G1), to: val(G2), prev_seen_ms: null }]);
+  });
+
+  it('a seen_ms off its grammar reads as never observed; a state row off its grammar as unobserved; the state rows counted', () => {
+    const p = plan({
+      seenRaw: '01000',
+      stateRows: [{ id: X, raw: '{"s":"maybe"}' }, { id: '../x', raw: roLib.canonicalJson(val(G1)) }],
+      files: [{ id: X, state: val(G1) }],
+    });
+    expect(gapsOf(p).map((g) => g['from'])).toEqual([null]);
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: 'unobserved', to: val(G1), prev_seen_ms: null }]);
+    expect(p.malformed).toBe(2);
+    expect(p.del).toEqual([`${K.state}../x`]);
+    expect(p.records.some((r) => r.fields['id'] === '../x'), 'no record names an id outside the grammar').toBe(false);
+  });
+
+  it('a seen_ms past Date\'s range reads as never observed, so status cannot throw on it', () => {
+    const KEY = roLib.RECALL_OFF_KEYS.seen;
+    expect(roLib.recallOffStatusOf(new Map([[KEY, '8640000000000000']])).seen_ms, 'CONTROL: Date\'s last ms').toBe(8_640_000_000_000_000);
+    expect(roLib.recallOffStatusOf(new Map([[KEY, '9000000000000000']])).seen_ms).toBeNull();
+    expect(gapsOf(plan({ seenRaw: '9000000000000000' })).map((g) => g['from'])).toEqual([null]);
+  });
+
+  it('refuses an observation that ends before it starts, and a file id outside the grammar', () => {
+    expect(() => plan({ startMs: 2000, endMs: 1999 })).toThrow(/planRecallOffObservation: startMs and endMs/);
+    expect(() => plan({ files: [{ id: '../x', state: val(G1) }] })).toThrow(/planRecallOffObservation: not a session id/);
+  });
+
+  it('journal: change and gap round-trip as recall-off records at v 1; an unknown rk is unknown, any other breach malformed', () => {
+    expect(roLib.JOURNAL_KINDS).toContain('recall-off');
+    const p = plan({ seenRaw: null, stateRows: [row(Y, val(G1))], files: [{ id: X, state: UNREADABLE }] });
+    expect(p.records.map((r) => r.fields.rk)).toEqual(['gap', 'change', 'change']);
+    for (const r of p.records) {
+      const line = roLib.journalRecord('recall-off', r.t, r.fields);
+      expect(roLib.parseJournalRecord(line)).toEqual({ kind: 'record', rec: { v: 1, k: 'recall-off', t: r.t, ...r.fields } });
+    }
+    const read = (o: object): string => roLib.parseJournalRecord(JSON.stringify({ v: 1, k: 'recall-off', t: 5, ...o })).kind;
+    const ok = { rk: 'change', id: X, from: 'unobserved', to: val(G1), prev_seen_ms: null };
+    expect(read(ok), 'CONTROL: well formed').toBe('record');
+    expect(read({ rk: 'moved', id: X }), 'a newer build\'s row kind: skipped and counted, never malformed').toBe('unknown');
+    expect(read({ rk: 7 })).toBe('malformed');
+    expect(read({ rk: 'gap', from: null })).toBe('malformed');
+    expect(read({ rk: 'gap', from: null, to: 4, id: X }), 'a field the gap shape does not declare').toBe('malformed');
+    expect(read({ ...ok, id: '../x' })).toBe('malformed');
+    expect(read({ ...ok, from: 'absent' }), 'from is never absent').toBe('malformed');
+    expect(read({ ...ok, to: 'unobserved' }), 'to is never unobserved').toBe('malformed');
+    expect(read({ ...ok, to: { s: 'value', v: 'x' } }), 'a value is a generation or a digest').toBe('malformed');
+    expect(read({ ...ok, to: { s: 'unreadable', v: 'x' } })).toBe('malformed');
+    expect(read({ ...ok, to: { s: 'value', v: G1, w: 1 } }), 'a state is exactly {s, v}').toBe('malformed');
+    expect(read({ ...ok, prev_seen_ms: -1 })).toBe('malformed');
+  });
+
+  it('an older build reads a recall-off record as an unknown kind, skipped and counted: v stays 1, so it is never newer', () => {
+    const o = JSON.parse(roLib.journalRecord('recall-off', 5, { rk: 'gap', from: null, to: 4 })) as Record<string, unknown>;
+    expect(o['v'], 'W2-1 does not bump JOURNAL_V: an older build answers unknown, not newer (counted malformed)').toBe(1);
+    expect(['head', 'file', 'spool', 'verdict', 'redact', 'tick'], 'the kinds a build before W2-1 knows').not.toContain(o['k']);
+    // A build without the kind reads it as this build reads any kind outside its list.
+    const older = roLib.parseJournalRecord(JSON.stringify({ ...o, k: 'recall-off-unknown-to-this-reader' }));
+    expect(older).toEqual({ kind: 'unknown' });
+    const state = { storeId: '00000000-0000-4000-8000-000000000001', file: null, recvMs: 0, drained: new Set<string>(),
+      verdictsByKey: new Map<string, readonly roLib.JournalRecord[]>(), ticksAfter: 0, ticksBefore: null };
+    expect(roLib.replayStep(state, older).actions).toEqual([{ do: 'skip', counter: 'journal_record_unknown' }]);
+  });
+
+  it('replayStep applies each recall-off record at its own position; recallOffReplayRows gives the rows the plan wrote, byte for byte', () => {
+    const withGap = plan({ seenRaw: null, files: [] });
+    const p = plan({ seenRaw: '1000', stateRows: [row(X, val(G1)), row(Y, val(G1))], files: [{ id: X, state: val(G2) }] });
+    const reads = [...withGap.records, ...p.records].map((r) => roLib.parseJournalRecord(roLib.journalRecord('recall-off', r.t, r.fields)));
+    const state = { storeId: '00000000-0000-4000-8000-000000000001', file: null, recvMs: 0, drained: new Set<string>(),
+      verdictsByKey: new Map<string, readonly roLib.JournalRecord[]>(), ticksAfter: 0, ticksBefore: null };
+    const recs = reads.map((r) => (r as { kind: 'record'; rec: roLib.JournalRecord }).rec);
+    for (const [i, r] of reads.entries()) expect(roLib.replayStep(state, r).actions).toEqual([{ do: 'recall-off', rec: recs[i] }]);
+    const rows = recs.map((rec) => roLib.recallOffReplayRows(rec));
+    expect(rows.map((r) => r.insert)).toEqual([...withGap.insert, ...p.insert]);
+    expect(rows.flatMap((r) => (r.put === null ? [] : [r.put]))).toEqual(p.put);
+    expect(rows.flatMap((r) => (r.del === null ? [] : [r.del])), 'a change to absent deletes the state row').toEqual(p.del);
+  });
+
+  it('every row the plan writes reads back through the gate\'s parseRecallOffRow, and changedFamilies drops the family it names', () => {
+    const S = '00000000-0000-4000-8000-0000000000aa';
+    const p = plan({ seenRaw: null, stateRows: [row(X, val(G1))], files: [{ id: X, state: val(G2) }], startMs: 5000, endMs: 5007 });
+    expect(p.insert.map((r) => roGate.parseRecallOffRow(r.k, r.v))).toEqual([
+      { kind: 'gap', ts_ms: 5007, from: null, to: 5000 },
+      { kind: 'change', ts_ms: 5007, id: X, from: val(G1), to: val(G2), prev_seen_ms: null },
+    ]);
+    expect(roGate.parseRecallOffRow(p.seen.k, p.seen.v), 'seen_ms is one of the gate\'s other rows').toEqual({ kind: 'other' });
+    for (const r of p.put) expect(roGate.parseRecallOffRow(r.k, r.v)).toEqual({ kind: 'other' });
+    const metaRows = p.insert.map((r) => ({ store_id: S, k: r.k, v: r.v }));
+    const list = [{ store_id: S, ccrc_id: X, generation: G2 }];
+    expect(roGate.changedFamilies(metaRows, { start_ms: 4000, end_ms: 6000 }, list).changed).toHaveLength(1);
+    expect(roGate.changedFamilies(metaRows, { start_ms: 5008, end_ms: 9000 }, list).changed, 'CONTROL: a window after the change drops nothing')
+      .toEqual([]);
+  });
+
+  it('recallOffStatusOf: seen_ms, the state rows, and those unreadable or off the grammar; counts only', () => {
+    const meta = new Map<string, string>([
+      [K.seen, '2000'], [`${K.state}${X}`, roLib.canonicalJson(val(G1))], [`${K.state}${Y}`, roLib.canonicalJson(UNREADABLE)],
+      [`${K.state}${C}`, 'not json'], [`${K.change}2005:${X}`, '{}'], [`${K.gap}2005`, '{}'], ['store_id', 'x'],
+    ]);
+    expect(roLib.recallOffStatusOf(meta)).toEqual({ seen_ms: 2000, files: 3, unreadable: 2 });
+    expect(roLib.recallOffStatusOf(new Map()), 'no record yet').toEqual({ seen_ms: null, files: 0, unreadable: 0 });
+    expect(roLib.recallOffStatusOf(new Map([[K.seen, 'soon']])).seen_ms).toBeNull();
+  });
+
+  it('an off-grammar state row whose file is absent changes from \'unobserved\' to \'absent\' with prev_seen_ms null; a well-formed one carries the old seen_ms (r761 F1)', () => {
+    // seenRaw is a valid ms, so prevSeen is 1000, not null: only the off-grammar row's own null can make prev_seen_ms null.
+    const p = plan({ stateRows: [row(X, val(G1)), { id: Y, raw: 'not json' }], files: [] });
+    expect(changeOf(p, Y)).toEqual([{ k: `${K.change}2005:${Y}`, from: 'unobserved', to: 'absent', prev_seen_ms: null }]);
+    expect(p.records.filter((r) => r.fields['id'] === Y)).toEqual([
+      { t: 2005, fields: { rk: 'change', id: Y, from: 'unobserved', to: 'absent', prev_seen_ms: null } },
+    ]);
+    expect(p.del, 'both state rows are deleted, the off-grammar one too').toEqual([`${K.state}${X}`, `${K.state}${Y}`]);
+    expect(p.malformed).toBe(1);
+    // CONTROL: the well-formed row whose file is absent carries the old seen_ms, a real number.
+    expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: 'absent', prev_seen_ms: 1000 }]);
   });
 });

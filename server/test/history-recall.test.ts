@@ -153,7 +153,7 @@ describe('C36, the Darwin row: a read verb answers 9 natively on macOS', () => {
   });
 });
 
-describe('the read verbs\' pure halves: parseReadArgs, selectColumns, decideRecallOffPreflight (W1-B2 Task 10)', () => {
+describe('the read verbs\' pure halves: parseReadArgs, selectColumns and recall-off\'s argv (W1-B2 Task 10)', () => {
   const parse = libRead.parseReadArgs;
   const bad = { ok: false, reason: 'bad-args' };
 
@@ -200,16 +200,13 @@ describe('the read verbs\' pure halves: parseReadArgs, selectColumns, decideReca
     expect(() => libRead.selectColumns(1, 'nodes', ['no_such_col'])).toThrow(TypeError);
   });
 
-  it('decideRecallOffPreflight: the id grammar first, then the generation read, then W2\'s word', () => {
-    const pre = libRead.decideRecallOffPreflight;
-    expect(pre({ args: ['../x', '--clear'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-id' });
-    expect(pre({ args: [ID], generation: null })).toEqual({ done: false, id: ID });
-    expect(pre({ args: [ID], generation: { state: 'unreadable' } })).toEqual({ done: true, exit: 2, reason: 'generation-unreadable' });
-    expect(pre({ args: [ID, '--clear'], generation: { state: 'value', value: G1 } })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [ID], generation: { state: 'absent' } })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: ['--clear-all'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
-    expect(pre({ args: [ID, '--bogus'], generation: null })).toEqual({ done: true, exit: 2, reason: 'bad-args' });
+  it('recall-off\'s argv is parseOpVerbArgs\' since W2-1: the B2 preflight is gone, and the id grammar still comes before any path (C66)', () => {
+    expect('decideRecallOffPreflight' in libRead, 'the B2 stub\'s decision went with the stub').toBe(false);
+    const p = libRead.parseOpVerbArgs;
+    expect(p('recall-off', ['../x', '--clear'])).toEqual({ ok: false, reason: 'bad-id' });
+    expect(p('recall-off', [ID])).toEqual({ ok: true, args: { op: 'recall-off', mode: 'write', id: ID, generation: null } });
+    expect(p('recall-off', ['--clear-all'])).toEqual({ ok: true, args: { op: 'recall-off', mode: 'clear-all', id: null, generation: null } });
+    expect(p('recall-off', [ID, '--bogus'])).toEqual({ ok: false, reason: 'bad-args' });
   });
 });
 
@@ -409,7 +406,8 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(fs.readFileSync(victim, 'utf8'), 'nothing unlinked, nothing written').toBe('keep');
     fs.mkdirSync(path.join(box.reg, `${ID_B}.generation`));
     expect(answer(runCli(box, ['recall-off', ID_B, '--json'])), 'C67\'s recall-off clause').toEqual([2, 'generation-unreadable']);
-    expect(answer(runCli(box, ['recall-off', ID, '--json'])), 'the writing verb ships with W2').toEqual([2, 'bad-args']);
+    expect(answer(runCli(box, ['recall-off', ID, '--json'])), 'the verb writes since W2-1').toEqual([0, undefined]);
+    expect(fs.readFileSync(hist(box, 'recall-off', ID), 'utf8'), 'the id\'s generation, through the shim').toBe(`${G1}\n`);
   }, HEAVY);
 
   it('C48: with no CCRC_SESSION_GENERATION and $REG/<id>.generation = G, the scope is (id, G), not the newest family', () => {
@@ -5396,5 +5394,460 @@ describe.skipIf(process.platform === 'darwin')('whole-branch fix 5: grep --json 
     expect(h.stdout, 'CONTROL: the human page found it').toContain('zqx45shape');
     expect(h.stdout).not.toContain('hunter2hunter2');
     expect(h.stdout).not.toContain('abcdef0123456789');
+  }, HEAVY);
+});
+
+// ── W2-1 Task 1 (W2-D33): the exports the deploy lane reads ─────────────────────────────────────────────────
+// These are recall.mjs expandEntryBody (the body pick expand now reads through), derive.mjs blobReadStmts, bodyOf
+// and keptOf, lib.mjs stampAtOrBefore and cli.mjs pairIndexOf. Each is exported so that W2-5a's driver reads a body,
+// a kept list and the pair index the way the store's own readers do, with no second decode in deploy/. The cases run
+// in-process against one fixture store in the DM2b shape (a ccd-sanitize pair whose sanitised copy is ingested first),
+// except the import pin. That one runs in a child, because importing cli.mjs sets the process umask to 0o077 (its
+// top-level process.umask call), and a child can start from a known 0o022 and measure the import's effect alone.
+describe.skipIf(process.platform === 'darwin')('W2-D33: the exports the deploy lane reads (W2-1 Task 1)', () => {
+  const XID = 'claude-a-w2d33';
+  const XT = 'a1d33001';
+  const XU = t16uuid(XT, 0);
+  const x = (i: number): string => t16uuid(XT, i);
+  interface PickedBody {
+    state: string; body: unknown; primary: unknown; causes: string[];
+    blob: { state: string; prunedMs?: number | null; rawLen?: number; bound?: number; bytes?: Uint8Array };
+  }
+  type Rc = { db: RDatabaseSync; version: number; schema: unknown };
+  type Recall = { expandEntryBody(rc: Rc, e: { entry_id: number; blob_id: number }): PickedBody };
+  type Derive = {
+    blobReadStmts(db: RDatabaseSync): Record<string, unknown>;
+    bodyOf(s: Record<string, unknown>, blobId: number, budget: { bytes: number }): unknown;
+    keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+  };
+  let box: rH.HistoryBox;
+  const writer = (): RDatabaseSync => new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+  const rcOf = (db: RDatabaseSync): Rc => ({
+    db, version: Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version), schema: libRead.SCHEMA_ADDED,
+  });
+  const entryOf = (db: RDatabaseSync, uuid: string): { entry_id: number; blob_id: number } =>
+    db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number; blob_id: number };
+  /** expandEntryBody over a fresh read handle, closed after: expand's statements are cached per handle. */
+  const picked = async (uuid: string): Promise<PickedBody> => {
+    const recall = (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
+    const db = rH.openStoreRO(box);
+    try { return recall.expandEntryBody(rcOf(db), entryOf(db, uuid)); } finally { db.close(); }
+  };
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d33-');
+    const rows = (fill: string): object[] => {
+      const a = rFx.toolUseRow({ uuid: x(2), ts: t16ts(2), parentUuid: x(1), sessionId: XU, toolUseId: 'toolu_01W2D33', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md' } });
+      const m = a['message'] as { content: unknown[] };
+      m.content = [{ type: 'text', text: fill }, ...m.content];
+      return [
+        rFx.userRow({ uuid: x(1), ts: t16ts(1), sessionId: XU, text: 'zqw2d33 question' }),
+        a,
+        rFx.boundaryRow({ uuid: x(3), ts: t16ts(3), parentUuid: x(2), sessionId: XU, trigger: 'manual', headUuid: x(2), anchorUuid: x(4),
+          tailUuid: x(2), allUuids: [x(1), x(2)] }),
+        rFx.summaryRow({ uuid: x(4), ts: t16ts(4), parentUuid: x(3), sessionId: XU, text: t16summary('zqw2d33') }),
+      ];
+    };
+    // The sanitised copy is ingested FIRST, so the entry's primary body is the "..." one (the DM2b case's shape).
+    const t = t16seed(box, { id: XID, project: 'demo', generation: '0189abcd-1234-4678-9abc-000000002d33', uuid: XU, rows: rows('...') });
+    rH.plantTranscript(box, 'claude-b', path.basename(path.dirname(t)), XU, rows(''));
+    t16scan(box);
+  }, 3 * HEAVY);
+
+  it('expandEntryBody picks the unsanitised ccd-sanitize variant, and expand prints exactly its rendering', async () => {
+    const k = await picked(x(2));
+    expect(k.state).toBe('body');
+    expect((k.primary as Array<{ text?: string }>)[0]!.text, 'CONTROL: the primary is the sanitised copy, ingested first').toBe('...');
+    expect((k.body as Array<{ text?: string }>)[0]!.text, 'the body is the unsanitised side').toBe('');
+    expect(k.causes).toEqual(['ccd-sanitize']);
+    expect(k.blob.state).toBe('bytes');
+    const j = rH.runCli(box, ['expand', x(2), '--json'], { env: rH.withPane(box, XID) });
+    expect(j.code, j.stderr).toBe(0);
+    const item = t16items(j)[0]!;
+    expect(item.text).toBe('\n[tool_use Read] {"file_path":"/home/u/tree/demo/b.md"}');
+    expect(libRead.renderEntryText(k.body), 'expand prints the rendering of the body the helper picked').toBe(item.text);
+    expect(item.variants).toEqual(k.causes.map((cause) => ({ cause })));
+  }, HEAVY);
+
+  it('expandEntryBody tells five states apart and hands back the expandBlob answer', async () => {
+    const w = writer();
+    const e1 = entryOf(w, x(1));
+    const orig = w.prepare('SELECT z, raw_len, pruned_ms FROM blobs WHERE blob_id = ?').get(e1.blob_id) as { z: Uint8Array; raw_len: number; pruned_ms: number | null };
+    const putBack = (): void => { w.prepare('UPDATE blobs SET z = ?, raw_len = ?, pruned_ms = ? WHERE blob_id = ?').run(orig.z, orig.raw_len, orig.pruned_ms, e1.blob_id); };
+    const stored = (text: string): void => {
+      const bytes = Buffer.from(text, 'utf8');
+      w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(t16brotliCompress(bytes), bytes.length, e1.blob_id);
+    };
+    const shape = (k: PickedBody): object => ({ state: k.state, body: k.body, primary: k.primary, causes: k.causes, blob: k.blob.state === 'bytes' ? 'bytes' : k.blob });
+    const PRUNED = Date.UTC(2026, 0, 2);
+    try {
+      const live = await picked(x(1));
+      expect([live.state, live.causes, live.blob.state], 'CONTROL: over its live primary the body parses').toEqual(['body', [], 'bytes']);
+      const arms: Array<{ arm: string; set: () => void; want: object }> = [
+        { arm: 'pruned', set: () => { w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(PRUNED, e1.blob_id); },
+          want: { state: 'tombstone', body: null, primary: null, causes: [], blob: { state: 'pruned', prunedMs: PRUNED } } },
+        { arm: 'over the decode cap', set: () => { w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.BLOB_DECODE_MAX + 1, e1.blob_id); },
+          want: { state: 'over-cap', body: null, primary: null, causes: [], blob: { state: 'too-large', rawLen: libRead.BLOB_DECODE_MAX + 1, bound: libRead.BLOB_DECODE_MAX } } },
+        { arm: 'over the expand bound', set: () => { w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.SIDECAR_WHOLE_MAX + 1, e1.blob_id); },
+          want: { state: 'over-cap', body: null, primary: null, causes: [], blob: { state: 'too-large', rawLen: libRead.SIDECAR_WHOLE_MAX + 1 } } },
+        { arm: 'undecodable', set: () => { w.prepare('UPDATE blobs SET z = NULL WHERE blob_id = ?').run(e1.blob_id); },
+          want: { state: 'undecodable', body: null, primary: null, causes: [], blob: { state: 'undecodable', rawLen: Number(orig.raw_len) } } },
+        { arm: 'not JSON', set: () => { stored('zq not json {'); },
+          want: { state: 'unparseable', body: 'zq not json {', primary: 'zq not json {', causes: [], blob: 'bytes' } },
+        { arm: 'a JSON string', set: () => { stored('"zq a json string"'); },
+          want: { state: 'body', body: 'zq a json string', primary: 'zq a json string', causes: [], blob: 'bytes' } },
+      ];
+      for (const a of arms) {
+        putBack();
+        a.set();
+        expect(shape(await picked(x(1))), a.arm).toEqual(a.want);
+      }
+    } finally {
+      putBack();
+      w.close();
+    }
+  }, HEAVY);
+
+  it('blobReadStmts prepares the two blob reads, and bodyOf over them tells a tombstone from an empty kept list', async () => {
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as Derive;
+    const keptId = (db: RDatabaseSync): number | null => (db.prepare(`SELECT b.kept_blob_id AS k FROM boundaries b
+      JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(x(3)) as { k: number | null }).k;
+    const read = (): { body: unknown; kept: string[]; none: number; bytes: number } => {
+      const db = rH.openStoreRO(box);
+      try {
+        const s = D.blobReadStmts(db);
+        expect(Object.keys(s).sort(), 'exactly the two blob reads').toEqual(['blobLen', 'blobZ']);
+        const id = keptId(db);
+        expect(id, 'CONTROL: the boundary stored its kept list').not.toBeNull();
+        const budget = { bytes: 0 };
+        const body = D.bodyOf(s, id!, budget);
+        return { body, kept: [...D.keptOf(s, id, { bytes: 0 })], none: D.keptOf(s, null, { bytes: 0 }).size, bytes: budget.bytes };
+      } finally { db.close(); }
+    };
+    const live = read();
+    expect(live.body).toEqual([x(1), x(2)]);
+    expect(live.kept).toEqual([x(1), x(2)]);
+    expect(live.bytes, 'bodyOf charges the compressed bytes it read to the budget').toBeGreaterThan(0);
+    expect(live.none, 'CONTROL (W2-D68): keptOf answers an empty set for a NULL id').toBe(0);
+    const w = writer();
+    const id = keptId(w)!;
+    const orig = w.prepare('SELECT z, pruned_ms FROM blobs WHERE blob_id = ?').get(id) as { z: Uint8Array; pruned_ms: number | null };
+    try {
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(Date.UTC(2026, 0, 2), id);
+      const gone = read();
+      expect(gone.body, 'bodyOf answers null for a tombstoned kept list').toBeNull();
+      expect(gone.kept, 'keptOf folds it into the empty set a NULL id answers, which is why deploy/ never calls keptOf (W2-D68)').toEqual([]);
+    } finally {
+      w.prepare('UPDATE blobs SET z = ?, pruned_ms = ? WHERE blob_id = ?').run(orig.z, orig.pruned_ms, id);
+      w.close();
+    }
+  }, HEAVY);
+
+  it('the deploy lane imports each export by name, and importing cli.mjs sets umask 0o077 without running main', () => {
+    const url = (f: string): string => pathToFileURL(path.join(REPO, 'ccd', 'history', f)).href;
+    const code = [
+      'process.umask(0o022);',
+      `const lib = await import(${JSON.stringify(url('lib.mjs'))});`,
+      `const derive = await import(${JSON.stringify(url('derive.mjs'))});`,
+      `const recall = await import(${JSON.stringify(url('recall.mjs'))});`,
+      `const cli = await import(${JSON.stringify(url('cli.mjs'))});`,
+      'const umask = process.umask(0o022);',
+      'console.log(JSON.stringify({ umask, kinds: [typeof lib.stampAtOrBefore, typeof derive.blobReadStmts, typeof derive.bodyOf,',
+      '  typeof derive.keptOf, typeof recall.expandEntryBody, typeof cli.pairIndexOf] }));',
+    ].join('\n');
+    // No argument after the script, so process.argv[1] is undefined and cli.mjs's entry guard is false.
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code], { encoding: 'utf8', env: box.env, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines, 'main did not run: stdout is the child line alone').toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toEqual({ umask: 0o077, kinds: Array(6).fill('function') });
+  }, HEAVY);
+});
+
+// ── W2-1 Task 3: one reader of recall-off/<id>, and RP10's verb half (W2-D28, W2-D29) ─────────────────────────────────
+// W2-D29: the CLI's read verbs and the drain's stale check read recall-off/<id> through ONE reader, sweep.mjs's
+// recallOffPresence (store.mjs readBounded at CONTROL_FILE_MAX), so they agree on every file. At the base the CLI read 4,096
+// bytes and the drain 128, and a file whose 129th byte onward differs from its head could be stale to one and off to the
+// other. RP10's verb half: the W2 close step clears every assigned file through the shim (its card half is beside RP8, W2-D32).
+describe('W2-1 recall-off: one reader, and RP10\'s verb half', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('W2-D29, one reader: G1, 5,000 spaces and a word (over the base CLI\'s 4,096-byte window, under CONTROL_FILE_MAX) is stale for the CLI and for the drain alike', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-w21one-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true, mode: 0o700 });
+    // 5,000 spaces: the base CLI's own reader (4,096 bytes) and the drain's (128) both saw only G1 and answered off; the one reader reads the
+    // whole file, which is not G1, so stale. The size is the CLI half's distinction: a fixture inside 4,096 bytes could not tell that reader back.
+    fs.writeFileSync(hist(box, 'recall-off', ID), `${G1}${' '.repeat(5000)}word\n`);
+    const r = treeJson(box);
+    expect(r.code, `the CLI reads the whole file: not G1, so stale, and recall proceeds. ${r.stderr}`).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => x.rc)).toEqual([0]);
+    expect(counters(box)['recall_off_stale'] ?? 0, 'the drain reads the same whole file, so it reaches the same verdict').toBe(1);
+  }, HEAVY);
+
+  it('RP10, verb half: three families switched off by the verb answer 8; recall-off --clear-all leaves none, cleared 3 and skipped none, and each family reads again', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-rp10-');
+    const FAMS = [[ID, TA, G1], [ID_B, TB, G2], [ID_D11, TD11, G4_11]] as const;
+    for (const [id, uuid, g] of FAMS) seedFamily(box, { id, project: PROJECT, uuid, generation: g, rows: turns(uuid, 2) });
+    for (const [id, , g] of FAMS) {
+      const w = runCli(box, ['recall-off', id, '--generation', g, '--json']);
+      expect(answer(w), `${w.stdout}${w.stderr}`).toEqual([0, undefined]);
+      expect(answer(treeJson(box, id)), `${id} is in the control arm`).toEqual([8, undefined]);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')).sort()).toEqual(FAMS.map(([id]) => id).sort());
+    const all = runCli(box, ['recall-off', '--clear-all']);
+    expect(all.code, `${all.stdout}${all.stderr}`).toBe(0);
+    expect(all.stdout).toContain('{"rc":0,"reason":null,"cleared":3,"skipped":[]}');
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'none left').toEqual([]);
+    for (const [id] of FAMS) expect(treeJson(box, id).code, `${id} reads again`).toBe(0);
+  }, 1.5 * HEAVY);
+});
+
+// ── W2-1 Task 5: RP8 end to end, RP10, and C66, C67 and C68 re-run over the shipped recall-off verb ───────────────
+// Spec 2026-10-05 §10.2 (RP8, RP10), §10.7 (C66, C67, C68), §8.4 (recall-off), §8.6 (the card line), §9.7.
+// W2-D32: RP8 is ONE `it`, in a fixture HOME whose gh (and tmux, ssh, curl and the managers) is poisoned
+// (makeHistoryBox). Each part runs as shipped: the verb through the CLI and the placed shim, the read verb in a pane,
+// the drain as the timer's pass, ccd/session-hook.sh as Claude Code runs it, and the analysis through W2-3's merged
+// pipeline: measure-history.py's raw rows, then history-gate.mjs's buildWindows, then windowTotals.
+// No recall-off file here is written by hand. B2 pinned hand-planted files before W2 wrote any (§10.7); these re-runs
+// hold the verb's own bytes, `<generation>\n` (W2-D28), which the CLI and the drain trim in JS and the hook trims of
+// ASCII whitespace. The hook and the measure are spawned and the gate is imported dynamically: no import line is added.
+const RP_HOOK = path.join(REPO, 'ccd', 'session-hook.sh');
+const RP_MEASURE = path.join(REPO, 'deploy', 'measure-history.py');
+/** How far past the case's start G1's last row is stamped, so G1's window spans every call the case makes. */
+const RP_LATE_MS = 86_400_000;
+type RpCall = [ts_ms: number, rc: number, verb: string];
+interface RpBoundary { boundary_uuid: string; ts_ms: number; copies: unknown[] }
+interface RpFamily {
+  ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: RpCall[]; boundaries: RpBoundary[];
+}
+interface RpWindow {
+  state: 'measured' | 'unmeasured'; start_ms: number; end_ms: number | null; end_inclusive: boolean; turns: number; calls: number; with_call: boolean;
+}
+/** The names of W2-3's merged gate module this describe reads. */
+interface RpGate {
+  ROW_CAP: number;
+  buildWindows(family: RpFamily, k?: number): RpWindow[];
+  windowOf(boundary: RpBoundary, calls: RpCall[], k?: number): RpWindow;
+  windowTotals(windows: RpWindow[]): { windows: number; with_call: number; calls: number; turns: number; unmeasured: number };
+}
+const rpGate = async (): Promise<RpGate> => (await import('../../deploy/history-gate.mjs')) as unknown as RpGate;
+
+/** G1's transcript: one manual compaction (`cycles`: the main boundary the analysis windows, at iso(8), its summary at
+ *  iso(9)), then two assistant turns, the second stamped `late`. Two turns is fewer than K and no boundary follows, so
+ *  the window ends INCLUSIVE at the copy's last timed row, `late` (W2-D14). */
+function rpRowsG1(late: number): Row[] {
+  const cwd = '/home/u/worktrees/p/quiet-basin';
+  return [
+    ...cycles(TA, 1),
+    assistantRow({ uuid: rid(TA, 6), ts: iso(10), sessionId: TA, cwd, text: 'Fixture answer after the summary.', requestId: 'req_rp8_1', msgId: 'msg_rp8_1' }),
+    assistantRow({ uuid: rid(TA, 7), ts: new Date(late).toISOString(), sessionId: TA, cwd, text: 'Fixture answer, stamped late.', requestId: 'req_rp8_2', msgId: 'msg_rp8_2' }),
+  ];
+}
+
+/** ccd's `_reg_purge` as this fixture's registry holds it: every `$REG/<id>.<field>` removed. recall-off/ lives
+ *  under ~/.ccrc/history, outside $REG, so a purge leaves it (§9.7). */
+function rpPurge(box: HistoryBox, id: string): void {
+  for (const n of fs.readdirSync(box.reg)) if (n.startsWith(`${id}.`)) fs.rmSync(path.join(box.reg, n), { recursive: true, force: true });
+}
+
+/** The prediction the sweep writes for `sid`, `card/<id>/<sid>.txt`, as its one line without the LF. A Stop line and
+ *  one pass come first, so that pass reads the transcript to its end (history-card.test.ts's pokeC). */
+function rpPredicted(box: HistoryBox, id: string, sid: string): string {
+  spoolLine(box, id, { v: 1, ev: 'Stop', id });
+  const r = runSweep(box);
+  expect(r.code, r.stderr).toBe(0);
+  const p = hist(box, 'card', id, `${sid}.txt`);
+  expect(fs.existsSync(p), `CONTROL: the sweep predicted ${id}'s card line`).toBe(true);
+  const line = fs.readFileSync(p, 'utf8').replace(/\n$/, '');
+  expect(libRead.CARD_LINE_RE.test(line), line).toBe(true);
+  return line;
+}
+
+/** SessionStart(compact) for `id`'s transcript `sid`, run as Claude Code runs the hook in that pane: the payload on
+ *  stdin, the pane's identity through withPane's tmux, the session generation in the env. PreCompact's scope marker
+ *  (`main <sid> <ms>`, S16's grammar) is planted first: no PreCompact is driven here. `context` is the
+ *  additionalContext the hook printed, or null when it printed nothing. */
+function rpCompactStart(box: HistoryBox, id: string, sid: string, gen: string, transcript: string): { code: number | null; stderr: string; context: string | null } {
+  fs.mkdirSync(hist(box, 'scope'), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(hist(box, 'scope', id), `main ${sid} ${Date.now()}\n`);
+  const r = spawnSync('bash', [RP_HOOK], {
+    input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact', cwd: box.home, transcript_path: transcript,
+      session_id: sid, prompt_id: 'p1', model: 'claude-fixture-4' }),
+    encoding: 'utf8', cwd: box.home, timeout: 60_000, killSignal: 'SIGTERM',
+    env: { ...box.env, ...withPane(box, id), CLAUDE_CODE_SESSION_ID: sid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: gen, CLAUDE_JOB_DIR: '' },
+  });
+  const out = (r.stdout ?? '').trim();
+  if (out === '') return { code: r.status, stderr: r.stderr ?? '', context: null };
+  const j = JSON.parse(out.split('\n').at(-1)!) as { hookSpecificOutput?: { additionalContext?: unknown } };
+  return { code: r.status, stderr: r.stderr ?? '', context: String(j.hookSpecificOutput?.additionalContext ?? '') };
+}
+
+/** measure-history.py's W2 raw rows for the listed families, isolated (-I) and bytecode-free (-B). */
+function rpMeasure(box: HistoryBox, families: string, start: number, end: number, rowCap: number): RpFamily[] {
+  const r = spawnSync('python3', ['-I', '-B', RP_MEASURE, '--db', hist(box, 'db', 'history.db'), '--families', families,
+    '--window-start', String(start), '--window-end', String(end), '--row-cap', String(rowCap)],
+  { encoding: 'utf8', env: { ...box.env, PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+  expect(r.status, r.stderr).toBe(0);
+  return (JSON.parse(r.stdout) as { w2: { families: RpFamily[] } }).w2.families;
+}
+
+/** Every arm-NULL recall_calls row of `id`, of any generation, in the script's order: the calls with the generation
+ *  filter dropped. */
+function rpCallsOf(box: HistoryBox, id: string): RpCall[] {
+  const db = openStoreRO(box);
+  try {
+    return (db.prepare('SELECT ts_ms, rc, verb FROM recall_calls WHERE ccrc_id = ? AND arm IS NULL ORDER BY ts_ms, event_key')
+      .all(id) as Array<{ ts_ms: number; rc: number; verb: string }>).map((c): RpCall => [Number(c.ts_ms), Number(c.rc), c.verb]);
+  } finally {
+    db.close();
+  }
+}
+
+/** The ts_ms of the one recall_calls row of (id, gen). */
+function rpTsOf(box: HistoryBox, id: string, gen: string): number {
+  const db = openStoreRO(box);
+  try {
+    const rows = db.prepare('SELECT ts_ms FROM recall_calls WHERE ccrc_id = ? AND generation = ?').all(id, gen) as Array<{ ts_ms: number }>;
+    expect(rows, `one recall_calls row of (${id}, ${gen})`).toHaveLength(1);
+    return Number(rows[0]!.ts_ms);
+  } finally {
+    db.close();
+  }
+}
+
+describe.skipIf(process.platform === 'darwin')('W2-1 Task 5: RP8 end to end, RP10, and C66, C67 and C68 over the shipped recall-off verb (spec 10.2, 10.7)', () => {
+  it('RP8 end to end (W2-D32): the verb writes G1; a purge and a reuse give G2; the new family reads (exit 0) and gets its card line, the drain counts recall_off_stale once, and the analysis counts no G2 line in G1\'s window', async () => {
+    const gate = await rpGate();
+    const box = makeHistoryBox('ccrc-hist-rcl-rp8-');
+    const late = Date.now() + RP_LATE_MS;
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: rpRowsG1(late) });
+    const ro = openStoreRO(box);
+    try {
+      const b = ro.prepare("SELECT count(*) AS n FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.cc_session_uuid = ? AND t.agent_id = ''")
+        .get(TA) as { n: number };
+      expect(Number(b.n), 'CONTROL: G1\'s one main boundary is ingested').toBe(1);
+    } finally {
+      ro.close();
+    }
+
+    // 1. The verb writes G1: as invoked, no dry run (W2-D26); the registry's generation equals --generation (W2-D27).
+    const off = hist(box, 'recall-off', ID);
+    const wrote = runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(wrote.code, `${wrote.stderr}${wrote.stdout}`).toBe(0);
+    expect(fs.readFileSync(off, 'utf8'), 'the verb\'s bytes: the generation and one LF (W2-D28)').toBe(`${G1}\n`);
+    // C68 over the verb's bytes: G1's read answers 8, counted, and its drain counts no stale read.
+    expect(answer(treeJson(box)), 'C68: the file names this generation').toEqual([8, undefined]);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8]]);
+    expect(counters(box)['recall_off_stale'] ?? 0, 'CONTROL: a read the file names is not stale').toBe(0);
+
+    // 2. A purge and a reuse of the id with G2: seedFamily drives the reuse's ticks, and rpPredicted's pass reads TB to
+    //    its end, so the sweep predicts the new family's card line.
+    rpPurge(box, ID);
+    const { transcript: tB } = seedFamily(box, { id: ID, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    expect(fs.readFileSync(off, 'utf8'), 'the purge leaves recall-off/<id>').toBe(`${G1}\n`);
+    const line = rpPredicted(box, ID, TB);
+
+    // 3. The read verb exits 0: the file names G1 and the resolved generation is G2, so the file is stale (§9.7).
+    const read = treeJson(box);
+    expect(read.code, `RP8: the new family gets recall. ${read.stderr}${read.stdout}`).toBe(0);
+    expect(scopeOf(read).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID, G2]]);
+
+    // 4. The drain counts recall_off_stale +1. The first tick renames the line, the second drains it while the file still
+    //    names G1. The drain runs before the hook. SessionStart(compact) is not a history spool source
+    //    (`SPOOL_SOURCES`), so the hook adds no history spool line;
+    //    draining first keeps the counted state exactly W2-D32's.
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => [x.generation, x.rc])).toEqual([[G1, 8], [G2, 0]]);
+    expect(counters(box)['recall_off_stale'], 'RP8: the drain counts the stale read once').toBe(1);
+
+    // 5. The hook serves the new family's card line.
+    const h = rpCompactStart(box, ID, TB, G2, tB);
+    expect(h.code, h.stderr).toBe(0);
+    expect(h.stderr, 'the hook is silent on stderr').toBe('');
+    expect(h.context ?? '', 'RP8: the new family gets its card line').toContain(line);
+
+    // 6. The analysis, through W2-3's merged pipeline, over the pre-registered list (ID, G1) only: the G2 family is a
+    //    new family, off the list (§10.2 "What the analysis counts").
+    const families = path.join(box.home, 'rp8-families.json');
+    fs.writeFileSync(families, JSON.stringify([{ store_id: storeIdOf(box), ccrc_id: ID, generation: G1 }]));
+    const fams = rpMeasure(box, families, T0, late + 1, gate.ROW_CAP);
+    expect(fams.map((f) => [f.ccrc_id, f.generation, f.found])).toEqual([[ID, G1, true]]);
+    const g2Ts = rpTsOf(box, ID, G2);
+    const windows = gate.buildWindows(fams[0]!);
+    expect(windows.map((w) => [w.state, w.end_inclusive, w.end_ms]), 'one measured window, inclusive at the late row').toEqual([['measured', true, late]]);
+    expect(windows[0]!.start_ms <= g2Ts && g2Ts <= late, 'the G1 boundary\'s window spans the G2 call\'s ts').toBe(true);
+    expect(fams[0]!.calls.map((c) => c[1]), 'the family\'s calls are G1\'s exit 8 alone').toEqual([8]);
+    expect(gate.windowTotals(windows), 'RP8: the analysis does not count the G2 line')
+      .toEqual({ windows: 1, with_call: 1, calls: 1, turns: 2, unmeasured: 0 });
+    // CONTROL: the same window over the id's calls with the generation filter dropped counts the G2 line as well, so
+    // only the filter keeps it out.
+    expect(gate.windowOf(fams[0]!.boundaries[0]!, rpCallsOf(box, ID)).calls, 'CONTROL: no generation filter').toBe(2);
+  }, 2 * HEAVY);
+
+  it('RP10 the W2 close step: recall-off --clear-all on a node with three verb-written files leaves none, and the next card line serves for each family', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-rp10-');
+    const fams = [{ id: ID, sid: TA, gen: G1 }, { id: ID_B, sid: TB, gen: G2 }, { id: ID_D11, sid: TD11, gen: G4_11 }]
+      .map((f) => ({ ...f, transcript: seedFamily(box, { id: f.id, project: PROJECT, uuid: f.sid, generation: f.gen, rows: turns(f.sid, 2) }).transcript }));
+    const lines = fams.map((f) => rpPredicted(box, f.id, f.sid));
+    for (const f of fams) {
+      const w = runCli(box, ['recall-off', f.id, '--generation', f.gen, '--json']);
+      expect(w.code, `${f.id}: ${w.stderr}${w.stdout}`).toBe(0);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')).sort(), 'three assigned files').toEqual([ID, ID_B, ID_D11].sort());
+    // CONTROL, and C68's card and CLI halves over the verb's bytes: each file names its family's generation, so the
+    // hook withholds that family's line and its read verb answers 8.
+    for (const f of fams) {
+      const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
+      expect(h.context ?? '', `${f.id}: no card line while its file names its generation`).not.toContain('History: node ');
+      expect(answer(treeJson(box, f.id)), `${f.id}: exit 8 while recall is off`).toEqual([8, undefined]);
+    }
+    const clear = runCli(box, ['recall-off', '--clear-all', '--json']);
+    expect(clear.code, `${clear.stderr}${clear.stdout}`).toBe(0);
+    // The pass prints its summary on its own line before the result line, and under --json the CLI relays it on stderr;
+    // stdout's last line is the CLI's envelope (W2-D28).
+    const summary = clear.stderr.split('\n').find((l) => l.startsWith('{"rc"') && l.includes('"cleared"'));
+    expect(summary, `the --clear-all summary is relayed on stderr\n${clear.stderr}`).toBeDefined();
+    const sum = JSON.parse(summary!) as { cleared: unknown; skipped: unknown };
+    expect([sum.cleared, sum.skipped], 'W2-D28: three cleared, none skipped').toEqual([3, []]);
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'RP10: none left').toEqual([]);
+    fams.forEach((f, k) => {
+      const h = rpCompactStart(box, f.id, f.sid, f.gen, f.transcript);
+      expect(h.code, h.stderr).toBe(0); expect(h.stderr, 'the hook is quiet on stderr').toBe('');
+      expect(h.context ?? '', `RP10: ${f.id}'s next card line serves`).toContain(lines[k]!);
+      expect(treeJson(box, f.id).code, `${f.id}: its read verb reads again`).toBe(0);
+    });
+  }, 3 * HEAVY);
+
+  it('C66 W2 half: every recall-off form whose id is off ccd\'s grammar answers 2 bad-id through the shipped verb, and no path is formed', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c66w-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    // CONTROL: the verb writes in this box. recall-off/ then exists, so `recall-off/../x` WOULD resolve to the victim
+    // below: a refusal that rested on a missing directory would not show here.
+    const w = runCli(box, ['recall-off', ID, '--generation', G1, '--json']);
+    expect(w.code, `${w.stderr}${w.stdout}`).toBe(0);
+    const victim = hist(box, 'x');   // where recall-off/../x lands
+    fs.writeFileSync(victim, 'keep');
+    for (const args of [['../x', '--clear'], ['../x', '--generation', G1], ['../x'], ['..', '--clear'], ['a/b', '--generation', G1]]) {
+      expect(answer(runCli(box, ['recall-off', ...args, '--json'])), args.join(' ')).toEqual([2, 'bad-id']);
+    }
+    expect(fs.readFileSync(victim, 'utf8'), 'nothing unlinked, nothing written').toBe('keep');
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'no entry but the CONTROL\'s').toEqual([ID]);
+  }, HEAVY);
+
+  it('C67 W2 half: an unreadable $REG/<id>.generation refuses the write form with and without --generation, 2 generation-unreadable, and nothing is written', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c67w-');
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    // CONTROL: the same verb writes for an id whose .generation reads.
+    const w = runCli(box, ['recall-off', ID_B, '--generation', G2, '--json']);
+    expect(w.code, `${w.stderr}${w.stdout}`).toBe(0);
+    plantSession(box, ID, { generation: 'unreadable' });   // present, and no read of it succeeds
+    for (const args of [[ID], [ID, '--generation', G1]]) {
+      expect(answer(runCli(box, ['recall-off', ...args, '--json'])), args.join(' ')).toEqual([2, 'generation-unreadable']);
+    }
+    expect(fs.readdirSync(hist(box, 'recall-off')), 'nothing written for the unreadable id').toEqual([ID_B]);
   }, HEAVY);
 });
