@@ -30,7 +30,7 @@ On 2026-10-22 the operator ruled, verbatim: "Docs only updates with no changes t
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking. The dispatched worker runs it under the `ccrc-worker` skill. The brief carries only this wave's specifics: this plan's path, the task range, the claim groups and the deviation block.
 
-**Goal:** a merge to `main` whose changed paths, measured from the highest release tag's tree to HEAD's, all lie outside what ships pushes no tag, builds nothing, leaves no attestation and publishes no release. The run says so in one plain line in its log and in the job summary, and its job ends green. Any other merge releases exactly as today. When the decision cannot be measured, the merge releases and the line says why. A `stable` push of such an unreleased head promotes the newest release it contains, because that release is a build of the same shipped tree.
+**Goal:** a merge to `main` whose changed paths, measured from the highest release tag's tree to HEAD's, all lie outside what ships pushes no tag, builds nothing, leaves no attestation and publishes no release. The run says so in one plain line in its log and in the job summary, and its job ends green. Any other merge releases exactly as today. When the decision cannot be measured, or the runner's node is below the repository's engines floor (D-6403), the merge releases and the line says why. A `stable` push of such an unreleased head is still refused, as before (the coordinator's ruling on Reading 6), and the refusal now says what is true: the newest release HEAD contains, that `stable` cannot move back past it, and that the next release cut from a descendant of HEAD promotes by a fast-forward push.
 
 **Spec:** the operator's directive above; `docs/superpowers/specs/2026-09-18-release-rollout-design.md` (decisions 2 and 3) and `docs/superpowers/specs/2026-09-20-centralised-update-management-design.md` (§4, decisions 2 and 3), both amended by a delta note in this wave.
 
@@ -40,13 +40,13 @@ On 2026-10-22 the operator ruled, verbatim: "Docs only updates with no changes t
   - `notShipped(path)`;
   - a CLI that diffs `<base>^{commit}` against `HEAD` with `--no-renames` and answers one line: `unchanged <n>` or `changed <n> <first>` (D-6392, D-6393).
 - `deploy/release-main.sh` gains two arms and keeps two:
-  - `decide` asks the helper about the highest release tag. Only when HEAD's helper AND the base tag's own copy of it both answer `unchanged` (D-6402), and that tag is a published, non-draft release (`gh release view`, D-6392), does it record `same-as <tag>` and write `build=false` to `$GITHUB_OUTPUT`. Anything else records `release`;
+  - `decide` asks the helper about the highest release tag. Only when the runner's node meets `server/package.json`'s engines floor (D-6403), HEAD's helper AND the base tag's own copy of it both answer `unchanged` (D-6402), and that tag is a published, non-draft release (`gh release view`, D-6392), does it record `same-as <tag>` and write `build=false` to `$GITHUB_OUTPUT`. Anything else records `release`;
   - `measure --base <tag>` prints the same two-helper answer and nothing else, for `release-stable.sh` (D-6398);
   - `prepare` reads the decision after its existing refusals. On exactly `same-as <highest>` it writes a new state word, `built unchanged` / `same-as <tag>` (D-6394), and returns without tagging or building. On anything else it releases as today;
   - `publish` returns on that word before the bundle refusal;
   - every decision prints one line and appends it to `$GITHUB_STEP_SUMMARY` (D-6395).
 - `release-main.yml`: a new `decide` step, which holds the job's only `GH_TOKEN` before publish, runs first with the runner's own node. `setup-node` and its npm cache run only when a build follows. The prepare step carries no token. There is no trigger filter (D-6397, D-6401).
-- `deploy/release-stable.sh`: a HEAD with no release tag promotes the newest release tag it contains when `release-main.sh measure` answers `unchanged`. Otherwise it refuses with a message that is true: `stable` cannot move back, so the way forward is the next release that contains HEAD (D-6398).
+- `deploy/release-stable.sh`: a HEAD with no release tag is still refused, exit 2, before any `gh` call. The refusal names the newest release tag HEAD contains, says `stable` now sits past it and cannot move back, and says the next release cut from a descendant of HEAD promotes by a fast-forward push. `release-main.sh measure` only chooses the sentence: nothing that ships changed, or HEAD changed what ships and its release run should be checked (D-6398).
 - A guard test derives build-release.sh's inputs from its own text, the package scripts it runs and the configs those read. It goes red when any input would fall under `NOT_SHIPPED`, or when the build grows a shape the derivation does not model (D-6396).
 - Prose and copy that say "every merge is a release" are corrected (D-6399).
 - `deploy/build-release.sh`, `release.yml`, `deploy/deploy.sh`, `ccd/ccrc`, `ci.yml` and every server, agent and wire file are untouched.
@@ -72,7 +72,7 @@ One PR, from this workspace's own branch.
 - Measuring the artifact (option (b)), and measuring whether two builds of one tree give identical dists (D-6390). A later wave may add it as a second check only if that measurement comes out identical.
 - Any change to `release.yml`. A hand-cut `vX.Y.0` tag always builds and releases, docs-only or not.
 - `ci.yml`'s daily full run and the stable gate's evidence rule (D-6400).
-- Moving release-stable's no-tag check into the `gate` job, so an unpromotable push fails before a full run. With D-6398's promote arm such a push is rarer, and the change is a job change in `release-stable.yml`, not a comment.
+- Moving release-stable's no-tag check into the `gate` job, so an unpromotable push fails before a full run. It is a job change in `release-stable.yml`, not a comment, and a follow-up candidate now that D-6398 keeps refusing every untagged head.
 - Filtering skipped `docs(…)` commits out of the next release's notes (D-6400).
 - `deploy/deploy.sh`'s `stamp_build` and `ccd/ccrc`'s `_inst_stamp`, `_inst_version_name` and `_inst_floor`. They stay as they are, and only the prose about them changes. Stamping the newest contained release tag when nothing that ships changed is a follow-up candidate (D-6400, Reading 9).
 - The `build-release.sh:94` comment "every merge's prerelease would stall". `build-release.sh` stays untouched because `release.yml` shares it, and the sentence still describes what a failing build does to every release.
@@ -89,7 +89,7 @@ One PR, from this workspace's own branch.
   - NOT touched: `deploy/build-release.sh` (`release.yml` shares it, and a hand-cut tag must always build), `release.yml`, `ci.yml`, `deploy/deploy.sh`, `ccd/`, `.github/ci/`.
 - **Functions this wave edits** (the consent list, by file):
   - `deploy/release-main.sh`: the header (`:1-27`), `usage` (`:33`), the argument loop and its checks (`:36-53`), `prepare` (`:56-103`), `publish` (`:117-178`) including the notes comment (`:151-155`), and the arm dispatch (`:180-183`). New `say`, `set_output`, `derive_tags`, `scope_ask`, `measure_change`, `base_published`, `decide` and `measure`, placed between the `SHAPE=` line (`:53`) and `prepare`.
-  - `deploy/release-stable.sh`: the header (`:1-12`), the zero-tag refusal (`:59-64`), which becomes the promote-or-refuse branch, and `TAG=` (`:69`).
+  - `deploy/release-stable.sh`: the header (`:1-12`), the zero-tag refusal (`:59-64`), whose message names the newest contained release (D-6398).
   - `.github/workflows/release-main.yml`: the header (`:1-16`), the steps from `setup-node` to prepare (`:57-70`), and the attest step's comment (`:72-78`).
   - `.github/workflows/release-stable.yml`: the header sentences "the gate runs one dependency-free module with the runner's own node" (`:5-6`) and "the script refuses an untagged merge HEAD" (`:7-8`), comments only.
   - `deploy/release-scope.mjs` (new): `NOT_SHIPPED`, `notShipped`, `changedPaths`, `decide`, `main`.
@@ -119,7 +119,7 @@ One PR, from this workspace's own branch.
 - **No numeric citation in any added code or test line** (`citations.test.ts`; its corpus is every file outside `docs/`). Cite `release-main.sh#decide` or a describe name. This plan's `path:line` anchors are for reading only.
 - **Hermetic tests.** Fixture repos under `mkTmp` with a bare `origin`, the poisoned `curl`, and the recording `gh` and `npm` stubs (`release-main.test.ts:98-120`). No network, no real `gh`. `run()` sets `GITHUB_STEP_SUMMARY: ''` and `GITHUB_OUTPUT: ''` before `extraEnv`. Without that, a CI test job would append fixture lines to its own real job summary and outputs (D-6395). Every spawn of the helper or of git carries `GIT_ENV`, so a developer's global git config never changes an answer.
 - **Memory and vitest.** Run ONE file at a time, in the foreground, from inside the package, with `./node_modules/.bin/vitest run test/<one>.test.ts --pool=forks --maxWorkers=1`, wrapped in `timeout -s INT 560`. Use a short real TMPDIR (`mkdir -p ~/.cc-tmp/w25`). Never use bare `npx vitest`. Read the session slice's `anon` in `memory.stat` first, and run nothing above the programme's gate.
-- **The absorb step.** Before each task's first edit, run `git fetch origin main` and re-read every anchor that task names in the landed text. Before the first push, rebase onto `origin/main`. After it, merge `origin/main`, and never force-push. Land through the merge queue: `gh pr merge <n> --match-head-commit <sha>`.
+- **The absorb step.** Before each task's first edit, run `git fetch origin main` and re-read every anchor that task names in the landed text. Absorb `origin/main` only on worker clause 16's triggers, with `git merge`, never a rebase or a force-push. The coordinator lands the PR.
 - **Public repo.** Commits use the noreply identity. No hosts, IPs, home paths, lane, account or session names in code, comments, commits or the PR body. Write "the server box" and "the fleet box".
 - **Routing.** Execute natively, inside the subscription, with no handoff. Pass the model explicitly on every subagent:
   - implementer subagents run on `sonnet`, one per task;
@@ -136,7 +136,8 @@ One PR, from this workspace's own branch.
 - **A merge that changes the classifier.** HEAD's helper may be the defect. The base tag's own copy of the helper must agree before anything skips. Rows W25-R15 and W25-R16.
 - **The token.** `GH_TOKEN` sits only in the `decide` step's environment and in publish's, as before. `decide` runs bash, git, gh and the first-party helper, and installs nothing. No step that runs `npm ci` holds it. Rows W25-Y2, W25-Y4 and W25-R14.
 - **A mode-only change to a shipped executable.** 48 shipped files are mode 100755. A chmod changes no content but must release. Rows W25-S7 and W25-R6.
-- **Promoting the contained release.** `release-stable.sh` promotes a tag that is not at HEAD only when both helpers say nothing that ships changed between it and HEAD, and only when that tag's commit carries exactly one release tag. Rows W25-T1 to W25-T7.
+- **The untagged-HEAD refusal.** `release-stable.sh` never promotes a tag that is not at HEAD. Its refusal names the newest contained release, never as a push target, prints no rewind or force command, and makes no `gh` call whatever `measure` answers. Rows W25-T1 to W25-T7.
+- **The node floor.** `decide` and `measure` never trust the runner's node below `server/package.json`'s engines floor, or when either version cannot be read. Rows W25-R20 to W25-R22.
 - **The guard's model of the build.** Every read build-release.sh spells through `"$ROOT"`, every package script npm runs, and every CSS, HTML, triple-slash and `file:`-dependency path is either modelled or refused. Rows W25-G3 to W25-G6.
 
 ## Risk notes
@@ -147,7 +148,7 @@ One PR, from this workspace's own branch.
 - **A hand-cut minor whose `release.yml` run is in flight or failed.** `gh release view` answers no release, so release-main releases the next patch of the same tree. That is what it does today.
 - **A yanked highest release.** A docs-only merge after it releases nothing new. Today it would re-release the same code under a new number, so nothing is lost.
 - **The checkout token in `.git/config`.** `actions/checkout` persists its token in the local git config, so `npm ci` lifecycle scripts can already read one today. This wave adds no token to any step that runs `npm ci`. The new `GH_TOKEN` lives in the `decide` step, which runs only first-party code plus git and gh (D-6401).
-- **A test-only fix after a red stable gate.** A release whose gate goes red on a broken test is fixed by a test-only merge, which cuts no release. Pushing that merge to `stable` runs the gate on it and, its shipped tree being the release's, promotes the release (D-6398). Without the promote arm nothing would be promotable until an unrelated code merge.
+- **A test-only fix after a red stable gate.** A release whose gate goes red on a broken test is fixed by a test-only merge, which cuts no release. Under the ruling on Reading 6 nothing is promotable until a release contains that fix: the next merge that changes what ships, or a hand-cut `vX.Y.0` tag, which `release.yml` always builds. Pushing the fix's own commit to `stable` is refused, and the refusal says so (D-6398).
 - **Paths in the job summary.** The first shipped path is printed JSON-quoted into the log and the summary. Paths come from merged commits (write access), and GitHub sanitises summaries.
 
 ## Mutation table
@@ -192,15 +193,19 @@ Each guard this wave adds, the mutation that removes or weakens it, and the row 
 | The token sits on `decide` | the `env:` block removed | W25-Y2 |
 | Decide runs before the toolchain, which a skip leaves out | `setup-node` moved above `decide`, or its `if:` dropped | W25-Y3 |
 | The prepare step carries no token | `env: GH_TOKEN` added to prepare | W25-Y4 |
-| release-stable promotes only on `unchanged` | promote on any `measure` answer | W25-T2, W25-T6 |
+| The node floor is checked | the floor check deleted from `measure_change` | W25-R20 |
+| An unreadable floor is not a pass | `node_floor_ok` returns 0 when no floor is read | W25-R21 |
+| An unreadable node version is not a pass | `node_floor_ok` returns 0 when the version does not parse | W25-R22 |
+| release-stable never promotes a contained release | promote `NEWEST` on `unchanged` | W25-T1 (exit 0, `ghArgv` not `[]`) |
 | release-stable names a contained tag | `--merged HEAD` dropped | W25-T3 |
 | release-stable ranks versions | `sort -V` becomes `sort` | W25-T4 |
-| One release tag on the contained commit (D-3129 kept) | the count check deleted | W25-T7 |
+| An unmeasured answer reads as changed | the `unmeasured` case worded as `unchanged` | W25-T6 |
+| No rewind is printed | `git push origin $NEWEST^{commit}:refs/heads/stable` printed | W25-T7 |
 | The channel note | old copy restored | `settings-screen.test.tsx` `'the labels read spec …'` |
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first thirteen, in order. The rest is the worker's reserve.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first fourteen, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 from the worker's reserve for the ruling on Reading 10. D-6404 to D-6409 remain the worker's reserve.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented as a deny-by-default classifier over changed paths (option (a)). Measuring the artifact (option (b)) is rejected for this wave.
   - (a) answers before the local tag. Nothing is tagged, built or attested, so the attest step's existing `hashFiles` skip covers it with no YAML expression changed. (b) builds first, so its tarball must be moved out of the attest glob before that step runs. A mistake there mints a public transparency-log entry for a digest no release publishes, and that cannot be undone.
@@ -209,7 +214,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - (a) is safe in the direction that matters. Only a path on a short, explicit list can skip. Every other path, known or new (`ui/`, `.github/`, a new top-level directory), releases. The one way (a) skips a real change is a build that reads a `NOT_SHIPPED` path. D-6396's guard refuses that for every read it models: build-release.sh's `"$ROOT"` reads, the package scripts npm runs, each tsconfig's `include`, `paths`, `rootDirs` and `typeRoots`, the vite configs' URL targets, `file:` dependencies, tracked symlinks, and the relative paths in input JS/TS, CSS and HTML. Any shape outside that model makes the guard throw. Reads it cannot model are named in the Risk notes.
   - (a) is cheaper: a docs merge spends two `git diff`s and one `gh release view`, not a build. And it is testable hermetically in the existing fixture harness.
 - **D-6391.** `NOT_SHIPPED` holds exactly six rules, each with a `why`: the tree `docs`; every root-level `*.md`; the root file `LICENSE`; the trees `server/test`, `server/test-e2e` and `agent/test`.
-  - Test trees are included on the coordinator's reading ("test-only merges for the same reason"). Each lies outside its package's `tsconfig.json` `include` (`server/tsconfig.json:7`, `agent/tsconfig.json:7`) and outside `PATHSPEC`. A test-only fix after a red stable gate stays promotable through D-6398.
+  - Test trees are included on the coordinator's reading ("test-only merges for the same reason"). Each lies outside its package's `tsconfig.json` `include` (`server/tsconfig.json:7`, `agent/tsconfig.json:7`) and outside `PATHSPEC`. A test-only fix after a red stable gate is not promotable until a release contains it (D-6398, the ruling on Reading 6).
   - `pwa/test` is NOT included: `pwa/tsconfig.json`'s `include` names `test`, so pwa's `tsc --noEmit` reads it. A pwa test change can break the build, and it releases.
   - Nested docs are NOT included (`agent/CLAUDE.md`, `ui/README.md`, `pwa/design/`, `.design-sync/`, `.superpowers/`, `.github/pull_request_template.md`). Each is one more rule, and each is the coordinator's call (Reading 3).
   - `.github/` releases: it carries the build's environment (the Node pin, the job env).
@@ -248,19 +253,20 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - Such a filter would be a second, hand-kept list.
   - GitHub evaluates it over the push's own range, which reintroduces the failed-release hazard of D-6392.
   - The existing trigger regex would let one pass unnoticed (`build-release.test.ts:658`, `m` flag, ends at `$`).
-- **D-6398.** `release-stable.sh` promotes the newest release a tagless HEAD contains when nothing that ships changed since it. It no longer only refuses, and so it amends design 2026-09-20 decision 3 ("the tag at HEAD is the whole input").
-  - Why not a better message alone: the push has already moved `stable` to HEAD when the script runs, so the newest contained tag is an ancestor, and pushing it is a non-fast-forward the ruleset refuses. No command can promote it through the branch after that. And a test-only fix after a red gate (D-6391) would leave nothing promotable.
-  - Why it is sound: the gate has just proved HEAD (a green full-suite on HEAD's own tree), and `measure` says HEAD's shipped tree is that release's. The promoted bytes are the ones that release always had. This is the same rule release-main uses to decide that the release already covers HEAD.
-  - The arm: when HEAD carries no release tag, take `NEWEST="$(git tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)"`. Refuse when there is none. Refuse unless `NEWEST`'s commit carries exactly one release tag, which keeps D-3129's "a promotion names one release". Then run `bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST"`, so there is one classifier and one two-helper rule (D-6402). Promote `NEWEST` through the existing flow only on rc 0 and exactly `unchanged <n>`.
-  - Every refusal stays exit 2 with no `gh` call, keeps the existing prefix, and says what is true: `stable` now points at HEAD and cannot move back, so the way forward is pushing the commit of the next release that contains HEAD. It never prints a command that rewinds the branch.
-  - No network is needed for the arm itself: the promote job checks out at full depth (`release-stable.yml:106`) and runs the helper with the runner's own node.
+- **D-6398.** `release-stable.sh` still promotes only the release tagged at HEAD: design 2026-09-20 decision 3 ("the tag at HEAD is the whole input") stands, by the coordinator's ruling on Reading 6. On a HEAD with no release tag it refuses, exit 2, before any `gh` call, as before. What changes is that the refusal now says what is true.
+  - Why the message changes: once docs- and tests-only merges cut no release, `main`'s head often carries none, and the old message's only cause, "a merge commit", is no longer the usual one. The push has already moved `stable` to HEAD when the script runs, and the ruleset refuses the force push a rewind would need (D-3130), so the message names the way forward: the next release cut from a descendant of HEAD, pushed by fast-forward.
+  - The arm: when HEAD carries no release tag, take `NEWEST="$(git tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)"`. With none, the reason is that HEAD contains no release tag. With one, run `bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST"`, so there is one classifier, one two-helper rule (D-6402) and one node floor (D-6403). The answer only chooses the sentence, never the exit: `unchanged` says HEAD's merges since `NEWEST` changed nothing that ships, so no release was cut for them; `changed` says HEAD changed what ships and the release-main run for its merge should be checked; `unmeasured`, a non-zero exit or any other answer says it could not be measured, reads it as changed, and says the same.
+  - The message keeps the existing prefix, names `NEWEST` as the newest release HEAD contains, never as something to push, and prints no rewind or force command. Its only command is the placeholder `git push origin <tag>^{commit}:refs/heads/stable`, where `<tag>` is literal text for a release not yet cut.
+  - D-3129's count check on HEAD's own tags is unchanged. `NEWEST`'s commit is never promoted, so no count is taken there.
+  - Consequence, stated: a test-only fix after a red stable gate cuts no release (D-6391), so nothing is promotable until a release contains it: the next merge that changes what ships, or a hand-cut `vX.Y.0` tag, which `release.yml` always builds.
+  - No network is needed: the promote job checks out at full depth (`release-stable.yml:106`) and runs the helper with the runner's own node, as the gate runs `main-artifact.mjs`.
 - **D-6399.** Every text that states "every merge is a release" is corrected in place: README, CLAUDE.md, the two script headers, the workflow headers, the `shared/api.ts` docstring, the PWA channel note with its pin, and the radio story.
   - The three specs get one dated delta note each and keep their sentences. Specs are dated history; a note keeps the decision record honest without rewriting it.
   - The PWA note becomes `Every merge that changes the build, minutes after it lands.` (Reading 5).
   - `NOT_SHIPPED`'s rules are enumerated in exactly one live text, README's pipeline paragraph, and W25-S13 holds it to the helper. CLAUDE.md and the skip line name the list by symbol only. The spec delta notes carry a dated copy as history.
 - **D-6400.** Downstream effects that this wave states and does not fix:
-  - **Gate evidence.** `ci.yml`'s daily full run tests `main`'s head (`ci.yml:214-229`). `isTrustedFullSuiteRun` (`.github/ci/main-artifact.mjs:85-95`) needs the exact sha. Pushing a release's own tag commit to `stable` while `main`'s head is an unreleased merge therefore runs the gate's `full` mode (about an hour). Pushing `main`'s head instead uses its daily evidence and, through D-6398, promotes the newest release it contains when nothing that ships changed. The README says so.
-  - **A push to `stable` that cannot promote.** A tagless HEAD whose shipped tree differs from the newest release it contains (its own release run failed or is still running) still runs the gate, possibly `full`, before `promote` refuses, and it leaves `stable` past that release until a later release contains HEAD. The refusal says so.
+  - **Gate evidence.** `ci.yml`'s daily full run tests `main`'s head (`ci.yml:214-229`). `isTrustedFullSuiteRun` (`.github/ci/main-artifact.mjs:85-95`) needs the exact sha. Pushing a release's own tag commit to `stable` while `main`'s head is an unreleased merge therefore runs the gate's `full` mode (about an hour). Pushing `main`'s head instead is refused when that head carries no release (D-6398), so while `main`'s head is an unreleased merge a promotion pays the gate's full run. The README says so.
+  - **A push to `stable` that cannot promote.** A tagless HEAD still runs the gate, possibly `full`, before `promote` refuses, and it leaves `stable` past the newest release it contains until a later release contains HEAD. The refusal says so.
   - **Unversioned heads, and the lost update floor.** `deploy.sh`'s `stamp_build` (`deploy/deploy.sh:263`) and `_inst_stamp` (`ccd/ccrc:15811-15814`) stamp `version` only from a tag at HEAD. A checkout of an unreleased head therefore stamps none. The PWA shows that box amber (`ui/src/components/build-line.tsx:20-30`), and a source install of it is named `untagged-<sha12>` (`_inst_version_name`, `ccd/ccrc:14301`). `_inst_floor` raises no floor from it (`ccd/ccrc:17772-17779`), and notify counts it behind every release (`server/src/update/notify.ts:89-93`). So a later bare `ccrc update` can move such a box to an older stable release with no `--downgrade` refusal; only the health gate stands behind it. Before this wave `main`'s head carried a tag within about a minute of nearly every merge. Now a README-quickstart clone taken while the head is a docs merge gets no floor. This wave changes the README (Task 4) to point a checkout install at a release tag or `--release`. Stamping the newest contained release tag when `release-scope.mjs` says nothing that ships changed is a follow-up, because it lifts "`ccd/ccrc` and `deploy.sh` untouched" (Reading 9).
   - **Needless releases (fail toward releasing).** These still mint a release whose shipped tree is identical:
     - a merge that touches only paths outside the six rules that the build does not read either: `agent/CLAUDE.md`, `ui/README.md`, `pwa/design/`, `.design-sync/`, `.superpowers/`, `.github/pull_request_template.md`, root dotfiles such as `.gitignore`, and the vitest configs. Also `pwa/test`, which pwa's `tsc` does read;
@@ -279,6 +285,11 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - A merge that changes the classifier changes `deploy/`, so the old helper answers `changed`, whatever HEAD's copy says. A defect in HEAD's `notShipped` cannot vouch for its own merge, and so cannot vouch for later ones either.
   - A base with no helper (every tag cut before this wave) is unmeasured, and the merge releases.
   - The temporary directory is removed in the same function, and it is never under `$ROOT` or `$OUT_DIR`.
+- **D-6403.** The runner's own node is trusted only at or above the repository's engines floor (the coordinator's ruling on Reading 10). `measure_change`, which both `decide` and `measure` run, first calls `node_floor_ok`. Below the floor, or when either version cannot be read, the answer is `unmeasured`, so `decide` releases and `measure` says so.
+  - The floor is read from `$ROOT/server/package.json`, never written as a second literal: exactly one match of `"node"` followed by `:` and a `">=X.Y.Z"` value. No match, more than one, or another range shape is unreadable.
+  - The version is `node --version`, which must exit 0 and print exactly `vX.Y.Z`. The comparison is numeric, field by field, in bash, so `sort -V` stays spelled once (W25-P5).
+  - The reasons, carried into the unmeasured line: `node <version> is below server/package.json's engines floor >=<floor>`, `node --version exited <rc>`, `node --version answered '<first 80 chars>'`, and `server/package.json names no readable engines floor`.
+  - It sits in `measure_change` rather than `decide` alone, so `release-stable.sh`'s use of `measure` (D-6398) is held to the same floor, with one check and one place.
 
 ## File structure
 
@@ -295,7 +306,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - a new describe after `:328`, `'release-main.sh: a merge that changes nothing that ships cuts no release (W25-b)'`;
   - new pins inside `'release-main.sh: source pins'`.
 - `server/test/build-release.test.ts` (Task 2): four rows in the `release-main.yml` describe (`:652`).
-- `deploy/release-stable.sh`, `.github/workflows/release-stable.yml`, `server/test/release-stable.test.ts` (Task 3): rows in `'release-stable.sh: what it refuses'` (`:97`) and `'release-stable.sh: the promotion'` (`:173`).
+- `deploy/release-stable.sh`, `.github/workflows/release-stable.yml`, `server/test/release-stable.test.ts` (Task 3): rows in `'release-stable.sh: what it refuses'` (`:97`).
 - Task 4: in-place edits, plus the README row.
 
 ## Tasks
@@ -447,7 +458,7 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
 
 - [ ] **Step 6: Commit.** `git add deploy/release-scope.mjs server/test/release-scope.test.ts && git commit -m "feat(release): one list of what never ships, held against build-release.sh's own inputs (D-6391, D-6396)"`.
 
-### Task 2: decide cuts no release when nothing that ships changed, and says so (W25-b; D-6392, D-6393, D-6394, D-6395, D-6397, D-6401, D-6402)
+### Task 2: decide cuts no release when nothing that ships changed, and says so (W25-b; D-6392, D-6393, D-6394, D-6395, D-6397, D-6401, D-6402, D-6403)
 
 **Files:**
 - Modify: `deploy/release-main.sh` (header `:1-27`, `usage` `:33`, arguments `:36-53`, `prepare` `:56-103`, `publish` `:117-178`, dispatch `:180-183`)
@@ -462,7 +473,8 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
   - `set_output <true|false>`: appends `build=<word>` to `$GITHUB_OUTPUT` when that is non-empty, wrapped the same way.
   - `derive_tags`: sets `HIGHEST` and `NEXT` exactly as `prepare`'s `:77-84` does today. `prepare` and `decide` both call it, so `sort -V` stays spelled once.
   - `scope_ask <helper> <base> <label>`: always returns 0. It runs `out="$(node "$helper" --repo "$ROOT" --base "$base")" || rc=$?` and sets `CHANGE` to `unchanged`, `changed` or `unmeasured`, `CHANGE_N`, `CHANGE_FIRST` and `CHANGE_WHY`. The why is `<label> exited <rc>`, `<label> answered more than one line`, or `<label> answered '<first 80 chars>'`.
-  - `measure_change <base>`: always returns 0. It runs `scope_ask "$ROOT/deploy/release-scope.mjs" "$base" release-scope.mjs`. On `unchanged` it makes `d="$(mktemp -d)"`. If `git -C "$ROOT" show "$base:deploy/release-scope.mjs" > "$d/release-scope.mjs"` fails, it sets `unmeasured` with why `<base> carries no deploy/release-scope.mjs to confirm the answer`. Otherwise it runs `scope_ask "$d/release-scope.mjs" "$base" "<base>'s release-scope.mjs"` and, on `changed`, sets `CHANGE_BY_BASE=1`. It removes `$d` before returning.
+  - `node_floor_ok`: returns 0 iff `node --version` is at or above the engines floor read from `$ROOT/server/package.json`; otherwise sets `FLOOR_WHY` to one of D-6403's four reasons and returns 1. It never calls `sort`.
+  - `measure_change <base>`: always returns 0. It first runs `node_floor_ok`; on 1 it sets `CHANGE=unmeasured` and `CHANGE_WHY="$FLOOR_WHY"` and returns, running no helper. Otherwise it runs `scope_ask "$ROOT/deploy/release-scope.mjs" "$base" release-scope.mjs`. On `unchanged` it makes `d="$(mktemp -d)"`. If `git -C "$ROOT" show "$base:deploy/release-scope.mjs" > "$d/release-scope.mjs"` fails, it sets `unmeasured` with why `<base> carries no deploy/release-scope.mjs to confirm the answer`. Otherwise it runs `scope_ask "$d/release-scope.mjs" "$base" "<base>'s release-scope.mjs"` and, on `changed`, sets `CHANGE_BY_BASE=1`. It removes `$d` before returning.
   - `base_published <tag>`: returns 0 iff `gh release view "$tag" --json isDraft --jq .isDraft`, run in `$ROOT`, exits 0 and prints exactly `false`. Otherwise it sets `BASE_WHY` (`gh release view exited <rc>` or `gh release view answered '<first 80 chars>'`) and returns 1. Only `decide` calls it.
   - `decide`: `mkdir -p "$OUT_DIR"`, `rm -f "$DECISION"` (`DECISION="$OUT_DIR/release-main.decision"`), `derive_tags`, then:
     - no `HIGHEST`: `say` the first-release line, record `release`;
@@ -491,6 +503,7 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
 
 - [ ] **Step 1: Change the harness** (`release-main.test.ts:39-129`), and nothing else in the existing rows' assertions.
   - `fixture()` gains `merge?: (root: string) => void`. It runs before `'the merge under release'` is committed with `git add -A` and without `--allow-empty`. The default writes `ccd/ccrc` as `'#!/usr/bin/env bash\necho the merge\n'` at mode 0755, a shipped change, so every existing release row still releases.
+  - `fixture()` writes `server/package.json` into the `'first'` commit, holding the real `server/package.json`'s `engines` object, read at test time and never spelled as a literal (D-6403). It gains `floor?: string | null`: a string replaces `engines.node`; `null` writes `{}`.
   - `fixture()` also gains `after?: (root: string) => void` (commits `'a docs merge after it'` when given), `scope?: false | string` and `headScope?: string`. By default the real helper is copied beside the script, as `NOTES` is (`:62-64`), into the `'first'` commit, so every tag carries it. `false` leaves it out; a string plants that text as the helper in `'first'`. `headScope` writes that text over `deploy/release-scope.mjs` in the merge commit only.
   - `plantBin()`'s `gh` stub still records every argv to `$HOME/gh-argv`. For `release view` it also appends `GH_TOKEN=${GH_TOKEN:-unset}` to `$HOME/gh-env`, and prints `$HOME/gh-view` (default `false`), or exits with `$HOME/gh-view-exit` when present. Everything else exits `ghExit`, as now. `plantBin` gains `GhView = { view?: string; viewExit?: number }`, threaded through `run()`.
   - `run()` spreads `GITHUB_STEP_SUMMARY: ''` and `GITHUB_OUTPUT: ''` after `process.env` and before `extraEnv`.
@@ -544,6 +557,9 @@ expect(originTags(home)).toEqual(['v0.0.1']);
   - **W25-R16** (a base with no helper): `scope: false` and the same `headScope`, docs-only. It releases `v0.0.2` with `could not measure what changed since v0.0.1 (v0.0.1 carries no deploy/release-scope.mjs to confirm the answer)`.
   - **W25-R17** (prepare consumes only an exact decision): the default shipped `merge`, prepare only (no decide). It releases `v0.0.2`, and stdout contains the no-decision line. Then, on a fresh docs-only fixture, `release-main.decision` is hand-written as `same-as v0.0.9\n` before prepare. It releases `v0.0.2` with the malformed-decision line.
   - **W25-R18** (an unwritable summary never fails the run): docs-only, `GITHUB_STEP_SUMMARY` = `home` (a directory). Decide exits 0, writes `same-as v0.0.1\n`, prints the skip line on stdout, and its stderr is empty.
+  - **W25-R20** (below the floor releases): docs-only, `floor: '>=999.0.0'`. It releases `v0.0.2`, stdout contains `could not measure what changed since v0.0.1 (node v` and `is below server/package.json's engines floor >=999.0.0)`, and `gh-argv` is absent.
+  - **W25-R21** (an unreadable floor releases): docs-only, `floor: null`. It releases `v0.0.2` with `(server/package.json names no readable engines floor)`.
+  - **W25-R22** (an unreadable node version releases): docs-only, with a `node` shim first on `PATH` that prints `garbage` for `--version` and otherwise `exec`s the real node (its absolute path, `process.execPath`). It releases `v0.0.2` with `(node --version answered 'garbage')`.
   - **W25-R19** (the measure arm): `measure --base v0.0.1` on a docs-only `merge` prints exactly `unchanged 2\n`, exit 0, with `gh-argv` and `npm-argv` absent and no `release-main.decision` written. On the default `merge` it prints `changed 1 "ccd/ccrc"\n`. With `scope: false` it prints `unmeasured release-scope.mjs exited 1\n`. `measure --base junk` and `measure` with no `--base` exit 2, and `prepare --base v0.0.1` exits 2.
 
 - [ ] **Step 3: Write the failing pins.**
@@ -589,54 +605,51 @@ expect(originTags(home)).toEqual(['v0.0.1']);
 
 - [ ] **Step 6: Run both files until green**, one at a time. Then run `release-notes.test.ts`, `update-states.test.ts`, `oss-metadata.test.ts`, `workflow-yaml-parses.test.ts` and `verify-provenance.test.ts` whole, which are unchanged and run to confirm.
 
-- [ ] **Step 7: Commit.** `git commit -m "feat(release): a merge that changes nothing that ships cuts no tag, build, attestation or release (D-6392..D-6395, D-6397, D-6401, D-6402)"`.
+- [ ] **Step 7: Commit.** `git commit -m "feat(release): a merge that changes nothing that ships cuts no tag, build, attestation or release (D-6392..D-6395, D-6397, D-6401..D-6403)"`.
 
-### Task 3: release-stable promotes the release an unreleased head contains, or says what is true (W25-c; D-6398)
+### Task 3: release-stable's untagged-HEAD refusal says what is true (W25-c; D-6398, the ruling on Reading 6)
+
+Rewritten to the coordinator's ruling on Reading 6: `release-stable.sh` never promotes a release HEAD only contains. The tag at HEAD stays the whole input to a promotion.
 
 **Files:**
-- Modify: `deploy/release-stable.sh` (`:1-12`, `:59-69`); `.github/workflows/release-stable.yml` (`:5-8`, comments only)
+- Modify: `deploy/release-stable.sh` (`:1-12`, `:59-64`); `.github/workflows/release-stable.yml` (`:5-8`, comments only)
 - Test: `server/test/release-stable.test.ts`
 
 **Interfaces:**
 - Consumes: `release-main.sh measure --base <tag>` (Task 2), exactly: rc 0 and one line `unchanged <n>`, `changed <n> <first>` or `unmeasured <why>`.
-- Produces: when HEAD carries exactly one release tag, nothing changes. When it carries none:
-  - promote: on `unchanged <n>`, stdout `release-stable.sh: HEAD <short> carries no release tag, and nothing that ships changed since <t>, the newest release it contains — promoting <t>`, then `TAG=<t>` and the existing flow (view, the two edits, the read-back), unchanged;
-  - refuse: exit 2, no `gh` call, stderr exactly `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag, and <reason>). stable now points at <short> and cannot move back (fast-forward only): push the commit of the next release that contains <short> (git push origin <tag>^{commit}:refs/heads/stable). Nothing was changed`, where `<reason>` is one of:
-    - `it contains no release tag`;
-    - `the newest release commit it contains carries more than one release tag (<tags>)`;
-    - `what ships changed since <t>, the newest release it contains (shipped paths changed: <n>; first: <first>)`;
-    - `whether what ships changed since <t>, the newest release it contains, could not be measured (<why>)`, where `<why>` is the `unmeasured` answer's text, `release-main.sh measure exited <rc>`, or `release-main.sh measure answered '<first 80 chars>'`.
+- Produces: when HEAD carries one or more release tags, nothing changes. When it carries none, exit 2, no `gh` call, empty stdout, and stderr is exactly one of two lines:
+  - HEAD contains no release tag: `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag, and it contains no release tag). stable now points at <short> and cannot move back (fast-forward only): the first release cut from a descendant of <short> promotes by a fast-forward push of that release's commit (git push origin <tag>^{commit}:refs/heads/stable). Nothing was changed`
+  - HEAD contains `<t>`: `release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD <short> carries no vX.Y.Z tag; it sits past <t>, the newest release it contains, and <reason>). stable now sits past <t> and cannot move back (fast-forward only): the next release cut from a descendant of <short> promotes by a fast-forward push of that release's commit (git push origin <tag>^{commit}:refs/heads/stable). Nothing was changed`, where `<reason>` is one of:
+    - on `unchanged <n>`: `its merges since changed nothing that ships (paths changed: <n>), so no release was cut for them`;
+    - on `changed <n> <first>`: `it changed what ships (shipped paths changed: <n>; first: <first>): check the release-main run for its merge, which should have cut a release`;
+    - otherwise: `whether it changed what ships could not be measured (<why>), so read it as changed: check the release-main run for its merge`, where `<why>` is the `unmeasured` answer's text, `release-main.sh measure exited <rc>`, or `release-main.sh measure answered '<first 80 chars>'`.
 
-  `<tag>` in the tail is literal text, a placeholder for the operator. The message never names `<t>` as something to push.
+  `<tag>` in the tail is literal text, a placeholder for a release not yet cut. The message never names `<t>` as something to push, and prints no rewind or force command.
 
-- [ ] **Step 1: Change the harness.** `fixture()` gains `scope?: boolean`: when true it copies the real `deploy/release-main.sh` and `deploy/release-scope.mjs` into `deploy/` before the first commit, so every tag carries them. `plantBin`'s `GhOpts` gains `realNode?: boolean`: when true, `node` is not poisoned. `npm` and `curl` stay poisoned in every row. The `run()` env gains `GIT_ENV` for the helper's own git, which it already passes.
+- [ ] **Step 1: Change the harness.** `fixture()` gains `scope?: boolean`: when true it copies the real `deploy/release-main.sh` and `deploy/release-scope.mjs` into `deploy/`, and writes `server/package.json` holding the real file's `engines` object (D-6403), before the first commit, so every tag carries them. `plantBin`'s `GhOpts` gains `realNode?: boolean`: when true, `node` is not poisoned. `npm` and `curl` stay poisoned in every row. The `run()` env already carries `GIT_ENV`, which the helper's own git inherits.
 
-- [ ] **Step 2: Write the failing rows.** In each, the row commits on top of `fixture(home, { tagHead: 'v1.2.3', scope: true })` and runs with `realNode: true` unless it says otherwise.
-  - In `'release-stable.sh: the promotion'`:
-    - **W25-T1** (an unreleased docs head promotes the release it contains): commit a `README.md` and `docs/a.md` change. Exit 0. Stdout contains `HEAD <short> carries no release tag, and nothing that ships changed since v1.2.3, the newest release it contains — promoting v1.2.3` and `promoted v1.2.3 to stable`. `ghArgv(home)` starts with `release view v1.2.3 --json isPrerelease,isDraft --jq [.isPrerelease, .isDraft] | @tsv` and holds `release edit v1.2.3 --prerelease=false`, then `release edit v1.2.3 --latest`.
-    - **W25-T3** (only a contained tag): as T1, plus a side branch off the tagged commit with a commit tagged `v9.9.9`, which HEAD does not contain. Stdout names `v1.2.3` and not `v9.9.9`. This is the `--merged HEAD` mutation row.
-    - **W25-T4** (version order): `fixture(home, { scope: true })`, then two empty commits tagged `v1.9.9` and `v1.9.10` in that order, then a docs commit. It promotes `v1.9.10`. This is the `sort -V` mutation row.
-  - In `'release-stable.sh: what it refuses'`:
-    - **W25-T2** (a shipped change refuses, truthfully): commit a `deploy/x.sh` change. Exit 2. Stderr matches the existing `:103` regex and `/HEAD [0-9a-f]+ carries no vX\.Y\.Z tag, and what ships changed since v1\.2\.3, the newest release it contains \(shipped paths changed: 1; first: "deploy\/x\.sh"\)\. stable now points at [0-9a-f]+ and cannot move back \(fast-forward only\)/`. Stderr does not contain `git push origin v1.2.3`. `ghArgv(home)` equals `[]`.
-    - **W25-T5** (no release anywhere): `fixture(home)` with no tag and no `realNode`. Exit 2, stderr contains `carries no vX.Y.Z tag, and it contains no release tag). stable now points at`, and `ghArgv(home)` equals `[]`. Node is never run: it stays poisoned and the row passes.
-    - **W25-T6** (unmeasured refuses): commit a docs change and `git rm deploy/release-scope.mjs`. Exit 2, stderr contains `could not be measured (release-scope.mjs exited 1)`, and `ghArgv(home)` equals `[]`.
-    - **W25-T7** (D-3129 kept for the contained commit): `fixture(home, { tagHead: 'v0.0.9', scope: true })`, then `git tag v0.1.0` on the same commit, then a docs commit. Exit 2, stderr names both `v0.0.9` and `v0.1.0` in the more-than-one reason, and `ghArgv(home)` equals `[]`.
-  - The existing `:98` row stays green unchanged: no tag, so no `measure` and no `node`.
+- [ ] **Step 2: Write the failing rows** in `'release-stable.sh: what it refuses'`. In each, the row commits on top of `fixture(home, { tagHead: 'v1.2.3', scope: true })` and runs with `realNode: true` unless it says otherwise. Every row expects exit 2, `ghArgv(home)` equal to `[]` and stdout `''`.
+  - **W25-T1** (an unreleased docs head is refused, and says nothing that ships changed): commit a `README.md` and `docs/a.md` change. Stderr contains `carries no vX.Y.Z tag; it sits past v1.2.3, the newest release it contains, and its merges since changed nothing that ships (paths changed: 2), so no release was cut for them). stable now sits past v1.2.3 and cannot move back (fast-forward only): the next release cut from a descendant of ` and ends `Nothing was changed\n`. This is the never-promote mutation row.
+  - **W25-T2** (a shipped change): commit a `deploy/x.sh` change. Stderr matches the existing untagged row's regex and `/carries no vX\.Y\.Z tag; it sits past v1\.2\.3, the newest release it contains, and it changed what ships \(shipped paths changed: 1; first: "deploy\/x\.sh"\): check the release-main run for its merge/`.
+  - **W25-T3** (only a contained tag): as T1, plus a side branch off the tagged commit with a commit tagged `v9.9.9`, which HEAD does not contain. Stderr names `v1.2.3` and not `v9.9.9`. This is the `--merged HEAD` mutation row.
+  - **W25-T4** (version order): `fixture(home, { scope: true })`, then two empty commits tagged `v1.9.9` and `v1.9.10` in that order, then a docs commit. Stderr names `it sits past v1.9.10`. This is the `sort -V` mutation row.
+  - **W25-T5** (no release anywhere): `fixture(home)` with no tag and no `realNode`. Stderr contains `carries no vX.Y.Z tag, and it contains no release tag). stable now points at`. Node is never run: it stays poisoned and the row passes.
+  - **W25-T6** (unmeasured reads as changed): commit a docs change and `git rm deploy/release-scope.mjs`. Stderr contains `whether it changed what ships could not be measured (release-scope.mjs exited 1), so read it as changed`.
+  - **W25-T7** (no rewind, no force, no push of a contained tag): over T1's and T2's cases, stderr does not match `/--force|push -f|\+refs|git reset|git push origin v[0-9]/`, and contains `git push origin <tag>^{commit}:refs/heads/stable` exactly once.
+  - The existing untagged row (`'an untagged HEAD is exit 2 …'`) and the D-3129 two-tag row stay green unchanged: no tag at HEAD and none contained means no `measure` and no `node`.
 
-- [ ] **Step 3: Run and confirm red.** Run `release-stable.test.ts`. Expected: T1 to T7 fail except T5's `ghArgv` part. Every pre-existing row is green.
+- [ ] **Step 3: Run and confirm red.** Run `release-stable.test.ts`. Expected: T1 to T4, T6 and T7 fail; T5 fails on its message. Every pre-existing row is green.
 
 - [ ] **Step 4: Implement** in the zero-tag branch:
-  - `SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"`, and a local `refuse_untagged <reason>` that prints the refusal line and exits 2;
-  - `NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""`; none → refuse;
-  - `mapfile -t AT_NEWEST < <(git -C "$ROOT" tag --points-at "$NEWEST^{commit}" | grep -E "$SHAPE" || true)`; a count other than 1 → refuse;
-  - `ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST")" || RC=$?`, then `case` on the answer as in the Interfaces;
-  - on `unchanged`, print the promote line and set `TAGS=("$NEWEST")`, so the two-tag check and `TAG=` below run unchanged.
+  - `SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"`, and one local function that prints the refusal from its varying parts and exits 2, so the prefix and the tail are spelled once;
+  - `NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""`; none → the no-release line;
+  - otherwise `ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST")" || RC=$?`, then `case` on the answer to pick `<reason>`; every answer refuses.
 
-  The header (`:1-12`): "a push to `stable` PROMOTES the release already cut for the commit at its HEAD" gains "or, when HEAD carries none, the newest release HEAD contains whose shipped tree it still is (D-6398)". "a merge commit carries no release tag and is refused here (exit 2)" becomes "a HEAD with no release tag is refused (exit 2) unless `release-main.sh measure` says nothing that ships changed since the newest release it contains". `release-stable.yml`'s comments: `:5-6` add "and so does `promote`, for `deploy/release-scope.mjs`"; `:7-8` "the script refuses an untagged merge HEAD" becomes "the script refuses an untagged HEAD unless nothing that ships changed since the newest release it contains, which it then promotes".
+  The header (`:1-12`): "a merge commit carries no release tag and is refused here (exit 2)" becomes "a HEAD with no release tag (a merge commit, or a `main` merge that changed nothing that ships, which release-main.sh cuts no release for) is refused here (exit 2), and the refusal names the newest release HEAD contains and whether anything that ships changed since it (D-6398)". `release-stable.yml`'s comments: `:5-6` add "and `promote` runs `deploy/release-scope.mjs` the same way, only to word a refusal"; `:7-8` "the script refuses an untagged merge HEAD" becomes "the script refuses a HEAD that carries no release tag".
 
 - [ ] **Step 5: Run until green.** Run the same file whole.
 
-- [ ] **Step 6: Commit.** `git commit -m "feat(release): release-stable promotes the release an unreleased head still is, and its refusal says what is true (D-6398)"`.
+- [ ] **Step 6: Commit.** `git commit -m "feat(release): release-stable's refusal of an untagged head names the release it contains and says what is true (D-6398)"`.
 
 ### Task 4: the texts say what the lane now does (W25-d; D-6399, D-6400)
 
@@ -645,7 +658,7 @@ expect(originTags(home)).toEqual(['v0.0.1']);
 - Test: `pwa/test/settings-screen.test.tsx:3207`; `server/test/release-scope.test.ts` (W25-S13)
 
 **Interfaces:**
-- Consumes: Task 2's skip line wording and `NOT_SHIPPED`'s six rules; Task 3's promote arm and refusal.
+- Consumes: Task 2's skip line wording and `NOT_SHIPPED`'s six rules; Task 3's refusal.
 - Produces: copy, and one row.
 
 - [ ] **Step 1: The pins first.**
@@ -662,14 +675,14 @@ expect(originTags(home)).toEqual(['v0.0.1']);
   - `:154`: "Every merge to `main` that changes what ships publishes a release, born a prerelease — the `dev` channel; a merge that touches only docs or tests publishes none, and the next release contains it."
   - After `:446` ("Keep the checkout out of `~/ccrc` …"), add: "Check out a release tag first if the box should carry a version and an update floor (\"Quickstart\", above)."
   - `:740-748`: after "derives the next patch tag from the highest `vX.Y.Z`", insert the README's one enumeration of the list: "A `decide` step first asks `deploy/release-scope.mjs` what changed between that tag's tree and HEAD's, and asks the tag's own copy of the helper too. When every changed path is on its `NOT_SHIPPED` list (`docs/`, the root's `*.md` and `LICENSE`, `server/test/`, `server/test-e2e/`, `agent/test/`), both copies agree, and that tag is a published release, the run stops: no toolchain, no tag, no build, no attestation, and one line in the log and the job summary says so. Anything else, including an answer it cannot read, releases."
-  - `:756-760`: "the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so it cannot be promoted;" becomes "the script refuses a HEAD that carries more than one release tag, and one that carries none unless nothing that ships changed since the newest release it contains, which it then promotes — a merge commit carries none, and neither does a `main` merge that changed nothing that ships;". After the promotion command's sentence ends, add: "`main`'s head often carries no release now. Pushing it is fine, and it lets the gate use the daily run's evidence on that head: when nothing that ships changed since the newest release it contains, that release is promoted. A head that did change what ships but has no release yet is refused, and `stable` then stays on it until a release that contains it is pushed."
+  - `:756-760`: "the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so it cannot be promoted;" becomes "the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, and neither does a `main` merge that changed nothing that ships, so neither can be promoted;". After the promotion command's sentence ends, add: "`main`'s head often carries no release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not `main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it first. A push of an untagged head is refused after its gate, and the refusal names the newest release it contains and whether anything that ships changed since; `stable` then stays on that head until a release cut from a descendant of it is pushed." (Ruling on Reading 6.)
   - `:6490`: "(auto-tagging makes that the ordinary case on `main`)" becomes "(true of a `main` head whose merge changed what ships; a docs- or tests-only merge leaves the head untagged, and such a box raises no update floor)".
 - [ ] **Step 4: CLAUDE.md**, each edit in place, naming the list by symbol only:
-  - `:245-248`: "Every merge to `main` that changes what ships becomes a GitHub **prerelease** … (… ; patch per released merge, and a merge whose every changed path `deploy/release-scope.mjs`'s `NOT_SHIPPED` covers, by HEAD's copy and the base tag's, cuts none; a `stable` push of such an untagged head promotes the newest release it contains; …)".
+  - `:245-248`: "Every merge to `main` that changes what ships becomes a GitHub **prerelease** … (… ; patch per released merge, and a merge whose every changed path `deploy/release-scope.mjs`'s `NOT_SHIPPED` covers, by HEAD's copy and the base tag's, cuts none, so `stable` promotes a release's own commit, never such an untagged head; …)".
   - `:292-293`: "which auto-tagging makes the ordinary case on `main`" becomes "which holds only for a `main` head whose merge changed what ships".
 - [ ] **Step 5: Spec delta notes.** One blockquote under each spec's Date/Status block (`2026-09-18-release-rollout-design.md` after `:7`, `2026-09-20-centralised-update-management-design.md` after `:14`, `2026-10-18-settings-redesign-design.md` after `:13`):
 
-  > **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398):** a merge to `main` whose every changed path is outside what ships (`deploy/release-scope.mjs`'s `NOT_SHIPPED`: `docs/`, the root's `*.md` and `LICENSE`, the server and agent test trees) cuts no release: no tag, no build, no attestation. The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` of a HEAD with no release tag promotes the newest release it contains when nothing that ships changed since it, so the tag at HEAD is no longer the whole input to a promotion.
+  > **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398):** a merge to `main` whose every changed path is outside what ships (`deploy/release-scope.mjs`'s `NOT_SHIPPED`: `docs/`, the root's `*.md` and `LICENSE`, the server and agent test trees) cuts no release: no tag, no build, no attestation. The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` still promotes only the release tagged at its HEAD: the tag at HEAD stays the whole input. The refusal of an untagged HEAD now names the newest release HEAD contains and whether anything that ships changed since it.
 
   For the settings spec, add: "The Dev note reads *Every merge that changes the build, minutes after it lands.*"
 - [ ] **Step 6: Run W25-S13 until green**, then `docs-parity` whole, since README changed.
@@ -685,13 +698,13 @@ expect(originTags(home)).toEqual(['v0.0.1']);
 - [ ] **Step 3: Repo guards.**
   - `citations`, `docs-parity`, `single-definition`, `topology-clean`, `private-names`, `dtbd`, `typecheck-tests`.
   - `GROWTH_CHECK=1 … test/growth-check.test.ts`. None of this wave's files is a growth file; run it to confirm.
-  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6402 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-2])\.\*\*'` reads 13, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
+  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6403 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-3])\.\*\*'` reads 14, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
 - [ ] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15 (`ccd/worker-skill/SKILL.md:76`): `green` or `red` from the FIRST full suite run after the implementation was complete, red staying red through fix rounds, and `unrun` when no full run happened locally. The per-file runs of Steps 2 and 3, and the CI full run, are listed in the as-built note, not folded into the word.
 - [ ] **Step 5: The PR body.**
   - The rule, D-6390's argument for (a) over (b), and D-6391's six rules (the body may enumerate them; it is a dated record).
   - The decision lines.
   - The token and cache handling (D-6401): the `decide` step before `setup-node`, rows Y2 to Y4 and R14. State it honestly: the token sits in `decide`'s environment, which runs only first-party code plus git and gh; no step that runs `npm ci` holds a token beyond the one `actions/checkout` already persists.
-  - The two-helper rule (D-6402) and the release-stable promote arm (D-6398), which amends design decision 3.
+  - The two-helper rule (D-6402), the node floor (D-6403), and release-stable's truthful refusal (D-6398), which keeps design decision 3 by the ruling on Reading 6.
   - The live proof the coordinator watches after landing: the first docs-only merge's run shows the skip line, no tag appears, and its job concludes green with its post steps.
   - D-6400's downstream effects, including the needless-release list and the lost update floor of a checkout install, so a needless release is not read as a classifier miss.
   - Every pin it changed, named: the harness default merge, the derive row's decide run and new line, and the settings note pin.
@@ -748,3 +761,10 @@ Every blocker and major was taken. The lines below record the findings, or the p
   - Claim 2226 (run 722) holds `CLAUDE.md`.
   - Group C takes those two files only with that run's consent through the coordinator, or once the claim has ended.
   - Wave 23's PR #1137 also edits README in disjoint lines. The second to land measures `git merge-tree` and absorbs only on a conflict.
+
+## Worker revision for the rulings (2026-10-22)
+
+The worker applied the rulings above to the body before Task 1. Readings 2 and 6 and the review notes keep their drafted text as history.
+- Reading 6: D-6398, Task 3 (its interfaces, rows W25-T1 to T7 and the mutation rows), the Goal, the Architecture, the Review Focus, the Risk notes, D-6391's test-tree bullet, D-6400's gate-evidence bullets, Task 4's README `:756-760` and CLAUDE.md wording, and the spec delta note now say that `release-stable.sh` refuses every untagged HEAD and never promotes a contained release.
+- Reading 10: D-6403 (the first reserve number) defines the node-floor guard. It sits in `measure_change`, so `decide` and `release-stable.sh`'s `measure` share it. Task 2 gains `node_floor_ok`, the fixture's `server/package.json` and rows W25-R20 to R22.
+- The absorb step follows worker clause 16 (merge only), replacing the drafted rebase-before-push.
