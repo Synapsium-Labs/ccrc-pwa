@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { ECHO_TRIES, sendPrompt, STASH_TRIES, SUBMIT_TRIES, type SendResult } from '../src/inject/send.js';
+import { ECHO_BUDGET_MS, ECHO_POLL_MS, sendPrompt, STASH_TRIES, SUBMIT_TRIES, type SendResult } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
+
+/** D-6366: the echo polls a free sleep takes (the wait is the larger of ECHO_TRIES polls and ECHO_BUDGET_MS). */
+const ECHO_WAIT_POLLS = ECHO_BUDGET_MS / ECHO_POLL_MS;
 
 /**
  * D-5911 (plan docs/superpowers/plans/2026-10-20-mail-and-run-truth-draft-never-blocks-rejected-m.md, Task P1b; spec
@@ -456,13 +459,13 @@ describe("onDraft: 'stash' (D-5911)", () => {
     });
 
     it('`box-unreadable` (no box on any echo poll): once the box is back, our text is cleared and the stash popped', async () => {
-      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'no-box', captures: ECHO_TRIES } });
+      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'no-box', captures: ECHO_WAIT_POLLS } });
       const res = await send(f, 'hello from the lane');
       givenBack(f, res, 'box-unreadable');
     });
 
     it('`not-alive` (every echo capture failed): once the pane reads again, our text is cleared and the stash popped', async () => {
-      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'dead', captures: ECHO_TRIES } });
+      const f = fakeCc({ box: [...DRAFT], blindAfterType: { kind: 'dead', captures: ECHO_WAIT_POLLS } });
       const res = await send(f, 'hello from the lane');
       givenBack(f, res, 'not-alive');
     });
