@@ -6,7 +6,10 @@
 // `syntheticJwt`; no token-shaped literal is written here.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, utimesSync, writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -518,6 +521,393 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     const w = await runAuthDriver(home, { ops: [{ op: 'wait', path: join(home, 'never') }] }, {}, { timeoutMs: 500 });
     expect(w.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
+// ── Task 2: the lock, the commit, the checkpoint and a full disk ────────────────────────────────────────────────
+
+const pendingPath = (dir: string): string => join(dir, 'auth.pending.json');
+const lockPath = (dir: string): string => join(dir, 'auth.json.lock');
+const modeOf = (p: string): number => lstatSync(p).mode & 0o777;
+const fileRecord = (dir: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
+
+/** The next credential a commit writes: LiteLLM's five keys, an account id of its own (the reading prints the id in
+ *  full and every token only by its length, so the id is what tells the new record from the planted one). */
+function nextRecord(accountId = 'acct-fixture-next'): Record<string, unknown> {
+  const now = Math.floor(Date.now() / 1000);
+  const claim = { [ACCOUNT_CLAIM]: { chatgpt_account_id: accountId } };
+  return {
+    access_token: syntheticJwt({ exp: now + 7200, iat: now, ...claim }),
+    refresh_token: `rtok-fixture-next-${randomBytes(16).toString('hex')}`,
+    id_token: syntheticJwt({ exp: now + 7200, iat: now, ...claim }),
+    expires_at: now + 7200,
+    account_id: accountId,
+  };
+}
+
+/** Wait (polling) until `p` exists. */
+async function until(p: string, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!existsSync(p)) {
+    if (Date.now() > deadline) throw new Error(`never appeared: ${p}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+const FOREIGN_WRITES = FOREIGN.filter(([name]) => ['codex-cli', 'siwc', 'api-key'].includes(name));
+
+describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4)', () => {
+  it('under a 0277 umask every file is 0600 and a new authDir 0700: credential, checkpoint and lock', async () => {
+    const home = mkTmp('codex-auth-umask-');
+    const top = join(home, 'lvl1');
+    const dir = join(top, 'lvl2');
+    try {
+      const a = await runAuthDriver(home, { authDir: dir, umask: 0o277, ops: [{ op: 'commit', record: nextRecord() }] });
+      expect(a.status, a.stderr).toBe(0);
+      expect(driverLines(a.stdout)[0].result).toBe(true);
+      // The checkpoint left behind by a crash between its fsync and the rename.
+      const b = await runAuthDriver(home, {
+        authDir: dir, umask: 0o277, faults: ['die-before-rename'], ops: [{ op: 'commit', record: nextRecord('acct-fixture-2') }],
+      });
+      expect(b.status, b.stderr).toBe(9);
+      expect({
+        credential: modeOf(credPath(dir)), checkpoint: modeOf(pendingPath(dir)), lock: modeOf(lockPath(dir)),
+        lvl1: modeOf(top), lvl2: modeOf(dir),
+      }).toEqual({ credential: 0o600, checkpoint: 0o600, lock: 0o600, lvl1: 0o700, lvl2: 0o700 });
+    } finally {
+      // A mutated `held` leaves the levels without their search bit; the cleanup needs it back.
+      for (const d of [top, dir]) { try { chmodSync(d, 0o700); } catch { /* absent */ } }
+    }
+  });
+
+  it('an adopted 0755 authDir keeps 0755', async () => {
+    const home = mkTmp('codex-auth-adopt-');
+    const dir = laneDir(home);
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o755);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(driverLines(r.stdout)[0].result).toBe(true);
+    expect(modeOf(dir)).toBe(0o755);
+    expect(modeOf(credPath(dir))).toBe(0o600);
+  });
+
+  it('a commit replaces the inode, and the lock file\'s inode is unchanged across it', async () => {
+    const home = mkTmp('codex-auth-inode-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const planted = lstatSync(credPath(dir)).ino;
+    const first = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord('acct-fixture-1') }] });
+    expect(first.status, first.stderr).toBe(0);
+    const afterFirst = lstatSync(credPath(dir)).ino;
+    const lock = lstatSync(lockPath(dir)).ino;
+    const second = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord('acct-fixture-2') }] });
+    expect(second.status, second.stderr).toBe(0);
+    expect(afterFirst, 'the first commit renamed a new file into place').not.toBe(planted);
+    expect(lstatSync(credPath(dir)).ino, 'so did the second').not.toBe(afterFirst);
+    expect(lstatSync(lockPath(dir)).ino, 'the lock is a file of its own, never replaced').toBe(lock);
+    expect(lock).not.toBe(lstatSync(credPath(dir)).ino);
+    expect(fileRecord(dir).account_id).toBe('acct-fixture-2');
+  });
+
+  it.each(FOREIGN_WRITES)('refuses to write over another family\'s file: bytes and mtime unchanged (%s)', async (_name, content) => {
+    const home = mkTmp('codex-auth-foreign-write-');
+    const dir = laneDir(home);
+    const p = writeCred(dir, content);
+    const bytes = readFileSync(p);
+    const before = lstatKey(p);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(driverLines(r.stdout)[0].error).toBe('foreign-family');
+    expect(readFileSync(p).equals(bytes)).toBe(true);
+    expect(lstatKey(p)).toBe(before);
+    expect(existsSync(pendingPath(dir)), 'no checkpoint was written').toBe(false);
+  });
+
+  it('refuses to write over a file that reads unreadable under the lock', async () => {
+    const home = mkTmp('codex-auth-unreadable-write-');
+    const dir = laneDir(home);
+    const p = writeCred(dir, '{"access_token": "x');
+    const before = lstatKey(p);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(driverLines(r.stdout)[0].error).toBe('credential-unusable');
+    expect(readFileSync(p, 'utf8')).toBe('{"access_token": "x');
+    expect(lstatKey(p)).toBe(before);
+  });
+
+  it('a symlink at the lock path is refused, and its target is untouched', async () => {
+    const home = mkTmp('codex-auth-locklink-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const credBefore = lstatKey(credPath(dir));
+    const target = join(home, 'lock-target');
+    writeFileSync(target, 'lock target', { mode: 0o644 });
+    chmodSync(target, 0o644);
+    const targetBefore = lstatKey(target);
+    symlinkSync(target, lockPath(dir));
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+    const [line] = driverLines(r.stdout);
+    expect(line.error).toBe('credential-unusable');
+    expect(line.message).toContain(lockPath(dir));
+    expect(readFileSync(target, 'utf8')).toBe('lock target');
+    expect(lstatKey(target), 'the target\'s mode and bytes').toBe(targetBefore);
+    expect(lstatKey(credPath(dir)), 'nothing was committed').toBe(credBefore);
+  });
+
+  it('a FIFO at the lock path is refused as a non-regular file, and nothing is committed', async () => {
+    const home = mkTmp('codex-auth-lockfifo-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const credBefore = lstatKey(credPath(dir));
+    const mk = spawnSync('mkfifo', [lockPath(dir)]);
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] }, {}, { timeoutMs: 5000 });
+    expect(r.timedOut).toBe(false);
+    const [line] = driverLines(r.stdout);
+    expect(line.error).toBe('credential-unusable');
+    expect(line.message).toContain(`${lockPath(dir)} is not a regular file`);
+    expect(lstatSync(lockPath(dir)).isFIFO()).toBe(true);
+    expect(lstatKey(credPath(dir))).toBe(credBefore);
+  });
+
+  // Root opens a 0400 file for writing, so the case cannot measure anything there.
+  it.skipIf(process.getuid?.() === 0)('a 0400 lock file is refused credential-unusable, naming chmod 600', async () => {
+    const home = mkTmp('codex-auth-lockmode-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    writeFileSync(lockPath(dir), '', { mode: 0o400 });
+    chmodSync(lockPath(dir), 0o400);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+    const [line] = driverLines(r.stdout);
+    expect(line.error).toBe('credential-unusable');
+    expect(line.message).toContain(lockPath(dir));
+    expect(line.message).toMatch(/chmod 600/);
+    expect(modeOf(lockPath(dir))).toBe(0o400);
+  });
+
+  it('a symlink at the checkpoint path is unlinked, never followed: its target is untouched', async () => {
+    const home = mkTmp('codex-auth-pendlink-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const target = join(home, 'pending-target');
+    writeFileSync(target, 'pending target', { mode: 0o644 });
+    chmodSync(target, 0o644);
+    const targetBefore = lstatKey(target);
+    symlinkSync(target, pendingPath(dir));
+    const rec = nextRecord();
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: rec }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(driverLines(r.stdout)[0].result).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('pending target');
+    expect(lstatKey(target)).toBe(targetBefore);
+    expect(lstatSync(credPath(dir)).isFile(), 'the credential is a regular file, not the link').toBe(true);
+    expect(fileRecord(dir)).toEqual(rec);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
+  it('held: a second process waits, and takes the lock once the first releases', async () => {
+    const home = mkTmp('codex-auth-wait-');
+    const dir = laneDir(home);
+    const ready = join(home, 'a-holds');
+    const [a, b] = await Promise.all([
+      runAuthDriver(home, { authDir: dir, ops: [{ op: 'hold', ms: 500, touch: ready }] }),
+      runAuthDriver(home, { authDir: dir, ops: [{ op: 'wait', path: ready, timeoutMs: 5000 }, { op: 'hold', ms: 0 }] }),
+    ]);
+    expect(a.status, a.stderr).toBe(0);
+    expect(b.status, b.stderr).toBe(0);
+    const held = driverLines(b.stdout)[1];
+    expect(held.result).toBe('released');
+    expect(held.ms).toBeGreaterThanOrEqual(400);
+    expect(held.ms).toBeLessThanOrEqual(2000);
+  });
+
+  it('held: past its bound the second process answers auth-lock-busy', async () => {
+    const home = mkTmp('codex-auth-busy-');
+    const dir = laneDir(home);
+    const ready = join(home, 'a-holds');
+    const [a, b] = await Promise.all([
+      runAuthDriver(home, { authDir: dir, ops: [{ op: 'hold', ms: 2000, touch: ready }] }),
+      runAuthDriver(home, {
+        authDir: dir, consts: { LOCK_WAIT_S: 0.3 },
+        ops: [{ op: 'wait', path: ready, timeoutMs: 5000 }, { op: 'hold', ms: 0 }],
+      }),
+    ]);
+    expect(a.status, a.stderr).toBe(0);
+    const busy = driverLines(b.stdout)[1];
+    expect(busy.error).toBe('auth-lock-busy');
+    expect(busy.message).toContain(lockPath(dir));
+    expect(busy.ms).toBeGreaterThanOrEqual(250);
+    expect(busy.ms).toBeLessThan(1500);
+  });
+
+  it('held: a holder killed with SIGKILL releases at once', async () => {
+    const home = mkTmp('codex-auth-kill-');
+    const dir = laneDir(home);
+    const ready = join(home, 'a-holds');
+    let aClosedAt = 0;
+    let bTookAt = 0;
+    // A keeps the lock 30 s; runAuthDriver kills it with SIGKILL at 1.5 s.
+    const aRun = runAuthDriver(home, { authDir: dir, ops: [{ op: 'hold', ms: 30000, touch: ready }] }, {}, { timeoutMs: 1500 })
+      .then((r) => { aClosedAt = Date.now(); return r; });
+    const bRun = runAuthDriver(home, {
+      authDir: dir, consts: { LOCK_WAIT_S: 10 },
+      ops: [{ op: 'wait', path: ready, timeoutMs: 5000 }, { op: 'hold', ms: 0 }],
+    }, {}, { onLine: (l) => { if (l.op === 'hold') bTookAt = Date.now(); } });
+    const [a, b] = await Promise.all([aRun, bRun]);
+    expect(a.timedOut, 'A was killed while it held').toBe(true);
+    expect(b.status, b.stderr).toBe(0);
+    const took = driverLines(b.stdout)[1];
+    expect(took.result).toBe('released');
+    expect(took.ms, 'B waited while A held').toBeGreaterThan(500);
+    expect(Math.abs(bTookAt - aClosedAt), 'B took the lock as A died').toBeLessThan(1000);
+  });
+
+  it('held: re-entered in the same thread it raises HeldReentry at once, never waits', async () => {
+    const home = mkTmp('codex-auth-reenter-');
+    const dir = laneDir(home);
+    const r = await runAuthDriver(home, { authDir: dir, consts: { LOCK_WAIT_S: 5 }, ops: [{ op: 'reenter' }] });
+    const [line] = driverLines(r.stdout);
+    expect(line.error).toBe('HeldReentry');
+    expect(line.ms).toBeLessThan(1000);
+  });
+
+  it('a crash after the checkpoint and before the rename is recovered by the next holder', async () => {
+    const home = mkTmp('codex-auth-crash-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const old = readFileSync(credPath(dir), 'utf8');
+    const rec = nextRecord();
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: rec }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    expect(existsSync(pendingPath(dir)), 'the checkpoint survived the crash').toBe(true);
+    expect(readFileSync(credPath(dir), 'utf8'), 'the credential is still the old one').toBe(old);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }, { op: 'read' }] });
+    expect(r.status, r.stderr).toBe(0);
+    const [recovered, read] = driverLines(r.stdout);
+    expect(recovered.result).toBe('promoted');
+    expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+    expect(fileRecord(dir)).toEqual(rec);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
+  it('a partial checkpoint is discarded, and the credential is unchanged', async () => {
+    const home = mkTmp('codex-auth-partial-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const before = lstatKey(credPath(dir));
+    const old = readFileSync(credPath(dir), 'utf8');
+    writeFileSync(pendingPath(dir), JSON.stringify(nextRecord()).slice(0, 40), { mode: 0o600 });
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(driverLines(r.stdout)[0].result).toBe('discarded');
+    expect(readFileSync(credPath(dir), 'utf8')).toBe(old);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
+  it('a checkpoint older than the credential is discarded, never promoted', async () => {
+    const home = mkTmp('codex-auth-stale-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const old = readFileSync(credPath(dir), 'utf8');
+    writeFileSync(pendingPath(dir), JSON.stringify(nextRecord()), { mode: 0o600 });
+    const anHourAgo = Date.now() / 1000 - 3600;
+    utimesSync(pendingPath(dir), anHourAgo, anHourAgo);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(driverLines(r.stdout)[0].result).toBe('discarded');
+    expect(readFileSync(credPath(dir), 'utf8')).toBe(old);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
+  // A file moved into place keeps its own mtime, so another family's file restored from elsewhere can be OLDER than a
+  // checkpoint a crash left; the mtime rule alone would promote over it.
+  it('a checkpoint is never promoted over another family\'s file, even one older than it', async () => {
+    const home = mkTmp('codex-auth-crash-foreign-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    const p = writeCred(dir, FOREIGN[0][1]);
+    const anHourAgo = Date.now() / 1000 - 3600;
+    utimesSync(p, anHourAgo, anHourAgo);
+    const bytes = readFileSync(p);
+    const before = lstatKey(p);
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(driverLines(r.stdout)[0].error).toBe('foreign-family');
+    expect(readFileSync(p).equals(bytes)).toBe(true);
+    expect(lstatKey(p)).toBe(before);
+    expect(existsSync(pendingPath(dir)), 'the checkpoint is kept, never lost').toBe(true);
+  });
+
+  it.each(['enospc-writes:1', 'enospc-fsync:1', 'enospc-replace:1'])('a full disk loses nothing (%s): read answers from memory, and a held retry writes it', async (fault) => {
+    const home = mkTmp('codex-auth-enospc-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const old = readFileSync(credPath(dir), 'utf8');
+    const rec = nextRecord();
+    const barrier = join(home, 'checked');
+    let fileAtRead = '';
+    let pendingAtRead = true;
+    const r = await runAuthDriver(home, {
+      authDir: dir, faults: [fault],
+      ops: [{ op: 'commit', record: rec }, { op: 'read' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' }],
+    }, {}, {
+      onLine: (l) => {
+        if (l.op !== 'read') return;
+        fileAtRead = readFileSync(credPath(dir), 'utf8');
+        pendingAtRead = existsSync(pendingPath(dir));
+        writeFileSync(barrier, '');
+      },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const [commit, read, , retry] = driverLines(r.stdout);
+    expect(commit.result, 'the commit could not write').toBe(false);
+    expect(read).toMatchObject({
+      credential: 'present', account_id: 'acct-fixture-next',
+      access_token: (rec.access_token as string).length, refresh_token: (rec.refresh_token as string).length,
+    });
+    expect(fileAtRead, 'the file still held the old credential').toBe(old);
+    expect(pendingAtRead, 'the partial checkpoint was unlinked').toBe(false);
+    expect(retry.result).toBe('written');
+    expect(fileRecord(dir)).toEqual(rec);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+    expect(r.stderr).toBe('');
+  });
+
+  it('a credential changed under an unsaved record is kept', async () => {
+    const home = mkTmp('codex-auth-changed-');
+    const dir = laneDir(home);
+    const planted = [...Object.values(plantBackendCredential(dir))];
+    const rec = nextRecord();
+    const barrier = join(home, 'signed-in');
+    const r = await runAuthDriver(home, {
+      authDir: dir, faults: ['enospc-writes:1'],
+      ops: [
+        { op: 'commit', record: rec }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'read' }, { op: 'held-retry' },
+      ],
+    }, {}, {
+      onLine: (l) => {
+        if (l.op !== 'commit') return;
+        // A sign-in elsewhere: a new credential renamed into place, a new inode.
+        const side = join(home, 'signin');
+        planted.push(...Object.values(plantBackendCredential(side, { accountId: 'acct-fixture-signin' })));
+        renameSync(credPath(side), credPath(dir));
+        writeFileSync(barrier, '');
+      },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const [commit, , read, retry] = driverLines(r.stdout);
+    expect(commit.result).toBe(false);
+    expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-signin' });
+    expect(retry.result).toBe('dropped');
+    expect(fileRecord(dir).account_id, 'the signed-in credential is kept').toBe('acct-fixture-signin');
+    const lines = r.stderr.split('\n').filter((l) => l !== '');
+    expect(lines, 'one line, from the retry alone').toHaveLength(1);
+    expect(lines[0]).toContain(dir);
+    for (const piece of secretPieces([...planted, rec.access_token as string, rec.refresh_token as string, rec.id_token as string])) {
+      expect(r.stderr).not.toContain(piece);
+    }
   });
 });
 

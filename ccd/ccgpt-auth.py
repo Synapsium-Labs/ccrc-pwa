@@ -24,15 +24,19 @@ the module changes what the next call does.
 """
 
 import base64
+import contextlib
 import errno
+import fcntl
 import hashlib
 import json
 import math
 import os
 import stat
+import sys
+import threading
 import time
 import urllib.parse
-from typing import Dict, NamedTuple, Optional, Tuple
+from typing import Dict, Iterator, NamedTuple, Optional, Tuple
 
 # ── the files ────────────────────────────────────────────────────────────────────────────────────────────────────
 CREDENTIAL_NAME = "auth.json"
@@ -57,6 +61,12 @@ CREDENTIAL_WORDS = ("present", "absent", "unreadable", "foreign-family", "incomp
 EXPIRY_SKEW_S = 60  # LiteLLM's TOKEN_EXPIRY_SKEW_SECONDS
 READ_RETRIES = 3  # a JSON parse failure is re-read this many times ...
 READ_RETRY_S = 0.05  # ... this far apart, then answers unreadable
+
+# ── the lock and the commit ──────────────────────────────────────────────────────────────────────────────────────
+LOCK_POLL_S = 0.05  # held() polls a non-blocking flock this often ...
+LOCK_WAIT_S = 60.0  # ... until this bound, then raises LockTimeout
+FILE_MODE = 0o600  # every file the library makes, set by fchmod after creation (umask-proof)
+DIR_MODE = 0o700  # every authDir level held() makes, set by chmod after mkdir
 
 # ── the endpoints (LiteLLM 1.105.0 `litellm/llms/chatgpt/common_utils.py`) ──────────────────────────────────────
 AUTH_BASE = "https://auth.openai.com"
@@ -364,6 +374,11 @@ READ_FAILED_REMEDY = (
 )
 
 
+def _key(auth_dir: str) -> str:
+    """The unsaved map's key for an authDir: the normalised path `paths_for` builds every file from."""
+    return os.path.normpath(auth_dir)
+
+
 def read(auth_dir: str) -> Reading:
     """Read the lane's credential. Never writes, never locks, never touches the network.
 
@@ -377,13 +392,21 @@ def read(auth_dir: str) -> Reading:
     `unreadable` at once, with no re-read."""
     p = paths_for(auth_dir)
     where = p.credential
-    unsaved = _UNSAVED.get(os.path.normpath(auth_dir))
+    unsaved = _UNSAVED.get(_key(auth_dir))
     if unsaved is not None:
         record, bound = unsaved
         if _current_identity(where) == bound:
             r = _reading_of(record, bound, where)
             return r._replace(detail="an unsaved credential for " + where + " is held in memory; the next refresh "
                               "writes it")
+    return _read_file(auth_dir)
+
+
+def _read_file(auth_dir: str) -> Reading:
+    """`read` without the unsaved record: what the file itself holds. The writers re-read through this under the lock,
+    because what they may overwrite is the file, never the record in memory."""
+    p = paths_for(auth_dir)
+    where = p.credential
     retries = READ_RETRIES
     retry_s = READ_RETRY_S
     attempt = 0
@@ -450,3 +473,266 @@ def expired(r: Reading, within_s: Optional[float] = None, now: Optional[float] =
     if r.expires_at is None:
         return True
     return t >= float(r.expires_at) - float(skew)
+
+
+# ── the lock ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# The lock paths this thread holds. It is a RE-ENTRY GUARD, never the exclusion: exclusion is flock(2) alone, on a
+# file each held() opens afresh, so two threads of one process are two open file descriptions and exclude each other
+# exactly as two processes do. Without the guard a nested held() in one thread would wait out LOCK_WAIT_S on itself.
+_HELD = threading.local()
+
+
+def _held_here() -> set:
+    paths = getattr(_HELD, "paths", None)
+    if paths is None:
+        paths = set()
+        _HELD.paths = paths
+    return paths
+
+
+def _errno_word(e: OSError) -> str:
+    return errno.errorcode.get(e.errno or 0, "error")
+
+
+def _make_auth_dir(auth_dir: str) -> None:
+    """Create a missing authDir, each missing level by `os.mkdir` and then `os.chmod(DIR_MODE)`, so a umask that
+    removes owner bits changes nothing. An existing level keeps its mode (an adopted authDir keeps its own, the A4
+    rule), and so does one another process makes first."""
+    d = os.path.normpath(auth_dir)
+    missing = []
+    cur = d
+    while not os.path.lexists(cur):
+        missing.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    try:
+        for level in reversed(missing):
+            try:
+                os.mkdir(level, DIR_MODE)
+            except FileExistsError:
+                continue
+            os.chmod(level, DIR_MODE)
+    except OSError as e:
+        raise Unreadable("the authDir " + d + " cannot be created (" + _errno_word(e) + "); check the permissions of "
+                         "the directories above it")
+
+
+def _open_lock(path: str) -> int:
+    """Open (creating) the lock file: `O_RDWR|O_CREAT|O_NOFOLLOW`, then `fchmod(FILE_MODE)`. A symlink (ELOOP), a
+    non-regular file, or a lock this process may not open (EACCES) is `Unreadable`, and nothing at the path is
+    changed."""
+    flags = (os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        fd = os.open(path, flags, FILE_MODE)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Unreadable("the credential lock " + path + " is a symlink (ELOOP); ccrc never follows it; remove "
+                             "it and retry")
+        if e.errno in (errno.EACCES, errno.EPERM):
+            raise Unreadable("the credential lock " + path + " cannot be opened (" + _errno_word(e) + "); fix its "
+                             "mode with chmod 600 " + path)
+        raise Unreadable("the credential lock " + path + " cannot be opened (" + _errno_word(e) + "); check the "
+                         "permissions of " + os.path.dirname(path))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Unreadable("the credential lock path " + path + " is not a regular file; remove it and retry")
+        os.fchmod(fd, FILE_MODE)
+    except OSError as e:
+        os.close(fd)
+        raise Unreadable("the credential lock " + path + " cannot be set to mode 600 (" + _errno_word(e) + "); fix "
+                         "its owner and mode with chmod 600 " + path)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+@contextlib.contextmanager
+def held(auth_dir: str, wait_s: Optional[float] = None) -> Iterator[Paths]:
+    """Hold the lane's credential lock: `flock(2)` on `auth.json.lock`, never on the credential, whose inode every
+    commit replaces. Yields the lane's `Paths`.
+
+    A missing authDir is created first, before the lock is opened (`_make_auth_dir`). The lock is polled with a
+    non-blocking flock every LOCK_POLL_S until `wait_s` (LOCK_WAIT_S, read when called, by default); past it,
+    LockTimeout. Entering held() for a path this thread already holds raises HeldReentry AT ONCE. The kernel releases
+    the lock when the descriptor closes, on exit or on process death, so a crash never leaves a stale lock."""
+    p = paths_for(auth_dir)
+    mine = _held_here()
+    if p.lock in mine:
+        raise HeldReentry("ccgpt-auth: this thread already holds the credential lock " + p.lock + "; a nested "
+                          "held() would wait on itself")
+    wait = LOCK_WAIT_S if wait_s is None else wait_s
+    poll = LOCK_POLL_S
+    _make_auth_dir(auth_dir)
+    fd = _open_lock(p.lock)
+    try:
+        deadline = time.monotonic() + float(wait)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                    raise Unreadable("the credential lock " + p.lock + " cannot be taken (" + _errno_word(e) + ")")
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise LockTimeout("the credential lock " + p.lock + " is still held after " + str(wait) + " s: "
+                                  "another ccrc process is refreshing or signing in this lane; retry")
+            time.sleep(min(float(poll), left))
+        mine.add(p.lock)
+        try:
+            yield p
+        finally:
+            mine.discard(p.lock)
+    finally:
+        os.close(fd)
+
+
+# ── the commit ───────────────────────────────────────────────────────────────────────────────────────────────────
+def _refuse_unwritable(r: Reading) -> None:
+    """A write never goes over a file that reads `unreadable` (it may be a tier's half-written rewrite, or a file
+    whose mode refuses ccrc) nor over another family's file; both are left exactly as they are."""
+    if r.credential == "unreadable":
+        raise Unreadable("ccrc will not write over it: " + r.detail)
+    if r.family is not None and r.family != FAMILY_BACKEND:
+        raise ForeignFamily(r.detail)
+
+
+def _unlink_absent_ok(path: str) -> None:
+    """Unlink `path` (a symlink is unlinked itself, never followed); a missing file is fine."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        view = view[n:]
+
+
+def _fsync_dir(d: str) -> None:
+    fd = os.open(d, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def commit_record(auth_dir: str, record: dict) -> bool:
+    """Write `record` as the lane's credential. The caller holds `held(auth_dir)`; this creates no directory.
+
+    Re-reads the file under the lock and refuses, with the file untouched, one that reads `unreadable` (Unreadable)
+    or belongs to another family (ForeignFamily). Then the checkpoint: any old one is unlinked (a symlink there is
+    unlinked, never followed), `auth.pending.json` is opened `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`, set to FILE_MODE
+    by fchmod, written and fsynced; then it is renamed over the credential and the directory fsynced.
+
+    True when the record is on disk. On an OSError anywhere in that sequence (a full disk) the record is kept in
+    memory as this process's unsaved record, bound to the identity of the file it was to replace (measured under the
+    lock), a partial checkpoint is unlinked, and the answer is False: `read` serves the record while that file is
+    unchanged, and `retry_unsaved` writes it at the next holder. A failure AFTER the rename (the directory fsync)
+    binds the record to the file now in place, which already holds it, so the retry re-runs the commit, fsync
+    included, rather than dropping it."""
+    p = paths_for(auth_dir)
+    key = _key(auth_dir)
+    current = _read_file(auth_dir)
+    _refuse_unwritable(current)
+    identity = current.identity
+    data = json.dumps(record).encode("utf-8")
+    replaced = False
+    try:
+        _unlink_absent_ok(p.pending)
+        fd = os.open(p.pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                     FILE_MODE)
+        try:
+            os.fchmod(fd, FILE_MODE)
+            _write_all(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(p.pending, p.credential)
+        replaced = True
+        _fsync_dir(os.path.dirname(p.credential))
+    except OSError:
+        if replaced:
+            bound = _current_identity(p.credential)  # type: object
+        else:
+            bound = identity
+            try:
+                _unlink_absent_ok(p.pending)
+            except OSError:
+                pass
+        _UNSAVED[key] = (dict(record), bound)  # type: ignore[assignment]
+        return False
+    _UNSAVED.pop(key, None)
+    return True
+
+
+def retry_unsaved(auth_dir: str) -> str:
+    """Write this process's unsaved record for `auth_dir`, if any. The caller holds `held(auth_dir)` and has just
+    run `recover_pending`.
+
+    `"none"`: no record. `"dropped"`: the credential file is no longer the one the record was to replace (a sign-in
+    or a restore wrote it since), so the record is removed and the file kept, with one stderr line naming the authDir
+    and no token; this is the only place a mismatched record is dropped. `"written"`: the commit succeeded and the
+    record is cleared. `"still-unsaved"`: the commit failed again and the record stays."""
+    p = paths_for(auth_dir)
+    key = _key(auth_dir)
+    entry = _UNSAVED.get(key)
+    if entry is None:
+        return "none"
+    record, bound = entry
+    if _current_identity(p.credential) != bound:
+        del _UNSAVED[key]
+        sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the credential file changed "
+                         "since it was refreshed (a sign-in or a restore); the file on disk is kept\n")
+        sys.stderr.flush()
+        return "dropped"
+    return "written" if commit_record(auth_dir, record) else "still-unsaved"
+
+
+def recover_pending(auth_dir: str) -> str:
+    """Settle a checkpoint a crash left between its fsync and its rename. The caller holds `held(auth_dir)`.
+
+    `"none"`: no checkpoint. `"promoted"`: a checkpoint that is a regular file, parses as a backend record with both
+    tokens, and whose mtime is not older than the credential's, is renamed into place and the directory fsynced.
+    `"discarded"`: any other checkpoint is unlinked. A promotion is a write, so it refuses as `commit_record` does,
+    over a credential that reads `unreadable` or belongs to another family, with both files left as they are."""
+    p = paths_for(auth_dir)
+    try:
+        pst = os.lstat(p.pending)
+    except OSError as e:
+        if e.errno == errno.ENOENT:
+            return "none"
+        raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); check the "
+                         "permissions of " + os.path.dirname(p.pending))
+    candidate = None  # type: Optional[Reading]
+    if stat.S_ISREG(pst.st_mode):
+        try:
+            fd = os.open(p.pending, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+                         | getattr(os, "O_CLOEXEC", 0))
+            try:
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            finally:
+                os.close(fd)
+            candidate = _reading_of(json.loads(b"".join(chunks).decode("utf-8")), None, p.pending)
+        except (OSError, ValueError, RecursionError):
+            candidate = None
+    current = _read_file(auth_dir)
+    older = current.identity is not None and pst.st_mtime_ns < current.identity[1]
+    if candidate is None or candidate.credential != "present" or older:
+        _unlink_absent_ok(p.pending)
+        return "discarded"
+    _refuse_unwritable(current)
+    os.replace(p.pending, p.credential)
+    _fsync_dir(os.path.dirname(p.credential))
+    return "promoted"
