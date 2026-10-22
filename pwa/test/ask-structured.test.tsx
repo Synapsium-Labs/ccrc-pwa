@@ -996,4 +996,96 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(tab).not.toHaveBeenCalled();
     expect(multi).not.toHaveBeenCalled();
   });
+
+  // A pane menu's id is a hash of its labels and title, so the SAME menu asked again has the SAME id. The in-flight marker
+  // of the answered one must not outlive its ask: it ends with the surface, whose closing content is still mounted for
+  // its exit (what a browser does; jsdom has no animation, so `holdClosingContent`), or the menu that comes back opens
+  // `answering…`, every row disabled and Escape refused, until a menu with another id arrives.
+  it('the same menu asked again after an answered ask opens free: no in-flight marker, rows enabled, Escape hides it', async () => {
+    holdClosingContent();
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue({ next: null } as never);
+    const fx = askFixture(4);
+    const store = connected(fx);
+    mount(store);
+    const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.opts button')];
+    expect(rows()).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, and auto-accept edits/ }));
+    await act(async () => { await Promise.resolve(); });
+    expect(answer).toHaveBeenCalledTimes(1);
+    // The route said the pane moved on (`next: null`): the dialog is gone; the ask ends.
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+
+    // The same menu again: the same id, a new ask.
+    act(() => {
+      for (const frame of fx.frames) store.getState().apply(frame);
+    });
+    expect(store.getState().dialog?.id).toBe(fx.dialog!.id);
+    expect(panel()?.getAttribute('data-state')).toBe('open');
+    expect(screen.queryByText('answering…'), 'the old marker survived the ask').toBeNull();
+    expect(rows().map((r) => (r as HTMLButtonElement).disabled), 'rows locked by a send that ended').toEqual([false, false, false]);
+    fireEvent.keyDown(document.activeElement ?? panel()!, { key: 'Escape' });
+    expect(panel()?.getAttribute('data-state'), 'Escape was refused').toBe('closed');
+  });
+
+  // The own-words call and the pick commit are in-flight markers of the same kind (`landed`: the send was accepted and the
+  // sheet stays busy until the pane moves on). When the route answers without a `next`, nothing clears them but the ask
+  // ending, and the same screen coming back must not find them still set.
+  it('own words sent before an ask ended do not lock the same question asked again', async () => {
+    holdClosingContent();
+    const send = vi.spyOn(api, 'answerDialogText').mockResolvedValue({} as never);
+    const fx = askFixture(1);
+    const store = connected(fx);
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Other/ }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await act(async () => { await Promise.resolve(); });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /^In-process/ }), 'a landed send holds the sheet busy').toBeDisabled();
+
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    act(() => {
+      for (const frame of fx.frames) store.getState().apply(frame);
+    });
+    expect(panel()?.getAttribute('data-state')).toBe('open');
+    expect(screen.getByRole('button', { name: /^In-process/ }), 'rows locked by a send that ended').toBeEnabled();
+    expect(screen.queryByRole('textbox'), 'the sent words came back').toBeNull();
+  });
+
+  it('a pick commit sent before an ask ended does not lock the same question asked again', async () => {
+    holdClosingContent();
+    const commit = vi.spyOn(api, 'answerDialogMulti').mockResolvedValue({} as never);
+    const base = askFixture(9).dialog!;
+    const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
+    const ask = { questions: [{
+      question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+      options: [{ label: 'North' }, { label: 'East' }, { label: 'South' }],
+    }] };
+    const frames: AskFixture['frames'] = [{ type: 'dialog', dialog }, { type: 'ask', ask, key: 'ask-key-m' }];
+    const store = connected({ ask, dialog, askFrameSeen: true, frames });
+    mount(store);
+    fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.click(screen.getByRole('button', { name: /^(Next|Review answers)/ }));
+    await act(async () => { await Promise.resolve(); });
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('checkbox')[0], 'a landed commit holds the sheet busy').toBeDisabled();
+
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    act(() => {
+      for (const frame of frames) store.getState().apply(frame);
+    });
+    expect(panel()?.getAttribute('data-state')).toBe('open');
+    expect(screen.getAllByRole('checkbox')[0], 'boxes locked by a commit that ended').toBeEnabled();
+  });
 });
