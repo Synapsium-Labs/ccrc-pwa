@@ -520,9 +520,12 @@ def _make_auth_dir(auth_dir: str) -> None:
 
 
 def _open_lock(path: str) -> int:
-    """Open (creating) the lock file: `O_RDWR|O_CREAT|O_NOFOLLOW`, then `fchmod(FILE_MODE)`. A symlink (ELOOP), a
-    non-regular file, or a lock this process may not open (EACCES) is `Unreadable`, and nothing at the path is
-    changed."""
+    """Open (creating) the lock file: `O_RDWR|O_CREAT|O_NOFOLLOW`, plus `O_NONBLOCK` (a FIFO at the lock path opens
+    at once and is refused by the `fstat`, where POSIX leaves a blocking `O_RDWR` open of a FIFO undefined) and
+    `O_CLOEXEC` (a child exec'd under `held` never inherits the descriptor, so the flock never outlives this
+    process), then `fchmod(FILE_MODE)`. A symlink (ELOOP), a non-regular file, or a lock this process may not open
+    (EACCES) is `Unreadable`, and nothing at the path is changed. The EACCES remedy names `chmod 600` for an existing
+    lock, and the authDir's permissions for a lock the open could not create."""
     flags = (os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
     try:
         fd = os.open(path, flags, FILE_MODE)
@@ -531,8 +534,11 @@ def _open_lock(path: str) -> int:
             raise Unreadable("the credential lock " + path + " is a symlink (ELOOP); ccrc never follows it; remove "
                              "it and retry")
         if e.errno in (errno.EACCES, errno.EPERM):
-            raise Unreadable("the credential lock " + path + " cannot be opened (" + _errno_word(e) + "); fix its "
-                             "mode with chmod 600 " + path)
+            if os.path.lexists(path):
+                raise Unreadable("the credential lock " + path + " cannot be opened (" + _errno_word(e) + "); fix "
+                                 "its mode with chmod 600 " + path)
+            raise Unreadable("the credential lock " + path + " cannot be created (" + _errno_word(e) + "); check "
+                             "the permissions of " + os.path.dirname(path))
         raise Unreadable("the credential lock " + path + " cannot be opened (" + _errno_word(e) + "); check the "
                          "permissions of " + os.path.dirname(path))
     try:
@@ -701,7 +707,13 @@ def recover_pending(auth_dir: str) -> str:
     `"none"`: no checkpoint. `"promoted"`: a checkpoint that is a regular file, parses as a backend record with both
     tokens, and whose mtime is not older than the credential's, is renamed into place and the directory fsynced.
     `"discarded"`: any other checkpoint is unlinked. A promotion is a write, so it refuses as `commit_record` does,
-    over a credential that reads `unreadable` or belongs to another family, with both files left as they are."""
+    over a credential that reads `unreadable` or belongs to another family, with both files left as they are.
+
+    The checkpoint is fsynced through the descriptor it is read by before it is promoted (its writer may have died
+    between its write and its fsync). An `OSError` is `Unreadable`, naming the checkpoint and the errno, with both
+    files kept as they are: from that fsync (a checkpoint not proven durable is never promoted, and never discarded,
+    since it may be the only copy of a refreshed pair), from the rename, or from the unlink of a discarded checkpoint.
+    A failure of the directory fsync after the rename still answers `"promoted"`: the checkpoint is in place."""
     p = paths_for(auth_dir)
     try:
         pst = os.lstat(p.pending)
@@ -711,6 +723,7 @@ def recover_pending(auth_dir: str) -> str:
         raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); check the "
                          "permissions of " + os.path.dirname(p.pending))
     candidate = None  # type: Optional[Reading]
+    sync_error = None  # type: Optional[OSError]
     if stat.S_ISREG(pst.st_mode):
         try:
             fd = os.open(p.pending, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
@@ -722,6 +735,10 @@ def recover_pending(auth_dir: str) -> str:
                     if not chunk:
                         break
                     chunks.append(chunk)
+                try:
+                    os.fsync(fd)
+                except OSError as e:
+                    sync_error = e
             finally:
                 os.close(fd)
             candidate = _reading_of(json.loads(b"".join(chunks).decode("utf-8")), None, p.pending)
@@ -730,9 +747,23 @@ def recover_pending(auth_dir: str) -> str:
     current = _read_file(auth_dir)
     older = current.identity is not None and pst.st_mtime_ns < current.identity[1]
     if candidate is None or candidate.credential != "present" or older:
-        _unlink_absent_ok(p.pending)
+        try:
+            _unlink_absent_ok(p.pending)
+        except OSError as e:
+            raise Unreadable("the checkpoint " + p.pending + " cannot be removed (" + _errno_word(e) + "); check "
+                             "the permissions of " + os.path.dirname(p.pending))
         return "discarded"
     _refuse_unwritable(current)
-    os.replace(p.pending, p.credential)
-    _fsync_dir(os.path.dirname(p.credential))
+    if sync_error is not None:
+        raise Unreadable("the checkpoint " + p.pending + " cannot be made durable (" + _errno_word(sync_error)
+                         + "); ccrc keeps it and the credential as they are; free space or fix the disk and retry")
+    try:
+        os.replace(p.pending, p.credential)
+    except OSError as e:
+        raise Unreadable("the checkpoint " + p.pending + " cannot be renamed into place (" + _errno_word(e) + "); "
+                         "ccrc keeps it and the credential as they are; free space or fix the disk and retry")
+    try:
+        _fsync_dir(os.path.dirname(p.credential))
+    except OSError:
+        pass  # the rename happened: the checkpoint is the credential now
     return "promoted"

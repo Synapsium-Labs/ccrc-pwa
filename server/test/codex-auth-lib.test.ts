@@ -546,14 +546,25 @@ function nextRecord(accountId = 'acct-fixture-next'): Record<string, unknown> {
   };
 }
 
-/** Wait (polling) until `p` exists. */
-async function until(p: string, ms = 5000): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!existsSync(p)) {
-    if (Date.now() > deadline) throw new Error(`never appeared: ${p}`);
-    await new Promise((r) => setTimeout(r, 10));
-  }
+/** SIGKILL every driver child of this process whose argv matches `pattern` (a `pgrep -f` regex); the pids killed. */
+function killDriver(pattern: string): number[] {
+  const found = spawnSync('pgrep', ['-P', String(process.pid), '-f', pattern], { encoding: 'utf8' });
+  const pids = found.stdout.split('\n').filter((l) => l.trim() !== '').map(Number);
+  for (const pid of pids) process.kill(pid, 'SIGKILL');
+  return pids;
 }
+
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Parseable checkpoints that are not a present backend record (the contract: "a checkpoint that parses as a backend
+// record with both tokens" is the only one promoted). Built at runtime: the access token is a synthetic JWT.
+const NOT_PRESENT_CHECKPOINTS: Array<[string, () => unknown]> = [
+  ['empty object', () => ({})],
+  ['an abandoned device flow', () => ({ device_code_requested_at: 1 })],
+  ['an access token alone', () => ({ access_token: syntheticJwt({ exp: Math.floor(Date.now() / 1000) + 7200 }) })],
+  ['another family (tokens)', () => ({ tokens: {} })],
+  ['not an object', () => [1]],
+];
 
 const FOREIGN_WRITES = FOREIGN.filter(([name]) => ['codex-cli', 'siwc', 'api-key'].includes(name));
 
@@ -685,6 +696,27 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     expect(modeOf(lockPath(dir))).toBe(0o400);
   });
 
+  // The same EACCES, from O_CREAT in an authDir this process cannot write: there is no lock file to chmod.
+  it.skipIf(process.getuid?.() === 0)('a lock the open cannot create in a 0500 authDir names the authDir, not chmod 600', async () => {
+    const home = mkTmp('codex-auth-lockdir-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const credBefore = lstatKey(credPath(dir));
+    chmodSync(dir, 0o500);
+    try {
+      const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'commit', record: nextRecord() }] });
+      const [line] = driverLines(r.stdout);
+      expect(line.error).toBe('credential-unusable');
+      expect(line.message).toContain(lockPath(dir));
+      expect(line.message).toContain(`check the permissions of ${dir}`);
+      expect(line.message).not.toMatch(/chmod 600/);
+      expect(existsSync(lockPath(dir))).toBe(false);
+      expect(lstatKey(credPath(dir))).toBe(credBefore);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
   it('a symlink at the checkpoint path is unlinked, never followed: its target is untouched', async () => {
     const home = mkTmp('codex-auth-pendlink-');
     const dir = laneDir(home);
@@ -744,22 +776,34 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     const home = mkTmp('codex-auth-kill-');
     const dir = laneDir(home);
     const ready = join(home, 'a-holds');
-    let aClosedAt = 0;
+    let killed: number[] = [];
+    let killAt = 0;
     let bTookAt = 0;
-    // A keeps the lock 30 s; runAuthDriver kills it with SIGKILL at 1.5 s.
-    const aRun = runAuthDriver(home, { authDir: dir, ops: [{ op: 'hold', ms: 30000, touch: ready }] }, {}, { timeoutMs: 1500 })
-      .then((r) => { aClosedAt = Date.now(); return r; });
+    // A keeps the lock 30 s. The case kills it itself, 700 ms after B has seen A's ready file (so B is past its `wait`
+    // and polling the lock), so neither process's interpreter start-up is inside any bound. runAuthDriver's own
+    // timeout is only a backstop here.
+    const aRun = runAuthDriver(home, { authDir: dir, ops: [{ op: 'hold', ms: 30000, touch: ready }] }, {}, { timeoutMs: 18000 });
     const bRun = runAuthDriver(home, {
-      authDir: dir, consts: { LOCK_WAIT_S: 10 },
-      ops: [{ op: 'wait', path: ready, timeoutMs: 5000 }, { op: 'hold', ms: 0 }],
-    }, {}, { onLine: (l) => { if (l.op === 'hold') bTookAt = Date.now(); } });
+      authDir: dir, consts: { LOCK_WAIT_S: 15 },
+      ops: [{ op: 'wait', path: ready, timeoutMs: 10000 }, { op: 'hold', ms: 0 }],
+    }, {}, {
+      timeoutMs: 18000,
+      onLine: (l) => {
+        if (l.op === 'wait') {
+          setTimeout(() => { killAt = Date.now(); killed = killDriver(`${reEscape(home)}.*"ms":30000`); }, 700);
+        }
+        if (l.op === 'hold') bTookAt = Date.now();
+      },
+    });
     const [a, b] = await Promise.all([aRun, bRun]);
-    expect(a.timedOut, 'A was killed while it held').toBe(true);
+    expect(killed, 'the case killed A, and only A').toHaveLength(1);
+    expect(a.timedOut, 'A died of the case\'s SIGKILL, not the backstop').toBe(false);
+    expect(a.status, 'a signal ended A').toBeNull();
     expect(b.status, b.stderr).toBe(0);
     const took = driverLines(b.stdout)[1];
     expect(took.result).toBe('released');
     expect(took.ms, 'B waited while A held').toBeGreaterThan(500);
-    expect(Math.abs(bTookAt - aClosedAt), 'B took the lock as A died').toBeLessThan(1000);
+    expect(bTookAt - killAt, 'B took the lock as A died, far inside A\'s 30 s hold').toBeLessThan(2000);
   });
 
   it('held: re-entered in the same thread it raises HeldReentry at once, never waits', async () => {
@@ -840,6 +884,64 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     expect(existsSync(pendingPath(dir)), 'the checkpoint is kept, never lost').toBe(true);
   });
 
+  it.each(NOT_PRESENT_CHECKPOINTS)('a parseable checkpoint that is not a present backend record is discarded, never promoted (%s)', async (_name, make) => {
+    const home = mkTmp('codex-auth-notpresent-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    // The credential an hour old, so the checkpoint is newer and the mtime rule alone would promote it.
+    const anHourAgo = Date.now() / 1000 - 3600;
+    utimesSync(credPath(dir), anHourAgo, anHourAgo);
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    writeFileSync(pendingPath(dir), JSON.stringify(make()), { mode: 0o600 });
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(r.status, r.stderr).toBe(0);
+    expect(driverLines(r.stdout)[0].result).toBe('discarded');
+    expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
+  it.each([['enospc-fsync:1', 'made durable'], ['enospc-replace:1', 'renamed into place']])('a promotion that meets a full disk (%s) refuses credential-unusable and keeps both files; the next holder promotes', async (fault, words) => {
+    const home = mkTmp('codex-auth-recover-enospc-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const rec = nextRecord();
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: rec }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    const pendingBytes = readFileSync(pendingPath(dir));
+    const barrier = join(home, 'checked');
+    let credAtRefusal = Buffer.alloc(0);
+    let credKeyAtRefusal = '';
+    let pendingAtRefusal = Buffer.alloc(0);
+    const r = await runAuthDriver(home, {
+      authDir: dir, faults: [fault],
+      ops: [{ op: 'recover' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'recover' }, { op: 'read' }],
+    }, {}, {
+      onLine: (l) => {
+        if (l.op !== 'recover' || existsSync(barrier)) return;
+        credAtRefusal = readFileSync(credPath(dir));
+        credKeyAtRefusal = lstatKey(credPath(dir));
+        pendingAtRefusal = existsSync(pendingPath(dir)) ? readFileSync(pendingPath(dir)) : Buffer.alloc(0);
+        writeFileSync(barrier, '');
+      },
+    });
+    const [refused, , promoted, read] = driverLines(r.stdout);
+    expect(refused.error, r.stderr).toBe('credential-unusable');
+    expect(refused.message).toContain(pendingPath(dir));
+    expect(refused.message).toContain('ENOSPC');
+    expect(refused.message).toContain(words);
+    expect(credAtRefusal.equals(bytes), 'the credential\'s bytes are unchanged').toBe(true);
+    expect(credKeyAtRefusal, 'and its inode and mtime').toBe(before);
+    expect(pendingAtRefusal.equals(pendingBytes), 'the checkpoint is kept, never lost').toBe(true);
+    expect(promoted.result).toBe('promoted');
+    expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+    expect(fileRecord(dir)).toEqual(rec);
+    expect(existsSync(pendingPath(dir))).toBe(false);
+  });
+
   it.each(['enospc-writes:1', 'enospc-fsync:1', 'enospc-replace:1'])('a full disk loses nothing (%s): read answers from memory, and a held retry writes it', async (fault) => {
     const home = mkTmp('codex-auth-enospc-');
     const dir = laneDir(home);
@@ -851,17 +953,24 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     let pendingAtRead = true;
     const r = await runAuthDriver(home, {
       authDir: dir, faults: [fault],
-      ops: [{ op: 'commit', record: rec }, { op: 'read' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' }],
+      ops: [
+        { op: 'commit', record: rec }, { op: 'read' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' },
+        // The written record is cleared: a second retry finds none, and a read answers from the file.
+        { op: 'held-retry' }, { op: 'read' },
+      ],
     }, {}, {
       onLine: (l) => {
-        if (l.op !== 'read') return;
+        if (l.op !== 'read' || existsSync(barrier)) return;
         fileAtRead = readFileSync(credPath(dir), 'utf8');
         pendingAtRead = existsSync(pendingPath(dir));
         writeFileSync(barrier, '');
       },
     });
     expect(r.status, r.stderr).toBe(0);
-    const [commit, read, , retry] = driverLines(r.stdout);
+    const [commit, read, , retry, again, after] = driverLines(r.stdout);
+    expect(again.result, 'the written record left the map').toBe('none');
+    expect(after).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+    expect(after.detail, 'the read answers from the file').not.toMatch(/held in memory/);
     expect(commit.result, 'the commit could not write').toBe(false);
     expect(read).toMatchObject({
       credential: 'present', account_id: 'acct-fixture-next',
