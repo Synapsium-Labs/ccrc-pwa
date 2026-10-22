@@ -6313,6 +6313,18 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     const rc = await rcOf(cut);
     try { return f(rc); } finally { rc.db.close(); }
   }
+  /** `f` with the damaged store's one leafless child (EMPTY) taken from the parent P, then put back: D-6283's CONTROL, the same tree with
+   *  every condensed node over a leaf. */
+  async function withoutEmptyChild<T>(f: () => Promise<T>): Promise<T> {
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      w.prepare('DELETE FROM node_children WHERE node_id = ? AND child_id = ?').run(P, EMPTY);
+      return await f();
+    } finally {
+      w.prepare('INSERT OR IGNORE INTO node_children (node_id, child_id, ord) VALUES (?, ?, 8)').run(P, EMPTY);
+      w.close();
+    }
+  }
   const describeOf = (target: string) => (rc: W35Rc): GrepVerbResult => R.runDescribe(rc, { target, full: false, cursor: null, json: true });
   const expandOf = (target: string) => (rc: W35Rc): GrepVerbResult =>
     R.runExpand(rc, { target, around: null, before: 5, after: 5, cursor: null, json: true });
@@ -6449,14 +6461,23 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     for (const g of ['zqw2d35gist8', 'zqw2d35crafthid', 'zqw2d35craftempty']) expect(all(r), g).not.toContain(g);
   }, HEAVY);
 
-  it('tree under ASOF=8: the parent shows once every leaf under it does, whenever it was formed; a node with no leaf under it stays hidden', async () => {
+  it('tree under ASOF=8: a parent shows once every leaf under it does, whenever it was formed, but not while a condensed node under it has no leaf (D-6283, R4 at every depth)', async () => {
+    // Every leaf under P is visible under cut 8, and so is P's rolled-up gist; its leafless child EMPTY is not, so P goes with it.
     const r = await under(cut8, treeOf);
     expect(r.exit, all(r)).toBe(0);
-    expect(treeIds(r)).toEqual([...L, P, VIS, HID].sort());
-    expect(r.total).toBe(11);
-    expect(r.items.find((i) => i['node_id'] === L[0])?.['parent_id']).toBe(P);
+    expect(treeIds(r)).toEqual([...L, VIS, HID].sort());
+    expect(r.total).toBe(10);
+    expect(r.items.find((i) => i['node_id'] === L[0])?.['parent_id'], 'a hidden parent is no parent').toBeNull();
     expect(all(r), 'the leafless condensed node, fail closed').not.toContain(pre7(EMPTY));
+    expect(all(r), 'and the parent over it').not.toContain(pre7(P));
     expect(r.blocks.some((l) => l.includes('session=2d35bbbb'))).toBe(false);
+    // CONTROL: the same tree with the leafless child taken away shows the parent under the same cut.
+    const intact = await withoutEmptyChild(() => under(cut8, treeOf));
+    expect(treeIds(intact), 'CONTROL: C intact').toEqual([...L, P, VIS, HID].sort());
+    expect(intact.total).toBe(11);
+    expect(intact.items.find((i) => i['node_id'] === L[0])?.['parent_id']).toBe(P);
+    expect(all(intact), 'the leafless node stays hidden on its own').not.toContain(pre7(EMPTY));
+    expect(treeIds(await under(undefined, treeOf)), 'CONTROL: with no cut the parent shows over its leafless child').toContain(P);
   }, HEAVY);
 
   it('a hidden node answers exit 3 at describe, grep --node and expand, never out-of-scope, and its refs never print; a visible out-of-scope node stays 2', async () => {
@@ -6509,7 +6530,8 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     expect(r1.blocks.some((l) => l.startsWith('parent ')), 'no parent line').toBe(false);
     expect(all(r1), 'no display of the hidden parent').not.toContain(pre7(P));
     expect(all(r1), 'the NULL-ts reply\'s uuid').not.toContain(u(2));
-    expect(item(await under(cut8, describeOf(L[0]!))).parent_id, 'under ASOF=8 the parent is visible, so it is named').toBe(P);
+    expect(item(await under(cut8, describeOf(L[0]!))).parent_id, 'under ASOF=8 the parent holds a leafless child, so it is hidden and not named (D-6283)').toBeNull();
+    expect(item(await withoutEmptyChild(() => under(cut8, describeOf(L[0]!)))).parent_id, 'CONTROL: with the child away the parent is visible, so it is named').toBe(P);
     expect(item(await under(undefined, describeOf(L[6]!))).producer, 'CONTROL: leaf 7\'s producer is the reply after its summary').toBe('anthropic');
     expect(item(await under(cut7, describeOf(L[6]!))).producer, 'under ASOF=7 that reply is hidden').toBe('unknown');
     expect(item(await under(cut8, describeOf(L[6]!))).producer, 'under ASOF=8 it is visible again').toBe('anthropic');
@@ -6517,10 +6539,13 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     type Kids = { children: Array<{ id: string }>; children_total: number };
     const kids = (r: GrepVerbResult): unknown[] => { const k = r.items[0] as unknown as Kids; return [k.children.map((c) => c.id).sort(), k.children_total]; };
     expect(kids(await under(undefined, describeOf(P))), 'CONTROL: with no cut the leafless child is listed and counted').toEqual([[...L, EMPTY].sort(), 9]);
-    const p8 = await under(cut8, describeOf(P));
+    // D-6283: a parent over a hidden child is hidden itself, so childRowsOf's filter has nothing left to drop on a visible parent.
+    const hid8 = await under(cut8, describeOf(P));
+    expect(ans(hid8), 'under ASOF=8 the parent over the leafless child is hidden').toEqual([3, undefined]);
+    expect(all(hid8), 'no display of the hidden child').not.toContain(pre7(EMPTY));
+    const p8 = await withoutEmptyChild(() => under(cut8, describeOf(P)));
     expect(p8.exit, all(p8)).toBe(0);
-    expect(kids(p8), 'under ASOF=8 the parent is visible, and its hidden child is neither listed nor counted').toEqual([[...L].sort(), 8]);
-    expect(all(p8), 'no display of the hidden child').not.toContain(pre7(EMPTY));
+    expect(kids(p8), 'CONTROL: C intact, under ASOF=8 the parent lists and counts its eight leaves').toEqual([[...L].sort(), 8]);
   }, HEAVY);
 
   it('nodes_fts has no reader on the read path, so node text reaches a read verb only through its node', () => {
@@ -6567,9 +6592,9 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
       .toEqual([refs(open1).refs_total - 1, refs(open1).files_total - 1]);
     // Leaf 7 is leaf N under cut 7, and every source row of it is visible: its mined ref stays.
     expect(all(await under(cut7, describeOf(L[6]!))), 'leaf N\'s mined ref, every row under it visible').toContain('zqw2d35minedrow7');
-    // The parent holds u(2) through leaf 1. It is visible under cut 8: its mined ref goes, its summary's ref stays.
+    // The parent holds u(2) through leaf 1. It is visible under cut 8 (its leafless child away, D-6283): its mined ref goes, its summary's ref stays.
     expect(all(await under(undefined, describeOf(P))), 'CONTROL: the parent\'s mined ref with no cut').toContain('zqw2d35minedparent');
-    const p8 = await under(cut8, describeOf(P));
+    const p8 = await withoutEmptyChild(() => under(cut8, describeOf(P)));   // D-6283: with its leafless child in place the parent is hidden
     expect(p8.exit, all(p8)).toBe(0);
     expect(all(p8), 'a hidden descendant source drops the parent\'s mined ref').not.toContain('zqw2d35minedparent');
     expect(all(p8), 'the parent\'s summary ref stays (R6)').toContain('zqw2d35modelparent');
@@ -6602,6 +6627,244 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     const open = await under(undefined, treeOf);
     expect(treeIds(open), 'CONTROL: with no cut the same nodes are visible').toEqual([...L, P, VIS, HID, EMPTY].sort());
   }, HEAVY);
+
+  it('D-6283: a node is hidden when any condensed node at or below it has no leaf below it, at any depth and through a cycle; describe, expand, --node, tree and the refs follow', async () => {
+    const GP = `N${hex20('9a9a9a', '1')}`;   // over P, which holds EMPTY
+    const Q = `N${hex20('9b9b9b', '1')}`;    // over leaf 1 and the cycle Z1 <-> Z2, which no leaf is under
+    const Z1 = `N${hex20('9c9c9c', '1')}`;
+    const Z2 = `N${hex20('9c9c9c', '2')}`;
+    const TOP = `N${hex20('9d9d9d', '1')}`;   // over Q
+    const W = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    const home = W.prepare('SELECT session_pk, epoch_seq, transcript_pk FROM nodes WHERE node_id = ?').get(P) as { session_pk: number; epoch_seq: number; transcript_pk: number };
+    const ins = W.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+      summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+      directive_flag, capped, parser_version, created_ms)
+      VALUES (?, ?, ?, ?, 'condensed', 2, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+    const link = W.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+    const now = Date.now();
+    for (const [id, gist] of [[GP, 'zqw2d35gp'], [Q, 'zqw2d35q'], [Z1, 'zqw2d35z1'], [Z2, 'zqw2d35z2'], [TOP, 'zqw2d35top']] as const) {
+      ins.run(id, home.session_pk, home.epoch_seq, home.transcript_pk, `${gist} gist`, ms(8), ms(8), now);
+    }
+    link.run(GP, P, 0);
+    link.run(Q, L[0]!, 0); link.run(Q, Z1, 1); link.run(Z1, Z2, 0); link.run(Z2, Z1, 0);
+    link.run(TOP, Q, 0);
+    W.close();
+    const drop = (): void => {
+      const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+      try {
+        for (const id of [GP, Q, Z1, Z2, TOP]) { w.prepare('DELETE FROM node_children WHERE node_id = ? OR child_id = ?').run(id, id); w.prepare('DELETE FROM nodes WHERE node_id = ?').run(id); }
+      } finally { w.close(); }
+    };
+    try {
+      const up = [GP, Q, Z1, Z2, TOP];
+      const exits = async (cut: W35Cut | null | undefined, ids: string[]): Promise<number[]> =>
+        Promise.all(ids.map(async (id) => (await under(cut, describeOf(id))).exit));
+      expect(await exits(undefined, [P, ...up]), 'CONTROL: with no cut every one of them describes').toEqual([0, 0, 0, 0, 0, 0]);
+      const r = await under(cut8, treeOf);
+      expect(r.exit, all(r)).toBe(0);
+      expect(treeIds(r), 'under ASOF=8 every node with a leafless condensed node at or below it is gone, whatever its depth').toEqual([...L, VIS, HID].sort());
+      for (const id of [P, ...up]) {
+        expect(all(r), id).not.toContain(pre7(id));
+        const d = await under(cut8, describeOf(id));
+        expect(ans(d), `describe ${id}`).toEqual([3, undefined]);
+        expect(all(d), `describe ${id}`).not.toContain('zqw2d35modelparent');
+      }
+      expect(ans(await under(cut8, expandOf(GP))), 'expand the grandparent').toEqual([3, undefined]);
+      expect(ans(await under(cut8, expandOf(P))), 'expand the parent').toEqual([3, undefined]);
+      const node = await GRX.grepArgs(['--node', P, 'zqw2d35ask8']);
+      expect(ans(await under(cut8, (rc) => R.runGrep(rc, node))), 'grep --node the parent').toEqual([3, undefined]);
+      // CONTROL: each shape reads visible once its leafless part is gone: P's child away, then Z1 and Z2 away from Q.
+      const gone = await withoutEmptyChild(async () => {
+        const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+        try { w.prepare('DELETE FROM node_children WHERE node_id = ? OR node_id = ?').run(Z1, Z2); w.prepare('DELETE FROM node_children WHERE node_id = ? AND child_id = ?').run(Q, Z1); } finally { w.close(); }
+        return exits(cut8, [P, GP, Q, TOP, Z1, Z2]);
+      });
+      expect(gone, 'CONTROL: with the leafless parts away, the parent, its ancestors and the chain over leaf 1 show; Z1 and Z2, now childless, stay hidden').toEqual([0, 0, 0, 0, 3, 3]);
+    } finally { drop(); }
+    expect(treeIds(await under(cut8, treeOf)), 'CONTROL: the store is put back').toEqual([...L, VIS, HID].sort());
+  }, 2 * HEAVY);
+});
+
+// ── W2-2a whole-branch fix wave (D-6282): a leaf is hidden when its summary row is ───────────────────────────────────────────
+// Family X compacts four times; each cycle c is an ask, a reply, a kept follow-up, boundary c and its summary row. Cut = ASOF
+// boundary 4. Leaf 1's summary row has no timestamp, leaf 2's is stamped after T_N (but sits before N in the file), leaf 3's is
+// stamped before T_N, and leaf 4 is N, whose summary is stamped after T_N and stays visible through the cut's own summary.
+// Every leaf's boundary entry is stamped at or before T_N and sits at or before N, so the boundary alone shows all four.
+describe.skipIf(process.platform === 'darwin')('D-6282: a leaf other than N is hidden when its summary row is hidden (W2-2a whole-branch fix wave)', () => {
+  type LCut = Readonly<{
+    asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[];
+    holdingFileId: number; boundaryLine: number;
+  }>;
+  type LRc = GrepRc & { gen: string | null; scopeArgs: string[]; scope: GrepRc['scope'] & { cut?: LCut | null } };
+  type LRecall = {
+    runGrep(rc: LRc, a: RGrepArgs): GrepVerbResult;
+    runTree(rc: LRc, a: { depth: number; json: boolean }): GrepVerbResult;
+    runDescribe(rc: LRc, a: { target: string; full: boolean; cursor: string | null; json: boolean }): GrepVerbResult;
+    runExpand(rc: LRc, a: { target: string; around: null; before: number; after: number; cursor: null; json: boolean }): GrepVerbResult;
+    asOfCutOf(rc: { db: RDatabaseSync }, asof: string): { ok: boolean; cut: LCut };
+  };
+  const X = 'claude-a-w2d36';
+  const TXC = '2d36cccc-0000-4000-8000-000000000001';
+  const GX = '0189abcd-1234-4678-9abc-00000000d361';
+  const T0 = Date.UTC(2026, 9, 3, 10, 0, 0);
+  const tsOf = (k: number): string => new Date(T0 + k * 1000).toISOString();
+  const msOf = (k: number): number => T0 + k * 1000;
+  /** Cycle c: u(5c-4) the ask, u(5c-3) the reply, u(5c-2) the kept follow-up, u(5c-1) the boundary, u(5c) its summary. */
+  const u = (i: number): string => `2d36eeee-0000-4000-8000-${i.toString(16).padStart(12, '0')}`;
+  const bnd = (c: number): string => u(5 * c - 1);
+  const sum = (c: number): string => u(5 * c);
+  const pre7 = (id: string): string => id.slice(0, 7);
+  const all = (r: GrepVerbResult): string => JSON.stringify(r);
+  let box: rH.HistoryBox;
+  let R: LRecall;
+  let L: string[] = [];
+  let cut: LCut;
+
+  function rows(): rFx.Row[] {
+    const out: rFx.Row[] = [];
+    const base = { sessionId: TXC, cwd: '/home/u/worktrees/p/quiet-basin' };
+    for (let c = 1; c <= 4; c += 1) {
+      out.push(rFx.userRow({ ...base, uuid: u(5 * c - 4), ts: tsOf(10 * c), text: `zqw2d36ask${c} fixture request` }));
+      out.push(rFx.assistantRow({ ...base, uuid: u(5 * c - 3), ts: tsOf(10 * c + 1), text: `zqw2d36reply${c} fixture answer`, requestId: `req_w2d36_${c}`, msgId: `msg_w2d36_${c}` }));
+      out.push(rFx.userRow({ ...base, uuid: u(5 * c - 2), ts: tsOf(10 * c + 2), text: `zqw2d36kept${c} fixture follow-up` }));
+      out.push(rFx.boundaryRow({ ...base, uuid: bnd(c), ts: tsOf(10 * c + 3), trigger: 'manual', headUuid: u(5 * c - 2), anchorUuid: sum(c), tailUuid: u(5 * c - 2), allUuids: [u(5 * c - 2)] }));
+      const row = rFx.summaryRow({ ...base, uuid: sum(c), ts: tsOf(c === 2 ? 90 : 10 * c + 4), text: [
+        'This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+        '<summary>', '1. Primary Request and Intent:', `   The fixture request ${c}.`,
+        '8. Current Work:', `   Wrote zqw2d36gist${c} of the fixture.`,
+        '9. Optional Next Step:', `   Continue past zqw2d36gist${c}.`, '</summary>',
+      ].join('\n') });
+      if (c === 1) delete row['timestamp'];   // leaf 1's summary row has no stamp: hidden under every cut (W2-D34)
+      out.push(row);
+    }
+    return out;
+  }
+
+  async function rcOf(c: LCut | null | undefined): Promise<LRc> {
+    const rc = await GRX.rc(box, X);
+    return { ...rc, gen: rc.scope.generation, scopeArgs: [], scope: { ...rc.scope, ...(c === undefined ? {} : { cut: c }) } };
+  }
+  async function under<T>(c: LCut | null | undefined, f: (rc: LRc) => T): Promise<T> {
+    const rc = await rcOf(c);
+    try { return f(rc); } finally { rc.db.close(); }
+  }
+  const describeOf = (target: string) => (rc: LRc): GrepVerbResult => R.runDescribe(rc, { target, full: false, cursor: null, json: true });
+  const expandOf = (target: string) => (rc: LRc): GrepVerbResult => R.runExpand(rc, { target, around: null, before: 5, after: 5, cursor: null, json: true });
+  const treeOf = (rc: LRc): GrepVerbResult => R.runTree(rc, { depth: 3, json: true });
+  const leafIds = (r: GrepVerbResult): string[] => r.items.filter((i) => i['kind'] === 'native_leaf').map((i) => String(i['node_id'])).sort();
+  const ans = (r: GrepVerbResult): unknown[] => [r.exit, r.reason];
+  /** `f` after `sql` ran on the store, then the store put back by `undo`. */
+  async function patched<T>(sql: string, args: Array<string | number | null>, undo: string, undoArgs: Array<string | number | null>, f: () => Promise<T>): Promise<T> {
+    const w = new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      expect(Number(w.prepare(sql).run(...args).changes), `CONTROL: ${sql} took`).toBe(1);
+      return await f();
+    } finally {
+      w.prepare(undo).run(...undoArgs);
+      w.close();
+    }
+  }
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-w2d36-');
+    rH.seedFamily(box, { id: X, project: 'demo', uuid: TXC, generation: GX, rows: rows() });
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
+    R = (await import('../../ccd/history/recall.mjs')) as unknown as LRecall;
+    const db = rH.openStoreRO(box);
+    try {
+      const leaves = db.prepare(`SELECT n.node_id AS node_id, e.uuid AS b FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE n.kind <> 'condensed'`).all() as unknown as { node_id: string; b: string }[];
+      L = [1, 2, 3, 4].map((c) => leaves.find((r) => r.b === bnd(c))?.node_id ?? '');
+      const got = R.asOfCutOf({ db }, bnd(4));
+      expect(got.ok, JSON.stringify(got)).toBe(true);
+      cut = got.cut;
+    } finally { db.close(); }
+  }, 4 * HEAVY);
+
+  it('the fixture: four derived leaves, each naming its summary row\'s blob; leaf 1\'s row has no stamp, leaf 2\'s is stamped after T_N, leaf 3\'s before, N\'s after and exempt', () => {
+    expect(L.every((id) => /^L[0-9a-f]{20}$/.test(id)), L.join(' ')).toBe(true);
+    const db = rH.openStoreRO(box);
+    try {
+      const stamp = (uuid: string): number | null => (db.prepare('SELECT ts_ms FROM entries WHERE uuid = ?').get(uuid) as { ts_ms: number | null }).ts_ms;
+      expect([stamp(sum(1)), stamp(sum(2)), stamp(sum(3)), stamp(sum(4))]).toEqual([null, msOf(90), msOf(34), msOf(44)]);
+      expect(cut.tsCut, 'T_N is boundary 4\'s own stamp').toBe(msOf(43));
+      expect([stamp(bnd(1)), stamp(bnd(2)), stamp(bnd(3))].every((t) => t !== null && t <= cut.tsCut), 'every other boundary is stamped at or before T_N').toBe(true);
+      for (let c = 1; c <= 4; c += 1) {
+        const same = db.prepare(`SELECT (n.summary_blob_id = e.blob_id) AS same FROM nodes n JOIN entries e ON e.uuid = ? WHERE n.node_id = ?`).get(sum(c), L[c - 1]!) as { same: number };
+        expect(same.same, `leaf ${c} names the blob of its summary row (the pick)`).toBe(1);
+      }
+      expect(cut.summaryEntryId, 'N\'s summary is the cut\'s own').toBe(Number((db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(sum(4)) as { entry_id: number }).entry_id));
+    } finally { db.close(); }
+  });
+
+  it('tree and describe: leaves 1 and 2 are hidden under ASOF=4, leaves 3 and 4 shown; with no cut all four are', async () => {
+    const open = await under(undefined, (rc) => R.runTree(rc, { depth: 3, json: true }));
+    expect(open.exit, all(open)).toBe(0);
+    expect(leafIds(open), 'CONTROL: with no cut all four').toEqual([...L].sort());
+    const r = await under(cut, (rc) => R.runTree(rc, { depth: 3, json: true }));
+    expect(r.exit, all(r)).toBe(0);
+    expect(leafIds(r)).toEqual([L[2]!, L[3]!].sort());
+    for (const g of ['zqw2d36gist1', 'zqw2d36gist2']) expect(all(r), g).not.toContain(g);
+    for (const id of [L[0]!, L[1]!]) expect(all(r), id).not.toContain(pre7(id));
+    for (const g of ['zqw2d36gist3', 'zqw2d36gist4']) expect(all(r), `${g} stays`).toContain(g);
+    for (const [k, id] of [[1, L[0]!], [2, L[1]!]] as const) {
+      expect(all(await under(undefined, describeOf(id))), `CONTROL: leaf ${k} describes with no cut`).toContain(`zqw2d36gist${k}`);
+      for (const target of [id, pre7(id)]) {
+        const d = await under(cut, describeOf(target));
+        expect(ans(d), `describe ${target}`).toEqual([3, undefined]);
+        expect(all(d), `describe ${target}`).not.toContain(`zqw2d36gist${k}`);
+      }
+    }
+    for (const [k, id] of [[3, L[2]!], [4, L[3]!]] as const) {
+      const d = await under(cut, describeOf(id));
+      expect(d.exit, all(d)).toBe(0);
+      expect(all(d), `leaf ${k}'s gist`).toContain(`zqw2d36gist${k}`);
+    }
+  }, HEAVY);
+
+  it('grep: a hit under a leaf with a hidden summary row groups under the live tail and prints neither its id nor its gist; --node and expand of it are exit 3', async () => {
+    for (const k of [1, 2]) {
+      const a = await GRX.grepArgs([`zqw2d36ask${k}`]);
+      const open = await under(undefined, (rc) => R.runGrep(rc, a));
+      expect(open.items.map((i) => i['node_id']), `CONTROL ${k}: with no cut the row groups under its leaf`).toEqual([L[k - 1]]);
+      expect(open.blocks.join('\n'), `CONTROL ${k}: the leaf header carries its gist`).toContain(`zqw2d36gist${k}`);
+      const r = await under(cut, (rc) => R.runGrep(rc, a));
+      expect(r.exit, all(r)).toBe(0);
+      expect(r.items.map((i) => i['node_id']), `the row is visible, its only leaf is not`).toEqual([null]);
+      expect(r.blocks[0]!.split('\n')[0]).toBe('── live tail (rows no leaf covers yet)');
+      expect(all(r)).not.toContain(pre7(L[k - 1]!));
+      expect(all(r)).not.toContain(`zqw2d36gist${k}`);
+      const node = await GRX.grepArgs(['--node', L[k - 1]!, `zqw2d36ask${k}`]);
+      expect(ans(await under(cut, (rc) => R.runGrep(rc, node))), `grep --node leaf ${k}`).toEqual([3, undefined]);
+      expect(ans(await under(cut, expandOf(L[k - 1]!))), `expand leaf ${k}`).toEqual([3, undefined]);
+    }
+    const a3 = await GRX.grepArgs(['zqw2d36ask3']);
+    const r3 = await under(cut, (rc) => R.runGrep(rc, a3));
+    expect(r3.items.map((i) => i['node_id']), 'leaf 3 groups its row, its summary row being visible').toEqual([L[2]]);
+    expect(r3.blocks.join('\n')).toContain('zqw2d36gist3');
+  }, 2 * HEAVY);
+
+  it('CONTROLs: the same leaves are visible once their summary rows are stamped at or before T_N; a leaf with no pick is judged by its boundary alone; an anchor on the boundary itself picks the first summary after it', async () => {
+    const seen = async (): Promise<number[]> => Promise.all([L[0]!, L[1]!].map(async (id) => (await under(cut, describeOf(id))).exit));
+    expect(await seen(), 'both are hidden to begin with').toEqual([3, 3]);
+    const stamped = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(2)], 'UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(90), sum(2)], seen);
+    expect(stamped, 'leaf 2\'s summary row stamped at or before T_N: leaf 2 shows, leaf 1 stays hidden').toEqual([3, 0]);
+    const nulled = await patched('UPDATE entries SET ts_ms = ? WHERE uuid = ?', [msOf(30), sum(1)], 'UPDATE entries SET ts_ms = NULL WHERE uuid = ? AND ? IS NOT NULL', [sum(1), 1], seen);
+    expect(nulled, 'leaf 1\'s summary row stamped: leaf 1 shows, leaf 2 stays hidden').toEqual([0, 3]);
+    const raw = await patched('UPDATE boundaries SET anchor_uuid = NULL WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
+    expect(raw, 'no anchor, no pick (a raw leaf): leaf 2 is judged by its boundary alone and shows').toEqual([3, 0]);
+    const self = await patched('UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [bnd(2), bnd(2)],
+      'UPDATE boundaries SET anchor_uuid = ? WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [sum(2), bnd(2)], seen);
+    expect(self, 'the anchor names the boundary itself: the pick is the first summary row after it, leaf 2\'s own, hidden').toEqual([3, 3]);
+    const db = rH.openStoreRO(box);
+    const kindOf = db.prepare('SELECT provenance FROM entries WHERE uuid = ?').get(sum(2)) as { provenance: string };
+    db.close();
+    const echo = await patched('UPDATE entries SET provenance = ? WHERE uuid = ?', ['harness', sum(2)],
+      'UPDATE entries SET provenance = ? WHERE uuid = ?', [kindOf.provenance, sum(2)], seen);
+    expect(echo, 'the anchored row is an echo row (user, harness), which summaryRowFor refuses: no pick, and leaf 2 shows').toEqual([3, 0]);
+    expect(await seen(), 'CONTROL: the store is put back').toEqual([3, 3]);
+  }, 2 * HEAVY);
 });
 
 // ── W2-2a Task 4 (W2-D37, W2-D38): the remaining doors of the as-of cut ──────────────────────────────────────────

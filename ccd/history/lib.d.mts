@@ -567,8 +567,13 @@ export function asOfBinds(cut: AsOfCut): {
   asof_ts: number; asof_file: number; asof_line: number; asof_boundary: number; asof_summary: number | null; asof_kept: string;
 };
 // --- W2-2a Task 3: the as-of cut's node, epoch and entry statements (W2-D35, W2-D36, W2-D38). Each binds asOfBinds' names plus one JSON array.
-/** Of the node ids at :asof_nodes, those the cut hides (column node_id): a leaf by its boundary entry, any node by every leaf under it. */
+/** Of the node ids at :asof_nodes, those the cut hides (column node_id). A leaf other than N's is hidden when its boundary entry is,
+ *  or when it has a summary row (summaryRowFor's pick over its holding copy) and that row is (D-6282); a node is hidden when a leaf
+ *  under it is, and when a condensed node at or below it has no leaf below it, however deep (R4 at every depth, D-6283). */
 export function asOfHiddenNodesSql(): string;
+/** Of the node ids at :asof_nodes, each non-condensed node's summary row as the store gives it (columns node_id, entry_id; entry_id NULL
+ *  for no pick): the pick asOfHiddenNodesSql judges a leaf's summary row by, held to pickHoldingCopy plus summaryRowFor by a test. D-6282. */
+export function asOfSummaryPickSql(): string;
 /** Of the epoch session uuids at :asof_epochs, those one of whose transcripts holds a row the cut shows (column cc_session_uuid). */
 export function asOfVisibleEpochsSql(): string;
 /** Of the entry ids at :asof_entries, those the cut shows (column entry_id). */

@@ -11150,3 +11150,126 @@ describe('expandCursorKey and expandResumeOf under an as-of cut (W2-D37; W2-2a T
     expect(l.decodeCursor(l.encodeCursor(c), 'expand')).toEqual(c);
   });
 });
+
+// ── W2-2a whole-branch fix wave (D-6282): the SQL pick of a leaf's summary row, held to lib's JS pick ───────────────────
+// asOfHiddenNodesSql judges a leaf by its summary row, which it reads from the store with SQL (asOfSummaryPickSql, the same
+// CTEs): the holding copy (pickHoldingCopy's rule) and the anchor arms (summaryRowFor's). This case builds seeded stores
+// with the tables those CTEs read, under their real NOT NULL constraints, and holds the SQL pick to the JS pick on every
+// leaf: the JS pick is pickHoldingCopy over each file of the boundary's transcript (live when source_key is '', holding
+// when it has the boundary as a member), then asOfCut over that copy's rows, whose summaryEntryId is summaryRowFor's pick
+// through lib's own meta mapping. The PRNG is seeded and the shapes counted, so the run is the same every time.
+describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals pickHoldingCopy plus summaryRowFor on seeded stores', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const mulberry = (seed: number): (() => number) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  type Tally = { leaves: number; picked: number; multiCopy: number; liveAndRetired: number; self: number; selfPicked: number; other: number; echoAnchor: number; missing: number; none: number; noCopy: number };
+
+  /** Every seeded store's leaves compared: the disagreements, and what shapes the run covered. */
+  async function compare(trials: number): Promise<{ bad: string[]; tally: Tally }> {
+    const l = await lib();
+    const { DatabaseSync } = await import('node:sqlite');
+    const sql = l.asOfSummaryPickSql();
+    const bad: string[] = [];
+    const tally: Tally = { leaves: 0, picked: 0, multiCopy: 0, liveAndRetired: 0, self: 0, selfPicked: 0, other: 0, echoAnchor: 0, missing: 0, none: 0, noCopy: 0 };
+    for (let t = 0; t < trials; t += 1) {
+      const rnd = mulberry(1000 + t);
+      const ri = (n: number): number => Math.floor(rnd() * n);
+      const of = <T>(a: readonly T[]): T => a[ri(a.length)]!;
+      const db = new DatabaseSync(':memory:');
+      db.exec(`CREATE TABLE ingest_files (file_id INTEGER PRIMARY KEY, source_key TEXT NOT NULL DEFAULT '', transcript_pk INTEGER NOT NULL);
+        CREATE TABLE entries (entry_id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, transcript_pk INTEGER NOT NULL, type TEXT NOT NULL,
+          is_compact_summary INTEGER NOT NULL DEFAULT 0, provenance TEXT NOT NULL, ts_ms INTEGER);
+        CREATE TABLE memberships (file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, line INTEGER NOT NULL, PRIMARY KEY (file_id, entry_id));
+        CREATE TABLE boundaries (entry_id INTEGER PRIMARY KEY, transcript_pk INTEGER NOT NULL, anchor_uuid TEXT);
+        CREATE TABLE nodes (node_id TEXT PRIMARY KEY, kind TEXT NOT NULL, boundary_entry_id INTEGER);`);
+      const nT = 1 + ri(2);
+      const nF = 1 + ri(4);
+      const nE = 4 + ri(8);
+      const files: Array<{ f: number; tp: number; sk: string }> = [];
+      for (let f = 1; f <= nF; f += 1) {
+        const x = { f, tp: 1 + ri(nT), sk: rnd() < 0.5 ? '' : `x${f}` };
+        files.push(x);
+        db.prepare('INSERT INTO ingest_files VALUES (?, ?, ?)').run(x.f, x.sk, x.tp);
+      }
+      const ents: Array<{ e: number; uuid: string; type: string; prov: string }> = [];
+      for (let e = 1; e <= nE; e += 1) {
+        const x = { e, uuid: `u${e}`, type: of(['user', 'assistant', 'system']), prov: of(['operator', 'harness', 'model']) };
+        ents.push(x);
+        db.prepare('INSERT INTO entries (entry_id, uuid, transcript_pk, type, is_compact_summary, provenance, ts_ms) VALUES (?, ?, ?, ?, ?, ?, 100)')
+          .run(x.e, x.uuid, 1 + ri(nT), x.type, rnd() < 0.4 ? 1 : 0, x.prov);
+      }
+      for (const { f } of files) {   // each copy holds its own subset, in its own order (a Fisher-Yates shuffle)
+        const mem = ents.filter(() => rnd() < 0.7);
+        for (let i = mem.length - 1; i > 0; i -= 1) { const j = ri(i + 1); [mem[i], mem[j]] = [mem[j]!, mem[i]!]; }
+        mem.forEach((x, i) => db.prepare('INSERT INTO memberships VALUES (?, ?, ?)').run(f, x.e, i + 1));
+      }
+      const leaves: Array<{ id: string; e: number; uuid: string; tp: number; anchor: string | null; arm: string }> = [];
+      for (const b of ents.filter(() => rnd() < 0.4)) {
+        const other = of(ents);
+        const arm = of(['none', 'empty', 'self', 'self', 'other', 'other', 'missing']);
+        const anchor = arm === 'none' ? null : arm === 'empty' ? '' : arm === 'self' ? b.uuid : arm === 'other' ? other.uuid : 'nope';
+        const tp = 1 + ri(nT);
+        db.prepare('INSERT INTO boundaries VALUES (?, ?, ?)').run(b.e, tp, anchor);
+        db.prepare('INSERT INTO nodes VALUES (?, ?, ?)').run(`L${b.e}`, 'native_leaf', b.e);
+        leaves.push({ id: `L${b.e}`, e: b.e, uuid: b.uuid, tp, anchor, arm });
+      }
+      const got = new Map<string, number | null>();
+      for (const r of db.prepare(sql).all({ asof_nodes: JSON.stringify(leaves.map((x) => x.id)) }) as unknown as Array<{ node_id: string; entry_id: number | null }>) {
+        got.set(r.node_id, r.entry_id === null ? null : Number(r.entry_id));
+      }
+      for (const x of leaves) {
+        const fl = files.filter((f) => f.tp === x.tp);
+        const holds = (f: number): boolean => db.prepare('SELECT 1 FROM memberships WHERE file_id = ? AND entry_id = ?').get(f, x.e) !== undefined;
+        const held = l.pickHoldingCopy(fl.map((f) => ({ fileId: f.f, live: f.sk === '', holds: holds(f.f) })));
+        let want: number | null = null;
+        if (held !== null) {
+          const rows = db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
+              e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+            WHERE m.file_id = ? ORDER BY m.line`).all(held) as unknown as NonNullable<Parameters<Lib['asOfCut']>[0]['copy']>['rows'];
+          const cut = l.asOfCut({ asof: x.uuid, boundary: { entryId: x.e, uuid: x.uuid, main: true, anchorUuid: x.anchor }, copy: { fileId: held, rows }, kept: new Set() });
+          if (!cut.ok) throw new Error(`the JS side refused a seeded leaf: ${JSON.stringify(cut)}`);
+          want = cut.cut.summaryEntryId;
+        }
+        const have = got.has(x.id) ? got.get(x.id)! : 'no row';
+        tally.leaves += 1;
+        if (want !== null) tally.picked += 1;
+        const holding = fl.filter((f) => holds(f.f));
+        if (holding.length > 1) tally.multiCopy += 1;
+        if (holding.some((f) => f.sk === '') && holding.some((f) => f.sk !== '')) tally.liveAndRetired += 1;
+        if (held === null) tally.noCopy += 1;
+        if (x.arm === 'self') { tally.self += 1; if (want !== null) tally.selfPicked += 1; }
+        if (x.arm === 'other') tally.other += 1;
+        if (x.arm === 'missing') tally.missing += 1;
+        if (x.arm === 'none' || x.arm === 'empty') tally.none += 1;
+        const target = ents.find((e) => e.uuid === x.anchor);
+        if (x.arm === 'other' && target !== undefined && target.type === 'user' && target.prov === 'harness') tally.echoAnchor += 1;
+        if (have !== want) bad.push(`trial ${t} ${x.id} (${x.arm}): the SQL says ${String(have)}, the JS pick ${String(want)}`);
+      }
+      db.close();
+    }
+    return { bad, tally };
+  }
+
+  it('on 250 seeded stores the SQL pick equals the JS pick on every leaf, over several copies, live and retired, divergent memberships and every anchor arm', async () => {
+    const { bad, tally } = await compare(250);
+    expect(bad.slice(0, 5)).toEqual([]);
+    // CONTROL: the stores cover what the case claims; a mutant of the pick has leaves to disagree on.
+    expect(tally.leaves, JSON.stringify(tally)).toBeGreaterThanOrEqual(400);
+    expect(tally.picked, 'leaves with a pick').toBeGreaterThanOrEqual(150);
+    expect(tally.multiCopy, 'leaves held by two or more copies').toBeGreaterThanOrEqual(100);
+    expect(tally.liveAndRetired, 'held by a live and a retired copy').toBeGreaterThanOrEqual(40);
+    expect(tally.selfPicked, 'anchor on the boundary itself, with a pick').toBeGreaterThanOrEqual(30);
+    expect(tally.echoAnchor, 'anchor on an echo row').toBeGreaterThanOrEqual(10);
+    expect(tally.missing + tally.none, 'anchors that name no row').toBeGreaterThanOrEqual(60);
+    expect(tally.noCopy, 'no copy holds the boundary').toBeGreaterThanOrEqual(5);
+  });
+});

@@ -4466,26 +4466,88 @@ export function asOfBinds(cut) {
 // recall.mjs and W2-5b's card parent (W2-D75) ask the same question. Each binds by name only: asOfBinds(cut)'s parameters
 // plus one JSON array of candidates. None is run without a cut: recall.mjs prepares nothing then (W2-D45).
 
+/** The two CTEs that read a leaf's summary row from the store, shared by asOfHiddenNodesSql and asOfSummaryPickSql so the
+ *  statement and its test read one text. `asof_hold` is pickHoldingCopy's pick over the boundary's transcript's files
+ *  (a live copy, `source_key` '', before a retired one, then the lowest file_id, among those holding the boundary).
+ *  `asof_pick` is summaryRowFor's pick over that copy: the `anchor_uuid` row among its memberships unless it is an echo
+ *  (`user` with provenance `harness`), or, when the anchor names the boundary itself, the first non-echo compact summary
+ *  after the boundary's line; NULL for no pick (no anchor, an empty one, one naming no row of the copy, an echo, no copy).
+ *  They read the walk `asof_down(top, node_id)` for the leaves to pick for. D-6282 (history-w2-asof-leaf-summary-row) */
+const ASOF_PICK_CTES = `
+  asof_hold(node_id, file_id) AS (
+    SELECT n.node_id, (SELECT hf.file_id FROM boundaries hb JOIN ingest_files hf ON hf.transcript_pk = hb.transcript_pk
+        JOIN memberships hm ON hm.file_id = hf.file_id AND hm.entry_id = hb.entry_id
+      WHERE hb.entry_id = n.boundary_entry_id ORDER BY (hf.source_key = '') DESC, hf.file_id LIMIT 1)
+    FROM nodes n WHERE n.kind <> 'condensed' AND n.node_id IN (SELECT node_id FROM asof_down)
+  ),
+  asof_pick(node_id, entry_id) AS (
+    SELECT h.node_id, CASE
+      WHEN pb.anchor_uuid = pe.uuid THEN (SELECT sm.entry_id FROM memberships sm JOIN entries se ON se.entry_id = sm.entry_id
+        WHERE sm.file_id = h.file_id AND se.is_compact_summary = 1 AND NOT (se.type = 'user' AND se.provenance = 'harness')
+          AND sm.line > (SELECT bm.line FROM memberships bm WHERE bm.file_id = h.file_id AND bm.entry_id = pb.entry_id)
+        ORDER BY sm.line LIMIT 1)
+      ELSE (SELECT sm.entry_id FROM memberships sm JOIN entries se ON se.entry_id = sm.entry_id
+        WHERE sm.file_id = h.file_id AND se.uuid = pb.anchor_uuid AND NOT (se.type = 'user' AND se.provenance = 'harness'))
+    END
+    FROM asof_hold h JOIN nodes pn ON pn.node_id = h.node_id JOIN boundaries pb ON pb.entry_id = pn.boundary_entry_id
+      JOIN entries pe ON pe.entry_id = pb.entry_id
+  )`;
+
 /** W2-D35's node rule. Of the node ids bound as a JSON array at `:asof_nodes`, the ones the cut hides (column `node_id`):
- *  - a leaf (any kind but `condensed`) is hidden when its boundary entry is not stored or asOfEntrySql hides it (W2-D34);
+ *  - a leaf (any kind but `condensed`) other than N's is hidden when its boundary entry is not stored or asOfEntrySql hides it
+ *    (W2-D34), or when it has a summary row and asOfEntrySql hides that row (D-6282). Its summary row is summaryRowFor's pick
+ *    over the leaf's holding copy, the rule derivation and asOfCut use, read from the store: the copy is pickHoldingCopy's
+ *    over the boundary's transcript's files (a live copy first, then the lowest file_id, among those holding the boundary),
+ *    and the row is the boundary's `anchor_uuid` row of that copy (an echo row never), or, when the anchor names the boundary
+ *    itself, the first non-echo compact summary after the boundary in it. A leaf with no pick (a raw leaf) is judged by its
+ *    boundary alone (an absent or empty anchor names no row). N's own leaf is exempt from the summary arm: its summary is
+ *    asof_summary, which the predicate shows, and a cut that names none judges N's leaf by its boundary, N itself;
  *  - any node is hidden when a leaf under it is hidden, whenever the node was formed: the walk goes down node_children
  *    (UNION, so a cycle ends it) and never reads `created_ms`;
- *  - a `condensed` node with no leaf under it is hidden too, fail closed: "every leaf under it is visible" would hold
- *    vacuously there, and only a damaged store has one (W2-D35 as amended).
+ *  - any node is hidden when a `condensed` node at or below it has no leaf below it (R4, fail closed: "every leaf under it is
+ *    visible" holds vacuously there, and only a damaged store has one), however deep, through a cycle or an unstored child.
+ *    A node has a leaf below it when it is one, or a node_children walk up from a leaf, kept to the nodes of the walk down,
+ *    reaches it (D-6283).
  *  An id that names no node answers nothing. */
 export function asOfHiddenNodesSql() {
+  // Two arms were added by the whole-branch review's rulings. D-6282 (history-w2-asof-leaf-summary-row): ASOF_PICK_CTES read a
+  // leaf's summary row, and the last HAVING term's summary clause applies the predicate to it. history-lib's seeded
+  // equivalence case holds that pick to pickHoldingCopy plus summaryRowFor over several copies and every anchor shape;
+  // history-recall's D-6282 describe holds the clause at each read door.
+  // D-6283 (history-w2-asof-leafless-descendant): asof_up and the middle HAVING term hide a node over a leafless condensed
+  // descendant; history-recall's D-6283 case holds them, including a cycle.
   return `WITH RECURSIVE asof_down(top, node_id) AS (
     SELECT value, value FROM json_each(:asof_nodes)
     UNION
     SELECT d.top, c.child_id FROM asof_down d JOIN node_children c ON c.node_id = d.node_id
-  )
+  ),
+  asof_up(node_id) AS (
+    SELECT dn.node_id FROM asof_down dn JOIN nodes asof_ln ON asof_ln.node_id = dn.node_id WHERE asof_ln.kind <> 'condensed'
+    UNION
+    SELECT c.node_id FROM asof_up u JOIN node_children c ON c.child_id = u.node_id WHERE c.node_id IN (SELECT node_id FROM asof_down)
+  ),
+  ${ASOF_PICK_CTES}
   SELECT d.top AS node_id
     FROM asof_down d
     JOIN nodes asof_n ON asof_n.node_id = d.node_id
     LEFT JOIN entries asof_b ON asof_b.entry_id = asof_n.boundary_entry_id
+    LEFT JOIN asof_pick asof_p ON asof_p.node_id = d.node_id
+    LEFT JOIN entries asof_s ON asof_s.entry_id = asof_p.entry_id
     GROUP BY d.top
     HAVING sum(asof_n.kind <> 'condensed') = 0
-      OR sum(asof_n.kind <> 'condensed' AND NOT coalesce(asof_b.entry_id IS NOT NULL AND (${asOfEntrySql('asof_b')}), 0)) > 0`;
+      OR sum(asof_n.kind = 'condensed' AND d.node_id NOT IN (SELECT node_id FROM asof_up)) > 0
+      OR sum(asof_n.kind <> 'condensed' AND NOT coalesce(asof_b.entry_id IS NOT NULL AND (${asOfEntrySql('asof_b')})
+        AND (asof_n.boundary_entry_id = :asof_boundary OR asof_s.entry_id IS NULL OR (${asOfEntrySql('asof_s')})), 0)) > 0`;
+}
+
+/** A leaf's summary row as the store gives it: of the node ids bound as a JSON array at `:asof_nodes`, each non-condensed
+ *  one's pick (columns `node_id`, `entry_id`; `entry_id` NULL for no pick), by the same CTEs asOfHiddenNodesSql judges a
+ *  leaf's summary row with. The test seam that holds them to pickHoldingCopy plus summaryRowFor over the same rows;
+ *  no read verb prepares it. D-6282 (history-w2-asof-leaf-summary-row) */
+export function asOfSummaryPickSql() {
+  return `WITH RECURSIVE asof_down(top, node_id) AS (SELECT value, value FROM json_each(:asof_nodes)),
+  ${ASOF_PICK_CTES}
+  SELECT node_id, entry_id FROM asof_pick`;
 }
 
 /** W2-D35's epoch rule. Of the epoch session uuids bound as a JSON array at `:asof_epochs`, the ones the cut shows (column
