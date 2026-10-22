@@ -2550,10 +2550,10 @@ export async function step0bMechanics({ launch, out, model, settingsMode, lang, 
 // A discard is a count by its RECON_DISCARDS word, never a refusal. A store that cannot be opened or read refuses
 // store-unreadable.
 
-/** Every word a boundary is discarded with (R5): reconstruction's (W2-D68, W2-D75, W2-D54; `body-unrenderable`, D-6302, a body
- *  that parses and cannot be rendered), then the words Tasks 2, 3 and
- *  4 append here in place (mining's span words, admission's verdicts, Baseline B's). Counts, never refusals, and never a
- *  DRIVER_REASONS or GATE_REASONS word. */
+/** Every word a boundary is discarded with (R5): reconstruction's come first (W2-D68, W2-D75, W2-D54), then the words
+ *  Tasks 2 to 4 append here in place (mining's span words, admission's verdicts, Baseline B's), and `body-unrenderable`
+ *  (D-6302, a body that parses and cannot be rendered; mining discards with it too, D-6303) is kept LAST: an appending task
+ *  inserts before it. Counts, never refusals, and never a DRIVER_REASONS or GATE_REASONS word. */
 export const RECON_DISCARDS = Object.freeze([
   'boundary-absent', 'boundary-uncopied',
   'summary-absent', 'summary-unparseable', 'summary-tombstone', 'summary-over-cap', 'summary-undecodable',
@@ -2959,7 +2959,9 @@ function pathFactOf(raw, cwd, configDirs) {
 
 /** Mine one boundary's candidates (W2-D61, W2-D65). Pure: it reads the rows it is handed and calls `pick` once for
  *  each row it mines, never for any other row. The family (`storeId`, `ccrcId`, `generation`) is carried onto every
- *  candidate, so the candidate is the writer's item (R4).
+ *  candidate, so the candidate is the writer's item (R4). A mined body nested too deep to render (a RangeError from
+ *  renderEntryText or from the paired tool_use's JSON.stringify, caught by renderOrNull) discards the boundary under
+ *  `body-unrenderable`, the word D-6302 gives reconstruction (D-6303).
  *  @param {{ storeId: string, ccrcId: string, generation: string, boundaryUuid: string, boundaryTsMs: number,
  *    rows: readonly SpanRow[], pick: (row: SpanRow) => PickedBody, cwd: string | null, cwdReal: string | null,
  *    configDirs: readonly string[] }} input
@@ -2979,7 +2981,9 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       if (why === undefined) throw new TypeError(`mineBoundary: body pick state ${JSON.stringify(picked.state)} is not one expandEntryBody answers`);
       return { state: 'discard', boundaryUuid, why, counts };
     }
-    span.push(storedField(renderEntryText(picked.body)));
+    const rendered = renderOrNull(() => renderEntryText(picked.body));
+    if (rendered === null) return { state: 'discard', boundaryUuid, why: 'body-unrenderable', counts };
+    span.push(storedField(rendered));
     const blocks = Array.isArray(picked.body) ? picked.body : [];
     let producer;
     if (row.provenance === 'model') {
@@ -3001,8 +3005,9 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
     const addShas = (leaf, leafKey, pair) => {
       for (const run of shaRunsOf(leaf)) add('sha', run.toLowerCase(), run, leaf, leafKey, pair);
     };
+    let unrenderable = false;
     blocks.forEach((b, bi) => {
-      if (!sjObject(b)) return;
+      if (unrenderable || !sjObject(b)) return;
       const key = `${row.entry_id}:${bi}`;
       if (row.provenance === 'model') {
         if (b.type === 'text' && typeof b.text === 'string') addShas(b.text, key, null);
@@ -3030,8 +3035,12 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       const text = sjResultText(b.content);
       if (text === null) return;
       const answered = typeof b.tool_use_id === 'string' ? uses.get(b.tool_use_id) : undefined;
-      const pair = answered?.block === undefined ? null
-        : { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(JSON.stringify(answered.block.input ?? null)) };
+      let pair = null;
+      if (answered?.block !== undefined) {
+        const input = renderOrNull(() => JSON.stringify(answered.block.input ?? null));
+        if (input === null) { unrenderable = true; return; }
+        pair = { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(input) };
+      }
       if (b.is_error === true) {
         const line = text.split('\n').find((l) => {
           const c = collapseWs(l);
@@ -3046,6 +3055,7 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       }
       addShas(text, key, pair);
     });
+    if (unrenderable) return { state: 'discard', boundaryUuid, why: 'body-unrenderable', counts };
   }
   Object.freeze(span);
   return { state: 'mined', boundaryUuid, boundaryTsMs, candidates, counts };

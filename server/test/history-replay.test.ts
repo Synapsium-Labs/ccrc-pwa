@@ -6223,6 +6223,22 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
     expect(() => w5a2Mine(w5a2Span([{ provenance: 'model', state: 'mystery', body: null }]))).toThrow(/body pick state/);
   });
 
+  it('D-6303: a mined tool_use input nested 5,000 deep cannot be rendered and discards the boundary as body-unrenderable; CONTROL: 4,000 deep mines normally', () => {
+    // Built at runtime: a body that parses (far inside lib's JSON_DEPTH_MAX) but overflows V8's JSON.stringify stack.
+    const nested = (levels: number): unknown => {
+      let v: unknown = 'leaf';
+      for (let i = 0; i < levels; i += 1) v = { a: v };
+      return v;
+    };
+    const body = (levels: number) => [w5a2Use('deep1', 'Bash', { command: 'npm run build:all', nest: nested(levels) })];
+    expect(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(5000) }]))).toMatchObject({
+      state: 'discard', why: 'body-unrenderable', boundaryUuid: 'fixture-boundary',
+    });
+    const ok = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(4000) }])));
+    expect(ok.candidates.map((c) => [c.kind, c.fact])).toEqual([['command', 'npm run build:all']]);
+    expect(w5a2Drv.RECON_DISCARDS).toContain('body-unrenderable');
+  });
+
   it('W2-D65 CONTROL: an unmined row whose body is pruned never discards the boundary and is never picked', () => {
     const sp = w5a2Span([{ provenance: 'operator', state: 'tombstone', body: null }, { provenance: 'model', body: [w5a2Text('commit 9f3e2d1')] }]);
     const r = w5a2MinedOf(w5a2Mine(sp));
@@ -6341,6 +6357,7 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
       'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
     ]);
     expect(w5a2Drv.RECON_DISCARDS.slice(14, 18), 'the span words, appended to Task 1\'s list').toEqual(['span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable']);
+    expect(w5a2Drv.RECON_DISCARDS.at(-1), "body-unrenderable (D-6302) stays last, so a task that inserts words keeps it there").toBe('body-unrenderable');
     expect(Object.isFrozen(w5a2Drv.FACT_DROP_REASONS)).toBe(true);
     expect(new Set(w5a2Drv.FACT_DROP_REASONS).size).toBe(w5a2Drv.FACT_DROP_REASONS.length);
     // R5 as amended by R10: only the pairs that involve a drop list are pinned. DRIVER_REASONS and GATE_REASONS already
