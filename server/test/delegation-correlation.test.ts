@@ -2454,9 +2454,8 @@ describe('D-WF: a workflow run ends on its task notification (D-6269)', () => {
 });
 
 describe('D-SC: a start-less stop ages out on journal time (D-6270)', () => {
-  // The horizon comes through the model namespace; the literal is the ruled value (48 h) and only lets the rows run at base, where the
-  // constant does not exist yet.
-  const H = (modelNs as unknown as { DELEGATION_STOP_CANDIDATE_HORIZON_MS?: number }).DELEGATION_STOP_CANDIDATE_HORIZON_MS ?? 172_800_000;
+  // The horizon comes through the model namespace only, never restated, so a renamed export fails to compile.
+  const H = modelNs.DELEGATION_STOP_CANDIDATE_HORIZON_MS;
   const A0 = Date.UTC(2026, 9, 14, 12);
   const Y = AGENT;
   const recoverAt = (entries: readonly (readonly [DelegationEventEnvelopeV1, number])[]) => {

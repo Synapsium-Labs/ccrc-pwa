@@ -20,9 +20,8 @@
 //   A20, A21  a second PreToolUse of a call; ageing sweeps the Bash map and never an agent candidate
 // (A19 lives in `delegation-correlation.test.ts`, A22 in `delegation-wave3.integration.test.ts`.)
 //
-// THE NEW NAMES. `DELEGATION_BASH_PENDING_MS` is reached through a namespace import and a cast, so that this file is type-clean against
-// code that has none of it yet and each row then fails on its own assertion, never as a whole file on an import error. The literal
-// fallback (one hour, the ruled value) exists ONLY so the rows run at the base; at the tip the constant is the bound.
+// THE NEW NAMES. `DELEGATION_BASH_PENDING_MS` is reached through the model's namespace import and never restated as a literal, so a renamed
+// or dropped export fails to compile here rather than leaving the rows running on a stale value (the coordinator's ruling on review 767).
 //
 // JOURNAL TIME ONLY. Every chain whose ageing matters is built by `chainAt`, which stamps each record's `acceptedAt` from a literal
 // instant; `observedAt` is the event's own and is a separate axis (A11b separates them on purpose). Nothing here reads a wall clock or
@@ -61,9 +60,9 @@ import { mkTmp } from './tmpHelpers.js';
 
 // ── the new names, by namespace ──────────────────────────────────────────────────────────────────────────────────────
 
-/** How long a listing-carrying PreToolUse waits, in journal time, for its PostToolUse. The literal is the ruled value and is a fallback only
- *  so the rows run at the base, where the constant does not exist. */
-const BOUND = (modelNs as unknown as { DELEGATION_BASH_PENDING_MS?: number }).DELEGATION_BASH_PENDING_MS ?? 3_600_000;
+/** How long a listing-carrying PreToolUse waits, in journal time, for its PostToolUse. Read through the namespace only, never restated, so a
+ *  renamed export fails to compile (the coordinator's ruling on review 767). */
+const BOUND = modelNs.DELEGATION_BASH_PENDING_MS;
 
 // ── fixtures (the shapes of `delegation-correlation.test.ts`; a test file imports no other test file) ────────────────────
 

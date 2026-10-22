@@ -4138,9 +4138,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
 
 // ── run 762 (D-6267 to D-6271): shared fixtures of the retirement rows, the workflow-end rows and the stop-ageing rows below ──────────
 
-/** The ruled bound, through the model's namespace. The literal is the fallback ONLY so these rows run, and fail on their own assertions, at
- *  the base, where the constant does not exist yet. */
-const BOUND = ((modelNs as unknown as Record<string, unknown>)['DELEGATION_BASH_PENDING_MS'] as number | undefined) ?? 3_600_000;
+/** The ruled bound, through the model's namespace only, never restated, so a renamed export fails to compile. */
+const BOUND = modelNs.DELEGATION_BASH_PENDING_MS;
 /** Journal time. Every fixture record is accepted from here on, within BOUND of the first; no clock is read anywhere in this section. */
 const T0 = Date.UTC(2026, 9, 14, 12);
 const LANE_B = 'lane-b-demo';
@@ -4884,9 +4883,9 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
 // D-WF1 to D-WF9, D-WF14, D-WF15 and D-SC1 to D-SC5 are in the correlation test; D-SC-COST in the fold-alloc test; D-WF-E2E in the
 // integration test; RE1 to RE3 and RE8 in the pass-timing test; RE9 in the watch test.
 describe('run 762: workflow runs end on their task notification, start-less stops age out, and the retirement door is wired (D-6268, D-6269, D-6270)', () => {
-  /** The ruled horizon, through the model's namespace. The literal (48 h) is the fallback ONLY so the rows run, and fail on their own
-   *  assertions, at the base, where the constant does not exist yet. Journal time throughout: no clock is read. */
-  const H = ((modelNs as unknown as Record<string, unknown>)['DELEGATION_STOP_CANDIDATE_HORIZON_MS'] as number | undefined) ?? 172_800_000;
+  /** The ruled horizon, through the model's namespace only, never restated, so a renamed export fails to compile. Journal time
+   *  throughout: no clock is read. */
+  const H = modelNs.DELEGATION_STOP_CANDIDATE_HORIZON_MS;
   const A0 = Date.UTC(2026, 9, 10);
   const RUN = 'wf_run1';
   const Y1 = 'agent-y1';

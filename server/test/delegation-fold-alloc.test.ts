@@ -146,11 +146,11 @@ describe('D-5833: the fold writes an opened activity\'s id into the builder\'s o
 // ── Run 762: the builder's Bash-call facts, its clone census and the fold's cost ──────────────────────────────────────────────────────
 //
 // Journal time only: every chain below is built by `chainAt` over `buildDelegationJournalRecord` with an explicit acceptance instant in
-// ms, from a literal origin. The two horizons are read from the model namespace, falling back to the ruled literal ONLY so that these rows
-// run (and fail on their own assertions) at a build that does not export them yet.
+// ms, from a literal origin. The two horizons are read from the model namespace only, never restated, so a renamed export fails to
+// compile.
 const A0 = Date.UTC(2026, 9, 14, 12);
-const BOUND: number = (modelNs as unknown as { DELEGATION_BASH_PENDING_MS?: number }).DELEGATION_BASH_PENDING_MS ?? 3_600_000;
-const HORIZON: number = (modelNs as unknown as { DELEGATION_STOP_CANDIDATE_HORIZON_MS?: number }).DELEGATION_STOP_CANDIDATE_HORIZON_MS ?? 172_800_000;
+const BOUND: number = modelNs.DELEGATION_BASH_PENDING_MS;
+const HORIZON: number = modelNs.DELEGATION_STOP_CANDIDATE_HORIZON_MS;
 
 /** A chain of journal entries from sequence 1 (or after `after`), each accepted at the given instant in epoch ms. */
 const chainEntriesAt = (entries: readonly (readonly [DelegationJournalEntryV1, number])[], after?: DelegationJournalRecordV1): DelegationJournalRecordV1[] => {
