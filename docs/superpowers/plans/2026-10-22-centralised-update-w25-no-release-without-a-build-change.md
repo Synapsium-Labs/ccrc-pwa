@@ -88,7 +88,7 @@ One PR, from this workspace's own branch.
   - This plan.
   - NOT touched: `deploy/build-release.sh` (`release.yml` shares it, and a hand-cut tag must always build), `release.yml`, `ci.yml`, `deploy/deploy.sh`, `ccd/`, `.github/ci/`.
 - **Functions this wave edits** (the consent list, by file):
-  - `deploy/release-main.sh`: the header (`:1-27`), `usage` (`:33`), the argument loop and its checks (`:36-53`), `prepare` (`:56-103`), `publish` (`:117-178`) including the notes comment (`:151-155`), and the arm dispatch (`:180-183`). New `say`, `set_output`, `derive_tags`, `scope_ask`, `measure_change`, `base_published`, `decide` and `measure`, placed between the `SHAPE=` line (`:53`) and `prepare`.
+  - `deploy/release-main.sh`: the header (`:1-27`), `usage` (`:33`), the argument loop and its checks (`:36-53`), `prepare` (`:56-103`), `publish` (`:117-178`) including the notes comment (`:151-155`), and the arm dispatch (`:180-183`). New `say`, `set_output`, `derive_tags`, `scope_ask`, `node_floor_ok` (D-6403), `measure_change`, `base_published`, `decide`, `measure` and `decision_in_tree` (D-6404), placed between the `SHAPE=` line (`:53`) and `prepare`.
   - `deploy/release-stable.sh`: the header (`:1-12`), the zero-tag refusal (`:59-64`), whose message names the newest contained release (D-6398).
   - `.github/workflows/release-main.yml`: the header (`:1-16`), the steps from `setup-node` to prepare (`:57-70`), and the attest step's comment (`:72-78`).
   - `.github/workflows/release-stable.yml`: the header sentences "the gate runs one dependency-free module with the runner's own node" (`:5-6`) and "the script refuses an untagged merge HEAD" (`:7-8`), comments only.
@@ -147,9 +147,9 @@ One PR, from this workspace's own branch.
 - **Needless releases remain, by design.** These fail toward releasing (D-6400 lists them): nested docs, root dotfiles, `pwa/test`, the vitest configs, a docs merge while the highest tag has no published release, and a docs merge during a `gh` or API outage.
 - **A hand-cut minor whose `release.yml` run is in flight or failed.** `gh release view` answers no release, so release-main releases the next patch of the same tree. That is what it does today.
 - **A yanked highest release.** A docs-only merge after it releases nothing new. Today it would re-release the same code under a new number, so nothing is lost.
-- **The checkout token in `.git/config`.** `actions/checkout` persists its token in the local git config, so `npm ci` lifecycle scripts can already read one today. This wave adds no token to any step that runs `npm ci`. The new `GH_TOKEN` lives in the `decide` step, which runs only first-party code plus git and gh (D-6401).
+- **The checkout token in `.git/config`, and the OIDC request token (D-6405).** `actions/checkout` persists its token in the local git config, so `npm ci` lifecycle scripts can already read one today. This wave adds no token to any step that runs `npm ci`. The new `GH_TOKEN` lives in the `decide` step, which runs only first-party code plus git and gh (D-6401).
 - **A test-only fix after a red stable gate.** A release whose gate goes red on a broken test is fixed by a test-only merge, which cuts no release. Under the ruling on Reading 6 nothing is promotable until a release contains that fix: the next merge that changes what ships, or a hand-cut `vX.Y.0` tag, which `release.yml` always builds. Pushing the fix's own commit to `stable` is refused, and the refusal says so (D-6398).
-- **Paths in the job summary.** The first shipped path is printed JSON-quoted into the log and the summary. Paths come from merged commits (write access), and GitHub sanitises summaries.
+- **Paths in the job summary.** The first shipped path is printed JSON-quoted into the log and the summary. `JSON.stringify` escapes quotes and control characters, not Markdown, so a merged path shaped like a Markdown link or image renders as one in the summary. Paths come from merged commits (write access), every line starts `release-main.sh:` so no workflow command can be smuggled, and GitHub sanitises summaries.
 
 ## Mutation table
 
@@ -187,6 +187,9 @@ Each guard this wave adds, the mutation that removes or weakens it, and the row 
 | A failed append never fails the run | the `|| :` dropped | W25-R18 |
 | The cache gate's output | `set_output` deleted | W25-R1 (`build=false`), W25-R3 (`build=true`) |
 | The token reaches gh | `unset GH_TOKEN` added to `decide` | W25-R14 |
+| The helpers never see the token | the `env -u` prefix dropped from `scope_ask` | W25-R24 |
+| Only the decision file is excused from the dirty check | the exclusion widened (`-x` dropped, or every `??` line) | W25-R23 (the straggler case) |
+| The in-tree decision is consumed before the build | the `rm -f` deleted | W25-R23 (the shipped case) |
 | prepare makes no gh call | prepare calls `base_published` | W25-P4 |
 | The list lives only in the helper | a `docs/` literal in the script | W25-P3 |
 | No trigger filter | `paths-ignore: ['docs/**']` added | W25-Y1 |
@@ -205,7 +208,7 @@ Each guard this wave adds, the mutation that removes or weakens it, and the row 
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first fourteen, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 from the worker's reserve for the ruling on Reading 10. D-6404 to D-6409 remain the worker's reserve.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first sixteen, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6405 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found). D-6406 to D-6409 remain the worker's reserve.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented as a deny-by-default classifier over changed paths (option (a)). Measuring the artifact (option (b)) is rejected for this wave.
   - (a) answers before the local tag. Nothing is tagged, built or attested, so the attest step's existing `hashFiles` skip covers it with no YAML expression changed. (b) builds first, so its tarball must be moved out of the attest glob before that step runs. A mistake there mints a public transparency-log entry for a digest no release publishes, and that cannot be undone.
@@ -278,11 +281,12 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **Release notes.** The next release's notes list the skipped `docs(…)` commits under "Behind the scenes", within `NOTES_BUDGET_BYTES`. That is correct: the release contains them.
   - **No change.** The update catalogue, the resolver, notify's reading of published releases, the inventory, `ccrc rollout`, `rollback`, `RUNS_ATTRIBUTION_SINCE` (`shared/api.ts:9490-9501`, measured by `git tag --contains`, which still holds) and `landing.ts`.
 - **D-6401.** The decision is its own workflow step, `decide`, placed before `setup-node`. It runs with the runner's own node and holds the job's only `GH_TOKEN` before publish.
-  - The token: a token on the prepare step would sit in the environment of the step shell that runs `npm ci`. `unset` inside the script cuts inheritance, but every process of the same user can still read the step shell's `/proc/<pid>/environ`. No step that runs `npm ci` may hold it. `decide` installs nothing and runs only bash, git, gh, the first-party helper and the base's copy of it.
+  - The token: a token on the prepare step would sit in the environment of the step shell that runs `npm ci`. `unset` inside the script cuts inheritance, but every process of the same user can still read the step shell's `/proc/<pid>/environ`. So this wave adds no `GH_TOKEN` to a step that runs `npm ci`. `decide` installs nothing and runs only bash, git, gh, the first-party helper and the base's copy of it, and both helpers run with the token and the workflow-command files removed from their environment (`scope_ask`, W25-R24).
+  - What this does not claim (corrected by D-6405): that the `npm ci` step reaches no token. The checkout's persisted credential and the job's OIDC request token reach it, as they did before this wave.
   - The cache: a skipped merge runs no npm. With `setup-node`'s `cache: npm` the post step would then try to save an `~/.npm` that, on a cache miss, does not exist, and it can fail the job. `setup-node` therefore runs only on `if: steps.decide.outputs.build != 'false'`. An absent output (`decide` did not write one) still sets up the toolchain, so the build path is the default.
   - `decide` writes `build=false` to `$GITHUB_OUTPUT` only when it records `same-as`, and `build=true` otherwise. The prepare step reads the decision file, not the output.
 - **D-6402.** `unchanged` needs the base's classifier to agree. After HEAD's helper answers `unchanged`, `measure_change` writes `git show <base>:deploy/release-scope.mjs` into a fresh `mktemp -d` directory and asks that copy the same question. It skips only if both answer `unchanged`.
-  - A merge that changes the classifier changes `deploy/`, so the old helper answers `changed`, whatever HEAD's copy says. A defect in HEAD's `notShipped` cannot vouch for its own merge, and so cannot vouch for later ones either.
+  - A merge that changes the classifier changes `deploy/`, so the old helper answers `changed`, whatever HEAD's copy says. A defect in HEAD's `notShipped` cannot vouch for its own merge. Once that merge has released, its helper is the next base's, so later merges rest on D-6396's guard and on review, not on this rule (corrected after Task 2's security review). Nor does the rule hold against a hostile merge: `release-main.sh` and the workflow run from HEAD, so a merge that edits `decide` can force a skip whatever either helper says. It guards against an accidental classifier defect.
   - A base with no helper (every tag cut before this wave) is unmeasured, and the merge releases.
   - The temporary directory is removed in the same function, and it is never under `$ROOT` or `$OUT_DIR`.
 - **D-6403.** The runner's own node is trusted only at or above the repository's engines floor (the coordinator's ruling on Reading 10). `measure_change`, which both `decide` and `measure` run, first calls `node_floor_ok`. Below the floor, or when either version cannot be read, the answer is `unmeasured`, so `decide` releases and `measure` says so.
@@ -290,6 +294,13 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - The version is `node --version`, which must exit 0 and print exactly `vX.Y.Z`. The comparison is numeric, field by field, in bash, so `sort -V` stays spelled once (W25-P5).
   - The reasons, carried into the unmeasured line: `node <version> is below server/package.json's engines floor >=<floor>`, `node --version exited <rc>`, `node --version answered '<first 80 chars>'`, and `server/package.json names no readable engines floor`.
   - It sits in `measure_change` rather than `decide` alone, so `release-stable.sh`'s use of `measure` (D-6398) is held to the same floor, with one check and one place.
+- **D-6404.** The workflow's `release-out` lies inside the checkout and is not gitignored, so the decision `decide` writes there is an untracked file. Both `prepare`'s dirty-tree refusal and `build-release.sh`'s would refuse every real run on it. The fixtures keep their out directory outside the repository, so no briefed row could see it (found by Task 2's implementer).
+  - `prepare`'s dirty check (`git status --porcelain -uall`) drops exactly one line, `?? <the decision file's path>`, and only when that file lies under the checkout (`decision_in_tree`). A decision directory that is the checkout root itself matches nothing, so it still refuses.
+  - On the release path, `prepare` removes the in-tree decision file before `git tag`: it has already read it, and nothing reads it again. So `build-release.sh` sees a clean tree, unchanged.
+  - Rejected: gitignoring `release-out/`, which would also relax `build-release.sh`'s refusal of its own leftovers on a local second run, and moving the decision outside the work tree, which would change every row and the README's naming of it. Row W25-R23.
+- **D-6405.** Stated, not fixed: the persisted `actions/checkout` credential (the job's `contents: write` token, in `.git/config`) and the job's OIDC request token (`id-token: write` puts `ACTIONS_ID_TOKEN_REQUEST_*` into every run step) reach every step of `release-main.yml`, prepare's `npm ci` included. A hostile install script could push with the first and could mint a signing certificate for `release-main.yml@refs/heads/main`, the identity every box's updater verifies, with the second. Both predate this wave, which neither widens nor narrows them (Task 2's security review).
+  - D-6401's text and the decide step's comment now say so.
+  - The follow-up, for the coordinator: split the build into its own job (`contents: read`, no `id-token`) that uploads `release-out/`, with `persist-credentials: false` on checkout and publish authenticating its own push. `release.yml` shares the shape and the question.
 
 ## File structure
 
@@ -560,6 +571,8 @@ expect(originTags(home)).toEqual(['v0.0.1']);
   - **W25-R20** (below the floor releases): docs-only, `floor: '>=999.0.0'`. It releases `v0.0.2`, stdout contains `could not measure what changed since v0.0.1 (node v` and `is below server/package.json's engines floor >=999.0.0)`, and `gh-argv` is absent.
   - **W25-R21** (an unreadable floor releases): docs-only, `floor: null`. It releases `v0.0.2` with `(server/package.json names no readable engines floor)`.
   - **W25-R22** (an unreadable node version releases): docs-only, with a `node` shim first on `PATH` that prints `garbage` for `--version` and otherwise `exec`s the real node (its absolute path, `process.execPath`). It releases `v0.0.2` with `(node --version answered 'garbage')`.
+  - **W25-R23** (an in-tree decision, D-6404): the out directory is `<root>/release-out`. On the default shipped `merge`, decide then prepare release `v0.0.2`, and the in-tree decision file is absent afterwards. With an untracked straggler planted beside it, prepare refuses the dirty tree.
+  - **W25-R24** (the helpers never see the token): a planted helper (`scope`) answers `changed` when `GH_TOKEN` or `GITHUB_OUTPUT` is in its environment and `unchanged 0` otherwise. With `GH_TOKEN` and `GITHUB_OUTPUT` set on decide, the merge skips (`same-as v0.0.1`), and `gh-env` still reads the token.
   - **W25-R19** (the measure arm): `measure --base v0.0.1` on a docs-only `merge` prints exactly `unchanged 2\n`, exit 0, with `gh-argv` and `npm-argv` absent and no `release-main.decision` written. On the default `merge` it prints `changed 1 "ccd/ccrc"\n`. With `scope: false` it prints `unmeasured release-scope.mjs exited 1\n`. `measure --base junk` and `measure` with no `--base` exit 2, and `prepare --base v0.0.1` exits 2.
 
 - [ ] **Step 3: Write the failing pins.**
@@ -698,7 +711,7 @@ Rewritten to the coordinator's ruling on Reading 6: `release-stable.sh` never pr
 - [ ] **Step 3: Repo guards.**
   - `citations`, `docs-parity`, `single-definition`, `topology-clean`, `private-names`, `dtbd`, `typecheck-tests`.
   - `GROWTH_CHECK=1 … test/growth-check.test.ts`. None of this wave's files is a growth file; run it to confirm.
-  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6403 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-3])\.\*\*'` reads 14, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
+  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6405 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-5])\.\*\*'` reads 16, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
 - [ ] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15 (`ccd/worker-skill/SKILL.md:76`): `green` or `red` from the FIRST full suite run after the implementation was complete, red staying red through fix rounds, and `unrun` when no full run happened locally. The per-file runs of Steps 2 and 3, and the CI full run, are listed in the as-built note, not folded into the word.
 - [ ] **Step 5: The PR body.**
   - The rule, D-6390's argument for (a) over (b), and D-6391's six rules (the body may enumerate them; it is a dated record).
