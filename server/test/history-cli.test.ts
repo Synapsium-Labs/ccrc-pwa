@@ -1383,6 +1383,21 @@ describe('W2-1 recall-off: the CLI door relays the shim', () => {
     expect(bare.stderr).toContain('ccrc history recall-off: internal error: the history writer gave no result');
   }, 60_000);
 
+  it('a stated rc 1 from another verb keeps the generic words; only recall-off prints the stated line (r761 F3)', () => {
+    const box = rBox('ccrc-hist-cli-w21f-');
+    healthHh.stubShim(box, { stdout: '{"rc":1}\n', exit: 1 });
+    const other = healthHh.runCli(box, ['doctor', '--backup']);
+    // CONTROL: the verb reached the stand-in, so the words below are the CLI's own for a shim that stated rc 1.
+    expect(fs.readFileSync(path.join(box.home, 'stub-shim-argv'), 'utf8'), 'doctor --backup reached the shim').toContain('--op');
+    expect(other.code, `${other.stdout}${other.stderr}`).toBe(1);
+    expect(other.stderr, 'another verb: the generic words').toContain('ccrc history doctor: internal error: the history writer gave no result');
+    expect(other.stderr, 'another verb: not the recall-off line').not.toContain('as the line above says');
+    // CONTROL: the same stand-in under recall-off prints the stated line, so the difference is the verb.
+    const ro = healthHh.runCli(box, ['recall-off', ID]);
+    expect(ro.code, `${ro.stdout}${ro.stderr}`).toBe(1);
+    expect(ro.stderr).toContain('ccrc history recall-off: the history writer stopped, as the line above says');
+  }, 60_000);
+
   it('README states the verb, its flag and its refusal words (W2-1)', () => {
     const readme = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8');
     expect(readme).toContain('`recall-off <id> [--generation <uuid>] [--clear]` and `recall-off --clear-all`');
