@@ -16,7 +16,7 @@ import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import {
-  ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, HOOK_QUESTIONS, askFixture, type AskFixture,
+  ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, DEBRIS_LABEL, HOOK_QUESTIONS, askFixture, type AskFixture,
 } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 
@@ -76,7 +76,7 @@ const dom = (): string => document.body.textContent ?? '';
 const eyebrow = (): HTMLElement => document.querySelector<HTMLElement>('.sheet-eyebrow')!;
 const CANT_READ = "Claude is asking a question this screen can't read yet.";
 
-describe('no pane text on an AskUserQuestion (D-6325)', () => {
+describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label renders on an AskUserQuestion, and the surface shows its own words', () => {
   // Fixtures 2, 3, 5, 8, 9 and 10: the pane's title, body, raw and labels are all debris, so every one of them that
   // reached the DOM would be found here.
   it.each([
@@ -93,6 +93,36 @@ describe('no pane text on an AskUserQuestion (D-6325)', () => {
     }
     expect(document.querySelector('.dlg-raw, .dlg-details-toggle, .dlg-body')).toBeNull();
     expect(screen.queryByText(/Show full question/)).toBeNull();
+  });
+
+  // A pick-several question answered with boxes: the option's words are Claude's (the hook's), and an option with none to
+  // show, or a blank one, shows none. The pane's sub-text under the same box is debris and must not stand in for it.
+  it('a pick-several option with no description, or a blank one, shows none and never the pane\'s sub-text', () => {
+    const multi = askFixture(9).dialog!;
+    const dialog: Dialog = {
+      ...multi,
+      multi: {
+        ...multi.multi!,
+        options: multi.multi!.options.map((o) => ({ ...o, description: DEBRIS_LABEL })),
+      },
+    };
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({
+        type: 'ask', key: null,
+        ask: { questions: [{
+          question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+          options: [{ label: 'North' }, { label: 'East', description: '' }, { label: 'South', description: 'Only for the latency test.' }],
+        }] },
+      });
+    });
+    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    for (const label of ['North', 'East', 'South']) expect(screen.getByText(label)).toBeInTheDocument();
+    expect(dom()).not.toContain(DEBRIS_LABEL);
+    expect(screen.getByText('Only for the latency test.')).toBeInTheDocument();
+    expect(document.querySelectorAll('.opt-desc')).toHaveLength(1);
   });
 
   it('fixture 2 (aged): the transcript\'s question, every label and every description', () => {
