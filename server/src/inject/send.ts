@@ -148,9 +148,10 @@ const PANE_TAIL = 2000;
  *  queues the message — so this is bounded by render time, not by Claude. */
 const SUBMIT_POLL_MS = 120;
 export const SUBMIT_TRIES = 8;
-/** D-6366: once a post-Enter capture has FAILED, the watch also ends when this much time is spent (the larger of the
- *  wall time and the sleeps asked for): fast-failing captures (a link blip) keep all their polls, a hung tmux whose
- *  captures each fail after their own timeout ends the watch at its first, as before. */
+/** D-6366: a blind run (consecutive failed post-Enter captures) also ends the watch when this much time is spent in it,
+ *  the larger of the wall time and the sleeps asked for, counted from the run's first failed capture (and its own cost).
+ *  Any capture that returns ends the run, so a link blip keeps the watch's remaining polls at any capture latency, and
+ *  a hung tmux whose captures each fail after their own timeout ends the watch at its first, as before. */
 export const SUBMIT_BLIND_MS = SUBMIT_TRIES * SUBMIT_POLL_MS;
 
 /** How long to wait for the input box to echo the typed text (~2.4 s of sleeping
@@ -317,29 +318,37 @@ type SubmitSeen = 'ours' | 'gone' | 'maybe-restored';
 /**
  * `submitted`'s poll, with the reading made a parameter so the stash path shares it. Answers `gone` on the first
  * capture that reads gone; otherwise `maybe-restored` if any capture read that, else `ours`. `pane` is the last
- * capture that held a box, `null` if none did.
+ * capture that held a box, `null` if none did. D-6366: `blindAfterRead` is true when the watch read no box at all or a
+ * FAILED capture (not an absent box) came after its last box read: the Enter may have landed unseen.
  */
 async function watchSubmit(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
   classify: (pane: string, draft: string) => SubmitSeen,
-): Promise<{ seen: SubmitSeen; pane: string | null }> {
+): Promise<{ seen: SubmitSeen; pane: string | null; blindAfterRead: boolean }> {
   let maybe = false;
   let last: string | null = null;
+  let failedSinceRead = false;
   const now = d.now ?? Date.now;
-  const start = now();
-  let slept = 0;
+  // D-6366: the current blind run; `runStart` is null outside one.
+  let runStart: number | null = null;
+  let runSlept = 0;
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
-    slept += SUBMIT_POLL_MS;
+    runSlept += SUBMIT_POLL_MS;
+    const askedAt = now();
     const pane = await d.tmux.captureAnsi(id);
     // D-6366: a failed capture is a blind poll, exactly like an absent box. One dropped read (a link drop) used to end
-    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time.
+    // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time
+    // spent in one blind run (it starts at the run's first failed capture, so one blip never ends a slow healthy watch).
     if (pane === null) {
-      if (Math.max(now() - start, slept) >= SUBMIT_BLIND_MS) break;
+      failedSinceRead = true;
+      if (runStart === null) { runStart = askedAt; runSlept = 0; }
+      if (Math.max(now() - runStart, runSlept) >= SUBMIT_BLIND_MS) break;
       continue;
     }
+    runStart = null; // any capture that returns ends the blind run
     const read = draftOfMeasured(pane);
     // ABSENCE IS NOT PROOF OF DEPARTURE, and this is the one place where the
     // collapse read as the OPPOSITE of the truth: with no box in the capture
@@ -350,11 +359,12 @@ async function watchSubmit(
     // poll is blind the loop falls out below and the caller refuses.
     if (read.box === 'absent') continue;
     last = pane;
+    failedSinceRead = false;
     const seen = classify(pane, read.draft);
-    if (seen === 'gone') return { seen, pane };
+    if (seen === 'gone') return { seen, pane, blindAfterRead: false };
     if (seen === 'maybe-restored') maybe = true;
   }
-  return { seen: maybe ? 'maybe-restored' : 'ours', pane: last };
+  return { seen: maybe ? 'maybe-restored' : 'ours', pane: last, blindAfterRead: last === null || failedSinceRead };
 }
 
 /**
@@ -395,16 +405,16 @@ async function submitOverHeldStash(
     !still(pane, draft) ? 'gone' : stashHeld(pane) ? 'ours' : 'maybe-restored';
   for (let press = 0; press < 2; press++) {
     await d.tmux.sendKey(id, 'Enter');
-    const { seen, pane } = await watchSubmit(d, id, sleep, classify);
+    const { seen, pane, blindAfterRead } = await watchSubmit(d, id, sleep, classify);
     if (seen === 'gone') return { ok: true };
     if (seen === 'maybe-restored') {
       const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
       if (!turnWasRunning && turnRunning(window)) return { ok: true };
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
-    // D-6366: a watch that read no box buys no retry Enter: the first may have landed, and Claude Code gives the human's
-    // stashed draft back at submit, so a second would submit it. The final read decides.
-    if (pane === null) break;
+    // D-6366: a watch that went blind after its last box read buys no retry Enter: the first may have landed, and Claude
+    // Code gives the human's stashed draft back at submit, so a second would submit it. The final read decides.
+    if (blindAfterRead) break;
   }
   return enterIgnored(d, id, { classify, onGone: async () => ({ ok: true }) });
 }
@@ -1063,7 +1073,7 @@ async function submitAroundStash(
   };
   for (let press = 0; press < 2; press++) {
     await d.tmux.sendKey(id, 'Enter');
-    const { seen, pane } = await watchSubmit(d, id, sleep, stashAwareStill);
+    const { seen, pane, blindAfterRead } = await watchSubmit(d, id, sleep, stashAwareStill);
     if (seen === 'gone') return verifyRestore(d, id, sleep, stash);
     if (seen === 'maybe-restored') {
       const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
@@ -1072,7 +1082,7 @@ async function submitAroundStash(
       if (!stash.turnWasRunning && turnRunning(window)) return verifyRestore(d, id, sleep, stash);
       return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
     }
-    if (pane === null) break; // D-6366: no retry Enter after a watch that read no box (see `submitOverHeldStash`)
+    if (blindAfterRead) break; // D-6366: no retry Enter after a watch that went blind after its last box read (see `submitOverHeldStash`)
   }
   return enterIgnored(d, id, { classify: stashAwareStill, onGone: () => verifyRestore(d, id, sleep, stash) });
 }
@@ -1616,10 +1626,11 @@ export function sendPrompt(
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
         lastPane = ansi;
-        // D-6366: a box proven to be our own chip or rendering never echoes the needle; its wait ends at the floor.
-        if (polls >= ECHO_TRIES && (ownPasteChip(ansi, parts, provenance) !== null || ownRenderedBox(ansi, parts, provenance) !== null)) break;
         if (lastBox.box === 'absent') continue;
-        if (lastBox.draft.startsWith(needle)) echoed = true;
+        if (lastBox.draft.startsWith(needle)) { echoed = true; continue; }
+        // D-6366: a box proven to be our own chip or rendering that has not echoed the needle ends its wait at the
+        // floor. After the echo check, so a late echo keeps the echo proof.
+        if (polls >= ECHO_TRIES && (ownPasteChip(ansi, parts, provenance) !== null || ownRenderedBox(ansi, parts, provenance) !== null)) break;
       }
       if (!echoed) {
         // EVERY capture failed: the session is gone, and none of what the arm

@@ -199,7 +199,7 @@ function fakeCc(o: FakeOpts = {}) {
   return { tmux: new Tmux(run), keys, state: s };
 }
 
-// A frozen clock: the proof's blind-poll deadline (`SUBMIT_BLIND_MS`) is spent by the fake sleeps alone, never by a real stall.
+// A frozen clock: no capture stalls, so the blind-run deadline (`SUBMIT_BLIND_MS`) never ends a watch here; the poll count does.
 const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 });
 type SendOpts = NonNullable<Parameters<typeof sendPrompt>[3]>;
 const STASH = { onDraft: 'stash' } as SendOpts;

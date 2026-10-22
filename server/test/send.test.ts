@@ -2246,7 +2246,7 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
     };
     return { tmux: new Tmux(run), calls };
   }
-  // A frozen clock: the proof's blind-poll deadline (`SUBMIT_BLIND_MS`) is spent by the fake sleeps alone, never by a real stall.
+  // A frozen clock: no capture stalls, so the blind-run deadline (`SUBMIT_BLIND_MS`) never ends a watch here; the poll count does.
   const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 }, 'x', 'hello there');
 
   it('a failed Enter press whose box then reads empty is ok', async () => {
