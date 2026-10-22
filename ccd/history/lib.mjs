@@ -62,6 +62,11 @@ const REASON_ROWS = [
     // W2-2b adds the pre-store half (an empty or non-UUID seam value) and the family half, under the same word.
     // D-5765 (history-w2-asof-invalid-word)
     'asof-invalid',
+    // `headless-malformed` and `headless-arm-unknown` (W2-2b, W2-D48): the headless seam's two new refusals, in
+    // decideHeadless's order (W2-D46). The marker headless-on is unreadable, longer than HEADLESS_LIST_MAX_BYTES, or off
+    // its grammar (D-5768); the seam's arm is empty, absent or outside RECALL_ARMS while the seam is engaged (W2-D42).
+    // D-5769 (history-w2-headless-refusal-words)
+    'headless-malformed', 'headless-arm-unknown',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -4238,6 +4243,104 @@ export function recallSeamEngaged({ session, arm, asof }) {
 export function decideSeamInPane({ pane, recall }) {
   if (typeof pane === 'string' && recallSeamEngaged(recall)) return refuseScope('headless-in-pane');
   return { ok: true };
+}
+
+// ── the headless seam's vocabulary and its marker (W2-2b; W2-D42, W2-D44, W2-D48) ──────────
+// The arm words decideHeadless checks and the replay driver imports (W2-D42), and headless-on's grammar (W2-D44): its
+// two bounds, parseHeadlessList over the text, formatHeadlessList as the one producer of that text, and
+// headlessMarkerOf, the fold of the marker's one read. That read is store.mjs's readBounded(historyPaths(home).headlessOn,
+// HEADLESS_LIST_MAX_BYTES, false), the generic bounded reader W2-D29 already uses (no link followed, nonblocking, the
+// type judged on the descriptor, at most the bound plus one byte), so no line pairs an open with the marker's path
+// (O13). D-5768 (history-w2-marker-grammar), D-5769 (history-w2-headless-refusal-words)
+
+/** The W2 replay's two arms (W2-D42): CCRC_RECALL_ARM must be one of these, else exit 2 headless-arm-unknown. Spelled
+ *  once, here: decideHeadless reads it and the replay driver imports it, and neither spells its words. */
+export const RECALL_ARMS = Object.freeze(['control', 'treatment']);
+/** headless-on's byte bound (W2-D44, chosen): its read stops one byte past it, and a longer marker is malformed. */
+export const HEADLESS_LIST_MAX_BYTES = 65536;
+/** headless-on's pair bound (W2-D44, chosen): more pair lines than this, duplicates counted, is malformed. */
+export const HEADLESS_LIST_MAX_PAIRS = 1000;
+/** The store line's prefix, and the legacy generation's spelling on a pair line (the family's generation is ''). */
+const HEADLESS_STORE_PREFIX = 'store ';
+const HEADLESS_LEGACY_GENERATION = '-';
+/** What readBounded's utf8 decode writes for an invalid byte (and what a lone surrogate becomes on the way to bytes). */
+const HEADLESS_REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
+const HEADLESS_PAIR_RE = /^([^ ]+) ([^ ]+)$/;
+const HEADLESS_UNARMED = Object.freeze(refuseScope('headless-unarmed'));
+const HEADLESS_MALFORMED = Object.freeze(refuseScope('headless-malformed'));
+
+/** headless-on's text, parsed (W2-D44). Pure. The text splits on LF, and one final LF is optional. The first line that
+ *  is not a `#` comment must be `store <store_id>`, a lowercase UUID; only comments come before it. After it, each line
+ *  is empty, a `#` comment, or exactly `<ccrc_id> <generation>`: an id idOk passes, one space, and a lowercase UUID or
+ *  `-` (a legacy family, generation ''). Answers `{ ok: true, storeId, pairs }`, frozen, the pairs as
+ *  `{ ccrcId, generation }` in file order with duplicates kept, or exit 2 headless-malformed when the text:
+ *  - is longer than HEADLESS_LIST_MAX_BYTES bytes, or holds more than HEADLESS_LIST_MAX_PAIRS pair lines;
+ *  - is not UTF-8 throughout: its UTF-8 round trip holds U+FFFD, which is how readBounded's decode marks an invalid
+ *    byte, so a literal U+FFFD is malformed too (the fatal decode, failing closed);
+ *  - holds a CR anywhere, or a line with leading or trailing whitespace (any \s, so a BOM or a no-break space);
+ *  - has no store line, a second one (any later line beginning `store `), or any other line.
+ *  Zero pairs parses: decideHeadless answers headless-unlisted for it, as for a family the list omits. Whether the store
+ *  line names THIS store is checked at admission, after the store opens (W2-D46 step 4). D-5768 (history-w2-marker-grammar) */
+export function parseHeadlessList(text) {
+  if (typeof text !== 'string') throw new TypeError('parseHeadlessList: the marker text is not a string');
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length > HEADLESS_LIST_MAX_BYTES) return HEADLESS_MALFORMED;
+  if (bytes.toString('utf8').includes(HEADLESS_REPLACEMENT_CHAR) || text.includes('\r')) return HEADLESS_MALFORMED;
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  let storeId = null;
+  const pairs = [];
+  for (const line of lines) {
+    if (/^\s|\s$/u.test(line)) return HEADLESS_MALFORMED;
+    if (line.startsWith('#')) continue;
+    if (storeId === null) {
+      if (!line.startsWith(HEADLESS_STORE_PREFIX) || !UUID_RE.test(line.slice(HEADLESS_STORE_PREFIX.length))) return HEADLESS_MALFORMED;
+      storeId = line.slice(HEADLESS_STORE_PREFIX.length);
+      continue;
+    }
+    if (line === '') continue;
+    if (line.startsWith(HEADLESS_STORE_PREFIX)) return HEADLESS_MALFORMED;
+    const m = HEADLESS_PAIR_RE.exec(line);
+    if (m === null || !idOk(m[1]) || !(m[2] === HEADLESS_LEGACY_GENERATION || UUID_RE.test(m[2]))) return HEADLESS_MALFORMED;
+    pairs.push(Object.freeze({ ccrcId: m[1], generation: m[2] === HEADLESS_LEGACY_GENERATION ? '' : m[2] }));
+    if (pairs.length > HEADLESS_LIST_MAX_PAIRS) return HEADLESS_MALFORMED;
+  }
+  if (storeId === null) return HEADLESS_MALFORMED;
+  return Object.freeze({ ok: true, storeId, pairs: Object.freeze(pairs) });
+}
+
+/** headless-on's text for `{ storeId, pairs }` (W2-D44): the paired formatter, and the only producer of marker text
+ *  (W2-5b's `marker` prints it). The store line, then one `<ccrc_id> <generation>` line per pair in the given order, a
+ *  legacy '' written `-`, one final LF, and no comment, so parseHeadlessList answers exactly `{ ok: true, storeId, pairs }`
+ *  for it and formatting that answer gives the same bytes. A list the parser would not read back throws: a TypeError for
+ *  a store id that is not a lowercase UUID, an id idOk refuses or spelled `store` (it would read as a second store line),
+ *  or a generation that is neither '' nor a lowercase UUID; a RangeError past either bound. */
+export function formatHeadlessList({ storeId, pairs }) {
+  if (typeof storeId !== 'string' || !UUID_RE.test(storeId)) throw new TypeError('formatHeadlessList: the store id is not a lowercase UUID');
+  if (!Array.isArray(pairs)) throw new TypeError('formatHeadlessList: pairs is not an array');
+  if (pairs.length > HEADLESS_LIST_MAX_PAIRS) throw new RangeError(`formatHeadlessList: more than ${HEADLESS_LIST_MAX_PAIRS} pairs`);
+  const lines = [`${HEADLESS_STORE_PREFIX}${storeId}`];
+  for (const p of pairs) {
+    const id = p === null || typeof p !== 'object' ? undefined : p.ccrcId;
+    const g = p === null || typeof p !== 'object' ? undefined : p.generation;
+    if (!idOk(id) || `${id} ` === HEADLESS_STORE_PREFIX) throw new TypeError(`formatHeadlessList: ${JSON.stringify(id)} cannot be listed`);
+    if (!(g === '' || (typeof g === 'string' && UUID_RE.test(g)))) throw new TypeError(`formatHeadlessList: ${JSON.stringify(g)} is not a generation`);
+    const spelled = g === '' ? HEADLESS_LEGACY_GENERATION : g;
+    lines.push(`${id} ${spelled}`);
+  }
+  const text = `${lines.join('\n')}\n`;
+  if (Buffer.byteLength(text, 'utf8') > HEADLESS_LIST_MAX_BYTES) throw new RangeError(`formatHeadlessList: over ${HEADLESS_LIST_MAX_BYTES} bytes`);
+  return text;
+}
+
+/** The marker as its one read answered (W2-D44): store.mjs's readBounded(historyPaths(home).headlessOn,
+ *  HEADLESS_LIST_MAX_BYTES, false), folded into what decideHeadless needs. Absent is exit 2 headless-unarmed. Unreadable
+ *  (a link, a FIFO, a directory, any open or read failure) and over-cap are exit 2 headless-malformed, never absent
+ *  (IV5: unreadable is never absent). A value is parseHeadlessList's answer. D-5769 (history-w2-headless-refusal-words) */
+export function headlessMarkerOf(read) {
+  if (read !== null && typeof read === 'object' && read.state === 'absent') return HEADLESS_UNARMED;
+  if (read === null || typeof read !== 'object' || read.state !== 'value' || typeof read.value !== 'string') return HEADLESS_MALFORMED;
+  return parseHeadlessList(read.value);
 }
 
 /** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The

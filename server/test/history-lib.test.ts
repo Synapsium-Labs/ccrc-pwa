@@ -11283,3 +11283,207 @@ describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals
     expect(tally.sharedBlob, 'D-6284: picks whose blob another entry shares, so the blob comparison is not the entry comparison').toBeGreaterThanOrEqual(100);
   });
 });
+
+// ── W2-2b Task 1 (W2-D42, W2-D44, W2-D48): the headless seam's vocabulary and the marker, pure ────────────────────────
+// RECALL_ARMS is the arm vocabulary decideHeadless checks and the replay driver imports; HEADLESS_LIST_MAX_BYTES and
+// HEADLESS_LIST_MAX_PAIRS bound headless-on; parseHeadlessList is its grammar and formatHeadlessList the one producer of
+// its text; headlessMarkerOf folds the marker's one read, store.mjs's readBounded. Pure, so it runs on darwin too: the
+// reader case reads real files in a scratch directory. Every non-ASCII fixture character is built with fromCharCode.
+// D-5768 (history-w2-marker-grammar), D-5769 (history-w2-headless-refusal-words)
+describe('W2-2b Task 1: RECALL_ARMS, the marker bounds, the marker grammar and its fold (W2-D42, W2-D44, W2-D48)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Pair = { ccrcId: string; generation: string };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const ch = (c: number): string => String.fromCharCode(c);
+  const S = '0189abcd-1234-4678-9abc-00000000beef';   // the store's meta store_id
+  const G1 = '0189abcd-1234-4678-9abc-0000000000a1';
+  const MAL = { ok: false, rc: 2, reason: 'headless-malformed' };
+  const UNARMED = { ok: false, rc: 2, reason: 'headless-unarmed' };
+  const BASE = `store ${S}\nacct-a-demo ${G1}\n`;
+  const listed = (pairs: Pair[], storeId = S): { ok: true; storeId: string; pairs: Pair[] } => ({ ok: true, storeId, pairs });
+
+  it('C16, its two words: headless-malformed and headless-arm-unknown are exit-2 REASONS words, so REFUSALS holds them', () => {
+    for (const w of ['headless-malformed', 'headless-arm-unknown']) {
+      expect(REASONS[w], w).toBe(EXIT.REFUSED);
+      expect(REFUSALS, w).toContain(w);
+    }
+    // CONTROL: the other words W2-D46's step 1 answers were exit-2 words before this task.
+    for (const w of ['headless-unarmed', 'headless-in-pane', 'headless-unlisted', 'no-identity', 'bad-id', 'asof-invalid']) {
+      expect(REASONS[w], w).toBe(EXIT.REFUSED);
+    }
+  });
+
+  it('REASON_ROWS lists the two words on one line, beside their departure, D-5769', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l === "    'headless-malformed', 'headless-arm-unknown',");
+    expect(at, 'REASON_ROWS lists the two words on one line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5769 (history-w2-headless-refusal-words)');
+  });
+
+  it('RECALL_ARMS is the two arm words, in order, frozen; the marker\'s bounds are 65,536 bytes and 1,000 pairs', async () => {
+    const l = await lib();
+    expect(l.RECALL_ARMS).toEqual(['control', 'treatment']);
+    expect(Object.isFrozen(l.RECALL_ARMS), 'RECALL_ARMS is frozen').toBe(true);
+    expect(l.HEADLESS_LIST_MAX_BYTES).toBe(65536);
+    expect(l.HEADLESS_LIST_MAX_PAIRS).toBe(1000);
+  });
+
+  it('parseHeadlessList: comments, the store line, then pairs, comments and empty lines; - is the legacy generation; the final LF is optional; duplicates kept in file order; zero pairs parses', async () => {
+    const l = await lib();
+    const text = ['# W2 quiz, node a', `store ${S}`, '', '# the pilot pairs', `acct-a-demo ${G1}`, 'acct-b-demo -', `acct-a-demo ${G1}`, ''].join('\n');
+    const want = listed([{ ccrcId: 'acct-a-demo', generation: G1 }, { ccrcId: 'acct-b-demo', generation: '' }, { ccrcId: 'acct-a-demo', generation: G1 }]);
+    const got = l.parseHeadlessList(text);
+    expect(got).toEqual(want);
+    expect(l.parseHeadlessList(text.slice(0, -1)), 'no final LF').toEqual(want);
+    expect(got.ok && Object.isFrozen(got) && Object.isFrozen(got.pairs) && got.pairs.every((p) => Object.isFrozen(p)), 'one answer has one form').toBe(true);
+    expect(l.parseHeadlessList(`store ${S}\n`), 'zero pairs parses: decideHeadless answers headless-unlisted for it').toEqual(listed([]));
+    expect(l.parseHeadlessList(`# only a comment\nstore ${S}`)).toEqual(listed([]));
+    expect(l.parseHeadlessList(`store ${S}\n${'a'.repeat(SPOOL_ID_MAX)} -\n`), 'an id at SPOOL_ID_MAX').toEqual(listed([{ ccrcId: 'a'.repeat(SPOOL_ID_MAX), generation: '' }]));
+  });
+
+  it('parseHeadlessList: every other shape is headless-malformed; CONTROL: the base marker each is cut from parses', async () => {
+    const l = await lib();
+    expect(l.parseHeadlessList(BASE), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    const pair = `acct-a-demo ${G1}`;
+    const shapes: Array<[string, string]> = [
+      ['empty text', ''],
+      ['comments and no store line', '# a\n# b\n'],
+      ['an empty line before the store line', `\n${BASE}`],
+      ['a pair before the store line', `${pair}\nstore ${S}\n`],
+      ['a second store line', `${BASE}store ${S}\n`],
+      ['a second store line naming -, never a pair', `${BASE}store -\n`],
+      ['a store line naming no UUID', `store not-a-uuid\n${pair}\n`],
+      ['an uppercase store id', `store ${S.toUpperCase()}\n${pair}\n`],
+      ['two spaces after store', `store  ${S}\n${pair}\n`],
+      ['CR LF line ends', BASE.replace(/\n/g, '\r\n')],
+      ['a CR inside a comment', `# a\rb\n${BASE}`],
+      ['leading whitespace on a pair', `store ${S}\n ${pair}\n`],
+      ['trailing whitespace on a pair', `store ${S}\n${pair} \n`],
+      ['trailing whitespace on a comment', `${BASE}# note \n`],
+      ['a line of spaces', `${BASE}   \n`],
+      ['a no-break space after the store id', `store ${S}${ch(0xa0)}\n${pair}\n`],
+      ['a byte-order mark', `${ch(0xfeff)}${BASE}`],
+      ['a tab between id and generation', `store ${S}\nacct-a-demo\t${G1}\n`],
+      ['two spaces between id and generation', `store ${S}\nacct-a-demo  ${G1}\n`],
+      ['three fields', `${BASE}${pair} x\n`],
+      ['one field', `${BASE}acct-a-demo\n`],
+      ['an uppercase generation', `store ${S}\nacct-a-demo ${G1.toUpperCase()}\n`],
+      ['a generation neither a UUID nor -', `store ${S}\nacct-a-demo --\n`],
+      ['an id off the grammar: ..', `store ${S}\n.. ${G1}\n`],
+      ['an id off the grammar: a slash', `store ${S}\nacct/a ${G1}\n`],
+      ['an id longer than SPOOL_ID_MAX', `store ${S}\n${'a'.repeat(SPOOL_ID_MAX + 1)} -\n`],
+      ['U+FFFD, what readBounded writes for an invalid byte', `# a${ch(0xfffd)}b\n${BASE}`],
+      ['a lone surrogate', `# a${ch(0xd800)}b\n${BASE}`],
+    ];
+    for (const [what, text] of shapes) expect(l.parseHeadlessList(text), what).toEqual(MAL);
+    expect(REASONS[MAL.reason], 'the refusal is a REASONS word of its exit').toBe(EXIT.REFUSED);
+    expect(() => l.parseHeadlessList(5 as never), 'text that is not a string is the caller\'s defect, named').toThrow(/the marker text is not a string/);
+  });
+
+  it('parseHeadlessList: the bounds are inclusive, counted in bytes and in pair lines', async () => {
+    const l = await lib();
+    const head = `store ${S}\n`;
+    const fill = 65536 - Buffer.byteLength(head) - 2;   // the comment's '#' and its LF
+    const at = `${head}#${'x'.repeat(fill)}\n`;
+    expect(Buffer.byteLength(at), 'CONTROL: the fixture is exactly the bound').toBe(l.HEADLESS_LIST_MAX_BYTES);
+    expect(l.parseHeadlessList(at), 'exactly 65,536 bytes').toEqual(listed([]));
+    expect(l.parseHeadlessList(`${head}#${'x'.repeat(fill + 1)}\n`), 'one byte over').toEqual(MAL);
+    const wide = `${head}#${ch(0xe9)}${'x'.repeat(fill - 1)}\n`;
+    expect([wide.length, Buffer.byteLength(wide)], 'CONTROL: 65,536 characters, 65,537 bytes').toEqual([65536, 65537]);
+    expect(l.parseHeadlessList(wide), 'the bound is in bytes, never characters').toEqual(MAL);
+    const pairs = (n: number): string => `${head}${Array.from({ length: n }, (_, i) => `acct-${i}-demo -\n`).join('')}`;
+    const r1000 = l.parseHeadlessList(pairs(1000));
+    expect(r1000.ok && r1000.pairs.length, 'exactly 1,000 pairs').toBe(1000);
+    expect(l.parseHeadlessList(pairs(1001)), '1,001 pairs').toEqual(MAL);
+    expect(l.parseHeadlessList(`${head}${'acct-a-demo -\n'.repeat(1001)}`), 'the bound counts pair lines, duplicates included').toEqual(MAL);
+  });
+
+  it('formatHeadlessList: the store line, one line per pair in the given order, - for the legacy generation, one final LF, no comment', async () => {
+    const l = await lib();
+    expect(l.formatHeadlessList({ storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1 }, { ccrcId: 'acct-b-demo', generation: '' }] }))
+      .toBe(`store ${S}\nacct-a-demo ${G1}\nacct-b-demo -\n`);
+    expect(l.formatHeadlessList({ storeId: S, pairs: [] })).toBe(`store ${S}\n`);
+  });
+
+  it('formatHeadlessList refuses every list parseHeadlessList would not read back: TypeError for the grammar, RangeError for a bound', async () => {
+    const l = await lib();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1 }] }), 'CONTROL').not.toThrow();
+    const grammar: Array<[string, { storeId: string; pairs: Pair[] }]> = [
+      ['a store id that is no UUID', { storeId: 'not-a-uuid', pairs: [] }],
+      ['an uppercase store id', { storeId: S.toUpperCase(), pairs: [] }],
+      ['the id store, which would read as a second store line', { storeId: S, pairs: [{ ccrcId: 'store', generation: '' }] }],
+      ['an id off the grammar', { storeId: S, pairs: [{ ccrcId: 'acct a', generation: G1 }] }],
+      ['an id longer than SPOOL_ID_MAX', { storeId: S, pairs: [{ ccrcId: 'a'.repeat(SPOOL_ID_MAX + 1), generation: '' }] }],
+      ['- as a generation: it is the marker\'s spelling of \'\', not a generation', { storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: '-' }] }],
+      ['an uppercase generation', { storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1.toUpperCase() }] }],
+    ];
+    for (const [what, x] of grammar) expect(() => l.formatHeadlessList(x), what).toThrow(TypeError);
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: null as never }), 'pairs that is not an array').toThrow(/pairs is not an array/);
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: [null as never] }), 'a pair that is not an object').toThrow(/undefined cannot be listed/);
+    const many = Array.from({ length: 1001 }, (_, i) => ({ ccrcId: `acct-${i}-demo`, generation: '' }));
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: many.slice(0, 1000) }), 'CONTROL: 1,000 pairs').not.toThrow();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: many }), '1,001 pairs').toThrow(RangeError);
+    const long = Array.from({ length: 300 }, (_, i) => ({ ccrcId: `${String(i).padStart(3, '0')}${'a'.repeat(SPOOL_ID_MAX - 3)}`, generation: G1 }));
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: long.slice(0, 200) }), 'CONTROL: 200 long pairs fit').not.toThrow();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: long }), '300 pairs of 224-character ids pass 65,536 bytes').toThrow(RangeError);
+  });
+
+  it('round trip: parseHeadlessList(formatHeadlessList(x)) answers x, and formatting the answer gives the same bytes', async () => {
+    const l = await lib();
+    let seed = 7;
+    const rnd = (): number => (seed = (seed * 48271) % 2147483647) / 2147483647;
+    const lists: Array<{ storeId: string; pairs: Pair[] }> = [
+      { storeId: S, pairs: [] },
+      { storeId: S, pairs: [{ ccrcId: 'a'.repeat(SPOOL_ID_MAX), generation: '' }, { ccrcId: 'acct_b.demo', generation: G1 }] },
+      { storeId: S, pairs: Array.from({ length: 1000 }, (_, i) => ({ ccrcId: `acct-${i % 7}-demo`, generation: i % 3 === 0 ? '' : G1 })) },
+    ];
+    for (let k = 0; k < 200; k += 1) {
+      lists.push({ storeId: S, pairs: Array.from({ length: Math.floor(rnd() * 12) }, () => ({ ccrcId: `acct-${Math.floor(rnd() * 5)}-demo`, generation: rnd() < 0.3 ? '' : G1 })) });
+    }
+    expect(lists.filter((x) => x.pairs.some((p) => p.generation === '')).length, 'CONTROL: the lists carry legacy pairs').toBeGreaterThan(100);
+    for (const x of lists) {
+      const text = l.formatHeadlessList(x);
+      const back = l.parseHeadlessList(text);
+      expect(back, text.slice(0, 80)).toEqual({ ok: true, ...x });
+      if (back.ok) expect(l.formatHeadlessList(back), 'formatting the answer gives the bytes back').toBe(text);
+    }
+  });
+
+  it('headlessMarkerOf: absent is headless-unarmed; unreadable and over-cap are headless-malformed, never absent (IV5); a value is parseHeadlessList\'s answer', async () => {
+    const l = await lib();
+    expect(l.headlessMarkerOf({ state: 'absent' })).toEqual(UNARMED);
+    expect(l.headlessMarkerOf({ state: 'unreadable' })).toEqual(MAL);
+    expect(l.headlessMarkerOf({ state: 'over-cap' })).toEqual(MAL);
+    expect(l.headlessMarkerOf({ state: 'value', value: BASE })).toEqual(l.parseHeadlessList(BASE));
+    expect(l.headlessMarkerOf({ state: 'value', value: BASE }), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    expect(l.headlessMarkerOf({ state: 'value', value: '' }), 'an empty marker is malformed, never unarmed').toEqual(MAL);
+    // Any other shape is malformed, never unarmed and never thrown (IV5, fail closed).
+    const odd: Array<[string, unknown]> = [['null', null], ['a value that is not text', { state: 'value', value: 5 }],
+      ['an unknown state carrying text', { state: 'bogus', value: BASE }]];
+    for (const [what, read] of odd) expect(l.headlessMarkerOf(read as never), what).toEqual(MAL);
+  });
+
+  it('the marker\'s one read, store.mjs readBounded at HEADLESS_LIST_MAX_BYTES with no link followed: the bound reads; one byte over, an invalid byte, a link, a directory and a FIFO are malformed', async () => {
+    const l = await lib();
+    const d = mkTmp('ccrc-history-headless-');
+    const read = (name: string) => l.headlessMarkerOf(replayStore.readBounded(join(d, name), l.HEADLESS_LIST_MAX_BYTES, false));
+    const head = `store ${S}\n`;
+    const fill = l.HEADLESS_LIST_MAX_BYTES - Buffer.byteLength(head) - 2;
+    t17fs.writeFileSync(join(d, 'at'), `${head}#${'x'.repeat(fill)}\n`);
+    t17fs.writeFileSync(join(d, 'over'), `${head}#${'x'.repeat(fill + 1)}\n`);
+    t17fs.writeFileSync(join(d, 'ok'), BASE);
+    t17fs.writeFileSync(join(d, 'bad-byte'), Buffer.concat([Buffer.from('# a'), Buffer.from([0xff]), Buffer.from(`\n${BASE}`)]));
+    t17fs.symlinkSync(join(d, 'ok'), join(d, 'link'));
+    t17fs.mkdirSync(join(d, 'dir'));
+    expect(spawnSync('mkfifo', [join(d, 'fifo')]).status, 'CONTROL: the FIFO was made').toBe(0);
+    expect(read('ok'), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    expect(read('at'), 'exactly HEADLESS_LIST_MAX_BYTES').toEqual(listed([]));
+    expect(replayStore.readBounded(join(d, 'over'), l.HEADLESS_LIST_MAX_BYTES, false), 'CONTROL: the reader answers over-cap').toEqual({ state: 'over-cap' });
+    expect(read('over')).toEqual(MAL);
+    expect(read('bad-byte'), 'an invalid UTF-8 byte').toEqual(MAL);
+    expect(read('link'), 'a link to a well-formed marker').toEqual(MAL);
+    expect(read('dir')).toEqual(MAL);
+    expect(read('fifo'), 'never waited on').toEqual(MAL);
+    expect(read('absent')).toEqual(UNARMED);
+  });
+});

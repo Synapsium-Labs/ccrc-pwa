@@ -522,6 +522,21 @@ export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }
 export interface RecallSeamValues { session: string | null; arm: string | null; asof: string | null }
 export function recallSeamEngaged(recall: RecallSeamValues): boolean;
 export function decideSeamInPane(i: { pane: string | null; recall: RecallSeamValues }): { ok: true } | ScopeRefusal<'headless-in-pane'>;
+// --- W2-2b Task 1: the headless seam's vocabulary and its marker (W2-D42, W2-D44, W2-D48)
+/** The W2 replay's two arms (W2-D42), frozen: the only values the seam's arm may take. */
+export const RECALL_ARMS: readonly ['control', 'treatment'];
+/** headless-on's bounds (W2-D44, chosen): bytes, and pair lines with duplicates counted. */
+export const HEADLESS_LIST_MAX_BYTES: 65536;
+export const HEADLESS_LIST_MAX_PAIRS: 1000;
+/** One listed family: its ccrc_id and its generation, '' for a legacy family (the marker spells it `-`). */
+export interface HeadlessPair { readonly ccrcId: string; readonly generation: string }
+/** A well-formed marker, frozen: its store line's store_id and its pairs in file order, duplicates kept. */
+export interface HeadlessList { readonly ok: true; readonly storeId: string; readonly pairs: readonly HeadlessPair[] }
+export function parseHeadlessList(text: string): HeadlessList | ScopeRefusal<'headless-malformed'>;
+export function formatHeadlessList(list: { storeId: string; pairs: readonly HeadlessPair[] }): string;
+/** store.mjs readBounded's answer (store.d.mts's BoundedRead), restated so this file imports nothing. */
+export type HeadlessMarkerRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string };
+export function headlessMarkerOf(read: HeadlessMarkerRead): HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'>;
 export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
 export function decideHarness(p: Presence<string>):
