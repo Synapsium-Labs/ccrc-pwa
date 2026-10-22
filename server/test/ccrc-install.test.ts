@@ -1496,10 +1496,11 @@ describe('ccrc install: the fixture tree', () => {
   it('the fixture tree carries the five GPT-lane executables the repository ships, and no `ccgpt`', () => {
     // Plan 2b-2 wrote `ccgpt-runtime` and the launcher `ccrc-codex` unplaced,
     // because a file may land before its install line but never after it.
-    // Both then joined `_inst_bins` and this fixture in one commit, so all
-    // four are COPIED from the repository like every other executable. They
-    // are never stubbed: a stub once let a placement pass here while a real
-    // tree would die (D-3165). The pin this case replaced held both OUT of the
+    // Both then joined `_inst_bins` and this fixture in one commit, and the
+    // auth library `ccgpt-auth.py` joined the same way in codex bridge Stage 1
+    // Task 5, so all five are COPIED from the repository like every other
+    // executable. They are never stubbed: a stub once let a placement pass
+    // here while a real tree would die (D-3165). The pin this case replaced held both OUT of the
     // fixture tree (and `ccgpt-runtime` in the repository) until that commit,
     // and flipping it was that commit's intended red.
     //
