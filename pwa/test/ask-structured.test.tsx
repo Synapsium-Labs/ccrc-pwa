@@ -619,3 +619,224 @@ describe('one scroll region (D-6325)', () => {
     expect(css).not.toMatch(/max-height:\s*38vh/);
   });
 });
+
+// D-6325, fix round 1 part B (decision `the-ask-holds-through-a-reconnect`): the ask holds through a reconnect, read-only
+// (F2), and an ask that ends closes with the sheet's exit (F3). These drive the drop the way production does: a store
+// that `connect()`s through a scripted socket, the socket's own close event for the drop, and the page's `online` event
+// (`ReconnectingSocket.nudge`, which skips the backoff wait) for the reconnect, so `onState` and `onOpen` are the real ones.
+class ScriptedSocket {
+  static all: ScriptedSocket[] = [];
+  onopen: ((ev: Event) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  readyState = 0;
+  constructor(readonly url: string) { ScriptedSocket.all.push(this); }
+  close(): void {}
+  send(): void {}
+  open(): void { this.readyState = 1; this.onopen?.(new Event('open')); }
+  drop(): void { this.readyState = 3; this.onclose?.(new Event('close') as CloseEvent); }
+}
+const lastScripted = (): ScriptedSocket => ScriptedSocket.all[ScriptedSocket.all.length - 1]!;
+
+const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
+
+describe('the ask holds through a reconnect, and an ask that ends closes with its exit (D-6325)', () => {
+  /** A connected store that has received `fx`'s frames on its first connection. */
+  function connected(fx: AskFixture): SessionStore {
+    ScriptedSocket.all = [];
+    const store = createSessionStore(ID, {
+      makeSocket: (url) => new ScriptedSocket(url) as unknown as WebSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    act(() => {
+      store.getState().connect();
+      lastScripted().open();
+      for (const frame of fx.frames) store.getState().apply(frame);
+    });
+    expect(store.getState().askFrameSeen).toBe(fx.askFrameSeen);
+    return store;
+  }
+  /** The socket drops. */
+  const drop = (): void => {
+    act(() => lastScripted().drop());
+  };
+  /** The page reconnects at once and the new connection opens; it has said nothing yet. */
+  const reconnect = (): void => {
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    act(() => lastScripted().open());
+  };
+  const panel = (): Element | null => document.querySelector('[role="dialog"]');
+  const status = (): HTMLElement | null => screen.queryByRole('status');
+  const mount = (store: SessionStore) =>
+    render(<><DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
+
+  // Every kind of surface: a question with Other open, a plan approval's menu, a permission prompt, the review, an
+  // ask this screen cannot read and an unparsed pane. The gap ends with the new connection's first deciding frame.
+  it.each([1, 4, 7, 8, 3, 5])(
+    'a reconnect keeps the open ask on screen, read-only, until the new connection speaks: fixture %i',
+    (n) => {
+      const store = connected(askFixture(n));
+      mount(store);
+      const before = panel();
+      expect(before).not.toBeNull();
+      expect(status(), 'live: no status line').toBeNull();
+      const title = screen.getAllByRole('heading')[0]!.textContent;
+
+      drop();
+      expect(panel(), 'the sheet vanished at the drop').toBe(before);
+      expect(status()?.textContent).toBe(RECONNECTING);
+
+      reconnect();
+      // A dialog frame alone decides nothing: still the same sheet, still read-only.
+      act(() => {
+        const dialog = askFixture(n).dialog;
+        if (dialog !== null) store.getState().apply({ type: 'dialog', dialog });
+      });
+      expect(panel(), 'the sheet vanished for the connect pipeline').toBe(before);
+      expect(status()?.textContent).toBe(RECONNECTING);
+      expect(screen.getAllByRole('heading')[0]!.textContent).toBe(title);
+
+      // The new connection's first deciding frame: live again, the status line gone, the same drawer.
+      act(() => {
+        const fx = askFixture(n);
+        store.getState().apply(fx.ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask: fx.ask, key: 'ask-key-b' });
+      });
+      expect(status(), 'live again: the status line is gone').toBeNull();
+      expect(panel()).toBe(before);
+    },
+  );
+
+  it('a reconnect keeps the Other field\'s node, its text and its focus, and sends work again once the connection speaks', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const fx = askFixture(1);
+    const store = connected(fx);
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Other/ }));
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: 'Memcached' } });
+    expect(document.activeElement).toBe(field);
+    const before = panel();
+
+    drop();
+    reconnect();
+    act(() => store.getState().apply({ type: 'dialog', dialog: fx.dialog! }));
+    expect(panel()).toBe(before);
+    expect(screen.getByRole('textbox'), 'the field was remounted').toBe(field);
+    expect((field as HTMLInputElement).value).toBe('Memcached');
+    expect(document.activeElement, 'the focus (a phone keyboard) was lost').toBe(field);
+    expect(status()?.textContent).toBe(RECONNECTING);
+
+    act(() => store.getState().apply({ type: 'ask', ask: fx.ask!, key: 'ask-key-b' }));
+    expect(status()).toBeNull();
+    expect(screen.getByRole('textbox')).toBe(field);
+    expect(document.activeElement).toBe(field);
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(text).toHaveBeenCalledWith(ID, 'dlg-a1', 4, 'Memcached');
+  });
+
+  it('a tap during the gap sends nothing', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const store = connected(askFixture(1));
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Other/ }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+
+    drop();
+    const state = store.getState();
+    fireEvent.click(screen.getByRole('button', { name: /^In-process/ }));
+    fireEvent.keyDown(screen.getByRole('button', { name: /^In-process/ }), { key: '2' });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Talk it over in the chat instead/ }));
+    expect(option).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(tab).not.toHaveBeenCalled();
+    expect(store.getState(), 'a tap in the gap changed the store').toBe(state);
+
+    // Hiding is not a send: the scrim and the close still work in the gap.
+    reconnect();
+    expect(option).not.toHaveBeenCalled();
+  });
+
+  it('a permission prompt\'s Deny sends nothing in the gap', () => {
+    const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
+    const store = connected(askFixture(7));
+    mount(store);
+    drop();
+    fireEvent.click(screen.getByRole('button', { name: /^Deny/ }));
+    expect(interrupt).not.toHaveBeenCalled();
+  });
+
+  // jsdom has no exit animation: this keeps the closed drawer mounted, as a browser's exit does (sheet-focus.test.tsx's device).
+  const holdClosingContent = (): void => {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = real(el, pseudo);
+      if (el.getAttribute('role') !== 'dialog') return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === 'animationName') return el.getAttribute('data-state') === 'closed' ? 'sheet-out' : 'sheet-in';
+          const v: unknown = Reflect.get(target, key, target);
+          return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+        },
+      });
+    });
+  };
+
+  it('an ask that ends closes with the sheet\'s exit, its content held, its controls inert', () => {
+    holdClosingContent();
+    const store = connected(askFixture(1));
+    mount(store);
+    const before = panel();
+    expect(before?.getAttribute('data-state')).toBe('open');
+
+    act(() => {
+      store.getState().apply({ type: 'ask_cleared' });
+      store.getState().apply({ type: 'dialog_cleared' });
+    });
+    // Not unmounted at once: closed, holding the last question, inside an inert wrapper.
+    expect(panel(), 'the drawer was unmounted instead of closing').toBe(before);
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+    expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question })).toBeInTheDocument();
+    const inert = panel()!.querySelector('[inert]');
+    expect(inert, 'nothing marks the held content inert').not.toBeNull();
+    expect(inert!.contains(screen.getByRole('button', { name: /^In-process/ }))).toBe(true);
+    expect(status(), 'a closed ask has no status line').toBeNull();
+
+    // A later drop and reconnect does not open it again; a new live ask does, on the same drawer.
+    drop();
+    reconnect();
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+    const fx = askFixture(1);
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: fx.dialog! });
+      store.getState().apply({ type: 'ask', ask: fx.ask!, key: 'ask-key-c' });
+    });
+    expect(panel()?.getAttribute('data-state')).toBe('open');
+    expect(panel()!.querySelector('[inert]')).toBeNull();
+  });
+
+  it('a reconnect whose first deciding frame is ask_cleared closes the sheet', () => {
+    holdClosingContent();
+    const store = connected(askFixture(1));
+    mount(store);
+    const before = panel();
+
+    drop();
+    reconnect();
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    expect(panel()?.getAttribute('data-state'), 'still held, not yet decided').toBe('open');
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(panel()).toBe(before);
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+    expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question })).toBeInTheDocument();
+    expect(panel()!.querySelector('[inert]')).not.toBeNull();
+    expect(status()).toBeNull();
+  });
+});
