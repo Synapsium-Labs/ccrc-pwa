@@ -8,8 +8,7 @@
 // 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
 // `+` (S11).
 //
-// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
-// vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
