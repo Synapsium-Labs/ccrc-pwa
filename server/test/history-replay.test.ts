@@ -10540,7 +10540,8 @@ describe('W2-5a fix wave: the review\'s minors', () => {
   });
 
   it('BASELINE_FILES_ID is the gate\'s open record default itself, read from it', () => {
-    expect(replay.BASELINE_FILES_ID).toBe(w6Gate.OPEN_RECORD_V1.draft.quiz.fields.baseline_files.value);
+    const rec = w6Gate.OPEN_RECORD_V1 as unknown as { draft: { quiz: { fields: { baseline_files: { value: string } } } } };
+    expect(replay.BASELINE_FILES_ID).toBe(rec.draft.quiz.fields.baseline_files.value);
     expect(replay.BASELINE_FILES_ID).toBe('v1');
     const src = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => /^export const BASELINE_FILES_ID\b/.test(l));
     expect(src).toHaveLength(1);
