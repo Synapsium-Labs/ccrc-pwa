@@ -1100,7 +1100,7 @@ Expected: one commit line, then `1`, `1`, `1`. Any other count: make no edit, an
 grep -c '^  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,$' ccd/history/recall.mjs
 grep -c "^import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';\$" ccd/history/recall.mjs
 grep -c '^function bindFor(sql, all) {$' ccd/history/recall.mjs
-grep -c "^      FROM m JOIN \${e('e')} ON e.blob_id = m.blob_id\$" ccd/history/recall.mjs
+grep -cF "      FROM m JOIN \${e('e')} ON e.blob_id = m.blob_id" ccd/history/recall.mjs
 grep -c '^      WHERE v.blob_id <> e.blob_id$' ccd/history/recall.mjs
 grep -c "ON se.entry_id = s.entry_id\$" ccd/history/recall.mjs
 grep -c '^    pool: RANK_POOL, now_ms: rc.nowMs,$' ccd/history/recall.mjs
@@ -1115,7 +1115,7 @@ grep -c 'function cutOf\|function cutTerm\|function cutAnd\|function cutBinds\|f
 grep -c 'W2-2a Task 2' server/test/history-recall.test.ts
 ```
 
-Expected: `1` for each of the first thirteen lines, and `0` for the last three (recall.mjs names no derive.mjs yet, the names are free, and nothing is appended yet). A `0` on an anchor line: re-read the region, re-anchor by the same content and record it in the notes; never widen an assertion.
+Expected: `1` for each of the first thirteen lines (measured: the fourth line printed `0` under plain `grep -c` because GNU grep reads the mid-pattern `$` as an anchor, so it is a fixed-string `grep -cF` above, which prints `1`), and `0` for the last three (recall.mjs names no derive.mjs yet, the names are free, and nothing is appended yet). A `0` on an anchor line: re-read the region, re-anchor by the same content and record it in the notes; never widen an assertion.
 
 Then record the base counts. Step 7 compares against them. In the foreground, with a timeout of at least 600000 ms, one suite per tool call:
 
@@ -1155,7 +1155,7 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
   const c = (i: number): string => t16uuid(XT, i);
   const o = (i: number): string => t16uuid(OT, i);
   const POOL = libRead.RANK_POOL + 1;
-  const PAIRED = '/home/u/tree/demo/zqcutpaired.json';
+  const PAIRED = '/home/u/tree/demo/zqcutpaired.ts';
   const BIG = JSON.stringify(Array.from({ length: 120 }, (_, i) => ({ id: i, name: `item ${i}`, tags: ['a', 'b'] })), null, 1);
   type Cut = Readonly<{
     asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null;
@@ -1432,9 +1432,10 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
   it('cut-B5: a hidden tool_use never names the outline\'s file', async () => {
     const r = await expand({ around: c(6), before: 0, after: 0 });
     const item = (x: XResult): Record<string, unknown> => x.items.find((i) => i['kind'] === 'entry' && i['uuid'] === c(6))!;
-    expect(item(r.none)['outline_kind'], 'CONTROL: with no cut the paired path makes it a json outline').toBe('json');
-    expect(String(item(r.none)['outline']), 'CONTROL: the outline names the file').toContain('zqcutpaired');
-    expect(item(r.cut)['outline_kind'], 'no visible pair: the default kind').toBe('code');
+    expect(item(r.none)['outline_kind'], 'CONTROL: with no cut the paired path makes it a code outline').toBe('code');
+    expect(String(item(r.none)['outline']), 'CONTROL: the code outline names the file').toContain('zqcutpaired');
+    expect(item(r.cut)['outline_kind'], 'the kind is code in both arms: a shape check, not the guard').toBe('code');
+    expect(String(item(r.cut)['outline']), 'no visible pair: the outline names no file').toContain('Code exploration summary:');
     expect(JSON.stringify(r.cut.items) + r.cut.blocks.join('\n')).not.toContain('zqcutpaired');
   }, HEAVY);
 
@@ -1471,7 +1472,7 @@ Expected (predicted, written before the code): `12 failed | 1 passed`.
 - `cut-B2`: `[2, 'out-of-scope']` against `[3, undefined]`.
 - `cut-B3`: `[c(1), c(2), c(3)]` against `[c(1), c(2), c(4)]`.
 - `cut-B4`: the cut's list still holds `c(3)`.
-- `cut-B5`: `'json'` against `'code'`.
+- `cut-B5`: the cut's outline names the file (`Code exploration summary (zqcutpaired.ts)`) against `Code exploration summary:` (measured: the first draft paired a `.json` path, whose JSON outline never prints the file's name, so its CONTROL `toContain('zqcutpaired')` failed before the code existed; the fixture now pairs a `.ts` path, whose code outline does name it, and the 'json' against 'code' prediction is replaced by this one. The fixed B5 was never run red before the code: its red was measured through M10, at the line `no visible pair: the outline names no file`).
 - `cut-D1`: `[]` against length 1 (`asOfEntrySql(` is not in recall.mjs yet).
 
 Any other failure first (a CONTROL, the beforeAll) is the fixture's: fix the fixture, never the expectation. If `cut-A0` reds, the fixture is not what W2-D34's cases need. For example, a NULL-ts row may not be stored as NULL, or the second copy may have become the holding copy. Re-measure it and fix the rows.
@@ -1732,8 +1733,19 @@ run 'cut-A1|cut-A2'; restore
 mut "$R" 'ON se.entry_id = s.entry_id${cutOf(rc) === null ? '"'"''"'"' : `
       WHERE ${cutTerm(rc, '"'"'se'"'"')}`}' 'ON se.entry_id = s.entry_id'
 run 'cut-A3'; restore
-# Expected RED (predicted): zqcutsidehid's cut arm [0, 1, …] against [3, 0, []]. The loop stops there; the orphan's
-# arm, next in the loop, answers the same way under this mutant, so its absence comes from this WHERE.
+# Expected RED (predicted): zqcutsidehid's cut arm [0, 1, …] against [3, 0, []]. Under M3, A3's loop stops at
+# zqcutsidehid, so the orphan's absence is measured by M3b below, not by M3.
+# Measured: red at zqcutsidehid, `[0, 1, …]` against `[3, 0, []]`.
+```
+
+```bash
+. .superpowers/sdd/history-w2-2a/t2/mut.sh
+# M3b: the sidecar arm keeps a sidecar linked to no entry (the orphan), and still cuts a hidden entry's.
+mut "$R" '      WHERE ${cutTerm(rc, '"'"'se'"'"')}`}' '      WHERE (se.entry_id IS NULL OR ${cutTerm(rc, '"'"'se'"'"')})`}'
+run 'cut-A3'; restore
+# Expected RED (predicted): zqcutsidehid's arm passes (its entry is cut), and the loop's next word, zqcutsideorphan,
+# answers [0, 1, …] against [3, 0, []].
+# Measured: red at zqcutsideorphan, `[0, 1, …]` against `[3, 0, []]` (sidecar zqcutorphan.txt returned).
 ```
 
 ```bash
@@ -1745,6 +1757,20 @@ run 'cut-A1|cut-A4|cut-A5'; restore
 # Expected RED (predicted): 1 failed | 2 passed. A4: relevance's cut arm is [3, [], 0, null] (the top RANK_POOL are all
 # hidden, so the filtered page is empty) against [0, [c(1)], 1, null]. A1 and A5 stay GREEN: a post-LIMIT filter is
 # right for a small result, so only C27's shape tells the two apart.
+# Measured: 1 failed | 2 passed (as predicted): A4 [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 green. The
+# shared entry arm is uncut here, so the empty pool answers exit 3 with total 0 at A1's and A5's hidden words.
+```
+
+```bash
+. .superpowers/sdd/history-w2-2a/t2/mut.sh
+# M4b: only the ranked pool is uncut, and filtered in JS after its LIMIT (countSql keeps the cut).
+mut "$R" 'function rankedSql(rc, matchSql, sort) {
+  return `${referrerSql(rc, matchSql)}' 'function rankedSql(rc, matchSql, sort) {
+  return `${referrerSql({ ...rc, scope: { ...rc.scope, cut: null } }, matchSql)}'
+mut "$R" '    const pool = rc.db.prepare(rs).all(bindFor(rs, all));' '    const pool = rc.db.prepare(rs).all(bindFor(rs, all)).filter((h) => h.via !== '"'"'entry'"'"' || visibleEntryIds(rc, [h.entry_id]).length === 1);'
+run 'cut-A1|cut-A4|cut-A5'; restore
+# Expected RED (predicted): 1 failed | 2 passed. A4: [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 stay GREEN.
+# Measured: 1 failed | 2 passed (as predicted): A4 [3, [], 0, null] against [0, [c(1)], 1, null]; A1 and A5 green.
 ```
 
 ```bash
@@ -1804,6 +1830,8 @@ run 'cut-B4'; restore
 mut "$R" '    if (r === undefined || !uuidVisible(rc, uuid)) return null;' '    if (r === undefined) return null;'
 run 'cut-B5'; restore
 # Expected RED (predicted): outline_kind 'json' against 'code'.
+# Measured: red at B5's no-visible-pair line: the cut's outline is 'Code exploration summary (zqcutpaired…' against
+# 'Code exploration summary:' (predicted: outline_kind 'json' against 'code'; the fixture pairs a .ts path now).
 ```
 
 ```bash

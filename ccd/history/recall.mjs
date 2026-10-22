@@ -25,12 +25,13 @@ import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinalJson, readEnvelope, nextLine,
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
-  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
+  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths, asOfEntrySql, asOfBinds, asOfCut,
   DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';
+import { blobReadStmts, keptOf } from './derive.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename } from 'node:path';
@@ -356,29 +357,106 @@ function bindFor(sql, all) {
   return out;
 }
 
+// ── The as-of cut at every entry read (W2-2a Task 2; W2-D35, W2-D36, W2-D38) ─────────────────────────────────────
+// lib's asOfEntrySql is the ONE spelling of W2-D34's rule (D-5766 (history-w2-asof-time-cut)), and asOfBinds its
+// values. This module only says where the rule is spliced. Every statement here that returns or counts entries
+// splices it before its scope term, its ORDER BY and its LIMIT, so a hidden row answers exactly as a row that was never
+// stored: exit 3, never out-of-scope (W2-D36; C27's order). With no cut, each splice is '' and the statement is
+// unchanged.
+
+/** This read's as-of cut (lib's asOfCut answer, W2-D38), or null for none. A context with no `cut` key reads as none. */
+function cutOf(rc) {
+  return rc.scope.cut ?? null;
+}
+
+/** The cut over one entries alias, as one parenthesised SQL term; '' with no cut. The alias exposes entry_id, uuid and
+ *  ts_ms. */
+function cutTerm(rc, alias) {
+  return cutOf(rc) === null ? '' : `(${asOfEntrySql(alias)})`;
+}
+
+/** cutTerm as an `AND` clause; '' with no cut. */
+function cutAnd(rc, alias) {
+  return cutOf(rc) === null ? '' : ` AND ${cutTerm(rc, alias)}`;
+}
+
+/** The cut's named parameters' values, {} with no cut. bindFor keeps each statement's own. */
+function cutBinds(rc) {
+  const cut = cutOf(rc);
+  return cut === null ? {} : asOfBinds(cut);
+}
+
+/** The ids among `ids` the cut leaves visible, in `ids`' order; `ids` itself with no cut. The statement is prepared per
+ *  call, never cached: EXPAND_STMTS is per handle, and a cut is per read. */
+function visibleEntryIds(rc, ids) {
+  if (cutOf(rc) === null || ids.length === 0) return ids;
+  const sql = `SELECT e.entry_id AS entry_id FROM entries e WHERE e.entry_id IN (SELECT value FROM json_each(:ids))${cutAnd(rc, 'e')}`;
+  const keep = new Set(rc.db.prepare(sql).all(bindFor(sql, { ids: JSON.stringify(ids.map(Number)), ...cutBinds(rc) })).map((r) => Number(r.entry_id)));
+  return ids.filter((id) => keep.has(Number(id)));
+}
+
+/** Whether the row stored under `uuid` is visible: true with no cut; false for a hidden row and for no row. */
+function uuidVisible(rc, uuid) {
+  if (cutOf(rc) === null) return true;
+  const sql = `SELECT e.entry_id AS entry_id FROM entries e WHERE e.uuid = :uuid${cutAnd(rc, 'e')}`;
+  return rc.db.prepare(sql).get(bindFor(sql, { uuid, ...cutBinds(rc) })) !== undefined;
+}
+
+/** W2-D39's store half (R2): the as-of cut at the boundary whose uuid is `asof`, measured on `rc.db` (nothing else of `rc`
+ *  is read) and decided by lib's asOfCut, whose answer it returns unchanged: `{ ok: true, cut }`, or exit 2
+ *  `asof-invalid` (D-5765 (history-w2-asof-invalid-word)). It measures the entries row of `asof` joined to its
+ *  boundaries row and its transcript (main: agent_id ''); the transcript's files and whether each holds N, the copy
+ *  picked by lib's pickHoldingCopy as producerOfLeaf picks it; that copy's rows in derive.mjs's copyRows column names,
+ *  in file order; and kept(N) through derive.mjs's keptOf, the set derivation spans with (W2-D34, option (a)). Only
+ *  tests call it in W2-2a; W2-2b's env path sets rc.scope.cut from it (W2-D46 step 7). */
+export function asOfCutOf(rc, asof) {
+  const b = rc.db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.transcript_pk AS transcript_pk, t.agent_id AS agent_id,
+      bd.anchor_uuid AS anchor_uuid, bd.kept_blob_id AS kept_blob_id
+    FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+    WHERE e.uuid = :uuid`).get({ uuid: asof });
+  if (b === undefined) return asOfCut({ asof, boundary: null, copy: null, kept: new Set() });
+  const boundary = { entryId: Number(b.entry_id), uuid: b.uuid, main: b.agent_id === '', anchorUuid: b.anchor_uuid ?? null };
+  const files = rc.db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line FROM ingest_files f
+      LEFT JOIN memberships mb ON mb.file_id = f.file_id AND mb.entry_id = :entry
+    WHERE f.transcript_pk = :tpk ORDER BY f.file_id`).all({ entry: b.entry_id, tpk: b.transcript_pk });
+  const held = pickHoldingCopy(files.map((f) => ({ fileId: Number(f.file_id), live: f.source_key === '', holds: f.line !== null })));
+  const copy = held === null ? null : {
+    fileId: held,
+    rows: rc.db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
+        e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = :file ORDER BY m.line`).all({ file: held }),
+  };
+  const kept = keptOf(blobReadStmts(rc.db), b.kept_blob_id === null ? null : Number(b.kept_blob_id), { bytes: 0 });
+  return asOfCut({ asof, boundary, copy, kept });
+}
+
 /** `refs`: every referrer of a blob `matchSql` selects as (blob_id, rank). That is the FTS MATCH here, and the
  *  regex child's blob list in Task 14. `ref_key` is the referrer's own immutable identity, unique across the three
  *  routes (an entry by its id, a variant by its entry and blob, a sidecar by its primary key: transcript, name,
  *  blob), so the ranked order can be total. A variant whose blob is the entry's first body is that entry's own row
- *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice. */
+ *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice.
+ *  Under an as-of cut each arm keeps only the referrers whose entry is visible, inside the CTE, so before the scope
+ *  filter, the ranking, the LIMIT and the count (W2-D35, W2-D36; C27). A variant follows its entry, and a sidecar the
+ *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is false over the LEFT JOIN's NULL row. */
 function referrerSql(rc, matchSql) {
   const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
   return `WITH m(blob_id, rank) AS (${matchSql}),
   refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank, ref_key) AS (
     SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
         'entry:' || e.entry_id
-      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id
+      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id${cutAnd(rc, 'e')}
     UNION ALL
     SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
         'variant:' || e.entry_id || ':' || v.blob_id
       FROM m JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
         JOIN ${e('e')} ON e.entry_id = v.entry_id
-      WHERE v.blob_id <> e.blob_id
+      WHERE v.blob_id <> e.blob_id${cutAnd(rc, 'e')}
     UNION ALL
     SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
         m.blob_id, s.name, m.rank, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
       FROM m JOIN ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
-        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
+        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id${cutOf(rc) === null ? '' : `
+      WHERE ${cutTerm(rc, 'se')}`}
   )`;
 }
 
@@ -487,6 +565,7 @@ function grepParams(rc, a, nodes, extra) {
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs,
     nodes: nodes === null ? null : JSON.stringify(nodes),
     pool: RANK_POOL, now_ms: rc.nowMs,
+    ...cutBinds(rc),
   };
 }
 
@@ -1341,6 +1420,19 @@ function expandHolding(s, files, entryId) {
   return null;
 }
 
+/** --around's neighbours of `hold` in its copy: `n` of them on `side` ('before' or 'after'), nearest first. With no cut,
+ *  expand's cached `before` and `after` statements, unchanged. Under an as-of cut each membership is joined to its entry
+ *  and the visible ones are kept BEFORE the LIMIT (W2-D36, C27's order), so a hidden row never takes a visible
+ *  neighbour's place: `--after 2` past one hidden row reads the two visible rows beyond it. Prepared per call: a cut is
+ *  per read, and EXPAND_STMTS is per handle. */
+function aroundRows(rc, s, hold, side, n) {
+  if (cutOf(rc) === null) return (side === 'before' ? s.before : s.after).all(hold.fileId, hold.line, n);
+  const sql = `SELECT mb.entry_id AS entry_id, mb.line AS line FROM memberships mb JOIN entries e ON e.entry_id = mb.entry_id
+    WHERE mb.file_id = :file AND mb.line ${side === 'before' ? '<' : '>'} :line${cutAnd(rc, 'e')}
+    ORDER BY mb.line ${side === 'before' ? 'DESC' : 'ASC'} LIMIT :n`;
+  return rc.db.prepare(sql).all(bindFor(sql, { file: hold.fileId, line: hold.line, n, ...cutBinds(rc) }));
+}
+
 /** A condensed node's source entries in leaf order (its children's ord, depth first), then node_sources.ord. */
 function expandLineage(rc, s, nodeId, kind) {
   const leaves = [];
@@ -1373,7 +1465,9 @@ function expandResolve(rc, s, a) {
   const files = expandScopedFiles(s, rc);
   const scopeTranscripts = new Set(rc.scope.transcriptPks);
   const entryNamed = (uuid) => {
-    const e = s.entryByUuid.get(uuid);
+    const stored = s.entryByUuid.get(uuid);
+    // W2-D36: a row the as-of cut hides answers as one never stored, decided BEFORE the scope: exit 3, never out-of-scope.
+    const e = stored === undefined || !uuidVisible(rc, uuid) ? undefined : stored;
     const hold = e === undefined ? null : expandHolding(s, files, e.entry_id);
     const verdict = xlib.entryScopeVerdict({ found: e !== undefined, inScope: e !== undefined && (scopeTranscripts.has(e.transcript_pk) || hold !== null) });
     return { verdict, e, hold };
@@ -1385,9 +1479,9 @@ function expandResolve(rc, s, a) {
     if (verdict !== 'ok') return { refuse: refuseEntry(verdict) };
     const ids = [];
     if (hold !== null) {
-      for (const r of s.before.all(hold.fileId, hold.line, a.before).reverse()) ids.push(r.entry_id);
+      for (const r of aroundRows(rc, s, hold, 'before', a.before).reverse()) ids.push(r.entry_id);
       ids.push(e.entry_id);
-      for (const r of s.after.all(hold.fileId, hold.line, a.after)) ids.push(r.entry_id);
+      for (const r of aroundRows(rc, s, hold, 'after', a.after)) ids.push(r.entry_id);
     } else ids.push(e.entry_id);
     return {
       key: `around:${e.uuid}:${a.before}:${a.after}`, entryIds: ids, whole: false,
@@ -1406,7 +1500,7 @@ function expandResolve(rc, s, a) {
   const found = resolveNodeInScope(rc, a.target);
   if (!found.ok) return { refuse: found.result };
   const node = s.node.get(found.id);
-  return { key: found.id, args: [found.id], entryIds: expandLineage(rc, s, found.id, node.kind), whole: false };
+  return { key: found.id, args: [found.id], entryIds: visibleEntryIds(rc, expandLineage(rc, s, found.id, node.kind)), whole: false };
 }
 
 /** The expansion's items: each entry, then the sidecars linked to it. Sidecars are read by their transcript (the
@@ -1557,7 +1651,8 @@ function expandPairedPath(rc, s, e, body) {
   let uuid = e.parent_uuid;
   for (let hop = 0; hop < EXPAND_PAIR_WALK && typeof uuid === 'string'; hop += 1) {
     const r = s.hop.get(uuid);
-    if (r === undefined) return null;
+    // A hidden ancestor is absent (W2-D36): the walk ends there, and its tool_use never names the outline's file.
+    if (r === undefined || !uuidVisible(rc, uuid)) return null;
     const b = expandBlob(s, r.blob_id, false);
     if (b.state === 'bytes') {
       const p = xlib.toolUseInputPath(expandParse(b.bytes), ids[0]);

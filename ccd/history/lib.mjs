@@ -8602,7 +8602,7 @@ const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 
  *  a version that adds a table a verb needs adds it here, in the same PR. blobs_fts is a virtual table the sweep
  *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
 export const VERB_TABLES = Object.freeze({
-  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children']),
+  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children', 'memberships']),
   describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
   expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
   tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children']),
