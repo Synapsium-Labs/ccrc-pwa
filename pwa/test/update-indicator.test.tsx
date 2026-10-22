@@ -128,7 +128,7 @@ describe('UpdateIndicator (D-6327)', () => {
     expect(location.pathname, 'and navigates by nothing of its own').toBe(before);
   });
 
-  it('one indicator per width: the bar at ≥900 (Refined), the status bar (Instrument), under the phone header (Refined) and in the fleet column (Instrument) below 900', async () => {
+  it('one indicator per width: a row under the bar at ≥900 (Refined), the status bar (Instrument), under the phone header (Refined) and in the fleet column (Instrument) below 900', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(waiting());
     const mount = async (skin: typeof REFINED | typeof INSTRUMENT, width: number, at = '/'): Promise<HTMLElement> => {
       setSkin(skin);
@@ -142,17 +142,18 @@ describe('UpdateIndicator (D-6327)', () => {
       expect(indicators(), `${skin === REFINED ? 'Refined' : 'Instrument'} at ${width}: one indicator`).toHaveLength(1);
       return indicators()[0]!;
     };
-    // Refined at a desk: the app bar's door group, before the bell.
+    // Refined at a desk: one full-width row in the frame's banner slot under the bar (the ruled departure
+    // `refined-desk-indicator-in-a-row-under-the-bar`), after the halt banner and every alert; never in the bar.
     let el = await mount(REFINED, 900);
-    expect(el.closest('header.shell-accounts'), 'Refined 900: in the app bar').not.toBeNull();
-    expect(el.parentElement!.matches('.ref-bar-doors'), 'Refined 900: among the bar\'s doors').toBe(true);
-    expect(el.parentElement!.firstElementChild, 'Refined 900: the first of them, before the bell').toBe(el);
-    expect(el).toHaveAttribute('data-form', 'bar');
+    expect(el.closest('.shell-banners'), 'Refined 900: in the banner slot under the bar').not.toBeNull();
+    expect(el.closest('header.shell-accounts'), 'Refined 900: not in the app bar').toBeNull();
+    expect(el).toHaveAttribute('data-form', 'row');
     cleanup();
     // The same on a session route (the bars are on every route, and the fleet column sits beside the session).
     el = await mount(REFINED, 900, SESSION);
-    expect(el.closest('header.shell-accounts'), 'Refined 900, session route: in the app bar').not.toBeNull();
-    expect(el).toHaveAttribute('data-form', 'bar');
+    expect(el.closest('.shell-banners'), 'Refined 900, session route: in the banner slot under the bar').not.toBeNull();
+    expect(el.closest('header.shell-accounts'), 'Refined 900, session route: not in the app bar').toBeNull();
+    expect(el).toHaveAttribute('data-form', 'row');
     cleanup();
     // Instrument at a desk: the status bar, between the summary and the keys.
     el = await mount(INSTRUMENT, 900);
@@ -268,10 +269,10 @@ describe('UpdateIndicator — dismissed until a newer release (D-6327, part b)',
     expect(screen.getByRole('button', { name: 'Dismiss v0.0.10' })).toHaveClass('min-w-tap', 'min-h-tap');
   });
 
-  it('dismiss hides the indicator in the bar and the phone row alike', async () => {
+  it('dismiss hides the indicator in the desk row, the status bar and the phone row alike', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(waiting());
     for (const [skin, width, form] of [
-      [REFINED, 900, 'bar'], [INSTRUMENT, 900, 'status'], [REFINED, 899, 'row'], [INSTRUMENT, 899, 'row'],
+      [REFINED, 900, 'row'], [INSTRUMENT, 900, 'status'], [REFINED, 899, 'row'], [INSTRUMENT, 899, 'row'],
     ] as const) {
       window.localStorage.clear();
       resetDismissalForTests();
