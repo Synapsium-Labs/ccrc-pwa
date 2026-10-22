@@ -2963,6 +2963,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose).toContain('a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads');
     expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
     expect(prose).toContain('This session writes no setting to make a route work');
+    // Ruling 82: only REVIEW_REQUIRED is a missing approval; a requested change is a stop of its own, never licensed.
+    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`)');
+    expect(prose).toContain('report it to the operator, because someone must answer or dismiss that review, and never pass `--admin`, merge or retry.');
     // Today's sentence, read literally, passed --admin over a required check an admin may skip: withdrawn.
     expect(allSkillText).not.toContain('where the repository\'s ruleset requires it');
   });
