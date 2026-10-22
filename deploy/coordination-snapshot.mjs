@@ -29,9 +29,10 @@
 // WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, and never touches a
 // service: restore asks whether the server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable.
 // It writes only the directory it is given (capture), `~/.ccrc` (restore and recover) and, for `thin`, each backup directory it is told to thin.
-// What it deletes: capture, only its own partials; restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
+// What it deletes: capture, on failure, only files that run created (its partials, the members it placed and its own manifest); restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
 // thin, only the four snapshot files (`SNAPSHOT_NAMES`, after writing that directory's record, `THINNED_FILE`), a stale thinning record and its own
-// `.partial` temp, and never the `--verified` directory's. Nothing else there, and nothing outside such a directory.
+// `.partial` temp. In the `--verified` directory it removes only a stale thinning record, never the snapshot files, and it refuses that directory
+// when it reads as anything but whole, stale or empty. Nothing else there, and nothing outside such a directory.
 // While the marker stands,
 // delegation recovery (`recoverDelegationFromFiles`) refuses to run, and the server's boot refuses too (it exits 1 before opening coord.db, naming `recover`). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
@@ -838,8 +839,11 @@ function exactKeys2(o, keys, what, code = 'manifest-invalid') {
   for (const k of keys) if (!Object.hasOwn(o, k)) refuse(code, `${what} is missing ${JSON.stringify(k)}`);
 }
 
-/** The order a thinning deletes its files in, and so the only order a record's `dropped` may list them in (D-6348): the manifest goes last. */
-const DROP_ORDER = Object.freeze([DB_FILE, JOURNAL_FILE, CHECKPOINT_FILE, MANIFEST_FILE]);
+/** The three members a v1 manifest can hold, in the order a record lists them (the manifest file itself follows them). */
+const THIN_MEMBERS = [['coordDb', DB_FILE], ['delegationJournal', JOURNAL_FILE], ['delegationCheckpoint', CHECKPOINT_FILE]];
+/** The order a thinning deletes its files in, and so the only order a record's `dropped` may list them in (D-6348): the manifest goes last.
+ *  Derived from `THIN_MEMBERS`, so the two cannot disagree. */
+const DROP_ORDER = Object.freeze([...THIN_MEMBERS.map(([, f]) => f), MANIFEST_FILE]);
 
 /**
  * Reads the thinning record (D-6348): one line of canonical JSON and an LF, exactly
@@ -988,8 +992,6 @@ function classifyBody({ from, fs }) {
 
 // ── Thin: keep the newest N verified data sets, drop the rest, record first (D-6346, D-6348, D-6350, D-6358) ────────────────
 
-/** The three members a v1 manifest can hold, in the order a record lists them (the manifest file itself follows them). */
-const THIN_MEMBERS = [['coordDb', DB_FILE], ['delegationJournal', JOURNAL_FILE], ['delegationCheckpoint', CHECKPOINT_FILE]];
 const hasCode = (err) => typeof err === 'object' && err !== null && typeof err.code === 'string';
 
 /** `quickState` without the record: the manifest and each member's presence and size, no hashing. */
@@ -1125,7 +1127,8 @@ function finishOne(fs, dir, t) {
  * read by presence and size, and one pre-migration data set is kept (D-6358). `out(line)` is called once per line, as it happens.
  * It throws a SnapError only for a call that is wrong in itself (a `dirs` list not strictly newest first by name, D-6362, included), and anything else
  * only for a helper failure. The `verified` dir is never thinned (D-6362). `left` counts the dirs that still hold a data set and were left
- * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir and a dir with no data set are not counted (D-6363).
+ * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir, a dir with no data set and a path that is not a directory are not counted (D-6363).
+ * A `verified` dir that reads as anything but whole, stale or empty (an interrupted thinning, a thinned dir, a damaged one) is refused, never finished (D-6362).
  * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
  */
 export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = realFs, now = () => new Date(), out }) {
@@ -1170,7 +1173,11 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   const stop = (rest) => {
     stopped = true;
     for (const d of rest) {
-      try { if (holdsData(quickState(fs, d))) left++; } catch (err) {
+      try {
+        const st = fs.lstat(d);
+        if (st === null || !st.isDirectory()) continue;
+        if (holdsData(quickState(fs, d))) left++;
+      } catch (err) {
         if (!(err instanceof SnapError) && !hasCode(err)) throw err;
         left++;
       }
@@ -1204,6 +1211,9 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
       if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${name} is not a directory`);
       let q = quickState(fs, dir);
       if (q.error !== undefined) throw q.error;
+      if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
+        refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
+      }
       if (q.word === 'interrupted') {
         const bytes = finishOne(fs, dir, q.record);
         out(`thinned ${name}: finished an interrupted thinning (${mib(bytes)}M); ${THINNED_FILE} records when and why`);

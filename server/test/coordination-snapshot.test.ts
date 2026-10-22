@@ -2820,10 +2820,15 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
       return d;
     });
     const good = [14, 13].map((n) => clone(home, tpl, stamp(n)));
-    const all = [own, ...bad, ...good];
+    // Past the stop and holding no data set (D-6363): an already thinned dir and a code-only dir are not "left as they are".
+    const already = clone(home, tpl, stamp(12));
+    thinByHand(already, tpl);
+    const codeOnly = path.join(home, 'ccrc-backups', stamp(11));
+    addCode(codeOnly);
+    const all = [own, ...bad, ...good, already, codeOnly];
     const before = all.map(treeDigest);
     for (const d of bad) expect(H.classify({ from: d }).kind, d).toBe('invalid');
-    const r = thinCli(home, argv({ keep: 2, own, dirs: [...bad, ...good] }));
+    const r = thinCli(home, argv({ keep: 2, own, dirs: [...bad, ...good, already, codeOnly] }));
     expect(r.status).toBe(3);
     expect(linesOf(r.stdout)).toEqual([
       'thinning stopped: 4 full verifications spent before the walk ended — every older backup is untouched until a later run',
@@ -2911,5 +2916,82 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     const fs = { ...H.realFs, unlink(p: string) { if (p === target) throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' }); return H.realFs.unlink(p); } };
     const { lines } = run({ own, dirs: [d1, victim], keep: 2, by: 'update', fs });
     expect(lines).toContain(`WARN: could not thin ${stamp(7)}: EIO: i/o error, unlink — it is left as it is`);
+  });
+
+  it('W23-T19 (D-6363): past a stop, a path that is not a directory is not counted as a data set left behind: a plain file and a symlink to a backup directory', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = path.join(home, 'ccrc-backups', stamp(20));
+    addCode(own);
+    const bad = [19, 18, 17, 16, 15].map((n) => {
+      const d = clone(home, tpl, stamp(n));
+      flipByte(path.join(d, 'delegation-events.log'));
+      return d;
+    });
+    const good = clone(home, tpl, stamp(14));
+    const aFile = path.join(home, 'ccrc-backups', stamp(13));
+    writeFileSync(aFile, 'not a directory\n');
+    const aLink = path.join(home, 'ccrc-backups', stamp(12));
+    symlinkSync(good, aLink);
+    const before = [own, ...bad, good].map(treeDigest);
+    const r = thinCli(home, argv({ keep: 2, own, dirs: [...bad, good, aFile, aLink] }));
+    expect(r.status).toBe(3);
+    expect(linesOf(r.stdout)).toEqual([
+      'thinning stopped: 4 full verifications spent before the walk ended — every older backup is untouched until a later run',
+      'coordination data sets: 0 kept, 0 thinned this run, 6 left as they are',
+    ]);
+    [own, ...bad, good].forEach((d, i) => expect(treeDigest(d), d).toEqual(before[i]));
+    expect(readFileSync(aFile, 'utf8')).toBe('not a directory\n');
+  });
+
+  it('W23-T20 (D-6363): a --dir that is not a directory is one WARN, is thinned around, and is not counted as a data set left behind', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, d1] = [9, 8].map((n) => clone(home, tpl, stamp(n))) as [string, string];
+    const aFile = path.join(home, 'ccrc-backups', stamp(7));
+    writeFileSync(aFile, 'not a directory\n');
+    const older = clone(home, tpl, stamp(6));
+    const r = thinCli(home, argv({ keep: 2, own, dirs: [d1, aFile, older] }));
+    expect(r.status).toBe(3);
+    const lines = linesOf(r.stdout);
+    expect(lines.filter((l) => l.startsWith('WARN: '))).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(`^WARN: could not thin ${stamp(7)}: thin-not-a-dir: `));
+    expect(lines).toContain(thinnedLine(stamp(6), 2));
+    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 0 left as they are');
+    expect(readFileSync(aFile, 'utf8')).toBe('not a directory\n');
+  });
+
+  it('W23-T21 (D-6362): a --verified dir that reads as interrupted is refused with a WARN and left byte-identical, never finished; a stale record in it is the one thing removed', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const own = clone(home, tpl, stamp(9));
+    const interrupted = clone(home, tpl, stamp(8));
+    writeFileSync(path.join(interrupted, RECORD), `${H.canonicalJson({
+      format: 'ccrc-coordination-thinned', version: 1, thinnedAt: '2026-10-01T00:00:00.000Z', by: 'update',
+      rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep: 3 }, source: 'v1', capturedAt: tpl.manifest.capturedAt, dropped: droppedOf(tpl),
+    })}\n`);
+    rmSync(path.join(interrupted, 'coord.db'));
+    expect(H.quickState(H.realFs, interrupted).word).toBe('interrupted');
+    const d1 = clone(home, tpl, stamp(7));
+    const older = clone(home, tpl, stamp(6));
+    const before = treeDigest(interrupted);
+    const r = thinCli(home, argv({ keep: 2, own, verified: interrupted, dirs: [interrupted, d1, older] }));
+    expect(r.status).toBe(3);
+    const lines = linesOf(r.stdout);
+    expect(lines.filter((l) => l.startsWith('WARN: '))).toEqual([expect.stringMatching(new RegExp(`^WARN: could not thin ${stamp(8)}: thin-verified-not-whole: .*interrupted.* — it is left as it is$`))]);
+    expect(lines.some((l) => l.includes('finished an interrupted thinning'))).toBe(false);
+    expect(treeDigest(interrupted)).toEqual(before);
+    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
+    // A stale record beside the whole set is the one thing that may be removed from the verified dir; its data set is untouched.
+    const home2 = mkHome();
+    const tpl2 = template(home2, '20260101-000000');
+    const own2 = clone(home2, tpl2, stamp(9));
+    const stale = clone(home2, tpl2, stamp(8));
+    writeFileSync(path.join(stale, RECORD), readFileSync(path.join(interrupted, RECORD)));
+    expect(H.quickState(H.realFs, stale).word).toBe('stale');
+    const r2 = thinCli(home2, argv({ keep: 2, own: own2, verified: stale, dirs: [stale] }));
+    expect(r2.status).toBe(0);
+    expect(existsSync(path.join(stale, RECORD))).toBe(false);
+    expect(H.classify({ from: stale })).toMatchObject({ kind: 'v1', data: true });
   });
 });
