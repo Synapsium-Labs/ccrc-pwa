@@ -1947,10 +1947,11 @@ function refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, nowMs) {
 }
 
 // ── W2-4 Task 7: the preflights W2-5a and W2-5b wire (W2-D56, W2-D24, W2-D6, W2-D78(ii), W2-D29, W2-D59) ────────
-// Mechanisms only: no subcommand here calls them yet. Before part 1 a spawning subcommand compares what step 0a
-// recorded (loadStep0a over `--step0a PATH --step0a-sha256 HEX`) with what it measures now; from part 1 it compares
-// part 1's values. W2-5a and W2-5b wire each of their own subcommands (W2-D24); step 0a (Task 8) RECORDS
-// codeShas() and the release stamp and never compares them.
+// These are the mechanisms; W2-5a wires them into pilot-source and quiz-source (openWriter's preflight and, before --out
+// exists, refuseWriterAdmission's preflightFiles), and W2-5b wires its own spawning subcommands (W2-D24). Before part 1 a
+// spawning subcommand compares what step 0a recorded (loadStep0a over `--step0a PATH --step0a-sha256 HEX`) with what it
+// measures now; from part 1 it compares part 1's values. Step 0a (Task 8) RECORDS codeShas() and the release stamp and
+// never compares them.
 // Every reader keeps its conditions apart: a file that cannot be measured is never hashed as nothing, a stamp that
 // cannot be read is never "no stamp", and a recall-off entry that cannot be lstat'ed is never "absent".
 
@@ -2835,7 +2836,7 @@ export function renderKeptMember(row, k, idx) {
   return { state: 'text', text: lines.join('\n') };
 }
 
-/** `fn()`, or null when it throws a RangeError: a body nested past V8's JSON.stringify stack (about 4,500 levels, far
+/** `fn()`, or null when it throws a RangeError: a body nested past V8's JSON.stringify stack (about 4,000 levels, far
  *  inside lib's JSON_DEPTH_MAX) parses and cannot be rendered, as recall.mjs's expandEntryText meets it (D-6302). Any other
  *  throw is a defect and propagates.
  *  @template T  @param {() => T} fn  @returns {T | null} */
@@ -3343,7 +3344,7 @@ export function admitStoreBoundaries(rs) {
 /** The baseline file set this code reads (W2-D69), recorded as the open record's quiz.baseline_files and in the
  *  pilot's `used`. A change to the set is a W2-5a amendment before part 1, under a new id; history-replay.test.ts pins
  *  this id to the open record's default (OPEN_RECORD_V1), as decisions §7 pins CODE_SHA_FILES to GATE_CODE_FILES. */
-export const BASELINE_FILES_ID = 'v1';
+export const BASELINE_FILES_ID = OPEN_RECORD_V1.draft.quiz.fields.baseline_files.value;   // read from the gate's record, never spelled twice
 /** The largest baseline file read (W2-D69): a larger one discards its boundary, `file-over-cap`. */
 export const BASELINE_FILE_MAX = 1024 * 1024;
 /** The most rows B's part 3 takes (W2-D68): one more discards its boundary, `post-over-cap`. */
@@ -3673,7 +3674,8 @@ export function writeBaselineRecord(out, section, { storeId, rows }) {
 // it; and (clause 4, D-5780) the source is stamped at or before T_N. Clause 4 removes what the as-of cut (W2-D34,
 // W2-D35) hides: a NULL-ts row, and a sidecar with no entry. The same-millisecond count (W2-D34's residual) is
 // reported per admitted question and decides nothing. Sampling (W2-D71) walks families, then each family's
-// candidates, in one seeded order, skips by quota before any filter, and runs the filters lazily in QUIZ_STAGES'
+// candidates, in seeded order (the quiz's families in their own keyed order, quizFamilyOrderKey, R10; the pilot's on its one
+// stream), skips by quota before any filter, and runs the filters lazily in QUIZ_STAGES'
 // order. Every read here is on the read-only handle; nothing writes.
 
 /** The filters a quiz candidate passes, in W2-D71's order. sampleQuestions runs them in exactly this order, lazily:
@@ -3975,7 +3977,7 @@ function pinnedPilotSeed(out, draw) {
   const read = readPlain(path.join(out, PILOT_SEED_FILE), 1024);
   if (read.state === 'bad') refuse('out-refused', `${PILOT_SEED_FILE} ${badWord(read)}`);
   if (read.state === 'bytes') {
-    const m = /^([0-9a-f]{64})\n$/.exec(read.bytes.toString('utf8'));
+    const m = read.bytes.toString('utf8').match(/^([0-9a-f]{64})\n$/);
     if (m === null) refuse('out-refused', `${PILOT_SEED_FILE} is not a seed`);
     return m[1];
   }
@@ -5216,7 +5218,9 @@ export function quizMetaReport({ recordSha256, frozenSha256, assignmentSha256, e
   return { kind: QUIZ_META_KIND, v: 1, record_sha256: recordSha256, frozen_sha256: frozenSha256, assignment_sha256: assignmentSha256,
     n_questions: entries.length, n_families: families.length,
     below_floor: quizFloor(entries.length, families.length, floor).halt,
-    short_of_min_families: families.length < minFamilies, sourced };
+    short_of_min_families: families.length < minFamilies,
+    // Sorted by store_id (code unit), so the meta's bytes do not depend on the order the sourced lists were named in.
+    sourced: [...sourced].sort((a, b) => cmpUnit(a.store_id, b.store_id)) };
 }
 
 // ── the record: template, draft and final ──────────────────────────────────────────────────────────────────
@@ -5332,11 +5336,13 @@ export function buildFinal({ draft, draftSha256, priorSha256 = null, assembled, 
 function entryError(e) {
   if (!plainObject(e)) return 'entry';
   for (const k of FROZEN_ENTRY_KEYS) if (!Object.hasOwn(e, k)) return `entry ${k}`;
+  // A string that is empty is no value: qidOf and the frozen list's own checks would throw on it later, a TypeError instead of
+  // this refusal, so every text field and every repo root must be non-empty here.
   for (const k of ['qid', 'store_id', 'ccrc_id', 'generation', 'boundary_uuid', 'fact', 'fact_raw', 'question', 'source_entry_uuid']) {
-    if (typeof e[k] !== 'string') return `entry ${k}`;
+    if (typeof e[k] !== 'string' || e[k] === '') return `entry ${k}`;
   }
   if (!FACT_KINDS.includes(e.kind)) return 'entry kind';
-  if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string')) return 'entry repo_roots';
+  if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string' && r !== '')) return 'entry repo_roots';
   // A quiz entry's rank is [its family's quizFamilyOrderKey, its candidate rank] (W2-D71 as amended 2026-10-22; R10).
   if (!Array.isArray(e.rank) || e.rank.length !== 2 || typeof e.rank[0] !== 'string' || !SHA256_RE.test(e.rank[0])
     || !Number.isSafeInteger(e.rank[1]) || e.rank[1] < 0) return 'entry rank';

@@ -6264,18 +6264,20 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
     expect(() => w5a2Mine(w5a2Span([{ provenance: 'model', state: 'mystery', body: null }]))).toThrow(/body pick state/);
   });
 
-  it('D-6303: a mined tool_use input nested 5,000 deep cannot be rendered and discards the boundary as body-unrenderable; CONTROL: 4,000 deep mines normally', () => {
-    // Built at runtime: a body that parses (far inside lib's JSON_DEPTH_MAX) but overflows V8's JSON.stringify stack.
+  it('D-6303: a mined tool_use input nested 10,000 deep cannot be rendered and discards the boundary as body-unrenderable; CONTROL: 2,000 deep mines normally', () => {
+    // Built at runtime: a body that parses (far inside lib's JSON_DEPTH_MAX) but overflows V8's JSON.stringify stack. V8's
+    // limit moves with the Node build and the stack in use (about 4,085 here on Node 22.16, 4,376 on Node 24), so the throw side
+    // is 10,000 and the CONTROL 2,000, each far from it.
     const nested = (levels: number): unknown => {
       let v: unknown = 'leaf';
       for (let i = 0; i < levels; i += 1) v = { a: v };
       return v;
     };
     const body = (levels: number) => [w5a2Use('deep1', 'Bash', { command: 'npm run build:all', nest: nested(levels) })];
-    expect(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(5000) }]))).toMatchObject({
+    expect(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(10_000) }]))).toMatchObject({
       state: 'discard', why: 'body-unrenderable', boundaryUuid: 'fixture-boundary',
     });
-    const ok = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(4000) }])));
+    const ok = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(2000) }])));
     expect(ok.candidates.map((c) => [c.kind, c.fact])).toEqual([['command', 'npm run build:all']]);
     expect(w5a2Drv.RECON_DISCARDS).toContain('body-unrenderable');
   });
@@ -6600,6 +6602,7 @@ describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
   it('an index outside the copy is a defect: TypeError, never a verdict', () => {
     const c = w5a3Copy([CL], [CL]);
     for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
       expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(/is not a row of the copy/);
     }
   });
@@ -7156,7 +7159,7 @@ describe('W2-5a Task 4: B fails closed, W2-D68', () => {
 
 describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304', () => {
   /** A fixture whose row `key` stores an object nested `depth` deep. It parses, and lib's renderEntryText throws a
-   *  RangeError on it from about 4,500 levels. Built at runtime: the blob is written raw, because JSON.stringify of the
+   *  RangeError on it from about 4,000 levels (the limit moves with the Node build). Built at runtime: the blob is written raw, because JSON.stringify of the
    *  nested value would throw in the fixture itself. */
   const nested = (key: string, depth: number): W5a4Fixture => {
     const fx = w5a4Fixture();
@@ -7172,10 +7175,10 @@ describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304
   };
 
   it.each([['summary', 'the summary row (part 1)'], ['a3', 'a kept member (part 2)'], ['card', 'a post-summary row (part 3)']])(
-    '%s: a body nested 5,000 deep discards body-unrenderable, and 4,000 deep builds B (%s)', (key) => {
-      expect(w5a4B(nested(key, 5000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
-      // CONTROL: the same row 4,000 deep renders, so the discard is the depth and not the fixture.
-      expect(w5a4B(nested(key, 4000)).state).toBe('built');
+    '%s: a body nested 10,000 deep discards body-unrenderable, and 2,000 deep builds B (%s)', (key) => {
+      expect(w5a4B(nested(key, 10_000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
+      // CONTROL: the same row 2,000 deep renders, so the discard is the depth and not the fixture.
+      expect(w5a4B(nested(key, 2000)).state).toBe('built');
     });
 
   it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
@@ -8577,7 +8580,7 @@ function w6ErrorIf<T extends object>(on: boolean, row: T): T {
   return row;
 }
 /** `dropThenDeep` (D-6306): the leaf's first tool_use is a Bash command too short to be a fact (a counted site drop), and a
- *  second tool_use row after it holds an input nested 5,000 deep (it parses and cannot be rendered), so mining drops one
+ *  second tool_use row after it holds an input nested 10,000 deep (it parses and cannot be rendered), so mining drops one
  *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
  *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
 function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
@@ -8592,9 +8595,9 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
   const sid = u(0);
   const sentinel = ['zq', 'w5a6', 'sentinel'].join('');
   const base = { sessionId: sid, cwd };
-  // The fixture serializer cannot stringify a 5,000-deep value, so the row carries a marker and its line is spliced as text.
+  // The fixture serializer cannot stringify a 10,000-deep value, so the row carries a marker and its line is spliced as text.
   const DEEP_MARK = '__w5a6_deep__';
-  const DEEP_TEXT = `${'{"a":'.repeat(5000)}"leaf"${'}'.repeat(5000)}`;
+  const DEEP_TEXT = `${'{"a":'.repeat(10_000)}"leaf"${'}'.repeat(10_000)}`;
   const rows = [
     w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
     w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
@@ -9428,8 +9431,10 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const tree = tree7();
       const s0 = save7(step0a7(tree, home), 'step0a.json');
       const pilot = save7(pilot7(tree), 'pilot-source.json');
+      const before = snapshot7(home);
       const r = run7(tree, home, draftArgv(s0, pilot));
       r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
       const rec = JSON.parse(r.stdout);
       r7expect(r.stdout).toBe(r7Canon(rec) + '\n');
       r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
@@ -9538,6 +9543,20 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       }
       return home;
     }
+    r7it('CONTROL: snapshot7 sees a planted write, a changed file and a stray file beside the store', () => {
+      const home = home7(STORE_A);
+      const base = snapshot7(home);
+      r7expect(snapshot7(home), 'a second look at an untouched HOME is equal').toEqual(base);
+      r7fs.writeFileSync(r7path.join(home, '.ccrc', 'planted'), 'x', { mode: 0o600 });
+      r7expect(snapshot7(home), 'a new file').not.toEqual(base);
+      r7fs.rmSync(r7path.join(home, '.ccrc', 'planted'));
+      r7fs.appendFileSync(r7path.join(home, '.ccrc', 'build.json'), ' ');
+      r7expect(snapshot7(home), 'a changed file').not.toEqual(base);
+      const stray = r7path.join(r7path.dirname(r7Paths(home).dbFile), 'stray');
+      r7fs.writeFileSync(stray, 'x', { mode: 0o600 });
+      r7expect(snapshot7(home).filter((l) => l.includes('/stray ') || l.startsWith('stray ')).length, 'a stray file beside the store').toBeGreaterThan(0);
+    });
+
     r7it('reports ok, registry-mismatch, registry-absent and unreadable, never one folded into another, and writes nothing (W2-D20, W2-D84)', () => {
       const home = registryHome({ 'a-t1': A_T1.generation, 'a-t2': `${A_T2.generation}\n`, 'a-c1': gen(399), 'a-c2': 'dir', 'a-d': null });
       const d = save7(draft7(R7_REPO, home), 'part1.json');
@@ -9576,9 +9595,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       run7(null, null, ['power', ...inp('record', c.d), ...census.flatMap((s) => inp('census', s)), ...verify.flatMap((s) => inp('verify', s))]);
 
     r7it('reads q18_settings: one q18Power call per power level at rho_headline and at 0, over the kept families, covered_days from lookback_days', () => {
-      const c = chain7(home7(null));
-      const r = powerRun(c);
+      const home = home7(null);
+      const c = chain7(home);
+      const before = snapshot7(home);
+      const r = run7(null, home, ['power', ...inp('record', c.d), ...[c.cA, c.cB].flatMap((x) => inp('census', x)), ...[c.vA, c.vB].flatMap((x) => inp('verify', x))]);
       r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
       r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
       const out = JSON.parse(r.stdout);
       // The population: every active family but a-d (registry-absent), each with its census windows; ticks from T0 - 7 d.
@@ -10168,6 +10190,22 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const two = freezeRun(c, [c.sB, c.sA]);
       r7expect(r7fs.readFileSync(r7path.join(two.out, r7drv.FROZEN_FILE))).toEqual(r7fs.readFileSync(r7path.join(one.out, r7drv.FROZEN_FILE)));
       r7expect(two.stderr).toBe(one.stderr);
+      // The meta too: its `sourced` list is sorted by store_id, not in argv order.
+      const metaOne = r7fs.readFileSync(r7path.join(one.out, r7drv.QUIZ_META_FILE));
+      r7expect(r7fs.readFileSync(r7path.join(two.out, r7drv.QUIZ_META_FILE))).toEqual(metaOne);
+      r7expect(JSON.parse(metaOne.toString('utf8')).sourced.map((x: R7) => x.store_id), 'sorted by store_id').toEqual([STORE_A, STORE_B]);
+    });
+
+    r7it('a sourced entry holding an empty string where a text goes, or an empty repo root, refuses input-invalid, never a later TypeError', () => {
+      const c = chain7(home7(null));
+      const entry = c.sB.value.entries[0];
+      for (const k of ['qid', 'store_id', 'ccrc_id', 'generation', 'boundary_uuid', 'fact', 'fact_raw', 'question', 'source_entry_uuid']) {
+        const bad = save7({ ...c.sB.value, entries: [{ ...entry, [k]: '' }, c.sB.value.entries[1]] });
+        r7expect(freezeRun(c, [c.sA, bad]).stderr, k).toBe(refusalLine('input-invalid', `sourced shape entry ${k}`));
+      }
+      const root = save7({ ...c.sB.value, entries: [{ ...entry, repo_roots: ['/home/u/tree', ''] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, root]).stderr).toBe(refusalLine('input-invalid', 'sourced shape entry repo_roots'));
+      r7expect(freezeRun(c, [c.sA, c.sB]).code, 'CONTROL: the unbroken lists freeze').toBe(0);
     });
 
     r7it('the merge takes the lists in global rank order and cuts at quiz.target; a smaller list is below the floor', () => {
@@ -10230,9 +10268,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   // ── open --finalize ────────────────────────────────────────────────────────────────────────────────────────
   r7describe('W2-5a Task 7: open finalize', () => {
     r7it('prints part 2, validated against its draft and frozen list, with the assignment re-derived and the power figures copied', () => {
-      const c = chain7(home7(null));
-      const r = run7(null, null, finalizeArgv(c));
+      const home = home7(null);
+      const c = chain7(home);
+      const before = snapshot7(home);
+      const r = run7(null, home, finalizeArgv(c));
       r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
       const rec = JSON.parse(r.stdout);
       r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
       r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: 5 } })).toEqual({ ok: true });
@@ -10482,5 +10523,27 @@ describe('W2-5a fix wave, D-6309: the leaf-span base is JSON, so a fact is place
       expect(replay.writerInputOf({ ...c, fact_raw: 'never in the text' } as never, w, FW_IDX), w).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
     }
     expect(replay.FACT_DROP_REASONS.slice(16, 19), 'R5').toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced']);
+  });
+});
+
+describe('W2-5a fix wave: the review\'s minors', () => {
+  it('quizFamilyOrderKey: its inner seed is the one the gate\'s substream(seed, \'quiz-sample\') derives, so a gate change reds here', () => {
+    const seed = 'ab'.repeat(32);
+    const fam = { store_id: 'fixture-store', ccrc_id: 'fixture-id', generation: 'fixture-gen' };
+    const inner = t4Lib.sha256Hex(`${seed}:quiz-sample`);
+    // xoshiro128**'s first output is rotl(s1 * 5, 7) * 9, and the gate takes s1 from bytes 4 to 7 of this hash, little-endian.
+    const s1 = (parseInt(inner.slice(8, 10), 16) | (parseInt(inner.slice(10, 12), 16) << 8) | (parseInt(inner.slice(12, 14), 16) << 16) | (parseInt(inner.slice(14, 16), 16) << 24)) >>> 0;
+    const rotl = (x: number, k: number): number => ((x << k) | (x >>> (32 - k))) >>> 0;
+    const first = Math.imul(rotl(Math.imul(s1, 5), 7), 9) >>> 0;
+    expect((w6Gate.substream(seed, 'quiz-sample') as { nextU32(): number }).nextU32(), 'the gate\'s stream starts from this hash').toBe(first);
+    expect(replay.quizFamilyOrderKey(seed, fam), 'the key hashes that same seed with the family key').toBe(t4Lib.sha256Hex(`${inner}:${w6Gate.familyKey(fam.store_id, fam.ccrc_id, fam.generation)}`));
+  });
+
+  it('BASELINE_FILES_ID is the gate\'s open record default itself, read from it', () => {
+    expect(replay.BASELINE_FILES_ID).toBe(w6Gate.OPEN_RECORD_V1.draft.quiz.fields.baseline_files.value);
+    expect(replay.BASELINE_FILES_ID).toBe('v1');
+    const src = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => /^export const BASELINE_FILES_ID\b/.test(l));
+    expect(src).toHaveLength(1);
+    expect(src[0], 'not spelled a second time').not.toMatch(/'v1'/);
   });
 });
