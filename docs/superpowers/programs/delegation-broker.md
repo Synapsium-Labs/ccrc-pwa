@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 (run 740) dispatched 2026-10-21 |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 (run 768, #1120) dispatched 2026-10-22 |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -1286,6 +1286,134 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   benches stop under 30 GiB free (7679). Ask 73 on disk was answered "Proceed except the bench" with a 10 GiB floor,
   lowered for run 740 alone at about 20:25Z to 3 GiB with all scratch on the root disk, because run 740 fixes the live
   stall. Its PR is #1097.
+- **2026-10-21 to 2026-10-22 — run 740 reviewed in the coordinator's session (operator ruling "Review in this session
+  (Recommended)").** At 22:00Z the worktree volume had 7.7 GiB free, under the 10 GiB floor for minting a reviewer's
+  workspace, so the operator directed the review into the coordinator's own session, as for reviews 705 and 716. No
+  review run was opened.
+  - Wave-done 7789 (23:31Z): `suite: green` at `34f0c537c`, PR CI and a full run green (macOS 4 of 4); `watch.ts` +11;
+    the bench unrun for disk.
+  - Panel complete: 33 agents, 0 errors; 6 confirmed, all minor (one a "reproduced" note); 4 refuted, two of them
+    "important" and refuted 3/3 (the bench skip not ledgered as a departure, and departures without numbers); 0
+    unexamined. The whole-branch pass answered 12 of 12 with no behaviour defect, and every suite was green at the
+    tip, run through a memory-gated vitest shim.
+  - Ruled (about 00:40Z): clean with carried items, and land now, since live attempt-filing passes stalled 21-25 s on
+    about two passes in three. No fix round. Carried into the rest-run's task text, text and tests only, no D-number:
+    D-6190/D-6191's landing counts restated at the merged tip (policy 131, not 128; the mutant count 22 to 25; C-P8 (a)
+    among MC1+2's red rows); C-K3 measured at the armed pass's own instant and keyed with `delegationAttemptKeyOf`,
+    not a hand-written copy of the key; C-P4 (ii)'s duplicate assertion; the pass-timing messages that still quote the
+    review base's values.
+  - Recorded, no code: a collapse refused before its write is retried on every ready pass, unlatched. That is
+    unreachable today: the guards cannot refuse an attempts-only change, and a write fault goes through the recovery
+    retry interval (one attempt per 5 min, measured). A latch (skip until the checkpoint revision moves) is owed if a
+    guard on attempts is ever added.
+  - The coordinator added to #1097's body: the first pass after deploy pays one full apply and one full projection
+    (one long stall, and possibly one /health miss, once); the bench is unrun; and on a rollback an older build
+    re-files the old rows, which a roll-forward collapses again.
+- **2026-10-22 — #1097 merged, through the merge queue.** `gh pr merge 1097 --match-head-commit 34f0c537c…` queued it,
+  and it merged at 01:12:56Z as `bc231bbcb`, its squash patch-id equal to the branch's. Run 740 closed `done`;
+  prerelease `v0.0.553`. D-6190 and D-6191 are defined; the other ten numbers issued at run-open are unused.
+  - Before (7809): cpAttempts 780 at 01:16Z; 7 to 38 attempt-filing passes an hour, each blocking 28-37 s with a mid
+    stall of 20.9-26.2 s.
+  - Live on `v0.0.555` (7837), which the operator tapped at 05:42-05:46Z, both gates passing: the collapse removed
+    N = 743 rows at 05:52:24Z, with no collapse-failed line and no mismatch line. cpAttempts fell from 799 to 56 and
+    stayed there; cpBytes fell 34.4 MB on that pass (113.8 to 79.4 MB).
+  - The first pass, at 05:52:33Z (about 6 min after the restart, after the health gate had passed), blocked 46.0 s,
+    `stallMid` 20.1 s, `projectFull` 1; no /health miss was seen. The five passes after it blocked 5.7-9.1 s,
+    `stallMid` 0.08-2.0 s, `projectFull` 0. cpBytes still grew about 57 KB in 4.8 min: the Bash-row growth that
+    run 762 fixes.
+  - Disk: after the move's 1,870 MB backup the server had 15,059 MB free, under the operator's 15 GB line, so the
+    soak's disk question went back to the operator.
+- **2026-10-22 — follow-up 7b dispatched.** Run 762 (block D-6267..D-6276) went to `ccrc-pwa-keen-basin` (branch
+  `ws/keen-basin`) at about 01:14Z, from `bc231bbcb`, brief 7807, six parts (D-6267..D-6272; five tracked items,
+  since rule A and the door ship together): fold rule A, the zero-delta retirement (the O4 amendment, in the same
+  PR), workflow runs ending, start-less stop candidates ageing out at 48 h, the slow-line keys and the document
+  corrections, with review 740's carried items. Its disk floor was 5 GiB with all scratch on the root disk, and a
+  bench needed 30 GiB free. The worktree volume had 14 GiB free.
+- **2026-10-22 — run 762's wave-done (7828) and its CI.** `suite: red`, `failure: unclear`, at `5979d8b0b`, ten
+  commits on `bc231bbcb`, PR #1115. 99 rows (141 failing cases at the base); 125 mutants against `ae6d5de45`, 119 red
+  and the 6 green all declared equivalents; `watch.ts` +9.
+  - PR CI at the tip was green. The full run's only reds were the advisory `test-macos` 2 of 4 (`run-tmp.test.ts`
+    T5d, a SIGHUP exit 129, in a file the PR does not touch) and `full-suite`, which refuses any leg not green; every
+    Linux leg was green. Attributed to the advisory macOS leg, and not re-run.
+  - The worker's disagreement, spec §5.2's ageing wording against the code's evidence-only ageing, went to the review
+    (its F3).
+- **2026-10-22 — the bench, then the live-scale measurement on copies.** The bench was unrun at the wave-done: the
+  worktree volume had 20 GiB free, under the 30 GiB rule. That rule was about the worktree volume, so the coordinator
+  asked (7830) for items 1-3 on the root disk (about 158 GiB free), gated, base `bc231bbcb` against the tip, three runs
+  each (7831).
+  - Fixture: neutral and generated, 249,357 records over 65 h at 7598's mix; the base's checkpoint 80,471 activities,
+    48.3 MB.
+  - First boot's recovery: base 21-22 s wall (20.8-22.4), longest stall 2.3-2.45 s; tip 27-28.6 s wall (26.9-28.6),
+    longest stall 3.2-3.35 s, ending 378 workflow runs and ageing 1,954 stop candidates out (holds 7,890 to 5,936).
+  - The door: 75,657 rows retired (80,471 to 4,814 activities; 48.0 to 3.7 MB) in 2.0-2.3 s, longest stall
+    0.66-0.73 s. An ordinary flush after it took 0.2 s, against the base's 1.9-2.1 s.
+  - Caveat: the neutral ids are shorter than live ones, so read the shape, not the absolute figures.
+  - At review 767's request, the soak watcher measured the same on copies of the live checkpoint (79.8 MB) and journal
+    (694.7 MB) taken at 06:47Z (7865): 110,313 activities (100,324 `bash-worktree`), 56 attempts, 10,368 holds;
+    `v0.0.555` against `5979d8b0b`, interleaved, three runs each, on the fleet box's root disk.
+    - Recovery: `v0.0.555` 61-64 s wall, longest block 3.8-4.5 s; the tip 72-74 s, longest block 5.1-5.4 s, heap peak
+      1.0 GB against 0.4-0.6 GB. A full projection of 3.7-4.2 s is most of the longest block in both.
+    - The door: 97,320 of 97,320 retirable rows retired in 3.9-4.1 s, longest block 2.4-2.6 s; checkpoint 78.8 to
+      12.5 MB; activities 110,313 to 12,993; attempts unchanged. That is the low end of the review's inferred 5-7 s
+      boot block, and 1.7 times the top of its inferred 1-1.5 s door block.
+    - Caveats: Node v24 on the fleet box against v22 on the server, and load 9.8-14.9 at nice 19. On the live boot
+      recovery ran after the server listened: the gate passed at 05:46:49Z, and the first slow pass came at 05:52:33Z.
+- **2026-10-22 — review 767 (`ccrc-pwa-soft-summit`, at `5979d8b0b`).** The worktree volume had 20 GiB free, so the
+  review was dispatched as a run. Panel complete: 33 agents, 0 errors; 7 confirmed (each 0/3), 3 refuted (each 3/3),
+  0 unexamined. The reviewer attributed one confirmed item, a boot-refusal timeout, to its own shim: that file passes
+  253/253 with real links. All 20 suites and tsc green; 22 mutants red at the tip as claimed, MB7 and MB8 green as
+  declared equivalents.
+  - Behaviour measured sound: rule A, the door, the clone census and the projection-fault path. Both older builds,
+    `bc231bbcb` and `v0.0.544`, decode the branch's checkpoints and then refuse `fold-refused` at
+    `identity-evidence`, the documented way. `v0.0.555` has no delegation-file change since `bc231bbcb`, so that
+    measurement covers the live rollback target.
+  - Ruled fix round 1, scoped, not carried items as for run 740: the live urgency had gone (ordinary passes 5.7-9.1 s
+    on `v0.0.555`), wave 4 is far off, and F1 is a false premise in code comments that wave 4's compaction author
+    would read first. No new D-number.
+  - F1 (important, latent): three comments' "nothing it named can open again" qualified to hold while both records
+    are retained; spec §5.12 widened to every listing-carrying Bash call (a PostToolUse is never retained without its
+    PreToolUse); D-6267 to record that `computeHolds` holds nothing for a consumed pair. Latent: `planPruning` has no
+    caller.
+  - F2 (important): the PR body to carry the rollout text: the first long pass; two full rewrites on a box without
+    #1097; the door idling; and the update's exit-4 automatic restore, which reaches the "Accept and document" hazard
+    with no operator choosing it.
+  - F3: spec §5.2 to the code's wording (ageing counts evidence records only). F4: drop six `??` fallbacks. F5: the
+    warn line says "changed N activity row(s)". F6: the plan's row counts. F7: the wider rollback wording. F8: D-6269
+    states that nothing outside the model, the checkpoint and the schema reads `executionState`. F9: RB-CLONE's
+    scalars derived from the instance, with a mutant. F10: two fabricated rows pin MB7 and MB8, which leave the
+    declared equivalents.
+  - Hygiene: the reproduce lens wrote about 965 MB of copies to the worktree volume (deleted by literal path); the
+    next review brief puts the panel's scratch on the root disk.
+- **2026-10-22 — fix round 1 and review 769 (`ccrc-pwa-plain-delta`, at `d2b228dbb`).** Wave-done 7857: six commits
+  covering F1-F10, the PR body rewritten by the worker; PR CI green after one re-run of an untouched agent row (1,895
+  ms against a 1,900 ms lower bound); no full run, as allowed. MB7 now reds RB9b only, and MB8 RB9c only (1 of 448
+  each).
+  - Panel complete: 30 agents, 0 errors; 9 confirmed (P3 1/3), 0 refuted, 0 unexamined, collapsing to six items, plus
+    the reviewer's two: F1-F8, all minor text or test strength, none a behaviour defect. Every ruled item of review 767
+    was done. All 10 suites and tsc green.
+  - Ruled LAND NOW, as for run 740: nothing left changes behaviour; the live checkpoint was about 80 MB and growing,
+    with the server under the operator's disk line; and at live scale this build cuts it to 12.5 MB. F1, F2 and F4-F7
+    carried to wave 4's first PR (Next-wave brief); F3 kept as ruled. F8 (the 2.2 s was the door's application, not the
+    whole first pass) fixed by the coordinator in the PR body, with the live-scale figures added, deployment-neutral.
+- **2026-10-22 — #1115 merged, through the merge queue.** `gh pr merge 1115 --match-head-commit d2b228dbb…` queued it,
+  and it merged at 07:51:27Z as `bb1a9478d`, its squash patch-id equal to the branch's (`bc231bbcb..d2b228dbb`). Run
+  762 closed `done`; prerelease `v0.0.557`. D-6267..D-6272 are defined; D-6273..D-6276 are unused.
+- **2026-10-22 — follow-up 8 dispatched (7848).** A merge-group run for #1118, docs only, failed on one case: the wave-3
+  spool's hook-cost row in `session-hook.test.ts`, at 164 ms against its absolute 150 ms p95. The queue ejected #1118,
+  which was re-queued unchanged. The row is this programme's.
+  - Run 768 (a block of three numbers) went to `ccrc-pwa-soft-harbor` with one task: rewrite that row alone as a
+    same-run ratio, the median of interleaved spool-present runs over the median of spool-absent runs, under an R
+    measured to clear both bands by at least 15%, after the file's existing ratio precedent; keep the row's
+    line-writing teeth, and write the masking window beside the guard.
+  - Ask 77 (7858): the plan file was held by run 762's claim. Ruled "append now": the overlap was the coordinator's
+    own, both runs only append, and #1115 lands first, then one land-sync for run 768.
+  - Wave-done 7869 (`suite: unrun`, no full dispatch, by the brief), PR #1120, CI green: R = 1.5. The shipped band
+    1.160-1.285 over 30 runs; the two-extra-jq-fork mutant 1.749-1.951; a 17% margin each side. One extra fork
+    (1.463-1.628) does not separate, about 7%, so the row cannot see a single extra fork; the brief allowed the
+    smallest regression that separates. The row 15 of 15 green, the mutant 15 of 15 red; the whole file 709/709.
+  - After #1115 merged, the coordinator asked for the land-sync (7876); the review follows at the synced tip.
+  - The three sibling rows at an absolute 150 ms (the base pin and two rows of another plan) have also failed on full
+    runs, at 150-233 ms. They are other plans' rows, not this programme's, and were raised with the operator.
 
 ## Carried constraints
 
@@ -1423,15 +1551,12 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Wave 3's remaining follow-ups (2026-10-21).** By the operator's "Split: attempt fix first", two runs remain, and the
-soak has not started: it did not start on #832's or #1068's release, and when it starts is the operator's.
-- Run 740 (follow-up 7, `ccrc-pwa-clear-basin`, PR #1097): attempts keyed on the decision, not its evidence; the
-  repeated attempts on file collapsed to the earliest of each key; the re-pins; review 758's F1. No new port member,
-  store method, checkpoint key, migration or slow-line key.
-- The rest-run (follow-up 7b, "the checkpoint stops growing"): fold rule A, the zero-delta retirement (the O4
-  amendment above, in the same PR), workflow runs ending on their task notification, start-less stop candidates
-  ageing out at 48 h, three slow-line keys, and the document corrections. It is dispatched after run 740 merges,
-  based on that `main`, with its own block of ten numbers.
+**Wave 3's remaining follow-ups (2026-10-22).** Both runs of the operator's "Split: attempt fix first" have landed:
+run 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762
+(follow-up 7b, "the checkpoint stops growing") as #1115, `bb1a9478d`, prerelease `v0.0.557` (decisions above).
+Follow-up 8 (run 768, `ccrc-pwa-soft-harbor`, PR #1120), the spool's hook-cost row as a same-run ratio, is in flight:
+a land-sync onto #1115's `main`, then a review. The soak has not started; its start, and the rollout of `v0.0.557`,
+are the operator's.
 - Added to wave 4's list since #597:
   - the restart verdict effect: after a restart, slice windows carry a null repository (run 627);
   - shape 2, building the index and the held/lost split once per pass in the caller (review 628 F9);
@@ -1441,7 +1566,17 @@ soak has not started: it did not start on #832's or #1068's release, and when it
   - from run 645's out-of-scope list: O5's fsync per record (group commit), a cheaper canonical encode, the no-op
     compare's two encodes, and the owners' reads with bounded concurrency;
   - compaction never prunes a Bash call's PreToolUse while keeping its PostToolUse, and holds an active workflow
-    run's launch record; the stale active old-rule Bash rows go to the `unknown` writer.
+    run's launch record; the stale active old-rule Bash rows go to the `unknown` writer;
+  - from review 769, for wave 4's first PR: F1, the stale MB7/MB8 "declared equivalent" comments (to "equivalent on
+    reachable states, pinned by RB9b/RB9c"); F2, the `coveredEnds` doc's "for an `unknown` status" qualifier; F4,
+    "equal pair" in the `computeHolds` comment, and spec §5.12's reason clause scoped to a call the checkpoint does
+    not map; F5, RB-CLONE's `isCollection` treating any non-null object as a collection; F6, the RB25 cell's messages;
+    F7, RB9b's in-row positive control;
+  - from review 740, recorded with no code: a collapse refused before its write is retried on every ready pass,
+    unlatched; a latch is owed if a guard on attempts is ever added.
+- Raised with the operator, on no run: the three sibling 150 ms absolute timing rows in `session-hook.test.ts` (the
+  base pin and two rows of another plan), which can eject an unrelated PR from the merge queue as the spool's row did
+  (7848). They are other plans' rows, and follow-up 8 leaves them as they are.
 - R111 (on wave 4's list since review 578): if it reds again before then, its 20 ms real-time wait becomes a
   condition-based wait, as its own small fix, not run 740's (review 758 F2).
 - Due whenever `projectDelegationCheckpoint` next must change, on no run yet: D-6168's consolidation, where the full
@@ -1498,8 +1633,8 @@ and 583 (decisions above). Run 360 closed `done`, and the prerelease `v0.0.258` 
 
 Rollout and the seven-day soak are the operator's acts, by the plan's "Rollout and Verification" steps 1–9. They run
 on a release the operator names: by the rulings recorded since 2026-10-19, not on `v0.0.299`, #832's or #1068's
-release, and not before wave 3's remaining follow-ups (Next-wave brief, above), under the disk watch the decisions
-above record. A prerelease is rolled out with `ccrc rollout --to <tag>`.
+release, and not before wave 3's growth follow-ups (#1097, and #1115 in `v0.0.557`; Next-wave brief, above), under
+the disk watch the decisions above record. A prerelease is rolled out with `ccrc rollout --to <tag>`.
 
 **Review 334 accepted wave 2 at its exact tip; wave 2 merged on 2026-10-13** (the decisions above record how). Reviewer `ccrc-pwa-keen-summit` accepted
 `e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report
