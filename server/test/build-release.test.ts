@@ -686,6 +686,37 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
   });
+
+  // W25 (D-6397, D-6401): the decision is its own step, before the toolchain.
+  it('W25-Y1: no trigger filter — a paths list would be a second, hand-kept list, judged over the push\'s own range', () => {
+    expect(wf()).not.toMatch(/^\s+paths(-ignore)?:/m);
+  });
+
+  it('W25-Y2: the decide step holds the job\'s only pre-publish token, and runs the first arm', () => {
+    expect(wf()).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m);
+  });
+
+  it('W25-Y3: decide runs before setup-node, which a skipped merge leaves out', () => {
+    const src = wf();
+    const setup = src.indexOf("      - uses: actions/setup-node@v4\n        if: steps.decide.outputs.build != 'false'\n");
+    const decide = src.search(/^        run: bash deploy\/release-main\.sh decide /m);
+    const prepare = src.search(/^        run: bash deploy\/release-main\.sh prepare /m);
+    expect(setup, 'setup-node is gated on decide\'s output').toBeGreaterThan(-1);
+    expect(decide).toBeGreaterThan(-1);
+    expect(decide).toBeLessThan(setup);
+    expect(setup).toBeLessThan(prepare);
+  });
+
+  it('W25-Y4: the step that installs carries no token and no expression', () => {
+    const src = wf();
+    const from = src.indexOf('      - name: Derive the next tag and build the artifact');
+    expect(from).toBeGreaterThan(-1);
+    const rest = src.slice(from + 1);
+    const next = rest.indexOf('\n      - ');
+    const block = rest.slice(0, next === -1 ? undefined : next);
+    expect(block).not.toContain('env:');
+    expect(block).not.toContain('${{');
+  });
 });
 
 describe('the release workflows key their npm cache on every lockfile the builder installs', () => {

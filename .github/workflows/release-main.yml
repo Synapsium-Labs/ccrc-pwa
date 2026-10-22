@@ -1,10 +1,10 @@
-# Every merge to main becomes a PRERELEASE carrying a provenance bundle
-# (designs 2026-09-18 §3 and 2026-09-20 §4). Thin by design, like release.yml:
+# Every merge to main that changes what ships becomes a PRERELEASE carrying
+# a provenance bundle (designs 2026-09-18 §3 and 2026-09-20 §4). Thin by design, like release.yml:
 # deploy/release-main.sh owns the derivation, the local tag, the build, the
 # push and the publish — in TWO ARMS, so the attest ACTION can run between
 # them — and both arms are tested locally (server/test/release-main.test.ts).
-# The one expression this file decides, the attest step's `if:`, is pinned
-# in server/test/build-release.test.ts.
+# The two expressions this file decides, setup-node's `if:` and the attest
+# step's `if:`, are pinned in server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge (spec §2, decision 4). There is no post-merge test run to
@@ -54,7 +54,21 @@ jobs:
           # both need the tags present, not a shallow single-commit fetch.
           fetch-depth: 0
 
+      # Decide first, with the runner's own node, as release-stable.yml's gate
+      # does: does this merge change what ships? The token serves only the
+      # published-base check; this step installs nothing, and no later step
+      # but the publish holds a token. A merge that changes nothing that ships
+      # skips the toolchain and its cache below (D-6401).
+      - name: Decide whether this merge changes what ships
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash deploy/release-main.sh decide --out release-out
+
+      # Only when a build follows: a skipped merge installs nothing, and the cache
+      # would have nothing to save.
       - uses: actions/setup-node@v4
+        if: steps.decide.outputs.build != 'false'
         with:
           node-version-file: server/package.json
           cache: npm
@@ -65,7 +79,8 @@ jobs:
             ui/package-lock.json
 
       # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing
-      # reaches origin here.
+      # reaches origin here. On a merge decide skipped, it records that and
+      # builds nothing.
       - name: Derive the next tag and build the artifact
         run: bash deploy/release-main.sh prepare --out release-out
 
@@ -74,7 +89,8 @@ jobs:
       # is published beside the tarball and every `ccrc update` verifies it
       # against exactly this identity (…/release-main.yml@refs/heads/main).
       # Skipped when prepare built nothing — an already-tagged HEAD is
-      # release.yml's — because the action refuses an empty subject glob;
+      # release.yml's, or prepare cut no release because nothing that ships
+      # changed — because the action refuses an empty subject glob;
       # `hashFiles` is '' when nothing matches.
       - uses: actions/attest-build-provenance@v4
         id: attest
