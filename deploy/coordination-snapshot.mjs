@@ -26,11 +26,13 @@
 // inside a complete record, a chain break: all are corruption, not a crash artefact, and refuse capture exactly as before. A differential
 // row in `coordination-snapshot.test.ts` feeds both sides the same files.
 //
-// WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, never writes
-// outside the directory it is given (capture) or `~/.ccrc` (restore), and never touches a service: restore asks whether the
-// server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. The one thing it deletes is the four snapshot
-// files (`SNAPSHOT_NAMES`) inside a backup directory it is told to thin, and only after it has written that directory's record (`THINNED_FILE`); it
-// deletes nothing else there, and nothing outside such a directory. While the marker stands,
+// WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, and never touches a
+// service: restore asks whether the server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable.
+// It writes only the directory it is given (capture), `~/.ccrc` (restore and recover) and, for `thin`, each backup directory it is told to thin.
+// What it deletes: capture, only its own partials; restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
+// thin, only the four snapshot files (`SNAPSHOT_NAMES`, after writing that directory's record, `THINNED_FILE`), a stale thinning record and its own
+// `.partial` temp, and never the `--verified` directory's. Nothing else there, and nothing outside such a directory.
+// While the marker stands,
 // delegation recovery (`recoverDelegationFromFiles`) refuses to run, and the server's boot refuses too (it exits 1 before opening coord.db, naming `recover`). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
 //
@@ -836,6 +838,9 @@ function exactKeys2(o, keys, what, code = 'manifest-invalid') {
   for (const k of keys) if (!Object.hasOwn(o, k)) refuse(code, `${what} is missing ${JSON.stringify(k)}`);
 }
 
+/** The order a thinning deletes its files in, and so the only order a record's `dropped` may list them in (D-6348): the manifest goes last. */
+const DROP_ORDER = Object.freeze([DB_FILE, JOURNAL_FILE, CHECKPOINT_FILE, MANIFEST_FILE]);
+
 /**
  * Reads the thinning record (D-6348): one line of canonical JSON and an LF, exactly
  * `{format, version: 1, thinnedAt, by, rule: {knob, keep}, source, capturedAt, dropped}`. Throws a `thinned-invalid` SnapError on any defect.
@@ -854,7 +859,8 @@ function readThinned(fs, p) {
   const body = text.slice(0, -1);
   let t;
   try { t = JSON.parse(body); } catch { return bad('the record is not JSON'); }
-  if (findJsonDefect(body) !== null) bad('the record repeats a key');
+  const defect = findJsonDefect(body);
+  if (defect !== null) bad(`the record is not clean JSON (${defect})`);
   if (!isRecord(t)) bad('the record is not an object');
   exactKeys2(t, ['format', 'version', 'thinnedAt', 'by', 'rule', 'source', 'capturedAt', 'dropped'], 'the record', 'thinned-invalid');
   if (t.format !== THINNED_FORMAT || t.version !== 1) bad('the record is not a ccrc-coordination-thinned version 1');
@@ -868,15 +874,20 @@ function readThinned(fs, p) {
   if (t.source === 'v1' ? (typeof t.capturedAt !== 'string' || Number.isNaN(Date.parse(t.capturedAt))) : t.capturedAt !== null) bad('capturedAt does not fit source');
   if (!Array.isArray(t.dropped) || t.dropped.length === 0) bad('dropped is not a non-empty array');
   const seen = new Set();
+  let at = -1;
   for (const d of t.dropped) {
     if (!isRecord(d)) bad('a dropped entry is not an object');
     exactKeys2(d, ['filename', 'bytes', 'sha256'], 'a dropped entry', 'thinned-invalid');
     if (!SNAPSHOT_NAMES.includes(d.filename)) bad(`dropped names ${JSON.stringify(d.filename)}, which is not one of the four snapshot files`);
     if (seen.has(d.filename)) bad(`dropped names ${d.filename} twice`);
     seen.add(d.filename);
+    const rank = DROP_ORDER.indexOf(d.filename);
+    if (rank < at) bad(`dropped lists ${d.filename} out of the drop order (${DROP_ORDER.join(', ')})`);
+    at = rank;
     if (!Number.isSafeInteger(d.bytes) || d.bytes < 0 || !isHex64(d.sha256)) bad(`dropped ${d.filename} bytes or sha256 is malformed`);
   }
   if (t.source === 'legacy' && (t.dropped.length !== 1 || t.dropped[0].filename !== DB_FILE)) bad('a legacy record drops coord.db alone');
+  if (t.source === 'v1' && t.dropped[t.dropped.length - 1].filename !== MANIFEST_FILE) bad(`a v1 record ends with ${MANIFEST_FILE}, the last file a thinning deletes`);
   let canonical;
   try { canonical = canonicalJson(t); } catch { return bad('the record is outside the canonical domain'); }
   if (canonical !== body) bad('the record is not the canonical encoding of its own value');
@@ -1012,7 +1023,19 @@ function quickBody(fs, dir) {
   const db = fs.lstat(path.join(dir, DB_FILE));
   if (db === null) return { word: 'none', detail: 'no manifest, no sidecars and no coord.db' };
   if (!db.isFile()) return bad('coord.db is not a regular file');
-  return { word: 'full', source: 'legacy', detail: 'a coord.db with no manifest, not inspected' };
+  // The one read a legacy dir costs (D-6361): thinning cannot be undone and a damaged dir is never thinned, so a file that is not
+  // SQLite is damage and stays as it is, never a data set dropped "by design".
+  let magic;
+  try {
+    const h = fs.openRead(path.join(dir, DB_FILE));
+    if (h === null) return bad('coord.db could not be read');
+    try { magic = h.size < SQLITE_MAGIC.length ? null : Buffer.from(h.read(0, SQLITE_MAGIC.length)).toString('latin1'); } finally { h.close(); }
+  } catch (err) {
+    if (hasCode(err)) return bad(`unreadable (${err.code})`);
+    throw err;
+  }
+  if (magic !== SQLITE_MAGIC) return bad('coord.db is not a SQLite database (bad header)');
+  return { word: 'full', source: 'legacy', detail: 'a coord.db with no manifest and the SQLite header' };
 }
 
 /**
@@ -1100,7 +1123,9 @@ function finishOne(fs, dir, t) {
  * `own` first and never thinned, then `dirs` newest first. `verified` (one of `dirs`) was verified by the caller in this same run.
  * A dir is verified in full only when it is about to be counted, within a budget of `keep + 2` verifications; past the count a dir is
  * read by presence and size, and one pre-migration data set is kept (D-6358). `out(line)` is called once per line, as it happens.
- * It throws a SnapError only for a call that is wrong in itself, and anything else only for a helper failure.
+ * It throws a SnapError only for a call that is wrong in itself (a `dirs` list not strictly newest first by name, D-6362, included), and anything else
+ * only for a helper failure. The `verified` dir is never thinned (D-6362). `left` counts the dirs that still hold a data set and were left
+ * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir and a dir with no data set are not counted (D-6363).
  * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
  */
 export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = realFs, now = () => new Date(), out }) {
@@ -1110,7 +1135,9 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   const verP = verified === null ? null : path.resolve(verified);
   const all = dirs.map((d) => path.resolve(d));
   if (verP !== null && !all.includes(verP)) refuse('thin-usage', 'the verified directory is not one of the directories to walk');
-  const walk = all.filter((d, i) => d !== ownP && all.indexOf(d) === i);
+  // The count means "the newest N", so the order is part of the call (D-6362): strictly newest first by name, never sorted here.
+  for (let i = 1; i < all.length; i++) if (!(path.basename(all[i - 1]) > path.basename(all[i]))) refuse('thin-usage', 'the directories are not strictly newest first by name');
+  const walk = all.filter((d) => d !== ownP);
   const budget = keep + 2;
   const mib = (bytes) => Math.floor(bytes / 1048576);
   const sum = (dropped) => dropped.reduce((s, d) => s + d.bytes, 0);
@@ -1121,7 +1148,12 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     if (thinned > 0 || refused > 0 || stopped) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
   };
   const warn = (dir, why) => { out(`WARN: could not thin ${path.basename(dir)}: ${why} — it is left as it is`); refused++; };
-  const whyOf = (err) => (err instanceof SnapError ? err.message : `${err.code}: ${oneLine(err.message)}`);
+  /** A node error's message already begins with its code (`EIO: i/o error, …`), so the code is added only when the message lacks it. */
+  const whyOf = (err) => {
+    if (err instanceof SnapError) return err.message;
+    const m = oneLine(err.message);
+    return m.startsWith(`${err.code}: `) ? m : `${err.code}: ${m}`;
+  };
   const hasDb = (q) => q.source === 'legacy' || q.manifest.members.coordDb.present;
   /** The schema version the pre-migration check compares against: the first counted set that has a coord.db. */
   const noteCounted = (dir, q) => { if (refUv === null && hasDb(q)) refUv = dbUserVersion(fs, path.join(dir, DB_FILE)); };
@@ -1132,8 +1164,17 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     const v = classify({ from: dir, fs });
     return (v.kind === 'v1' && v.data === true) || v.kind === 'legacy';
   };
-  const stop = () => {
+  /** Whether a dir still holds something of a data set; a `none` or a `thinned` dir does not. */
+  const holdsData = (q) => q.word !== 'none' && q.word !== 'thinned';
+  /** The walk ends here: `rest` (this dir and every older one) is untouched, and each that still holds a data set is left as it is. */
+  const stop = (rest) => {
     stopped = true;
+    for (const d of rest) {
+      try { if (holdsData(quickState(fs, d))) left++; } catch (err) {
+        if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+        left++;
+      }
+    }
     out(`thinning stopped: ${spent} full verifications spent before the walk ended — every older backup is untouched until a later run`);
   };
 
@@ -1156,7 +1197,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     }
   }
 
-  for (const dir of walk) {
+  for (const [at, dir] of walk.entries()) {
     const name = path.basename(dir);
     try {
       const st = fs.lstat(dir);
@@ -1175,16 +1216,16 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
         out(`${name}: removed a thinning record that never started; the backup is whole`);
         q = quickBody(fs, dir);
       }
-      if (q.word !== 'full') { left++; continue; }
+      if (q.word !== 'full') { if (holdsData(q)) left++; continue; }
       if (counted < keep) {
-        if (dir !== verP && spent >= budget) { stop(); break; }
+        if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
         if (verify(dir)) { counted++; noteCounted(dir, q); } else left++;
         continue;
       }
       if (preMigration === 0 && refUv !== null && hasDb(q)) {
         const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
         if (uv !== null && uv < refUv) {
-          if (dir !== verP && spent >= budget) { stop(); break; }
+          if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
           if (verify(dir)) {
             preMigration++;
             out(`kept ${name}: its coord.db predates a schema migration (user_version ${uv} < ${refUv}), so it is the one data set kept from before it`);
@@ -1192,12 +1233,14 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
           continue;
         }
       }
+      if (dir === verP) { left++; continue; }
       const dropped = thinOne(fs, dir, q, { keep, by, now });
       out(`thinned ${name}: dropped its coordination data set (${mib(sum(dropped))}M: ${dropped.map((d) => d.filename).join(', ')}); its code is kept, and ${THINNED_FILE} records when and why (CCRC_BACKUP_DATA_KEEP=${keep})`);
       thinned++;
     } catch (err) {
       if (!(err instanceof SnapError) && !hasCode(err)) throw err;
       warn(dir, whyOf(err));
+      if (err.code !== 'thin-not-a-dir') left++;
     }
   }
   summary();

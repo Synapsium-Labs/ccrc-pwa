@@ -2277,7 +2277,7 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
     expect(classifyCli(dir)).toMatchObject({ status: 1, stdout: 'thinned\n' });
     expect(classifyCli(dir, 'validate').stdout).toBe(
       'thinned: thinned 2026-10-22T00:00:00.000Z by ccrc update (CCRC_BACKUP_DATA_KEEP=3): its coordination data set was dropped by design\ndata: no\n');
-    expect(H.classify({ from: dir })).toMatchObject({ kind: 'thinned', data: false });
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'thinned', data: false, thinned: { by: 'update' } });
   });
 
   it('W23-H2: the record beside some but not all of the names it lists is invalid, and says a thinning did not finish', () => {
@@ -2289,6 +2289,10 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
       expect(H.classify({ from: copy }).reason, name).toBe(`a thinning did not finish: ${name} is still beside coordination-thinned.json (the next completed update or ccrc backup finishes it)`);
       expect(classifyCli(copy), name).toMatchObject({ status: 2, stdout: 'invalid\n' });
     }
+    // Two of the four left: the reason names the first present in SNAPSHOT_NAMES order, which is the manifest, not coord.db.
+    const two = assembled(full, '20261014-160000', ['coord.db', 'coordination-snapshot.json']);
+    expect(H.classify({ from: two })).toMatchObject({ kind: 'invalid' });
+    expect(H.classify({ from: two }).reason).toBe('a thinning did not finish: coordination-snapshot.json is still beside coordination-thinned.json (the next completed update or ccrc backup finishes it)');
   });
 
   describe('W23-H3: a record that is not one is invalid, never thinned', () => {
@@ -2308,6 +2312,9 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
       ['an empty dropped', (d, v) => putRecord(d, { ...v, dropped: [] })],
       ['a dropped filename outside the four', (d, v) => putRecord(d, { ...v, dropped: [...v.dropped, { filename: 'agent-dist', bytes: 1, sha256: 'a'.repeat(64) }] })],
       ['a duplicate filename', (d, v) => putRecord(d, { ...v, dropped: [...v.dropped, v.dropped[0]] })],
+      ['dropped out of the drop order (the first two swapped)', (d, v) => putRecord(d, { ...v, dropped: [v.dropped[1], v.dropped[0], ...v.dropped.slice(2)] })],
+      ['dropped with the manifest first', (d, v) => putRecord(d, { ...v, dropped: [v.dropped[3], ...v.dropped.slice(0, 3)] })],
+      ['a v1 record with no manifest entry', (d, v) => putRecord(d, { ...v, dropped: v.dropped.slice(0, 3) })],
       ['a symlink at coordination-thinned.json', (d) => { writeFileSync(path.join(d, 'elsewhere'), 'x\n'); symlinkSync(path.join(d, 'elsewhere'), path.join(d, RECORD)); }],
     ];
     for (const [name, make] of cases) {
@@ -2320,6 +2327,16 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
         expect(classifyCli(dir), name).toMatchObject({ status: 2, stdout: 'invalid\n' });
       });
     }
+  });
+
+  it('W23-H8: the reason carries the JSON defect that findJsonDefect names, not a fixed phrase', () => {
+    const dup = recordDir();
+    const text = H.canonicalJson(dup.value);
+    writeFileSync(path.join(dup.dir, RECORD), `${text.replace('{', '{"by":"update",')}\n`);
+    expect(H.classify({ from: dup.dir }).reason).toMatch(/^the thinning record is unreadable: .*duplicate-key/);
+    const deep = recordDir();
+    writeFileSync(path.join(deep.dir, RECORD), `${'['.repeat(70)}${']'.repeat(70)}\n`);
+    expect(H.classify({ from: deep.dir }).reason).toMatch(/^the thinning record is unreadable: .*malformed-json/);
   });
 
   it('W23-H4: restore refuses a thinned source as source-thinned, exit 2, and the live set is byte-identical', () => {
@@ -2543,7 +2560,7 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(existsSync(path.join(invalid, 'coord.db'))).toBe(true);
     expect(H.classify({ from: valid }).kind).toBe('v1');
     expect(dirListing(oldest)).toEqual(AFTER);
-    expect(linesOf(r.stdout)).toEqual([thinnedLine(stamp(4), 2), 'coordination data sets: 2 kept, 1 thinned this run, 4 left as they are']);
+    expect(linesOf(r.stdout)).toEqual([thinnedLine(stamp(4), 2), 'coordination data sets: 2 kept, 1 thinned this run, 1 left as they are']);
   });
 
   it('W23-T4: a legacy coord.db past the count is thinned with source legacy, capturedAt null and coord.db as its one dropped member, measured', () => {
@@ -2603,7 +2620,7 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(lines.find((l) => l.startsWith('WARN: '))).toMatch(new RegExp(`^WARN: could not thin ${stamp(7)}: thin-foreign: .* — it is left as it is$`));
     expect(treeDigest(victim)).toEqual(before);
     expect(dirListing(older)).toEqual(AFTER);
-    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 0 left as they are');
+    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
   });
 
   it('W23-T7: own that is not a directory refuses the whole act: exit 3, one WARN line, nothing thinned', () => {
@@ -2701,7 +2718,7 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
         expect(warns[0]).toMatch(new RegExp(`^WARN: could not thin ${stamp(7)}: thinned-invalid: .* — it is left as it is$`));
         expect(treeDigest(victim)).toEqual(before);
         expect(dirListing(older)).toEqual(AFTER);
-        expect(linesOf(r.stdout).at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 0 left as they are');
+        expect(linesOf(r.stdout).at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
       });
     }
   });
@@ -2810,8 +2827,89 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(r.status).toBe(3);
     expect(linesOf(r.stdout)).toEqual([
       'thinning stopped: 4 full verifications spent before the walk ended — every older backup is untouched until a later run',
-      'coordination data sets: 0 kept, 0 thinned this run, 4 left as they are',
+      'coordination data sets: 0 kept, 0 thinned this run, 7 left as they are',
     ]);
     all.forEach((d, i) => expect(treeDigest(d), d).toEqual(before[i]));
+  });
+
+  it('W23-T15 (D-6361): a coord.db past the count with no manifest is thinned only when its first 16 bytes are the SQLite magic; otherwise it is damaged and left byte-identical', () => {
+    const cases: Array<[string, Buffer]> = [['not SQLite', Buffer.alloc(300, 0x61)], ['shorter than the magic', Buffer.from('SQLite')]];
+    for (const [name, body] of cases) {
+      const home = mkHome();
+      const tpl = template(home, '20260101-000000');
+      const own = clone(home, tpl, stamp(9));
+      const d1 = clone(home, tpl, stamp(8));
+      const legacy = path.join(home, 'ccrc-backups', stamp(7));
+      mkdirSync(legacy, { recursive: true });
+      writeFileSync(path.join(legacy, 'coord.db'), body);
+      addCode(legacy);
+      const older = clone(home, tpl, stamp(6));
+      expect(H.quickState(H.realFs, legacy), name).toMatchObject({ word: 'damaged' });
+      const before = treeDigest(legacy);
+      const r = thinCli(home, argv({ keep: 2, own, dirs: [d1, legacy, older] }));
+      expect(r.stderr, name).toBe('');
+      expect(r.status, name).toBe(0);
+      expect(treeDigest(legacy), name).toEqual(before);
+      expect(linesOf(r.stdout), name).toEqual([thinnedLine(stamp(6), 2), 'coordination data sets: 2 kept, 1 thinned this run, 1 left as they are']);
+    }
+  });
+
+  it('W23-T16 (D-6362): the --verified dir is counted when the count is below keep and otherwise left as it is, never thinned', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, x, v, older] = [9, 8, 7, 6].map((n) => clone(home, tpl, stamp(n))) as [string, string, string, string];
+    const before = treeDigest(v);
+    const r = thinCli(home, argv({ keep: 2, own, verified: v, dirs: [x, v, older] }));
+    expect(r.status).toBe(0);
+    expect(treeDigest(v)).toEqual(before);
+    expect(H.classify({ from: v })).toMatchObject({ kind: 'v1', data: true });
+    expect(dirListing(older)).toEqual(AFTER);
+    expect(linesOf(r.stdout)).toEqual([thinnedLine(stamp(6), 2), 'coordination data sets: 2 kept, 1 thinned this run, 1 left as they are']);
+  });
+
+  it('W23-T17 (D-6362): a --dir list that is not strictly newest-first by name exits 70 and touches nothing', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, a, b, c] = [9, 8, 7, 6].map((n) => clone(home, tpl, stamp(n))) as [string, string, string, string];
+    const before = [own, a, b, c].map(treeDigest);
+    for (const [name, dirs] of [['ascending', [c, b, a]], ['one out of place', [a, c, b]], ['a repeat', [a, a, b]]] as const) {
+      const r = thinCli(home, argv({ keep: 2, own, dirs: [...dirs] }));
+      expect(r.status, name).toBe(70);
+      expect(r.stdout, name).toBe('');
+      expect(r.stderr, name).toMatch(/^coordination snapshot: thin-usage: /);
+      expect(() => H.thinBackups({ own, dirs: [...dirs], keep: 2, by: 'update', out: () => undefined }), name).toThrow(/^thin-usage: /);
+    }
+    [own, a, b, c].forEach((d, i) => expect(treeDigest(d), d).toEqual(before[i]));
+  });
+
+  it('W23-T18 (D-6363): the summary counts only dirs that still hold a data set and were left as they are: an already thinned dir and a dir with no data set are not counted, a damaged one is', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    setLive(home, { journal: null, checkpoint: null, db: null });
+    const emptyTpl = snapshotOf(home, '20260101-000001');
+    const own = clone(home, tpl, stamp(9));
+    const d1 = clone(home, tpl, stamp(8));
+    const already = clone(home, tpl, stamp(7));
+    thinByHand(already, tpl);
+    const empty = path.join(home, 'ccrc-backups', stamp(6));
+    cpSync(emptyTpl.dir, empty, { recursive: true });
+    const codeOnly = path.join(home, 'ccrc-backups', stamp(5));
+    addCode(codeOnly);
+    const damaged = clone(home, tpl, stamp(4));
+    writeFileSync(path.join(damaged, 'coord.db'), Buffer.concat([readFileSync(path.join(damaged, 'coord.db')), Buffer.from('x')]));
+    const last = clone(home, tpl, stamp(3));
+    const { r, lines } = run({ own, dirs: [d1, already, empty, codeOnly, damaged, last], keep: 2, by: 'update', fs: H.realFs });
+    expect(r).toMatchObject({ kept: 2, thinned: 1, left: 1, refused: 0 });
+    expect(lines.at(-1)).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
+  });
+
+  it('W23: a node error prints its code once in the WARN detail', () => {
+    const home = mkHome();
+    const tpl = template(home, '20260101-000000');
+    const [own, d1, victim] = [9, 8, 7].map((n) => clone(home, tpl, stamp(n))) as [string, string, string];
+    const target = path.join(victim, 'coord.db');
+    const fs = { ...H.realFs, unlink(p: string) { if (p === target) throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' }); return H.realFs.unlink(p); } };
+    const { lines } = run({ own, dirs: [d1, victim], keep: 2, by: 'update', fs });
+    expect(lines).toContain(`WARN: could not thin ${stamp(7)}: EIO: i/o error, unlink — it is left as it is`);
   });
 });
