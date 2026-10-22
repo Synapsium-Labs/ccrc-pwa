@@ -155,60 +155,102 @@ One PR, from this workspace's own branch.
 
 Each guard this wave adds, the mutation that removes or weakens it, and the row that goes red. The worker measures each one once, before and after (mutate, run the row, see red, restore), and records the result in the as-built note.
 
-| Guard | Mutation | Red row |
+Re-measured in fix round 1 (review 812, F8). Each mutation was applied alone, the whole named file was run, and the file was restored byte-identical. The release-main rows were measured again with `deploy/release-scope.mjs` held stable, after a first pass ran while another fix was mutating the helper (only one row changed: a `git show` failure read as agreement reds W25-R16 alone). A row title shortened for the table keeps its row id.
+
+| File run | Mutation | Red rows, as measured |
 |---|---|---|
-| `notShipped`'s tree boundary | `p.startsWith(tree)` without the `/` | W25-S1 (`server/testx/a.ts`, `docsx/a.md`) |
-| Root rules match the root only | `*.md` matched at any depth | W25-S1 (`ccd/worker-skill/SKILL.md`, `agent/CLAUDE.md`) |
-| `--no-renames` | flag dropped | W25-S6 |
-| Base is the tag, not the last commit | diff `HEAD^` against `HEAD` | W25-S8, W25-R5 |
-| The dash guard | the leading-`-` check deleted | W25-S9 (`--output=` leaves a file and answers `unchanged 0`) |
-| The README names exactly the list | a seventh rule added to `NOT_SHIPPED` only | W25-S13 |
-| Overlap guard | `shippedViolations` returns `[]` | W25-G3 (every case) |
-| tsconfig `paths`/`typeRoots` are inputs | those entries not added | W25-G3 (the two tsconfig cases) |
-| Unparsed growth refuses | the count checks deleted | W25-G4 (the `PATHSPEC+=` and `npm run` cases) |
-| build-release.sh totality | the `"$ROOT"` line scan deleted | W25-G4 (`cp -a "$ROOT/LICENSE"`, a second `archive`) |
-| The package-script model | the `scripts` comparison deleted | W25-G4 (postbuild, `-p`, `prepare` cases) |
-| `file:` dependencies are modelled | the `file:` check deleted | W25-G4 (`file:../docs`) |
-| vite path keys refuse | the key check deleted | W25-G4 (`publicDir`) |
-| Import escape, JS/TS | `importEscapes` returns `[]` | W25-G5 (the two planted escapes) |
-| Import escape, CSS, HTML, triple-slash, `file:` names | each extractor deleted | W25-G5 (its own planted case) |
-| Symlink escape | `linkEscapes` returns `[]` | W25-G6 |
-| Only a positive answer skips | skip on `[ "$CHANGE" != changed ]` | W25-R8, W25-R9 |
-| rc is part of the answer | rc ignored | W25-R9 (`exited 3`) |
-| The base's helper must agree | the second `scope_ask` deleted | W25-R15 |
-| A base with no helper is unmeasured | the `git show` failure read as agreement | W25-R16 |
-| Published-base check | `base_published` always returns 0 | W25-R10 |
-| Own state word | the skip writes `built false` | W25-R1 (state bytes) |
-| publish returns before the bundle refusal | the `unchanged` branch moved after the bundle check | W25-R1 (publish exit 0) |
-| `same-as` validated | the SHAPE check dropped | W25-R13 |
-| The attest tripwire | `compgen` check deleted | W25-R12 |
-| prepare skips only on exactly `same-as <highest>` | skip on any `same-as` line | W25-R17 (the stale `same-as v0.0.9` case) |
-| Summary line | the append deleted from `say` | W25-R1, W25-R3 (summary file) |
-| A failed append never fails the run | the `|| :` dropped | W25-R18 |
-| The cache gate's output | `set_output` deleted | W25-R1 (`build=false`), W25-R3 (`build=true`) |
-| The token reaches gh | `unset GH_TOKEN` added to `decide` | W25-R14 |
-| The helpers never see the token | the `env -u` prefix dropped from `scope_ask` | W25-R24 |
-| Only the decision file is excused from the dirty check | the exclusion widened (`-x` dropped, or every `??` line) | W25-R23 (the straggler case) |
-| The in-tree decision is consumed before the build | the `rm -f` deleted | W25-R23 (the shipped case) |
-| prepare makes no gh call | prepare calls `base_published` | W25-P4 |
-| The list lives only in the helper | a `docs/` literal in the script | W25-P3 |
-| No trigger filter | `paths-ignore: ['docs/**']` added | W25-Y1 |
-| The token sits on `decide` | the `env:` block removed | W25-Y2 |
-| Decide runs before the toolchain, which a skip leaves out | `setup-node` moved above `decide`, or its `if:` dropped | W25-Y3 |
-| The prepare step carries no token | `env: GH_TOKEN` added to prepare | W25-Y4 |
-| The node floor is checked | the floor check deleted from `measure_change` | W25-R20 |
-| An unreadable floor is not a pass | `node_floor_ok` returns 0 when no floor is read | W25-R21 |
-| An unreadable node version is not a pass | `node_floor_ok` returns 0 when the version does not parse | W25-R22 |
-| release-stable never promotes a contained release | promote `NEWEST` on `unchanged` | W25-T1 (exit 0, `ghArgv` not `[]`) |
-| release-stable names a contained tag | `--merged HEAD` dropped | W25-T3 |
-| release-stable ranks versions | `sort -V` becomes `sort` | W25-T4 |
-| An unmeasured answer reads as changed | the `unmeasured` case worded as `unchanged` | W25-T6 |
-| No rewind is printed | `git push origin $NEWEST^{commit}:refs/heads/stable` printed | W25-T7 |
-| The channel note | old copy restored | `settings-screen.test.tsx` `'the labels read spec …'` |
+| `release-scope.test.ts` | notShipped tree boundary (startsWith(tree) without /) | W25-S1: notShipped("server/testx/a.ts") is false; W25-S1: notShipped("docsx/a.md") is false |
+| `release-scope.test.ts` | root rules at any depth (atRoot always true) | W25-S1: notShipped("ccd/worker-skill/SKILL.md") is false; W25-S1: notShipped("ccd/coordinator-skill/references/resume.md") is false; W25-S1: notShipped("agent/CLAUDE.md") is false; W25-S1: notShipped("ui/README.md") is false; W25-S1: notShipped("docsx/a.md") is false; W25-S5: a skill file is shipped, and named; W25-G2: no tracked file at or under a build input is on the NOT_SHIPPED list |
+| `release-scope.test.ts` | --no-renames dropped | W25-S6: a move out of a shipped tree into docs still names the shipped side (no rename detection) |
+| `release-scope.test.ts` | diff HEAD^ instead of the tag | W25-S8: the base is the tag, not HEAD^ |
+| `release-scope.test.ts` | dash guard deleted | W25-S9: an unknown ref exits 1 with nothing on stdout, and a dash-leading base is refused before git runs |
+| `release-scope.test.ts` | shippedViolations returns [] | W25-G3: PATHSPEC gains docs; W25-G3: PATHSPEC gains server; W25-G3: PATHSPEC gains README.md; W25-G3: PATHSPEC gains the root as .; W25-G3: PATHSPEC gains ./docs; W25-G3: server tsconfig include gains test; W25-G3: pwa tsconfig paths reach docs; W25-G3: pwa tsconfig typeRoots reach server/test; W25-G3: pwa vite config names docs by URL |
+| `release-scope.test.ts` | tsconfig paths not added | W25-G3: pwa tsconfig paths reach docs |
+| `release-scope.test.ts` | tsconfig rootDirs/typeRoots not added | W25-G3: pwa tsconfig typeRoots reach server/test |
+| `release-scope.test.ts` | PATHSPEC+= count check deleted | W25-G4: a PATHSPEC+= line outside the loop (throws) |
+| `release-scope.test.ts` | ( cd "$ROOT/ count check deleted | W25-G4: an indented ( cd "$ROOT/ line the install parse never sees (throws) |
+| `release-scope.test.ts` | "$ROOT" line scan deleted | W25-G4: a cp of a root file (throws) |
+| `release-scope.test.ts` | archive-line pin deleted | W25-G4: git archive with an extra pathspec (throws) |
+| `release-scope.test.ts` | archive count check deleted | W25-G4: the exact modelled git archive line twice (throws) |
+| `release-scope.test.ts` | scripts comparison deleted | W25-G4: pwa postbuild reading docs (throws); W25-G4: pwa build with another tsconfig (throws); W25-G4: ui prepare script (throws) |
+| `release-scope.test.ts` | file: check deleted | W25-G4: a file: dependency on docs (throws) |
+| `release-scope.test.ts` | vite key check deleted | W25-G4: a vite publicDir (throws) |
+| `release-scope.test.ts` | importEscapes returns [] | W25-G5 a relative import of a server test helper is reported; W25-G5 a raw import of a docs file is reported; W25-G5 a triple-slash reference is reported; W25-G5 a file: dependency subpath is reported; W25-G5 a css @source is reported; W25-G5 a css @import is reported; W25-G5 a css @source of the repository root is reported; W25-G5 an @/ import that climbs out of the alias to a docs file is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css url( of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported; W25-G5 a JS import of an exact .. is reported; W25-G5 an import.meta.glob of an ancestor of a tree rule is reported; W25-G5 a css source( (throws); W25-G5 a css @plugin (throws); W25-G5 a css @config (throws); W25-G5 a css @reference (throws); W25-G5 a path in a comment is not reported, and a quoted glob is not a comment; W25-G5 an html href is reported |
+| `release-scope.test.ts` | CSS extractor branch deleted | W25-G5 a css @source is reported; W25-G5 a css @import is reported; W25-G5 a css @source of the repository root is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css url( of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported; W25-G5 a css source( (throws); W25-G5 a css @plugin (throws); W25-G5 a css @config (throws); W25-G5 a css @reference (throws); W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | CSS @import extractor deleted | W25-G5 a css @import is reported; W25-G5 a css @import of a bare relative path into docs is reported; W25-G5 a css @import through the @ alias is reported |
+| `release-scope.test.ts` | CSS @source extractor deleted | W25-G5 a css @source is reported; W25-G5 a css @source of the repository root is reported; W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported; W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | CSS url( extractor deleted | W25-G5 a css url( of a bare relative path into docs is reported |
+| `release-scope.test.ts` | HTML extractor deleted | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment; W25-G5 an html href is reported |
+| `release-scope.test.ts` | triple-slash extractor deleted | W25-G5 a triple-slash reference is reported |
+| `release-scope.test.ts` | file:-name (dep subpath) candidate deleted | W25-G5 a file: dependency subpath is reported |
+| `release-scope.test.ts` | linkEscapes returns [] | W25-G6: no tracked symlink at or under a build input points into NOT_SHIPPED |
+| `release-scope.test.ts` | F1 .. segment check deleted | W25-G4: a cp from dist that climbs out to docs (throws); W25-G4: a cp from dist that climbs out to server/test (throws) |
+| `release-scope.test.ts` | F1 installed-package check on dist deleted | W25-G4: a cp from a dist of a package that is not installed (throws) |
+| `release-scope.test.ts` | F1 dist expansion check deleted | W25-G4: a test of a dist path with an expansion (throws) |
+| `release-scope.test.ts` | F2 source( refusal deleted | W25-G5 a css source( (throws) |
+| `release-scope.test.ts` | F2 @plugin refusal deleted | W25-G5 a css @plugin (throws) |
+| `release-scope.test.ts` | F2 @config refusal deleted | W25-G5 a css @config (throws) |
+| `release-scope.test.ts` | F2 @reference refusal deleted | W25-G5 a css @reference (throws) |
+| `release-scope.test.ts` | F4 @/ resolution deleted | W25-G5 an @/ import that climbs out of the alias to a docs file is reported; W25-G5 a css @import through the @ alias is reported |
+| `release-scope.test.ts` | F4 alias disagreement check deleted | W25-G4: an @ alias that pwa and ui disagree on (throws) |
+| `release-scope.test.ts` | F4 alias underivable check deleted (ui paths) | W25-G4: an @ alias ui/tsconfig.json no longer names (throws) |
+| `release-scope.test.ts` | F4 vite alias key/shape check deleted | W25-G4: an @ alias pwa/vite.config.ts no longer names (throws) |
+| `release-scope.test.ts` | F11 JS exact . / .. deleted | W25-G5 a JS import of an exact .. is reported |
+| `release-scope.test.ts` | F11 CSS values all relative deleted | W25-G5 a css @source of a bare .. (an ancestor of server/test) is reported |
+| `release-scope.test.ts` | F14 HTML comment drop returns src | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | F14 HTML unterminated comment keeps the rest | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | F14 CSS comment drop returns src | W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | F14 CSS string-awareness deleted | W25-G5 a css @source is reported; W25-G5 a path in a comment is not reported, and a quoted glob is not a comment |
+| `release-scope.test.ts` | `@import` extractor loses `i` | an upper-case css @IMPORT is reported |
+| `release-scope.test.ts` | `@source` extractor loses `i` | a mixed-case css @Source is reported |
+| `release-scope.test.ts` | `url(` extractor loses `i` | a mixed-case css URL( is reported |
+| `release-scope.test.ts` | `@import\s*` back to `\s+` | a css @import with no space before the string is reported |
+| `release-scope.test.ts` | `@source\s*` back to `\s+` | a css @source with no space before the string is reported |
+| `release-main.test.ts` | only-positive-skips (skip on != changed) | W25-R8, W25-R9, W25-R16, W25-R20, W25-R21, W25-R22 |
+| `release-main.test.ts` | rc ignored in scope_ask | W25-R8, W25-R9, W25-R19 |
+| `release-main.test.ts` | second scope_ask deleted | W25-R15 |
+| `release-main.test.ts` | git show failure read as agreement | W25-R16 |
+| `release-main.test.ts` | base_published always 0 | W25-R1, W25-R10, W25-R14, W25-R24 |
+| `release-main.test.ts` | skip writes built false | W25-R1, W25-R2, W25-R11, W25-R26, W25-R23, W25-P2 |
+| `release-main.test.ts` | unchanged publish branch moved after bundle check | W25-R1 |
+| `release-main.test.ts` | same-as SHAPE check dropped | W25-R13 |
+| `release-main.test.ts` | compgen tripwire deleted | W25-R12 |
+| `release-main.test.ts` | prepare skips on any same-as line | W25-R17 |
+| `release-main.test.ts` | say append deleted | W25-R1, W25-R3 |
+| `: dropped (say)` | \ | \ |
+| `: dropped (set_output)` | \ | \ |
+| `release-main.test.ts` | set_output deleted | W25-R1, W25-R3 |
+| `release-main.test.ts` | unset GH_TOKEN added to decide | W25-R14, W25-R24 |
+| `release-main.test.ts` | prepare calls base_published | the pre-existing rows `refuses when origin already holds the derived tag`, the four `highest [...] → next ...` derive rows and `publish without a bundle refuses`; W25-R1, W25-R3, W25-R7, W25-R15, W25-R20, W25-P4 |
+| `release-main.test.ts` | docs/ literal in script | W25-P3 |
+| `release-main.test.ts` | floor check deleted from measure_change | W25-R20, W25-R21, W25-R22 |
+| `release-main.test.ts` | node_floor_ok returns 0 when no floor read | W25-R21 |
+| `release-main.test.ts` | node_floor_ok returns 0 when version unparsable | W25-R22 |
+| `release-main.test.ts` | exclusion widened: drop -x | W25-R23 |
+| `release-main.test.ts` | exclusion widened: every ?? line | W25-R23 |
+| `release-main.test.ts` | in-tree rm -f deleted | W25-R23 |
+| `release-main.test.ts` | -uall dropped | W25-R23 |
+| `release-main.test.ts` | env -u prefix dropped | W25-R24 |
+| `release-main.test.ts` | env -u list lacks GITHUB_STATE (F13 check) | W25-R24 |
+| `release-main.test.ts` | R25: base copy run BEFORE HEAD helper | W25-R25 |
+| `release-main.test.ts` | R25: base copy run regardless of HEAD answer | three pre-existing `highest [...] → next ...` derive rows; W25-R3, W25-R4, W25-R5, W25-R6, W25-R8, W25-R9, W25-R19, W25-R25 |
+| `release-main.test.ts` | R26: node_floor_ok final return 0 -> 1 | W25-R26 |
+| `build-release.test.ts` | Y1: paths-ignore added | W25-Y1 |
+| `build-release.test.ts` | Y2: decide env block removed | W25-Y2 |
+| `build-release.test.ts` | Y3: setup-node moved above decide | W25-Y3 |
+| `build-release.test.ts` | Y3: setup-node if: dropped | W25-Y3 |
+| `build-release.test.ts` | Y4: env GH_TOKEN on prepare | W25-Y4 |
+| `build-release.test.ts` | Y2: continue-on-error dropped | W25-Y2 |
+| `release-stable.test.ts` | T3: promote NEWEST on unchanged | W25-T1, W25-T2, W25-T3, W25-T4, W25-T6, W25-T7 |
+| `release-stable.test.ts` | T3: --merged HEAD dropped | W25-T3 |
+| `release-stable.test.ts` | T3: sort -V -> sort | W25-T4 |
+| `release-stable.test.ts` | T3: unmeasured worded as unchanged | W25-T6 |
+| `release-stable.test.ts` | T3: printing git push origin $NEWEST^{commit} | W25-T1, W25-T5, W25-T7 |
+| `release-stable.test.ts` | T3: 2>/dev/null dropped | W25-T6 |
 
 ## Deviations found
 
-These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first sixteen, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6405 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found). D-6406 to D-6409 remain the worker's reserve.
+These twenty numbers, starting at D-6390, were issued to run 793. This plan defines the first eighteen, in order: D-6390 to D-6402 from the coordinator's draft, and D-6403 to D-6407 from the worker's reserve (D-6403 for the ruling on Reading 10; D-6404 and D-6405 for what Task 2's reviews found; D-6406 and D-6407 for review 812's fix round). D-6408 and D-6409 remain the worker's reserve.
 
 - **D-6390.** The rule is "a merge whose shipped build would be unchanged cuts no release". It is implemented as a deny-by-default classifier over changed paths (option (a)). Measuring the artifact (option (b)) is rejected for this wave.
   - (a) answers before the local tag. Nothing is tagged, built or attested, so the attest step's existing `hashFiles` skip covers it with no YAML expression changed. (b) builds first, so its tarball must be moved out of the attest glob before that step runs. A mistake there mints a public transparency-log entry for a digest no release publishes, and that cannot be undone.
@@ -257,7 +299,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - GitHub evaluates it over the push's own range, which reintroduces the failed-release hazard of D-6392.
   - The existing trigger regex would let one pass unnoticed (`build-release.test.ts:658`, `m` flag, ends at `$`).
 - **D-6398.** `release-stable.sh` still promotes only the release tagged at HEAD: design 2026-09-20 decision 3 ("the tag at HEAD is the whole input") stands, by the coordinator's ruling on Reading 6. On a HEAD with no release tag it refuses, exit 2, before any `gh` call, as before. What changes is that the refusal now says what is true.
-  - Why the message changes: once docs- and tests-only merges cut no release, `main`'s head often carries none, and the old message's only cause, "a merge commit", is no longer the usual one. The push has already moved `stable` to HEAD when the script runs, and the ruleset refuses the force push a rewind would need (D-3130), so the message names the way forward: the next release cut from a descendant of HEAD, pushed by fast-forward.
+  - Why the message changes: once merges that touch only docs or the server and agent tests cut no release, `main`'s head often carries none, and the old message's only cause, "a merge commit", is no longer the usual one. The push has already moved `stable` to HEAD when the script runs, and the ruleset refuses the force push a rewind would need (D-3130), so the message names the way forward: the next release cut from a descendant of HEAD, pushed by fast-forward.
   - The arm: when HEAD carries no release tag, take `NEWEST="$(git tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)"`. With none, the reason is that HEAD contains no release tag. With one, run `bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST"`, so there is one classifier, one two-helper rule (D-6402) and one node floor (D-6403). The answer only chooses the sentence, never the exit: `unchanged` says HEAD's merges since `NEWEST` changed nothing that ships, so no release was cut for them; `changed` says HEAD changed what ships and the release-main run for its merge should be checked; `unmeasured`, a non-zero exit or any other answer says it could not be measured, reads it as changed, and says the same.
   - The message keeps the existing prefix, names `NEWEST` as the newest release HEAD contains, never as something to push, and prints no rewind or force command. Its only command is the placeholder `git push origin <tag>^{commit}:refs/heads/stable`, where `<tag>` is literal text for a release not yet cut.
   - D-3129's count check on HEAD's own tags is unchanged. `NEWEST`'s commit is never promoted, so no count is taken there.
@@ -281,7 +323,7 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - **Release notes.** The next release's notes list the skipped `docs(…)` commits under "Behind the scenes", within `NOTES_BUDGET_BYTES`. That is correct: the release contains them.
   - **No change.** The update catalogue, the resolver, notify's reading of published releases, the inventory, `ccrc rollout`, `rollback`, `RUNS_ATTRIBUTION_SINCE` (`shared/api.ts:9490-9501`, measured by `git tag --contains`, which still holds) and `landing.ts`.
 - **D-6401.** The decision is its own workflow step, `decide`, placed before `setup-node`. It runs with the runner's own node and holds the job's only `GH_TOKEN` before publish.
-  - The token: a token on the prepare step would sit in the environment of the step shell that runs `npm ci`. `unset` inside the script cuts inheritance, but every process of the same user can still read the step shell's `/proc/<pid>/environ`. So this wave adds no `GH_TOKEN` to a step that runs `npm ci`. `decide` installs nothing and runs only bash, git, gh, the first-party helper and the base's copy of it, and both helpers run with the token and the workflow-command files removed from their environment (`scope_ask`, W25-R24).
+  - The token: a token on the prepare step would sit in the environment of the step shell that runs `npm ci`. `unset` inside the script cuts inheritance, but every process of the same user can still read the step shell's `/proc/<pid>/environ`. So this wave adds no `GH_TOKEN` to a step that runs `npm ci`. `decide` installs nothing and runs only bash, git, gh, the first-party helper and the base's copy of it, and the token and the workflow-command files are not passed to either helper's environment (`scope_ask`, W25-R24). That is hygiene, not a boundary: a child can read its parent's environment from `/proc`, and the checkout's credential sits in `.git/config` (D-6405).
   - What this does not claim (corrected by D-6405): that the `npm ci` step reaches no token. The checkout's persisted credential and the job's OIDC request token reach it, as they did before this wave.
   - The cache: a skipped merge runs no npm. With `setup-node`'s `cache: npm` the post step would then try to save an `~/.npm` that, on a cache miss, does not exist, and it can fail the job. `setup-node` therefore runs only on `if: steps.decide.outputs.build != 'false'`. An absent output (`decide` did not write one) still sets up the toolchain, so the build path is the default.
   - `decide` writes `build=false` to `$GITHUB_OUTPUT` only when it records `same-as`, and `build=true` otherwise. The prepare step reads the decision file, not the output.
@@ -301,24 +343,34 @@ These twenty numbers, starting at D-6390, were issued to run 793. This plan defi
   - Rejected: gitignoring `release-out/`, which would also relax `build-release.sh`'s refusal of its own leftovers on a local second run, and moving the decision outside the work tree, which would change every row and the README's naming of it. Row W25-R23.
 - **D-6405.** Stated, not fixed: the persisted `actions/checkout` credential (the job's `contents: write` token, in `.git/config`) and the job's OIDC request token (`id-token: write` puts `ACTIONS_ID_TOKEN_REQUEST_*` into every run step) reach every step of `release-main.yml`, prepare's `npm ci` included. A hostile install script could push with the first and could mint a signing certificate for `release-main.yml@refs/heads/main`, the identity every box's updater verifies, with the second. Both predate this wave, which neither widens nor narrows them (Task 2's security review).
   - D-6401's text and the decide step's comment now say so.
+  - Why running the base tag's helper does not widen it (review 812, answer (b)): the base tag's `release-scope.mjs` runs only after HEAD's own classifier answered `unchanged` against that tag. That classifier diffs whole trees and `deploy/` ships, so the tag's copy is byte-identical to HEAD's, and the code that runs is HEAD's. Row W25-R25 pins it with an off-main higher tag whose differing helper would write a canary: decide answers changed and the canary is never written.
   - The follow-up, for the coordinator: split the build into its own job (`contents: read`, no `id-token`) that uploads `release-out/`, with `persist-credentials: false` on checkout and publish authenticating its own push. `release.yml` shares the shape and the question.
+
+- **D-6406.** Three texts this plan dictated word for word are amended to what landed (review 812, F15). Each landed text was chosen in a reviewed fix round, and the plan now says what the tree says:
+  - Task 4 Step 3's README copy: "docs- or tests-only" and "only docs or tests" became "a merge that touches only docs or the server and agent tests", because `pwa/test` and `ui/` changes still release (D-6391); and "the run stops" became "the run builds nothing".
+  - Task 2 Step 5's decide comment: the comment that landed says what `GH_TOKEN` serves, that the variables are not passed to the helpers' environment, that the checkout's persisted credential and the job's OIDC request token still reach every step (D-6405), why a failed decide releases, and why the base tag's helper runs HEAD's bytes (D-6402).
+  - W25-Y2's regex: it holds the `continue-on-error: true` line between `id: decide` and `env:`.
+- **D-6407.** `release-scope.mjs`'s CLI guard compares basenames, `basename(process.argv[1]) === basename(fileURLToPath(import.meta.url))`, not the full-path check `release-notes.mjs` uses (review 812, F10).
+  - Why: `process.argv[1]` is resolved but not realpath'd, while `import.meta.url` is the realpath. Run through a symlinked path, the full-path form answers rc 0 with empty stdout, the third state D-6393 rules out. The base tag's copy runs from a `mktemp -d` directory, which on macOS sits under the `/var` symlink, so the macOS CI leg would read every base answer as silence.
+  - A realpath comparison needs `node:fs`, which the helper does not import (it runs on the runner's own node with the four modules the Global Constraints name).
+  - Cost: a script of the same basename that imports the module would run its CLI. No caller has that name. Row W25-S14 runs the helper through a symlinked directory.
 
 ## File structure
 
-- `deploy/release-scope.mjs` (new, Task 1). It imports only `node:` modules. It has JSDoc types so `typecheck-tests` sees the shapes. Its CLI is guarded by the `process.argv[1]` check that `release-notes.mjs:204` uses.
-- `server/test/release-scope.test.ts` (new, Task 1; one row added in Task 4), with four describes:
-  - `'release-scope.mjs: what is not shipped (W25-a, D-6391)'`;
-  - `'release-scope.mjs: the answer over a real repo (W25-a, D-6392, D-6393)'`;
-  - `'NOT_SHIPPED never covers what build-release.sh builds from (W25-a, D-6396)'`;
+- `deploy/release-scope.mjs` (new, Task 1). It imports only `node:` modules. It has JSDoc types so `typecheck-tests` sees the shapes. Its CLI is guarded by comparing the basename of `process.argv[1]` with its own file's (D-6407), not by the full-path check `release-notes.mjs` uses.
+- `server/test/release-scope.test.ts` (new, Task 1; one row added in Task 4), with four describes, named as landed (the drafted names are in brackets):
+  - `'W25 the rule table'` (drafted `'release-scope.mjs: what is not shipped (W25-a, D-6391)'`);
+  - `'W25 the CLI over fixture repositories'` (drafted `'release-scope.mjs: the answer over a real repo (W25-a, D-6392, D-6393)'`);
+  - `'W25 the guard: no build input is on the NOT_SHIPPED list'` (drafted `'NOT_SHIPPED never covers what build-release.sh builds from (W25-a, D-6396)'`);
   - `'README names exactly NOT_SHIPPED (W25-d, D-6399)'`.
-- `deploy/release-main.sh` (Task 2): new `say`, `set_output`, `derive_tags`, `scope_ask`, `measure_change`, `base_published`, `decide` and `measure`, plus `prepare`, `publish`, the argument loop, the dispatch and the header.
+- `deploy/release-main.sh` (Task 2): new `say`, `set_output`, `derive_tags`, `scope_ask`, `node_floor_ok` (D-6403), `measure_change`, `base_published`, `decide`, `measure` and `decision_in_tree` (D-6404), plus `prepare`, `publish`, the argument loop, the dispatch and the header.
 - `.github/workflows/release-main.yml` (Task 2): the `decide` step, the gated `setup-node`, and the comments.
 - `server/test/release-main.test.ts` (Task 2):
   - `fixture()`, `plantBin()` and `run()` change as Task 2 Step 1 says;
-  - a new describe after `:328`, `'release-main.sh: a merge that changes nothing that ships cuts no release (W25-b)'`;
+  - a new describe after `:328`, landed as `'release-main.sh: decide — a merge that changes nothing that ships cuts no release (W25)'` (drafted `'… (W25-b)'`);
   - new pins inside `'release-main.sh: source pins'`.
 - `server/test/build-release.test.ts` (Task 2): four rows in the `release-main.yml` describe (`:652`).
-- `deploy/release-stable.sh`, `.github/workflows/release-stable.yml`, `server/test/release-stable.test.ts` (Task 3): rows in `'release-stable.sh: what it refuses'` (`:97`).
+- `deploy/release-stable.sh`, `.github/workflows/release-stable.yml`, `server/test/release-stable.test.ts` (Task 3): rows W25-T1 to T7 in a describe of their own, landed as `'release-stable.sh: the refusal of a HEAD with no release tag says what is true (W25, D-6398)'` (drafted: inside `'release-stable.sh: what it refuses'`).
 - Task 4: in-place edits, plus the README row.
 
 ## Tasks
@@ -340,7 +392,7 @@ Tasks 1 and 2 are claim group A. Task 3 is group B. Task 4 is group C. Every tes
   - CLI: `node deploy/release-scope.mjs --repo <dir> --base <tag>`. It prints `unchanged <n>` or `changed <n> <JSON.stringify(first)>` plus `\n`, and exits 0. Any thrown error goes to stderr with exit 1 and empty stdout. An unknown or missing argument exits 2 with empty stdout.
 - Consumes: nothing.
 
-- [ ] **Step 1: Write the failing rows** in `server/test/release-scope.test.ts`. Import `{ NOT_SHIPPED, notShipped, decide }` from `'../../deploy/release-scope.mjs'` (the import style of `history-replay.test.ts`). Repo fixtures use the `GIT_ENV` and `git()` shape of `release-main.test.ts:22-32` under `mkTmp`. The CLI runs through `spawnSync('node', [HELPER, '--repo', root, '--base', base], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' })`, so `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` are `/dev/null` and a developer's `diff.renames` cannot change an answer.
+- [x] **Step 1: Write the failing rows** in `server/test/release-scope.test.ts`. Import `{ NOT_SHIPPED, notShipped, decide }` from `'../../deploy/release-scope.mjs'` (the import style of `history-replay.test.ts`). Repo fixtures use the `GIT_ENV` and `git()` shape of `release-main.test.ts:22-32` under `mkTmp`. The CLI runs through `spawnSync('node', [HELPER, '--repo', root, '--base', base], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' })`, so `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` are `/dev/null` and a developer's `diff.renames` cannot change an answer.
 
 ```ts
 it.each([
@@ -376,7 +428,7 @@ it('W25-S2: six rules, each with a reason, trees bare (no slash at either end, n
   - W25-S11: adding `docs/a b.md` gives `unchanged 1\n`. Adding `ccd/a b` gives `changed 1 "ccd/a b"\n`.
   - W25-S12: `decide(['docs/a.md', 'ccd/b', 'agent/test/c', 'deploy/d'])` equals `{ word: 'changed', count: 2, first: 'ccd/b' }`, and `decide([])` equals `{ word: 'unchanged', count: 0 }`.
 
-- [ ] **Step 2: Write the guard rows** in the third describe. These test-local functions are this task's decisions:
+- [x] **Step 2: Write the guard rows** in the third describe. These test-local functions are this task's decisions:
 
 ```ts
 type Read = (rel: string) => string | null;
@@ -462,13 +514,13 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
     - `pwa/src/screens/w25.ts` holding `import { DocsLeaf } from '../docs/DocsLeaf';` reports nothing, because `pwa/src/docs` ships.
   - W25-G6: `linkEscapes(inputs, links)` at the checkout equals `[]`. With `links` holding `pwa/src/w25 -> ../../docs/a.md` it reports it.
 
-- [ ] **Step 3: Run the file and confirm red.** `cd server && timeout -s INT 560 ./node_modules/.bin/vitest run test/release-scope.test.ts --pool=forks --maxWorkers=1`. Expected: it fails to import `release-scope.mjs`.
+- [x] **Step 3: Run the file and confirm red.** `cd server && timeout -s INT 560 ./node_modules/.bin/vitest run test/release-scope.test.ts --pool=forks --maxWorkers=1`. Expected: it fails to import `release-scope.mjs`.
 
-- [ ] **Step 4: Implement `deploy/release-scope.mjs`** to the Interfaces above. The header names D-6390 to D-6393 and D-6402, and says this is the one list (the `#NOT_SHIPPED` symbol), consulted by `release-main.sh#measure_change`. It also says that a base tag's own copy of this file is run by `release-main.sh` and by the runner's own node, so it stays dependency-free. `main(argv)` returns the exit code. Each rule's `why` is one short clause (for example `'tests: outside server/tsconfig.json include; tsc and vite never read it'`).
+- [x] **Step 4: Implement `deploy/release-scope.mjs`** to the Interfaces above. The header names D-6390 to D-6393 and D-6402, and says this is the one list (the `#NOT_SHIPPED` symbol), consulted by `release-main.sh#measure_change`. It also says that a base tag's own copy of this file is run by `release-main.sh` and by the runner's own node, so it stays dependency-free. `main(argv)` returns the exit code. Each rule's `why` is one short clause (for example `'tests: outside server/tsconfig.json include; tsc and vite never read it'`).
 
-- [ ] **Step 5: Run until green.** Same command. If W25-G2, W25-G5 or W25-G6 is red at the checkout, a build input really does reach a `NOT_SHIPPED` path. If W25-G1 throws at the checkout, the base has a build shape this plan did not measure. Either way, stop and report it to the coordinator. Never narrow the guard.
+- [x] **Step 5: Run until green.** Same command. If W25-G2, W25-G5 or W25-G6 is red at the checkout, a build input really does reach a `NOT_SHIPPED` path. If W25-G1 throws at the checkout, the base has a build shape this plan did not measure. Either way, stop and report it to the coordinator. Never narrow the guard.
 
-- [ ] **Step 6: Commit.** `git add deploy/release-scope.mjs server/test/release-scope.test.ts && git commit -m "feat(release): one list of what never ships, held against build-release.sh's own inputs (D-6391, D-6396)"`.
+- [x] **Step 6: Commit.** `git add deploy/release-scope.mjs server/test/release-scope.test.ts && git commit -m "feat(release): one list of what never ships, held against build-release.sh's own inputs (D-6391, D-6396)"`.
 
 ### Task 2: decide cuts no release when nothing that ships changed, and says so (W25-b; D-6392, D-6393, D-6394, D-6395, D-6397, D-6401, D-6402, D-6403)
 
@@ -513,7 +565,7 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
     - publish, on `built unchanged`: `release-main.sh: no release for this merge — nothing that ships changed since <same-as>; nothing to push, attest or publish`
 - Produces, in `release-main.yml`, steps in this order: checkout (unchanged); `decide`; `setup-node` (unchanged inputs, gated); prepare (no `env:`); attest; publish (unchanged).
 
-- [ ] **Step 1: Change the harness** (`release-main.test.ts:39-129`), and nothing else in the existing rows' assertions.
+- [x] **Step 1: Change the harness** (`release-main.test.ts:39-129`), and nothing else in the existing rows' assertions.
   - `fixture()` gains `merge?: (root: string) => void`. It runs before `'the merge under release'` is committed with `git add -A` and without `--allow-empty`. The default writes `ccd/ccrc` as `'#!/usr/bin/env bash\necho the merge\n'` at mode 0755, a shipped change, so every existing release row still releases.
   - `fixture()` writes `server/package.json` into the `'first'` commit, holding the real `server/package.json`'s `engines` object, read at test time and never spelled as a literal (D-6403). It gains `floor?: string | null`: a string replaces `engines.node`; `null` writes `{}`.
   - `fixture()` also gains `after?: (root: string) => void` (commits `'a docs merge after it'` when given), `scope?: false | string` and `headScope?: string`. By default the real helper is copied beside the script, as `NOTES` is (`:62-64`), into the `'first'` commit, so every tag carries it. `false` leaves it out; a string plants that text as the helper in `'first'`. `headScope` writes that text over `deploy/release-scope.mjs` in the merge commit only.
@@ -522,7 +574,7 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[];
   - A new `decideThenPrepare(root, home, out, gh?, env?)` runs `decide --out <out>` and then `prepare --out <out>` and returns both results.
   - The derive row (`:197`) runs `decide --out <out>` before its `prepare`, and gains `expect(d.stdout).toContain(…)` of the changed line, with first `"ccd/ccrc"`, n 1 and `highest` = the row's highest release-shaped tag. For `[]` it is the first-release line. Its existing `gh-argv` absence check after prepare stays, because a `changed` answer never calls `gh`.
 
-- [ ] **Step 2: Write the failing rows** in the new describe. Each runs `decideThenPrepare` unless it says otherwise.
+- [x] **Step 2: Write the failing rows** in the new describe. Each runs `decideThenPrepare` unless it says otherwise.
   - **W25-R1** (docs-only skips): `merge` writes `docs/a.md` and `README.md`; tags `['v0.0.1']`; `GITHUB_STEP_SUMMARY` = `<home>/summary.md`, `GITHUB_OUTPUT` = `<home>/output`.
 
 ```ts
@@ -573,10 +625,10 @@ expect(originTags(home)).toEqual(['v0.0.1']);
   - **W25-R21** (an unreadable floor releases): docs-only, `floor: null`. It releases `v0.0.2` with `(server/package.json names no readable engines floor)`.
   - **W25-R22** (an unreadable node version releases): docs-only, with a `node` shim first on `PATH` that prints `garbage` for `--version` and otherwise `exec`s the real node (its absolute path, `process.execPath`). It releases `v0.0.2` with `(node --version answered 'garbage')`.
   - **W25-R23** (an in-tree decision, D-6404): the out directory is `<root>/release-out`. On the default shipped `merge`, decide then prepare release `v0.0.2`, and the in-tree decision file is absent afterwards. With an untracked straggler planted beside it, prepare refuses the dirty tree.
-  - **W25-R24** (the helpers never see the token): a planted helper (`scope`) answers `changed` when `GH_TOKEN` or `GITHUB_OUTPUT` is in its environment and `unchanged 0` otherwise. With `GH_TOKEN` and `GITHUB_OUTPUT` set on decide, the merge skips (`same-as v0.0.1`), and `gh-env` still reads the token.
+  - **W25-R24** (the token is not passed to the helpers' environment): a planted helper (`scope`) answers `changed` when `GH_TOKEN` or `GITHUB_OUTPUT` is in its environment and `unchanged 0` otherwise. With `GH_TOKEN` and `GITHUB_OUTPUT` set on decide, the merge skips (`same-as v0.0.1`), and `gh-env` still reads the token.
   - **W25-R19** (the measure arm): `measure --base v0.0.1` on a docs-only `merge` prints exactly `unchanged 2\n`, exit 0, with `gh-argv` and `npm-argv` absent and no `release-main.decision` written. On the default `merge` it prints `changed 1 "ccd/ccrc"\n`. With `scope: false` it prints `unmeasured release-scope.mjs exited 1\n`. `measure --base junk` and `measure` with no `--base` exit 2, and `prepare --base v0.0.1` exits 2.
 
-- [ ] **Step 3: Write the failing pins.**
+- [x] **Step 3: Write the failing pins.**
   - In `'release-main.sh: source pins'`:
     - **W25-P1**: `src()` contains `node "$helper" --repo "$ROOT" --base "$base"`, `git -C "$ROOT" show "$base:deploy/release-scope.mjs"` and `gh release view "$tag" --json isDraft --jq .isDraft`.
     - **W25-P2**: `src()` contains both `printf 'built unchanged\nsame-as %s\n'` and `printf 'built false\ntag %s\n'`.
@@ -585,15 +637,15 @@ expect(originTags(home)).toEqual(['v0.0.1']);
     - **W25-P5**: `src()` matches `/sort -V/` exactly once. The derivation is spelled once, in `derive_tags`.
   - In `build-release.test.ts`'s `release-main.yml` describe:
     - **W25-Y1**: `expect(src).not.toMatch(/^\s+paths(-ignore)?:/m)`.
-    - **W25-Y2**: `expect(src).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m)`.
+    - **W25-Y2** (as landed, D-6406): `expect(src).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        continue-on-error: true\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m)`.
     - **W25-Y3**: `src` contains `      - uses: actions/setup-node@v4\n        if: steps.decide.outputs.build != 'false'\n`, and the index of the decide `run:` is below the setup-node line's, which is below prepare's `run:`.
     - **W25-Y4**: the prepare step's block, from `      - name: Derive the next tag and build the artifact` to the next `\n      - `, contains neither `env:` nor `${{`.
 
-- [ ] **Step 4: Run both files and confirm red.** Run `release-main.test.ts`, then `build-release.test.ts`, one at a time with the Global Constraints command. Expected:
+- [x] **Step 4: Run both files and confirm red.** Run `release-main.test.ts`, then `build-release.test.ts`, one at a time with the Global Constraints command. Expected:
   - the W25-R, P and Y rows fail;
   - every pre-existing row is green, except the derive row, which now runs `decide`, an arm that does not exist yet. Any other red pre-existing row is a harness mistake: fix it before Step 5.
 
-- [ ] **Step 5: Implement.**
+- [x] **Step 5: Implement.**
   - `release-main.sh`:
     - the argument loop accepts the four arms and `--base`, and `[ -n "$ARM" ]`'s message names all four;
     - the new functions, as in the Interfaces;
@@ -606,20 +658,29 @@ expect(originTags(home)).toEqual(['v0.0.1']);
 
       ```
       # Decide first, with the runner's own node, as release-stable.yml's gate
-      # does: does this merge change what ships? The token serves only the
-      # published-base check; this step installs nothing, and no later step
-      # but the publish holds a token. A merge that changes nothing that ships
-      # skips the toolchain and its cache below (D-6401).
+      # does: does this merge change what ships? GH_TOKEN serves only the
+      # published-base check, and it is not passed to the helpers'
+      # environment. This step installs nothing. A merge that changes
+      # nothing that ships skips the toolchain and its cache below (D-6401).
+      # The base tag's own classifier runs only after HEAD's answered
+      # unchanged against that tag, and since deploy/ ships, its bytes then
+      # equal HEAD's (D-6402). The checkout's persisted credential and the
+      # job's OIDC request token still reach every step, as before this wave
+      # (D-6405). The step continues on error: a decide that crashes must not
+      # block a code merge's release, so its output is then absent, the
+      # toolchain step below still runs, and prepare, finding no decision
+      # recorded, releases as it always did.
       ```
+      (As landed, D-6406; the step itself carries `continue-on-error: true` between `id: decide` and `env:`.)
     - `setup-node` gains `if: steps.decide.outputs.build != 'false'` as its first key under `- uses:`, and this comment above it: `# Only when a build follows: a skipped merge installs nothing, and the cache would have nothing to save.`;
     - the prepare step's comment becomes `# Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing reaches origin here. On a merge decide skipped, it records that and builds nothing.`;
     - the attest comment says it is also skipped "when prepare cut no release because nothing that ships changed".
 
     None of these comments may contain `npm ci`, `npm run`, `build-release.sh` or `gh release` (`build-release.test.ts:686-687`).
 
-- [ ] **Step 6: Run both files until green**, one at a time. Then run `release-notes.test.ts`, `update-states.test.ts`, `oss-metadata.test.ts`, `workflow-yaml-parses.test.ts` and `verify-provenance.test.ts` whole, which are unchanged and run to confirm.
+- [x] **Step 6: Run both files until green**, one at a time. Then run `release-notes.test.ts`, `update-states.test.ts`, `oss-metadata.test.ts`, `workflow-yaml-parses.test.ts` and `verify-provenance.test.ts` whole, which are unchanged and run to confirm.
 
-- [ ] **Step 7: Commit.** `git commit -m "feat(release): a merge that changes nothing that ships cuts no tag, build, attestation or release (D-6392..D-6395, D-6397, D-6401..D-6403)"`.
+- [x] **Step 7: Commit.** `git commit -m "feat(release): a merge that changes nothing that ships cuts no tag, build, attestation or release (D-6392..D-6395, D-6397, D-6401..D-6403)"`.
 
 ### Task 3: release-stable's untagged-HEAD refusal says what is true (W25-c; D-6398, the ruling on Reading 6)
 
@@ -640,9 +701,9 @@ Rewritten to the coordinator's ruling on Reading 6: `release-stable.sh` never pr
 
   `<tag>` in the tail is literal text, a placeholder for a release not yet cut. The message never names `<t>` as something to push, and prints no rewind or force command.
 
-- [ ] **Step 1: Change the harness.** `fixture()` gains `scope?: boolean`: when true it copies the real `deploy/release-main.sh` and `deploy/release-scope.mjs` into `deploy/`, and writes `server/package.json` holding the real file's `engines` object (D-6403), before the first commit, so every tag carries them. `plantBin`'s `GhOpts` gains `realNode?: boolean`: when true, `node` is not poisoned. `npm` and `curl` stay poisoned in every row. The `run()` env already carries `GIT_ENV`, which the helper's own git inherits.
+- [x] **Step 1: Change the harness.** `fixture()` gains `scope?: boolean`: when true it copies the real `deploy/release-main.sh` and `deploy/release-scope.mjs` into `deploy/`, and writes `server/package.json` holding the real file's `engines` object (D-6403), before the first commit, so every tag carries them. `plantBin`'s `GhOpts` gains `realNode?: boolean`: when true, `node` is not poisoned. `npm` and `curl` stay poisoned in every row. The `run()` env already carries `GIT_ENV`, which the helper's own git inherits.
 
-- [ ] **Step 2: Write the failing rows** in `'release-stable.sh: what it refuses'`. In each, the row commits on top of `fixture(home, { tagHead: 'v1.2.3', scope: true })` and runs with `realNode: true` unless it says otherwise. Every row expects exit 2, `ghArgv(home)` equal to `[]` and stdout `''`.
+- [x] **Step 2: Write the failing rows** in `'release-stable.sh: what it refuses'`. In each, the row commits on top of `fixture(home, { tagHead: 'v1.2.3', scope: true })` and runs with `realNode: true` unless it says otherwise. Every row expects exit 2, `ghArgv(home)` equal to `[]` and stdout `''`.
   - **W25-T1** (an unreleased docs head is refused, and says nothing that ships changed): commit a `README.md` and `docs/a.md` change. Stderr contains `carries no vX.Y.Z tag; it sits past v1.2.3, the newest release it contains, and its merges since changed nothing that ships (paths changed: 2), so no release was cut for them). stable now sits past v1.2.3 and cannot move back (fast-forward only): the next release cut from a descendant of ` and ends `Nothing was changed\n`. This is the never-promote mutation row.
   - **W25-T2** (a shipped change): commit a `deploy/x.sh` change. Stderr matches the existing untagged row's regex and `/carries no vX\.Y\.Z tag; it sits past v1\.2\.3, the newest release it contains, and it changed what ships \(shipped paths changed: 1; first: "deploy\/x\.sh"\): check the release-main run for its merge/`.
   - **W25-T3** (only a contained tag): as T1, plus a side branch off the tagged commit with a commit tagged `v9.9.9`, which HEAD does not contain. Stderr names `v1.2.3` and not `v9.9.9`. This is the `--merged HEAD` mutation row.
@@ -652,18 +713,18 @@ Rewritten to the coordinator's ruling on Reading 6: `release-stable.sh` never pr
   - **W25-T7** (no rewind, no force, no push of a contained tag): over T1's and T2's cases, stderr does not match `/--force|push -f|\+refs|git reset|git push origin v[0-9]/`, and contains `git push origin <tag>^{commit}:refs/heads/stable` exactly once.
   - The existing untagged row (`'an untagged HEAD is exit 2 …'`) and the D-3129 two-tag row stay green unchanged: no tag at HEAD and none contained means no `measure` and no `node`.
 
-- [ ] **Step 3: Run and confirm red.** Run `release-stable.test.ts`. Expected: T1 to T4, T6 and T7 fail; T5 fails on its message. Every pre-existing row is green.
+- [x] **Step 3: Run and confirm red.** Run `release-stable.test.ts`. Expected: T1 to T4, T6 and T7 fail; T5 fails on its message. Every pre-existing row is green.
 
-- [ ] **Step 4: Implement** in the zero-tag branch:
+- [x] **Step 4: Implement** in the zero-tag branch:
   - `SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"`, and one local function that prints the refusal from its varying parts and exits 2, so the prefix and the tail are spelled once;
   - `NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""`; none → the no-release line;
   - otherwise `ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST")" || RC=$?`, then `case` on the answer to pick `<reason>`; every answer refuses.
 
   The header (`:1-12`): "a merge commit carries no release tag and is refused here (exit 2)" becomes "a HEAD with no release tag (a merge commit, or a `main` merge that changed nothing that ships, which release-main.sh cuts no release for) is refused here (exit 2), and the refusal names the newest release HEAD contains and whether anything that ships changed since it (D-6398)". `release-stable.yml`'s comments: `:5-6` add "and `promote` runs `deploy/release-scope.mjs` the same way, only to word a refusal"; `:7-8` "the script refuses an untagged merge HEAD" becomes "the script refuses a HEAD that carries no release tag".
 
-- [ ] **Step 5: Run until green.** Run the same file whole.
+- [x] **Step 5: Run until green.** Run the same file whole.
 
-- [ ] **Step 6: Commit.** `git commit -m "feat(release): release-stable's refusal of an untagged head names the release it contains and says what is true (D-6398)"`.
+- [x] **Step 6: Commit.** `git commit -m "feat(release): release-stable's refusal of an untagged head names the release it contains and says what is true (D-6398)"`.
 
 ### Task 4: the texts say what the lane now does (W25-d; D-6399, D-6400)
 
@@ -675,46 +736,46 @@ Rewritten to the coordinator's ruling on Reading 6: `release-stable.sh` never pr
 - Consumes: Task 2's skip line wording and `NOT_SHIPPED`'s six rules; Task 3's refusal.
 - Produces: copy, and one row.
 
-- [ ] **Step 1: The pins first.**
+- [x] **Step 1: The pins first.**
   - At `settings-screen.test.tsx:3207`, `dev:` becomes `'Every merge that changes the build, minutes after it lands.'`. Run `cd pwa && timeout -s INT 560 ./node_modules/.bin/vitest run test/settings-screen.test.tsx --pool=forks --maxWorkers=1 -t "the labels read spec"`. Expected: FAIL.
   - **W25-S13** in `release-scope.test.ts`'s fourth describe: read `README.md`, take the parenthesis that follows the text ``on its `NOT_SHIPPED` list (``, extract its backticked tokens, and assert that their sorted set equals `NOT_SHIPPED` spelled as `` `${tree}/` ``, `` `*${rootExt}` `` and `rootName`, sorted. Run it. Expected: FAIL (the sentence is not there yet).
-- [ ] **Step 2: The copy.**
+- [x] **Step 2: The copy.**
   - `UpdatesSection.tsx:70` gets the same string.
   - `radio.stories.tsx:65` becomes `'Dev — every merge that changes the build.'`.
   - `shared/api.ts:9342` becomes "`dev` is every merge that changes what ships, `stable` a promotion".
   - Re-run Step 1's pwa command. Expected: PASS.
-- [ ] **Step 3: README**, each edit in place:
-  - `:66`: "Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a docs- or tests-only merge cuts none)".
+- [x] **Step 3: README**, each edit in place:
+  - `:66`: "Every merge to `main` that changes what ships becomes a provenance-attested `dev` release (a merge that touches only docs or the server and agent tests cuts none)".
   - After the quickstart paragraph that begins at `:79`, add: "A checkout of a `main` head that no release names (a merge that changed nothing that ships) installs with no `version` in its stamp, so it raises no update floor, and a later bare `ccrc update` may move it to an older stable release. For a versioned build, check out a release tag before `bash install.sh` (`git checkout vX.Y.Z`), or install with `--release`."
-  - `:154`: "Every merge to `main` that changes what ships publishes a release, born a prerelease — the `dev` channel; a merge that touches only docs or tests publishes none, and the next release contains it."
+  - `:154`: "Every merge to `main` that changes what ships publishes a release, born a prerelease — the `dev` channel; a merge that touches only docs or the server and agent tests publishes none, and the next release contains it."
   - After `:446` ("Keep the checkout out of `~/ccrc` …"), add: "Check out a release tag first if the box should carry a version and an update floor (\"Quickstart\", above)."
-  - `:740-748`: after "derives the next patch tag from the highest `vX.Y.Z`", insert the README's one enumeration of the list: "A `decide` step first asks `deploy/release-scope.mjs` what changed between that tag's tree and HEAD's, and asks the tag's own copy of the helper too. When every changed path is on its `NOT_SHIPPED` list (`docs/`, the root's `*.md` and `LICENSE`, `server/test/`, `server/test-e2e/`, `agent/test/`), both copies agree, and that tag is a published release, the run stops: no toolchain, no tag, no build, no attestation, and one line in the log and the job summary says so. Anything else, including an answer it cannot read, releases."
+  - `:740-748`: after "derives the next patch tag from the highest `vX.Y.Z`", insert the README's one enumeration of the list: "A `decide` step first asks `deploy/release-scope.mjs` what changed between that tag's tree and HEAD's, and asks the tag's own copy of the helper too. When every changed path is on its `NOT_SHIPPED` list (`docs/`, the root's `*.md` and `LICENSE`, `server/test/`, `server/test-e2e/`, `agent/test/`), both copies agree, and that tag is a published release, the run builds nothing: no toolchain, no tag, no build, no attestation, and one line in the log and the job summary says so. Anything else, including an answer it cannot read, releases."
   - `:756-760`: "the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so it cannot be promoted;" becomes "the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, and neither does a `main` merge that changed nothing that ships, so neither can be promoted;". After the promotion command's sentence ends, add: "`main`'s head often carries no release now, so push a release's own commit (`git push origin vX.Y.Z^{commit}:refs/heads/stable`), not `main`'s head. When that commit is not the head the daily run tested, the gate runs the full suite on it first. A push of an untagged head is refused after its gate, and the refusal names the newest release it contains and whether anything that ships changed since; `stable` then stays on that head until a release cut from a descendant of it is pushed." (Ruling on Reading 6.)
-  - `:6490`: "(auto-tagging makes that the ordinary case on `main`)" becomes "(true of a `main` head whose merge changed what ships; a docs- or tests-only merge leaves the head untagged, and such a box raises no update floor)".
-- [ ] **Step 4: CLAUDE.md**, each edit in place, naming the list by symbol only:
+  - `:6490`: "(auto-tagging makes that the ordinary case on `main`)" becomes "(true of a `main` head whose merge changed what ships; a merge that touches only docs or the server and agent tests leaves the head untagged, and such a box raises no update floor)".
+- [x] **Step 4: CLAUDE.md**, each edit in place, naming the list by symbol only:
   - `:245-248`: "Every merge to `main` that changes what ships becomes a GitHub **prerelease** … (… ; patch per released merge, and a merge whose every changed path `deploy/release-scope.mjs`'s `NOT_SHIPPED` covers, by HEAD's copy and the base tag's, cuts none, so `stable` promotes a release's own commit, never such an untagged head; …)".
   - `:292-293`: "which auto-tagging makes the ordinary case on `main`" becomes "which holds only for a `main` head whose merge changed what ships".
-- [ ] **Step 5: Spec delta notes.** One blockquote under each spec's Date/Status block (`2026-09-18-release-rollout-design.md` after `:7`, `2026-09-20-centralised-update-management-design.md` after `:14`, `2026-10-18-settings-redesign-design.md` after `:13`):
+- [x] **Step 5: Spec delta notes.** One blockquote under each spec's Date/Status block (`2026-09-18-release-rollout-design.md` after `:7`, `2026-09-20-centralised-update-management-design.md` after `:14`, `2026-10-18-settings-redesign-design.md` after `:13`):
 
   > **Delta, 2026-10-22 (centralised update management wave 25, D-6390, D-6398):** a merge to `main` whose every changed path is outside what ships (`deploy/release-scope.mjs`'s `NOT_SHIPPED`: `docs/`, the root's `*.md` and `LICENSE`, the server and agent test trees) cuts no release: no tag, no build, no attestation. The next merge that changes the build takes the next patch number, and its release contains the skipped merges. Where this document says every merge is a release, read every merge that changes what ships. A push to `stable` still promotes only the release tagged at its HEAD: the tag at HEAD stays the whole input. The refusal of an untagged HEAD now names the newest release HEAD contains and whether anything that ships changed since it.
 
   For the settings spec, add: "The Dev note reads *Every merge that changes the build, minutes after it lands.*"
-- [ ] **Step 6: Run W25-S13 until green**, then `docs-parity` whole, since README changed.
-- [ ] **Step 7: Commit.** `git commit -m "docs(release): every merge that changes what ships is a release, not every merge (D-6399)"`.
+- [x] **Step 6: Run W25-S13 until green**, then `docs-parity` whole, since README changed.
+- [x] **Step 7: Commit.** `git commit -m "docs(release): every merge that changes what ships is a release, not every merge (D-6399)"`.
 
 ### Task 5: The gate and the PR
 
-- [ ] **Step 1: Landing tip.** Run `git fetch origin main`, merge it (after the first push; rebase before it), and re-read every anchor named above in the landed text.
-- [ ] **Step 2: Touched suites, one file at a time, behind the memory gate.**
+- [x] **Step 1: Landing tip.** Run `git fetch origin main`, merge it (after the first push; rebase before it), and re-read every anchor named above in the landed text.
+- [x] **Step 2: Touched suites, one file at a time, behind the memory gate.**
   - Whole, in `server/`: `release-scope`, `release-main`, `build-release`, `release-stable`, `release-notes`, `update-states`, `oss-metadata`, `workflow-yaml-parses`, `verify-provenance`.
   - By case, in `pwa/`: `settings-screen` with `-t "the labels read spec"`.
   - **Unmeasured, and so listed:** `settings-screen` beyond that case, and every suite that `shared/api.ts` selects. This PR touches `.github/`, so CI runs the full server suite (`.github/ci/select-tests.mjs`'s full trigger). Read the PR's `select tests` summary to confirm it ran in full.
-- [ ] **Step 3: Repo guards.**
+- [x] **Step 3: Repo guards.**
   - `citations`, `docs-parity`, `single-definition`, `topology-clean`, `private-names`, `dtbd`, `typecheck-tests`.
   - `GROWTH_CHECK=1 … test/growth-check.test.ts`. None of this wave's files is a growth file; run it to confirm.
-  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6405 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-5])\.\*\*'` reads 16, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
-- [ ] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15 (`ccd/worker-skill/SKILL.md:76`): `green` or `red` from the FIRST full suite run after the implementation was complete, red staying red through fix rounds, and `unrun` when no full run happened locally. The per-file runs of Steps 2 and 3, and the CI full run, are listed in the as-built note, not folded into the word.
-- [ ] **Step 5: The PR body.**
+  - After `git fetch origin main`, run `deviation-refs`. Check directly that each of D-6390 to D-6407 is defined exactly once, in this plan: `grep -cE '^- \*\*D-(639[0-9]|640[0-7])\.\*\*'` reads 18, and none of them is defined on `origin/main`. Any reserve number the worker defines is added to that pattern and that count.
+- [x] **Step 4: The wave-done fingerprint.** The `suite:` line follows worker clause 15 (`ccd/worker-skill/SKILL.md:76`): `green` or `red` from the FIRST full suite run after the implementation was complete, red staying red through fix rounds, and `unrun` when no full run happened locally. The per-file runs of Steps 2 and 3, and the CI full run, are listed in the as-built note, not folded into the word.
+- [x] **Step 5: The PR body.**
   - The rule, D-6390's argument for (a) over (b), and D-6391's six rules (the body may enumerate them; it is a dated record).
   - The decision lines.
   - The token and cache handling (D-6401): the `decide` step before `setup-node`, rows Y2 to Y4 and R14. State it honestly: the token sits in `decide`'s environment, which runs only first-party code plus git and gh; no step that runs `npm ci` holds a token beyond the one `actions/checkout` already persists.
@@ -784,3 +845,90 @@ The worker applied the rulings above to the body before Task 1. Readings 2 and 6
 - Reading 6: D-6398, Task 3 (its interfaces, rows W25-T1 to T7 and the mutation rows), the Goal, the Architecture, the Review Focus, the Risk notes, D-6391's test-tree bullet, D-6400's gate-evidence bullets, Task 4's README `:756-760` and CLAUDE.md wording, and the spec delta note now say that `release-stable.sh` refuses every untagged HEAD and never promotes a contained release.
 - Reading 10: D-6403 (the first reserve number) defines the node-floor guard. It sits in `measure_change`, so `decide` and `release-stable.sh`'s `measure` share it. Task 2 gains `node_floor_ok`, the fixture's `server/package.json` and rows W25-R20 to R22.
 - The absorb step follows worker clause 16 (merge only), replacing the drafted rebase-before-push.
+
+## Coordinator rulings on review 812 (2026-10-22)
+
+Review 812 read the tip a8c72ff9f; its F- and R-numbers refer to the review's report. Recorded verbatim, with one substitution for this public repository: an external CI check's name is written as "an external per-PR review check".
+
+The two answers that decide the landing are settled, and they stand:
+- (a) At this tip no merge that changes what ships can decide "no release". This was measured by a build diff in a scratch clone: Tailwind's scan roots at pwa/ and reaches no NOT_SHIPPED path.
+- (b) The exposure is unchanged in effect, by byte-identity.
+Everything below makes the guard hold those answers against FUTURE edits, which is D-6396's whole job. So the guard gaps are fixed in this wave, not parked.
+
+The guard: no shape it does not model may pass silently (D-6396, plan:217, "any shape outside that model makes the guard throw").
+- F1 (fix): a `..` segment anywhere in a modelled cp/test source path throws, or the source is resolved into the inputs and checked. Choose one, and say which. Pin the three measured shapes, each red with the fix removed:
+  - `cp -a "$ROOT/server/dist/../../docs" "$TOP/docs"`
+  - `cp -a "$ROOT/server/dist/../test" "$TOP/t"`
+  - `cp -a "$ROOT/docs/dist" "$TOP/x"`
+- F2 (fix): in an input CSS file these must throw unless the guard extracts their target and checks it:
+  - a `source(` anywhere;
+  - `@plugin`, `@config` and `@reference`.
+  If one of these forms already exists in the tree at the tip, extract and check that one instead of throwing, and name it in the as-built note. Pin one red row per form.
+- F4 (fix): an alias specifier (`@/…`, per pwa/vite.config.ts and ui/tsconfig.json) is resolved through the alias the configs name and then checked, or it throws. Either way, `@/../../docs/a.md?raw` must red G5. Pin it.
+- F11 (fix, same family): an exact `.` or `..` specifier, and a bare relative CSS path, are resolved or throw. Pin a future-shaped `@source '..'` case.
+- Each fix gets a mutation row, measured red, then restored byte-identical.
+
+R2 and R3, ruled as fixes, though the panel killed them as findings: the byte-identity argument is the reason (b) is safe, and nothing writes it down. So a later edit could break it unseen.
+- Say it in decide's comment and in D-6401/D-6405's text, one or two sentences each. The base tag's release-scope.mjs runs only after HEAD's own classifier answered `unchanged` against that tag, so its bytes equal HEAD's.
+- Add one fixture row. An off-main tag with a higher version carries a release-scope.mjs that differs and writes a canary file when run. decide answers changed, and the canary is never written. Mutation: run the base copy before HEAD's answer, and it reds.
+- Do NOT add a `--merged HEAD` filter. It changes which tag is the base and buys no reach.
+
+F3 (fix before landing): correct PR #1149's body to D-6400 as corrected at plan:278.
+- The landing merge releases.
+- The first docs-only merge after a successful landing release SKIPS.
+- A release there is a finding to chase, never "expected".
+gh pr edit fails on this box, so patch the body over REST. Scan the body for private names before you send it.
+
+F14 (fix): rewrite the comment strip at release-scope.test.ts:424 so CodeQL accepts it. For example, repeat the replace until the text stops changing, or match comment spans without replacing. Alert #172 must clear on the PR's own CodeQL run. Nobody dismisses it, and nobody resolves a thread by hand.
+
+Text fixes:
+- F12: the four texts say "not passed to the helper's environment", never that the helper cannot see the token.
+- F13: add GITHUB_STATE to the env -u list.
+- F5: narrow W25-P4's title to "no gh call, no token".
+- F6: prepare's reason for an absent decision names both ways (decide did not run, or it crashed after removing the file).
+- F7: add the at-the-floor row. Use a stub node on PATH reporting exactly the floor, whatever the box runs. Mutation: `return 0` → `return 1`, and it reds.
+- F8: the mutation table names the rows that actually red under each mutation. Re-measure each row before you write it.
+- F9: write the as-built note: the mutation results, the per-file runs, and the CI full run beside the suite word. Tick the task steps.
+- F10: conform to the File structure's CLI guard, `resolve(argv[1]) === fileURLToPath(import.meta.url)` as release-notes.mjs does. Keep W25-S14 if it still applies. If you had a reason for basenames, ledger it instead, from the reserve.
+- F15: amend the plan's dictated text to what landed:
+  - Task 4 Step 3's README copy;
+  - Task 2 Step 5's decide comment;
+  - W25-Y2's regex.
+  Record that change as ONE deviation from the reserve (D-6406), naming the three. Add node_floor_ok and decision_in_tree to the File structure.
+- F16: update the File structure's describe names to the landed ones. Traceability only; do not rename tests.
+
+Consents, checked by me:
+- README: all seven hunks sit in consent 8085's regions at base 93f1c459b. The paragraph inserted after the install paragraph is the one Task 4 specifies at plan:661, so it is covered.
+- CLAUDE.md: both hunks are in the "Deploy = release + rollout" bullet, outside "Known load flakes" (8081).
+- No new consent is needed unless this round moves a hunk.
+
+The red from an external per-PR review check is a per-PR gate on this PR's .github/ and test edits; main does not share it. It is not this round's to fix. main's rules are a pull request and a merge queue, with no required status checks (read at 18:10Z), so it does not gate the merge. Report its state in the wave-done.
+
+Routing is unchanged. The first full run was unrun, not red, and CI's full run is green.
+Reserve: D-6406 to D-6409, as before.
+
+Landing:
+- First-ready against runs 775 (PR #1137, now in its fix round 2), 722 and 774.
+- Measure merge-tree against origin/main and #1137's head before pushing. Absorb only on a conflict or a red, with git merge; never rebase or force-push.
+- Claims 2241 and 2246 hold.
+Mail wave-done with the fingerprint when done. A review run follows.
+
+## As built (2026-10-22)
+
+**Suite.** `suite: unrun`: no full local run happened after the implementation was complete, because the box sat at a load average of 35 to 70 throughout. CI's full run on the first PR head (`a8c72ff9f`) was green: the PR touches `.github/`, so `select tests` ran in full mode, all twelve server shards and the `test (server)` summary passed, and `test (agent)`, `test (pwa)`, `build-pwa`, `browser (pwa)`, `node floor (22.16.0)`, `probe-macos`, `storybook-a11y` and `typecheck (server)` passed. On that head CodeQL was red on one alert this wave introduced (the guard's HTML comment strip); fix round 1 rewrote both multi-character comment strips as loops (F14), so the alert should clear on the PR's own CodeQL run. An external per-PR review check was red on that head for this PR's `.github/` and test edits; it does not run on `main` and `main` requires no status checks.
+
+**Per-file runs at the fix round's tip,** one file at a time from `server/`, `--pool=forks --maxWorkers=1`:
+- release-scope 96, release-main 63, build-release 45, release-stable 22, release-notes 44, update-states 32, oss-metadata 29, verify-provenance 25, workflow-yaml-parses 17.
+- citations 4, private-names 47, topology-clean 60, single-definition 836, dtbd 1, growth-check 45 (`GROWTH_CHECK=1`), deviation-refs (after `git fetch origin main`), docs-parity 54 (Task 4).
+- typecheck-tests: one row timed out in a batch run under load, then 12 of 12 passed alone, which is the known load flake.
+- pwa `settings-screen.test.tsx`: the `the labels read spec` case (Task 4), and 240 of 240 in review 812's run.
+
+**Mutations.** Every row in the Mutation table above was measured: mutate alone, run the whole file, record the red rows, restore byte-identical. Two mutations survived a first pass and their rows were tightened before the table was written: dropping `set_output`'s `|| :` (W25-R18 now makes the output file unwritable) and dropping `-u GITHUB_STATE` (W25-R24 now sets every listed name).
+
+**Known limits of the guard (D-6396),** found by the re-review of fix round 1 and not modelled. None of these shapes exists at the tip:
+- an HTML `<!-->` comment that the spec closes at once is read as running to the next `-->`;
+- a CSS string left unclosed before a `/*` on the same line can hide a following line;
+- a vite alias written in a form other than `fileURLToPath(new URL(...))` is neither followed nor refused, unless it is the `@` alias, which must have that form;
+- an absolute filesystem path in `@source` or an import, and a `%2e` in a CSS `url()`.
+
+**Commits.** Tasks 1 to 4 and the final-review fix wave as in the ledger; fix round 1 (review 812): `0fc2f38d1`, `38010008b`, `73adb54a0`, `dbb83809a`, `02c1d47e8`, and this plan's own commit.
