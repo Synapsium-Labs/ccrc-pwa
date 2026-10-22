@@ -2244,3 +2244,314 @@ describe('W2-2b Task 3: box verbs ignore the seam (W2-D47; C28 extended)', () =>
     expect([inPane.code, inPane.json?.['reason']]).toEqual([2, 'headless-in-pane']);
   }, 240_000);
 });
+
+
+// ── W2-2b Task 4 (W2-D43, W2-D46): a counted env call carries its arm; nothing before step 4 is counted ────────────
+// recallLine (cli.mjs) is the single writer of `arm`: a RECALL_ARMS word on every counted env call, none on a tmux call,
+// and no line at all for any other value. A counter line is written iff step 4 admitted the family, and none under
+// history-off. The marker is written here in W2-D44's grammar by hand, never through formatHeadlessList: these cases
+// test the counter, and a fixture built by the formatter under test could hide its defect.
+describe('W2-D43 and W2-D46: the counter line on the env path carries its arm (W2-2b Task 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const AL_T = 'e5e5e5e5-5555-4555-8555-555555555555';
+  const AL_ID2 = 'acct-b-demo';
+  const AL_T2 = 'f6f6f6f6-6666-4666-8666-666666666666';
+  const OTHER_STORE = 'abababab-abab-4bab-8bab-abababababab';
+  const NOT_STORED = 'c7c7c7c7-7777-4777-8777-777777777777';
+  const ENV_KEYS = ['arm', 'cmd', 'ev', 'gen', 'id', 'ms', 'rc', 'ts', 'v'];
+  const TMUX_KEYS = ['cmd', 'ev', 'gen', 'id', 'ms', 'rc', 'ts', 'v'];
+  type Run = ReturnType<typeof healthHh.runCli>;
+  type Line = Record<string, unknown>;
+  const ans = (r: Run): unknown[] => [r.code, r.json?.['reason']];
+  /** Every regular file under spool/, with its bytes: a refusal before step 4 must leave all of it as it was. */
+  const spoolState = (box: HistoryBox): Array<[string, string]> => {
+    const dir = hist(box, 'spool');
+    return fs.readdirSync(dir).sort().filter((n) => fs.statSync(path.join(dir, n)).isFile())
+      .map((n): [string, string] => [n, fs.readFileSync(path.join(dir, n), 'utf8')]);
+  };
+  const linesOf = (box: HistoryBox, id: string): Line[] => {
+    const p = hist(box, 'spool', `${id}.jsonl`);
+    return (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Line);
+  };
+  /** The lines `run` added to spool/<id>.jsonl. */
+  const added = (box: HistoryBox, id: string, run: () => Run): { r: Run; lines: Line[] } => {
+    const before = linesOf(box, id).length;
+    const r = run();
+    return { r, lines: linesOf(box, id).slice(before) };
+  };
+  const writeMarker = (box: HistoryBox, storeId: string, pairs: ReadonlyArray<readonly [string, string]>): void => {
+    fs.writeFileSync(hist(box, 'headless-on'), `store ${storeId}\n${pairs.map(([i, g]) => `${i} ${g}\n`).join('')}`);
+  };
+  let seeded: { box: HistoryBox; asof: string; asofLegacy: string } | null = null;
+  /** Two families, each one manual compaction: (ID, G1), and AL_ID2's legacy '' family (a gen-less line, no
+   *  $REG/<id>.generation). Captured once for the describe; every case restores what it changes. */
+  async function seededBox(): Promise<{ box: HistoryBox; asof: string; asofLegacy: string }> {
+    if (seeded !== null) return seeded;
+    const fx = await import('./historyFixtures.js');
+    const box = makeHistoryBox('ccrc-hist-cli-zqarmline-', { role: 'fleet', shim: true });
+    const a = fx.compactionSequence({ n: 1, trigger: 'manual', sessionId: AL_T, seed: 0xe5, tailRows: 0 });
+    healthHh.seedFamily(box, { id: ID, project: 'demo', uuid: AL_T, generation: G1, rows: a.rows });
+    const b = fx.compactionSequence({ n: 1, trigger: 'manual', sessionId: AL_T2, seed: 0xf6, tailRows: 0 });
+    healthHh.seedFamily(box, { id: AL_ID2, project: 'demo', uuid: AL_T2, generation: null, rows: b.rows });
+    seeded = { box, asof: a.boundaryUuids[0]!, asofLegacy: b.boundaryUuids[0]! };
+    return seeded;
+  }
+
+  it('recallLine writes a RECALL_ARMS word or no line at all, and gen only as a UUID (W2-D43)', () => {
+    // A child process: importing cli.mjs sets the importing process's umask, so no case imports it in this worker.
+    const box = makeHistoryBox('ccrc-hist-cli-recallline-', { role: 'fleet', shim: false });
+    const src = [
+      `import { recallLine } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
+      `const base = { id: ${JSON.stringify(ID)}, cmd: 'tree', rc: 0, ms: 1, ts: 1759312800000 };`,
+      `const g = ${JSON.stringify(G1)};`,
+      'process.stdout.write(JSON.stringify({',
+      '  tmux: recallLine({ ...base, gen: g }),',
+      '  tmuxNull: recallLine({ ...base, gen: g, arm: null }),',
+      "  control: recallLine({ ...base, gen: g, arm: 'control', rc: 8 }),",
+      "  treatment: recallLine({ ...base, gen: g, arm: 'treatment' }),",
+      "  legacy: recallLine({ ...base, gen: '', arm: 'treatment' }),",
+      "  unknown: recallLine({ ...base, gen: g, arm: 'fixture' }),",
+      "  empty: recallLine({ ...base, gen: g, arm: '' }),",
+      '}));',
+    ].join('\n');
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', src],
+      { cwd: box.home, env: box.env, encoding: 'utf8', timeout: 60_000, killSignal: 'SIGTERM' });
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as Record<string, string | null>;
+    const keys = (k: string): string[] => Object.keys(JSON.parse(out[k]!) as Line).sort();
+    expect(keys('tmux'), 'a tmux call: today\'s line, no arm').toEqual(TMUX_KEYS);
+    expect(out['tmuxNull'], 'null means no arm, exactly as absent does').toBe(out['tmux']);
+    expect(keys('control'), 'W2-D43: the control arm is written').toEqual(ENV_KEYS);
+    expect(JSON.parse(out['control']!)).toMatchObject({ id: ID, gen: G1, rc: 8, arm: 'control' });
+    expect(JSON.parse(out['treatment']!)).toMatchObject({ id: ID, gen: G1, rc: 0, arm: 'treatment' });
+    expect(keys('legacy'), 'a legacy family: the arm, and no gen (section 7)').toEqual(ENV_KEYS.filter((k) => k !== 'gen'));
+    expect(out['unknown'], 'a word outside RECALL_ARMS: no line, never a line without its arm').toBeNull();
+    expect(out['empty'], 'an empty arm is no word: no line').toBeNull();
+  }, 120_000);
+
+  it('the ladder: each refusal at steps 1 to 4 writes no counter line; each answer after the admission writes one, carrying its arm; the tmux CONTROL carries none', async () => {
+    const { box, asof } = await seededBox();
+    const sid = storeIdOf(box);
+    const marker = hist(box, 'headless-on');
+    const env = (o: Record<string, string> = {}): Record<string, string> =>
+      ({ CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: asof, ...o });
+    const tree = (o: Record<string, string> = {}, args: string[] = []): Run =>
+      healthHh.runCli(box, ['tree', ...args, '--json'], { env: env(o) });
+    fs.rmSync(marker, { force: true });
+    const before = spoolState(box);
+    const none = (r: Run, want: unknown[], what: string): void => {
+      expect(ans(r), `${what}: ${r.stderr}${r.stdout}`).toEqual(want);
+      expect(spoolState(box), `${what}: no counter line before step 4 admits the family (W2-D46)`).toEqual(before);
+    };
+    // Step 1, in W2-D46's order.
+    none(tree(), [2, 'headless-unarmed'], 'step 1, no marker');
+    fs.writeFileSync(marker, 'not a marker\n');
+    none(tree(), [2, 'headless-malformed'], 'step 1, a malformed marker');
+    writeMarker(box, sid, [[ID, G1]]);
+    none(tree({ CCRC_RECALL_SESSION: '' }), [2, 'no-identity'], 'step 1, SESSION unset');
+    none(tree({ CCRC_RECALL_SESSION: '..' }), [2, 'bad-id'], 'step 1, a bad id');
+    writeMarker(box, sid, [[AL_ID2, '-']]);
+    none(tree(), [2, 'headless-unlisted'], 'step 1, not on a list line');
+    writeMarker(box, sid, [[ID, G1]]);
+    none(tree({ CCRC_RECALL_ARM: 'bogus' }), [2, 'headless-arm-unknown'], 'step 1, ARM');
+    none(tree({ CCRC_RECALL_ASOF: 'not-a-uuid' }), [2, 'asof-invalid'], 'step 1, the ASOF grammar');
+    // Step 2: the harness, still read from $REG/<id>.harness on the env path (W2-D40's residual).
+    const harness = path.join(box.reg, `${ID}.harness`);
+    fs.writeFileSync(harness, 'codex');
+    try { none(tree(), [2, 'harness-unsupported'], 'step 2, the harness'); } finally { fs.rmSync(harness); }
+    // Step 3: the store table.
+    const storeIdFile = hist(box, 'store.id');
+    const savedStoreId = fs.readFileSync(storeIdFile);
+    fs.writeFileSync(storeIdFile, `${OTHER_STORE}\n`);
+    try { none(tree(), [5, 'store-mismatch'], 'step 3, the store table'); } finally { fs.writeFileSync(storeIdFile, savedStoreId); }
+    // Step 3, faulted: the table's own store-id read, then the read-only open, then decideStatusRead. Each refuses
+    // before the admission.
+    const faults = (o: Record<string, string>): Run =>
+      healthHh.runCli(box, ['tree', '--json'], { preloads: [PRELOADS.faults], env: env(o) });
+    // The faults preload counts reader opens: n=1 is measureReach's own (measureStoreFacts' peekStoreId), which §8.3's
+    // table reads as an unreadable meta store_id; n=2 is readContextEnv's openReader, the CLI's read-only open.
+    none(faults({ HISTORY_TEST_FAIL_QUERY_ONLY: '1' }), [5, 'store-unmeasured'], 'step 3, the table: the store id unreadable');
+    none(faults({ HISTORY_TEST_FAIL_QUERY_ONLY: '2' }), [5, 'store-read-failed'], 'step 3, the read-only open');
+    const userVersionOf = (): number => {
+      const w = new DatabaseSync(dbFile(box));
+      try { return Number((w.prepare('PRAGMA user_version').get() as { user_version: number }).user_version); } finally { w.close(); }
+    };
+    const setUserVersion = (n: number): void => {
+      const w = new DatabaseSync(dbFile(box));
+      try { w.exec(`PRAGMA user_version = ${n}`); } finally { w.close(); }
+    };
+    const savedVersion = userVersionOf();
+    expect(savedVersion, 'CONTROL: the store has a version to restore').toBeGreaterThan(0);
+    setUserVersion(0);
+    try { none(tree(), [5, 'store-schema-missing'], 'step 3, decideStatusRead'); } finally { setUserVersion(savedVersion); }
+    // Step 4: the family from ASOF; a defect and a failed read of its rows, before the admission (a fault planted on
+    // asOfFamilySql's own text); then the store line. None admits, so none is counted: the defect leaves bare, rc 1.
+    none(tree({ CCRC_RECALL_ASOF: NOT_STORED }), [2, 'asof-invalid'], 'step 4, an ASOF the store does not hold');
+    const d4 = faults({ HISTORY_TEST_THROW_PREPARE: 'TypeError@AS into_merged_into' });
+    expect(d4.stderr, 'CONTROL: it is the defect arm').toContain('ccrc history: internal error: ');
+    none(d4, [1, undefined], 'step 4, a defect before the admission');
+    none(faults({ HISTORY_TEST_THROW_PREPARE: 'SqliteError:zqarmline-planted@AS into_merged_into' }), [5, 'store-read-failed'],
+      'step 4, a failed read before the admission');
+    writeMarker(box, OTHER_STORE, [[ID, G1]]);
+    none(tree(), [2, 'headless-unlisted'], 'step 4, another store\'s marker');
+    writeMarker(box, sid, [[ID, G1]]);
+    // CONTROL, one step later: step 5 (recall-off naming the resolved generation) is after the admission: one line, with
+    // the arm and the resolved generation.
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
+    fs.writeFileSync(hist(box, 'recall-off', ID), `${G1}\n`);
+    const s5 = ((): { r: Run; lines: Line[] } => {
+      try { return added(box, ID, () => tree()); } finally { fs.rmSync(hist(box, 'recall-off', ID)); }
+    })();
+    expect(ans(s5.r), `step 5: ${s5.r.stderr}`).toEqual([8, undefined]);
+    expect(s5.lines, 'step 5: exactly one counter line').toHaveLength(1);
+    expect(Object.keys(s5.lines[0]!).sort()).toEqual(ENV_KEYS);
+    expect(s5.lines[0]).toMatchObject({ v: 1, ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 8, arm: 'treatment' });
+    // Step 6: ARM=control is exit 8, counted, with its own arm (W2-D42).
+    const s6 = added(box, ID, () => tree({ CCRC_RECALL_ARM: 'control' }));
+    expect(ans(s6.r), `step 6: ${s6.r.stderr}`).toEqual([8, undefined]);
+    expect(s6.lines.map((l) => [l['rc'], l['arm'], l['gen']])).toEqual([[8, 'control', G1]]);
+    // Step 7: the verb's own answer, and a scope refusal after the admission, each counted with the arm.
+    const s7 = added(box, ID, () => tree());
+    expect(ans(s7.r), `step 7: ${s7.r.stderr}`).toEqual([0, undefined]);
+    expect(s7.lines.map((l) => [l['rc'], l['arm'], l['gen']])).toEqual([[0, 'treatment', G1]]);
+    const s7b = added(box, ID, () => tree({}, ['--session', '..']));
+    expect(ans(s7b.r), `step 7, scope: ${s7b.r.stderr}`).toEqual([2, 'bad-id']);
+    expect(s7b.lines.map((l) => [l['rc'], l['arm']]), 'a refusal after the admission is counted').toEqual([[2, 'treatment']]);
+    // CONTROL: the same family from its pane, no seam: counted, with no arm. Then an empty ARM in the pane: empty is
+    // unset (W2-D45), so it is no seam, and the tmux path still writes its line with no arm.
+    const pane = healthHh.withPane(box, ID);
+    const t = added(box, ID, () => healthHh.runCli(box, ['tree', '--json'], { env: pane }));
+    expect(ans(t.r), `tmux: ${t.r.stderr}`).toEqual([0, undefined]);
+    expect(t.lines.map((l) => Object.keys(l).sort()), 'W2-D43: never an arm on a tmux call').toEqual([TMUX_KEYS]);
+    const te = added(box, ID, () => healthHh.runCli(box, ['tree', '--json'], { env: { ...pane, CCRC_RECALL_ARM: '' } }));
+    expect(ans(te.r), `tmux, empty ARM: ${te.r.stderr}`).toEqual([0, undefined]);
+    expect(te.lines.map((l) => Object.keys(l).sort()), 'an empty ARM in a pane: counted, no arm').toEqual([TMUX_KEYS]);
+  }, 240_000);
+
+  it('a defect after the admission is counted rc 1 with its arm, and a legacy family\'s arm line carries no gen (W2-D43; section 7)', async () => {
+    const { box, asof, asofLegacy } = await seededBox();
+    writeMarker(box, storeIdOf(box), [[ID, G1], [AL_ID2, '-']]);
+    // pairIndexOf, the last read of readContext (step 7), is the one statement over redact_hashes: the throw comes after
+    // the admission, inside readContext, so it leaves as a ReadDefect.
+    const d = added(box, ID, () => healthHh.runCli(box, ['tree', '--json'], {
+      preloads: [PRELOADS.faults],
+      env: { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: asof, HISTORY_TEST_THROW_PREPARE: 'TypeError@FROM redact_hashes' },
+    }));
+    expect(d.r.code, d.r.stderr).toBe(1);
+    expect(d.r.stderr, 'CONTROL: it is the defect arm').toContain('ccrc history: internal error: ');
+    expect(d.lines, 'the defect: exactly one counter line').toHaveLength(1);
+    expect(d.lines[0]).toMatchObject({ ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 1, arm: 'treatment' });
+    // The legacy family: the resolved generation is '' (W2-D40), so the line carries the arm and no gen.
+    const l = added(box, AL_ID2, () => healthHh.runCli(box, ['tree', '--json'],
+      { env: { CCRC_RECALL_SESSION: AL_ID2, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: asofLegacy } }));
+    expect(ans(l.r), `legacy: ${l.r.stderr}${l.r.stdout}`).toEqual([0, undefined]);
+    expect(l.lines.map((x) => Object.keys(x).sort())).toEqual([ENV_KEYS.filter((k) => k !== 'gen')]);
+    expect(l.lines[0]).toMatchObject({ id: AL_ID2, rc: 0, arm: 'treatment' });
+  }, 240_000);
+
+  it('under history-off nothing is written on the env path either; CONTROL: without the switch the same call writes its line', async () => {
+    const { box, asof } = await seededBox();
+    writeMarker(box, storeIdOf(box), [[ID, G1]]);
+    const env = { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ARM: 'treatment', CCRC_RECALL_ASOF: asof };
+    const off = path.join(box.home, '.ccrc', 'history-off');
+    const before = spoolState(box);
+    fs.writeFileSync(off, '');
+    try {
+      const r = healthHh.runCli(box, ['tree', '--json'], { env });
+      expect(ans(r), `the CLI still reads under the switch: ${r.stderr}`).toEqual([0, undefined]);
+      expect(spoolState(box), 'and writes no line (W2-D46)').toEqual(before);
+    } finally {
+      fs.rmSync(off);
+    }
+    const c = added(box, ID, () => healthHh.runCli(box, ['tree', '--json'], { env }));
+    expect(ans(c.r), c.r.stderr).toEqual([0, undefined]);
+    expect(c.lines.map((l) => [l['rc'], l['arm']]), 'CONTROL: the switch removed, the line is written').toEqual([[0, 'treatment']]);
+  }, 240_000);
+});
+
+// ── W2-2b Task 4: the C-R pin (W2-D43, W2-D13) ──────────────────────────────────────────────────────────────────────
+// A treatment-arm run on a listed family that is also a live A/B family writes a non-null arm, and W2-3's window does not
+// count it. The window is W2-3's merged pipeline, run as W2-1's RP8 runs it: measure-history.py's raw rows (its `calls`
+// select `arm IS NULL`, W2-D13), then history-gate.mjs's buildWindows, windowTotals and splitAtFirstExit8. Both run
+// read-only: the script is spawned isolated (-I) and bytecode-free (-B), and the gate is imported dynamically.
+describe('C-R: a treatment-arm run on a live A/B family writes a non-null arm, and the window does not count it (W2-2b Task 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const CR_T = 'a7a7a7a7-7777-4777-8777-a7a7a7a7a7a7';
+  const CR_MEASURE = path.join(REPO, 'deploy', 'measure-history.py');
+  type CrCall = [ts_ms: number, rc: number, verb: string];
+  interface CrBoundary { boundary_uuid: string; ts_ms: number; copies: unknown[] }
+  interface CrFamily { ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: CrCall[]; boundaries: CrBoundary[] }
+  interface CrWindow { state: 'measured' | 'unmeasured'; start_ms: number; end_ms: number | null; end_inclusive: boolean; turns: number; calls: number; with_call: boolean }
+  interface CrGate {
+    ROW_CAP: number;
+    buildWindows(family: CrFamily, k?: number): CrWindow[];
+    windowOf(boundary: CrBoundary, calls: CrCall[], k?: number): CrWindow;
+    windowTotals(windows: CrWindow[]): { windows: number; with_call: number; calls: number; turns: number; unmeasured: number };
+    splitAtFirstExit8(calls: CrCall[]): { upTo: CrCall[]; after: CrCall[] };
+  }
+
+  it('C-R: the live call alone is in the measure\'s calls, the window and the first-exit-8 split; CONTROL: with the arm filter dropped, all three are', async () => {
+    const fx = await import('./historyFixtures.js');
+    const gate = (await import('../../deploy/history-gate.mjs')) as unknown as CrGate;
+    const box = makeHistoryBox('ccrc-hist-cli-zqarmline-cr-', { role: 'fleet', shim: true });
+    // One manual compaction, then two assistant turns, the second stamped a day past now: fewer than K turns and no next
+    // boundary, so the boundary's window ends inclusive at that row and spans every call this case makes (W2-D14).
+    const late = Date.now() + 86_400_000;
+    const seq = fx.compactionSequence({ n: 1, trigger: 'manual', sessionId: CR_T, seed: 0xa7, tailRows: 0 });
+    const rows = [
+      ...seq.rows,
+      fx.assistantRow({ uuid: 'a7a7a7a7-0000-4000-8000-0000000000f1', ts: '2026-10-01T11:00:00.000Z', sessionId: CR_T,
+        text: 'Fixture answer after the summary.', requestId: 'req_cr_1', msgId: 'msg_cr_1' }),
+      fx.assistantRow({ uuid: 'a7a7a7a7-0000-4000-8000-0000000000f2', ts: new Date(late).toISOString(), sessionId: CR_T,
+        text: 'Fixture answer, stamped late.', requestId: 'req_cr_2', msgId: 'msg_cr_2' }),
+    ];
+    healthHh.seedFamily(box, { id: ID, project: 'demo', uuid: CR_T, generation: G1, rows });
+    const sid = storeIdOf(box);
+    // The quiz family is listed (W2-D44's grammar, by hand), and it is a live A/B family on the treatment side: no
+    // recall-off file.
+    fs.writeFileSync(hist(box, 'headless-on'), `store ${sid}\n${ID} ${G1}\n`);
+    const seam = { CCRC_RECALL_SESSION: ID, CCRC_RECALL_ASOF: seq.boundaryUuids[0]! };
+    const live = healthHh.runCli(box, ['tree', '--json'], { env: healthHh.withPane(box, ID) });
+    expect([live.code, live.json?.['reason']], `the live call: ${live.stderr}`).toEqual([0, undefined]);
+    const treat = healthHh.runCli(box, ['tree', '--json'], { env: { ...seam, CCRC_RECALL_ARM: 'treatment' } });
+    expect([treat.code, treat.json?.['reason']], `the treatment arm: ${treat.stderr}${treat.stdout}`).toEqual([0, undefined]);
+    const ctrl = healthHh.runCli(box, ['tree', '--json'], { env: { ...seam, CCRC_RECALL_ARM: 'control' } });
+    expect([ctrl.code, ctrl.json?.['reason']], `the control arm: ${ctrl.stderr}`).toEqual([8, undefined]);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);   // tick N renames the lines, tick N+1 drains them
+
+    // C-R: the rows hold each call's arm, a non-null one for each eval call.
+    const got = ((): Array<{ ts_ms: number; rc: number; verb: string; arm: string | null }> => {
+      const db = healthHh.openStoreRO(box);
+      try {
+        return db.prepare('SELECT ts_ms, rc, verb, arm FROM recall_calls WHERE ccrc_id = ? ORDER BY ts_ms, event_key').all(ID) as
+          Array<{ ts_ms: number; rc: number; verb: string; arm: string | null }>;
+      } finally {
+        db.close();
+      }
+    })();
+    expect(got.map((g) => [Number(g.rc), g.arm]), 'C-R: the live call has no arm, each eval call its own').toEqual([[0, null], [0, 'treatment'], [8, 'control']]);
+    const all = got.map((g): CrCall => [Number(g.ts_ms), Number(g.rc), g.verb]);
+
+    // W2-3's window over the listed family.
+    const families = path.join(box.home, 'cr-families.json');
+    fs.writeFileSync(families, JSON.stringify([{ store_id: sid, ccrc_id: ID, generation: G1 }]));
+    const m = spawnSync('python3', ['-I', '-B', CR_MEASURE, '--db', hist(box, 'db', 'history.db'), '--families', families,
+      '--window-start', String(Date.parse('2026-10-01T00:00:00.000Z')), '--window-end', String(late + 1), '--row-cap', String(gate.ROW_CAP)],
+    { encoding: 'utf8', env: { ...box.env, PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(m.status, m.stderr).toBe(0);
+    const fams = (JSON.parse(m.stdout) as { w2: { families: CrFamily[] } }).w2.families;
+    expect(fams.map((f) => [f.ccrc_id, f.generation, f.found])).toEqual([[ID, G1, true]]);
+    const fam = fams[0]!;
+    expect(fam.calls.map((c) => [c[1], c[2]]), 'C-R: the measure\'s calls hold the live call alone').toEqual([[0, 'tree']]);
+    const windows = gate.buildWindows(fam);
+    expect(windows.map((w) => w.state), 'one measured window').toEqual(['measured']);
+    const w = windows[0]!;
+    for (const c of all) expect(w.start_ms <= c[0] && c[0] <= w.end_ms!, `CONTROL: the window spans the call at ${c[0]}`).toBe(true);
+    expect(gate.windowTotals(windows).calls, 'C-R: the window counts the live call alone').toBe(1);
+    expect(gate.splitAtFirstExit8(fam.calls), 'the control arm\'s exit 8 is no live first exit 8').toEqual({ upTo: fam.calls, after: [] });
+    // CONTROL: the same window over every row of the family, the arm filter dropped, counts all three, and the split
+    // finds the control arm's exit 8. So only the arm keeps the eval calls out.
+    expect(gate.windowOf(fam.boundaries[0]!, all).calls, 'CONTROL: no arm filter').toBe(3);
+    expect(gate.splitAtFirstExit8(all).upTo.at(-1)?.[1], 'CONTROL: the unfiltered split stops at the control arm\'s exit 8').toBe(8);
+  }, 240_000);
+});

@@ -57,7 +57,7 @@ import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
   decideSeamInPane, decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
-  decideRecallOff, parseSpoolLine,
+  decideRecallOff, parseSpoolLine, RECALL_ARMS,
   recallSeamEngaged, decideHeadless, headlessMarkerOf, HEADLESS_LIST_MAX_BYTES,
   decideHeadlessStore, asOfFamilySql, decideAsOfFamily, decideHeadlessRead, decideEnvProject,
   readEnvelope, shownLine, nextLine,
@@ -618,7 +618,12 @@ function scopeArgsOf(o) {
 
 /** The CLI's one write (§8.1): `{v, ev:'recall', id, gen?, cmd, rc, ms, ts}`, fenced like the hook's lines.
  *  It carries no query text and no argument (G5). `gen` rides only when it has the UUID grammar. A line the
- *  spool grammar would reject (parseSpoolLine) is never written: the answer is null. */
+ *  spool grammar would reject (parseSpoolLine) is never written: the answer is null.
+ *  W2-D43: this is the single writer of `arm`. A counted env call passes the RECALL_ARMS word step 1 admitted, and the
+ *  line carries it, so every live counter (`arm IS NULL`, W2-D13) leaves the call out; §8.2's "counted
+ *  `scope_source=env`" reads as `recall_calls.arm IS NOT NULL` (an erratum, E10, W2-5b's to amend). A tmux call passes
+ *  none: absent and null both mean none. Any other value answers null, so no line is written: a line without its word
+ *  would count an eval call as a live one (C-R). */
 export function recallLine(i) {
   const rec = { v: 1, ev: 'recall', id: i.id };
   if (typeof i.gen === 'string' && UUID_RE.test(i.gen)) rec.gen = i.gen;
@@ -626,6 +631,10 @@ export function recallLine(i) {
   rec.rc = i.rc;
   rec.ms = i.ms;
   rec.ts = i.ts;
+  if (i.arm !== undefined && i.arm !== null) {
+    if (!RECALL_ARMS.includes(i.arm)) return null;
+    rec.arm = i.arm;
+  }
   const line = JSON.stringify(rec);
   return parseSpoolLine(line).ok ? line : null;
 }
@@ -661,7 +670,9 @@ export function writeRecallLine(home, id, line, afterPrecheck = null, afterOpen 
   }
 }
 
-/** One counter line per identity-resolved read call, whatever its exit. */
+/** One counter line per counted read call, whatever its exit (D-5023): on the tmux path every call whose identity resolved,
+ *  on the env path every call step 4 admitted (W2-D46; the env branch's answers before it carry no id), with its arm
+ *  (W2-D43). None under history-off. */
 function countRecall(home, i) {
   if (existsSync(historyPaths(home).off)) return;
   const line = recallLine(i);
@@ -678,13 +689,15 @@ function realOrNull(p) {
 
 /** A defect (exit 1) thrown out of readContext after the read's identity resolved, D-5023 (fix round 1, review 441 F6): it
  *  carries the identity and generation known at the throw, so readVerb counts the call (rc 1) as it counts every other
- *  identity-resolved call. `cause` is the thrown value itself. */
+ *  identity-resolved call. `cause` is the thrown value itself. `arm` is the env branch's admitted arm (W2-D43), null on
+ *  the tmux path. */
 class ReadDefect extends Error {
-  constructor(cause, id, gen) {
+  constructor(cause, id, gen, arm) {
     super(thrownText(cause));
     this.cause = cause;
     this.id = id;
     this.gen = gen;
+    this.arm = arm;
   }
 }
 
@@ -694,9 +707,12 @@ class ReadDefect extends Error {
 export async function readContext(home, verb, parsed, nowMs = Date.now()) {
   const seen = { id: null, gen: null, arm: null };
   try {
-    return await readContextIn(home, verb, parsed, nowMs, seen);
+    // W2-D43: Task 3's env branch sets seen.arm at step 4's admission, beside id and gen; every answer carries it.
+    const r = await readContextIn(home, verb, parsed, nowMs, seen);
+    r.arm = seen.arm;
+    return r;
   } catch (e) {
-    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen);
+    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen, seen.arm);
     throw e;
   }
 }
@@ -1010,10 +1026,10 @@ async function readVerb(home, verb, argv) {
       ctx = await readContext(home, verb, parsed, t0);
     } catch (x) {
       if (!(x instanceof ReadDefect)) throw x;
-      who = { id: x.id, gen: x.gen };
+      who = { id: x.id, gen: x.gen, arm: x.arm };
       throw x.cause;
     }
-    who = { id: ctx.id, gen: ctx.gen };
+    who = { id: ctx.id, gen: ctx.gen, arm: ctx.arm };
     if (!('db' in ctx)) {
       exit = emitRefusal(ctx, json, NO_PAIRS);
     } else {
@@ -1042,7 +1058,7 @@ async function readVerb(home, verb, argv) {
     errLine(`ccrc history: internal error: ${thrownText(e)}`, ctx !== null && 'db' in ctx ? ctx.pairIdx : NO_PAIRS);
     return exit;
   } finally {
-    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
+    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, arm: who.arm, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
   }
   return exit;
 }
