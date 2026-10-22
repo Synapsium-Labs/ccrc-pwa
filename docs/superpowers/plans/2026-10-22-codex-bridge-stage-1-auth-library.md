@@ -634,8 +634,10 @@ Expected: FAIL, the new cases, with `AttributeError: module 'ccgpt_auth' has no 
   - `classify_error(status: int, body: bytes) -> Tuple[str, Optional[str]]` — `("needs-signin" | "config-error" |
     "transient", code)`, classified as Codex classifies a refresh rejection (What was measured). The code is read as
     Codex's `TokenErrorDetail::parse` reads it, from a JSON object body: a string `error`, else a string
-    `error.code`, else a top-level string `code`; `code` is that name bounded by `CODE_RE` (`"unrecognised"`
-    otherwise), and `None` when none of the three is a string. The body itself is never kept, logged or formatted.
+    `error.code`, else a top-level string `code`, each skipped when it is empty after trimming (Codex's
+    `nonempty_text`). The name is lower-cased, as Codex compares it, before it is classified; `code` is that
+    lower-cased name bounded by `CODE_RE` (`"unrecognised"` otherwise), and `None` when none of the three is a
+    non-empty string. The body itself is never kept, logged or formatted.
     The kind, in this order: `config-error` when the code is in `CONFIG_ERROR_CODES`, whatever the status (spec
     §2.6); `needs-signin` on any 401, whatever its code or body (Codex's rule); `needs-signin` for `invalid_grant` on
     a 400 (Codex's rule); `needs-signin` for any other code in `NEEDS_SIGNIN_CODES`, whatever the status; otherwise
@@ -701,10 +703,11 @@ with held(auth_dir):
   - `'a crash between the token answer and the commit is recovered from the checkpoint'` — fault
     `die-before-rename` on driver A; driver B then answers the new tokens with zero further requests. (Spec §5.)
   - `'a full disk loses nothing: the refresh is served from memory, written by the next call, and asked for once'` —
-    fault `enospc-writes:1`, ops `ensure_fresh`, `status`, `ensure_fresh`, `status`; one request in total; the second
-    call writes the record (the unsaved record takes it into `held` though the token is valid); no checkpoint left.
-    The first `status` reads `source: file` and `unsaved: true`; the second `source: file`, `unsaved: false` and
-    `lastRefreshAt` set. (Spec §5.)
+    fault `enospc-writes:1`, ops `ensure_fresh`, `ensure_fresh`; one request in total; the second call writes the
+    record (the unsaved record takes it into `held` though the token is valid); no checkpoint left. After the first
+    call, `auth.status.json`, read straight from disk, holds `unsaved: true` and an `identity` equal to the
+    credential file's lstat; after the second, `unsaved: false`, the new file's identity and `lastRefreshAt` set.
+    (Spec §5.)
   - `'a disk that stays full asks once: every call is answered from memory'` — an expiring token, fault
     `enospc-writes:3`, ops `ensure_fresh` ×3; one request in total, and the three answers carry the same new access
     token length.
@@ -719,9 +722,13 @@ with held(auth_dir):
   - `it.each` over a 401 with an empty body and a 401 `{"error": "server_error"}`: `'a 401 is needs-signin whatever
     its code (%s)'`; and `'a 401 carrying invalid_client is config-error'`.
   - `'invalid_grant on a 503 is transient, as Codex classifies it'`.
-  - `it.each` over a 129-character `error`, one with a control character, and one with an upper-case letter:
+  - `it.each` over a 129-character `error`, one with a control character, and one with a space:
     `'an error code outside CODE_RE is stored as unrecognised (%s)'` — and the status file holds none of the raw
     string.
+  - `'a 400 INVALID_GRANT is needs-signin: codes are compared lower-cased, as Codex compares them'` — `lastErrorCode`
+    `invalid_grant`.
+  - `'an empty error falls through to a top-level code, as Codex skips blank strings'` — a 400
+    `{"error": "", "code": "refresh_token_expired"}` is `needs-signin`, `lastErrorCode` `refresh_token_expired`.
   - `it.each` over 500, 503, a dropped connection and a 1 s delay with `consts.TOKEN_TIMEOUT_S` 0.5: `'%s is
     transient: refresh-failed, the state is unchanged and the next call tries again'`.
   - `'a 302 from the token route is refresh-failed, and its Location receives nothing'` — the `Location` is a second
@@ -773,10 +780,13 @@ with held(auth_dir):
 - F15 (`write_status`: no `fchmod`) → 1 failed (under a 0277 umask … status file).
 - F16 (`ensure_fresh`: under the lock, refresh whenever an unsaved record is bound) → 1 failed (a disk that stays
   full asks once …: 3 requests).
-- F17 (`retry_unsaved`: no status rewrite on `"written"`) → 1 failed (a full disk loses nothing …: the second
-  `status`).
+- F17 (`retry_unsaved`: no status rewrite on `"written"`) → 1 failed (a full disk loses nothing …: the status file
+  after the second call).
 - F18 (`ensure_fresh`: bind the status to no file after a failed commit) → 1 failed (a full disk loses nothing …: the
-  first `status` reads `computed`).
+  status identity after the first call matches no file).
+- F19 (`classify_error`: classify the code as received, not lower-cased) → 1 failed (a 400 INVALID_GRANT …).
+- F20 (`classify_error`: take an empty string as the code instead of skipping it) → 1 failed (an empty error falls
+  through …).
 
 - [ ] **Step 6: Commit** — `git commit -m "codex-auth: one locked refresh, its error states and the status file
   (codex-bridge Stage 1, Task 3)"` with the test and library files added.
@@ -1161,7 +1171,7 @@ operator notes.
     the wrapper's record holds no request: the wrapper denies every socket and records only `urlopen`, so a
     `fakeAuthServer` there would see nothing either way. (Review Focus 3.)
   - `ccgpt-usage.test.ts:106-130` (the helper's "contents never read" note), `:145`, `:189`: the stub becomes a planted
-    backend credential; `:529` (the case that writes `'{}'` at a lane.json authDir and expects status 0 at `:537`)
+    backend credential; `:529` (the case that writes `'{}'` at a lane.json authDir and expects status 0 at `:535`)
     plants `plantBackendCredential` at that distinctive authDir instead, keeping the case's point (the authDir is
     read from lane.json); `:1059` becomes `'a dead credential: login-required at once, no token request, nothing
     published'`; `:1120` (`runtime-api-moved`) becomes `'no library beside the publisher: auth-library-absent'`.
@@ -1282,7 +1292,7 @@ operator notes.
 - Modify: `ccd/ccrc` — new `_codex_auth_hold <id>` / `_codex_auth_release` (modelled on `_codex_lock`,
   `:12812-12843`): the lock path and bound come from `_codex_auth paths` (`lock`, `lockWaitS`), an absent authDir holds
   nothing and answers 0, a missing `flock` answers 0 with nothing held (as `_codex_lock` does), a timeout answers 1.
-  It keeps `held`'s file rules, which `_codex_lock`'s `exec {fd}>>` (`:12827-12828`) does not: a symlink or other
+  It keeps `held`'s file rules, which `_codex_lock`'s `exec {fd}>>` (`:12825-12826`) does not: a symlink or other
   non-regular file at the lock path refuses (answers 1) without opening it, and a lock file the hold creates gets
   `chmod 600` right after the open.
   `_codex_lock`'s rule carries over: `CX_AUTH_LOCK_FD` is closed in any spawn made while it is held, so no child
@@ -1635,11 +1645,11 @@ report.
 - **Departs from:** spec §2.6, "`invalid_grant`, `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
   `refresh_token_invalidated` and `refresh_token_reused` all mean `needs-signin`", which names no status.
 - **What changed:** `classify_error` reads the code as Codex does, from a string `error`, else `error.code`, else a
-  top-level `code` (upstream `openai/codex` `codex-rs/login/src/oauth/error.rs:135-164` @ `092d3ac`), stores the
-  name (never the body) bounded by `CODE_RE`, and classifies as Codex does (`auth/manager.rs:1655-1671`,
-  `:1680-1691`): any 401 and `invalid_grant` on a 400 are `needs-signin`. `invalid_grant` on any other status is
-  `transient`, as in Codex. The spec's other five codes mean `needs-signin` at any status, and `invalid_client`
-  stays `config-error` (Task 3).
+  top-level `code`, skipping blank strings (upstream `openai/codex` `codex-rs/login/src/oauth/error.rs:135-171` @
+  `092d3ac`), compares it lower-cased, stores the name (never the body) bounded by `CODE_RE`, and classifies as
+  Codex does (`auth/manager.rs:1655-1671`, `:1680-1691`): any 401 and `invalid_grant` on a 400 are `needs-signin`.
+  `invalid_grant` on any other status is `transient`, as in Codex. The spec's other five codes mean `needs-signin`
+  at any status, and `invalid_client` stays `config-error` (Task 3).
 - **Why:** ruling S1 of fix round 2: classify like Codex.
 - **Cost if wrong:** a dead token answered `invalid_grant` with a status other than 400 or 401 reads `transient`:
   the tier answers `refresh-failed` on each request instead of recording `needs-signin`; Codex reads it the same way.
