@@ -494,7 +494,7 @@ function specifiers(file: string, src: string): string[] {
       if (re.test(bare)) throw new Error(`${file} uses ${form}, which the derivation does not model`);
     }
     for (const re of [
-      /@import\s+(['"])([^'"\n]+)\1/g, /@source\s+(?:not\s+)?(['"])([^'"\n]+)\1/g, /\burl\(\s*(['"]?)([^'")\s]+)\1\s*\)/g,
+      /@import\s*(['"])([^'"\n]+)\1/gi, /@source\s*(?:not\s*)?(['"])([^'"\n]+)\1/gi, /\burl\(\s*(['"]?)([^'")\s]+)\1\s*\)/gi,
     ]) for (const m of bare.matchAll(re)) out.push(m[2]!);
   } else if (file.endsWith('.html')) {
     const bare = dropHtmlComments(src);
@@ -639,6 +639,11 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
       ['a css @source of a bare .. (an ancestor of server/test)', { 'server/src/w25.css': "@source '..';\n" }, 'server'],
       ['a css @import of a bare relative path into docs', { 'pwa/src/styles/w25.css': "@import '../../../docs/a.css';\n@import 'tailwindcss';\n" }, 'docs/a.css'],
       ['a css url( of a bare relative path into docs', { 'pwa/src/styles/w25.css': ".a { background: url(../../../docs/a.png); }\n" }, 'docs/a.png'],
+      ['an upper-case css @IMPORT', { 'pwa/src/styles/w25.css': "@IMPORT '../../../docs/a.css';\n" }, 'docs/a.css'],
+      ['a mixed-case css @Source', { 'pwa/src/styles/w25.css': "@Source '../../../docs';\n" }, 'docs'],
+      ['a css @source with no space before the string', { 'pwa/src/styles/w25.css': '@source"../../../docs";\n' }, 'docs'],
+      ['a mixed-case css URL(', { 'pwa/src/styles/w25.css': ".a { background: URL(../../../docs/a.png); }\n" }, 'docs/a.png'],
+      ['a css @import with no space before the string', { 'pwa/src/styles/w25.css': '@import"../../../docs/a.css";\n' }, 'docs/a.css'],
       ['a css @import through the @ alias', { 'pwa/src/styles/w25.css': "@import '@/../../docs/a.css';\n" }, 'docs/a.css'],
       ['a JS import of an exact ..', { 'deploy/w25.ts': "import x from '..';\n" }, '.'],
       ['an import.meta.glob of an ancestor of a tree rule', { 'pwa/src/w25.ts': "const m = import.meta.glob('../../server/**/*.ts');\n" }, 'server'],
