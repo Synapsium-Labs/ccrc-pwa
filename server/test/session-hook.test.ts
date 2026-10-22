@@ -10859,28 +10859,76 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // THE PRODUCTION CONFIGURATION'S COST (review of Task 5, Important 2). The p95 pin in 'the fleet gate and failure polarity' runs with NO
   // spool directory and a payload with no `session_id` or `tool_use_id`, so the spool's jq text is never compiled there. Once ccd has
   // made the directory (every session, at its next spawn) every Bash, Agent, Task, Workflow and session event compiles it: about
-  // 11 ms of jq CPU on top of the parse. This row is that pin's twin for the configuration the fleet will actually run, with the same
-  // 150 ms allowance, and it asserts the line was written so it cannot pass by never reaching the spool. It is its own `it` (the
-  // existing pin's lines are not edited); the helpers it needs are this file's module-level `run` and the describe's `spoolLines`.
-  it('p95 of 20 realistic Bash PostToolUse runs with the spool directory and generation present stays under the same 150 ms budget, and every run wrote its line', () => {
-    const times: number[] = [];
+  // 11 ms of jq CPU on top of the parse. This row binds that increment, and it asserts the line was written so it cannot pass by
+  // never reaching the spool. It is its own `it` (the existing pin's lines are not edited); the helpers it needs are this file's
+  // module-level `run` and the describe's `spoolLines`.
+  //
+  // the-spool-cost-pin-reads-a-same-run-ratio (D-6321): this row first asserted a p95 under the same absolute 150 ms, and on
+  // 2026-10-22 it read 164 ms in a merge-queue run on a slow runner and ejected an unrelated docs-only pull request; its three
+  // 150 ms siblings (the pin above, the `ccd-tool-adj` row and the agent PostToolUse row) have failed full runs at 150-233 ms.
+  // An absolute ms number is the wrong shape here for D-1898's reason (above), so this asserts its method instead: a RATIO of two
+  // arms timed IN THE SAME RUN, interleaved one present then one absent, 20 pairs after a warm-up of one of each, read as
+  // median over median (ratio-row-reads-the-median, D-3704). The present arm is the payload with the owner directory and the
+  // generation present; the absent arm is the same payload shape with the directory moved aside (outside the timed region), so
+  // the gate's `-d` fails, the spool's text is never compiled and the arm is the parse alone.
+  //
+  // THE BANDS (15+ isolated runs each, fleet box, 1-minute load recorded per set). Shipped: 1.193-1.275 (mean 1.230, load
+  // 8.8-9.9) and 1.160-1.285 (mean 1.236, load 7.4-8.6), absent-arm medians 33.3-39.3 ms. The default mutation, the spool's jq run a
+  // second time (one more jq fork per event), measured 1.463-1.628 (mean 1.570, load 8.8-9.9): its best case sits 15% above the
+  // shipped worst, so no R leaves even 10% on both sides of it (the best, 1.371, leaves ~7% each side), and this row does NOT
+  // see one extra fork. The smallest mutation it separates is two more forks: 1.749-1.951 (mean 1.858, load 7.4-8.7).
+  // R=1.5: +17% over the shipped worst (1.5/1.285), +17% under the mutation's best (1.749/1.5).
+  //
+  // WHAT THIS GUARD CANNOT SEE — its masking window. A ratio is blind to anything that inflates BOTH arms (the parse every event
+  // pays, the box's load), and blind in one direction to anything that slows the DENOMINATOR alone: the absent arm is the hook's
+  // whole no-spool path, and if it grows on its own the ratio falls while the spool costs exactly what it did. Against the
+  // measured bands, a no-spool regression of >=17% (1.749/1.5 = 1.166) pulls the two-fork mutation's BEST case back under R=1.5,
+  // and ~24% (1.858/1.5 = 1.239) pulls a MEAN mutated run there, silently and with the suite green. What still binds the
+  // absolute cost is the p95 pin above, which times the hook's no-spool cost; this ratio binds the spool's increment over it. If
+  // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together. And below the
+  // window, with no masking at all: one extra jq fork of the spool (mutant 1.463-1.628 against shipped 1.160-1.285, ~7% best
+  // margin) does not separate, so the smallest spool regression this row can see is two forks.
+  it('the spool\'s increment: 20 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
+    const payload = (toolUseId: string): object => ({
+      session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
+      permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'git status --short', description: 'show the working tree state' },
+      tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      tool_use_id: toolUseId, duration_ms: 41,
+    });
+    const ms = (p: object): number => { const t0 = process.hrtime.bigint(); run(p); return Number(process.hrtime.bigint() - t0) / 1e6; };
+    const aside = `${SPOOL()}.aside`;
+    const absent = (p: object): number => {                            // the move aside and back are outside the timed region
+      fs.renameSync(SPOOL(), aside);
+      try {
+        const t = ms(p);
+        expect(fs.existsSync(SPOOL()), 'the absent arm made no owner directory').toBe(false);
+        return t;
+      } finally { fs.renameSync(aside, SPOOL()); }
+    };
+    const ids = (arm: string): string[] => Array.from({ length: 20 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
+    const presentIds = ids('Pin');
+    const absentIds = ids('Abs');
+    const WARM = 'toolu_01WarmPresentAAAAAAAAAAAAAA';
+    ms(payload(WARM)); absent(payload('toolu_01WarmAbsentAAAAAAAAAAAAAAA'));
+    const present: number[] = [];
+    const without: number[] = [];
     for (let i = 0; i < 20; i++) {
-      const payload = {
-        session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
-        permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
-        tool_input: { command: 'git status --short', description: 'show the working tree state' },
-        tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
-        tool_use_id: `toolu_01Pin${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`, duration_ms: 41,
-      };
-      const t0 = Date.now();
-      run(payload);
-      times.push(Date.now() - t0);
+      present.push(ms(payload(presentIds[i]!)));
+      without.push(absent(payload(absentIds[i]!)));
     }
     const lines = spoolLines();
-    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every run reached the spool and wrote its line').toEqual(Array(20).fill('PostToolUse:Bash'));
-    expect(new Set(lines.map((l) => l.toolUseId)).size).toBe(20);
-    times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+    expect(lines.map((l) => l.toolUseId).sort(), 'the warm-up and every present run wrote one line each, and no absent run wrote any')
+      .toEqual([WARM, ...presentIds].sort());
+    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every one of those lines is the Bash PostToolUse it was sent')
+      .toEqual(Array(21).fill('PostToolUse:Bash'));
+    const median = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
+    };
+    const ratio = median(present) / median(without);   // the-spool-cost-pin-reads-a-same-run-ratio (D-6321) (above)
+    expect(ratio, `R=${ratio.toFixed(4)} (present ${median(present).toFixed(1)} ms, absent ${median(without).toFixed(1)} ms) against a bound of 1.5`)
+      .toBeLessThan(1.5);
   }, 60000);
 });
 
