@@ -57,6 +57,11 @@ const REASON_ROWS = [
     // `--generation` names another than the registry's (or the registry holds none).
     // D-5764 (history-w2-recall-off-generation-checks)
     'generation-malformed', 'generation-mismatch',
+    // `asof-invalid` (W2-2a, W2-D39): the as-of cut's refusal. Its store half is asOfCut's: the uuid names no boundaries
+    // row, or a boundary on a sidechain transcript, held by no copy, or with no stamp at or before it in its holding copy.
+    // W2-2b adds the pre-store half (an empty or non-UUID seam value) and the family half, under the same word.
+    // D-5765 (history-w2-asof-invalid-word)
+    'asof-invalid',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -4348,6 +4353,94 @@ export function resolveScopedId({ wanted, inScope, outOfScope }) {
   if (hits.length === 1) return { kind: 'ok', id: hits[0] };
   if (hits.length > 1) return { kind: 'ambiguous', candidates: hits.sort() };
   return outOfScope.some((id) => id.startsWith(wanted)) ? { kind: 'out-of-scope' } : { kind: 'not-found' };
+}
+
+// ── the as-of cut (W2-2a; W2-D34, W2-D38, W2-D39) ──────────────────────────
+// ONE definition of "as of boundary N" (W2-D38): asOfCut decides the cut from what a reader measured, asOfEntrySql is
+// the one SQL predicate that applies it to an entries row, and asOfBinds is that predicate's named parameters' values.
+// Every read verb, the regex child and the replay driver's re-check read these and spell no second rule. A cut is plain
+// data (numbers, strings, one array), so it rides on a ReadContext as `rc.scope.cut` (absent or null: no cut, and a
+// site then adds no clause and no binds). It is keyed on entries, never on blobs: two entries that share one stored
+// body are decided apart. W2-2b's headless seam is the first production caller; until then only tests set it.
+// D-5766 (history-w2-asof-time-cut)
+
+/** The cut at boundary N (W2-D34, W2-D38), from what the reader measured:
+ *  - `asof`: N's uuid, as the caller was given it;
+ *  - `boundary`: the entries row whose uuid is `asof`, joined to its boundaries row and its transcript, as
+ *    `{ entryId, uuid, main, anchorUuid }` (`main`: that transcript's agent_id is ''; `anchorUuid`: the boundaries
+ *    row's anchor_uuid); null when no boundaries row has that uuid;
+ *  - `copy`: N's holding copy, the file pickHoldingCopy picks among the transcript's files that hold N, as
+ *    `{ fileId, rows }`, its rows in file order in derive.mjs's copyRows shape (`entry_id`, `uuid`, `line`, `ts_ms`,
+ *    `type`, `provenance`, `is_compact_summary`); null when no file holds N;
+ *  - `kept`: kept(N), derive.mjs's keptOf over N's kept_blob_id (option (a)), the set derivation spans with.
+ *  The store half of W2-D39's validation answers exit 2 `asof-invalid` when the boundary is absent or is not `asof`'s,
+ *  sits on a sidechain transcript, has no copy holding it, or has no time at or before it. T_N is stampAtOrBefore over
+ *  the copy at N's own row (W2-D33): N's own ts_ms, else the newest non-null stamp before it in that copy; a stamp of
+ *  0 is a time. The summary entry is summaryRowFor's pick over the same copy, the rule derivation uses, so an echo row
+ *  is never it; null when there is none. `keptUuids` is the kept set's strings, once each, sorted, so one cut has one
+ *  form. D-5765 (history-w2-asof-invalid-word) */
+export function asOfCut({ asof, boundary, copy, kept }) {
+  if (boundary === null || boundary.uuid !== asof) return refuseScope('asof-invalid');
+  if (boundary.main !== true) return refuseScope('asof-invalid');
+  const at = copy === null ? -1 : copy.rows.findIndex((r) => Number(r.entry_id) === Number(boundary.entryId));
+  if (at < 0) return refuseScope('asof-invalid');
+  const tsCut = stampAtOrBefore(copy.rows, at);
+  if (tsCut === null) return refuseScope('asof-invalid');
+  const meta = copy.rows.map((r) => ({
+    uuid: r.uuid, isCompactSummary: Number(r.is_compact_summary) === 1, isEcho: r.type === 'user' && r.provenance === 'harness',
+  }));
+  const pick = summaryRowFor({ boundaryUuid: boundary.uuid, anchorUuid: boundary.anchorUuid, rows: meta });
+  const summary = pick.uuid === null ? undefined : copy.rows.find((r) => r.uuid === pick.uuid);
+  return {
+    ok: true,
+    cut: Object.freeze({
+      asof,
+      tsCut,
+      boundaryEntryId: Number(boundary.entryId),
+      summaryEntryId: summary === undefined ? null : Number(summary.entry_id),
+      keptUuids: Object.freeze([...new Set([...kept].filter((u) => typeof u === 'string'))].sort()),
+      holdingFileId: Number(copy.fileId),
+      boundaryLine: Number(copy.rows[at].line),
+    }),
+  };
+}
+
+/** The one SQL predicate of the cut (W2-D34): one parenthesised boolean term over the entries row aliased `alias`, true
+ *  iff the cut leaves that row visible. Its parameters are named only, each `asof_`-prefixed so none collides with a
+ *  caller's own, and asOfBinds(cut) answers exactly their values. An entry is visible iff:
+ *  - its ts_ms is at most T_N (a NULL ts_ms compares NULL, so it never passes), and it is not a row of N's holding copy
+ *    at a line after N's (memberships reached by its primary key, file_id and entry_id); or
+ *  - it is N's boundary entry, or N's summary entry (a NULL summary matches nothing); or
+ *  - its uuid is a member of kept(N), whatever its stamp or line, matched in SQL, so a member with no entries row
+ *    matches nothing.
+ *  Everything else is absent: every NULL-ts row, and every row after N in its holding copy whatever its stamp. Outside
+ *  the holding copy the decision is the stamp alone, so a row written after N in another copy but stamped at or before
+ *  T_N stays visible: the residual W2-5a counts for the same millisecond. Over a LEFT JOIN's all-NULL row it is false.
+ *  `alias` is interpolated, so it must be an SQL name; the inner memberships alias is `asof_hm`. Keyed on entries,
+ *  never on blobs. D-5766 (history-w2-asof-time-cut) */
+export function asOfEntrySql(alias) {
+  if (typeof alias !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
+    throw new TypeError(`asOfEntrySql: ${JSON.stringify(alias)} is not an SQL name`);
+  }
+  const e = alias;
+  return `((${e}.ts_ms <= :asof_ts`
+    + ` AND NOT EXISTS (SELECT 1 FROM memberships asof_hm WHERE asof_hm.file_id = :asof_file AND asof_hm.entry_id = ${e}.entry_id AND asof_hm.line > :asof_line))`
+    + ` OR ${e}.entry_id = :asof_boundary OR ${e}.entry_id = :asof_summary`
+    + ` OR ${e}.uuid IN (SELECT value FROM json_each(:asof_kept)))`;
+}
+
+/** asOfEntrySql's named parameters for `cut`, by bare name, the way node:sqlite binds them here (recall.mjs's bindFor):
+ *  exactly the names asOfEntrySql uses, because node:sqlite refuses an unknown named parameter and the regex child
+ *  spreads these unfiltered. kept(N) travels as JSON text for json_each, so the object crosses JSON as it is. */
+export function asOfBinds(cut) {
+  return {
+    asof_ts: cut.tsCut,
+    asof_file: cut.holdingFileId,
+    asof_line: cut.boundaryLine,
+    asof_boundary: cut.boundaryEntryId,
+    asof_summary: cut.summaryEntryId,
+    asof_kept: JSON.stringify(cut.keptUuids),
+  };
 }
 
 // derived from lossless-claw src/tools/lcm-describe-id.ts @ e05d8d3, MIT, see LICENSE.lossless-claw

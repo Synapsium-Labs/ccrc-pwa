@@ -937,7 +937,9 @@ restore
 mut ccd/history/lib.mjs ' OR ${e}.entry_id = :asof_summary' ' OR ${e}.entry_id = ?'
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'asOfEntrySql and asOfBinds')
 restore
-# Expected RED (predicted): 'named parameters only': the text contains '?'.
+# Expected RED (measured: 4 failed | 6 passed; predicted: 1 failed): 'named parameters only' (the text contains '?'),
+# and, because the bound asof_summary now names no parameter, the positional-hide CONTROL, 'the cut decides by entry' and
+# the real-schema case, each with node:sqlite's `Unknown named parameter 'asof_summary'`.
 ```
 
 After the last mutant, one more call:

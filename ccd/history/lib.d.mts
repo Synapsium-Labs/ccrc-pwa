@@ -538,6 +538,29 @@ export type ScopedId =
   | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }
   | { kind: 'ambiguous'; candidates: string[] } | { kind: 'bad' };
 export function resolveScopedId(i: { wanted: string; inScope: readonly string[]; outOfScope: readonly string[] }): ScopedId;
+// --- W2-2a Task 1: the as-of cut, lib's one definition (W2-D34, W2-D38, W2-D39)
+/** One row of N's holding copy, in file order, in derive.mjs's copyRows column names. */
+export interface AsOfCopyRow {
+  readonly entry_id: number | bigint; readonly uuid: string; readonly line: number | bigint; readonly ts_ms: number | bigint | null;
+  readonly type: string; readonly provenance: string; readonly is_compact_summary: number | bigint;
+}
+/** The cut at boundary N (W2-D38). Plain data: it rides on `rc.scope.cut`. */
+export interface AsOfCut {
+  readonly asof: string; readonly tsCut: number; readonly boundaryEntryId: number; readonly summaryEntryId: number | null;
+  readonly keptUuids: readonly string[]; readonly holdingFileId: number; readonly boundaryLine: number;
+}
+export function asOfCut(i: {
+  asof: string;
+  boundary: { entryId: number; uuid: string; main: boolean; anchorUuid: string | null } | null;
+  copy: { fileId: number; rows: readonly AsOfCopyRow[] } | null;
+  kept: Iterable<unknown>;
+}): { ok: true; cut: AsOfCut } | ScopeRefusal<'asof-invalid'>;
+/** The cut's one SQL predicate over an entries alias: one parenthesised boolean term, named `asof_` parameters only. */
+export function asOfEntrySql(alias: string): string;
+/** asOfEntrySql's named parameters for a cut, by bare name: exactly the names it uses; kept(N) as JSON text. */
+export function asOfBinds(cut: AsOfCut): {
+  asof_ts: number; asof_file: number; asof_line: number; asof_boundary: number; asof_summary: number | null; asof_kept: string;
+};
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';

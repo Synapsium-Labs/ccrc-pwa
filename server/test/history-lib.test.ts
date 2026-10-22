@@ -10905,3 +10905,195 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: 'absent', prev_seen_ms: 1000 }]);
   });
 });
+
+// ── W2-2a Task 1 (W2-D34, W2-D38, W2-D39): the as-of cut, lib's one definition ────────────────────────────────────
+// asOfCut decides the cut at boundary N from what a reader measured; asOfEntrySql is the one SQL predicate that applies
+// it to an entries row, and asOfBinds its named parameters' values. Pure, so it runs on darwin too: the SQL cases run
+// over an in-memory node:sqlite database holding the two tables the predicate reads, and one case prepares it against a
+// real store's schema. D-5765 (history-w2-asof-invalid-word), D-5766 (history-w2-asof-time-cut)
+describe('W2-2a as-of cut: asOfCut, asOfEntrySql and asOfBinds, lib\'s one definition (W2-D34, W2-D38, W2-D39)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Cut = import('../../ccd/history/lib.mjs').AsOfCut;
+  type In = Parameters<Lib['asOfCut']>[0];
+  type Row = { entry_id: number; uuid: string; line: number; ts_ms: number | null; type: string; provenance: string; is_compact_summary: number };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const T = 1_760_000_000_000;   // T_N in the main fixture
+  const row = (entry_id: number, uuid: string, line: number, ts_ms: number | null, o: Partial<Row> = {}): Row =>
+    ({ entry_id, uuid, line, ts_ms, type: 'assistant', provenance: 'model', is_compact_summary: 0, ...o });
+  /** N's holding copy (file 1), in file order. N (`B`) has no stamp of its own, so T_N is p2's, the newest before it. */
+  const HOLD: readonly Row[] = [
+    row(1, 'p0', 0, T - 200, { type: 'user', provenance: 'operator' }),
+    row(2, 'pn', 1, null),
+    row(3, 'p2', 2, T),
+    row(4, 'B', 3, null, { type: 'system', provenance: 'harness' }),
+    row(5, 'q_lt', 4, T - 50),
+    row(6, 'echo', 5, T + 5, { type: 'user', provenance: 'harness', is_compact_summary: 1 }),
+    row(7, 'S', 6, T + 10, { type: 'user', provenance: 'summary', is_compact_summary: 1 }),
+    row(8, 'q_eq', 7, T),
+    row(9, 'k1', 8, null, { type: 'user', provenance: 'operator' }),
+    row(10, 'q_gt', 9, T + 100),
+  ];
+  /** Another transcript's copy (file 2): decided by stamp alone. */
+  const OTHER: readonly Row[] = [
+    row(11, 'o_lt', 0, T - 1),
+    row(12, 'o_eq', 1, T),
+    row(13, 'o_gt', 2, T + 1),
+    row(14, 'o_null', 3, null),
+    row(15, 'o_late', 20, T - 10),
+  ];
+  const ALL = [...HOLD, ...OTHER].map((r) => r.uuid);
+  const N = { entryId: 4, uuid: 'B', main: true, anchorUuid: 'B' };
+  const input = (o: Partial<In> = {}): In => ({ asof: 'B', boundary: N, copy: { fileId: 1, rows: HOLD }, kept: ['k1', 'ghost', 'k1', 7], ...o });
+  const cutOf = async (o: Partial<In> = {}): Promise<Cut> => {
+    const r = (await lib()).asOfCut(input(o));
+    if (!r.ok) throw new Error(`expected a cut, got ${JSON.stringify(r)}`);
+    return r.cut;
+  };
+  /** HOLD with the named rows restamped. */
+  const stamped = (ts: Record<string, number | null>): Row[] => HOLD.map((r) => (r.uuid in ts ? { ...r, ts_ms: ts[r.uuid] ?? null } : r));
+  const REFUSED = { ok: false, rc: 2, reason: 'asof-invalid' };
+  /** The two tables the predicate reads, holding HOLD as file 1 and OTHER as file 2. q_eq and q_lt are also early rows
+   *  of file 2, and q_eq shares one stored body (blob 900) with o_eq. */
+  const storeOf = (): FtsDb => {
+    const db = new FtsDb(':memory:');
+    db.exec(`CREATE TABLE entries (entry_id INTEGER PRIMARY KEY, uuid TEXT NOT NULL UNIQUE, ts_ms INTEGER, blob_id INTEGER NOT NULL);
+      CREATE TABLE memberships (file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, line INTEGER NOT NULL, PRIMARY KEY (file_id, entry_id));`);
+    const ent = db.prepare('INSERT INTO entries (entry_id, uuid, ts_ms, blob_id) VALUES (?, ?, ?, ?)');
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    for (const [fileId, rows] of [[1, HOLD], [2, OTHER]] as const) {
+      for (const r of rows) {
+        ent.run(r.entry_id, r.uuid, r.ts_ms, r.uuid === 'q_eq' || r.uuid === 'o_eq' ? 900 : 100 + r.entry_id);
+        mem.run(fileId, r.entry_id, r.line);
+      }
+    }
+    mem.run(2, 8, 4);   // q_eq, early in file 2
+    mem.run(2, 5, 5);   // q_lt, early in file 2
+    return db;
+  };
+  /** The uuids a statement returns with the cut spliced and bound, or with neither when there is no cut. */
+  const visible = (l: Lib, db: FtsDb, cut: Cut | null): string[] => {
+    const where = cut === null ? '' : ` AND ${l.asOfEntrySql('e')}`;
+    return (db.prepare(`SELECT e.uuid AS uuid FROM entries e WHERE e.entry_id > :min${where} ORDER BY e.entry_id`)
+      .all({ min: 0, ...(cut === null ? {} : l.asOfBinds(cut)) }) as Array<{ uuid: string }>).map((r) => r.uuid);
+  };
+
+  it('C16, its one word: asof-invalid is an exit-2 REASONS word, so REFUSALS holds it', () => {
+    expect(REASONS['asof-invalid']).toBe(EXIT.REFUSED);
+    expect(REFUSALS).toContain('asof-invalid');
+  });
+
+  it('REASON_ROWS lists asof-invalid on its own line, beside its departure, D-5765', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l === "    'asof-invalid',");
+    expect(at, 'REASON_ROWS lists asof-invalid on its own line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5765 (history-w2-asof-invalid-word)');
+  });
+
+  it('asOfCut: T_N is the boundary\'s own stamp, the summary is derivation\'s pick, kept(N) is its strings once each, sorted', async () => {
+    const own = await cutOf({ copy: { fileId: 1, rows: stamped({ B: T - 20 }) } });
+    expect(own, 'N\'s own stamp is T_N, though p2 before it is stamped later').toEqual({
+      asof: 'B', tsCut: T - 20, boundaryEntryId: 4, summaryEntryId: 7, keptUuids: ['ghost', 'k1'], holdingFileId: 1, boundaryLine: 3,
+    });
+    expect(Object.isFrozen(own) && Object.isFrozen(own.keptUuids), 'one cut has one form').toBe(true);
+    expect((await cutOf({ kept: new Set<string>() })).keptUuids, 'an empty kept(N)').toEqual([]);
+  });
+
+  it('a NULL-ts boundary: T_N is the newest stamp at or before it in its holding copy, past NULL rows, and a stamp of 0 is a time', async () => {
+    expect((await cutOf()).tsCut, 'B has no stamp: p2\'s').toBe(T);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p2: null }) } })).tsCut, 'p2 and pn have none: p0\'s').toBe(T - 200);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p0: 0, p2: null }) } })).tsCut).toBe(0);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p2: null, q_lt: T - 5 }) } })).tsCut, 'a row after N is never read').toBe(T - 200);
+  });
+
+  it('asof-invalid, each arm against its CONTROL: no boundary row, another row\'s, a sidechain, no holding copy, a copy without N, no time at or before N', async () => {
+    const l = await lib();
+    expect(l.asOfCut(input()).ok, 'CONTROL: the fixture cuts').toBe(true);
+    const arms: Array<[string, Partial<In>]> = [
+      ['no boundaries row has the uuid', { boundary: null }],
+      ['the boundary measured is not the asof\'s', { asof: 'p2' }],
+      ['N sits on a sidechain transcript', { boundary: { ...N, main: false } }],
+      ['no file holds N', { copy: null }],
+      ['the copy given does not hold N', { copy: { fileId: 2, rows: OTHER } }],
+      ['no stamp at or before N in its holding copy', { copy: { fileId: 1, rows: stamped({ p0: null, p2: null }) } }],
+    ];
+    for (const [arm, o] of arms) expect(l.asOfCut(input(o)), arm).toEqual(REFUSED);
+    expect(REASONS[REFUSED.reason], 'the refusal is a REASONS word of its exit').toBe(EXIT.REFUSED);
+  });
+
+  it('the summary entry is derivation\'s pick: never an echo row; the row an anchor names; none without an anchor or a summary', async () => {
+    expect((await cutOf()).summaryEntryId, 'the first compact summary after N that is not an echo').toBe(7);
+    expect((await cutOf({ boundary: { ...N, anchorUuid: 'q_lt' } })).summaryEntryId, 'an anchor naming a row picks it').toBe(5);
+    expect((await cutOf({ boundary: { ...N, anchorUuid: 'echo' } })).summaryEntryId, 'an echo row is never the pick').toBeNull();
+    expect((await cutOf({ boundary: { ...N, anchorUuid: null } })).summaryEntryId).toBeNull();
+    expect((await cutOf({ copy: { fileId: 1, rows: HOLD.filter((r) => r.uuid !== 'S') } })).summaryEntryId, 'only an echo after N').toBeNull();
+  });
+
+  it('asOfEntrySql and asOfBinds: an alias off the SQL-name grammar throws; no blob is named; the parameters are named, asof_-prefixed, and exactly the binds\' keys', async () => {
+    const l = await lib();
+    for (const bad of ['', '1e', 'e; DROP TABLE entries', 'e.x', 'e ']) {
+      expect(() => l.asOfEntrySql(bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    const sql = l.asOfEntrySql('ent_2');
+    expect(sql.startsWith('(') && sql.endsWith(')'), 'one parenthesised boolean term').toBe(true);
+    expect(sql).toContain('ent_2.ts_ms <= :asof_ts');
+    expect(sql, 'keyed on entries, never on blobs').not.toMatch(/blob/i);
+    expect(sql, 'named parameters only').not.toContain('?');
+    const names = [...new Set([...l.asOfEntrySql('e').matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!))].sort();
+    expect(names.length > 0 && names.every((n) => n.startsWith('asof_')), names.join(' ')).toBe(true);
+    const binds = l.asOfBinds(await cutOf());
+    expect(Object.keys(binds).sort(), 'the regex child spreads the binds unfiltered, and node:sqlite refuses an unknown name').toEqual(names);
+    expect(binds).toEqual({ asof_ts: T, asof_file: 1, asof_line: 3, asof_boundary: 4, asof_summary: 7, asof_kept: '["ghost","k1"]' });
+  });
+
+  it('the positional-hide CONTROL: rows after N in its holding copy stamped exactly T_N and before T_N are hidden; without the cut they show', async () => {
+    const l = await lib();
+    const db = storeOf();
+    try {
+      const cut = await cutOf();
+      expect(cut.tsCut, 'CONTROL: T_N is the stamp both rows are measured against').toBe(T);
+      const seen = visible(l, db, cut);
+      expect(seen, 'q_eq is stamped exactly T_N, after N in its holding copy (and early in another copy too)').not.toContain('q_eq');
+      expect(seen, 'q_lt is stamped before T_N, the row right after N in its holding copy').not.toContain('q_lt');
+      expect(seen, 'CONTROL: p2, stamped exactly T_N before N in the same copy, is visible').toContain('p2');
+      expect(visible(l, db, null), 'CONTROL: the same fixture without the cut shows every row').toEqual(ALL);
+    } finally { db.close(); }
+  });
+
+  it('the cut decides by entry: NULL-ts rows absent; N, its summary and kept(N) present whatever their stamp or line; other copies by stamp alone', async () => {
+    const l = await lib();
+    const db = storeOf();
+    try {
+      const seen = new Set(visible(l, db, await cutOf()));
+      expect(Object.fromEntries(ALL.map((u) => [u, seen.has(u)]))).toEqual({
+        p0: true,                    // stamped before T_N, before N
+        pn: false,                   // NULL ts, before N
+        p2: true,                    // stamped exactly T_N, before N
+        B: true,                     // N itself, no stamp of its own
+        q_lt: false,                 // the row right after N in its holding copy, stamped before T_N
+        echo: false,                 // an echo after N: never the summary
+        S: true,                     // N's summary, stamped after T_N
+        q_eq: false,                 // after N in its holding copy, stamped exactly T_N
+        k1: true,                    // a member of kept(N), no stamp, after N
+        q_gt: false,
+        o_lt: true,
+        o_eq: true,                  // the named residual: another copy, the same millisecond as T_N (D-5766)
+        o_gt: false,
+        o_null: false,
+        o_late: true,                // another copy, before T_N, at a line past N's: the positional clause is the holding copy's alone
+      });
+      expect([seen.has('q_eq'), seen.has('o_eq')], 'q_eq and o_eq share one stored body and are decided apart').toEqual([false, true]);
+    } finally { db.close(); }
+  });
+
+  it('the predicate prepares and runs against a real store\'s schema', async () => {
+    const l = await lib();
+    const h = mkTmp('ccrc-history-asof-');
+    replayStore.createStore(h);
+    const db = replayStore.openWriter(l.historyPaths(h).dbFile);
+    try {
+      const cut = await cutOf();
+      expect(db.prepare(`SELECT e.uuid AS uuid FROM entries e WHERE e.transcript_pk = :tpk AND ${l.asOfEntrySql('e')}`)
+        .all({ tpk: 1, ...l.asOfBinds(cut) })).toEqual([]);
+    } finally { db.close(); }
+  });
+});

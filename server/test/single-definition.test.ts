@@ -8447,3 +8447,23 @@ describe('ccrc history W2-1 Task 2: isSyntheticModel is declared once, in lib.mj
     expect(hits).toEqual(["ccd/history/lib.mjs: return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');"]);
   });
 });
+
+// W2-2a Task 1 (W2-D38): the as-of cut is defined once, in lib.mjs. APPENDED after the last describe, for the reason the
+// CCRC HISTORY block above states; no import line is added. ALL_MJS, stallCode and rel are that block's.
+describe('ccrc history: the as-of cut is defined once, in lib.mjs (W2-D38; W2-2a Task 1)', () => {
+  const DEFINES = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\s*\\(|(?:const|let|var)\\s+${name}\\s*=)`);
+  const definers = (name: string): string[] =>
+    ALL_MJS.filter((f) => stallCode(f).split('\n').some((l) => DEFINES(name).test(l))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a function or binding declaration, exported or not, and never a call', () => {
+    expect(DEFINES('asOfCut').test('export function asOfCut({ asof, boundary, copy, kept }) {')).toBe(true);
+    expect(DEFINES('asOfCut').test('const asOfCut = (i) => i;')).toBe(true);
+    expect(DEFINES('asOfEntrySql').test('function asOfEntrySql(alias) {')).toBe(true);
+    expect(DEFINES('asOfCut').test('  const c = asOfCut({ asof, boundary, copy, kept });')).toBe(false);
+    expect(DEFINES('asOfBinds').test('  const b = xlib.asOfBinds(cut);')).toBe(false);
+  });
+
+  it('asOfCut, asOfEntrySql and asOfBinds are each defined in lib.mjs alone', () => {
+    for (const name of ['asOfCut', 'asOfEntrySql', 'asOfBinds']) expect(definers(name), name).toEqual(['ccd/history/lib.mjs']);
+  });
+});
