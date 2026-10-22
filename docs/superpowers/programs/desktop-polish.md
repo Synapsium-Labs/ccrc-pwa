@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-10-15-ccrc-two-skins-design.md` (the two skins; this wave amends its §6 inline-answer row, D-6326)
 Plan: `docs/superpowers/plans/2026-10-22-desktop-polish.md`
 Home project: `ccrc-pwa`   Coordinator: the coordinator session of this wave   Workspace: **a fresh child per task**
-**Status:** planning (2026-10-22). The plan is in its docs PR.
+**Status:** under way (2026-10-22). The plan landed as #1129; rev 3 adds the operator's later notes.
 
 **What this program is.** The operator reviewed the desktop experience (Refined, about 2000 px wide, a child
 session waiting on a question) and was "not super happy". They accepted a defect list in order ("Order accepted,
@@ -21,23 +21,23 @@ pressed in the console") and the slow first open of a new session. One task is o
 | 1 | T1a (D-6324) | server: the structured ask outlives the 30-minute cut while its menu is up | — | dispatched, run 782 |
 | 2 | T1b (D-6325) | the ask is Claude's own question: who asks, plain words, Recommended tag, Other, one scroller, no pane text | — | dispatched, run 783 |
 | 3 | T1c (D-6326) | the ask answered inline in the pane at ≥900; a phone keeps the sheet | — | planned, after T1b |
-| 4 | T2a (D-6327) | the update banner becomes one quiet line | — | planned, after Step 1 and #1116 |
+| 4 | T2a (D-6327) | the update banner becomes one quiet line, dismissible until a newer release | — | planned, after Step 1 and #1116's content |
 | 5 | T2b (D-6328) | no floating `+` at the desk in Instrument | — | planned, after #1116 |
-| 6 | T2c (D-6329) | gauges always print a number, name their window, never an empty bar | — | planned, after Step 1 |
+| 6 | T2c (D-6329) | gauges most free first in a full-width row; always a number with its window; never an empty bar | — | planned, ahead of the step order (Q1 ruled) |
 | 7 | T2d (D-6330) | Inbox and Runs counts show only what waits on the operator | — | planned, after Step 1 and #1116 |
-| 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | — | planned, after Step 1 |
-| 18 | T2f (D-6371) | Instrument's runs row and class chooser at the desk (Q5) | — | planned, after T2d |
+| 8 | T2e (D-6335) | Instrument's desk: no empty column, no second head in the list column, dense rows | — | planned, run 788, ahead of the step order |
+| 18 | T2f (D-6371) | Instrument's desk column: no count line, no runs row, the chooser in project mode (Q5) | — | planned, after T2d |
 | 9 | T3a (D-6331) | plain fleet words; one bucket vocabulary; the counts once | — | planned, after Step 2 |
 | 10 | T3b (D-6332) | names whole where they fit; ⋯ revealed under a fine pointer | — | planned, after Step 2 |
 | 11 | T3c (D-6333) | the header names the session; chips never cut at the desk; doors carry words | — | planned, after Step 2 |
 | 12 | T3d (D-6334) | the inspector shows only sections with content and one honest routing line | — | planned, after Step 2 |
-| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | — | planned, beside Step 1 (Q6) |
+| 13 | B1 (D-6366) | a typed send waits long enough for its echo; a lost Enter reply does not end the proof | — | planned, run 784 (cap) |
 | 14 | B2 (D-6367) | Retry resumes our own text | — | planned, after B1 |
-| 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | — | planned, beside Step 1 (Q6) |
+| 15 | B3 (D-6368) | the drawer follows its pty; a phone's Return is Enter | — | planned, run 785 (cap) |
 | 16 | B4 (D-6369) | the transcript search runs in parallel | — | dispatched, run 786 |
 | 17 | B5 (D-6370) | New session opens at once; an unprompted session says so | — | planned, after B4 and T1a |
 | 19 | S5 (W2, D-5471) | Refined's phone header and FAB, landed by a superseding PR for the unowned #1116 | — | planned, run 787 |
-| 20 | S18 (W2, D-5479) | Instrument on a desk and Refined on a phone by default, brought forward | — | planned |
+| 20 | S18 (W2, D-5479; D-6389) | Instrument on a desk and Refined on a phone by default, brought forward | — | planned |
 | 21 | T3e (D-6385) | the right-side inspector hides and shows, per device | — | planned, after T3c, T3d, T2e and #1116 |
 | 22 | T3f (D-6386) | Done above Working when grouped by status | — | planned |
 | 23 | T4a (D-6387) | colour where the machine speaks: tool boxes, inline code, failed calls | — | planned, after T1c |
