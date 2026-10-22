@@ -1576,10 +1576,10 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     expect(end!.canonical, 'and the checkpoint\'s canonical bytes').toBe(start!.canonical);
     expect(end!.file.equals(start!.file), 'and the file on disk').toBe(true);
     expect([...end!.ids].sort(), 'the ids on file (the set the part answers) are the ones that were').toEqual(attemptsBefore.map((a) => a.attemptId).sort());
-    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes').toEqual(AT_START);
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the v2 pin, AT_START').toEqual(AT_START);
     expect(shaOf(end), 'and at its end: the revision, the canonical bytes and the file bytes are unchanged').toEqual(AT_START);
     expect(end!.ids, 'the ids on file are the one attempt').toEqual([FILED_ID]);
-    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID]]);
+    expect(await returned!.all(), 'fileAttempts answered, once, the v2 pin, FILED_ID').toEqual([[FILED_ID]]);
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says the call was skipped').toBe(1);
   });
 
@@ -1608,10 +1608,10 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     expect(after.map((a) => a.attemptId).sort(), 'the new attempt is on file beside the old ones').toEqual([...attemptsBefore.map((a) => a.attemptId), NEW_ID].sort());
     expect(start, 'the attempts part started').not.toBeNull();
     expect(end, 'and the lease part began after it').not.toBeNull();
-    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the one the review base computes (the same as (a)\'s)').toEqual(AT_START);
-    expect(shaOf(end), 'and at its end the one change left the revision, canonical bytes and file bytes the review base computes').toEqual(AT_END_B);
+    expect(shaOf(start), 'the checkpoint at the start of the attempts part is the v2 pin, AT_START (the same as (a)\'s)').toEqual(AT_START);
+    expect(shaOf(end), 'and at its end the one change left the revision, canonical bytes and file bytes of the v2 pin, AT_END_B').toEqual(AT_END_B);
     expect(end!.ids, 'the filed attempt and the new one').toEqual([FILED_ID, NEW_ID].sort());
-    expect(await returned!.all(), 'fileAttempts answered, once, the set the review base answers').toEqual([[FILED_ID, NEW_ID].sort()]);
+    expect(await returned!.all(), 'fileAttempts answered, once, the v2 pin FILED_ID and the injected NEW_ID').toEqual([[FILED_ID, NEW_ID].sort()]);
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says a call was made').toBe(0);
   });
 
@@ -1625,10 +1625,11 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
         const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');       // the scenario's own spy: a second spyOn returns it
         const read = (): Reading => {
           const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
-          const keys = new Set(cp.attempts.map((a) => JSON.stringify([a.parentId, a.parentIncarnation, a.project, a.adminRecord, a.canonicalPath, a.rung, a.verdict, a.detail])));
+          const keys = new Set(cp.attempts.map((a) => model.delegationAttemptKeyOf(a)));                 // the ONE definition of a decision's key
           return {
             calls: change.mock.calls.length, revision: cp.revision, attempts: cp.attempts.length, keys: keys.size,
-            intervalsHaveNothingToDo: model.upkeepDelegationIntervals(cp.observationIntervals, at(2)).changed === false,
+            // at the ARMED pass's own instant: `scenario` runs `2 + extra` unarmed passes, so on this rig the armed one is at(3)
+            intervalsHaveNothingToDo: model.upkeepDelegationIntervals(cp.observationIntervals, at(2 + replay.extra)).changed === false,
           };
         };
         r.also('upkeep', () => { atUpkeep = read(); });
@@ -2052,7 +2053,7 @@ describe('RE1, RE8: a lane seeded with legacy stock retires its zero-delta Bash 
 
   /** RE0's shape (generated, neutral): E1..E4 equal-listing calls (the third compares as a SET), C1 a call that added a name, A1 a Pre with no
    *  Post, one agent (start and stop); `activeToo` adds A2, a second Pre with no Post. All accepted within the hour before the first pass. */
-  function legacy(opts: { activeToo?: boolean; suffix?: boolean } = {}) {
+  function legacy(opts: { activeToo?: boolean; suffix?: boolean; fourth?: boolean } = {}) {
     const t = (k: number): number => T0 + k * 20_000;
     let n = 0;
     const steps: Array<readonly [DelegationEventEnvelopeV1, number]> = [];
@@ -2065,7 +2066,7 @@ describe('RE1, RE8: a lane seeded with legacy stock retires its zero-delta Bash 
     pair('toolu_e1', ['main-wt', 'wt-raw'], ['wt-raw', 'main-wt']);
     pair('toolu_e2', ['main-wt'], ['main-wt']);
     pair('toolu_e3', ['main-wt', 'wt-x'], ['main-wt', 'wt-x']);
-    pair('toolu_e4', ['main-wt'], ['main-wt']);
+    if (opts.fourth !== false) pair('toolu_e4', ['main-wt'], ['main-wt']);   // RE1's fourth equal pair, leased by its suffix; RE8 takes RE0's three
     pair('toolu_c1', ['main-wt'], ['main-wt', 'wt-new']);
     push((id, at) => bashEv(id, 'PreToolUse', 'toolu_a1', ['main-wt'], at));
     if (opts.activeToo === true) push((id, at) => bashEv(id, 'PreToolUse', 'toolu_a2', ['main-wt'], at));
@@ -2147,7 +2148,7 @@ describe('RE1, RE8: a lane seeded with legacy stock retires its zero-delta Bash 
   it('RE8: the door runs on the first pass of each UTC hour only: pass 1 retires 3 and projects in full; pass 2 (5 min on) retires nothing, projects no full rewrite and keeps its rows; pass 3 (next hour) retires the row whose equal Post arrived meanwhile', async () => {
     const warn = quietWarn();
     const w = world();
-    const s = legacy({ activeToo: true });
+    const s = legacy({ activeToo: true, fourth: false });
     seedStock(w, s);
     const r = rig(w);
     const m1 = await armedPass(w, r, warn, H11);

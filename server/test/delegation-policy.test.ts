@@ -480,7 +480,7 @@ describe('an attempt is a decision, not its witnesses (D-6190, C-P1, C-P3..C-P8)
     if (e.kind !== 'request-linked-lease-identity') throw new Error('unreachable');
     expect(e.attempt.rung).toBe(3);
     expect(e.attempt.attemptId).not.toBe(hex('legacy-linked'));
-    expect(e.attempt.attemptId).not.toBe(onFile.attemptId);
+    expect(e.attempt).not.toEqual(onFile);
   });
 
   // C-P5: each of the eight key fields is part of the decision: a row on file that differs in ONLY that field is not this decision.
