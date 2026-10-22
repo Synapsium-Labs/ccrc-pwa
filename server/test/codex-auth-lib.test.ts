@@ -1676,6 +1676,84 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  // The unsaved record's OWN refresh token refused: the first call refreshes but cannot commit, the second (forced by
+  // withinS) cannot commit either and refreshes the record, and is refused. The disk recovers after those two writes.
+  it('a needs-signin met on the unsaved record\'s own refresh token drops the record: it bars every later call, and a recovered disk never writes ok over it', async () => {
+    const home = mkTmp('codex-auth-unsaved-signin-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const a1 = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 400, body: { error: 'invalid_grant' } }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const forced = { op: 'ensure_fresh', withinS: 100000 };
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, forced, forced, forced], { faults: ['enospc-writes:2'] });
+      expect(r.lines[0], r.stderr).toMatchObject({ credential: 'present', access_token: (a1.access_token as string).length });
+      expect(r.lines.slice(1).map((l) => l.error), r.stderr).toEqual(['needs-signin', 'needs-signin', 'needs-signin']);
+      expect(srv.requests, 'the dead refresh token is sent once').toHaveLength(2);
+      expect(srv.requests[1].form?.refresh_token, 'the record\'s own token was the one refused').toBe(a1.refresh_token);
+      expect(readFileSync(credPath(dir), 'utf8'), 'the dead record is never written').toBe(old);
+      expect(statusOf(dir)).toMatchObject({ state: 'needs-signin', lastErrorCode: 'invalid_grant', unsaved: false });
+      expect(statusIdentity(statusText(dir)), 'the needs-signin binds the file on disk').toEqual(fileIdentity(dir));
+      const named = r.stderr.split('\n').filter((l) => l !== '');
+      expect(named, r.stderr).toHaveLength(1);
+      expect(named[0]).toMatch(/^ccgpt-auth: dropped an unsaved credential for .+: the token endpoint refused its refresh token; the file on disk is kept$/);
+      for (const piece of secretPieces([...tokensOf(t), ...tokensOf(a1)])) expect(r.stderr).not.toContain(piece);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1)]);
+    });
+  });
+
+  it('a config-error met on the unsaved record\'s own refresh bars every later call, the unsaved reading included', async () => {
+    const home = mkTmp('codex-auth-unsaved-client-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const old = readFileSync(credPath(dir), 'utf8');
+    const a1 = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 400, body: { error: 'invalid_client' } }, { status: 200, body: issuedAnswer() }] }, async (srv) => {
+      const forced = { op: 'ensure_fresh', withinS: 100000 };
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, forced, forced, forced], { faults: ['enospc-writes:2'] });
+      expect(r.lines[0], r.stderr).toMatchObject({ credential: 'present', access_token: (a1.access_token as string).length });
+      expect(r.lines.slice(1).map((l) => l.error), r.stderr).toEqual(['config-error', 'config-error', 'config-error']);
+      expect(srv.requests, 'a config-error is never retried under the same config').toHaveLength(2);
+      expect(readFileSync(credPath(dir), 'utf8')).toBe(old);
+      expect(statusOf(dir)).toMatchObject({ state: 'config-error', lastErrorCode: 'invalid_client' });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1)]);
+    });
+  });
+
+  it('a transient failure while the record is unsaved keeps the record\'s lastRefreshAt, never the replaced file\'s', async () => {
+    const home = mkTmp('codex-auth-unsaved-transient-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    plantStatus(dir, { state: 'ok', lastRefreshAt: 1000 });
+    const planted = statusText(dir);
+    mkdirSync(statusTmpPath(dir));
+    const a1 = issuedAnswer();
+    const barrier = join(home, 'checked');
+    const started = Math.floor(Date.now() / 1000);
+    let afterFirst = '';
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 503, body: 'unavailable' }] }, async (srv) => {
+      // The first call's commit and status write both fail; the second (forced) cannot commit and meets a 503.
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh', withinS: 100000 },
+      ], { faults: ['enospc-writes:2'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          afterFirst = statusText(dir);
+          rmSync(statusTmpPath(dir), { recursive: true });
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(r.lines[0], r.stderr).toMatchObject({ credential: 'present' });
+      expect(r.lines[2].error, r.stderr).toBe('refresh-failed');
+      expect(srv.requests).toHaveLength(2);
+      expect(afterFirst, 'the first call could not write its status').toBe(planted);
+      const st = statusOf(dir);
+      expect(st).toMatchObject({ state: 'ok', unsaved: true });
+      expect(st.lastRefreshAt, 'the record\'s own refresh, not the replaced file\'s').toBeGreaterThanOrEqual(started);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1)]);
+    });
+  });
+
   it('a status file that cannot be written is named on stderr once and never fails the refresh', async () => {
     const home = mkTmp('codex-auth-status-unwritable-');
     const dir = laneDir(home);
@@ -1965,6 +2043,23 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  it.each([
+    ['a 200', (): Record<string, unknown> => ({ status: 200, body: issuedAnswer() }), 'ok'],
+    ['a 400', (): Record<string, unknown> => ({ status: 400, body: { error: 'invalid_grant' } }), 'needs-signin'],
+  ] as Array<[string, () => Record<string, unknown>, string]>)('a request id that echoes the submitted refresh token is never stored (%s)', async (_label, answerOf, state) => {
+    const home = mkTmp('codex-auth-echo-rid-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120, refresh: `rtok-Fixture-${mixedCase(randomBytes(16).toString('hex'))}` });
+    const a = answerOf();
+    await withAuth({ token: [{ ...a, headers: { 'x-request-id': t.refresh } } as never] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(srv.requests).toHaveLength(1);
+      expect(statusOf(dir), r.stdout + r.stderr).toMatchObject({ state, lastRequestId: null });
+      expectNowhere(r, dir, tokensOf(t));
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf((a.body ?? {}) as Record<string, unknown>)]);
+    });
+  });
+
   // The plan's two names are refused by their word. The two that follow name no DNS name and reach the fake's own
   // listener when connected to (0.0.0.0 and the IPv4-mapped loopback both land on 127.0.0.1), so its request count is
   // a real check: a refusal that let them through would be seen there, with no query leaving the box.
@@ -2001,14 +2096,9 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
-  it('an answer sent slowly is cut at TOKEN_TIMEOUT_S from the request, not stretched by each read', async () => {
-    const home = mkTmp('codex-auth-answer-slow-');
-    const dir = laneDir(home);
-    const t = plantBackendCredential(dir, { expiresIn: -120 });
-    const bytes = readFileSync(credPath(dir));
-    const answer = issuedAnswer();
-    const text = JSON.stringify(answer);
-    // Sixteen pieces 150 ms apart: each read waits far less than the 0.5 s timeout, the whole answer 2.4 s.
+  /** A token endpoint that answers `status` with `text` in sixteen pieces 150 ms apart: each read waits far less than a
+   *  0.5 s timeout, the whole answer 2.4 s. */
+  async function slowServer(status: number, text: string): Promise<{ base: string; requests: () => number; close(): Promise<void> }> {
     const pieces = Array.from({ length: 16 }, (_, i) => text.slice(Math.floor((i * text.length) / 16), Math.floor(((i + 1) * text.length) / 16)));
     const timers: NodeJS.Timeout[] = [];
     let requests = 0;
@@ -2016,7 +2106,7 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       requests += 1;
       req.resume();
       res.on('error', () => undefined);
-      res.writeHead(200, { 'content-type': 'application/json' });
+      res.writeHead(status, { 'content-type': 'application/json' });
       pieces.forEach((piece, i) => timers.push(setTimeout(() => {
         if (res.destroyed) return;
         if (i === pieces.length - 1) res.end(piece);
@@ -2024,18 +2114,52 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       }, 150 * (i + 1))));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      requests: () => requests,
+      close: async () => {
+        for (const timer of timers) clearTimeout(timer);
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  }
+
+  it('an answer sent slowly is cut at TOKEN_TIMEOUT_S from the request, not stretched by each read', async () => {
+    const home = mkTmp('codex-auth-answer-slow-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const bytes = readFileSync(credPath(dir));
+    const answer = issuedAnswer();
+    const srv = await slowServer(200, JSON.stringify(answer));
     try {
-      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      const r = await runFresh(home, dir, base, [{ op: 'ensure_fresh' }], { consts: { TOKEN_TIMEOUT_S: 0.5 } });
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }], { consts: { TOKEN_TIMEOUT_S: 0.5 } });
       expect(r.lines[0].error, r.stdout + r.stderr).toBe('refresh-failed');
       expect(r.lines[0].ms, 'the request ends near its 0.5 s bound').toBeLessThan(1500);
-      expect(requests).toBe(1);
+      expect(srv.requests()).toBe(1);
       expect(readFileSync(credPath(dir)).equals(bytes), 'the credential is unchanged').toBe(true);
       expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
     } finally {
-      for (const timer of timers) clearTimeout(timer);
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await srv.close();
+    }
+  });
+
+  it('an error answer sent slowly is cut at TOKEN_TIMEOUT_S too: refresh-failed, never a needs-signin read past the bound', async () => {
+    const home = mkTmp('codex-auth-answer-slow-400-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const bytes = readFileSync(credPath(dir));
+    const srv = await slowServer(400, JSON.stringify({ error: 'invalid_grant', error_description: 'the refresh token is not valid any more' }));
+    try {
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }], { consts: { TOKEN_TIMEOUT_S: 0.5 } });
+      expect(r.lines[0].error, r.stdout + r.stderr).toBe('refresh-failed');
+      expect(r.lines[0].ms, 'the request ends near its 0.5 s bound').toBeLessThan(1500);
+      expect(srv.requests()).toBe(1);
+      expect(readFileSync(credPath(dir)).equals(bytes), 'the credential is unchanged').toBe(true);
+      expect(statusOf(dir).state, 'a cut refusal records no needs-signin').toBe('ok');
+      expectStatusClean(dir, tokensOf(t));
+    } finally {
+      await srv.close();
     }
   });
 
