@@ -385,7 +385,9 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
   });
 
   // Two failed writes: only the third try (SIGNIN_COMMIT_TRIES) signs in, after two SIGNIN_COMMIT_RETRY_S waits,
-  // which the op's own elapsed time (the driver's `ms`) covers; the poll answers at once, so it waits nothing.
+  // which the op's own elapsed time (the driver's `ms`) covers; the poll answers at once, so it waits nothing. The
+  // bound is two-sided: at least the two 0.5 s waits, and under 2.9 s, which a spacing of 1.45 s or more reaches, so
+  // a wider spacing is red too; the 1.9 s between the two is headroom for a loaded box.
   it('signin on a disk that frees after two failed writes is signed-in at the third try, 0.5 s apart', async () => {
     const home = mkTmp('codex-auth-enospc1-');
     const dir = laneDir(home);
@@ -399,6 +401,7 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(r.rc, r.stderr).toBe(0);
       expect(r.stdout).toContain('ccgpt-auth: codex-a: signed-in');
       expect(r.ms).toBeGreaterThanOrEqual(950);
+      expect(r.ms).toBeLessThan(2900);
       const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
       expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
       expect(JSON.parse(readFileSync(statusPath(dir), 'utf8'))).toMatchObject({ state: 'ok', unsaved: false });
@@ -408,9 +411,42 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     }
   });
 
+  // Every try's rename lands and its directory fsync fails (enospc-fsyncdir:3): the file holds the sign-in's record,
+  // so the sign-in is signed in, the status is ok with unsaved false, and nothing is kept in memory, which the second
+  // op in the same process reads (D-TBD-signin-landed-rename).
+  it('signin whose rename lands and whose directory fsync fails is signed-in, and keeps nothing unsaved', async () => {
+    const home = mkTmp('codex-auth-enospc-dir-');
+    const dir = laneDir(home);
+    plantMarker(dir);
+    const t = issued();
+    const srv = await fakeAuthServer(fullSignin(t));
+    try {
+      const run = await runAuthDriver(home, {
+        authDir: dir, faults: ['enospc-fsyncdir:3'],
+        ops: [{ op: 'main', argv: ['signin', '--auth-dir', dir, '--lane', 'codex-a'] }, { op: 'read' }, { op: 'status' }],
+      }, { CCRC_CODEX_AUTH_BASE: srv.base }, { timeoutMs: 15_000 });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const [r, after, status] = driverLines(run.stdout);
+      expect(r.rc, r.stderr).toBe(0);
+      expect(r.stdout).toContain('ccgpt-auth: codex-a: signed-in');
+      expect(r.stderr).not.toContain('login-failed');
+      expect(r.ms).toBeGreaterThanOrEqual(950); // all three tries ran, so the fault fired at each
+      const cred = JSON.parse(readFileSync(credPath(dir), 'utf8')) as Record<string, unknown>;
+      expect(cred).toMatchObject({ access_token: t.access, refresh_token: t.refresh, id_token: t.id });
+      expect(existsSync(pendingPath(dir))).toBe(false);
+      expect(JSON.parse(readFileSync(statusPath(dir), 'utf8'))).toMatchObject({ state: 'ok', unsaved: false });
+      expect(status.result).toMatchObject({ source: 'file', state: 'ok', unsaved: false, credential: 'present' });
+      expect(after).toMatchObject({ op: 'read', credential: 'present', refresh_token: t.refresh.length });
+      expect(String(after.detail)).not.toContain('an unsaved credential for');
+    } finally {
+      await srv.close();
+    }
+  });
+
   // In one process: a refresh whose commit the full disk refused leaves an unsaved record; the record's next refresh
   // meets a config-error, which bars it, so a sign-in runs; every sign-in commit then fails. The map must hold the
-  // refresh's record again, not the sign-in's and not nothing. Each record's refresh token has its own length.
+  // refresh's record again, not the sign-in's and not nothing. The refresh's record has a refresh token of its own
+  // length; the file's and the sign-in's share one, and the detail check tells the file's apart.
   it("signin on a full disk gives back the unsaved refresh record it found", async () => {
     const home = mkTmp('codex-auth-enospc-kept-');
     const dir = laneDir(home);

@@ -40,6 +40,8 @@ THE FAULTS, applied by monkeypatching `os` after the library loads (the library 
                     OSError(ENOSPC) (the driver maps each such fd to its path by wrapping `os.open`, and forgets it
                     at `os.close`)
   enospc-fsync:N    the first N `os.fsync` calls on such an fd raise OSError(ENOSPC)
+  enospc-fsyncdir:N the first N `os.fsync` calls on an fd opened on the authDir itself (the directory fsync after a
+                    rename, so the rename has landed when it fails) raise OSError(ENOSPC)
   enospc-replace:N  the first N `os.replace` calls onto the credential raise OSError(ENOSPC)
   die-before-rename `os.replace` onto the credential calls `os._exit(9)` (stdout flushed first)
   eio-read:N        the first N `os.read` calls on an fd opened on the credential (a path whose basename is the
@@ -92,12 +94,12 @@ def _is_reading(value):
     return hasattr(value, "_fields") and "credential" in getattr(value, "_fields", ())
 
 
-def _install_faults(lib, faults):
+def _install_faults(lib, faults, auth_dir):
     counts = {}
     flags = set()
     for f in faults:
         name, _, n = f.partition(":")
-        if name in ("enospc-writes", "enospc-fsync", "enospc-replace", "eio-read", "uid"):
+        if name in ("enospc-writes", "enospc-fsync", "enospc-fsyncdir", "enospc-replace", "eio-read", "uid"):
             if not n.lstrip("-").isdigit():
                 _usage("fault " + f + " needs a number")
             counts[name] = int(n)
@@ -109,6 +111,8 @@ def _install_faults(lib, faults):
     credential_name = getattr(lib, "CREDENTIAL_NAME", "auth.json")
     pending_fds = set()
     credential_fds = set()
+    dir_fds = set()
+    auth_dir_norm = os.path.normpath(auth_dir) if isinstance(auth_dir, str) else None
     if "count-opens" in flags:
         _state["opens"] = 0
     real_open, real_close, real_read, real_write = os.open, os.close, os.read, os.write
@@ -132,11 +136,14 @@ def _install_faults(lib, faults):
             pending_fds.add(fd)
         if on_credential:
             credential_fds.add(fd)
+        if auth_dir_norm is not None and os.path.normpath(os.fspath(path)) == auth_dir_norm:
+            dir_fds.add(fd)
         return fd
 
     def f_close(fd):
         pending_fds.discard(fd)
         credential_fds.discard(fd)
+        dir_fds.discard(fd)
         return real_close(fd)
 
     def f_read(fd, n):
@@ -151,6 +158,8 @@ def _install_faults(lib, faults):
 
     def f_fsync(fd):
         if fd in pending_fds and take("enospc-fsync"):
+            raise enospc()
+        if fd in dir_fds and take("enospc-fsyncdir"):
             raise enospc()
         return real_fsync(fd)
 
@@ -189,7 +198,7 @@ def _load(action):
         if not hasattr(mod, name):
             _usage("the library defines no constant " + name)
         setattr(mod, name, value)
-    _install_faults(mod, action.get("faults") or [])
+    _install_faults(mod, action.get("faults") or [], action.get("authDir"))
     _state["lib"] = mod
     return mod
 

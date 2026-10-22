@@ -1480,7 +1480,7 @@ def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Opt
     tokens (ruling R8: the sign-in exchange only; a refresh keeps the tokens its answer lacks); a refusal names the
     missing fields' names, never a value. Answers the backend record and the answer's request id, which is dropped
     when it echoes the submitted code or code_verifier or one of the answer's tokens (as `token_request` drops one that
-    echoes its refresh token), so the status file never holds one."""
+    echoes its submitted refresh token or a token its answer carries), so the status file never holds one."""
     form = urllib.parse.urlencode({
         "grant_type": "authorization_code",
         "code": code,
