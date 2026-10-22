@@ -5176,10 +5176,11 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
         // and the three timer-bound ones, macOS is a supported box for it. The
-        // GPT lane's four join it for the same reason: none is timer-bound to
+        // GPT lane's five join it for the same reason: none is timer-bound to
         // this arm — `ccrc-codex` (the launcher every Codex wrapper execs) and
         // `ccgpt-runtime` are commands, `ccgpt-proxy.py` is the shim a tier
-        // runs, `ccgpt-usage.py` is placed for hand-running. Gated `!= server`,
+        // runs, `ccgpt-auth.py` is the auth library the lane's other files will load,
+        // `ccgpt-usage.py` is placed for hand-running. Gated `!= server`,
         // which this `both` install is not. `ccrc-codex` and `ccgpt-runtime`
         // joined in the commit that placed them, and no earlier than the
         // commits that wrote them (fix round 1, Finding 1). NEVER `ccgpt`
@@ -5226,7 +5227,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     const PY_SIDECARS_COVERED_BY_SIBLING = [
       'ccd-usage-sweep.py', // engine carried by ccd-usage-sweep's own name
     ];
-    // `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
+    // `ccgpt-auth.py`, `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
     // each must be named explicitly in the echo below on its own, and so must
     // `ccgpt-runtime` and `ccrc-codex`, which are dotless and so never exempt.
     const { home, r } = converged;
@@ -5237,14 +5238,16 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         && !PY_SIDECARS_COVERED_BY_SIBLING.includes(b))
       .sort();
     // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum — `ccd`,
-    // `ccd-account-auth`, the GPT lane's four and `ccrc`, seven since Plan 2b-2
-    // placed `ccgpt-runtime` and `ccrc-codex` — the smaller of the two
+    // `ccd-account-auth`, `ccrc`, `ccrc-api` and the GPT lane's five, nine since
+    // codex bridge Stage 1 Task 5 placed `ccgpt-auth.py` (seven since Plan 2b-2
+    // placed `ccgpt-runtime` and `ccrc-codex`; wave 17's `ccrc-api` made it
+    // eight and this floor was not raised then) — the smaller of the two
     // platforms, so it holds on both. Like `gen-wrappers.test.ts`'s
     // `TOOLCHAIN_EXECUTABLES` floor, this is a RATCHET: it only ever needs to
     // rise as names are added, never fall, and a fall here means the
     // derivation lost members rather than that fewer names shipped.
     expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
-      .toBeGreaterThanOrEqual(7);
+      .toBeGreaterThanOrEqual(9);
     // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
     // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
     // PREFIX of another name this same census carries (`ccd-account-auth`,

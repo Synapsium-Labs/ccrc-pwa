@@ -1527,7 +1527,7 @@ function editRosterRow(home: string, id: string, edit: (row: Record<string, any>
 /** A healthy box whose roster also carries Codex lanes (`ids`), each one a
  *  lane ccrc runs end to end: its launcher, a signed-in authDir, its model
  *  registry and a fresh catalogue, and the files rendered from them; the
- *  four GPT-lane executables placed from the shipped tree; a current
+ *  five GPT-lane executables placed from the shipped tree; a current
  *  runtime. Every check still PASSes — healthy()'s contract — so a Codex
  *  case breaks exactly one thing. The ports are FREE ones (`freeLanes`),
  *  never the fixed pure-parse pair: from Task 5 on the check connects to
