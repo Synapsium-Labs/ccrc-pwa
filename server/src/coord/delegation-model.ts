@@ -1601,8 +1601,10 @@ export function isDelegationHealthKebab(v: string): boolean {
 // ── Cursor retention (R58, D-4654) ────────────────────────────────────────────────────────────────────────────────────
 //
 // A bucket cursor is checkpoint-owned state the lane needs for as long as the bucket can still be READ, and not a moment longer; kept
-// for ever it is the checkpoint's one unbounded member, and every application rewrites the whole checkpoint. Two horizons, one
-// derivation:
+// for ever it would be one more unbounded member of a checkpoint that every application rewrites whole. It is not the only one: the
+// activities and their natural-key map, the sessions, the attempts (bounded per decision since run 740's D-6190, not in decisions), the leases
+// and the lineage are kept for ever too (O4; D-6268 retires one class of activity, and wave 4 owns the general bound; D-6272). Two
+// horizons, one derivation:
 //   * THE READ HORIZON is `DELEGATION_SPOOL_LOOKBACK_HOURS` (24 h, the hook's own retention): the lane reads no bucket older than that,
 //     whoever it belongs to, through `delegationBucketReadable` and nothing else.
 //   * THE RETENTION is the read horizon plus a day: a cursor older than `DELEGATION_CURSOR_RETENTION_HOURS` (48 h) is retired, and only
