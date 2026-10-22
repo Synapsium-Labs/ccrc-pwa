@@ -48,13 +48,33 @@ import { loadConfig as t6LoadConfig } from '../src/config.js';
 import { localIO as t6LocalIO } from '../src/io.js';
 import { rolloverCases as t6RolloverCases } from './fixtures/rollover.js';
 import { DEFAULT_TEST_ROSTER as T6_ROSTER } from './helpers/roster.js';
+// W2-5a Task 1 (W2-D74, W2-D75, W2-D33, W2-D24): w5a1-prefixed bindings, so none collides with a binding above. The
+// fixture store is built by the real sweep in a historyHelpers box (a mkTmp HOME whose PATH holds the poisoned gh) and
+// read here, in process, through the driver's exports.
+import { beforeAll as w5a1BeforeAll } from 'vitest';
+import { DatabaseSync as W5a1Db } from 'node:sqlite';
+import { brotliCompressSync as w5a1Brotli } from 'node:zlib';
+import * as w5a1H from './historyHelpers.js';
+import * as w5a1Fx from './historyFixtures.js';
+import * as w5a1Lib from '../../ccd/history/lib.mjs';
+import * as w5a1Derive from '../../ccd/history/derive.mjs';
+import * as w5a1Recall from '../../ccd/history/recall.mjs';
+import { createStore as w5a1CreateStore } from '../../ccd/history/store.mjs';
+import * as w5a1Gate from '../../deploy/history-gate.mjs';
+import * as w5a1Drv from '../../deploy/history-replay.mjs';
+import { removeTmpFixturesEachTest as w5a8EachTest } from './tmpHelpers.js';
+
+// Each case's fixture homes and stores go when the case ends (R20a's opt-in): with W2-5a's cases the one end-of-file
+// sweep overran vitest's 20 s hook timeout under load while every test passed. Registered before the root afterEach
+// hooks below, so it runs after them: claims are released and children killed before their directories go.
+w5a8EachTest();
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
 /** One driver run as the operator makes it: node on the script, an argv array, a fixture HOME, the scrubbed env plus
  *  `extraEnv`, and the HOME as cwd so a relative path never lands in the checkout. */
 function runDriver(home: string, args: string[], extraEnv: Record<string, string> = {}): { code: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+  const r = spawnSync(process.execPath, ['--no-warnings', SCRIPT, ...args], {
     cwd: home, encoding: 'utf8', timeout: 60_000,
     env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv },
   });
@@ -140,12 +160,13 @@ describe('history-replay W2-4 Task 1: the driver words (W2-D59, W2-D12; D-5774)'
     'budget-exhausted', 'record-invalid', 'record-sha-mismatch', 'input-sha-mismatch', 'assignment-mismatch', 'out-refused'];
   const PLAN_CHOSEN = ['args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured'];
   const FIX_ROUND_1 = ['run-live', 'out-in-use', 'interrupted'];   // D-5984, D-5985
+  const W2_5A = ['store-unreadable'];   // W2-5a Task 1: a store this node cannot open or read (W2-D59, its owner PR's word)
 
-  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three', () => {
+  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three, then W2-5a\'s', () => {
     expect(W2_D59).toHaveLength(16);
     expect(Object.isFrozen(replay.DRIVER_REASONS)).toBe(true);
     expect(new Set(replay.DRIVER_REASONS).size, 'a word is listed twice').toBe(replay.DRIVER_REASONS.length);
-    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1]);
+    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1, ...W2_5A]);
   });
 
   it('DRIVER_REASONS is disjoint from lib REASONS: no driver word is a CLI word (C-J)', () => {
@@ -175,10 +196,21 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
     }
   };
 
-  it('FLAG_SPECS declares exactly the seven flags W2-4 uses, frozen', () => {
+  it('FLAG_SPECS declares exactly W2-4\'s seven flags and W2-5a Task 7\'s, frozen', () => {
     expect(Object.isFrozen(replay.FLAG_SPECS)).toBe(true);
     expect(replay.FLAG_SPECS).toEqual({ out: 'string', account: 'string', budget: 'int', 'writer-model': 'string',
-      'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string' });
+      'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string',
+      // W2-5a Task 7 (W2-D25, W2-D73, W2-D84, W2-D21): a list flag repeats, one value per node, paired by position
+      step0a: 'list', 'step0a-sha256': 'list', 'node-label': 'list', 'node-store-id': 'list',
+      pilot: 'string', 'pilot-sha256': 'string', overrides: 'string',
+      record: 'string', 'record-sha256': 'string', supersedes: 'string', 'supersedes-sha256': 'string',
+      part1: 'string', 'part1-sha256': 'string', 'prior-final': 'string', 'prior-final-sha256': 'string',
+      census: 'list', 'census-sha256': 'list', verify: 'list', 'verify-sha256': 'list', sourced: 'list', 'sourced-sha256': 'list',
+      frozen: 'string', 'frozen-sha256': 'string', 'quiz-meta': 'string', 'quiz-meta-sha256': 'string',
+      power: 'string', 'power-sha256': 'string', 'pilot-result': 'string', 'pilot-result-sha256': 'string',
+      'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
+      'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
+      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -266,8 +298,9 @@ describe('history-replay W2-4 Task 1: RP2, the pane refusal comes first (W2-D51,
 describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a word and 1 for a defect', () => {
   /** Runs `fn` with a handler registered under `sub`, and removes it afterwards (HANDLERS is module state). From Task 2
    *  on, main sets process.umask(0o077) before parseArgs, and these cases call main in this test process (vitest's fork
-   *  pool), so the worker's umask is saved first and restored afterwards: no later case inherits 077. */
-  const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean>, env: Record<string, string | undefined>) => Promise<number>,
+   *  pool), so the worker's umask is saved first and restored afterwards. From W2-5a Task 1 importing the driver loads
+   *  cli.mjs, which sets this worker's umask to 077 at import, so the saved value is 077 too. */
+  const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean | string[]>, env: Record<string, string | undefined>) => Promise<number>,
     fn: () => Promise<void>): Promise<void> => {
     replay.HANDLERS.set(sub, h);
     const umask = process.umask(0o022);
@@ -319,7 +352,7 @@ describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a
     const link = path.join(home, 'bin', 'replay.mjs');
     symlinkSync(SCRIPT, link);
     // A name no task registers, so this case still holds once Tasks 8 and 9 register step0a and probe.
-    const r = spawnSync(process.execPath, [link, 'no-such-sub'], {
+    const r = spawnSync(process.execPath, ['--no-warnings', link, 'no-such-sub'], {
       cwd: home, encoding: 'utf8', timeout: 60_000, env: { ...scrubbedEnv(process.env), HOME: home },
     });
     expect([r.status, r.stderr]).toEqual([EXIT.REFUSED, refusalLine('args-invalid', 'unknown subcommand "no-such-sub"')]);
@@ -327,8 +360,9 @@ describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a
   });
 });
 
-// ── W2-4 Task 1: W2-D51, no deploy/history-*.mjs loads node:sqlite ────────
-describe('history-replay W2-4 Task 1: no deploy/history-*.mjs loads node:sqlite (W2-D51)', () => {
+// ── W2-4 Task 1: W2-D51, no deploy/history-*.mjs spells a node:sqlite specifier. From W2-5a Task 1 the driver loads it, but only
+// through store.mjs (its one importer), whose openReader is every store read's door; D-5814's import pin names store.mjs.
+describe('history-replay W2-4 Task 1: no deploy/history-*.mjs spells a node:sqlite specifier (W2-D51)', () => {
   /** Any quoted `node:sqlite` specifier: a static import, a dynamic import() and a createRequire call all quote it.
    *  KNOWN WIDTH: a specifier assembled from pieces is not seen; review is the backstop. A quoted mention inside a
    *  comment reds too, which is the safe side. */
@@ -456,7 +490,7 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
     'try { process.stdout.write("accepted " + d.prepareOut(process.env.MARKER_OUT)); }',
     'catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; process.stdout.write(e.word + " " + e.detail); }',
   ].join('\n');
-  const markerChild = (o: string) => spawnSync(process.execPath, ['--input-type=module', '-e', MARKER_CHILD], {
+  const markerChild = (o: string) => spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', MARKER_CHILD], {
     env: { ...scrubbedEnv(process.env), MARKER_DRIVER_URL: pathToFileURL(T2_SCRIPT).href, MARKER_OUT: o }, encoding: 'utf8', timeout: 10_000,
   });
   it('D-5814: a marker that is a FIFO is refused marker-mismatch without being opened (child with a deadline); a regular marker is accepted by the same child', () => {
@@ -515,7 +549,7 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
       'd.HANDLERS.set(\'t2-umask\', async (flags) => { const real = d.prepareOut(flags.out); fs.writeFileSync(real + \'/probe\', \'x\'); return 0; });',
       `process.exitCode = await d.main(['t2-umask', '--out', ${JSON.stringify(o)}], { HOME: ${JSON.stringify(b)} });`,
     ].join('\n');
-    const r = t2SpawnSync(process.execPath, ['--input-type=module', '-e', code],
+    const r = t2SpawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code],
       { encoding: 'utf8', env: { ...t2Scrubbed(process.env), HOME: b }, timeout: 60_000 });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     expect(modeOf(t2Path.join(o, 'probe')), 'main set no umask 077 before the handler').toBe('0600');
@@ -732,7 +766,7 @@ describe('W2-4 Task 3: account admission from the roster (W2-D52, RP3-admission,
   it('admission never opens a config dir\'s credentials file: planted as FIFOs, admission returns promptly (RP9)', () => {
     const home = admitHome();
     plantCredentialFifos(home);
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', ADMIT_CHILD], {
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', ADMIT_CHILD], {
       env: { ...scrubbedEnv(process.env), HOME: home, ADMIT_DRIVER_URL: pathToFileURL(ADMIT_DRIVER).href },
       encoding: 'utf8', timeout: 15_000,
     });
@@ -872,7 +906,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
   it('an empty stream is no init, no result and no usage: zeros with usageSource none', () => {
     expect(t4Replay.readStreamJson('')).toEqual({
       init: null, usage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, usageSource: 'none', toolPairs: [],
-      permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0,
+      permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0, firstCallUsage: null,
     });
   });
 
@@ -2238,7 +2272,7 @@ process.stdin.on('data', (d) => {
       const dead = await deadRecord();
       writeFileSync(lockPath(out), recText(dead.pid, dead.start));
       const racers = [0, 1].map(() => {
-        const c = spawn(process.execPath, [racer, out], { stdio: ['pipe', 'pipe', 'inherit'] });
+        const c = spawn(process.execPath, ['--no-warnings', racer, out], { stdio: ['pipe', 'pipe', 'inherit'] });
         startedChildren.push(c);
         const lines: string[] = [];
         let partial = '';
@@ -2730,7 +2764,7 @@ let said;
 try { D.prepareOut(join(process.argv[2], 'out')); said = 'no refusal'; } catch (e) { said = e.word + ': ' + e.detail; }
 process.stdout.write(said);
 `);
-    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, '--no-warnings', script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG; --out was created: remove it before a re-run');
     expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
@@ -2749,7 +2783,7 @@ let said;
 try { D.claimOut(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(0);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toMatch(/^out-refused: \.driver\.lock\.tmp-\d+ unwritable EFBIG$/);
@@ -2769,7 +2803,7 @@ let said;
 try { D.ensurePoisonBin(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(0);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: poison-bin/gh unwritable EFBIG');
@@ -2795,7 +2829,7 @@ let said;
 try { D.recordSpend(process.argv[2], 'j0', 5); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
 process.stdout.write(said);
 `);
-    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, '--no-warnings', script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     const r = run(before.length);
     expect(r.signal, r.stderr).toBeNull();
     expect(r.stdout).toBe('out-refused: spend.jsonl unwritable EFBIG');
@@ -2846,7 +2880,7 @@ const results = {};
 ${body}
 process.stdout.write(JSON.stringify(results));
 `);
-    const r = spawnSync(process.execPath, [script, dir], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = spawnSync(process.execPath, ['--no-warnings', script, dir], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     return { out: r.stdout, err: r.stderr, signal: r.signal, status: r.status };
   }
 
@@ -3014,21 +3048,39 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
   });
 
-  // D-5814: the import block is exactly the seven modules the plan names, and node:child_process brings in `spawn` only,
-  // so W2-D24's code hash covers the driver's whole scoring path and no later edit widens it unseen.
-  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', '../ccd/history/lib.mjs', '../shared/roster-json.mjs'];
+  // D-5814, widened by W2-5a Task 1: the import block is exactly the fourteen modules W2-5a's driver loads, every one
+  // added here once (R3). node:child_process brings in `spawn` only, and node:crypto and each ccd/history module beyond
+  // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
+  // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
+  // (W2-D68), sweep.mjs's recall-off content reader (W2-D29, R6) or a decode of its own. W2-D24's code hash covers the
+  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24).
+  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
+    '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
+    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
+  const EXACT_NAMES: Record<string, string> = {
+    'node:child_process': '{ spawn }',
+    'node:crypto': '{ randomBytes }',
+    '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
+    '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
+    '../ccd/history/recall.mjs': '{ expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
+    '../ccd/history/cli.mjs': '{ pairIndexOf }',
+    '../ccd/history/sweep.mjs': '{ ftsTextOfBlob, readRegPresence }',
+  };
   const importViolations = (text: string): string[] => {
     const found: string[] = [];
     const froms = [...text.matchAll(/^import\s+([^;]*?)\s*from\s*'([^']+)';/gms)];
     if (JSON.stringify(froms.map((m) => m[2])) !== JSON.stringify(EXPECTED_IMPORTS)) found.push(`imports ${froms.map((m) => m[2]).join(', ')}`);
-    for (const m of froms) if (m[2] === 'node:child_process' && m[1]!.trim() !== '{ spawn }') found.push(`child_process brings in ${m[1]}`);
+    for (const m of froms) {
+      const want = EXACT_NAMES[m[2]!];
+      if (want !== undefined && m[1]!.trim() !== want) found.push(`${m[2]} brings in ${m[1]}`);
+    }
     for (const l of text.split('\n')) {
       if (isComment(l.trim())) continue;
       if (/^import\s*['"]/.test(l) || /\bimport\s*\(/.test(l) || /\brequire\s*\(/.test(l)) found.push(`side-effect or dynamic load ${l.trim()}`);
     }
     return found;
   };
-  it('CONTROL: the import scan sees spawnSync, an import of history-gate.mjs, node:fs/promises, a dynamic import and a missing module', () => {
+  it('CONTROL: the import scan sees spawnSync, a stray history-gate specifier, node:fs/promises, a dynamic import, a missing module, keptOf from derive.mjs and sweep.mjs\'s recall-off reader', () => {
     const real = t5fs.readFileSync(SRC, 'utf8');
     expect(importViolations(real), 'the driver itself').toEqual([]);
     const variants: Array<[string, string]> = [
@@ -3037,13 +3089,16 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
       ['fs/promises', real.replace("import os from 'node:os';", "import os from 'node:os';\nimport { readFile } from 'node:fs/promises';")],
       ['dynamic', real + "\nconst m = await import('node:sqlite');\n"],
       ['missing', real.replace("import os from 'node:os';\n", '')],
+      // The two below edit a module's braces by pattern, so they hold whatever names later tasks add there.
+      ['keptOf', real.replace(/^import \{ ([^}]*) \} from '\.\.\/ccd\/history\/derive\.mjs';$/m, (_m, n: string) => `import { ${n}, keptOf } from '../ccd/history/derive.mjs';`)],
+      ['sweep reader', real.replace(/^import \{ ([^}]*) \} from '\.\.\/ccd\/history\/sweep\.mjs';$/m, (_m, n: string) => `import { ${n}, recallOffPresence as sweepPresence } from '../ccd/history/sweep.mjs';`)],
     ];
     for (const [label, text] of variants) {
       expect(text, `${label}: the variant differs from the driver`).not.toBe(real);
       expect(importViolations(text), label).not.toEqual([]);
     }
   });
-  it('deploy/history-replay.mjs imports exactly its seven modules, and node:child_process brings in spawn only', () => {
+  it('deploy/history-replay.mjs imports exactly its fourteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
     expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
   });
 });
@@ -3835,12 +3890,12 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
       t7expect(refusalOf(() => t7drv.refuseRecallOff(t7MkTmp('t7-ro-'), ['fam-a', '../escape'])), 'refuseRecallOff carries the same refusal')
         .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
     });
-    t7it('the driver names recall-off on exactly one code line, an lstatSync of recallOffPath, and never spells the directory', () => {
+    t7it('the driver names recall-off on exactly two code lines, W2-4\'s lstatSync presence check and verify\'s readBounded content read (W2-D84, R6), and never spells the directory', () => {
       const code = t7fs.readFileSync(t7path.join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
         .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
       const naming = (lines: string[]): string[] => lines.filter((l) => l.includes('recallOffPath(')).map((l) => l.trim());
       const spells = (lines: string[]): string[] => lines.filter((l) => /\/recall-off|'recall-off'|RECALL_OFF_DIR/.test(l));
-      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));']);
+      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));', 'const r = readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false);']);
       t7expect(spells(code)).toEqual([]);
       // CONTROL: both needles see a planted line.
       t7expect(naming(['  writeFileSync(recallOffPath(home, id), g);'])).toHaveLength(1);
@@ -3853,9 +3908,9 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
 // The subcommand as the operator runs it: a child process with a fixture HOME (t8Run, runDriver's env contract over
 // a driver copy) against Task 5's recording stub. Every rostered id's launcher is a stub and every id has a fresh
 // limits row, so a spawn of ANY account, admitted or not, leaves a log line, and only admission can stop it. Each
-// run uses a fixture tree (t8Tree): a copy of the driver beside fixture bytes for the two gate_code files this PR
-// does not own, so codeShas() is measured whichever of W2-3 and this PR merges first and the recorded shas can be
-// pinned exactly; lib.mjs is copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
+// run uses a fixture tree (t8Tree): a copy of the driver beside the gate's real bytes (the driver imports the gate,
+// W2-5a Task 1) and fixture bytes for measure-history.py, so the recorded shas can be pinned exactly; lib.mjs is
+// copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
 describe('W2-4 Task 8: step0a end to end', () => {
   const T8_SESSION = '00000000-0000-4000-8000-0000000000a8';
   const T8_USAGE = { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 50 };
@@ -3866,7 +3921,9 @@ describe('W2-4 Task 8: step0a end to end', () => {
     { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ready', usage: T8_USAGE, permission_denials: [] },
   ].map((e) => JSON.stringify(e)).join('\n') + '\n';
   const T8_STAMP = 'v9.9.9';
-  const T8_GATE_BYTES = '// fixture bytes for deploy/history-gate.mjs (W2-4 Task 8)\n';
+  /** The gate's real bytes: the driver imports ./history-gate.mjs (W2-5a Task 1), so a tree it runs from carries the gate
+   *  itself, and step 0a records that file's sha. */
+  const T8_GATE_BYTES = readFileSync(path.join(REPO, 'deploy', 'history-gate.mjs'));
   const T8_MEASURE_BYTES = '# fixture bytes for deploy/measure-history.py (W2-4 Task 8)\n';
   const T8_CALLER_ENV = {
     TMUX: '/tmp/fixture-tmux,1,0', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'fixture-session', CCRC_SESSION_GENERATION: 'fixture-generation',
@@ -3909,16 +3966,16 @@ describe('W2-4 Task 8: step0a end to end', () => {
     return home;
   }
 
-  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), fixture bytes for the two
-   *  gate_code files this PR does not own (`gate: false` leaves deploy/history-gate.mjs out), lib.mjs copied and
+  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), the gate's real bytes (the driver
+   *  imports it), fixture bytes for deploy/measure-history.py (`measure: false` leaves it out), lib.mjs copied and
    *  ccd/history's other entries and shared/ symlinked to this checkout, so every import resolves. */
-  function t8Tree(opts: { gate?: boolean } = {}): string {
+  function t8Tree(opts: { measure?: boolean } = {}): string {
     const repo = path.resolve(path.dirname(SCRIPT), '..');
     const tree = mkTmp('ccrc-w2-t8-tree-');
     mkdirSync(path.join(tree, 'deploy'));
     copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
-    if (opts.gate !== false) writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
-    writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
+    writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    if (opts.measure !== false) writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
     mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
     for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
       const from = path.join(repo, 'ccd', 'history', n);
@@ -3931,7 +3988,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
 
   /** runDriver's contract, for the driver copy in `tree`. */
   function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}, timeout = 120_000) {
-    const r = spawnSync(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
+    const r = spawnSync(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
       // SIGKILL at the deadline (D-5986): the driver holds SIGTERM until its event loop turns, so a call blocked on a FIFO would outlive a SIGTERM and hang spawnSync.
       { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -4233,9 +4290,10 @@ describe('W2-4 Task 8: step0a end to end', () => {
 
   it('an unmeasured code sha refuses code-unmeasured, and an untagged stamp tree-unmeasured, before any spawn', () => {
     const home = t8Home('ccrc-w2-t8-unmeasured-');
-    const noGate = t8Run(t8Tree({ gate: false }), home, t8Argv(t8Out()));
-    expect(noGate.code).toBe(2);
-    expect(noGate.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/history-gate.mjs is absent\n');
+    // W2-5a Task 1: a tree without the gate cannot load the driver (it imports the gate), so the absent file is the census script.
+    const noMeasure = t8Run(t8Tree({ measure: false }), home, t8Argv(t8Out()));
+    expect(noMeasure.code).toBe(2);
+    expect(noMeasure.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/measure-history.py is absent\n');
     writeFileSync(path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', dirty: false }));
     const untagged = t8Run(t8Tree(), home, t8Argv(t8Out()));
     expect(untagged.code).toBe(2);
@@ -4543,7 +4601,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       if (ignoresTerm) writeFileSync(path.join(home, 'ignore-term'), '');
       const tree = t8Tree();
       const out = t8Out();
-      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+      const driver = spawn(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
         { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
       startedChildren.push(driver);
       let stdout = '';
@@ -4605,7 +4663,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       writeFileSync(path.join(home, 'version-sleep'), '');
       const tree = t8Tree();
       const out = t8Out();
-      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+      const driver = spawn(process.execPath, ['--no-warnings', path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
         { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
       startedChildren.push(driver);
       let stderr = '';
@@ -4761,8 +4819,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
       'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
     ]);
-    // This PR's whole subcommand set, in registration order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe']);
+    // The driver's whole subcommand set, in registration order: W2-4's two, then W2-5a Task 7's six (Task 1's grammar
+    // cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -5335,7 +5394,7 @@ process.stdout.write(stream());`), { mode: 0o700 });
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
     writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
     const out = join(base, 'out');
-    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+    const driver = spawn(process.execPath, ['--no-warnings', SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
       { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
     startedChildren.push(driver);
     let stderr = '';
@@ -5373,7 +5432,7 @@ process.stdout.write(stream());`), { mode: 0o700 });
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
     writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
     const out = join(base, 'out');
-    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+    const driver = spawn(process.execPath, ['--no-warnings', SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
       { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
     startedChildren.push(driver);
     let stderr = '';
@@ -5447,4 +5506,5173 @@ setTimeout(() => {}, 25000);`), { mode: 0o700 });
       expect(await until(() => !alive(gc!), 3_000), 'the group member that ignored SIGTERM is dead when the run returns').toBe(true);
     } finally { killAll(allOf(b.home)); }
   }, 120_000);
+});
+
+// ── W2-5a Task 1: reconstruction reads the store through W2-1's exports (W2-D74, W2-D75, W2-D33, W2-D68 (2), W2-D54,
+// W2-D24, W2-D29) ────────────────────────────────────────────────────────────────────────────────────────────────────
+// The scans and pure cases run everywhere. The store cases run on ONE fixture HOME (historyHelpers' makeHistoryBox: a
+// mkTmp HOME whose PATH holds ccrcContainedEnv's poisoned gh, ssh, curl and managers). The real sweep builds its store
+// from planted transcripts, as history-recall's W2-D33 block builds its own: no live store, no model and no claude are
+// touched or spawned. The cases read it in this process through the driver's exports, and change it only through a
+// writer handle on the fixture store, putting every column back in a finally.
+type W5a1Rs = { db: W5a1Db; close: () => void } & Record<string, unknown>;
+type W5a1Payload =
+  | { state: 'payload'; text: string; counts: { members: number; absent: number; off_copy: number; unparseable: number; pointer_lines: number } }
+  | { state: 'discard'; why: string };
+const w5a1 = w5a1Drv as unknown as {
+  openReplayStore(home: string): W5a1Rs;
+  reconstructPayload(rs: W5a1Rs, boundaryEntryId: number, question: string): W5a1Payload;
+  entryBodyOf(rs: unknown, row: { entry_id: number; blob_id: number }): { state: string; word?: string };
+  boundaryCopyOf(rs: W5a1Rs, boundaryEntryId: number): { state: string; rows: Array<{ blob_id: number; uuid: string }>; summaryIndex: number | null };
+  spanRowsOf(rs: W5a1Rs, boundaryEntryId: number): { state: 'span'; rows: Array<Record<string, unknown>> } | { state: 'discard'; why: string };
+  composePayload(parts: { summary: string; kept: readonly string[] }, question: string): string;
+  renderToolUseLine(name: string, inputText: string): string;
+  removePointerLines(text: string): { text: string; replaced: number };
+  RECON_DISCARDS: readonly string[];
+  POINTER_REMOVED: string;
+  CODE_SHA_FILES: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  TOOL_RESULT_CUT: number;
+  DriverRefusal: new (word: string, detail: string) => Error & { word: string; detail: string };
+};
+const w5a1D = w5a1Derive as unknown as {
+  blobReadStmts(db: W5a1Db): Record<string, unknown>;
+  bodyOf(s: Record<string, unknown>, blobId: number, budget: { bytes: number }): unknown;
+  keptOf(s: Record<string, unknown>, blobId: number | null, budget: { bytes: number }): Set<string>;
+};
+const w5a1R = w5a1Recall as unknown as {
+  expandEntryBody(rc: unknown, e: { entry_id: number; blob_id: number }): { state: string; body: unknown; primary: unknown; causes: string[] };
+};
+const W5A1_DEPLOY = path.join(REPO, 'deploy');
+const w5a1DeployMjs = (): string[] => readdirSync(W5A1_DEPLOY).filter((f) => f.endsWith('.mjs')).sort();
+/** A deploy file's code lines: a line whose trimmed start is //, * or /* is prose, which may name what the code never calls. */
+const w5a1Code = (f: string): string[] => readFileSync(path.join(W5A1_DEPLOY, f), 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
+const W5A1_KEPT_OF = /\bkeptOf\b/;
+const W5A1_DECODE = /\bunbrotli(?:Prefix)?\b|\bbrotliDecompress(?:Sync)?\b|\bcreateBrotliDecompress\b|(['"`])node:zlib\1/;
+/** Every word the store cases below answer: each must be a RECON_DISCARDS member. */
+const W5A1_SEEN_DISCARDS = ['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable', 'summary-tombstone',
+  'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone', 'member-over-cap', 'member-undecodable',
+  'body-unrenderable'];
+
+describe('W2-5a Task 1: the driver reads the store only through W2-1 exports', () => {
+  it('CONTROL: the keptOf pattern sees an import, a call, a namespace read and an alias, and not another name; the corpus holds the driver and the gate, and the driver reads kept lists through bodyOf', () => {
+    for (const planted of ["import { bodyOf, keptOf } from '../ccd/history/derive.mjs';", 'const kept = keptOf(s, b.kept_blob_id, budget);',
+      'const v = derive.keptOf(s, id, { bytes: 0 });', "import { keptOf as readKept } from '../ccd/history/derive.mjs';"]) {
+      expect(W5A1_KEPT_OF.test(planted), planted).toBe(true);
+    }
+    expect(W5A1_KEPT_OF.test('const keptOfficial = 1;')).toBe(false);
+    expect(w5a1DeployMjs()).toEqual(expect.arrayContaining(['history-gate.mjs', 'history-replay.mjs']));
+    expect(w5a1Code('history-replay.mjs').some((l) => /\bbodyOf\(/.test(l)), 'CONTROL: the driver does read a kept list, through bodyOf').toBe(true);
+  });
+
+  it('no deploy/*.mjs names keptOf on a code line (W2-D33, W2-D68): a NULL id, a tombstone and a body that is not a list would fold into one empty set', () => {
+    expect(w5a1DeployMjs().filter((f) => w5a1Code(f).some((l) => W5A1_KEPT_OF.test(l)))).toEqual([]);
+  });
+
+  it('no deploy/*.mjs decodes a blob itself (W2-D74): no unbrotli, brotliDecompress or node:zlib on a code line; CONTROL: the pattern sees each', () => {
+    for (const planted of ["import { unbrotli } from '../ccd/history/store.mjs';", 'const b = brotliDecompressSync(z);',
+      "import zlib from 'node:zlib';", 'const s = createBrotliDecompress();']) expect(W5A1_DECODE.test(planted), planted).toBe(true);
+    expect(W5A1_DECODE.test('const body = bodyOf(rs.blobs, id, { bytes: 0 });')).toBe(false);
+    expect(w5a1DeployMjs().filter((f) => w5a1Code(f).some((l) => W5A1_DECODE.test(l)))).toEqual([]);
+  });
+
+  it('CODE_SHA_FILES parity (W2-D24, decisions §7): CODE_SHA_FILES is the gate\'s GATE_CODE_FILES itself, so the four gate_code paths are spelled once', () => {
+    expect(w5a1.CODE_SHA_FILES).toBe(w5a1Gate.GATE_CODE_FILES);
+    expect([...w5a1Gate.GATE_CODE_FILES], 'CONTROL: the four W2-D24 names')
+      .toEqual(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+    expect(w5a1Code('history-replay.mjs').filter((l) => l.includes("'deploy/measure-history.py'")), 'the driver spells no gate_code path').toEqual([]);
+  });
+
+  it('W2-D29 (R6): the driver\'s recallOffPresence is its own (home, ids) lstat; no driver import binds a recallOffPresence under any name, and cli.mjs re-exports nothing', () => {
+    const IMPORT = /^import\s+([^;]*?)\s*from\s*'([^']+)';/gms;
+    const bindsReader = (i: RegExpMatchArray): boolean => /\brecallOffPresence\b/.test(i[1]!);
+    for (const planted of ["import { recallOffPresence as sweepPresence } from '../ccd/history/sweep.mjs';", "import { ftsTextOfBlob, recallOffPresence } from '../ccd/history/sweep.mjs';"]) {
+      expect([...planted.matchAll(IMPORT)].some(bindsReader), `CONTROL: ${planted}`).toBe(true);
+    }
+    expect([..."import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';".matchAll(IMPORT)].some(bindsReader), 'CONTROL: another sweep.mjs name is not the reader').toBe(false);
+    const src = readFileSync(SCRIPT, 'utf8');
+    const imports = [...src.matchAll(IMPORT)];
+    expect(imports.length, 'CONTROL: the scan read the import block').toBeGreaterThan(5);
+    expect(imports.filter(bindsReader).map((i) => i[0])).toEqual([]);
+    expect(src.split('\n').filter((l) => /^export function recallOffPresence\(/.test(l))).toEqual(['export function recallOffPresence(home, ids) {']);
+    const cli = readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8').split('\n');
+    expect(cli.filter((l) => /^export\s*(?:\*|\{)/.test(l)), 'cli.mjs re-exports nothing, so importing pairIndexOf brings no second reader').toEqual([]);
+    expect(cli.some((l) => l.includes("recallOffPresence } from './sweep.mjs';")), 'CONTROL: cli.mjs imports sweep\'s reader').toBe(true);
+  });
+
+  it('RECON_DISCARDS is frozen, duplicate-free, Task 1\'s fourteen words first, holds every word the store cases answer (body-unrenderable, D-6302, among them), and is disjoint from DRIVER_REASONS and GATE_REASONS: a discard is a count, never a refusal (R5)', () => {
+    expect(Array.isArray(w5a1.RECON_DISCARDS) && Object.isFrozen(w5a1.RECON_DISCARDS)).toBe(true);
+    // Tasks 2, 3 and 4 append their boundary words after these, in place, each pinning its own slice.
+    expect(w5a1.RECON_DISCARDS.slice(0, 14)).toEqual(['boundary-absent', 'boundary-uncopied', 'summary-absent', 'summary-unparseable',
+      'summary-tombstone', 'summary-over-cap', 'summary-undecodable', 'kept-absent', 'kept-unreadable', 'member-tombstone',
+      'member-over-cap', 'member-undecodable', 'over-decode-cap', 'leaf-absent']);
+    expect(new Set(w5a1.RECON_DISCARDS).size).toBe(w5a1.RECON_DISCARDS.length);
+    expect(W5A1_SEEN_DISCARDS.filter((w) => !w5a1.RECON_DISCARDS.includes(w))).toEqual([]);
+    expect(w5a1.RECON_DISCARDS.filter((w) => w5a1.DRIVER_REASONS.includes(w))).toEqual([]);
+    expect(w5a1.RECON_DISCARDS.filter((w) => (w5a1Gate.GATE_REASONS as readonly string[]).includes(w))).toEqual([]);
+  });
+
+  it('W2-D75 item 3 and W2-D64: composePayload joins the summary, each kept member and the question by one blank line, the question followed by ANSWER_PROTOCOL; an empty question and empty parts still carry it; renderToolUseLine is lib\'s tool_use rendering', () => {
+    expect(w5a1.composePayload({ summary: 's', kept: ['a', 'b'] }, 'q')).toBe(`s\n\na\n\nb\n\nq\n\n${w5a1Gate.ANSWER_PROTOCOL}`);
+    expect(w5a1.composePayload({ summary: '', kept: [] }, '')).toBe(`\n\n\n\n${w5a1Gate.ANSWER_PROTOCOL}`);
+    const input = { file_path: '/home/u/tree/demo/b.md' };
+    expect(w5a1.renderToolUseLine('Read', JSON.stringify(input))).toBe('[tool_use Read] {"file_path":"/home/u/tree/demo/b.md"}');
+    expect(w5a1.renderToolUseLine('Read', JSON.stringify(input)), 'CONTROL: lib\'s rendering of the same block')
+      .toBe(w5a1Lib.renderEntryText([{ type: 'tool_use', id: 'toolu_01W5A1R', name: 'Read', input }]));
+  });
+
+  it('item 1 (W2-D75): removePointerLines replaces each whole line naming a .jsonl path with [pointer removed], and nothing else', () => {
+    const ptr = 'If you need specific details from before compaction, read the full transcript at: /home/u/.claude/projects/-home-u-tree-demo/abc.jsonl';
+    const text = ['1. Primary Request and Intent:', '   keep /home/u/tree/demo/b.md', ptr, 'Continue from where it left off.'].join('\n');
+    expect(w5a1.removePointerLines(text)).toEqual({
+      text: ['1. Primary Request and Intent:', '   keep /home/u/tree/demo/b.md', '[pointer removed]', 'Continue from where it left off.'].join('\n'), replaced: 1,
+    });
+    expect(w5a1.POINTER_REMOVED).toBe('[pointer removed]');
+    // CONTROL: a .jsonl name with no path, a path ending .jsonlx and a text with no pointer are left alone.
+    for (const keep of ['the file notes.jsonl', 'see /home/u/tree/x.jsonlx', 'no pointer here']) expect(w5a1.removePointerLines(keep)).toEqual({ text: keep, replaced: 0 });
+    expect(w5a1.removePointerLines(`${ptr}\n${ptr}`).replaced, 'every such line').toBe(2);
+  });
+
+  it('openReplayStore refuses store-unreadable with the store\'s own word, never its message: a missing store and a zero-byte one (W2-D51)', () => {
+    const answer = (home: string): [string, string] => {
+      try { w5a1.openReplayStore(home).close(); return ['opened', '']; } catch (e) {
+        expect(e).toBeInstanceOf(w5a1.DriverRefusal);
+        const r = e as { word: string; detail: string };
+        return [r.word, r.detail];
+      }
+    };
+    expect(answer(mkTmp('ccrc-w5a1-nostore-'))).toEqual(['store-unreadable', 'store-missing']);
+    const zero = mkTmp('ccrc-w5a1-zerostore-');
+    const f = w5a1Lib.historyPaths(zero).dbFile;
+    mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    writeFileSync(f, '', { mode: 0o600 });
+    expect(answer(zero)).toEqual(['store-unreadable', 'store-zero-byte']);
+    expect(statSync(f).size, 'the open adopted nothing').toBe(0);
+  });
+
+  it('the driver runs under --no-warnings: its shebang passes the flag', () => {
+    expect(readFileSync(SCRIPT, 'utf8').split('\n')[0]).toBe('#!/usr/bin/env -S node --no-warnings');
+  });
+
+  it('importing the driver loads cli.mjs, which sets the importing process\'s umask to 0o077, and runs no main (W2-D33)', () => {
+    const code = ['process.umask(0o022);', `await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`, 'console.log(String(process.umask(0o022)));'].join('\n');
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', code],
+      { encoding: 'utf8', timeout: 60_000, env: { ...scrubbedEnv(process.env), HOME: mkTmp('ccrc-w5a1-umask-') } });
+    expect(r.status, r.stderr).toBe(0);
+    expect([r.stdout, r.stderr], 'the umask is 0o077 after the import, and neither main printed').toEqual([`${0o077}\n`, '']);
+  });
+});
+
+describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: reconstruction from a fixture store', () => {
+  const ID = 'claude-a-w5a1';
+  const GEN = '0189abcd-1234-4678-9abc-0000000005a1';
+  const TAG = 'a5a10001';
+  const u = (i: number): string => `${TAG}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const ts = (i: number): string => new Date(Date.UTC(2026, 9, 1, 10, 0, i)).toISOString();
+  const SID = u(0);
+  const HEAVY = 120_000;
+  /** The run's secret: a fixture token under ~/.ccrc, written after every sweep, so only pairIndexOf's read of it redacts it.
+   *  Assembled at run time; no fixture value is key-shaped. */
+  const SECRET = ['zq', 'w5a1', 'plain', 'words', 'value'].join('-');
+  const POINTER = `If you need specific details from before compaction, read the full transcript at: /home/u/.claude/projects/${w5a1H.SEED_SLUG}/${SID}.jsonl`;
+  const SUMMARY = ['<summary>', '1. Primary Request and Intent:', '   zqw5a1 intent', `   zqw5a1 token ${SECRET}`, '9. Optional Next Step:',
+    '   zqw5a1 next step', '</summary>', POINTER, 'Continue from where it left off.'].join('\n');
+  const RESULT = `zqw5a1 result ${SECRET} ${'r '.repeat(2500)}end`;
+  const QUESTION = `Which file did the session read first? ${SECRET}`;
+  // W2-D54: the run's secret sits in every part kind, the summary, a user text block and a tool_use input as well as the
+  // tool_result and the question, so each redaction call is pinned by its own part (mutants M19 and M20).
+  const USER_PART = `[user] zqw5a1 open the app ${w5a1Lib.REDACTED_MARK}`;
+  const READ_LINE = `[tool_use Read] {"file_path":"/home/u/tree/demo/b.md","note":"${w5a1Lib.REDACTED_MARK}"}`;
+  let box: w5a1H.HistoryBox;
+  let dbFile = '';
+  /** Leaf N's rows. Its kept list names u(3), u(1), u(2) out of file order, and u(9), which no copy holds. u(4) is not
+   *  kept. The first text block of u(2) is `fill`: "..." in the copy seeded first, "" in the second, a ccd-sanitize pair. */
+  const rows = (fill: string): object[] => {
+    const read = w5a1Fx.toolUseRow({ uuid: u(2), ts: ts(2), parentUuid: u(1), sessionId: SID, toolUseId: 'toolu_01W5A1', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md', note: SECRET } });
+    const m = read['message'] as { content: unknown[] };
+    m.content = [{ type: 'text', text: fill }, ...m.content];
+    return [
+      w5a1Fx.userRow({ uuid: u(1), ts: ts(1), sessionId: SID, text: `zqw5a1 open the app ${SECRET}` }),
+      read,
+      w5a1Fx.toolResultRow({ uuid: u(3), ts: ts(3), parentUuid: u(2), sessionId: SID, toolUseId: 'toolu_01W5A1', content: RESULT }),
+      w5a1Fx.assistantRow({ uuid: u(4), ts: ts(4), parentUuid: u(3), sessionId: SID, text: 'zqw5a1 not kept' }),
+      w5a1Fx.boundaryRow({ uuid: u(5), ts: ts(5), parentUuid: u(4), sessionId: SID, trigger: 'manual', headUuid: u(4), anchorUuid: u(6),
+        tailUuid: u(4), allUuids: [u(3), u(1), u(2), u(9)] }),
+      w5a1Fx.summaryRow({ uuid: u(6), ts: ts(6), parentUuid: u(5), sessionId: SID, text: SUMMARY }),
+    ];
+  };
+
+  w5a1BeforeAll(() => {
+    box = w5a1H.makeHistoryBox('ccrc-w5a1-');
+    dbFile = w5a1Lib.historyPaths(box.home).dbFile;
+    // The sanitised copy is seeded FIRST, so its entries' primary bodies are the "..." ones (history-recall's DM2b shape),
+    // and one more tick derives leaf N.
+    const seeded = w5a1H.seedFamily(box, { id: ID, project: 'demo', generation: GEN, uuid: SID, rows: rows('...') });
+    const t = w5a1H.runSweep(box);
+    expect(t.code, t.stderr).toBe(0);
+    w5a1H.plantTranscript(box, 'claude-b', path.basename(path.dirname(seeded.transcript)), SID, rows(''));
+    // Two discovery passes (SCAN_INTERVAL_MS) find and ingest the second copy.
+    for (let k = 0; k < 2; k += 1) {
+      const r = w5a1H.runDriver(box, { offsetMs: w5a1Lib.SCAN_INTERVAL_MS + 60_000 });
+      expect(r.code, r.stderr).toBe(0);
+    }
+    writeFileSync(path.join(box.home, '.ccrc', 'w5a1.token'), `${SECRET}\n`, { mode: 0o600 });
+  }, 3 * HEAVY);
+
+  const ro = <T,>(fn: (db: W5a1Db) => T): T => { const db = new W5a1Db(dbFile, { readOnly: true }); try { return fn(db); } finally { db.close(); } };
+  const rw = <T,>(fn: (db: W5a1Db) => T): T => { const db = new W5a1Db(dbFile); try { return fn(db); } finally { db.close(); } };
+  const idOf = (uuid: string): number => ro((db) => Number((db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number }).entry_id));
+  const blobOf = (uuid: string): number => ro((db) => Number((db.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(uuid) as { blob_id: number }).blob_id));
+  const keptBlob = (): number => ro((db) => Number((db.prepare('SELECT kept_blob_id AS k FROM boundaries WHERE entry_id = ?').get(idOf(u(5))) as { k: number }).k));
+  /** A read handle through the driver's own open, closed after `fn`. */
+  const withStore = <T,>(fn: (rs: W5a1Rs) => T): T => { const rs = w5a1.openReplayStore(box.home); try { return fn(rs); } finally { rs.close(); } };
+  const payload = (q: string = QUESTION): W5a1Payload => withStore((rs) => w5a1.reconstructPayload(rs, idOf(u(5)), q));
+  const parts = (p: W5a1Payload): string[] => {
+    expect(p.state, JSON.stringify(p).slice(0, 200)).toBe('payload');
+    return (p as { text: string }).text.split('\n\n');
+  };
+  const picked = (uuid: string) => withStore((rs) => w5a1R.expandEntryBody(rs, { entry_id: idOf(uuid), blob_id: blobOf(uuid) }));
+  type BlobCols = { z: Uint8Array | null; raw_len: number; pruned_ms: number | null };
+  /** Sets a blob's stored columns for `fn`, then puts back the three it read. */
+  const withBlob = <T,>(blobId: number, set: Partial<BlobCols>, fn: () => T): T => {
+    const orig = ro((db) => db.prepare('SELECT z, raw_len, pruned_ms FROM blobs WHERE blob_id = ?').get(blobId)) as BlobCols;
+    const put = (v: BlobCols): void => rw((db) => { db.prepare('UPDATE blobs SET z = ?, raw_len = ?, pruned_ms = ? WHERE blob_id = ?').run(v.z, v.raw_len, v.pruned_ms, blobId); });
+    put({ ...orig, ...set });
+    try { return fn(); } finally { put(orig); }
+  };
+  type BoundaryCols = { kept_blob_id: number | null; anchor_uuid: string | null };
+  /** Sets boundary N's kept id or anchor for `fn`, then puts both back. */
+  const withBoundary = <T,>(set: Partial<BoundaryCols>, fn: () => T): T => {
+    const b = idOf(u(5));
+    const orig = ro((db) => db.prepare('SELECT kept_blob_id, anchor_uuid FROM boundaries WHERE entry_id = ?').get(b)) as BoundaryCols;
+    const put = (v: BoundaryCols): void => rw((db) => { db.prepare('UPDATE boundaries SET kept_blob_id = ?, anchor_uuid = ? WHERE entry_id = ?').run(v.kept_blob_id, v.anchor_uuid, b); });
+    put({ ...orig, ...set });
+    try { return fn(); } finally { put(orig); }
+  };
+  /** A body stored as the store stores one: brotli bytes and the raw length. */
+  const stored = (text: string): { z: Uint8Array; raw_len: number } => { const b = Buffer.from(text, 'utf8'); return { z: w5a1Brotli(b), raw_len: b.length }; };
+
+  it('W2-D74: a kept member\'s body is expand\'s pick, the unsanitised side, never the sanitised primary', () => {
+    const k = picked(u(2));
+    expect([k.state, (k.primary as Array<{ text?: string }>)[0]!.text, k.causes], 'CONTROL: the primary is the sanitised copy, seeded first, paired ccd-sanitize')
+      .toEqual(['body', '...', ['ccd-sanitize']]);
+    expect(parts(payload())[2]).toBe(`[assistant] \n${READ_LINE}`);
+  }, HEAVY);
+
+  it('item 1 (W2-D75): the summary row\'s text, redacted whole, with its transcript-pointer line replaced by [pointer removed]', () => {
+    expect(picked(u(6)).body, 'CONTROL: the stored summary names the transcript').toBe(SUMMARY);
+    const p = payload();
+    expect(parts(p)[0]).toBe(SUMMARY.replace(POINTER, '[pointer removed]').replace(SECRET, w5a1Lib.REDACTED_MARK));
+    expect((p as { counts: { pointer_lines: number } }).counts.pointer_lines).toBe(1);
+  }, HEAVY);
+
+  it('item 2 (W2-D75, W2-D68 (2)): kept(N) members present in the store, in the holding copy\'s file order, role-tagged; a row outside kept(N) is not there', () => {
+    const p = payload();
+    const ps = parts(p);
+    expect(ps, 'summary, three members, question, protocol').toHaveLength(6);
+    expect(ps[1]).toBe(USER_PART);
+    expect(ps[3]!.startsWith('[tool_result] zqw5a1 result ')).toBe(true);
+    expect((p as { text: string }).text).not.toContain('zqw5a1 not kept');
+    expect((p as { counts: object }).counts).toEqual({ members: 3, absent: 1, off_copy: 0, unparseable: 0, pointer_lines: 1 });
+    const list = withStore((rs) => w5a1D.bodyOf(w5a1D.blobReadStmts(rs.db), keptBlob(), { bytes: 0 }));
+    expect(list, 'CONTROL: the kept list is stored out of file order, with a uuid no copy holds').toEqual([u(3), u(1), u(2), u(9)]);
+  }, HEAVY);
+
+  it('item 2 (W2-D54): a tool_result is redacted whole over the run\'s pair index (pairIndexOf), then cut to TOOL_RESULT_CUT code points', () => {
+    const tr = parts(payload())[3]!;
+    expect(tr).not.toContain(SECRET);
+    expect(tr.startsWith(`[tool_result] zqw5a1 result ${w5a1Lib.REDACTED_MARK} r r`)).toBe(true);
+    expect(Array.from(tr.slice('[tool_result] '.length))).toHaveLength(w5a1.TOOL_RESULT_CUT);
+    expect(JSON.stringify(picked(u(3)).body), 'CONTROL: the stored row holds the value verbatim').toContain(SECRET);
+    expect(w5a1Lib.redactField(RESULT, w5a1Lib.makePairIndex([])), 'CONTROL: no shape rule redacts it without its pair').toContain(SECRET);
+  }, HEAVY);
+
+  it('W2-D54: the summary, a user text block and a tool_use input are each redacted whole over the run\'s pair index; no part carries the value', () => {
+    const ps = parts(payload());
+    for (const [i, what] of [[0, 'the summary'], [1, 'the user row'], [2, 'the Read tool_use']] as const) {
+      expect(ps[i], what).not.toContain(SECRET);
+      expect(ps[i], what).toContain(w5a1Lib.REDACTED_MARK);
+    }
+    for (const id of [u(6), u(1), u(2)]) {
+      expect(JSON.stringify(picked(id).body), `CONTROL: the stored row ${id} holds the value verbatim`).toContain(SECRET);
+    }
+  }, HEAVY);
+
+  it('item 3 (W2-D75, W2-D64): the question, redacted, then ANSWER_PROTOCOL, last; an empty question still carries it', () => {
+    const ps = parts(payload());
+    expect(ps[4]).toBe(`Which file did the session read first? ${w5a1Lib.REDACTED_MARK}`);
+    expect(ps[5]).toBe(w5a1Gate.ANSWER_PROTOCOL);
+    expect(parts(payload('')).slice(-2)).toEqual(['', w5a1Gate.ANSWER_PROTOCOL]);
+  }, HEAVY);
+
+  it('kept(N) through bodyOf, never keptOf (W2-D68, W2-D33): a NULL kept id is kept-absent; a tombstoned kept blob and one that is not a list are kept-unreadable, never an empty list', () => {
+    const kb = keptBlob();
+    const live = withStore((rs) => [...w5a1D.keptOf(w5a1D.blobReadStmts(rs.db), kb, { bytes: 0 })]);
+    expect(new Set(live), 'CONTROL: on the live blob, keptOf and the payload agree on kept(N)').toEqual(new Set([u(3), u(1), u(2), u(9)]));
+    withBoundary({ kept_blob_id: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'kept-absent' }));
+    withBlob(kb, { z: null, pruned_ms: Date.UTC(2026, 0, 2) }, () => {
+      expect(payload()).toEqual({ state: 'discard', why: 'kept-unreadable' });
+      expect(withStore((rs) => w5a1D.keptOf(w5a1D.blobReadStmts(rs.db), kb, { bytes: 0 }).size), 'CONTROL: keptOf folds the tombstone into an empty set').toBe(0);
+    });
+    withBlob(kb, stored('{"a":1}'), () => expect(payload()).toEqual({ state: 'discard', why: 'kept-unreadable' }));
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+
+  it('expandEntryBody\'s five words (D-6238): an unparseable kept member is read as text and counted; tombstone, over-cap and undecodable each discard under their own word; for the summary row all four discard', () => {
+    const m = blobOf(u(1));
+    const s = blobOf(u(6));
+    const PRUNED = Date.UTC(2026, 0, 2);
+    const OVER = w5a1Lib.BLOB_DECODE_MAX + 1;
+    withBlob(m, { z: null, pruned_ms: PRUNED }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-tombstone' }));
+    withBlob(m, { raw_len: OVER }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-over-cap' }));
+    withBlob(m, { z: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'member-undecodable' }));
+    withBlob(m, stored('zq not json {'), () => {
+      const p = payload();
+      expect(parts(p)[1]).toBe('[user] zq not json {');
+      expect((p as { counts: { unparseable: number } }).counts.unparseable).toBe(1);
+    });
+    withBlob(s, { z: null, pruned_ms: PRUNED }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-tombstone' }));
+    withBlob(s, { raw_len: OVER }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-over-cap' }));
+    withBlob(s, { z: null }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-undecodable' }));
+    withBlob(s, stored('zq not json {'), () => expect(payload()).toEqual({ state: 'discard', why: 'summary-unparseable' }));
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+
+  it('W2-D65: leaf N\'s span is the rows derivation recorded for leaf N, in holding-copy file order, in the store\'s column names; a row that is no boundary is leaf-absent', () => {
+    const b = idOf(u(5));
+    const span = withStore((rs) => w5a1.spanRowsOf(rs, b));
+    expect(span.state).toBe('span');
+    const rows = (span as { rows: Array<Record<string, unknown>> }).rows;
+    const recorded = ro((db) => db.prepare(`SELECT e.uuid AS uuid FROM nodes n JOIN node_sources s ON s.node_id = n.node_id
+      JOIN entries e ON e.entry_id = s.entry_id WHERE n.boundary_entry_id = ? AND n.depth = 0 ORDER BY s.ord`).all(b)) as Array<{ uuid: string }>;
+    expect(recorded.length, 'CONTROL: the sweep recorded leaf N\'s sources').toBeGreaterThan(0);
+    expect(rows.map((r) => r['uuid'])).toEqual(recorded.map((r) => r.uuid));
+    expect(Object.keys(rows[0]!).sort()).toEqual(['blob_id', 'entry_id', 'model', 'provenance', 'ts_ms', 'type', 'uuid']);
+    const copy = withStore((rs) => w5a1.boundaryCopyOf(rs, b));
+    const at = rows.map((r) => copy.rows.findIndex((c) => c.uuid === r['uuid']));
+    expect(at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1]!)), 'holding-copy file order').toBe(true);
+    expect(withStore((rs) => w5a1.spanRowsOf(rs, idOf(u(1))))).toEqual({ state: 'discard', why: 'leaf-absent' });
+  }, HEAVY);
+
+  it('one store open per run (R3): the open reads this node\'s store id through its own handle', () => {
+    const want = ro((db) => String((db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v));
+    expect(want, 'CONTROL: the fixture store holds a UUID store id').toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(withStore((rs) => rs['storeId'])).toBe(want);
+  }, HEAVY);
+
+  it('boundary N and its summary row: boundary-absent, boundary-uncopied and summary-absent; the summary pick is the row leaf N\'s derivation used', () => {
+    expect(withStore((rs) => w5a1.reconstructPayload(rs, idOf(u(1)), QUESTION))).toEqual({ state: 'discard', why: 'boundary-absent' });
+    withBoundary({ anchor_uuid: u(8) }, () => expect(payload()).toEqual({ state: 'discard', why: 'summary-absent' }));
+    const b = idOf(u(5));
+    const held = ro((db) => db.prepare('SELECT file_id, entry_id, line FROM memberships WHERE entry_id = ?').all(b)) as Array<{ file_id: number; entry_id: number; line: number }>;
+    expect(held.length, 'CONTROL: both copies hold N, so the second copy was ingested').toBe(2);
+    rw((db) => { db.prepare('DELETE FROM memberships WHERE entry_id = ?').run(b); });
+    try {
+      expect(payload()).toEqual({ state: 'discard', why: 'boundary-uncopied' });
+    } finally {
+      rw((db) => { for (const h of held) db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(h.file_id, h.entry_id, h.line); });
+    }
+    const leaf = ro((db) => db.prepare('SELECT summary_blob_id AS s FROM nodes WHERE boundary_entry_id = ? AND depth = 0').get(b)) as { s: number | null } | undefined;
+    expect(leaf?.s, 'CONTROL: the sweep derived leaf N with its summary').toBe(blobOf(u(6)));
+    const pick = withStore((rs) => { const c = w5a1.boundaryCopyOf(rs, b); return c.summaryIndex === null ? null : c.rows[c.summaryIndex]!.blob_id; });
+    expect(pick, 'the payload\'s summary row is the one derivation used').toBe(leaf!.s);
+    expect(parts(payload())[1], 'CONTROL: the memberships are back').toBe(USER_PART);
+  }, HEAVY);
+
+  it('D-6301: a body word expandEntryBody does not answer today throws a TypeError naming it, never a discard with no word; a word it does answer keeps its own discard (CONTROL)', async () => {
+    let word = 'mystery';
+    vi.resetModules();
+    vi.doMock('../../ccd/history/recall.mjs', async (importOriginal: () => Promise<object>) => ({
+      ...(await importOriginal()),
+      expandEntryBody: () => ({ state: word, body: null, primary: null, causes: [], blob: { state: 'none' } }),
+    }));
+    try {
+      const fresh = (await import('../../deploy/history-replay.mjs')) as unknown as typeof w5a1;
+      expect(() => fresh.entryBodyOf({}, { entry_id: 1, blob_id: 1 })).toThrow(new TypeError('entryBodyOf: unknown body state mystery'));
+      const rs = fresh.openReplayStore(box.home);
+      try {
+        expect(() => fresh.reconstructPayload(rs, idOf(u(5)), QUESTION), 'the payload path throws too').toThrow(TypeError);
+        word = 'tombstone';
+        expect(fresh.reconstructPayload(rs, idOf(u(5)), QUESTION), 'CONTROL: a known body-less word keeps its own discard through the same stub')
+          .toEqual({ state: 'discard', why: 'summary-tombstone' });
+      } finally { rs.close(); }
+    } finally {
+      vi.doUnmock('../../ccd/history/recall.mjs');
+      vi.resetModules();
+    }
+  }, HEAVY);
+
+  it('D-6302: a body nested past JSON.stringify\'s stack parses and cannot be rendered; a kept member and the summary row each discard the boundary body-unrenderable, a count, never a thrown RangeError', () => {
+    const DEPTH = 10_000;
+    const nested = `${'{"a":'.repeat(DEPTH)}1${'}'.repeat(DEPTH)}`;
+    expect(() => JSON.stringify(JSON.parse(nested)), 'CONTROL: this depth parses and cannot be stringified').toThrow(RangeError);
+    withBlob(blobOf(u(1)), stored(`[{"type":"tool_use","name":"Read","input":${nested}}]`), () => {
+      expect(picked(u(1)).state, 'CONTROL: expandEntryBody answers body for it').toBe('body');
+      expect(payload()).toEqual({ state: 'discard', why: 'body-unrenderable' });
+    });
+    withBlob(blobOf(u(6)), stored(nested), () => {
+      expect(picked(u(6)).state, 'CONTROL: expandEntryBody answers body for it').toBe('body');
+      expect(payload()).toEqual({ state: 'discard', why: 'body-unrenderable' });
+    });
+    expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
+  }, HEAVY);
+
+  // D-6308: a key that follows a newline in a stored object body sits behind a JSON `\n` once the body is rendered as JSON.
+  it('D-6308: an object summary body, a kept tool_use input and an object tool_result content, each holding keys after a newline, reach the payload masked', () => {
+    const keys = [['AKIA', ['AK', 'IA'].join('') + ['FIXTURE', 'W5A1', 'NLKEY'].join('')], ['ghp_', ['gh', 'p_'].join('') + 'Nl4Fw8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o'],
+      ['sk-ant', ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd']] as const;
+    const note = ['first line', ...keys.map(([, k]) => k)].join('\n');
+    const leaks = (t: string): string[] => keys.filter(([, k]) => Array.from({ length: k.length - 7 }, (_, i) => k.slice(i, i + 8)).some((w) => t.includes(w))).map(([n]) => n);
+    withBlob(blobOf(u(6)), stored(JSON.stringify({ kind: 'summary-object', note })), () => {
+      expect(JSON.stringify(picked(u(6)).body), 'CONTROL: the stored summary holds the keys').toContain(keys[0][1]);
+      expect(leaks(w5a1Lib.redactField(w5a1Lib.renderEntryText(picked(u(6)).body), w5a1Lib.makePairIndex([]))), 'CONTROL: redacting the rendered JSON as text leaks').toEqual(['AKIA', 'ghp_', 'sk-ant']);
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(leaks(p.text), 'the summary part').toEqual([]);
+      expect(p.text).toContain(w5a1Lib.REDACTED_MARK);
+    });
+    withBlob(blobOf(u(2)), stored(JSON.stringify([{ type: 'tool_use', id: 'toolu_01W5A1', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md', note } }])), () => {
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(p.text, 'CONTROL: the tool_use is in the payload').toContain('[tool_use Read]');
+      expect(leaks(p.text), 'the kept tool_use input').toEqual([]);
+    });
+    withBlob(blobOf(u(3)), stored(JSON.stringify([{ type: 'tool_result', tool_use_id: 'toolu_01W5A1', content: { note } }])), () => {
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(p.text, 'CONTROL: the tool_result is in the payload').toContain('[tool_result]');
+      expect(leaks(p.text), 'the kept tool_result object content').toEqual([]);
+    });
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: openReplayStore\'s refusal arms on a fixture HOME (W2-D51, W2-D59)', () => {
+  /** What the open answers for `home`: 'opened', or the refusal's word and detail. */
+  const answer = (home: string): [string, string] => {
+    try { w5a1.openReplayStore(home).close(); return ['opened', '']; } catch (e) {
+      expect(e).toBeInstanceOf(w5a1.DriverRefusal);
+      const r = e as { word: string; detail: string };
+      return [r.word, r.detail];
+    }
+  };
+  /** A store the real createStore made under a fresh fixture HOME, then `edit` run on a writer handle. */
+  const storeWith = (prefix: string, edit: (db: W5a1Db) => void): string => {
+    const home = mkTmp(prefix);
+    w5a1CreateStore(home);
+    const db = new W5a1Db(w5a1Lib.historyPaths(home).dbFile);
+    try { edit(db); } finally { db.close(); }
+    return home;
+  };
+
+  it('CONTROL: an untouched created store opens', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-ok-', () => {}))).toEqual(['opened', '']);
+  });
+
+  it('a store whose meta holds no store_id refuses store-unreadable store-id-absent', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-noid-', (db) => { db.prepare("DELETE FROM meta WHERE k = 'store_id'").run(); })))
+      .toEqual(['store-unreadable', 'store-id-absent']);
+  });
+
+  it('a store whose store_id is not a UUID refuses store-unreadable store-id-unreadable, apart from an absent one', () => {
+    expect(answer(storeWith('ccrc-w5a1-arm-badid-', (db) => { db.prepare("UPDATE meta SET v = 'not-a-uuid' WHERE k = 'store_id'").run(); })))
+      .toEqual(['store-unreadable', 'store-id-unreadable']);
+  });
+
+  it('a file that is not a SQLite database refuses store-unreadable with store-read-failed and SQLite\'s own message', () => {
+    const home = mkTmp('ccrc-w5a1-arm-garbage-');
+    const f = w5a1Lib.historyPaths(home).dbFile;
+    mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    writeFileSync(f, 'this is not a database. '.repeat(400), { mode: 0o600 });
+    const [word, detail] = answer(home);
+    expect(word).toBe('store-unreadable');
+    expect(detail).toMatch(/^store-read-failed: .+/);
+  });
+});
+
+// ── W2-5a Task 2: fact mining, the producer and the redaction screen (W2-D61, W2-D65, W2-D67) ───────────────────
+// Pure and in-process: no spawn, no HOME, no store and no network. Span rows are built in memory with the entries
+// columns mining reads, and each row's body comes from a stand-in for W2-1's expandEntryBody answer ({state, body,
+// primary, causes, blob}; mining reads state and body only), which records every row it is asked for. Redaction runs
+// through lib's own redactField over pair indexes built with makePairIndex, standing in for the run's pairIndexOf
+// index. Key-shaped fixtures are assembled at runtime and never written whole; paths are /home/u fixtures.
+// MODULE-LEVEL below: w5a2Akia, w5a2Span, the w5a2 block builders and the W5A2_ constants, which later W2-5a tasks call
+// from their own describes (Task 6's W2-D67 pin: a span holding a key-shaped value reaches the stub redacted, R7).
+import { readFileSync as w5a2Read } from 'node:fs';
+import * as w5a2Lib from '../../ccd/history/lib.mjs';
+import * as w5a2Gate from '../../deploy/history-gate.mjs';
+import * as w5a2Drv from '../../deploy/history-replay.mjs';
+
+/** A synthetic access-key-shaped value lib's shape layer masks, assembled at runtime and never written whole. */
+function w5a2Akia(): string {
+  return ['AK', 'IA', 'Q7V2M9X4', 'P8W3N6Z5'].join('');
+}
+/** Model names: backendOf reads the first as anthropic and the second as other. */
+const W5A2_CLAUDE = 'claude-fixture-model';
+const W5A2_GATEWAY = 'fixture-gateway-model';
+const W5A2_CWD = '/home/u/tree';
+const W5A2_CONFIG_DIRS = ['/home/u/.claude', '/home/u/.gen-a'];
+const W5A2_IDX0 = w5a2Lib.makePairIndex([]);
+type W5a2Spec = { provenance: string; body: unknown; model?: string | null; type?: string; state?: string; source_tool_use_id?: string | null };
+type W5a2Row = {
+  entry_id: number; uuid: string; type: string; model: string | null; provenance: string; ts_ms: number | null; blob_id: number;
+  source_tool_use_id: string | null;
+};
+type W5a2Pick = (r: { entry_id: number }) => { state: string; body: unknown; primary: unknown; causes: string[]; blob: null };
+let w5a2NextId = 1000;
+/** Span rows in file order, entry ids unique across the file, and a pick that answers like expandEntryBody and records
+ *  every row it is asked for. An assistant row defaults to W5A2_CLAUDE; `state` other than 'body' gives a null body. */
+function w5a2Span(specs: W5a2Spec[]): { rows: W5a2Row[]; pick: W5a2Pick; picked: number[] } {
+  const bodies = new Map<number, { state: string; body: unknown }>();
+  const rows = specs.map((s): W5a2Row => {
+    const entry_id = w5a2NextId++;
+    const state = s.state ?? 'body';
+    bodies.set(entry_id, { state, body: state === 'body' ? s.body : null });
+    const model = 'model' in s ? s.model ?? null : (s.provenance === 'model' ? W5A2_CLAUDE : null);
+    return {
+      entry_id, uuid: `fixture-${entry_id}`, type: s.type ?? (s.provenance === 'model' ? 'assistant' : 'user'), model,
+      provenance: s.provenance, ts_ms: entry_id, blob_id: entry_id + 50_000, source_tool_use_id: s.source_tool_use_id ?? null,
+    };
+  });
+  const picked: number[] = [];
+  const pick: W5a2Pick = (r) => {
+    picked.push(r.entry_id);
+    const b = bodies.get(r.entry_id)!;
+    return { state: b.state, body: b.body, primary: b.body, causes: [], blob: null };
+  };
+  return { rows, pick, picked };
+}
+const w5a2Text = (text: string) => ({ type: 'text', text });
+const w5a2Use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use', id, name, input });
+const w5a2Result = (id: string, content: unknown, isError?: boolean) =>
+  (isError === undefined ? { type: 'tool_result', tool_use_id: id, content } : { type: 'tool_result', tool_use_id: id, content, is_error: isError });
+type W5a2MineInput = Parameters<typeof w5a2Drv.mineBoundary>[0];
+type W5a2Mined = Extract<ReturnType<typeof w5a2Drv.mineBoundary>, { state: 'mined' }>;
+type W5a2Candidate = W5a2Mined['candidates'][number];
+/** mineBoundary over a w5a2Span, as boundary 'fixture-boundary' of family ('fixture-store', 'fixture-a', 'fixture-gen')
+ *  with cwd and cwd_real W5A2_CWD; `over` replaces any input. */
+function w5a2Mine(sp: { rows: W5a2Row[]; pick: W5a2Pick }, over: Partial<W5a2MineInput> = {}): ReturnType<typeof w5a2Drv.mineBoundary> {
+  return w5a2Drv.mineBoundary({
+    storeId: 'fixture-store', ccrcId: 'fixture-a', generation: 'fixture-gen',
+    boundaryUuid: 'fixture-boundary', boundaryTsMs: 900_000, rows: sp.rows, pick: sp.pick, cwd: W5A2_CWD, cwdReal: W5A2_CWD,
+    configDirs: W5A2_CONFIG_DIRS, ...over,
+  });
+}
+/** The mined answer; a discard fails the case. */
+function w5a2MinedOf(r: ReturnType<typeof w5a2Drv.mineBoundary>): W5a2Mined {
+  expect(r.state).toBe('mined');
+  return r as W5a2Mined;
+}
+
+describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () => {
+  const screen = (c: W5a2Candidate) => w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: '' });
+  const DRIVER_URL = new URL('../../deploy/history-replay.mjs', import.meta.url);
+
+  // ── mining (W2-D65) and the two forms of a fact (W2-D61) ──
+  it('W2-D65 sha: maximal runs of 7 to 40 lower-case hex with a digit and a letter, bounded, never inside a UUID', () => {
+    const text = `commit 9f3e2d1 in session 4d1c9e2a-7b3f-4a6c-9d8e-1f2a3b4c5d6e; build-1f2a3b4c5d6e-x; deadbeef 1234567 ABC1234f g1f2a3b4c ${'a1'.repeat(20)}9 ${'0a'.repeat(20)}`;
+    const sp = w5a2Span([{ provenance: 'model', body: [w5a2Text(text)] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact, c.fact_raw])).toEqual([
+      ['sha', '9f3e2d1', '9f3e2d1'], ['sha', '1f2a3b4c5d6e', '1f2a3b4c5d6e'], ['sha', '0a'.repeat(20), '0a'.repeat(20)],
+    ]);
+    expect(r.candidates.every((c) => c.leaf.text === text && c.source_provenance === 'model')).toBe(true);
+    expect(r.candidates[0]).toMatchObject({
+      store_id: 'fixture-store', ccrc_id: 'fixture-a', generation: 'fixture-gen',
+      producer: { state: 'row', backend: 'anthropic' }, repo_roots: [W5A2_CWD], boundary_uuid: 'fixture-boundary',
+      source_entry_uuid: sp.rows[0]!.uuid, source_entry_id: sp.rows[0]!.entry_id, pair: null,
+      leaf: { text, rawLen: Buffer.byteLength(text, 'utf8') },
+    });
+    // R4: the writer's span is each mined row's rendering, one list the boundary's candidates share.
+    // D-6308: each rendering carries the body it was rendered from, which the writer redacts as a value.
+    expect(r.candidates[0]!.span).toEqual([{ text, rawLen: Buffer.byteLength(text, 'utf8'), body: [w5a2Text(text)] }]);
+    expect(r.candidates.every((c) => c.span === r.candidates[0]!.span)).toBe(true);
+  });
+
+  it('W2-D65 command: a Bash input command, collapsed, 12 to 300 characters, never a recall, and only from Bash', () => {
+    const at300 = `echo ${'x'.repeat(295)}`;
+    const sp = w5a2Span([{ provenance: 'model', body: [
+      w5a2Use('c1', 'Bash', { command: 'ls -la /tmp' }),
+      w5a2Use('c2', 'Bash', { command: 'npm run test' }),
+      w5a2Use('c3', 'Bash', { command: at300 }),
+      w5a2Use('c4', 'Bash', { command: `${at300}x` }),
+      w5a2Use('c5', 'Bash', { command: 'ccrc history grep thing' }),
+      w5a2Use('c6', 'Bash', { command: '/home/u/.local/bin/ccrc history expand x' }),
+      w5a2Use('c7', 'Task', { command: 'npm run build', prompt: 'look' }),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.filter((c) => c.kind === 'command').map((c) => c.fact)).toEqual(['npm run test', at300]);
+    expect([r.counts['command-length'], r.counts['command-recall']]).toEqual([2, 2]);
+  });
+
+  it('W2-D61: a multi-line command is mined, F collapsed and F_raw exact, and the redaction screen keeps it', () => {
+    const raw = 'cd server &&\n  ./node_modules/.bin/vitest run \\\n    test/a.test.ts';
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('m1', 'Bash', { command: raw })] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'command', fact: 'cd server && ./node_modules/.bin/vitest run \\ test/a.test.ts', fact_raw: raw, leaf: { text: raw } });
+    expect(c.fact).toBe(w5a2Gate.collapseWs(raw));
+    expect(screen(c), 'the source side reads F_raw, which its leaf holds verbatim').toEqual({ state: 'pass' });
+  });
+
+  it('W2-D61: a short quoted command present in a kept tool_use is rejected by B, CONTROL the JSON rendering alone would admit it', () => {
+    const raw = 'git commit -m "wip"';
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('q1', 'Bash', { command: raw })] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'command', fact: raw, fact_raw: raw });
+    // A stand-in for W2-D68's B over one kept member, in both of its renderings; the B task re-asserts this on real B.
+    const kept = (command: string) => [w5a2Use('toolu_k', 'Bash', { command })];
+    const both = (command: string) => `${w5a2Lib.renderEntryText(kept(command))}\n${w5a2Lib.ftsTextOf(kept(command), 'entry')}`;
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: both(raw) })).toEqual({ state: 'drop', reason: 'baseline-hit' });
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: w5a2Lib.renderEntryText(kept(raw)) }), 'CONTROL: the JSON rendering escapes the quotes')
+      .toEqual({ state: 'pass' });
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: both('git commit -m "wap"') }), 'CONTROL: another command in B')
+      .toEqual({ state: 'pass' });
+  });
+
+  it('W2-D65 path: the path fields of the seven tools, made absolute against the epoch cwd, never under a rostered config dir', () => {
+    const sp = w5a2Span([{ provenance: 'model', body: [
+      w5a2Use('p1', 'Read', { file_path: '/home/u/tree/src/app.ts' }),
+      w5a2Use('p2', 'Edit', { file_path: 'src/lib/x.ts', old_string: 'a', new_string: 'b' }),
+      w5a2Use('p3', 'Glob', { pattern: '**/*.ts', path: 'server' }),
+      w5a2Use('p4', 'Grep', { pattern: 'TODO', path: '/home/u/tree/docs' }),
+      w5a2Use('p5', 'NotebookEdit', { notebook_path: 'nb/a.ipynb', new_source: 'x' }),
+      w5a2Use('p6', 'MultiEdit', { file_path: '../other/y.ts', edits: [] }),
+      w5a2Use('p7', 'Write', { file_path: '/home/u/.claude/settings.json', content: '{}' }),
+      w5a2Use('p8', 'Read', { file_path: '/home/u/.gen-a/projects/p/memory/m.md' }),
+      w5a2Use('p9', 'Read', { file_path: '~/notes.md' }),
+      w5a2Use('p10', 'WebFetch', { url: 'https://example.com/a', path: '/home/u/tree/web' }),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact, c.fact_raw])).toEqual([
+      ['path', '/home/u/tree/src/app.ts', '/home/u/tree/src/app.ts'],
+      ['path', '/home/u/tree/src/lib/x.ts', 'src/lib/x.ts'],
+      ['path', '/home/u/tree/server', 'server'],
+      ['path', '/home/u/tree/docs', '/home/u/tree/docs'],
+      ['path', '/home/u/tree/nb/a.ipynb', 'nb/a.ipynb'],
+      ['path', '/home/u/other/y.ts', '../other/y.ts'],
+    ]);
+    expect([r.counts['path-config-dir'], r.counts['path-tilde'], r.counts['path-no-cwd']]).toEqual([2, 1, 0]);
+  });
+
+  it('W2-D65 path: with no epoch cwd a relative path is not mined, and the repo roots are the distinct cwd and cwd_real', () => {
+    const body = [w5a2Use('q1', 'Read', { file_path: 'src/a.ts' }), w5a2Use('q2', 'Read', { file_path: '/srv/tree/src/b.ts' })];
+    const none = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body }]), { cwd: null, cwdReal: null }));
+    expect(none.candidates.map((c) => [c.fact, c.repo_roots])).toEqual([['/srv/tree/src/b.ts', []]]);
+    expect(none.counts['path-no-cwd']).toBe(1);
+    const two = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body }]), { cwd: W5A2_CWD, cwdReal: '/srv/tree' }));
+    expect(two.candidates.map((c) => c.repo_roots)).toEqual([[W5A2_CWD, '/srv/tree'], [W5A2_CWD, '/srv/tree']]);
+  });
+
+  it('W2-D65 error: an is_error result gives its first non-empty line that is not just Exit code N, collapsed, 16 to 300 characters', () => {
+    const uses = ['e1', 'e2', 'e3', 'e4', 'e5'].map((id) => w5a2Use(id, 'Bash', { command: `npm run check-${id}` }));
+    const sp = w5a2Span([
+      { provenance: 'model', body: uses },
+      { provenance: 'tool', body: [w5a2Result('e1', 'Exit code 1\n\n  fatal:   not a git repository (or any parent)\nmore', true)] },
+      { provenance: 'tool', body: [w5a2Result('e2', 'Exit code 2\nshort failure', true)] },
+      { provenance: 'tool', body: [w5a2Result('e3', 'Exit code 3\n   \n', true)] },
+      { provenance: 'tool', body: [w5a2Result('e4', 'error: this result is not marked as an error', false)] },
+      { provenance: 'tool', body: [w5a2Result('e5', [w5a2Text('Exit code 1'), w5a2Text('npm ERR! missing script: lint')], true)] },
+    ]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.filter((c) => c.kind === 'error').map((c) => [c.fact, c.fact_raw])).toEqual([
+      ['fatal: not a git repository (or any parent)', '  fatal:   not a git repository (or any parent)'],
+      ['npm ERR! missing script: lint', 'npm ERR! missing script: lint'],
+    ]);
+    expect([r.counts['error-length'], r.counts['error-no-line']]).toEqual([1, 1]);
+    const first = r.candidates.find((c) => c.kind === 'error')!;
+    expect(first.leaf.text).toBe('Exit code 1\n\n  fatal:   not a git repository (or any parent)\nmore');
+    expect(first.producer).toEqual({ state: 'paired', backend: 'anthropic', tool_use_uuid: sp.rows[0]!.uuid });
+    expect(first.pair).toEqual({ name: 'Bash', input: { text: '{"command":"npm run check-e1"}', rawLen: 30, value: { command: 'npm run check-e1' } } });   // D-6308: the value beside its text
+  });
+
+  it.each(['operator', 'summary', 'harness', 'ccrc-injected', 'recall-echo'])('W2-D65 never mined: the %s row, whatever its body holds, and its body is never picked', (prov) => {
+    const sp = w5a2Span([{ provenance: prov, body: [
+      w5a2Text('commit 9f3e2d1 at /home/u/tree/src/app.ts'),
+      w5a2Use('o1', 'Read', { file_path: '/home/u/tree/src/app.ts' }),
+      w5a2Result('o1', 'see 9f3e2d1 and a long enough failure line here', true),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates).toEqual([]);
+    expect(sp.picked).toEqual([]);
+  });
+
+  it('W2-D65 never mined: a synthetic assistant row, and a path an operator row names in its text', () => {
+    const sp = w5a2Span([
+      { provenance: 'model', model: '<synthetic>', body: [w5a2Text('commit 9f3e2d1'), w5a2Use('s1', 'Read', { file_path: '/home/u/tree/a.ts' })] },
+      { provenance: 'operator', body: [w5a2Text('please open /home/u/tree/src/app.ts')] },
+      { provenance: 'model', body: [w5a2Use('s2', 'Read', { file_path: '/home/u/tree/src/b.ts' })] },
+    ]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact])).toEqual([['path', '/home/u/tree/src/b.ts']]);
+    expect(sp.picked).toEqual([sp.rows[2]!.entry_id]);
+  });
+
+  // ── the producer and its pairing (W2-D65) ──
+  it('W2-D65 producer: a tool_result answering a gateway tool_use is dropped as producer-other, CONTROL the same result answering an anthropic one passes', () => {
+    const run = (useModel: string) => {
+      const sp = w5a2Span([
+        { provenance: 'model', model: useModel, body: [w5a2Use('g1', 'Bash', { command: 'git rev-parse HEAD' })] },
+        { provenance: 'model', model: W5A2_CLAUDE, body: [w5a2Text('checking the head')] },
+        { provenance: 'tool', body: [w5a2Result('g1', 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')] },
+      ]);
+      return { sha: w5a2MinedOf(w5a2Mine(sp)).candidates.find((c) => c.kind === 'sha')!, sp };
+    };
+    const gw = run(W5A2_GATEWAY);
+    expect(gw.sha.producer).toEqual({ state: 'paired', backend: 'other', tool_use_uuid: gw.sp.rows[0]!.uuid });
+    expect(screen(gw.sha)).toEqual({ state: 'drop', reason: 'producer-other' });
+    expect(screen(run(W5A2_CLAUDE).sha), 'CONTROL: an anthropic tool_use').toEqual({ state: 'pass' });
+  });
+
+  it('W2-D65 pairing: a tool_result row with a NULL source_tool_use_id but a paired block id is mined and passes, and the block id wins over the column', () => {
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('n1', 'Bash', { command: 'git log -1 --format=%H' })] },
+      { provenance: 'model', model: W5A2_GATEWAY, body: [w5a2Use('n2', 'Bash', { command: 'git log -2 --format=%H' })] },
+      { provenance: 'tool', source_tool_use_id: null, body: [w5a2Result('n1', '0123456789abcdef0123456789abcdef01234567')] },
+      { provenance: 'tool', source_tool_use_id: 'n1', body: [w5a2Result('n2', '89abcdef0123456789abcdef0123456789abcdef')] },
+    ]);
+    const shas = w5a2MinedOf(w5a2Mine(sp)).candidates.filter((c) => c.kind === 'sha');
+    expect(shas.map((c) => [c.fact, c.producer])).toEqual([
+      ['0123456789abcdef0123456789abcdef01234567', { state: 'paired', backend: 'anthropic', tool_use_uuid: sp.rows[0]!.uuid }],
+      ['89abcdef0123456789abcdef0123456789abcdef', { state: 'paired', backend: 'other', tool_use_uuid: sp.rows[1]!.uuid }],
+    ]);
+    expect(shas.map((c) => screen(c))).toEqual([{ state: 'pass' }, { state: 'drop', reason: 'producer-other' }]);
+  });
+
+  it('W2-D65 pairing: a result whose tool_use is outside the span or written after it is result-unpaired, as the sweep pairs in file order', () => {
+    const outside = w5a2Span([{ provenance: 'tool', body: [w5a2Result('x1', 'fixed in 9f3e2d1')] }]);
+    const later = w5a2Span([
+      { provenance: 'tool', body: [w5a2Result('x2', 'fixed in 9f3e2d1')] },
+      { provenance: 'model', body: [w5a2Use('x2', 'Bash', { command: 'git show --stat HEAD' })] },
+    ]);
+    for (const sp of [outside, later]) {
+      const sha = w5a2MinedOf(w5a2Mine(sp)).candidates.find((c) => c.kind === 'sha')!;
+      expect(sha.producer).toEqual({ state: 'unpaired' });
+      expect(sha.pair).toBeNull();
+      expect(screen(sha)).toEqual({ state: 'drop', reason: 'result-unpaired' });
+    }
+  });
+
+  it('W2-D65: the driver never reads the source_tool_use_id column, CONTROL the pattern sees a planted read', () => {
+    const COLUMN = /source_tool_use_id|sourceToolUseID/;
+    const code = (t: string): string[] => t.split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l) && COLUMN.test(l));
+    expect(code('      const first = row.source_tool_use_id ?? undefined;')).toHaveLength(1);
+    expect(code(w5a2Read(DRIVER_URL, 'utf8'))).toEqual([]);
+  });
+
+  // ── the body pick (W2-D74 through W2-D65) ──
+  it.each(['tombstone', 'over-cap', 'undecodable', 'unparseable'])('W2-D74 via W2-D65: a mined row whose body pick answers %s discards the boundary by its own word', (state) => {
+    const sp = w5a2Span([{ provenance: 'model', body: [w5a2Text('commit 9f3e2d1')] }, { provenance: 'model', state, body: null }]);
+    expect(w5a2Mine(sp)).toMatchObject({ state: 'discard', why: `span-${state}`, boundaryUuid: 'fixture-boundary' });
+  });
+
+  it('W2-D65: a body pick state outside expandEntryBody words is a defect that throws, never a discard word', () => {
+    expect(() => w5a2Mine(w5a2Span([{ provenance: 'model', state: 'mystery', body: null }]))).toThrow(/body pick state/);
+  });
+
+  it('D-6303: a mined tool_use input nested 10,000 deep cannot be rendered and discards the boundary as body-unrenderable; CONTROL: 2,000 deep mines normally', () => {
+    // Built at runtime: a body that parses (far inside lib's JSON_DEPTH_MAX) but overflows V8's JSON.stringify stack. V8's
+    // limit moves with the Node build and the stack in use (about 4,085 here on Node 22.16, 4,376 on Node 24), so the throw side
+    // is 10,000 and the CONTROL 2,000, each far from it.
+    const nested = (levels: number): unknown => {
+      let v: unknown = 'leaf';
+      for (let i = 0; i < levels; i += 1) v = { a: v };
+      return v;
+    };
+    const body = (levels: number) => [w5a2Use('deep1', 'Bash', { command: 'npm run build:all', nest: nested(levels) })];
+    expect(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(10_000) }]))).toMatchObject({
+      state: 'discard', why: 'body-unrenderable', boundaryUuid: 'fixture-boundary',
+    });
+    const ok = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: body(2000) }])));
+    expect(ok.candidates.map((c) => [c.kind, c.fact])).toEqual([['command', 'npm run build:all']]);
+    expect(w5a2Drv.RECON_DISCARDS).toContain('body-unrenderable');
+  });
+
+  it('W2-D65 CONTROL: an unmined row whose body is pruned never discards the boundary and is never picked', () => {
+    const sp = w5a2Span([{ provenance: 'operator', state: 'tombstone', body: null }, { provenance: 'model', body: [w5a2Text('commit 9f3e2d1')] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => c.fact)).toEqual(['9f3e2d1']);
+    expect(sp.picked).toEqual([sp.rows[1]!.entry_id]);
+  });
+
+  it('W2-D65: kind and fact are deduplicated within a family, the earliest boundary first and file order within it, and another kind with the same text is kept', () => {
+    const body = (extra: unknown[]) => [w5a2Text('commit 9f3e2d1'), w5a2Use('d1', 'Bash', { command: 'npm run test' }), ...extra];
+    const mine = (uuid: string, ts: number, sp: ReturnType<typeof w5a2Span>) => w5a2MinedOf(w5a2Mine(sp, { boundaryUuid: uuid, boundaryTsMs: ts }));
+    const early = mine('b-early', 100, w5a2Span([{ provenance: 'model', body: body([w5a2Text('again 9f3e2d1')]) }]));
+    const late = mine('b-late', 200, w5a2Span([
+      { provenance: 'model', body: body([w5a2Use('d2', 'Read', { file_path: '/home/u/tree/src/app.ts' })]) },
+      { provenance: 'tool', body: [w5a2Result('d2', '/home/u/tree/src/app.ts', true)] },
+    ]));
+    const counts = w5a2Drv.newDropCounts();
+    const kept = w5a2Drv.dedupeFamily([late, early], counts);
+    expect(kept.map((c) => [c.boundary_uuid, c.kind, c.fact])).toEqual([
+      ['b-early', 'sha', '9f3e2d1'], ['b-early', 'command', 'npm run test'],
+      ['b-late', 'path', '/home/u/tree/src/app.ts'], ['b-late', 'error', '/home/u/tree/src/app.ts'],
+    ]);
+    expect(counts.duplicate).toBe(3);
+  });
+
+  // ── the redaction discard (W2-D67) ──
+  it('W2-D67: a synthetic key-shaped fact assembled at runtime is discarded first as redact-fact, for a command and for an error line, and counted without its value', () => {
+    const key = w5a2Akia();
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('k1', 'Bash', { command: `aws configure set aws_access_key_id ${key}` })] },
+      { provenance: 'tool', body: [w5a2Result('k1', `InvalidClientTokenId: key ${key} rejected`, true)] },
+    ]);
+    const cands = w5a2MinedOf(w5a2Mine(sp)).candidates;
+    expect(cands.map((c) => c.kind)).toEqual(['command', 'error']);
+    const counts = w5a2Drv.newDropCounts();
+    for (const c of cands) {
+      const s = screen(c);
+      expect(s).toEqual({ state: 'drop', reason: 'redact-fact' });
+      w5a2Drv.noteDrop(counts, (s as { reason: string }).reason);
+    }
+    expect(counts['redact-fact']).toBe(2);
+    expect(JSON.stringify(counts), 'counts carry words, never a value').not.toMatch(new RegExp(`${key.slice(0, 4)}|${key.slice(4)}`));
+  });
+
+  it('W2-D67: a fact intact alone but masked inside the leaf it was mined from is discarded as redact-leaf', () => {
+    const leaf = `rotate key ${['sk', 'a1b2c3d4e5f6'].join('-')} now`;
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Text(leaf)] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'sha', fact_raw: 'a1b2c3d4e5f6', leaf: { text: leaf } });
+    expect(w5a2Lib.redactField(c.fact_raw, W5A2_IDX0), 'CONTROL: the fact alone is not masked').toBe('a1b2c3d4e5f6');
+    expect(w5a2Lib.redactField(leaf, W5A2_IDX0), 'CONTROL: its leaf masks it').not.toContain('a1b2c3d4e5f6');
+    expect(screen(c)).toEqual({ state: 'drop', reason: 'redact-leaf' });
+  });
+
+  it('W2-D67 (R10, F6): a whitespace-split bearer token leaves F_raw intact under redaction but not F, and is discarded as redact-fact; CONTROL: the same split command with no Authorization header passes', () => {
+    // The token is assembled at runtime. A newline splits the header from its value, so lib's bearer rule ([ \t]+ only)
+    // misses F_raw; collapseWs joins them in F, which the rule masks.
+    const tok = ['zq', 'w5a2', 'bearer', 'value'].join('');
+    const split = `curl -H "Authorization: Bearer\n${tok}" https://api.example.test/v1`;
+    const plain = `curl -H "Accept: text/plain"\n${tok} https://api.example.test/v1`;
+    const cands = w5a2MinedOf(w5a2Mine(w5a2Span([
+      { provenance: 'model', body: [w5a2Use('f6', 'Bash', { command: split })] },
+      { provenance: 'model', body: [w5a2Use('f7', 'Bash', { command: plain })] },
+    ]))).candidates.filter((x) => x.kind === 'command');
+    expect(cands.map((x) => x.fact_raw)).toEqual([split, plain]);
+    const [c, ctl] = [cands[0]!, cands[1]!];
+    expect(c.fact, 'F joins the header and its value').toBe(`curl -H "Authorization: Bearer ${tok}" https://api.example.test/v1`);
+    expect(w5a2Lib.redactField(c.fact_raw, W5A2_IDX0), 'CONTROL: F_raw alone is not masked, so an F_raw-only screen passes it').toBe(c.fact_raw);
+    expect(w5a2Lib.redactField(c.leaf.text, W5A2_IDX0), 'CONTROL: nor is its leaf, so redact-leaf does not fire').toContain(c.fact_raw);
+    expect(w5a2Lib.redactField(c.fact, W5A2_IDX0), 'CONTROL: F is masked').not.toContain(tok);
+    expect(w5a2Drv.screenRedaction(c, W5A2_IDX0)).toBe('redact-fact');
+    expect(screen(c)).toEqual({ state: 'drop', reason: 'redact-fact' });
+    expect(w5a2Lib.redactField(ctl.fact, W5A2_IDX0), 'CONTROL: the header-less command\'s F is not masked').toBe(ctl.fact);
+    expect(w5a2Drv.screenRedaction(ctl, W5A2_IDX0), 'CONTROL: so it passes the screen').toBeNull();
+  });
+
+  it('W2-D67: an F_raw the redaction masks under an F it does not (a relative path through a registered value, resolved away) is discarded as redact-fact, never redact-leaf', () => {
+    // W2-D67's first clause alone: the AKIA cases fire both clauses (F equals F_raw) and the bearer case only the F
+    // clause. The value is assembled at runtime and registered in this case's own pair index; path.posix.resolve
+    // removes it from F.
+    const secret = ['zq', 'w5a2', 'fraw', 'pathvalue'].join('');
+    const idx = w5a2Lib.makePairIndex([{ len: secret.length, sha256: w5a2Lib.sha256Hex(secret) }]);
+    const raw = `${secret}/../src/app.ts`;
+    const cands = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('fr1', 'Read', { file_path: raw })] }]))).candidates;
+    expect(cands.map((x) => [x.kind, x.fact, x.fact_raw])).toEqual([['path', '/home/u/tree/src/app.ts', raw]]);
+    const c = cands[0]!;
+    expect(w5a2Lib.redactField(c.fact_raw, idx), 'CONTROL: F_raw is masked').not.toContain(secret);
+    expect(w5a2Lib.redactField(c.fact, idx), 'CONTROL: F, resolved past the value, is not').toBe(c.fact);
+    expect(w5a2Lib.redactField(c.leaf.text, idx), 'CONTROL: the redacted leaf no longer holds F_raw, so redact-leaf is the next word').not.toContain(c.fact_raw);
+    expect(w5a2Drv.screenRedaction(c, idx)).toBe('redact-fact');
+    expect(w5a2Drv.screenCandidate(c, { idx, baselineText: '' })).toEqual({ state: 'drop', reason: 'redact-fact' });
+  });
+
+  it('W2-D67 order CONTROL: redaction runs before admission, so a masked fact that B also holds is counted redact-fact, never baseline-hit', () => {
+    const command = `aws configure set aws_access_key_id ${w5a2Akia()}`;
+    const c = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('o1', 'Bash', { command })] }]))).candidates[0]!;
+    const baselineText = `notes\n${command}`;
+    expect(w5a2Gate.admitFact('command', c.fact, baselineText, '', { repoRoots: [] }).admitted, 'CONTROL: B holds the fact').toBe(false);
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText })).toEqual({ state: 'drop', reason: 'redact-fact' });
+  });
+
+  it('W2-D67: admission compares unredacted F against unredacted B, so a fact B holds only inside a masked value is still rejected', () => {
+    const secret = ['9f3e2d1', 'Q7mZx4Kp', 'W3n6Z5r1H8t2'].join('');
+    const idx = w5a2Lib.makePairIndex([{ len: secret.length, sha256: w5a2Lib.sha256Hex(secret) }]);
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Text('cherry-pick 9f3e2d1 onto main')] }])));
+    expect(r.candidates).toHaveLength(1);
+    const baselineText = `token was ${secret} yesterday`;
+    expect(w5a2Lib.redactField(baselineText, idx), 'CONTROL: redaction would hide the fact from B').not.toContain('9f3e2d1');
+    expect(w5a2Drv.screenCandidate(r.candidates[0]!, { idx, baselineText })).toEqual({ state: 'drop', reason: 'baseline-hit' });
+  });
+
+  it('W2-D67, R5: drop counts carry reason words only, each starting at 0, and a word outside FACT_DROP_REASONS throws; the two driver-local lists are disjoint from each other and from DRIVER_REASONS and GATE_REASONS', () => {
+    // This task's fourteen come first; Tasks 5 and 6 append their fact drops after them, in place, each pinning its slice.
+    expect(w5a2Drv.FACT_DROP_REASONS.slice(0, 14)).toEqual([
+      'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
+      'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
+    ]);
+    expect(w5a2Drv.RECON_DISCARDS.slice(14, 18), 'the span words, appended to Task 1\'s list').toEqual(['span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable']);
+    expect(w5a2Drv.RECON_DISCARDS.at(-1), "body-unrenderable (D-6302) stays last, so a task that inserts words keeps it there").toBe('body-unrenderable');
+    expect(Object.isFrozen(w5a2Drv.FACT_DROP_REASONS)).toBe(true);
+    expect(new Set(w5a2Drv.FACT_DROP_REASONS).size).toBe(w5a2Drv.FACT_DROP_REASONS.length);
+    // R5 as amended by R10: only the pairs that involve a drop list are pinned. DRIVER_REASONS and GATE_REASONS already
+    // share three words at the base (W2-3's and W2-4's), so that pair is never pinned; QUOTA_SKIPS is a report list.
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => w5a2Drv.DRIVER_REASONS.includes(w)), 'a drop is a count, not a refusal').toEqual([]);
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => (w5a2Gate.GATE_REASONS as readonly string[]).includes(w)), 'one spelling per word').toEqual([]);
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => (w5a2Drv.RECON_DISCARDS as readonly string[]).includes(w)), 'a fact drop is not a boundary discard').toEqual([]);
+    const counts = w5a2Drv.newDropCounts();
+    expect(Object.keys(counts)).toEqual([...w5a2Drv.FACT_DROP_REASONS]);
+    expect(Object.values(counts).every((n) => n === 0)).toBe(true);
+    expect(() => w5a2Drv.noteDrop(counts, 'not-a-reason')).toThrow(/^noteDrop: /);
+    expect(Object.keys(counts)).toEqual([...w5a2Drv.FACT_DROP_REASONS]);
+  });
+
+  it('W2-D61 and W2-D67: the driver imports collapseWs and lib redaction and declares no copy of either, CONTROL planted copies are seen', () => {
+    const COPY = /^\s*(?:export\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)(collapseWs|FACT_KINDS|SECRET_SHAPE_RES|redact(?!ForSpawn\b)[A-Za-z]*)\b/;
+    const copies = (t: string): string[] => t.split('\n').filter((l) => COPY.test(l));
+    // The FACT_KINDS line is built from parts, as measure-history.test.ts's OWN_WORDS are: W2-D12's scan there reads
+    // every server/test file and is not anchored to a line start, so a whole planted declaration would be a second holder.
+    for (const planted of ['function collapseWs(s) {', `export const ${'FACT' + '_KINDS'} = Object.freeze([]);`, 'const redactLeaf = (t) => t;',
+      'export function redactField(text, idx) {', 'const SECRET_SHAPE_RES = [];']) expect(copies(planted), planted).toHaveLength(1);
+    expect(copies('export function redactForSpawn(field, idx) {'), "W2-4's door is lib's redactField behind the decode cap").toEqual([]);
+    const src = w5a2Read(DRIVER_URL, 'utf8');
+    expect(copies(src)).toEqual([]);
+    expect(src).toMatch(/^import \{[^}]*\bcollapseWs\b[^}]*\} from '\.\/history-gate\.mjs';$/m);
+    expect(src).toMatch(/^import \{[^}]*\bredactField\b[^}]*\} from '\.\.\/ccd\/history\/lib\.mjs';$/m);
+  });
+
+  it('W2-D65: rosterConfigDirs lists every rostered account config dir under HOME, hidden ones included, once each and sorted', () => {
+    const roster = rosterFromJson({ version: 1, accounts: FIXTURE_ACCOUNTS });
+    expect(w5a2Drv.rosterConfigDirs(roster, '/home/u')).toEqual([
+      '/home/u/.claude', '/home/u/.cx-a', '/home/u/.ext-a', '/home/u/.ext-n', '/home/u/.gen-a', '/home/u/.gen-d',
+      '/home/u/.gen-h', '/home/u/.gen-m', '/home/u/.gen-o', '/home/u/.gen-r', '/home/u/.gen-s', '/home/u/.gen-u',
+    ]);
+  });
+});
+
+// ── W2-5a Task 3: boundary admission (W2-D66; spec §10.2 RP5 with the straddle and two-copy CONTROLs; D-5771) ──────
+// In-process only: no case spawns a child, so no claude, ccrc or gh is reached, and no account or roster is read. The
+// pure cases build copies in memory; the store cases plant a store with store.mjs's own createStore under a mkTmp
+// HOME, close the writer, and hand admission a handle from store.mjs's openReader, the route W2-D51 names. Models:
+// claude-fixture-4 (anthropic), gpt-fixture-5 (a gateway) and Claude Code's own `<synthetic>`.
+// The W5A3_ and w5a3 declarations are MODULE-LEVEL: later W2-5a tasks build their copies and stores with them.
+import * as w5a3Drv from '../../deploy/history-replay.mjs';
+import * as w5a3Store from '../../ccd/history/store.mjs';
+import * as w5a3Lib from '../../ccd/history/lib.mjs';
+import { mkTmp as w5a3MkTmp } from './tmpHelpers.js';
+
+const W5A3_CLAUDE = 'claude-fixture-4';
+const W5A3_GATEWAY = 'gpt-fixture-5';
+const W5A3_SYNTH = '<synthetic>';
+/** One copy row with the columns admission reads (entries joined through memberships, in file order). */
+type W5a3Row = { uuid: string; type: string; model: string | null; provenance: string; is_compact_summary: number };
+/** A uuid in the fixture shape: an 8-hex seed, then a 12-hex counter. */
+const w5a3Uid = (seed: number, n: number): string => `${seed.toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const w5a3Op = (uuid: string): W5a3Row => ({ uuid, type: 'user', model: null, provenance: 'operator', is_compact_summary: 0 });
+const w5a3Asst = (uuid: string, model: string | null): W5a3Row => ({ uuid, type: 'assistant', model, provenance: 'model', is_compact_summary: 0 });
+interface W5a3Copy { rows: W5a3Row[]; boundary: string; summary: string; bi: number; si: number }
+/** One copy in the manual shape, reduced to what admission reads. It holds an operator row before each `before`
+ *  model's assistant row, the operator's /compact row, the boundary, its summary (the anchor), then an operator row
+ *  before each `after` model's assistant row. The head, up to the summary, is minted from `seed`. The rows after the
+ *  summary are minted from `tailSeed`, counted from 0x1001. So two copies of one transcript share their head
+ *  (boundary and summary included) and part after the summary. `noSummary` leaves the summary row out: the anchor then
+ *  names a uuid the copy does not hold (DM25's shape). */
+function w5a3Copy(before: Array<string | null>, after: Array<string | null>,
+  o: { seed?: number; tailSeed?: number; noSummary?: boolean } = {}): W5a3Copy {
+  const seed = o.seed ?? 0xa3;
+  const tailSeed = o.tailSeed ?? seed;
+  const rows: W5a3Row[] = [];
+  let n = 0;
+  let m = 0;
+  const head = (): string => { n += 1; return w5a3Uid(seed, n); };
+  const tail = (): string => { m += 1; return w5a3Uid(tailSeed, 0x1000 + m); };
+  for (const model of before) {
+    rows.push(w5a3Op(head()));
+    rows.push(w5a3Asst(head(), model));
+  }
+  rows.push(w5a3Op(head()));
+  const boundary = head();
+  rows.push({ uuid: boundary, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 });
+  const summary = head();
+  if (o.noSummary !== true) rows.push({ uuid: summary, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 });
+  for (const model of after) {
+    rows.push(w5a3Op(tail()));
+    rows.push(w5a3Asst(tail(), model));
+  }
+  return { rows, boundary, summary, bi: rows.findIndex((r) => r.uuid === boundary), si: rows.findIndex((r) => r.uuid === summary) };
+}
+
+interface W5a3PlantSession { pk: number; ccrcId: string; generation: string; mergedInto?: number; epochs: Array<{ ccUuid: string; confirmed: boolean }> }
+interface W5a3PlantTranscript {
+  pk: number; ccUuid: string; agentId?: string; files: Array<{ fileId: number; sourceKey?: string; rows: W5a3Row[] }>;
+  boundary: string; anchor: string; tsNull?: boolean; unheld?: boolean;
+}
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, planted in one transaction, and closed. It
+ *  answers the HOME and the db file. Each transcript has one boundary (ord 1). A uuid is one entry per transcript, and every file
+ *  that lists it is a membership at its row's line (1-based), so two copies share their head entries. `tsNull` stores
+ *  the boundary's ts_ms as NULL. `unheld` leaves the boundary row's membership out of every file, so no copy holds
+ *  it. Every other entry is stamped 1 s after the one before. The sessions' epochs take seq 1, 2, … in list order. */
+function w5a3PlantStore(sessions: W5a3PlantSession[], transcripts: W5a3PlantTranscript[]): { home: string; dbFile: string } {
+  const home = w5a3MkTmp('ccrc-replay-w5a3-');
+  w5a3Store.createStore(home);
+  const dbFile = w5a3Lib.historyPaths(home).dbFile;
+  const db = w5a3Store.openWriter(dbFile);
+  try {
+    db.exec('BEGIN');
+    db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 0xa3), Buffer.from([0]));
+    const ses = db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, 'demo', 1, ?)");
+    const ep = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', ?)");
+    for (const s of sessions) ses.run(s.pk, s.ccrcId, s.generation, s.mergedInto ?? null);
+    for (const s of sessions) s.epochs.forEach((e, i) => { ep.run(s.pk, i + 1, e.ccUuid, e.confirmed ? 1 : null); });
+    const tr = db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, ?)');
+    const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, ?, 'live', 1)");
+    const ent = db.prepare('INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, ?, ?)');
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, ?, 1, ?)');
+    let ts = 1_000;
+    for (const t of transcripts) {
+      tr.run(t.pk, t.ccUuid, t.agentId ?? '');
+      const ids = new Map<string, number>();
+      for (const f of t.files) {
+        file.run(f.fileId, 9000 + f.fileId, f.sourceKey ?? '', t.pk);
+        f.rows.forEach((r, i) => {
+          let id = ids.get(r.uuid);
+          if (id === undefined) {
+            ts += 1000;
+            const stamp = t.tsNull === true && r.uuid === t.boundary ? null : ts;
+            id = Number(ent.run(r.uuid, t.pk, r.type, r.model, r.provenance, stamp, r.is_compact_summary).lastInsertRowid);
+            ids.set(r.uuid, id);
+          }
+          if (!(t.unheld === true && r.uuid === t.boundary)) mem.run(f.fileId, id, i + 1);
+        });
+      }
+      bnd.run(ids.get(t.boundary)!, t.pk, t.anchor);
+    }
+    db.exec('COMMIT');
+  } finally {
+    w5a3Store.closeWriter(db);
+  }
+  return { home, dbFile };
+}
+
+describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const GW = W5A3_GATEWAY;
+  const SY = W5A3_SYNTH;
+  const verdictOf = (c: W5a3Copy) => w5a3Drv.admitBoundary(c.rows, c.bi, c.si);
+  const ADMITTED = { admitted: true, reason: null, before: 'anthropic', after: 'anthropic' };
+
+  it('CONTROL: anthropic rows on both sides are admitted', () => {
+    expect(verdictOf(w5a3Copy([CL, CL], [CL]))).toEqual(ADMITTED);
+  });
+
+  it('RP5: a gateway row as the last real assistant row before the boundary is not admitted, whatever came before it', () => {
+    expect(verdictOf(w5a3Copy([CL, GW], [CL]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'anthropic' });
+  });
+
+  it('RP5: the anthropic-to-gateway straddle, anthropic rows before and a gateway row after the summary, is not admitted', () => {
+    expect(verdictOf(w5a3Copy([CL, CL], [GW, CL]))).toEqual({ admitted: false, reason: 'after-other', before: 'anthropic', after: 'other' });
+  });
+
+  it('RP5: a synthetic row before the boundary is skipped, and the boundary is judged by the real row before it', () => {
+    expect(verdictOf(w5a3Copy([CL, SY], [CL]))).toEqual(ADMITTED);
+    expect(verdictOf(w5a3Copy([GW, SY], [CL]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'anthropic' });
+  });
+
+  it('RP5: a synthetic row after the summary is skipped, and the boundary is judged by the real row after it', () => {
+    expect(verdictOf(w5a3Copy([CL], [SY, CL]))).toEqual(ADMITTED);
+    expect(verdictOf(w5a3Copy([CL], [SY, GW]))).toEqual({ admitted: false, reason: 'after-other', before: 'anthropic', after: 'other' });
+  });
+
+  it('a model-less assistant row is skipped on either side, as lib.backendOf reads it unknown', () => {
+    expect(verdictOf(w5a3Copy([CL, null], [null, CL]))).toEqual(ADMITTED);
+  });
+
+  it('with no real assistant row on a side, that side is unknown and the boundary is not admitted', () => {
+    expect(verdictOf(w5a3Copy([], [CL]))).toEqual({ admitted: false, reason: 'before-unknown', before: 'unknown', after: 'anthropic' });
+    expect(verdictOf(w5a3Copy([CL], [SY]))).toEqual({ admitted: false, reason: 'after-unknown', before: 'anthropic', after: 'unknown' });
+  });
+
+  it('both sides failing: the reason names the before side, tested first', () => {
+    expect(verdictOf(w5a3Copy([GW], [GW]))).toEqual({ admitted: false, reason: 'before-other', before: 'other', after: 'other' });
+  });
+
+  it('only assistant rows are witnesses before the boundary, as lib.producerOfCopy reads after it', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r, i) => (i === c.bi - 1 ? { ...r, model: GW } : r));
+    expect(rows[c.bi - 1]!.type, 'CONTROL: the row carrying a gateway model is the operator\'s /compact row').toBe('user');
+    expect(w5a3Drv.admitBoundary(rows, c.bi, c.si)).toEqual(ADMITTED);
+  });
+
+  it('the after side starts at the summary row, as derive.mjs leafFields reads the producer: a gateway row between the boundary and its summary is no witness', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = [...c.rows.slice(0, c.bi + 1), w5a3Asst(w5a3Uid(0xa3, 0x2001), GW), ...c.rows.slice(c.bi + 1)];
+    expect(rows[c.si + 1]!.is_compact_summary, 'CONTROL: the summary moved one row down').toBe(1);
+    expect(w5a3Drv.admitBoundary(rows, c.bi, c.si + 1)).toEqual(ADMITTED);
+  });
+
+  it('an index outside the copy is a defect: TypeError, never a verdict', () => {
+    const c = w5a3Copy([CL], [CL]);
+    for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(/is not a row of the copy/);
+    }
+  });
+
+  it('R6: the before witness is not bounded by the previous boundary: with no assistant row between two boundaries, the second is judged by the real row before the first', () => {
+    const c = w5a3Copy([CL], []);
+    const boundary2 = w5a3Uid(0xa3, 0x4001);
+    const summary2 = w5a3Uid(0xa3, 0x4002);
+    const rows: W5a3Row[] = [
+      ...c.rows,
+      w5a3Op(w5a3Uid(0xa3, 0x4000)),
+      { uuid: boundary2, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 },
+      { uuid: summary2, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 },
+      w5a3Op(w5a3Uid(0xa3, 0x4003)),
+      w5a3Asst(w5a3Uid(0xa3, 0x4004), CL),
+    ];
+    const bi2 = rows.findIndex((r) => r.uuid === boundary2);
+    const si2 = rows.findIndex((r) => r.uuid === summary2);
+    expect(rows.slice(c.si + 1, bi2).some((r) => r.type === 'assistant'), 'CONTROL: no assistant row between the two boundaries').toBe(false);
+    expect(w5a3Drv.admitBoundary(rows, bi2, si2)).toEqual(ADMITTED);
+  });
+});
+
+describe('W2-5a Task 3: the summary row is lib.summaryRowFor\'s pick, summaryIndexOf (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const summaryLike = (uuid: string, provenance: string): W5a3Row => ({ uuid, type: 'user', model: null, provenance, is_compact_summary: 1 });
+
+  it('the anchored summary row: its index in the copy', () => {
+    const c = w5a3Copy([CL], [CL]);
+    expect(w5a3Drv.summaryIndexOf(c.rows, c.boundary, c.summary)).toBe(c.si);
+  });
+
+  it('an anchor the copy does not hold is -1, though a compact summary row follows the boundary', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r) => (r.uuid === c.summary ? summaryLike(w5a3Uid(0xa3, 0x3001), 'summary') : r));
+    expect(rows.some((r, i) => i > c.bi && r.is_compact_summary === 1), 'CONTROL: a compact summary row follows the boundary').toBe(true);
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.summary)).toBe(-1);
+  });
+
+  it('an anchor that names a harness echo row is -1, as derive.mjs copyPlan marks an echo', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = c.rows.map((r) => (r.uuid === c.summary ? { ...r, provenance: 'harness' } : r));
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.summary)).toBe(-1);
+  });
+
+  it('an anchor naming the boundary itself takes the first compact summary row after it that is no echo', () => {
+    const c = w5a3Copy([CL], [CL]);
+    const rows = [...c.rows.slice(0, c.bi + 1), summaryLike(w5a3Uid(0xa3, 0x3002), 'harness'), ...c.rows.slice(c.bi + 1)];
+    expect(w5a3Drv.summaryIndexOf(rows, c.boundary, c.boundary)).toBe(c.si + 1);
+  });
+});
+
+describe('W2-5a Task 3: the population over a planted store, admitStoreBoundaries (W2-D66)', () => {
+  const CL = W5A3_CLAUDE;
+  const GW = W5A3_GATEWAY;
+  const cc = (k: number): string => w5a3Uid(0xcc, k);
+  const gen = (k: number): string => w5a3Uid(0x5e5, k);
+  const T3_HELD = w5a3Copy([CL, CL], [GW], { seed: 3, tailSeed: 0x31 });
+  const T3_LONG = w5a3Copy([CL, CL], [CL, CL, CL], { seed: 3, tailSeed: 0x32 });
+  const T4_HELD = w5a3Copy([CL], [CL], { seed: 4, tailSeed: 0x41 });
+  const T4_LONG = w5a3Copy([CL], [GW, GW, GW], { seed: 4, tailSeed: 0x42 });
+  const T10_RETIRED = w5a3Copy([CL], [CL], { seed: 0xa, tailSeed: 0xa1 });
+  const T10_LIVE = w5a3Copy([CL], [GW], { seed: 0xa, tailSeed: 0xa2 });
+  const one = (pk: number, c: W5a3Copy, fileId: number, extra: Partial<W5a3PlantTranscript> = {}): W5a3PlantTranscript =>
+    ({ pk, ccUuid: cc(pk), files: [{ fileId, rows: c.rows }], boundary: c.boundary, anchor: c.summary, ...extra });
+  const SESSIONS: W5a3PlantSession[] = [
+    ...[1, 2, 3, 4, 5, 8, 10, 11].map((k) => ({ pk: k, ccrcId: `claude-a-p${k}`, generation: gen(k), epochs: [{ ccUuid: cc(k), confirmed: true }] })),
+    { pk: 6, ccrcId: 'claude-a-p6', generation: gen(6), epochs: [{ ccUuid: cc(6), confirmed: false }] },
+    { pk: 9, ccrcId: 'claude-a-p9', generation: gen(9), mergedInto: 1, epochs: [{ ccUuid: cc(9), confirmed: true }] },
+    { pk: 12, ccrcId: 'claude-a-other', generation: gen(12), epochs: [{ ccUuid: cc(1), confirmed: true }] },
+  ];
+  const TRANSCRIPTS: W5a3PlantTranscript[] = [
+    one(1, w5a3Copy([CL, CL], [CL], { seed: 1 }), 1),
+    one(2, w5a3Copy([CL, GW], [CL], { seed: 2 }), 2),
+    { pk: 3, ccUuid: cc(3), files: [{ fileId: 3, rows: T3_HELD.rows }, { fileId: 4, rows: T3_LONG.rows }], boundary: T3_HELD.boundary, anchor: T3_HELD.summary },
+    { pk: 4, ccUuid: cc(4), files: [{ fileId: 5, rows: T4_HELD.rows }, { fileId: 6, rows: T4_LONG.rows }], boundary: T4_HELD.boundary, anchor: T4_HELD.summary },
+    one(5, w5a3Copy([CL], [CL], { seed: 5 }), 7, { tsNull: true }),
+    one(6, w5a3Copy([CL], [CL], { seed: 6 }), 8),
+    one(7, w5a3Copy([CL], [CL], { seed: 7 }), 9, { ccUuid: cc(1), agentId: 'a3sub' }),
+    one(8, w5a3Copy([CL], [CL], { seed: 8, noSummary: true }), 10),
+    one(9, w5a3Copy([CL], [CL], { seed: 9 }), 11),
+    { pk: 10, ccUuid: cc(10), files: [{ fileId: 12, sourceKey: 'retired-fixture', rows: T10_RETIRED.rows }, { fileId: 13, rows: T10_LIVE.rows }], boundary: T10_LIVE.boundary, anchor: T10_LIVE.summary },
+    one(11, w5a3Copy([CL], [CL], { seed: 0xb }), 14, { unheld: true }),
+  ];
+  type Result = ReturnType<typeof w5a3Drv.admitStoreBoundaries>;
+  let memo: { dbFile: string; res: Result } | null = null;
+  /** The planted store and admission's answer over it, through Task 1's store opener as a subcommand opens it, made once;
+   *  a throw leaves it unmade, so every case reds. */
+  function planted(): { dbFile: string; res: Result } {
+    if (memo === null) {
+      const { home, dbFile } = w5a3PlantStore(SESSIONS, TRANSCRIPTS);
+      const rs = w5a3Drv.openReplayStore(home);
+      try {
+        memo = { dbFile, res: w5a3Drv.admitStoreBoundaries(rs) };
+      } finally {
+        rs.close();
+      }
+    }
+    return memo;
+  }
+  // Made before the cases, so the per-case fixture removal (w5a8EachTest) leaves its home for every case of this describe.
+  w5a1BeforeAll(() => { planted(); });
+  const rowOf = (pk: number) => planted().res.boundaries.find((b) => b.transcript_pk === pk)!;
+  /** W1's measure: a copy's membership rows after the boundary row (the window's longest-copy rule, W2-D15). */
+  function afterCount(fileId: number, uuid: string): number {
+    const db = w5a3Store.openReader(planted().dbFile);
+    try {
+      return Number((db.prepare(`SELECT count(*) AS n FROM memberships m JOIN memberships mb ON mb.file_id = m.file_id
+        JOIN entries e ON e.entry_id = mb.entry_id WHERE m.file_id = ? AND e.uuid = ? AND m.line > mb.line`).get(fileId, uuid) as { n: number }).n);
+    } finally {
+      db.close();
+    }
+  }
+
+  it('every main boundary once, in transcript order, with its family and verdict; a subagent transcript\'s boundary is outside the population', () => {
+    expect(planted().res.boundaries.map((b) => [b.transcript_pk, b.ccrc_id, b.reason, b.admitted, b.file_id])).toEqual([
+      [1, 'claude-a-p1', null, true, 1],
+      [2, 'claude-a-p2', 'before-other', false, 2],
+      [3, 'claude-a-p3', 'after-other', false, 3],
+      [4, 'claude-a-p4', null, true, 5],
+      [5, 'claude-a-p5', 'ts-null', false, null],
+      [6, null, 'no-epoch', false, null],
+      [8, 'claude-a-p8', 'summary-absent', false, 10],
+      [9, null, 'no-epoch', false, null],
+      [10, 'claude-a-p10', 'after-other', false, 13],
+      [11, 'claude-a-p11', 'boundary-uncopied', false, null],
+    ]);
+    expect(typeof rowOf(1).summary_entry_id, 'R3: the admitted row names the summary row it judged').toBe('number');
+    expect(rowOf(5).summary_entry_id, 'a boundary judged before its copy names none').toBeNull();
+  });
+
+  it('the counts: admitted and every RECON_DISCARDS word, zeros included', () => {
+    const zero = Object.fromEntries(['admitted', ...w5a3Drv.RECON_DISCARDS].map((w) => [w, 0]));
+    expect(planted().res.counts).toEqual({
+      ...zero, admitted: 2, 'no-epoch': 2, 'ts-null': 1, 'boundary-uncopied': 1, 'summary-absent': 1, 'before-other': 1, 'after-other': 2,
+    });
+  });
+
+  it('two copies, the straddle CONTROL: the holding copy (live, smaller file_id) straddles and is not admitted, though the copy with the most rows after the boundary is anthropic throughout', () => {
+    const t3 = rowOf(3);
+    expect(t3).toMatchObject({
+      uuid: T3_HELD.boundary, ccrc_id: 'claude-a-p3', generation: gen(3), admitted: false, reason: 'after-other',
+      file_id: 3, boundary_index: T3_HELD.bi, summary_index: T3_HELD.si, before: 'anthropic', after: 'other',
+    });
+    expect(typeof t3.ts_ms).toBe('number');
+    expect(afterCount(4, T3_HELD.boundary), 'CONTROL: W1\'s longest-copy rule would read file 4').toBeGreaterThan(afterCount(3, T3_HELD.boundary));
+    expect(w5a3Drv.admitBoundary(T3_LONG.rows, T3_LONG.bi, T3_LONG.si).admitted, 'CONTROL: file 4 alone would be admitted').toBe(true);
+  });
+
+  it('two copies, reversed: the holding copy is anthropic on both sides and admitted, though the copy with the most rows after the boundary reaches a gateway', () => {
+    expect(rowOf(4)).toMatchObject({
+      admitted: true, reason: null, file_id: 5, boundary_index: T4_HELD.bi, summary_index: T4_HELD.si, before: 'anthropic', after: 'anthropic',
+    });
+    expect(afterCount(6, T4_HELD.boundary), 'CONTROL: W1\'s longest-copy rule would read file 6').toBeGreaterThan(afterCount(5, T4_HELD.boundary));
+    expect(w5a3Drv.admitBoundary(T4_LONG.rows, T4_LONG.bi, T4_LONG.si).admitted, 'CONTROL: file 6 alone would not be admitted').toBe(false);
+  });
+
+  it('two copies, a live copy is read before a retired copy with a smaller file_id (lib.pickHoldingCopy: live first)', () => {
+    expect(rowOf(10)).toMatchObject({ admitted: false, reason: 'after-other', file_id: 13, before: 'anthropic', after: 'other' });
+    expect(afterCount(12, T10_LIVE.boundary), 'CONTROL: neither length nor file order picks file 13').toBe(afterCount(13, T10_LIVE.boundary));
+    expect(w5a3Drv.admitBoundary(T10_RETIRED.rows, T10_RETIRED.bi, T10_RETIRED.si).admitted, 'CONTROL: the retired copy alone would be admitted').toBe(true);
+  });
+
+  it('RP5 in a store: an Anthropic-wrapper session (claude-a-p2) whose last real assistant row before the boundary is a gateway row is not admitted, and no roster is read', () => {
+    expect(rowOf(2)).toMatchObject({ ccrc_id: 'claude-a-p2', admitted: false, reason: 'before-other', before: 'other', after: 'anthropic', file_id: 2 });
+    expect(w5a3Drv.admitStoreBoundaries.length, 'one parameter, the store handle: no HOME, so no roster').toBe(1);
+  });
+
+  it('the family is derive.mjs epochOfUuid\'s: a confirmed epoch of an unmerged session, the smallest session_pk', () => {
+    expect([rowOf(1).ccrc_id, rowOf(1).generation], 'session 1, not session 12, which holds a later epoch of the same uuid').toEqual(['claude-a-p1', gen(1)]);
+    expect([rowOf(6).ccrc_id, rowOf(6).reason], 'an unconfirmed epoch').toEqual([null, 'no-epoch']);
+    expect([rowOf(9).ccrc_id, rowOf(9).reason], 'a confirmed epoch of a merged session').toEqual([null, 'no-epoch']);
+  });
+
+  it('CONTROL (R5): this task\'s six words are appended to RECON_DISCARDS after Task 2\'s, none is a DRIVER_REASONS word, and every reason a verdict carries is a RECON_DISCARDS word', () => {
+    expect(w5a3Drv.RECON_DISCARDS.slice(18, 24)).toEqual(['no-epoch', 'ts-null', 'before-other', 'before-unknown', 'after-other', 'after-unknown']);
+    expect(w5a3Drv.RECON_DISCARDS.filter((w) => (w5a3Drv.DRIVER_REASONS as readonly string[]).includes(w))).toEqual([]);
+    const reasons = new Set(planted().res.boundaries.map((b) => b.reason).filter((r) => r !== null));
+    for (const r of reasons) expect(w5a3Drv.RECON_DISCARDS).toContain(r);
+    expect(reasons.size, 'CONTROL: the planted store reaches six reasons').toBe(6);
+  });
+});
+
+// ── W2-5a Task 4: Baseline B and its files (W2-D68, W2-D69; W2-D33's kept-list scan; W2-D61's quoted-command pin) ────
+// In-process, on fixture stores and fixture trees only. Each case makes a mkTmp root that holds a fixture HOME (its
+// roster is two of W2-4 Task 3's FIXTURE_ACCOUNTS rows; its store is made by store.mjs's createStore and written with
+// openWriter) and a fixture tree, and hands the driver Task 1's openReplayStore over that HOME, as a subcommand does. W2-D69's
+// ancestor walk stops at that root (ctx.top), so no case reads a file outside its own tree; the default walk to the
+// filesystem root is pinned on baselineCandidates, which reads nothing. Nothing is spawned but mkfifo, and no live
+// store or real home is read. Facts are SHA-shaped, `fa` + five digits + `cafe`, so each has its own seven-character
+// prefix (the variant W2-D62 tests), or short synthetic commands; nothing key-shaped is planted.
+// The W5A4_ and w5a4 declarations are MODULE-LEVEL: later W2-5a tasks build B fixtures with them.
+import * as w5a4Fs from 'node:fs';
+import * as w5a4Path from 'node:path';
+import { createHash as w5a4Hash } from 'node:crypto';
+import { inspect as w5a4Inspect } from 'node:util';
+import type { DatabaseSync as W5a4Db } from 'node:sqlite';
+import * as w5a4Lib from '../../ccd/history/lib.mjs';
+import * as w5a4St from '../../ccd/history/store.mjs';
+import * as w5a4DeriveMod from '../../ccd/history/derive.mjs';
+import * as w5a4Gate from '../../deploy/history-gate.mjs';
+import * as w5a4Drv from '../../deploy/history-replay.mjs';
+import { mkTmp as w5a4MkTmp } from './tmpHelpers.js';
+
+/** derive.mjs has no .d.mts (W2-1, R1): the two reads the CONTROL needs, typed at the call site. */
+const w5a4Derive = w5a4DeriveMod as unknown as {
+  keptOf: (s: unknown, blobId: number | null, budget: { bytes: number }) => Set<string>;
+  blobReadStmts: (db: W5a4Db) => unknown;
+};
+const W5A4_UUID = (n: number): string => `5a400000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const W5A4_FACT = (n: number): string => `fa${String(n).padStart(5, '0')}cafe`;
+/** A short Bash command with quotes: renderEntryText escapes them, so only the string-leaf rendering holds it whole. */
+const W5A4_QUOTED = 'git log --format="%h %s" -n 3';
+/** The served card's command, quoted the same way, inside an attachment object. */
+const W5A4_CARD_CMD = 'make check ARGS="--fast --keep"';
+const W5A4_ROOT_USER = (process.getuid?.() ?? 1) === 0;
+
+type W5a4Stored = 'tombstone' | 'over-cap';
+type W5a4Row = {
+  key: string;
+  type: 'user' | 'assistant' | 'system' | 'attachment';
+  provenance: 'operator' | 'model' | 'tool' | 'summary' | 'harness';
+  body: unknown;
+  stored?: W5a4Stored;
+  variants?: Array<{ body: unknown; cause: 'ccd-sanitize' | 'unknown'; stored?: W5a4Stored }>;
+  held?: boolean;
+};
+interface W5a4Spec {
+  rows?: W5a4Row[];
+  kept?: string[] | null | 'tombstone' | 'object' | 'non-string';
+  keptExtra?: string[];
+  /** Epochs 1..n of the family, each cwd a name under the tree (null: none). N's is `nSeq`, default the last. */
+  epochs?: Array<{ cwd: string | null; cwdReal?: string | null }>;
+  nSeq?: number;
+}
+/** An admitted row of Task 3's admitStoreBoundaries, as the fixture knows it. */
+type W5a4Admission = {
+  entry_id: number; uuid: string; transcript_pk: number; ts_ms: number | null; ccrc_id: string | null; generation: string | null;
+  admitted: boolean; reason: string | null; file_id: number | null; boundary_index: number | null; summary_index: number | null;
+  summary_entry_id: number | null; before: string | null; after: string | null;
+};
+/** Task 1's ReplayStore, as the fixture reads it. */
+type W5a4Rs = { db: W5a4Db; close(): void };
+interface W5a4Fixture {
+  root: string; home: string; tree: string; cwd: string; rs: W5a4Rs; db: W5a4Db; keptBlobId: number | null;
+  boundary: W5a4Admission;
+  ctx: { home: string; configDirs: string[]; budget: { bytes: number }; top: string };
+  uuidOf: (key: string) => string;
+}
+type W5a4Answer =
+  | { state: 'built'; bytes: number; files: number; keptMembers: number; keptAbsent: number; postRows: number; text: string }
+  | { state: 'discard'; why: string };
+
+/** The holding copy, in line order: an operator row and three kept rows before the boundary; the summary (its last line
+ *  the transcript pointer); a kept assistant row; the served card and a harness notice; the operator's next prompt (the
+ *  stop); and a row after it. Assistant rows carry Task 3's anthropic fixture model, so RP5 admits the boundary. */
+function w5a4Rows(): W5a4Row[] {
+  const bash = { type: 'tool_use', id: 'toolu_k1', name: 'Bash', input: { command: W5A4_QUOTED } };
+  return [
+    { key: 'op1', type: 'user', provenance: 'operator', body: `look at ${W5A4_FACT(4)} please` },
+    { key: 'a1', type: 'assistant', provenance: 'model', body: [{ type: 'text', text: '...' }, bash], variants: [
+      { cause: 'ccd-sanitize', body: [{ type: 'text', text: `the sanitised text named ${W5A4_FACT(5)}` }, bash] },
+      { cause: 'unknown', body: [{ type: 'text', text: `another copy named ${W5A4_FACT(6)}` }, bash] },
+    ] },
+    { key: 'r1', type: 'user', provenance: 'tool', body: [{ type: 'tool_result', tool_use_id: 'toolu_k1', content: `kept output ${W5A4_FACT(3)}` }] },
+    { key: 'a2', type: 'assistant', provenance: 'model', body: [{ type: 'tool_use', id: 'toolu_k2', name: 'Edit', input: { [W5A4_FACT(9)]: true } }] },
+    { key: 'boundary', type: 'system', provenance: 'harness', body: 'Conversation compacted' },
+    { key: 'summary', type: 'user', provenance: 'summary',
+      body: `This session is being continued. Summary: ${W5A4_FACT(1)} was the head.\nIf you need specifics, read the full transcript at: /home/u/.claude/projects/-home-u-tree-demo/${W5A4_FACT(2)}.jsonl` },
+    { key: 'a3', type: 'assistant', provenance: 'model', body: [{ type: 'text', text: `a kept reply after the summary, ${W5A4_FACT(7)}` }] },
+    { key: 'card', type: 'attachment', provenance: 'harness', body: { type: 'hook_additional_context', content: [`History: node L1a2b3c4 ran ${W5A4_CARD_CMD}`] } },
+    { key: 'sys', type: 'system', provenance: 'harness', body: `a harness notice ${W5A4_FACT(8)}` },
+    { key: 'op2', type: 'user', provenance: 'operator', body: 'the next prompt' },
+    { key: 'late', type: 'attachment', provenance: 'harness', body: { type: 'hook_additional_context', content: [`later context ${W5A4_FACT(30)}`] } },
+  ];
+}
+const W5A4_KEPT = ['a1', 'r1', 'a2', 'a3'];
+/** w5a4Rows with one row patched. */
+const w5a4With = (key: string, patch: Partial<W5a4Row>): W5a4Row[] => w5a4Rows().map((r) => (r.key === key ? { ...r, ...patch } : r));
+
+const w5a4Open: W5a4Rs[] = [];
+afterEach(() => {
+  for (const rs of w5a4Open) { try { rs.close(); } catch { /* its case closed it */ } }
+  w5a4Open.length = 0;
+});
+
+/** One family, one confirmed epoch per `epochs` entry, one transcript (N's epoch's session uuid), one live copy
+ *  (file 1) holding every row not marked `held: false`, and the boundary's kept list. Answers the admitted row Task 3
+ *  would hand B, built by position over the held rows, and the ctx a subcommand passes, with `top` at the root. */
+function w5a4Fixture(spec: W5a4Spec = {}): W5a4Fixture {
+  const root = w5a4MkTmp('w5a4-baseline-');
+  const home = w5a4Path.join(root, 'home');
+  const tree = w5a4Path.join(root, 'tree');
+  const cwd = w5a4Path.join(tree, 'demo');
+  w5a4Fs.mkdirSync(cwd, { recursive: true });
+  w5a4Fs.mkdirSync(home, { recursive: true });
+  writeRoster(home, FIXTURE_ACCOUNTS.slice(0, 2));
+  w5a4St.createStore(home);
+  const dbFile = w5a4Lib.historyPaths(home).dbFile;
+  const w = w5a4St.openWriter(dbFile);
+  const rows = spec.rows ?? w5a4Rows();
+  const epochs = spec.epochs ?? [{ cwd: 'demo' }];
+  const nSeq = spec.nSeq ?? epochs.length;
+  const under = (name: string | null | undefined): string | null => (name === null || name === undefined ? null : w5a4Path.join(tree, name));
+  let blobN = 0;
+  const blob = (body: unknown, stored?: W5a4Stored): number => {
+    blobN += 1;
+    const raw = Buffer.from(JSON.stringify(body), 'utf8');
+    const sha = w5a4Hash('sha256').update(`${blobN}:`).update(raw).digest();
+    if (stored === 'tombstone') {
+      return Number(w.prepare("INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, 'br5', NULL, ?, 1)").run(sha, raw.length).lastInsertRowid);
+    }
+    const rawLen = stored === 'over-cap' ? w5a4Lib.BLOB_DECODE_MAX + 1 : raw.length;
+    return Number(w.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)").run(sha, w5a4St.brotli(raw), rawLen).lastInsertRowid);
+  };
+  const ids = new Map<string, number>();
+  const uuids = new Map<string, string>();
+  const uuidOf = (key: string): string => {
+    const u = uuids.get(key);
+    if (u === undefined) throw new Error(`w5a4Fixture: no row ${key}`);
+    return u;
+  };
+  w.exec('BEGIN');
+  w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'fam-a', ?, 'demo', 1)").run(W5A4_UUID(0xfa));
+  const epoch = w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, cwd_real, confirmed_ms) VALUES (1, ?, ?, 'startup', 'hook', ?, ?, 1)");
+  epochs.forEach((e, i) => { epoch.run(i + 1, W5A4_UUID(0xe0 + i), under(e.cwd), under(e.cwdReal)); });
+  w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(W5A4_UUID(0xe0 + nSeq - 1));
+  w.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (1, 1, 5401, 1, 'live', 1)").run();
+  const entry = w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, is_compact_summary)
+    VALUES (?, 1, ?, ?, ?, 1, 0, 1, ?, ?, ?)`);
+  const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (1, ?, ?)');
+  const variant = w.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause) VALUES (?, ?, 1, 1, ?)');
+  rows.forEach((r, i) => {
+    const primary = blob(r.body, r.stored);
+    const id = Number(entry.run(W5A4_UUID(i + 1), r.type, r.type === 'assistant' ? W5A3_CLAUDE : null, r.provenance, primary, 1_000 + i,
+      r.provenance === 'summary' ? 1 : 0).lastInsertRowid);
+    ids.set(r.key, id);
+    uuids.set(r.key, W5A4_UUID(i + 1));
+    if (r.held !== false) member.run(id, i + 1);
+    if (r.variants !== undefined) {
+      variant.run(id, primary, 'unknown');   // a store may list the primary among its variants; B reads it once
+      for (const v of r.variants) variant.run(id, blob(v.body, v.stored), v.cause);
+    }
+  });
+  const kept = spec.kept === undefined ? W5A4_KEPT : spec.kept;
+  let keptBlobId: number | null = null;
+  if (kept === 'tombstone') keptBlobId = blob([uuidOf('a1')], 'tombstone');
+  else if (kept === 'object') keptBlobId = blob({ allUuids: [uuidOf('a1')] });
+  else if (kept === 'non-string') keptBlobId = blob([uuidOf('a1'), 7]);
+  else if (kept !== null) keptBlobId = blob([...kept.map(uuidOf), ...(spec.keptExtra ?? [])]);
+  w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid, kept_blob_id) VALUES (?, 1, 1, ?, ?)')
+    .run(ids.get('boundary')!, uuidOf('summary'), keptBlobId);
+  w.exec('COMMIT');
+  w5a4St.closeWriter(w);
+  const rs = w5a4Drv.openReplayStore(home) as unknown as W5a4Rs;
+  w5a4Open.push(rs);
+  const held = rows.filter((r) => r.held !== false).map((r) => r.key);
+  const boundary: W5a4Admission = {
+    entry_id: ids.get('boundary')!, uuid: uuidOf('boundary'), transcript_pk: 1, ts_ms: 1_000 + rows.findIndex((r) => r.key === 'boundary'),
+    ccrc_id: 'fam-a', generation: W5A4_UUID(0xfa), admitted: true, reason: null, file_id: 1,
+    boundary_index: held.indexOf('boundary'), summary_index: held.indexOf('summary'), summary_entry_id: ids.get('summary')!,
+    before: 'anthropic', after: 'anthropic',
+  };
+  const configDirs = w5a4Drv.rosterConfigDirs(w5a4Drv.readRoster(home).roster, home);
+  return { root, home, tree, cwd, rs, db: rs.db, keptBlobId, boundary, ctx: { home, configDirs, budget: { bytes: 0 }, top: root }, uuidOf };
+}
+
+/** A file with its parent directories. */
+const w5a4Put = (p: string, text: string): void => {
+  w5a4Fs.mkdirSync(w5a4Path.dirname(p), { recursive: true });
+  w5a4Fs.writeFileSync(p, text);
+};
+/** W2-D69's tree for a fixture, one fact per file: the cwd's CLAUDE.md (with a relative, a `~`, a directory, a
+ *  nobody and a chained mention), the cwd's .claude/CLAUDE.md, the tree's CLAUDE.local.md and a CLAUDE.md that links to
+ *  a regular file, gen-a's config-dir CLAUDE.md, a memory file under the cwd's slug in the upstream config dir, the two
+ *  imported files, and a six-link import chain. */
+function w5a4WriteFiles(fx: W5a4Fixture): void {
+  w5a4Put(w5a4Path.join(fx.cwd, 'CLAUDE.md'),
+    `# demo\nfact ${W5A4_FACT(10)}\nsee @docs/notes.md and @~/shared/team.md, the folder @docs/ and ask @nobody.\nchain: @chain/d1.md\n`);
+  w5a4Put(w5a4Path.join(fx.cwd, '.claude', 'CLAUDE.md'), `fact ${W5A4_FACT(12)}\n`);
+  w5a4Put(w5a4Path.join(fx.tree, 'CLAUDE.local.md'), `fact ${W5A4_FACT(11)}\n`);
+  w5a4Put(w5a4Path.join(fx.root, 'elsewhere', 'real.md'), `fact ${W5A4_FACT(18)}\n`);
+  w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'elsewhere', 'real.md'), w5a4Path.join(fx.tree, 'CLAUDE.md'));
+  w5a4Put(w5a4Path.join(fx.home, '.gen-a', 'CLAUDE.md'), `fact ${W5A4_FACT(13)}\n`);
+  w5a4Put(w5a4Path.join(fx.home, '.claude', 'projects', fx.cwd.replace(/[^A-Za-z0-9]/g, '-'), 'memory', 'topic.md'), `fact ${W5A4_FACT(14)}\n`);
+  w5a4Put(w5a4Path.join(fx.cwd, 'docs', 'notes.md'), `fact ${W5A4_FACT(15)}\n`);
+  w5a4Put(w5a4Path.join(fx.home, 'shared', 'team.md'), `fact ${W5A4_FACT(16)}\n`);
+  for (let i = 1; i <= 6; i += 1) w5a4Put(w5a4Path.join(fx.cwd, 'chain', `d${i}.md`), `fact ${W5A4_FACT(20 + i)}\n${i < 6 ? `@d${i + 1}.md\n` : ''}`);
+}
+const w5a4B = (fx: W5a4Fixture, boundary: W5a4Admission = fx.boundary): W5a4Answer =>
+  w5a4Drv.baselineOf(fx.rs as never, boundary, fx.ctx) as unknown as W5a4Answer;
+function w5a4Built(fx: W5a4Fixture): Extract<W5a4Answer, { state: 'built' }> {
+  const b = w5a4B(fx);
+  if (b.state !== 'built') throw new Error(`B was not built: ${JSON.stringify(b)}`);
+  return b;
+}
+const w5a4Admitted = (kind: 'sha' | 'command', F: string, text: string): boolean =>
+  w5a4Gate.admitFact(kind, F, text, '', { repoRoots: [] }).admitted;
+
+describe('W2-5a Task 4: Baseline B parts 1 to 3, W2-D68', () => {
+  it('B is built for the row admitStoreBoundaries admits, read in place of a hand-made row', () => {
+    const fx = w5a4Fixture();
+    const rows = w5a4Drv.admitStoreBoundaries(fx.rs as never).boundaries as unknown as W5a4Admission[];
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.admitted, JSON.stringify(row)).toBe(true);
+    const pick = (r: W5a4Admission) => [r.entry_id, r.uuid, r.transcript_pk, r.file_id, r.boundary_index, r.summary_index, r.summary_entry_id];
+    expect(pick(row)).toEqual(pick(fx.boundary));
+    const viaTask3 = w5a4B(fx, row);
+    expect(viaTask3.state).toBe('built');
+    expect((viaTask3 as { text: string }).text).toBe(w5a4Built(fx).text);
+  });
+
+  it('part 1 is the summary row whole, its pointer line kept', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(1), b.text), 'the summary text').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(2), b.text), 'the transcript-pointer line: B keeps it, only the payload removes it').toBe(false);
+  });
+
+  it('part 2 is every kept member in the store, its primary and every variant', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(3), b.text), 'a kept tool_result').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(5), b.text), 'only in a ccd-sanitize variant').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(6), b.text), 'only in a variant of another cause: expand would not pick it, B reads it').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(7), b.text), 'only in a post-summary kept member').toBe(false);
+    // CONTROL: a row of leaf N's span outside kept(N) is not in B, so B is not the whole copy.
+    expect(w5a4Admitted('sha', W5A4_FACT(4), b.text)).toBe(true);
+  });
+
+  it('W2-D74: a fact only in the sanitised body, the primary expand passes over, is rejected by B (R7)', () => {
+    const a1 = w5a4Rows().find((r) => r.key === 'a1')!;
+    const primary = [{ type: 'text', text: `the sanitised primary ${W5A4_FACT(42)}` }, ...(a1.body as unknown[]).slice(1)];
+    const b = w5a4Built(w5a4Fixture({ rows: w5a4With('a1', { body: primary }) }));
+    expect(w5a4Admitted('sha', W5A4_FACT(42), b.text)).toBe(false);
+    // CONTROL: no variant holds it, so only B's reading of the primary rejects it.
+    expect(a1.variants!.some((v) => JSON.stringify(v.body).includes(W5A4_FACT(42)))).toBe(false);
+  });
+
+  it('both renderings: a short quoted command in a kept tool_use and a fact only in a tool_use key are not admitted', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('command', W5A4_QUOTED, b.text), 'W2-D61: the string leaf holds it whole').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(9), b.text), 'renderEntryText keeps an input key; the leaves do not').toBe(false);
+    // CONTROL: each rendering alone misses one of them, so neither half is redundant.
+    const bash = [{ type: 'tool_use', id: 'toolu_k1', name: 'Bash', input: { command: W5A4_QUOTED } }];
+    expect(w5a4Admitted('command', W5A4_QUOTED, w5a4Lib.renderEntryText(bash))).toBe(true);
+    const keyed = [{ type: 'tool_use', id: 'toolu_k2', name: 'Edit', input: { [W5A4_FACT(9)]: true } }];
+    expect(w5a4Admitted('sha', W5A4_FACT(9), w5a4Lib.ftsTextOf(keyed, 'entry'))).toBe(true);
+  });
+
+  it('part 3 takes the rows after the summary to the first operator row, the served card included', () => {
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, b.text), 'the served card: its string leaves hold the quoted command').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(8), b.text), 'a harness row before the stop').toBe(false);
+    expect(b.postRows).toBe(2);
+    // CONTROL: the row after the operator's next prompt is not in B.
+    expect(w5a4Admitted('sha', W5A4_FACT(30), b.text)).toBe(true);
+    // CONTROL: the card's JSON rendering escapes its quotes, and ftsTextOf reads nothing of an object, so the object's
+    // string leaves are what reject it (D-6279).
+    const card = { type: 'hook_additional_context', content: [`History: node L1a2b3c4 ran ${W5A4_CARD_CMD}`] };
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, w5a4Lib.renderEntryText(card))).toBe(true);
+    expect(w5a4Lib.ftsTextOf(card, 'entry')).toBe('');
+  });
+
+  it('a kept member after the summary is never the stop, and an assistant row that is not kept is', () => {
+    // a3, a kept assistant row between the summary and the card, is part 2's, so the card is still read
+    // (D-6278).
+    const b = w5a4Built(w5a4Fixture());
+    expect(w5a4Admitted('sha', W5A4_FACT(7), b.text)).toBe(false);
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, b.text)).toBe(false);
+    // CONTROL: with a3 outside kept(N) it is the first assistant row after the summary, the stop, so neither it nor the
+    // card is in B.
+    const c = w5a4Built(w5a4Fixture({ kept: ['a1', 'r1', 'a2'] }));
+    expect(w5a4Admitted('sha', W5A4_FACT(7), c.text)).toBe(true);
+    expect(w5a4Admitted('command', W5A4_CARD_CMD, c.text)).toBe(true);
+    expect(c.postRows).toBe(0);
+  });
+
+  it('kept members come in holding-copy order, absent ones are counted, and the run budget is charged', () => {
+    const rows: W5a4Row[] = [...w5a4Rows(), { key: 'x', type: 'user', provenance: 'tool', held: false,
+      body: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: `elsewhere ${W5A4_FACT(31)}` }] }];
+    const fx = w5a4Fixture({ rows, kept: ['x', 'a3', 'a2', 'r1', 'a1'], keptExtra: [W5A4_UUID(0xdead), W5A4_UUID(0xbeef)] });
+    const b = w5a4Built(fx);
+    expect([b.keptMembers, b.keptAbsent]).toEqual([5, 2]);
+    const at = (n: number): number => b.text.indexOf(W5A4_FACT(n));
+    expect(at(5)).toBeGreaterThan(-1);
+    expect(at(5) < at(3) && at(3) < at(7) && at(7) < at(31), 'held members by line (a1, r1, a3), then the unheld one').toBe(true);
+    expect(b.bytes).toBe(Buffer.byteLength(b.text, 'utf8'));
+    expect(fx.ctx.budget.bytes, 'every blob B read was charged to the run budget').toBeGreaterThan(0);
+  });
+});
+
+describe('W2-5a Task 4: B fails closed, W2-D68', () => {
+  it('a NULL kept id discards as kept-absent', () => {
+    expect(w5a4B(w5a4Fixture({ kept: null }))).toEqual({ state: 'discard', why: 'kept-absent' });
+  });
+
+  it('a tombstoned kept blob discards as kept-unreadable, never an empty B', () => {
+    const fx = w5a4Fixture({ kept: 'tombstone' });
+    expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'kept-unreadable' });
+    // CONTROL, the reason for Task 1's keptOf scan (W2-D33): derive.mjs's kept-set reader answers an empty set for this
+    // same blob, which a B built on it would read as "nothing was kept".
+    expect(w5a4Derive.keptOf(w5a4Derive.blobReadStmts(fx.db), fx.keptBlobId, { bytes: 0 }).size).toBe(0);
+  });
+
+  it('a kept body that is not an array of strings discards as kept-unreadable', () => {
+    expect(w5a4B(w5a4Fixture({ kept: 'object' }))).toEqual({ state: 'discard', why: 'kept-unreadable' });
+    expect(w5a4B(w5a4Fixture({ kept: 'non-string' }))).toEqual({ state: 'discard', why: 'kept-unreadable' });
+  });
+
+  it('an empty kept list is an empty part 2, not a discard', () => {
+    const b = w5a4Built(w5a4Fixture({ kept: [] }));
+    expect([b.keptMembers, b.keptAbsent]).toEqual([0, 0]);
+    expect(w5a4Admitted('sha', W5A4_FACT(3), b.text)).toBe(true);
+  });
+
+  it('a kept member whose primary or a variant is pruned or over the decode cap discards', () => {
+    const a1 = w5a4Rows().find((r) => r.key === 'a1')!;
+    for (const rows of [
+      w5a4With('a1', { stored: 'tombstone' }),
+      w5a4With('a1', { stored: 'over-cap' }),
+      w5a4With('a1', { variants: [{ ...a1.variants![0]!, stored: 'tombstone' }, a1.variants![1]!] }),
+    ]) expect(w5a4B(w5a4Fixture({ rows }))).toEqual({ state: 'discard', why: 'kept-member-unreadable' });
+  });
+
+  it('a summary that cannot be read is summary-unreadable, a copy that moved is copy-moved, and a row not admitted throws', () => {
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('summary', { stored: 'tombstone' }) }))).toEqual({ state: 'discard', why: 'summary-unreadable' });
+    const fx = w5a4Fixture();
+    expect(w5a4B(fx, { ...fx.boundary, boundary_index: fx.boundary.boundary_index! + 1 })).toEqual({ state: 'discard', why: 'copy-moved' });
+    expect(w5a4B(fx, { ...fx.boundary, summary_index: 999 })).toEqual({ state: 'discard', why: 'copy-moved' });
+    expect(() => w5a4B(fx, { ...fx.boundary, admitted: false, reason: 'after-other' })).toThrow(TypeError);
+  });
+
+  it('a post-summary row that cannot be read discards; a row after the stop is never read', () => {
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('sys', { stored: 'tombstone' }) }))).toEqual({ state: 'discard', why: 'post-row-unreadable' });
+    // CONTROL: the same damage after the operator's next prompt is never read.
+    expect(w5a4B(w5a4Fixture({ rows: w5a4With('late', { stored: 'tombstone' }) })).state).toBe('built');
+  });
+
+  it('B\'s discard words are appended to RECON_DISCARDS after Task 3\'s, each once (R5)', () => {
+    expect(w5a4Drv.RECON_DISCARDS.slice(24, 35)).toEqual(['copy-moved', 'summary-unreadable', 'kept-member-unreadable', 'post-row-unreadable',
+      'post-over-cap', 'cwd-unknown', 'cwd-missing', 'cwd-unreadable', 'file-unreadable', 'file-not-regular', 'file-over-cap']);
+    expect(w5a4Drv.RECON_DISCARDS, 'kept-absent and kept-unreadable are Task 1\'s').toEqual(expect.arrayContaining(['kept-absent', 'kept-unreadable']));
+    expect(new Set(w5a4Drv.RECON_DISCARDS).size).toBe(w5a4Drv.RECON_DISCARDS.length);
+  });
+
+  it('more than 200 post-summary rows discard as post-over-cap; 200 do not', () => {
+    const many = (n: number): W5a4Row[] => [
+      ...w5a4Rows().slice(0, 6),
+      ...Array.from({ length: n }, (_, i): W5a4Row => ({ key: `h${i}`, type: 'system', provenance: 'harness', body: `notice ${i}` })),
+      { key: 'op2', type: 'user', provenance: 'operator', body: 'the next prompt' },
+    ];
+    expect(w5a4Built(w5a4Fixture({ rows: many(200), kept: ['a1', 'r1', 'a2'] })).postRows).toBe(200);
+    expect(w5a4B(w5a4Fixture({ rows: many(201), kept: ['a1', 'r1', 'a2'] }))).toEqual({ state: 'discard', why: 'post-over-cap' });
+  });
+});
+
+describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304', () => {
+  /** A fixture whose row `key` stores an object nested `depth` deep. It parses, and lib's renderEntryText throws a
+   *  RangeError on it from about 4,000 levels (the limit moves with the Node build). Built at runtime: the blob is written raw, because JSON.stringify of the
+   *  nested value would throw in the fixture itself. */
+  const nested = (key: string, depth: number): W5a4Fixture => {
+    const fx = w5a4Fixture();
+    fx.rs.close();
+    const w = w5a4St.openWriter(w5a4Lib.historyPaths(fx.home).dbFile);
+    const row = w.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(fx.uuidOf(key)) as { blob_id: number };
+    const raw = Buffer.from(`${'{"a":'.repeat(depth)}"x"${'}'.repeat(depth)}`, 'utf8');
+    w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(w5a4St.brotli(raw), raw.length, Number(row.blob_id));
+    w5a4St.closeWriter(w);
+    const rs = w5a4Drv.openReplayStore(fx.home) as unknown as W5a4Rs;
+    w5a4Open.push(rs);
+    return { ...fx, rs, db: rs.db };
+  };
+
+  it.each([['summary', 'the summary row (part 1)'], ['a3', 'a kept member (part 2)'], ['card', 'a post-summary row (part 3)']])(
+    '%s: a body nested 10,000 deep discards body-unrenderable, and 2,000 deep builds B (%s)', (key) => {
+      expect(w5a4B(nested(key, 10_000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
+      // CONTROL: the same row 2,000 deep renders, so the discard is the depth and not the fixture.
+      expect(w5a4B(nested(key, 2000)).state).toBe('built');
+    });
+
+  it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
+    expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+  });
+});
+
+describe('W2-5a Task 4: B is held in memory only, W2-D68 and W2-D33', () => {
+  /** What the default fixture plants in B, as the seven-character variant W2-D62 tests, and the two commands. */
+  const IN_B = [1, 2, 3, 5, 6, 7, 8, 9].map((n) => W5A4_FACT(n).slice(0, 7));
+  const leaks = (text: string): string[] => [...IN_B, W5A4_QUOTED, W5A4_CARD_CMD].filter((s) => text.includes(s));
+  const refusal = (fn: () => unknown): { word: string; detail: string } | null => {
+    try { fn(); return null; } catch (e) { if (e instanceof DriverRefusal) return { word: e.word, detail: e.detail }; throw e; }
+  };
+  const byUuid = (a: { boundary_uuid: string }, b: { boundary_uuid: string }): number =>
+    (a.boundary_uuid < b.boundary_uuid ? -1 : a.boundary_uuid > b.boundary_uuid ? 1 : 0);
+
+  it('its text is not enumerable, so no serialiser or inspector carries it', () => {
+    const fx = w5a4Fixture();
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m));
+    const b = w5a4Built(fx);
+    const calls = spies.map((s) => s.mock.calls.length);
+    for (const s of spies) s.mockRestore();
+    expect(calls, 'B is never logged').toEqual([0, 0, 0, 0]);
+    expect(leaks(b.text), 'CONTROL: the text holds every planted fact').toHaveLength(IN_B.length + 2);
+    expect(Object.keys(b)).not.toContain('text');
+    expect(Object.isFrozen(b)).toBe(true);
+    for (const [how, s] of [['JSON.stringify', JSON.stringify(b)], ['canonicalJson', w5a4Lib.canonicalJson(b)], ['inspect', w5a4Inspect(b, { depth: 8 })]] as const) {
+      expect(leaks(s), how).toEqual([]);
+    }
+  });
+
+  it('the baseline record carries counts only, and a scan of --out finds no B text', () => {
+    const fx = w5a4Fixture();
+    const b = w5a4Built(fx);
+    const out = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out'));
+    const rows = [w5a4Drv.baselineRow(fx.boundary.uuid, b), w5a4Drv.baselineRow(W5A4_UUID(2), { state: 'discard', why: 'kept-absent' })];
+    expect(rows[0]).toEqual({ boundary_uuid: fx.boundary.uuid, state: 'built', why: null, bytes: b.bytes, files: 0, kept_members: 4, kept_absent: 0, post_rows: 2 });
+    const sha = w5a4Drv.writeBaselineRecord(out, 'quiz', { storeId: 'store-a', rows });
+    const file = w5a4Path.join(out, 'quiz', w5a4Drv.BASELINE_RECORD);
+    const bytes = w5a4Fs.readFileSync(file);
+    expect(bytes.toString('utf8')).toBe(`${w5a4Lib.canonicalJson({
+      kind: 'ccrc-history-w2-baseline', v: 1, baseline_files: 'v1', store_id: 'store-a', boundaries: [...rows].sort(byUuid), discards: { 'kept-absent': 1 },
+    })}\n`);
+    expect(sha).toBe(w5a4Lib.sha256Hex(bytes));
+    expect(w5a4Fs.statSync(file).mode & 0o777).toBe(0o600);
+    // The scan: every file under --out, read whole, holds nothing B holds (the CONTROL is the case above: the text does).
+    const walk = (dir: string): string[] => w5a4Fs.readdirSync(dir, { withFileTypes: true })
+      .flatMap((d) => (d.isDirectory() ? walk(w5a4Path.join(dir, d.name)) : [w5a4Path.join(dir, d.name)]));
+    const files = walk(out);
+    expect(files).toContain(file);
+    for (const f of files) expect(leaks(w5a4Fs.readFileSync(f, 'utf8')), f).toEqual([]);
+  });
+
+  it('the record is sorted by boundary and counts each discard word', () => {
+    const fx = w5a4Fixture();
+    const out = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out'));
+    const d = (n: number, why: string) => w5a4Drv.baselineRow(W5A4_UUID(n), { state: 'discard', why });
+    w5a4Drv.writeBaselineRecord(out, 'pilot', { storeId: 'store-a', rows: [d(3, 'kept-absent'), d(1, 'post-over-cap'), d(2, 'kept-absent')] });
+    const rec = JSON.parse(w5a4Fs.readFileSync(w5a4Path.join(out, 'pilot', 'baseline.json'), 'utf8')) as
+      { boundaries: Array<{ boundary_uuid: string }>; discards: Record<string, number> };
+    expect(rec.boundaries.map((r) => r.boundary_uuid)).toEqual([W5A4_UUID(1), W5A4_UUID(2), W5A4_UUID(3)]);
+    expect(rec.discards).toEqual({ 'kept-absent': 2, 'post-over-cap': 1 });
+  });
+
+  it('the record refuses a link at its section or its file, and a caller defect throws', () => {
+    const fx = w5a4Fixture();
+    const rows = [w5a4Drv.baselineRow(W5A4_UUID(1), { state: 'discard', why: 'kept-absent' })];
+    const out1 = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out1'));
+    w5a4Fs.mkdirSync(w5a4Path.join(fx.root, 'elsewhere-dir'));
+    w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'elsewhere-dir'), w5a4Path.join(out1, 'quiz'));
+    expect(refusal(() => w5a4Drv.writeBaselineRecord(out1, 'quiz', { storeId: 's', rows }))).toEqual({ word: 'out-refused', detail: 'quiz is not a directory' });
+    expect(w5a4Fs.readdirSync(w5a4Path.join(fx.root, 'elsewhere-dir'))).toEqual([]);
+    const out2 = w5a4Drv.prepareOut(w5a4Path.join(fx.root, 'out2'));
+    w5a4Fs.mkdirSync(w5a4Path.join(out2, 'quiz'));
+    w5a4Fs.writeFileSync(w5a4Path.join(fx.root, 'target.json'), 'untouched\n');
+    w5a4Fs.symlinkSync(w5a4Path.join(fx.root, 'target.json'), w5a4Path.join(out2, 'quiz', 'baseline.json'));
+    expect(refusal(() => w5a4Drv.writeBaselineRecord(out2, 'quiz', { storeId: 's', rows })))
+      .toEqual({ word: 'out-refused', detail: 'quiz/baseline.json is not a regular file' });
+    expect(w5a4Fs.readFileSync(w5a4Path.join(fx.root, 'target.json'), 'utf8')).toBe('untouched\n');
+    expect(() => w5a4Drv.writeBaselineRecord(out2, 'arms', { storeId: 's', rows })).toThrow(TypeError);
+    expect(() => w5a4Drv.writeBaselineRecord(out2, 'pilot', { storeId: 's', rows: [rows[0]!, rows[0]!] })).toThrow(TypeError);
+  });
+
+  it('BASELINE_FILES_ID is the open record default', () => {
+    const rec = w5a4Gate.OPEN_RECORD_V1 as unknown as { draft: { quiz: { fields: { baseline_files: { value: string } } } } };
+    expect(w5a4Drv.BASELINE_FILES_ID).toBe(rec.draft.quiz.fields.baseline_files.value);
+    expect(w5a4Drv.BASELINE_FILES_ID).toBe('v1');
+  });
+});
+
+describe('W2-5a Task 4: the baseline files, W2-D69', () => {
+  it('a fact in any file of a, b or c is not admitted; a later epoch is not read', () => {
+    const fx = w5a4Fixture({ epochs: [{ cwd: 'old' }, { cwd: 'demo' }, { cwd: 'later' }], nSeq: 2 });
+    w5a4WriteFiles(fx);
+    w5a4Put(w5a4Path.join(fx.tree, 'old', 'CLAUDE.md'), `fact ${W5A4_FACT(17)}\n`);
+    w5a4Put(w5a4Path.join(fx.tree, 'later', 'CLAUDE.md'), `fact ${W5A4_FACT(19)}\n`);
+    const b = w5a4Built(fx);
+    for (const [n, where] of [[10, 'the cwd CLAUDE.md'], [11, 'an ancestor CLAUDE.local.md'], [12, 'the cwd .claude/CLAUDE.md'],
+      [13, 'a config dir CLAUDE.md'], [14, 'a memory file under the slug'], [17, 'an earlier epoch cwd'],
+      [18, 'a CLAUDE.md that links to a regular file']] as const) {
+      expect(w5a4Admitted('sha', W5A4_FACT(n), b.text), where).toBe(false);
+    }
+    // CONTROL: an epoch after N's is not the family's history up to N.
+    expect(w5a4Admitted('sha', W5A4_FACT(19), b.text)).toBe(true);
+    // 7 at depth 0 (demo/CLAUDE.md, demo/.claude/CLAUDE.md, tree/CLAUDE.md, tree/CLAUDE.local.md, old/CLAUDE.md,
+    // .gen-a/CLAUDE.md, topic.md), 3 at depth 1 (notes.md, team.md, d1.md), d2 to d5.
+    expect(b.files).toBe(14);
+  });
+
+  it('a fact only in an imported file is not admitted, to depth 5 and no deeper', () => {
+    const fx = w5a4Fixture();
+    w5a4WriteFiles(fx);
+    const b = w5a4Built(fx);
+    expect(w5a4Admitted('sha', W5A4_FACT(15), b.text), 'a relative import').toBe(false);
+    expect(w5a4Admitted('sha', W5A4_FACT(16), b.text), 'a ~ import, read as HOME').toBe(false);
+    for (let depth = 1; depth <= 5; depth += 1) expect(w5a4Admitted('sha', W5A4_FACT(20 + depth), b.text), `depth ${depth}`).toBe(false);
+    // CONTROL: the sixth link of the chain is past BASELINE_IMPORT_DEPTH and is never read.
+    expect(w5a4Admitted('sha', W5A4_FACT(26), b.text)).toBe(true);
+    expect(w5a4Drv.BASELINE_IMPORT_DEPTH).toBe(5);
+  });
+
+  it('an absent file is left out, and a mention of a directory or of nothing is not an import', () => {
+    expect(w5a4Built(w5a4Fixture()).files).toBe(0);
+    const fx = w5a4Fixture();
+    w5a4Put(w5a4Path.join(fx.cwd, 'docs', 'keep.txt'), 'not markdown\n');
+    w5a4Put(w5a4Path.join(fx.cwd, 'CLAUDE.md'), 'see the folder @docs/ and ask @nobody.\n');
+    expect(w5a4Built(fx).files).toBe(1);
+  });
+
+  it('a removed worktree discards: N cwd or cwd_real gone is cwd-missing, an unknown one cwd-unknown; an earlier gone cwd is left out', () => {
+    const removed = w5a4Fixture();
+    w5a4Fs.rmSync(removed.cwd, { recursive: true });
+    expect(w5a4B(removed)).toEqual({ state: 'discard', why: 'cwd-missing' });
+    expect(w5a4B(w5a4Fixture({ epochs: [{ cwd: 'demo', cwdReal: 'real-gone' }] }))).toEqual({ state: 'discard', why: 'cwd-missing' });
+    expect(w5a4B(w5a4Fixture({ epochs: [{ cwd: null }] }))).toEqual({ state: 'discard', why: 'cwd-unknown' });
+    // CONTROL: an earlier epoch's removed directory is left out, and its ancestors are still read.
+    const earlier = w5a4Fixture({ epochs: [{ cwd: 'gone' }, { cwd: 'demo' }] });
+    w5a4Put(w5a4Path.join(earlier.tree, 'CLAUDE.md'), `fact ${W5A4_FACT(40)}\n`);
+    expect(w5a4Admitted('sha', W5A4_FACT(40), w5a4Built(earlier).text)).toBe(false);
+  });
+
+  it.skipIf(W5A4_ROOT_USER)('an unreadable memory file or memory directory discards as file-unreadable', () => {
+    const fx = w5a4Fixture();
+    w5a4WriteFiles(fx);
+    const memory = w5a4Path.join(fx.home, '.claude', 'projects', fx.cwd.replace(/[^A-Za-z0-9]/g, '-'), 'memory');
+    const topic = w5a4Path.join(memory, 'topic.md');
+    w5a4Fs.chmodSync(topic, 0o000);
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'file-unreadable' });
+    } finally { w5a4Fs.chmodSync(topic, 0o600); }
+    w5a4Fs.chmodSync(memory, 0o000);
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'file-unreadable' });
+    } finally { w5a4Fs.chmodSync(memory, 0o700); }
+    expect(w5a4B(fx).state, 'CONTROL: readable again, B is built').toBe('built');
+  });
+
+  it.skipIf(W5A4_ROOT_USER)('an unreadable cwd discards as cwd-unreadable', () => {
+    const fx = w5a4Fixture();
+    w5a4Fs.chmodSync(fx.tree, 0o600);   // no search permission: the stat of tree/demo fails EACCES
+    try {
+      expect(w5a4B(fx)).toEqual({ state: 'discard', why: 'cwd-unreadable' });
+    } finally { w5a4Fs.chmodSync(fx.tree, 0o700); }
+  });
+
+  it('a FIFO or a directory at CLAUDE.md discards as file-not-regular', () => {
+    const fifo = w5a4Fixture();
+    const mk = spawnSync('mkfifo', [w5a4Path.join(fifo.cwd, 'CLAUDE.md')], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    expect(w5a4B(fifo), 'answered from the stat, never a blocking open').toEqual({ state: 'discard', why: 'file-not-regular' });
+    const dir = w5a4Fixture();
+    w5a4Fs.mkdirSync(w5a4Path.join(dir.cwd, 'CLAUDE.md'));
+    expect(w5a4B(dir)).toEqual({ state: 'discard', why: 'file-not-regular' });
+  });
+
+  it('a file over 1 MiB discards as file-over-cap; one of exactly 1 MiB is read', () => {
+    expect(w5a4Drv.BASELINE_FILE_MAX).toBe(1024 * 1024);
+    const over = w5a4Fixture();
+    w5a4Put(w5a4Path.join(over.cwd, 'CLAUDE.md'), 'x'.repeat(w5a4Drv.BASELINE_FILE_MAX + 1));
+    expect(w5a4B(over)).toEqual({ state: 'discard', why: 'file-over-cap' });
+    const at = w5a4Fixture();
+    w5a4Put(w5a4Path.join(at.cwd, 'CLAUDE.md'), `${W5A4_FACT(41)}${'x'.repeat(w5a4Drv.BASELINE_FILE_MAX - W5A4_FACT(41).length)}`);
+    expect(w5a4Admitted('sha', W5A4_FACT(41), w5a4Built(at).text)).toBe(false);
+  });
+
+  it('the ancestor walk reaches the filesystem root by default and stops at top when given', () => {
+    const names = (dir: string): string[] => ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((n) => w5a4Path.join(dir, n));
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: ['/home/u/.gen-a'] })).toEqual([
+      ...names('/home/u/tree/demo'), ...names('/home/u/tree'), ...names('/home/u'), ...names('/home'), ...names('/'),
+      '/home/u/.gen-a/CLAUDE.md',
+    ]);
+    // Each path once: the upstream config dir's CLAUDE.md is also an ancestor's .claude/CLAUDE.md, and is read once.
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: ['/home/u/.claude'] })).toHaveLength(15);
+    expect(w5a4Drv.baselineCandidates({ cwds: ['/home/u/tree/demo'], configDirs: [], top: '/home/u/tree' }))
+      .toEqual([...names('/home/u/tree/demo'), ...names('/home/u/tree')]);
+    expect(w5a4Drv.BASELINE_NAMES).toEqual(['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']);
+  });
+});
+
+// ── W2-5a Task 5: answerability, the same-millisecond count and sampling ─────────────────────────────────────────
+// (W2-D70, W2-D34, W2-D71; D-5780). In-process only. Every store is built by hand under a mkTmp HOME, as
+// history-card.test.ts's W1-B3 Task 4 builds one: createStore, then rows inserted directly, and each blob the sweep would
+// index indexed through the sweep's own ftsTextOfBlob and indexBlob. Nothing here runs a pass, spawns a child, reads a
+// roster, a live store or a live HOME, or reaches claude, ccrc or gh. The sampler's stages are recording stand-ins.
+import { createHash as w5a5Hash } from 'node:crypto';
+import type { DatabaseSync as W5a5Db } from 'node:sqlite';
+import { describe as w5a5describe, expect as w5a5expect, it as w5a5it } from 'vitest';
+import * as w5a5Drv from '../../deploy/history-replay.mjs';
+import * as w5a5Lib from '../../ccd/history/lib.mjs';
+import * as w5a5Gate from '../../deploy/history-gate.mjs';
+import * as w5a5StoreMod from '../../ccd/history/store.mjs';
+import * as w5a5SweepMod from '../../ccd/history/sweep.mjs';
+import { mkTmp as w5a5MkTmp } from './tmpHelpers.js';
+import * as w6Gate from '../../deploy/history-gate.mjs';
+import { createHash as w6Hash } from 'node:crypto';
+
+type W5a5Rng = { nextU32(): number };
+type W5a5Cand = { id: string; kind: string; boundary_uuid: string; rank?: [number | string, number]; [k: string]: unknown };
+type W5a5Verdict = { keep: true; candidate: W5a5Cand } | { keep: false; reason: string };
+type W5a5Stage = (c: W5a5Cand, f: unknown) => Promise<W5a5Verdict>;
+type W5a5Src = { via: 'entry' | 'sidecar'; entryId: number | null; blobId: number; name: string | null };
+type W5a5Check = { ok: true; entryUuid: string } | { ok: false; clause: number; why: string };
+type W5a5Answer = { state: 'answerable'; source: W5a5Src & { entryUuid: string } } | { state: 'untimed' } | { state: 'unanswerable' };
+type W5a5Span = { tsMs: number; transcriptPk: number; spanEntryIds: number[] };
+type W5a5Same = { tsMs: number; holdingFileId: number; transcriptPks: number[] };
+type W5a5FamRef = { store_id: string; ccrc_id: string; generation: string };
+type W5a5Quotas = { target: number; caps: { family: number; boundary: number; kind_per_family: number } };
+type W5a5Sampled = { questions: W5a5Cand[]; families: string[]; drops: Record<string, Record<string, number>>; skips: Record<string, number>; reports: Record<string, unknown> };
+/** The exports this task adds, typed for the test. The driver is JavaScript, so its inferred JSDoc types are loose. */
+interface W5a5Api {
+  QUIZ_STAGES: readonly string[];
+  QUOTA_SKIPS: readonly string[];
+  FACT_DROP_REASONS: readonly string[];
+  RECON_DISCARDS: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  SOURCE_FAILS: Readonly<Record<string, number>>;
+  familyScopeOf(db: W5a5Db, f: { ccrc_id: string; generation: string }): number[];
+  familyRng(seedHex: string, label: string, f: W5a5FamRef): W5a5Rng;
+  checkSource(db: W5a5Db, idx: unknown, source: W5a5Src, factRaw: string, tsMs: number): Promise<W5a5Check>;
+  answerability(db: W5a5Db, idx: unknown, ctx: W5a5Span, factRaw: string): Promise<W5a5Answer>;
+  answerableStage(db: W5a5Db, idx: unknown, contextOf: (c: W5a5Cand) => W5a5Span & { factRaw: string }): W5a5Stage;
+  asofSameMsHits(db: W5a5Db, ctx: W5a5Same, factRaw: string): number;
+  sameMsReport(db: W5a5Db, contextOf: (c: W5a5Cand) => W5a5Same & { factRaw: string }): (c: W5a5Cand) => Promise<{ asof_same_ms_hits: number }>;
+  seededOrder<T>(rng: W5a5Rng, items: readonly T[], keyOf: (x: T) => string): T[];
+  quizRng(seedHex: string): W5a5Rng;
+  pilotRng(seedHex: string): W5a5Rng;
+  quizFamilyOrderKey(seedHex: string, f: W5a5FamRef): string;
+  drawSeedHex(draw?: (n: number) => Uint8Array): string;
+  quizPopulation<F extends W5a5FamRef & { admitted: number }>(families: F[], o: { pilotFamilies: W5a5FamRef[]; assignment: Array<W5a5FamRef & { arm: string }> }): { families: F[]; excluded: Record<string, number> };
+  sampleQuestions(o: { families: unknown[]; rng: W5a5Rng; quotas: W5a5Quotas; stages: Record<string, W5a5Stage>; afterAdmit?: (c: W5a5Cand, f: unknown) => Promise<unknown>; candidateRng?: (f: W5a5FamRef) => W5a5Rng; familyOrder?: (f: W5a5FamRef) => string }): Promise<W5a5Sampled>;
+  quizFloor(nQuestions: number, nFamilies: number, haltFloor: { questions: number; families: number }): { halt: boolean; short: string[] };
+  sampleFidelityBoundaries(o: { families: unknown[]; rng: W5a5Rng; n: number; admitBoundary: (b: { boundary_uuid: string }, f: unknown) => Promise<{ keep: true } | { keep: false; reason: string }> }): Promise<{ boundaries: Array<{ family: W5a5FamRef; boundary: { boundary_uuid: string } }>; drops: Record<string, number> }>;
+}
+const w5a5D = w5a5Drv as unknown as W5a5Api;
+const w5a5Sweep = w5a5SweepMod as unknown as {
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, idx: unknown, rawLen: number): Promise<{ text: string | null; overCap?: boolean }>;
+  indexBlob(db: W5a5Db, blobId: number, text: string, idx: unknown, overCap?: boolean): void;
+};
+
+w5a5describe('W2-5a Task 5: answerability, the same-millisecond count and sampling', () => {
+  const D = w5a5D;
+  const T = 1_760_000_000_000;              // boundary N's ts_ms: T_N
+  const IDX = w5a5Lib.makePairIndex([]);    // no registered pair: redaction changes none of these texts
+  const INDEXED = new Set<string>(w5a5Lib.INDEXED_PROVENANCE as readonly string[]);
+  const UUID = (n: number): string => `5a5e0000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+  type RowSpec = { key: string; ts: number | null; provenance: string; text: string; files?: number[]; indexed?: boolean; variantText?: string };
+  type SideSpec = { key: string; name: string; bytes: Buffer; linkTo: string | null; tpk?: number };
+  type Fx = { dbFile: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string> };
+
+  /** A store built by hand. Transcript 1 is this family's main transcript, with file 1 (N's holding copy) and file 2 (another
+   *  copy of it). Transcript 2 is another family's, with file 3. Rows go in the order given, each a member of every file it
+   *  lists (default file 1) at its own line. A row whose provenance the sweep indexes (INDEXED_PROVENANCE) is indexed
+   *  through the sweep's own functions unless `indexed: false`, and so is every variant and sidecar. `edit` runs on the
+   *  writer before it closes. */
+  async function build(rows: RowSpec[], sides: SideSpec[] = [], edit?: (w: W5a5Db, fx: Fx) => void): Promise<Fx> {
+    const home = w5a5MkTmp('w5a5-store-');
+    w5a5StoreMod.createStore(home);
+    const dbFile = w5a5Lib.historyPaths(home).dbFile;
+    const w = w5a5StoreMod.openWriter(dbFile) as unknown as W5a5Db;
+    w5a5StoreMod.createFtsTables(w);
+    w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?), (2, ?)').run(UUID(9001), UUID(9002));
+    const file = w.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 'live', 1)");
+    file.run(1, 5001, 1);
+    file.run(2, 5002, 1);
+    file.run(3, 5003, 2);
+    const fx: Fx = { dbFile, entry: {}, blob: {}, uuid: {} };
+    const blobOf = (bytes: Buffer): number => Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+      .get(w5a5Hash('sha256').update(bytes).digest(), w5a5StoreMod.CODEC, w5a5StoreMod.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+    const index = async (blobId: number, isSidecar: boolean): Promise<void> => {
+      const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(blobId) as { z: Uint8Array; raw_len: number | bigint };
+      const t = await w5a5Sweep.ftsTextOfBlob(b.z, isSidecar, IDX, Number(b.raw_len));
+      w5a5Sweep.indexBlob(w, blobId, t.text ?? '', IDX, t.overCap === true);
+    };
+    const body = (text: string): Buffer => Buffer.from(w5a5Lib.canonicalJson([{ type: 'text', text }]));
+    const ent = w.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', ?, 1, ?, ?, ?, ?) RETURNING entry_id");
+    const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    for (const [i, r] of rows.entries()) {
+      const files = r.files ?? [1];
+      const blobId = blobOf(body(r.text));
+      const id = Number((ent.get(UUID(i + 1), files.includes(3) ? 2 : 1, r.provenance, i, files[0]!, blobId, r.ts) as { entry_id: number | bigint }).entry_id);
+      for (const f of files) member.run(f, id, i + 1);
+      fx.entry[r.key] = id;
+      fx.blob[r.key] = blobId;
+      fx.uuid[r.key] = UUID(i + 1);
+      if (r.indexed !== false && INDEXED.has(r.provenance)) await index(blobId, false);
+      if (r.variantText !== undefined) {
+        const v = blobOf(body(r.variantText));
+        w.prepare("INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms, cause) VALUES (?, ?, ?, 1, 'unknown')").run(id, v, files[0]!);
+        fx.blob[`${r.key}:variant`] = v;
+        await index(v, false);
+      }
+    }
+    for (const s of sides) {
+      const blobId = blobOf(s.bytes);
+      w.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+        .run(s.tpk ?? 1, s.name, blobId, s.linkTo === null ? null : fx.entry[s.linkTo]!, T - 60_000);
+      fx.blob[s.key] = blobId;
+      await index(blobId, true);
+    }
+    edit?.(w, fx);
+    w5a5StoreMod.closeWriter(w);
+    return fx;
+  }
+  /** The driver's reads go through the read-only handle, as W2-D51's openReader route opens it. */
+  async function withReader<R>(fx: Fx, fn: (db: W5a5Db) => Promise<R> | R): Promise<R> {
+    const db = w5a5StoreMod.openReader(fx.dbFile) as unknown as W5a5Db;
+    try { return await fn(db); } finally { db.close(); }
+  }
+  const span = (fx: Fx, keys: string[]): W5a5Span => ({ tsMs: T, transcriptPk: 1, spanEntryIds: keys.map((k) => fx.entry[k]!) });
+  const ans = (fx: Fx, keys: string[], fact: string): Promise<W5a5Answer> => withReader(fx, (db) => D.answerability(db, IDX, span(fx, keys), fact));
+  const check = (fx: Fx, src: W5a5Src, fact: string): Promise<W5a5Check> => withReader(fx, (db) => D.checkSource(db, IDX, src, fact, T));
+  const rowSrc = (fx: Fx, key: string): W5a5Src => ({ via: 'entry', entryId: fx.entry[key]!, blobId: fx.blob[key]!, name: null });
+
+  w5a5describe('answerability, W2-D70 and D-5780', () => {
+    w5a5it('the words are fixed: the two drop words, appended to FACT_DROP_REASONS after Task 2\'s (R5), and each failure word with its clause', () => {
+      w5a5expect(D.FACT_DROP_REASONS.slice(14, 16)).toEqual(['unanswerable', 'unanswerable-untimed']);
+      w5a5expect(new Set(D.FACT_DROP_REASONS).size).toBe(D.FACT_DROP_REASONS.length);
+      w5a5expect({ ...D.SOURCE_FAILS }).toEqual({
+        'entry-absent': 1, provenance: 1, 'not-verbatim': 1, 'blob-absent': 2, 'not-indexed': 2, pruned: 2, 'no-match': 3, unlinked: 4, 'ts-null': 4, 'ts-after': 4,
+      });
+      w5a5expect(Object.isFrozen(D.SOURCE_FAILS)).toBe(true);
+    });
+
+    w5a5it('a fact in a stamped model row of the span is answerable, and the source is that row', async () => {
+      const fx = await build([{ key: 'm', ts: T - 5000, provenance: 'model', text: 'run zqcmd51 now' }]);
+      w5a5expect(await ans(fx, ['m'], 'zqcmd51 now')).toEqual({
+        state: 'answerable', source: { via: 'entry', entryId: fx.entry.m, blobId: fx.blob.m, name: null, entryUuid: fx.uuid.m },
+      });
+    });
+
+    w5a5it('clause 4: a source stamped exactly T_N is answerable, and one stamped one ms after T_N is untimed', async () => {
+      const at = await build([{ key: 'r', ts: T, provenance: 'tool', text: 'zqat51 output' }]);
+      w5a5expect((await ans(at, ['r'], 'zqat51 output')).state).toBe('answerable');
+      const after = await build([{ key: 'r', ts: T + 1, provenance: 'tool', text: 'zqat51 output' }]);
+      w5a5expect(await ans(after, ['r'], 'zqat51 output')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(after, rowSrc(after, 'r'), 'zqat51 output')).toEqual({ ok: false, clause: 4, why: 'ts-after' });
+    });
+
+    w5a5it('clause 4: a NULL-ts source is not answerable, and is untimed', async () => {
+      const fx = await build([{ key: 'r', ts: null, provenance: 'tool', text: 'zqnull51 output' }]);
+      w5a5expect(await ans(fx, ['r'], 'zqnull51 output')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqnull51 output')).toEqual({ ok: false, clause: 4, why: 'ts-null' });
+    });
+
+    w5a5it('clause 1: a harness row and an indexed recall-echo row are not sources; CONTROL: the same text in a tool row is', async () => {
+      const harness = await build([{ key: 'h', ts: T - 1000, provenance: 'harness', text: 'zqmeta51 injected' }]);
+      w5a5expect(await ans(harness, ['h'], 'zqmeta51 injected')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(harness, rowSrc(harness, 'h'), 'zqmeta51 injected')).toEqual({ ok: false, clause: 1, why: 'provenance' });
+      const echo = await build([{ key: 'e', ts: T - 1000, provenance: 'recall-echo', text: 'zqecho51 result' }]);
+      w5a5expect(await ans(echo, ['e'], 'zqecho51 result')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(echo, rowSrc(echo, 'e'), 'zqecho51 result')).toEqual({ ok: false, clause: 1, why: 'provenance' });
+      const tool = await build([{ key: 'e', ts: T - 1000, provenance: 'tool', text: 'zqecho51 result' }]);
+      w5a5expect((await ans(tool, ['e'], 'zqecho51 result')).state).toBe('answerable');
+    });
+
+    w5a5it('clause 2: a blob marked unindexed, and a pruned blob, are not sources even with their index row still present', async () => {
+      const cold = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqcold51 output' }], [],
+        (w, fx) => { w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(fx.blob.r!); });
+      w5a5expect(await ans(cold, ['r'], 'zqcold51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(cold, rowSrc(cold, 'r'), 'zqcold51 output')).toEqual({ ok: false, clause: 2, why: 'not-indexed' });
+      const pruned = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqgone51 output' }], [],
+        (w, fx) => { w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(T, fx.blob.r!); });
+      w5a5expect(await ans(pruned, ['r'], 'zqgone51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(pruned, rowSrc(pruned, 'r'), 'zqgone51 output')).toEqual({ ok: false, clause: 2, why: 'pruned' });
+    });
+
+    w5a5it('clause 3: a source the index MATCH does not return is not answerable', async () => {
+      const fx = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqmiss51 output' }], [],
+        (w, f) => { w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(f.blob.r!); });
+      w5a5expect(await ans(fx, ['r'], 'zqmiss51 output')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqmiss51 output')).toEqual({ ok: false, clause: 3, why: 'no-match' });
+    });
+
+    w5a5it('clause 1: a phrase the MATCH finds but the index text does not hold verbatim is not answerable; CONTROL: the verbatim fact is', async () => {
+      const fx = await build([{ key: 'r', ts: T - 1000, provenance: 'tool', text: 'zqrun51 zqtest51:zqunit51 now' }]);
+      w5a5expect(await ans(fx, ['r'], 'zqrun51 zqtest51-zqunit51')).toEqual({ state: 'unanswerable' });
+      w5a5expect(await check(fx, rowSrc(fx, 'r'), 'zqrun51 zqtest51-zqunit51')).toEqual({ ok: false, clause: 1, why: 'not-verbatim' });
+      w5a5expect((await ans(fx, ['r'], 'zqrun51 zqtest51:zqunit51')).state).toBe('answerable');
+    });
+
+    w5a5it('the sidecar window: a fact past SIDECAR_FTS_BYTES is not answerable, and one inside it is', async () => {
+      const bytes = Buffer.from(`zqhead51 ${'x '.repeat(270_000)}zqtail51\n`);
+      w5a5expect(bytes.indexOf('zqtail51'), 'CONTROL: the tail starts past the window').toBeGreaterThan(w5a5Lib.SIDECAR_FTS_BYTES);
+      const fx = await build([{ key: 'tr', ts: T - 2000, provenance: 'tool', text: 'Output too large. Full output saved to: tool-results/big51.txt' }],
+        [{ key: 's', name: 'big51.txt', bytes, linkTo: 'tr' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqhead51')).toEqual({
+        state: 'answerable', source: { via: 'sidecar', entryId: fx.entry.tr, blobId: fx.blob.s, name: 'big51.txt', entryUuid: fx.uuid.tr },
+      });
+      w5a5expect(await ans(fx, ['tr'], 'zqtail51')).toEqual({ state: 'unanswerable' });
+    });
+
+    w5a5it('clause 4: an unlinked sidecar is untimed; CONTROL: the same sidecar linked to a stamped span row is answerable', async () => {
+      const side = (linkTo: string | null): SideSpec[] => [{ key: 's', name: 'toolu_01SIDE51.txt', bytes: Buffer.from('zqside51 body\n'), linkTo }];
+      const row: RowSpec[] = [{ key: 'tr', ts: T - 2000, provenance: 'tool', text: 'saved elsewhere' }];
+      const unlinked = await build(row, side(null));
+      w5a5expect(await ans(unlinked, ['tr'], 'zqside51 body')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(unlinked, { via: 'sidecar', entryId: null, blobId: unlinked.blob.s!, name: 'toolu_01SIDE51.txt' }, 'zqside51 body'))
+        .toEqual({ ok: false, clause: 4, why: 'unlinked' });
+      const linked = await build(row, side('tr'));
+      w5a5expect((await ans(linked, ['tr'], 'zqside51 body'))).toEqual({
+        state: 'answerable', source: { via: 'sidecar', entryId: linked.entry.tr, blobId: linked.blob.s, name: 'toolu_01SIDE51.txt', entryUuid: linked.uuid.tr },
+      });
+    });
+
+    w5a5it('clause 4: a sidecar linked to a NULL-ts span row is untimed, though the sidecar has a first-seen time', async () => {
+      const fx = await build([{ key: 'tr', ts: null, provenance: 'tool', text: 'saved elsewhere' }],
+        [{ key: 's', name: 'toolu_01SIDE52.txt', bytes: Buffer.from('zqside52 body\n'), linkTo: 'tr' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqside52 body')).toEqual({ state: 'untimed' });
+      w5a5expect(await check(fx, { via: 'sidecar', entryId: fx.entry.tr!, blobId: fx.blob.s!, name: 'toolu_01SIDE52.txt' }, 'zqside52 body'))
+        .toEqual({ ok: false, clause: 4, why: 'ts-null' });
+    });
+
+    w5a5it('a sidecar linked to a row outside the span is never a source', async () => {
+      const fx = await build([
+        { key: 'tr', ts: T - 2000, provenance: 'tool', text: 'nothing here' },
+        { key: 'post', ts: T + 5000, provenance: 'tool', text: 'a later result' },
+      ], [{ key: 's', name: 'toolu_01SIDE53.txt', bytes: Buffer.from('zqside53 body\n'), linkTo: 'post' }]);
+      w5a5expect(await ans(fx, ['tr'], 'zqside53 body')).toEqual({ state: 'unanswerable' });
+    });
+
+    w5a5it('sources are tried rows first, in span order, then sidecars: a fact in both answers from the row', async () => {
+      const fx = await build([{ key: 'r', ts: T - 3000, provenance: 'tool', text: 'zqboth51 in the row' }],
+        [{ key: 's', name: 'toolu_01SIDE54.txt', bytes: Buffer.from('zqboth51 in the sidecar\n'), linkTo: 'r' }]);
+      const a = await ans(fx, ['r'], 'zqboth51');
+      w5a5expect(a.state === 'answerable' ? a.source.via : a.state).toBe('entry');
+    });
+
+    w5a5it('answerableStage keeps an answerable candidate with its source, and drops the rest as unanswerable or unanswerable-untimed', async () => {
+      const fx = await build([
+        { key: 'good', ts: T - 3000, provenance: 'tool', text: 'zqgood51 output' },
+        { key: 'null', ts: null, provenance: 'tool', text: 'zqnull53 output' },
+        { key: 'cold', ts: T - 3000, provenance: 'tool', text: 'zqcold53 output', indexed: false },
+      ]);
+      const verdicts = await withReader(fx, async (db) => {
+        const stage = D.answerableStage(db, IDX, (c) => ({ ...span(fx, ['good', 'null', 'cold']), factRaw: c.fact_raw as string }));
+        const out: Record<string, W5a5Verdict> = {};
+        for (const f of ['zqgood51 output', 'zqnull53 output', 'zqcold53 output']) out[f] = await stage({ id: f, kind: 'error', boundary_uuid: UUID(7000), fact_raw: f }, null);
+        return out;
+      });
+      w5a5expect(verdicts['zqgood51 output']).toEqual({
+        keep: true,
+        candidate: { id: 'zqgood51 output', kind: 'error', boundary_uuid: UUID(7000), fact_raw: 'zqgood51 output', source: { via: 'entry', entryId: fx.entry.good, blobId: fx.blob.good, name: null, entryUuid: fx.uuid.good } },
+      });
+      w5a5expect(verdicts['zqnull53 output']).toEqual({ keep: false, reason: 'unanswerable-untimed' });
+      w5a5expect(verdicts['zqcold53 output']).toEqual({ keep: false, reason: 'unanswerable' });
+    });
+  });
+
+  w5a5describe('the same-millisecond count, W2-D34', () => {
+    /** One fact, zqsame51, planted in every shape the count must tell apart. Expected: 4 (out, outVariant, outSide, outDual). */
+    const SAME_ROWS: RowSpec[] = [
+      { key: 'holdAfter', files: [1], ts: T, provenance: 'tool', text: 'zqsame51 in the holding copy' },
+      { key: 'both', files: [1, 2], ts: T, provenance: 'tool', text: 'zqsame51 in both copies' },
+      { key: 'out', files: [2], ts: T, provenance: 'tool', text: 'zqsame51 outside' },
+      { key: 'outBefore', files: [2], ts: T - 1, provenance: 'tool', text: 'zqsame51 one ms before' },
+      { key: 'outAfter', files: [2], ts: T + 1, provenance: 'tool', text: 'zqsame51 one ms after' },
+      { key: 'outNull', files: [2], ts: null, provenance: 'tool', text: 'zqsame51 with no stamp' },
+      { key: 'outEcho', files: [2], ts: T, provenance: 'recall-echo', text: 'zqsame51 echoed' },
+      { key: 'outVariant', files: [2], ts: T, provenance: 'tool', text: 'no fact here a', variantText: 'zqsame51 in a variant' },
+      { key: 'outSide', files: [2], ts: T, provenance: 'tool', text: 'no fact here b' },
+      { key: 'outDual', files: [2], ts: T, provenance: 'tool', text: 'zqsame51 in a row and its sidecar' },
+      { key: 'otherFamily', files: [3], ts: T, provenance: 'tool', text: 'zqsame51 in another family' },
+    ];
+    const SAME_SIDES: SideSpec[] = [
+      { key: 'sSide', name: 'toolu_01SAME51.txt', bytes: Buffer.from('zqsame51 in a sidecar\n'), linkTo: 'outSide' },
+      { key: 'sDual', name: 'toolu_01SAME52.txt', bytes: Buffer.from('zqsame51 in the dual sidecar\n'), linkTo: 'outDual' },
+      { key: 'sLoose', name: 'toolu_01SAME53.txt', bytes: Buffer.from('zqsame51 unlinked\n'), linkTo: null },
+    ];
+    const CTX: W5a5Same = { tsMs: T, holdingFileId: 1, transcriptPks: [1] };
+
+    w5a5it('counts the entries outside N holding copy, in the family, searchable, stamped exactly T_N, by row, variant or sidecar, each once', async () => {
+      const fx = await build(SAME_ROWS, SAME_SIDES);
+      await withReader(fx, (db) => {
+        w5a5expect(D.asofSameMsHits(db, CTX, 'zqsame51')).toBe(4);
+        w5a5expect(D.asofSameMsHits(db, CTX, 'zqabsent51')).toBe(0);
+      });
+    });
+
+    w5a5it('familyScopeOf is recall.mjs\'s own family scope: a confirmed epoch\'s transcript that holds rows, never an unconfirmed epoch\'s or another family\'s (R6)', async () => {
+      const home = w5a5MkTmp('w5a5-scope-');
+      w5a5StoreMod.createStore(home);
+      const dbFile = w5a5Lib.historyPaths(home).dbFile;
+      const w = w5a5StoreMod.openWriter(dbFile) as unknown as W5a5Db;
+      w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'fam-a', 'g1', 'demo', 1), (2, 'fam-b', 'g1', 'demo', 2)").run();
+      const ep = w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', ?)");
+      ep.run(1, 1, UUID(9101), 1);
+      ep.run(1, 2, UUID(9102), null);
+      ep.run(2, 1, UUID(9103), 1);
+      w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?), (2, ?), (3, ?)').run(UUID(9101), UUID(9102), UUID(9103));
+      const bytes = Buffer.from(w5a5Lib.canonicalJson([{ type: 'text', text: 'scope' }]));
+      const blobId = Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+        .get(w5a5Hash('sha256').update(bytes).digest(), w5a5StoreMod.CODEC, w5a5StoreMod.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+      const ent = w.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 0, 0, ?, ?)");
+      for (const t of [1, 2, 3]) ent.run(UUID(9200 + t), t, blobId, T - 1000);
+      w5a5StoreMod.closeWriter(w);
+      const fx: Fx = { dbFile, entry: {}, blob: {}, uuid: {} };
+      w5a5expect(await withReader(fx, (db) => D.familyScopeOf(db, { ccrc_id: 'fam-a', generation: 'g1' }))).toEqual([1]);
+      // CONTROL: every transcript of the family's epochs, the second family rule R6 forbids, would also take the unconfirmed one.
+      const naive = await withReader(fx, (db) => (db.prepare(`SELECT DISTINCT t.transcript_pk AS p FROM epochs e
+        JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid WHERE e.session_pk = 1 ORDER BY p`).all() as Array<{ p: number | bigint }>).map((r) => Number(r.p)));
+      w5a5expect(naive).toEqual([1, 2]);
+    });
+
+    w5a5it('sameMsReport answers the count per admitted candidate, as a report', async () => {
+      const fx = await build(SAME_ROWS, SAME_SIDES);
+      const rep = await withReader(fx, (db) => D.sameMsReport(db, (c) => ({ ...CTX, factRaw: c.fact_raw as string }))({ id: 'q1', kind: 'error', boundary_uuid: UUID(7001), fact_raw: 'zqsame51' }));
+      w5a5expect(rep).toEqual({ asof_same_ms_hits: 4 });
+    });
+  });
+
+  w5a5describe('sampling, W2-D71', () => {
+    const SEED = 'ab'.repeat(32);
+    const L8 = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const BIG: W5a5Quotas = { target: 1000, caps: { family: 1000, boundary: 1000, kind_per_family: 1000 } };
+    type Fam = W5a5FamRef & { admitted: number; calls: number; candidates: () => Promise<W5a5Cand[]> };
+    const fam = (ccrc: string, cands: W5a5Cand[], o: { store?: string; gen?: string; admitted?: number } = {}): Fam => {
+      const f: Fam = {
+        store_id: o.store ?? 's1', ccrc_id: ccrc, generation: o.gen ?? 'g1', admitted: o.admitted ?? 1, calls: 0,
+        candidates: async () => { f.calls += 1; return cands; },
+      };
+      return f;
+    };
+    const cand = (id: string, kind = 'sha', boundary = `b-${id}`): W5a5Cand => ({ id, kind, boundary_uuid: boundary });
+    const recorder = (log: string[], drop: Record<string, Record<string, string>> = {}): Record<string, W5a5Stage> => Object.fromEntries(
+      D.QUIZ_STAGES.map((n) => [n, async (c: W5a5Cand): Promise<W5a5Verdict> => {
+        log.push(`${n}:${c.id}`);
+        const reason = drop[n]?.[c.id];
+        return reason === undefined ? { keep: true, candidate: c } : { keep: false, reason };
+      }]));
+    const ids = (r: W5a5Sampled): string[] => r.questions.map((q) => q.id);
+    const fk = (f: W5a5FamRef): string => w5a5Gate.familyKey(f.store_id, f.ccrc_id, f.generation);
+
+    w5a5it('the stage order and the quota words are fixed', () => {
+      w5a5expect([...D.QUIZ_STAGES]).toEqual(['redaction', 'producer', 'admit-baseline', 'answerable', 'writer', 'admit-question']);
+      w5a5expect([...D.QUOTA_SKIPS]).toEqual(['cap-family', 'cap-boundary', 'cap-kind']);
+      w5a5expect(Object.isFrozen(D.QUIZ_STAGES) && Object.isFrozen(D.QUOTA_SKIPS)).toBe(true);
+    });
+
+    w5a5it('seededOrder sorts by key, then draws its order: a recorded vector for each substream, and input order never moves it', () => {
+      w5a5expect(D.seededOrder(D.quizRng(SEED), L8, (x) => x)).toEqual(['f', 'a', 'g', 'b', 'd', 'h', 'e', 'c']);
+      w5a5expect(D.seededOrder(D.quizRng(SEED), [...L8].reverse(), (x) => x)).toEqual(['f', 'a', 'g', 'b', 'd', 'h', 'e', 'c']);
+      w5a5expect(D.seededOrder(D.pilotRng(SEED), L8, (x) => x)).toEqual(['h', 'b', 'f', 'e', 'c', 'g', 'd', 'a']);
+      const rng = D.quizRng(SEED);
+      D.seededOrder(rng, L8, (x) => x);
+      w5a5expect(D.seededOrder(rng, ['x1', 'x2', 'x3', 'x4'], (x) => x), 'a second order continues the same stream').toEqual(['x4', 'x3', 'x1', 'x2']);
+    });
+
+    w5a5it('seededOrder refuses a key listed twice', () => {
+      w5a5expect(() => D.seededOrder(D.quizRng(SEED), ['k1', 'k1'], (x) => x)).toThrow(/listed twice/);
+    });
+
+    w5a5it('drawSeedHex is 32 drawn bytes as 64 lowercase hex, and refuses a draw of another length', () => {
+      w5a5expect(D.drawSeedHex(() => new Uint8Array(32).fill(0xab))).toBe('ab'.repeat(32));
+      const a = D.drawSeedHex();
+      w5a5expect(a).toMatch(/^[0-9a-f]{64}$/);
+      w5a5expect(D.drawSeedHex()).not.toBe(a);
+      w5a5expect(() => D.drawSeedHex(() => new Uint8Array(16))).toThrow(/32 bytes/);
+    });
+
+    w5a5it('families in seeded order, then the candidates of each family, all from one stream: a recorded vector', async () => {
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-c': [cand('c2'), cand('c1'), cand('c3')], 'fam-a': [cand('a1'), cand('a3'), cand('a2')], 'fam-b': [cand('b3'), cand('b1'), cand('b2')],
+      };
+      const fams = Object.entries(lists).map(([id, cs]) => fam(id, cs));
+      const r = await D.sampleQuestions({ families: fams, rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      w5a5expect(ids(r)).toEqual(['a2', 'a3', 'a1', 'b1', 'b2', 'b3', 'c1', 'c3', 'c2']);
+      w5a5expect(r.families).toEqual(fams.map(fk).sort());
+      const rev = Object.entries(lists).reverse().map(([id, cs]) => fam(id, [...cs].reverse()));
+      const again = await D.sampleQuestions({ families: rev, rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      w5a5expect(ids(again), 'the same seed and inputs in another order give the same list').toEqual(ids(r));
+    });
+
+    w5a5it('the stages run in QUIZ_STAGES order, whatever order the stages object lists them in', async () => {
+      const log: string[] = [];
+      const stages = Object.fromEntries(Object.entries(recorder(log)).reverse());
+      await D.sampleQuestions({ families: [fam('fam-a', [cand('o1')])], rng: D.quizRng(SEED), quotas: BIG, stages });
+      w5a5expect(log).toEqual(D.QUIZ_STAGES.map((n) => `${n}:o1`));
+    });
+
+    w5a5it('lazy: a candidate a stage drops reaches no later stage, and the drop is counted under that stage', async () => {
+      const log: string[] = [];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('c1'), cand('c2', 'path')])], rng: D.quizRng(SEED), quotas: BIG,
+        stages: recorder(log, { 'admit-baseline': { c1: 'in-baseline' } }),
+      });
+      w5a5expect(log.filter((l) => l.endsWith(':c1'))).toEqual(['redaction:c1', 'producer:c1', 'admit-baseline:c1']);
+      w5a5expect(r.drops['admit-baseline']).toEqual({ 'in-baseline': 1 });
+      w5a5expect(ids(r)).toEqual(['c2']);
+    });
+
+    w5a5it('the family cap: five questions, the rest skipped before any stage', async () => {
+      const kinds = ['sha', 'path', 'command', 'error'];
+      const log: string[] = [];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', Array.from({ length: 7 }, (_, i) => cand(`k${i}`, kinds[i % 4]!)))], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 5, boundary: 1000, kind_per_family: 1000 } }, stages: recorder(log),
+      });
+      w5a5expect(r.questions.length).toBe(5);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 2, 'cap-boundary': 0, 'cap-kind': 0 });
+      w5a5expect(log.filter((l) => l.startsWith('redaction:')).length).toBe(5);
+    });
+
+    w5a5it('the boundary cap: three questions from one boundary', async () => {
+      const kinds = ['sha', 'path', 'command', 'error', 'sha'];
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', kinds.map((k, i) => cand(`b${i}`, k, 'b-one')))], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 1000, boundary: 3, kind_per_family: 1000 } }, stages: recorder([]),
+      });
+      w5a5expect(r.questions.length).toBe(3);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 0, 'cap-boundary': 2, 'cap-kind': 0 });
+    });
+
+    w5a5it('the kind cap: two questions of one kind in a family', async () => {
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('s1'), cand('s2'), cand('s3'), cand('s4'), cand('p1', 'path')])], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 1000, boundary: 1000, kind_per_family: 2 } }, stages: recorder([]),
+      });
+      w5a5expect(r.questions.map((q) => q.kind).sort()).toEqual(['path', 'sha', 'sha']);
+      w5a5expect(r.skips).toEqual({ 'cap-family': 0, 'cap-boundary': 0, 'cap-kind': 2 });
+    });
+
+    w5a5it('a cap counts admitted questions only: a candidate the writer drops does not use the family cap', async () => {
+      w5a5expect(D.seededOrder(D.quizRng(SEED), ['d1', 'd2', 'd3'], (x) => x), 'CONTROL: d1 is drawn first').toEqual(['d1', 'd2', 'd3']);
+      const r = await D.sampleQuestions({
+        families: [fam('fam-a', [cand('d1'), cand('d2', 'path'), cand('d3', 'command')])], rng: D.quizRng(SEED),
+        quotas: { target: 1000, caps: { family: 2, boundary: 1000, kind_per_family: 1000 } }, stages: recorder([], { writer: { d1: 'writer-leak' } }),
+      });
+      w5a5expect(ids(r)).toEqual(['d2', 'd3']);
+      w5a5expect(r.drops.writer).toEqual({ 'writer-leak': 1 });
+    });
+
+    w5a5it('each question carries its rank, [family rank, candidate rank]; with candidateRng a family\'s ranks do not depend on what other families hold (R4)', async () => {
+      const cr = (f: W5a5FamRef): W5a5Rng => D.familyRng(SEED, 'quiz-sample', f);
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-a': ['a1', 'a2', 'a3', 'a4'].map((n) => cand(n)), 'fam-b': ['b1', 'b2', 'b3', 'b4'].map((n) => cand(n)), 'fam-c': ['c1', 'c2', 'c3', 'c4'].map((n) => cand(n)),
+      };
+      const rankOf = (r: W5a5Sampled): Record<string, string> => Object.fromEntries(r.questions.map((q) => [q.id, JSON.stringify(q.rank)]));
+      const whole = rankOf(await D.sampleQuestions({ families: Object.entries(lists).map(([id, cs]) => fam(id, cs)), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), candidateRng: cr }));
+      w5a5expect(Object.keys(whole)).toHaveLength(12);
+      w5a5expect(new Set(Object.values(whole)).size, 'no two questions share a rank').toBe(12);
+      for (const only of Object.keys(lists)) {
+        // A node that holds one family walks the same global list, the others empty, and ranks its own as the whole walk does.
+        const local = rankOf(await D.sampleQuestions({ families: Object.entries(lists).map(([id, cs]) => fam(id, id === only ? cs : [])), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), candidateRng: cr }));
+        w5a5expect(local, only).toEqual(Object.fromEntries(Object.entries(whole).filter(([id]) => id.startsWith(only.slice(-1)))));
+      }
+    });
+
+    w5a5it('the quiz\'s keyed family order (W2-D71 as amended 2026-10-22; R10): families sorted by quizFamilyOrderKey, each question ranked [key, candidate rank], and two nodes\' outputs merged by rank are the one walk over both', async () => {
+      const cr = (f: W5a5FamRef): W5a5Rng => D.familyRng(SEED, 'quiz-sample', f);
+      const ko = (f: W5a5FamRef): string => D.quizFamilyOrderKey(SEED, f);
+      // The key, recomputed from its definition: the 'quiz-sample' substream's seed hashed with familyKey.
+      const sub = w5a5Hash('sha256').update(`${SEED}:quiz-sample`).digest('hex');
+      const refA: W5a5FamRef = { store_id: 's1', ccrc_id: 'fam-a', generation: 'g1' };
+      w5a5expect(ko(refA)).toBe(w5a5Hash('sha256').update(`${sub}:${fk(refA)}`).digest('hex'));
+      w5a5expect(ko(refA)).toMatch(/^[0-9a-f]{64}$/);
+      const lists: Record<string, W5a5Cand[]> = {
+        'fam-a': ['a1', 'a2', 'a3'].map((n) => cand(n)), 'fam-b': ['b1', 'b2', 'b3'].map((n) => cand(n)),
+        'fam-c': ['c1', 'c2', 'c3'].map((n) => cand(n)), 'fam-d': ['d1', 'd2', 'd3'].map((n) => cand(n)),
+      };
+      const walk = (held: string[], target: number): Promise<W5a5Sampled> => D.sampleQuestions({
+        families: held.map((id) => fam(id, lists[id]!)), rng: D.quizRng(SEED), quotas: { ...BIG, target }, stages: recorder([]),
+        candidateRng: cr, familyOrder: ko,
+      });
+      const all = await walk(['fam-a', 'fam-b', 'fam-c', 'fam-d'], 1000);
+      // A recorded vector: the keys sort fam-a, fam-d, fam-b, fam-c; each family's candidates come from its own stream.
+      w5a5expect(ids(all)).toEqual(['a3', 'a2', 'a1', 'd2', 'd1', 'd3', 'b1', 'b3', 'b2', 'c2', 'c1', 'c3']);
+      w5a5expect(all.questions.map((q) => q.rank)).toEqual(['fam-a', 'fam-d', 'fam-b', 'fam-c'].flatMap((id) =>
+        [0, 1, 2].map((ci) => [ko({ store_id: 's1', ccrc_id: id, generation: 'g1' }), ci])));
+      const again = await walk(['fam-d', 'fam-c', 'fam-b', 'fam-a'], 1000);
+      w5a5expect(ids(again), 'input order never moves the keyed order').toEqual(ids(all));
+      // Two nodes, each holding the families the other's sit between in the key order, and no list of the other's.
+      const cmp = (x: string | number, y: string | number): number => (x < y ? -1 : x > y ? 1 : 0);
+      const byRank = (x: W5a5Cand, y: W5a5Cand): number => cmp(x.rank![0], y.rank![0]) || cmp(x.rank![1], y.rank![1]);
+      for (const target of [1000, 5]) {
+        const one = await walk(['fam-a', 'fam-b', 'fam-c', 'fam-d'], target);
+        const nodeA = await walk(['fam-a', 'fam-b'], target);
+        const nodeB = await walk(['fam-d', 'fam-c'], target);
+        const merged = [...nodeA.questions, ...nodeB.questions].sort(byRank).slice(0, target);
+        w5a5expect(merged.map((q) => [q.id, q.rank]), `target ${target}`).toEqual(one.questions.map((q) => [q.id, q.rank]));
+        if (target === 5) {
+          w5a5expect(ids(one)).toEqual(['a3', 'a2', 'a1', 'd2', 'd1']);
+          w5a5expect([...nodeA.questions, ...nodeB.questions].slice(0, target).map((q) => q.id),
+            'CONTROL: the nodes\' lists concatenated are not the walk; only the rank order merges them').toEqual(['a3', 'a2', 'a1', 'b1', 'b3']);
+        }
+      }
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('x1')]), fam('fam-a', [cand('x2')])], rng: D.quizRng(SEED),
+        quotas: BIG, stages: recorder([]), candidateRng: cr, familyOrder: ko })).rejects.toThrow(/listed twice/);
+    });
+
+    w5a5it('the target stops the draw: no further stage runs, and a family not reached is never mined', async () => {
+      const log: string[] = [];
+      const fams = [fam('fam-a', ['1', '2', '3', '4', '5'].map((n) => cand(`a${n}`))), fam('fam-b', ['1', '2', '3', '4', '5'].map((n) => cand(`b${n}`)))];
+      const r = await D.sampleQuestions({ families: fams, rng: D.quizRng(SEED), quotas: { ...BIG, target: 3 }, stages: recorder(log) });
+      w5a5expect(r.questions.length).toBe(3);
+      w5a5expect(log.filter((l) => l.startsWith('writer:')).length).toBe(3);
+      w5a5expect(fams[0]!.calls + fams[1]!.calls).toBe(1);
+    });
+
+    w5a5it('the same-millisecond report never gates: the list is the same with and without it, and each question carries its report', async () => {
+      const make = (): Fam[] => [fam('fam-a', [cand('a1'), cand('a2', 'path')]), fam('fam-b', [cand('b1')])];
+      const plain = await D.sampleQuestions({ families: make(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]) });
+      const withRep = await D.sampleQuestions({
+        families: make(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([]), afterAdmit: async () => ({ asof_same_ms_hits: 7 }),
+      });
+      w5a5expect(ids(withRep)).toEqual(ids(plain));
+      w5a5expect(plain.reports).toEqual({});
+      w5a5expect(withRep.reports).toEqual(Object.fromEntries(ids(plain).map((id) => [id, { asof_same_ms_hits: 7 }])));
+    });
+
+    w5a5it('malformed sampler inputs are defects: a missing or unknown stage, a drop with no reason, a bad quota, a bad kind, a repeated id', async () => {
+      const one = (): Fam[] => [fam('fam-a', [cand('x1')])];
+      const stages = recorder([]);
+      const noWriter = Object.fromEntries(Object.entries(stages).filter(([k]) => k !== 'writer'));
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: noWriter })).rejects.toThrow(/no 'writer' stage/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: { ...stages, judge: stages.writer! } })).rejects.toThrow(/'judge' is an unknown stage/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([], { producer: { x1: '' } }) })).rejects.toThrow(/without a reason word/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, target: 0 }, stages })).rejects.toThrow(/not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, caps: { ...BIG.caps, boundary: 0 } }, stages })).rejects.toThrow(/caps\.boundary=0 is not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('y1', 'decision')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/has kind/);
+      await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('z1'), cand('z1', 'path')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/listed twice/);
+    });
+
+    w5a5it('the population drops families with no admitted boundary, pilot families, and every family of a control-assigned store and id', () => {
+      const F = (store: string, ccrc: string, gen: string, admitted = 1): W5a5FamRef & { admitted: number } => ({ store_id: store, ccrc_id: ccrc, generation: gen, admitted });
+      const a1 = F('s1', 'fam-a', 'g1', 2); const a2 = F('s1', 'fam-a', 'g2'); const b1 = F('s1', 'fam-b', 'g1'); const b2 = F('s1', 'fam-b', 'g2');
+      const a3 = F('s2', 'fam-a', 'g1'); const c1 = F('s1', 'fam-c', 'g1'); const c2 = F('s1', 'fam-c', 'g2'); const d1 = F('s1', 'fam-d', 'g1', 0);
+      const r = D.quizPopulation([a1, a2, b1, b2, a3, c1, c2, d1], {
+        pilotFamilies: [c1],
+        assignment: [{ ...a1, arm: 'control' }, { ...b1, arm: 'treatment' }, { ...a3, arm: 'treatment' }],
+      });
+      w5a5expect(r.families).toEqual([b1, b2, a3, c2]);
+      w5a5expect(r.excluded).toEqual({ 'no-admitted-boundary': 1, pilot: 1, 'control-id': 2 });
+      w5a5expect(() => D.quizPopulation([b1], { pilotFamilies: [], assignment: [{ ...b1, arm: 'holdout' }] })).toThrow(/not an assignment arm/);
+    });
+
+    w5a5it('the halt floor: fewer than 60 questions or fewer than 12 families halts, and exactly the floor does not', () => {
+      const floor = { questions: 60, families: 12 };
+      w5a5expect(D.quizFloor(60, 12, floor)).toEqual({ halt: false, short: [] });
+      w5a5expect(D.quizFloor(59, 12, floor)).toEqual({ halt: true, short: ['questions'] });
+      w5a5expect(D.quizFloor(60, 11, floor)).toEqual({ halt: true, short: ['families'] });
+      w5a5expect(D.quizFloor(0, 0, floor)).toEqual({ halt: true, short: ['questions', 'families'] });
+    });
+
+    w5a5it('fidelity boundaries: at most one per family, in seeded family order, a dropped boundary counted, and a family not reached never read', async () => {
+      type FFam = W5a5FamRef & { calls: number; boundaries: () => Promise<Array<{ boundary_uuid: string }>> };
+      const ffam = (id: string): FFam => {
+        const f: FFam = { store_id: 's1', ccrc_id: id, generation: 'g1', calls: 0, boundaries: async () => { f.calls += 1; return [{ boundary_uuid: `${id}-b1` }, { boundary_uuid: `${id}-b2` }]; } };
+        return f;
+      };
+      const four = (): FFam[] => ['fam-a', 'fam-b', 'fam-c', 'fam-d'].map(ffam);
+      const fams = four();
+      const two = await D.sampleFidelityBoundaries({ families: fams, rng: D.pilotRng(SEED), n: 2, admitBoundary: async () => ({ keep: true }) });
+      w5a5expect(two.boundaries.map((p) => p.family.ccrc_id)).toEqual(['fam-d', 'fam-c']);
+      w5a5expect(fams.reduce((n, f) => n + f.calls, 0)).toBe(2);
+      const all = await D.sampleFidelityBoundaries({
+        families: four(), rng: D.pilotRng(SEED), n: 10,
+        admitBoundary: async (b, f) => ((f as FFam).ccrc_id === 'fam-a' ? { keep: false, reason: 'payload-discarded' } : { keep: true }),
+      });
+      w5a5expect(all.boundaries.map((p) => p.family.ccrc_id).sort()).toEqual(['fam-b', 'fam-c', 'fam-d']);
+      w5a5expect(all.drops).toEqual({ 'payload-discarded': 2 });
+    });
+  });
+});
+
+// ── W2-5a Task 6: the question writer, the frozen lists, the fidelity pilot (W2-D72, W2-D73, W2-D64; D-5779) ──────
+// Live safety: every spawn reaches W2-4's recording stub at `$HOME/.local/bin/<id>` in a mkTmp fixture HOME, through
+// spawnEnv's allow-list, with the poisoned gh first on PATH. gen-a goes through its real generated wrapper over the stub.
+// Every --out is a prepareOut directory under that HOME, claimed with claimFor. Limits rows and the release stamp are
+// fixture files. Only the sourceQuiz describe opens a store: the real sweep's store in a w6SourceBox fixture HOME, read
+// through openReplayStore, whose pair index is pairIndexOf over that fixture HOME. The other fidelity functions take rows
+// and streams as values, and their redaction runs over a pair index built with makePairIndex. Key-shaped values are
+// assembled at runtime.
+
+const W6_MODEL = 'claude-opus-9-1';                 // a synthetic exact Opus id (EXACT_MODEL_ID_RE and OPUS_MODEL_RE)
+const W6_STAMP = 'v9.9.6';
+const W6_CMD = 'npm run fixture-build --workspace pkg-a';   // 39 characters: below LABELLER.window, matched whole
+const W6_CMD2 = 'npm run fixture-lint --workspace pkg-b';
+const W6_ERR = 'Error: fixture deploy step three failed';
+const W6_SECRET = ['m4p', 'x9q2', 'r7v1', 'k3z8', 't6w5', 'n2h9', 'b8c4', 'y1d6', 'f5g3', 'j7e'].join('');
+const W6_IDX = t4Lib.makePairIndex([{ len: W6_SECRET.length, sha256: t4Lib.sha256Hex(W6_SECRET) }]);
+/** An AKIA-shaped key, assembled here, so no key-shaped literal sits in the tree. `tail` is seven capitals. */
+const w6Akia = (tail: string): string => ['AK', 'IA'].join('') + ['FIXTURE', 'W6', tail].join('');
+const W6_INIT = { type: 'system', subtype: 'init', session_id: 'fixture-writer-session', model: W6_MODEL, tools: [],
+  mcp_servers: [], plugins: [], skills: [], slash_commands: [] };
+const W6_USAGE = { input_tokens: 40, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 5 };
+/** A writer stream: the fixed init line (so the stub's `--version`, its first line, never moves), one assistant
+ *  message and, unless `result` is false, a result event whose text is `reply`. */
+function w6Reply(reply: string, opts: { result?: boolean } = {}): string {
+  const events: object[] = [W6_INIT,
+    { type: 'assistant', message: { id: 'msg-w6-1', role: 'assistant', content: [{ type: 'text', text: reply }], usage: W6_USAGE } }];
+  if (opts.result !== false) {
+    events.push({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: reply, permission_denials: [], usage: W6_USAGE });
+  }
+  return events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+const W6_GEN = '00000000-0000-4000-8000-0000000000c6';
+const W6_BOUNDARY = '00000000-0000-4000-8000-0000000000b6';
+const W6_SOURCE = '00000000-0000-4000-8000-0000000000e6';
+const w6Field = (text: string): { text: string; rawLen: number } => ({ text, rawLen: Buffer.byteLength(text) });
+type W6Item = {
+  store_id: string; ccrc_id: string; generation: string; boundary_uuid: string; kind: string; fact: string; fact_raw: string;
+  source_entry_uuid: string; repo_roots: string[]; leaf: { text: string; rawLen: number };
+  pair: { name: string; input: { text: string; rawLen: number } } | null; span: Array<{ text: string; rawLen: number }>;
+};
+/** A command candidate whose leaf is its Bash command, in the writer's item fields of Task 2's candidate (R4). */
+function w6Item(over: Partial<W6Item> = {}): W6Item {
+  const fact = over.fact ?? W6_CMD;
+  return {
+    store_id: 'fixture-store-a', ccrc_id: 'fixture-ccrc-a', generation: W6_GEN, boundary_uuid: W6_BOUNDARY, kind: 'command',
+    fact, fact_raw: fact, source_entry_uuid: W6_SOURCE, repo_roots: ['/home/u/tree'],
+    leaf: w6Field(fact), pair: null, span: [w6Field(fact)], ...over,
+  };
+}
+type W6Box = { home: string; out: string; claim: ReturnType<typeof claimFor> };
+/** A fixture HOME: Task 3's twelve rows; a stub at every id's launcher; gen-a's real wrapper over the upstream stub and
+ *  its secrets file; a fresh limits row for every id; a tagged release stamp; the writer stream; a claimed --out. */
+function w6Box(prefix: string): W6Box {
+  const home = mkTmp(prefix);
+  writeRoster(home, FIXTURE_ACCOUNTS);
+  const nowS = Math.floor(Date.now() / 1000);
+  mkdirSync(join(home, '.cc-limits'), { recursive: true });
+  for (const a of FIXTURE_ACCOUNTS as Array<{ id: string }>) {
+    plantStub(home, a.id);
+    writeFileSync(join(home, '.cc-limits', `${a.id}.json`),
+      JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+  }
+  const flat = rosterFromJson(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')));
+  const genA = flat.accounts.find((a) => a.id === 'gen-a')!;
+  writeFileSync(join(home, '.local', 'bin', 'gen-a'), generateWrapperBody(genA, flat.upstreamId), { mode: 0o700 });
+  mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(home, '.cc-secrets', 'gen-a.env'), `export CLAUDE_CODE_OAUTH_TOKEN=${T5_TOKEN}\n`, { mode: 0o600 });
+  writeFileSync(join(home, '.ccrc', 'build.json'),
+    JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: W6_STAMP }));
+  writeFileSync(join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package before the release step?'));
+  const out = replay.prepareOut(join(home, 'out'));
+  return { home, out, claim: claimFor(out) };
+}
+/** What step 0a would have recorded for this box and account: the stub's version line, the stamp, the wrapper's sha
+ *  (null for upstream) and the code shas measured now over this checkout. */
+function w6Expected(home: string, id: string): Record<string, unknown> {
+  const shas = replay.codeShas();
+  if (shas.state !== 'measured') throw new Error(`fixture: codeShas is ${shas.state}`);
+  return {
+    claude_code_version: readFileSync(join(home, STUB_STREAM), 'utf8').split('\n')[0]!.trim(),
+    release_stamp: W6_STAMP,
+    wrapper_sha256: id === 'gen-a' ? sha256Hex(readFileSync(join(home, '.local', 'bin', 'gen-a'))) : null,
+    code_shas: shas.files,
+  };
+}
+function w6Open(b: W6Box, id: string, over: Record<string, unknown> = {}): ReturnType<typeof replay.openWriter> {
+  return replay.openWriter({
+    home: b.home, accountId: id, model: W6_MODEL, settingsMode: 'restricted', writerInput: 'excerpt', claim: b.claim,
+    budget: 100_000, limits: replay.LIMITS_DEFAULTS, expected: w6Expected(b.home, id), lang: 'fixture.UTF-8', idx: W6_IDX, ...over,
+  } as never);
+}
+/** The stub's print-mode runs: the writer spawns, not the `--version` calls. */
+const w6Runs = (home: string) => (stubLog(home) ?? []).filter((e) => e.argv.includes('-p'));
+/** A launcher that is the recording stub with one more control: an exit code keyed to print mode (`-p`) only, so its
+ *  `--version` call still exits 0 while the writer run exits non-zero (D-6305). The shared stub is not touched. */
+const W6_PRINT_EXIT = 'stub-exit-print';
+function w6PlantPrintExit(home: string, id: string): void {
+  const tail = `process.exitCode = Number(opt(${JSON.stringify(T5_STUB_EXIT)}) ?? '0');`;
+  expect(T5_STUB_SOURCE.split(tail)).toHaveLength(2);
+  const src = T5_STUB_SOURCE.replace(tail, `${tail}\n  const pe = opt(${JSON.stringify(W6_PRINT_EXIT)});\n  if (pe !== null && process.argv.slice(2).includes('-p')) process.exitCode = Number(pe);`);
+  writeFileSync(join(home, '.local', 'bin', id), src, { mode: 0o700 });
+}
+const w6Excerpt = (r: unknown): string => {
+  expect((r as { state: string }).state).toBe('input');
+  return (r as { input: { excerpt: string } }).input.excerpt;
+};
+const w6Text = (r: unknown): string => {
+  expect((r as { state: string }).state).toBe('text');
+  return (r as { excerpt: string }).excerpt;
+};
+const W6_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+describe('W2-5a Task 6: the writer input, W2-D72 and W2-D54', () => {
+  it('excerpt: a short leaf is sent whole, as canonical v1 input with kind, fact and excerpt', () => {
+    const r = replay.writerInputOf(w6Item(), 'excerpt', W6_IDX);
+    expect(r).toEqual({ state: 'input', input: { v: 1, kind: 'command', fact: W6_CMD, excerpt: W6_CMD } });
+  });
+
+  it('excerpt: a long leaf is windowed to 4000 code points centred on the first occurrence of the raw fact', () => {
+    const F = 'make fixture-target';
+    const leaf = `${'a'.repeat(6000)}${F}${'b'.repeat(6000)}${F}${'c'.repeat(100)}`;
+    const ex = w6Excerpt(replay.writerInputOf(w6Item({ kind: 'command', fact: F, fact_raw: F, leaf: w6Field(leaf) }), 'excerpt', W6_IDX));
+    const start = 6000 + Math.floor(F.length / 2) - 2000;
+    expect(ex).toBe(leaf.slice(start, start + 4000));
+    expect(ex.indexOf(F)).toBe(6000 - start);
+  });
+
+  it('excerpt: the window is clamped at either end of the leaf and always holds the whole raw fact', () => {
+    const F = 'make fixture-target';
+    const head = `${'x'.repeat(10)}${F}${'y'.repeat(9000)}`;
+    expect(w6Text(replay.windowExcerpt({ base: head, factRaw: F, firstWindow: 4000, pairLine: null }))).toBe(head.slice(0, 4000));
+    const tail = `${'y'.repeat(9000)}${F}${'x'.repeat(10)}`;
+    expect(w6Text(replay.windowExcerpt({ base: tail, factRaw: F, firstWindow: 4000, pairLine: null }))).toBe(tail.slice(tail.length - 4000));
+  });
+
+  it('excerpt: a paired tool_use is appended as one line, redacted whole and capped at 2000 code points', () => {
+    const input = `${'p '.repeat(500)}${W6_SECRET} ${'q '.repeat(2000)}`;   // the secret sits inside the 2000 cap
+    const item = w6Item({ kind: 'error', fact: W6_ERR, fact_raw: W6_ERR, leaf: w6Field(`${W6_ERR}\nmore output`),
+      pair: { name: 'Bash', input: w6Field(input) } });
+    const ex = w6Excerpt(replay.writerInputOf(item, 'excerpt', W6_IDX));
+    const line = Array.from(replay.renderToolUseLine('Bash', t4Lib.redactField(input, W6_IDX))).slice(0, 2000).join('');
+    expect(ex).toBe(`${W6_ERR}\nmore output\n${line}`);
+    expect(ex).not.toContain(W6_SECRET.slice(0, 6));
+    expect(Array.from(ex.slice(ex.lastIndexOf('\n') + 1)).length).toBe(2000);
+  });
+
+  it('excerpt: a window past 8 KiB of UTF-8 shrinks around the fact until it fits, never splitting a code point', () => {
+    const F = 'make fixture-target';
+    const cjk = `${'中'.repeat(6000)}${F}${'中'.repeat(6000)}`;
+    const ex = w6Text(replay.windowExcerpt({ base: cjk, factRaw: F, firstWindow: 4000, pairLine: null }));
+    expect(Buffer.byteLength(ex)).toBeLessThanOrEqual(replay.WRITER_EXCERPT_MAX_BYTES);
+    expect(Buffer.byteLength(ex)).toBeGreaterThan(replay.WRITER_EXCERPT_MAX_BYTES - 4);
+    expect(ex).toContain(F);
+    expect(cjk.includes(ex)).toBe(true);
+    const astral = String.fromCodePoint(0x1f600);
+    const wide = `${astral.repeat(3000)}${F}${astral.repeat(3000)}`;
+    const ex2 = w6Text(replay.windowExcerpt({ base: wide, factRaw: F, firstWindow: 4000, pairLine: null }));
+    expect(Buffer.byteLength(ex2)).toBeLessThanOrEqual(8192);
+    expect(ex2).toContain(F);
+    expect(ex2).not.toMatch(W6_LONE_SURROGATE);
+    expect(wide.includes(ex2)).toBe(true);
+  });
+
+  it('excerpt: a raw fact whose own bytes pass 8 KiB is discarded as writer-input-over-cap', () => {
+    const F = '中'.repeat(3000);
+    expect(replay.windowExcerpt({ base: F, factRaw: F, firstWindow: 4000, pairLine: null }))
+      .toEqual({ state: 'discard', why: 'writer-input-over-cap' });
+    expect(replay.writerInputOf(w6Item({ kind: 'error', fact: F, fact_raw: F, leaf: w6Field(F) }), 'excerpt', W6_IDX))
+      .toEqual({ state: 'discard', why: 'writer-input-over-cap' });
+    expect(replay.FACT_DROP_REASONS.slice(16, 17), 'R5: a fact drop, appended after Task 5\'s').toEqual(['writer-input-over-cap']);
+  });
+
+  it('a leaf or a paired input over the decode cap is discarded, never cut', () => {
+    const over = { text: W6_CMD, rawLen: t4Lib.BLOB_DECODE_MAX + 1 };
+    expect(replay.writerInputOf(w6Item({ leaf: over }), 'excerpt', W6_IDX)).toEqual({ state: 'discard', why: 'over-decode-cap' });
+    expect(replay.writerInputOf(w6Item({ pair: { name: 'Bash', input: over } }), 'excerpt', W6_IDX))
+      .toEqual({ state: 'discard', why: 'over-decode-cap' });
+    expect(replay.writerInputOf(w6Item({ span: [over] }), 'leaf-span', W6_IDX)).toEqual({ state: 'discard', why: 'over-decode-cap' });
+  });
+
+  it('W2-D54 order: a secret straddling the window edge is redacted whole before the window, and no head of it survives', () => {
+    const F = 'make fixture-target';
+    // Spaced filler, so the secret is a run of its own and its (length, sha256) pair matches it whole.
+    const leaf = `${'a '.repeat(1500)}${F}  ${'b '.repeat(989)}${W6_SECRET} ${'c '.repeat(1500)}`;
+    const end = 3000 + Math.floor(F.length / 2) - 2000 + 4000;
+    expect(leaf.indexOf(W6_SECRET), 'the fixture: the secret starts 10 code points before the window ends').toBe(end - 10);
+    const ex = w6Excerpt(replay.writerInputOf(w6Item({ fact: F, fact_raw: F, leaf: w6Field(leaf) }), 'excerpt', W6_IDX));
+    expect(ex).not.toContain(W6_SECRET.slice(0, 6));
+    expect(ex).toContain(t4Lib.REDACTED_MARK);
+    // CONTROL: window the raw leaf first and redact afterwards, and the head the window leaves matches no pair.
+    const raw = w6Text(replay.windowExcerpt({ base: leaf, factRaw: F, firstWindow: 4000, pairLine: null }));
+    expect(t4Lib.redactField(raw, W6_IDX)).toContain(W6_SECRET.slice(0, 10));
+  });
+
+  it('leaf-span: the whole span, each leaf redacted, joined by newlines and windowed to the 8 KiB budget', () => {
+    const span = [w6Field('first leaf text'), w6Field(W6_CMD), w6Field(`third leaf ${W6_SECRET}`)];
+    const ex = w6Excerpt(replay.writerInputOf(w6Item({ span }), 'leaf-span', W6_IDX));
+    expect(ex).toBe(`first leaf text\n${W6_CMD}\nthird leaf ${t4Lib.REDACTED_MARK}`);
+    const big = [w6Field('q'.repeat(5000)), w6Field(`${'r'.repeat(2000)}${W6_CMD}${'s'.repeat(2000)}`), w6Field('t'.repeat(5000))];
+    const ex2 = w6Excerpt(replay.writerInputOf(w6Item({ span: big }), 'leaf-span', W6_IDX));
+    expect(Buffer.byteLength(ex2)).toBe(8192);
+    expect(ex2).toContain(W6_CMD);
+  });
+
+  it('a raw fact absent from its redacted text is a TypeError of the pure windowExcerpt, never an empty excerpt; writerInputOf answers a counted discard instead (D-6309)', () => {
+    expect(() => replay.windowExcerpt({ base: 'some other command', factRaw: W6_CMD, firstWindow: 4000, pairLine: null })).toThrow(/does not occur/);
+    expect(replay.writerInputOf(w6Item({ leaf: w6Field('some other command') }), 'excerpt', W6_IDX)).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
+    expect(() => replay.writerInputOf(w6Item(), 'whole-session' as never, W6_IDX)).toThrow(/writer_input "whole-session" is not one of/);
+  });
+
+  it('writerStdin is the writer prompt, a blank line, the canonical input and one newline', () => {
+    const input = { v: 1, kind: 'command', fact: W6_CMD, excerpt: W6_CMD };
+    expect(replay.writerStdin(input)).toBe(
+      `${w6Gate.WRITER_PROMPT}\n\n{"excerpt":${JSON.stringify(W6_CMD)},"fact":${JSON.stringify(W6_CMD)},"kind":"command","v":1}\n`);
+  });
+
+  it('W2-D67 (R10, F6): a whitespace-split bearer token, mined by Task 2, is dropped redact-fact by the redaction stage, because the writer input carries F as it stands', () => {
+    // The token is assembled at runtime; a newline splits it from its header in F_raw, and collapseWs joins them in F.
+    const tok = ['zq', 'w5a6', 'bearer', 'value'].join('');
+    const command = `curl -H "Authorization: Bearer\n${tok}" https://api.example.test/v1`;
+    const sp = w5a2Span([{ provenance: 'model', body: [w5a2Use('b6', 'Bash', { command })] }]);
+    const c = w5a2MinedOf(w5a2Mine(sp, { storeId: 'fixture-store-a', ccrcId: 'fixture-ccrc-a', generation: W6_GEN })).candidates.find((x) => x.kind === 'command')!;
+    expect(c).toMatchObject({ fact_raw: command, leaf: { text: command } });
+    const made = replay.writerInputOf(c as never, 'excerpt', W6_IDX) as { state: string; input: { fact: string; excerpt: string } };
+    expect(made.state).toBe('input');
+    expect(made.input.excerpt, 'CONTROL: the excerpt, redacted whole, keeps the split token (lib\'s bearer rule reads one line)').toContain(tok);
+    expect(made.input.fact, 'CONTROL: the writer input carries F, the header and token joined, unredacted').toContain(`Bearer ${tok}`);
+    expect(w5a2Drv.screenRedaction(c, W6_IDX), 'so the redaction stage, which runs before the writer stage, drops it').toBe('redact-fact');
+  });
+});
+
+describe('W2-5a Task 6: the writer spawn, RP1-writer and RP3-writer', () => {
+  it.each(['up-a', 'gen-a'])('RP1-writer %s: the writer call goes through W2-4 spawn in writer mode, with the composed input on stdin', async (id) => {
+    const b = w6Box(`ccrc-w2-5a-t6-rp1-${id}-`);
+    const w = await w6Open(b, id);
+    const item = w6Item();
+    const qid = replay.qidOf(item);
+    const r = await w.ask('quiz', item);
+    expect(r).toMatchObject({ state: 'question', qid, entry: { qid, question: 'Which command rebuilt the fixture package before the release step?' } });
+    const runs = w6Runs(b.home);
+    expect(runs, 'one writer spawn').toHaveLength(1);
+    const l = runs[0]!;
+    expect(l.argv).toEqual(t5Argv('writer', W6_MODEL, b.home));
+    expect(l.argv).not.toContain('--allowedTools');
+    const keys = withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k));
+    expect(keys).toEqual(id === 'gen-a' ? [...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort() : [...T5_BASE_KEYS].sort());
+    for (const k of [...T5_NEVER_KEYS, ...T5_RECALL_KEYS]) expect(l.envKeys, k).not.toContain(k);
+    expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${path.dirname(process.execPath)}:/usr/bin:/bin`);
+    expect(l.env['CLAUDE_CONFIG_DIR']).toBe(join(b.home, id === 'gen-a' ? '.gen-a' : '.claude'));
+    const input = `{"excerpt":${JSON.stringify(W6_CMD)},"fact":${JSON.stringify(W6_CMD)},"kind":"command","v":1}`;
+    expect(l.stdin).toBe(`${w6Gate.WRITER_PROMPT}\n\n${input}\n`);
+    const dir = join(b.out, 'quiz', 'writer');
+    expect(readFileSync(join(dir, `${qid}.jsonl`), 'utf8')).toBe(readFileSync(join(b.home, STUB_STREAM), 'utf8'));
+    expect(JSON.parse(readFileSync(join(dir, `${qid}.run.json`), 'utf8'))).toMatchObject({ mode: 'writer', model: W6_MODEL, account: id });
+    expect(readFileSync(join(dir, `${qid}.input.json`), 'utf8')).toBe(`${input}\n`);
+    expect(readFileSync(join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it.each([['cx-a', 'kind-codex'], ['ext-n', 'kind-external'], ['ext-a', 'kind-external'], ['gen-o', 'provider-openai']])(
+    'RP3-writer %s: refused account-refused before any spawn, and the stub log stays absent', async (id, detail) => {
+      const b = w6Box(`ccrc-w2-5a-t6-rp3-${id}-`);
+      const err = await w6Open(b, id).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(DriverRefusal);
+      expect(err).toMatchObject({ word: 'account-refused', detail });
+      expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+      expect(existsSync(join(b.out, 'quiz'))).toBe(false);
+    }, 60_000);
+
+  it('a writer model that is not an exact Opus id is refused before admission and any spawn', async () => {
+    for (const model of ['opus', 'claude-opus-latest', 'claude-other-9-1']) {
+      const b = w6Box('ccrc-w2-5a-t6-model-');
+      const err = await w6Open(b, 'up-a', { model }).then(() => null, (e: unknown) => e);
+      expect(err, model).toMatchObject({ word: 'args-invalid' });
+      expect(stubLog(b.home), model).toBeNull();
+    }
+    // The model refusal comes first: a refused account with a bad model is args-invalid, not account-refused.
+    const bad = w6Box('ccrc-w2-5a-t6-model-refused-');
+    const err = await w6Open(bad, 'cx-a', { model: 'opus' }).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'args-invalid' });
+    expect(stubLog(bad.home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  it('a stub question holding the 7-character SHA prefix is discarded as writer-leak, and a 6-character one is kept', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-leak-');
+    const w = await w6Open(b, 'up-a');
+    const sha = ['0a1b2c3', 'd4e5f60', '718293a', '4b5c6d7', 'e8f9012', '34567'].join('');
+    const sha2 = ['9f8e7d6', 'c5b4a39', '2817f6e', '5d4c3b2', 'a190817', '26354'].join('');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply(`QUESTION: Which commit, starting ${sha.slice(0, 7)}, landed the fixture merge?`));
+    const leak = await w.ask('quiz', w6Item({ kind: 'sha', fact: sha, fact_raw: sha, leaf: w6Field(`merged at ${sha}`) }));
+    expect(leak).toMatchObject({ state: 'discard', why: 'writer-leak' });
+    // CONTROL: a 6-character prefix is under LABELLER.sha_admit_prefix, so the same shape of question is kept.
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply(`QUESTION: Which commit, starting ${sha2.slice(0, 6)}, landed the fixture merge?`));
+    const kept = await w.ask('quiz', w6Item({ kind: 'sha', fact: sha2, fact_raw: sha2, leaf: w6Field(`merged at ${sha2}`) }));
+    expect(kept).toMatchObject({ state: 'question' });
+    expect(w6Runs(b.home)).toHaveLength(2);
+  }, 60_000);
+
+  it('a reply with no QUESTION line, or a run with no result event, is writer-malformed with no retry', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-malformed-');
+    const w = await w6Open(b, 'up-a');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('I would ask about the build command.'));
+    expect(await w.ask('quiz', w6Item())).toMatchObject({ state: 'discard', why: 'writer-malformed', run: { code: 0, skipped: false } });
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('QUESTION: Which command linted the fixture package?', { result: false }));
+    expect(await w.ask('quiz', w6Item({ fact: W6_CMD2, fact_raw: W6_CMD2, leaf: w6Field(W6_CMD2) })))
+      .toMatchObject({ state: 'discard', why: 'writer-malformed' });
+    expect(w6Runs(b.home), 'one spawn per ask, never a retry').toHaveLength(2);
+  }, 60_000);
+
+  it('W2-D67 (R7): an AKIA-shaped key in the leaf or in its paired tool_use, mined by Task 2 from leaf N\'s span, reaches the writer stub redacted, under both writer inputs', async () => {
+    const key = w5a2Akia();
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('k7', 'Bash', { command: `AWS_ACCESS_KEY_ID=${key} ./fixture-deploy.sh` })] },
+      { provenance: 'tool', body: [w5a2Result('k7', `${W6_ERR}\nkey in env: ${key}\n`, true)] },
+    ]);
+    const mined = w5a2MinedOf(w5a2Mine(sp, { storeId: 'fixture-store-a', ccrcId: 'fixture-ccrc-a', generation: W6_GEN }));
+    const err = mined.candidates.find((c) => c.kind === 'error')!;
+    expect(err).toMatchObject({ fact_raw: W6_ERR, pair: { name: 'Bash' } });
+    expect(err.leaf.text, 'CONTROL: the mined leaf holds the key').toContain(key);
+    expect(err.pair!.input.text, 'CONTROL: so does its paired tool_use').toContain(key);
+    expect(w5a2Drv.screenRedaction(err, W6_IDX), 'the screen keeps it: the fact is intact once the key is masked').toBeNull();
+    for (const writerInput of ['excerpt', 'leaf-span']) {
+      const b = w6Box(`ccrc-w2-5a-t6-akia-${writerInput}-`);
+      writeFileSync(join(b.home, STUB_STREAM), w6Reply('QUESTION: What error did the fixture deploy step print?'));
+      const w = await w6Open(b, 'up-a', { writerInput });
+      expect(await w.ask('quiz', err as never), writerInput).toMatchObject({ state: 'question' });
+      const stdin = w6Runs(b.home)[0]!.stdin;
+      expect(stdin, writerInput).not.toContain(key);
+      expect(stdin, writerInput).toContain(t4Lib.REDACTED_MARK);
+      expect(stdin, writerInput).toContain(W6_ERR);
+      expect(readFileSync(join(b.out, 'quiz', 'writer', `${replay.qidOf(err as never)}.input.json`), 'utf8'), writerInput).not.toContain(key);
+    }
+  }, 120_000);
+
+  it('the preflight runs before every writer batch: a version that moves between two asks refuses before the second spawn', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-moved-');
+    const w = await w6Open(b, 'up-a');
+    expect(await w.ask('quiz', w6Item())).toMatchObject({ state: 'question' });
+    const moved = readFileSync(join(b.home, STUB_STREAM), 'utf8').replace('fixture-writer-session', 'fixture-writer-moved');
+    writeFileSync(join(b.home, STUB_STREAM), moved);
+    const err = await w.ask('quiz', w6Item({ fact: W6_CMD2, fact_raw: W6_CMD2, leaf: w6Field(W6_CMD2) })).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'claude-version-moved' });
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('the limits gate stops the writer at open: limits-threshold, and the stub never runs', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-limits-');
+    const nowS = Math.floor(Date.now() / 1000);
+    writeFileSync(join(b.home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 90, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    const err = await w6Open(b, 'up-a').then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'limits-threshold' });
+    expect(stubLog(b.home)).toBeNull();
+  }, 60_000);
+
+  it('W2-D55: the writer stops at its budget before the next writer batch: budget-exhausted, one stub run', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-budget-');
+    const w = await w6Open(b, 'up-a', { budget: 1 });
+    const first = await w.ask('quiz', w6Item());
+    expect(first, 'CONTROL: the first ask ran, the ledger at 0').toMatchObject({ state: 'question', run: { skipped: false } });
+    expect((first as { run: { tokens: number } }).run.tokens, 'CONTROL: the stub run spent past the budget').toBeGreaterThanOrEqual(1);
+    const err = await w.ask('pilot', w6Item()).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'budget-exhausted' });
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('W2-D55, W2-D56: a limits row raised past the threshold between two asks stops the second before its spawn: limits-threshold', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-limits-ask-');
+    const w = await w6Open(b, 'up-a');
+    await w.ask('quiz', w6Item());
+    expect(w6Runs(b.home), 'CONTROL: the first ask spawned under the fresh row').toHaveLength(1);
+    const nowS = Math.floor(Date.now() / 1000);
+    writeFileSync(join(b.home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 90, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    const err = await w.ask('pilot', w6Item()).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'limits-threshold' });
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('D-6305: a print-mode run that exits non-zero, or is killed, after printing a valid QUESTION result is writer-malformed and no question; CONTROL: exit 0 yields the question', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-failed-run-');
+    w6PlantPrintExit(b.home, 'up-a');
+    const w = await w6Open(b, 'up-a');
+    const item = w6Item();
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    expect(await w.ask('quiz', item), 'CONTROL: exit 0').toMatchObject({ state: 'question', run: { code: 0, result: true } });
+    const failed = w6Item({ fact: W6_CMD2, fact_raw: W6_CMD2, leaf: w6Field(W6_CMD2) });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '3');
+    const r = await w.ask('quiz', failed);
+    expect(r).toMatchObject({ state: 'discard', why: 'writer-malformed', run: { code: 3, signal: null, result: true } });
+    expect((r as { entry?: unknown }).entry).toBeUndefined();
+    expect(w6Runs(b.home), 'the --version calls exit 0 and the two print runs ran').toHaveLength(2);
+  }, 60_000);
+
+  it('a resumed ask reuses the finished run with no spawn, and changed input for the same qid refuses out-refused', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-resume-');
+    const w = await w6Open(b, 'up-a');
+    const first = await w.ask('quiz', w6Item());
+    const again = await w.ask('quiz', w6Item());
+    expect(again).toMatchObject({ state: 'question', run: { skipped: true } });
+    expect((again as { entry: unknown }).entry).toEqual((first as { entry: unknown }).entry);
+    expect(w6Runs(b.home)).toHaveLength(1);
+    const changed = w6Item({ leaf: w6Field(`cd pkg-a && ${W6_CMD}`) });
+    expect(replay.qidOf(changed)).toBe(replay.qidOf(w6Item()));
+    const err = await w.ask('quiz', changed).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'out-refused' });
+    expect((err as { detail: string }).detail).toMatch(/^writer-input-changed quiz\/writer\/[0-9a-f]{16}\.input\.json$/);
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+});
+
+const W6_HEAD = { writer_model: W6_MODEL, labeller: { ...w6Gate.LABELLER, sha_min_prefix: 7 } };
+/** A frozen entry for `fact`, its qid computed by qidOf (its type is inferred, so it is a FrozenEntry). */
+function w6Entry(fact: string) {
+  const six = { store_id: 'fixture-store-a', ccrc_id: 'fixture-ccrc-a', generation: W6_GEN, boundary_uuid: W6_BOUNDARY, kind: 'command', fact };
+  return { qid: replay.qidOf(six), ...six, fact_raw: fact, question: `Which command ran as step ${fact.length}?`,
+    source_entry_uuid: W6_SOURCE, repo_roots: ['/home/u/tree'] };
+}
+
+describe('W2-5a Task 6: the frozen lists, W2-D73', () => {
+  it('qidOf is the first 16 hex of sha256 over the canonical six-tuple', () => {
+    const six = ['fixture-store-a', 'fixture-ccrc-a', W6_GEN, W6_BOUNDARY, 'command', W6_CMD];
+    expect(replay.qidOf(w6Item())).toBe(w6Hash('sha256').update(JSON.stringify(six)).digest('hex').slice(0, 16));
+  });
+
+  it('frozenListText: canonical bytes, entries sorted by qid, no trailing newline, byte-identical twice and in any input order', () => {
+    const a = w6Entry(W6_CMD);
+    const c = w6Entry(W6_CMD2);
+    const text = replay.frozenListText('quiz', W6_HEAD, [a, c]);
+    expect(replay.frozenListText('quiz', W6_HEAD, [c, a])).toBe(text);
+    expect(replay.frozenListText('quiz', W6_HEAD, [a, c])).toBe(text);
+    expect(text.endsWith('\n')).toBe(false);
+    const doc = JSON.parse(text);
+    expect(t4Lib.canonicalJson(doc)).toBe(text);
+    expect(doc.entries.map((e: { qid: string }) => e.qid)).toEqual([a.qid as string, c.qid as string].sort());
+    expect(Object.keys(doc.entries[0]).sort()).toEqual([...replay.FROZEN_ENTRY_KEYS]);
+    expect([doc.kind, doc.version, doc.writer_model, doc.writer_prompt_sha256, doc.answer_protocol_sha256])
+      .toEqual(['ccrc-history-w2-quiz', 1, W6_MODEL, w6Gate.WRITER_PROMPT_SHA256, w6Gate.ANSWER_PROTOCOL_SHA256]);
+    expect(JSON.parse(replay.frozenListText('pilot', W6_HEAD, [a])).kind).toBe('ccrc-history-w2-pilot');
+  });
+
+  it('frozenListText refuses a wrong qid, an extra key, a repeated qid, an unknown kind and an aliased writer model', () => {
+    const a = w6Entry(W6_CMD);
+    expect(() => replay.frozenListText('quiz', W6_HEAD, [{ ...a, qid: '0'.repeat(16) }] as never)).toThrow(TypeError);
+    expect(() => replay.frozenListText('quiz', W6_HEAD, [{ ...a, arm: 'x' }] as never)).toThrow(TypeError);
+    expect(() => replay.frozenListText('quiz', W6_HEAD, [a, a] as never)).toThrow(TypeError);
+    const decision = { ...a, kind: 'decision' };
+    expect(() => replay.frozenListText('quiz', W6_HEAD, [decision] as never)).toThrow(TypeError);
+    expect(() => replay.frozenListText('quiz', { ...W6_HEAD, writer_model: 'opus' }, [a] as never)).toThrow(TypeError);
+    expect(() => replay.frozenListText('ab' as never, W6_HEAD, [a] as never)).toThrow(TypeError);
+  });
+
+  it('writeFrozenList writes quiz and pilot lists at 0600 and answers the sha of the bytes on disk', () => {
+    const b = w6Box('ccrc-w2-5a-t6-write-');
+    for (const section of ['quiz', 'pilot'] as const) {
+      const text = replay.frozenListText(section, W6_HEAD, [w6Entry(W6_CMD)]);
+      const sha = replay.writeFrozenList(b.out, section, text);
+      const p = join(b.out, section, 'frozen.json');
+      expect(readFileSync(p, 'utf8')).toBe(text);
+      expect(statSync(p).mode & 0o777).toBe(0o600);
+      expect(sha).toBe(sha256Hex(readFileSync(p)));
+    }
+  });
+
+  it('writeFrozenList keeps a list it already wrote, and refuses a different list over it', () => {
+    const b = w6Box('ccrc-w2-5a-t6-rewrite-');
+    const text = replay.frozenListText('quiz', W6_HEAD, [w6Entry(W6_CMD)]);
+    const sha = replay.writeFrozenList(b.out, 'quiz', text);
+    expect(replay.writeFrozenList(b.out, 'quiz', text)).toBe(sha);
+    const other = replay.frozenListText('quiz', W6_HEAD, [w6Entry(W6_CMD2)]);
+    expect(() => replay.writeFrozenList(b.out, 'quiz', other)).toThrow(/holds another frozen list/);
+    expect(readFileSync(join(b.out, 'quiz', 'frozen.json'), 'utf8')).toBe(text);
+  });
+
+  it('loadFrozenList: a one-byte edit refuses quiz-sha-mismatch before any parse, and a consumer that loads first never spawns', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-load-');
+    const text = replay.frozenListText('quiz', W6_HEAD, [w6Entry(W6_CMD), w6Entry(W6_CMD2)]);
+    const sha = replay.writeFrozenList(b.out, 'quiz', text);
+    const p = join(b.out, 'quiz', 'frozen.json');
+    expect(replay.loadFrozenList(p, sha, 'quiz').entries).toHaveLength(2);
+    writeFileSync(p, text.replace('Which', 'Whick'));
+    const { json, roster } = readRoster(b.home);
+    const launch = admitAccount(json, roster, 'up-a', b.home);
+    const consumer = async () => {
+      replay.loadFrozenList(p, sha, 'quiz');
+      return claimedBatch([t5job(b, launch, 'writer', 'quiz/consumer')], { gate: T5_NO_GATE });
+    };
+    await expect(consumer()).rejects.toMatchObject({ word: 'quiz-sha-mismatch' });
+    expect(stubLog(b.home)).toBeNull();
+  }, 60_000);
+
+  it('loadFrozenList: bytes whose sha matches but are not the canonical list refuse input-invalid', () => {
+    const text = replay.frozenListText('quiz', W6_HEAD, [w6Entry(W6_CMD)]);
+    const dir = mkTmp('ccrc-w2-5a-t6-loose-');
+    const loose = JSON.stringify(JSON.parse(text), null, 2);
+    writeFileSync(join(dir, 'loose.json'), loose);
+    expect(() => replay.loadFrozenList(join(dir, 'loose.json'), sha256Hex(loose), 'quiz')).toThrow(/frozen list/);
+    let word = '';
+    try { replay.loadFrozenList(join(dir, 'loose.json'), sha256Hex(loose), 'quiz'); } catch (e) { word = (e as { word: string }).word; }
+    expect(word).toBe('input-invalid');
+    // CONTROL: the canonical bytes of the same list load.
+    writeFileSync(join(dir, 'tight.json'), text);
+    expect(replay.loadFrozenList(join(dir, 'tight.json'), sha256Hex(text), 'quiz').kind).toBe('ccrc-history-w2-quiz');
+    let pilotWord = '';
+    try { replay.loadFrozenList(join(dir, 'tight.json'), sha256Hex(text), 'pilot'); } catch (e) { pilotWord = (e as { word: string }).word; }
+    expect(pilotWord, 'a quiz list is not a pilot list').toBe('input-invalid');
+  });
+});
+
+describe('W2-5a Task 6: the fidelity pilot payloads and overhead arithmetic', () => {
+  const sj = (...events: object[]): string => events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const usage = (input: number, cc: number, cr: number, out = 3) =>
+    ({ input_tokens: input, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, output_tokens: out });
+  const msg = (id: string, u: object | null) =>
+    ({ type: 'assistant', message: { id, role: 'assistant', content: [{ type: 'text', text: 'ok' }], ...(u === null ? {} : { usage: u }) } });
+  const RESULT = { type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'ok', usage: usage(999, 999, 999) };
+  const facts = (input: number, cc: number, cr: number) => replay.readStreamJson(sj(msg('m1', usage(input, cc, cr)), msg('m2', usage(1, 1, 1)), RESULT));
+
+  it('readStreamJson firstCallUsage: the first message usage, counted once; null when the first message carried none', () => {
+    expect(facts(10, 20, 30).firstCallUsage).toEqual({ input: 10, cacheCreation: 20, cacheRead: 30, output: 3 });
+    const repeated = replay.readStreamJson(sj(msg('m1', usage(10, 20, 30)), msg('m1', usage(10, 20, 30)), msg('m2', usage(5, 5, 5))));
+    expect(repeated.firstCallUsage).toEqual({ input: 10, cacheCreation: 20, cacheRead: 30, output: 3 });
+    expect(replay.readStreamJson(sj(msg('m0', null), msg('m1', usage(10, 20, 30)), RESULT)).firstCallUsage).toBeNull();
+    expect(replay.readStreamJson(sj(RESULT)).firstCallUsage).toBeNull();
+  });
+
+  it('usageInputOf and userTextOf read a stored row body, and an unreadable count is null, never 0', () => {
+    expect(replay.usageInputOf({ message: { usage: usage(100, 200, 300) } })).toBe(600);
+    expect(replay.usageInputOf({ message: { usage: { input_tokens: 7 } } }), 'absent cache counts are 0').toBe(7);
+    expect(replay.usageInputOf({ message: { usage: { cache_read_input_tokens: 7 } } })).toBeNull();
+    expect(replay.usageInputOf({ message: { usage: { input_tokens: -1 } } })).toBeNull();
+    expect(replay.usageInputOf({ message: {} })).toBeNull();
+    expect(replay.userTextOf({ message: { content: 'plain text' } })).toBe('plain text');
+    expect(replay.userTextOf({ message: { content: [{ type: 'text', text: 'a' }, { type: 'tool_result', content: 'x' }, { type: 'text', text: 'b' }] } })).toBe('a\nb');
+    expect(replay.userTextOf({ message: { content: [{ type: 'tool_result', content: 'x' }] } })).toBeNull();
+  });
+
+  const row = (type: string, provenance: string, model: string | null, body: object) =>
+    ({ type, provenance, model, body, rawLen: Buffer.byteLength(JSON.stringify(body)) });
+  const user = (provenance: string, text: string) => row('user', provenance, null, { type: 'user', message: { role: 'user', content: text } });
+  const asst = (model: string, u: object) => row('assistant', 'model', model, { type: 'assistant', message: { role: 'assistant', usage: u, content: [] } });
+  const EPOCH = [
+    user('harness', 'harness notice text'),
+    user('operator', 'please rebuild the fixture package'),
+    asst('<synthetic>', usage(1, 0, 0)),
+    asst('claude-fixture-1', usage(2000, 9000, 1000)),
+    user('operator', 'a later prompt'),
+  ];
+  const COPY = [
+    asst('claude-fixture-1', usage(5, 5, 5)),
+    user('operator', 'before the boundary'),
+    row('user', 'summary', null, { type: 'user', message: { role: 'user', content: 'the summary' } }),
+    asst('<synthetic>', usage(1, 0, 0)),
+    asst('claude-fixture-1', usage(1000, 4000, 25000)),
+  ];
+
+  it('originalSideOf: the first non-synthetic call of the epoch, the operator text before it, and the first non-synthetic call after the summary', () => {
+    expect(replay.originalSideOf({ epochRows: EPOCH, copyRows: COPY, summaryIndex: 2 })).toEqual({
+      state: 'measured', firstInput: 12000, postInput: 30000,
+      userRows: [{ text: 'please rebuild the fixture package', rawLen: EPOCH[1]!.rawLen }],
+    });
+    expect(replay.originalSideOf({ epochRows: EPOCH.slice(0, 3), copyRows: COPY, summaryIndex: 2 }))
+      .toEqual({ state: 'unmeasured', why: 'epoch-first-call-absent' });
+    expect(replay.originalSideOf({ epochRows: [EPOCH[0]!, EPOCH[3]!], copyRows: COPY, summaryIndex: 2 }))
+      .toEqual({ state: 'unmeasured', why: 'epoch-first-user-text-absent' });
+    expect(replay.originalSideOf({ epochRows: EPOCH, copyRows: COPY.slice(0, 4), summaryIndex: 2 }))
+      .toEqual({ state: 'unmeasured', why: 'post-boundary-call-absent' });
+    const noUsage = [...COPY.slice(0, 4), row('assistant', 'model', 'claude-fixture-1', { message: { content: [] } })];
+    expect(replay.originalSideOf({ epochRows: EPOCH, copyRows: noUsage, summaryIndex: 2 }))
+      .toEqual({ state: 'unmeasured', why: 'post-boundary-usage-absent' });
+  });
+
+  it('fidelityFigures: each side net of its own fixed overhead, and unmeasured is never folded into zero', () => {
+    const original = { state: 'measured', firstInput: 12000, postInput: 30000, userRows: [] };
+    const runs = { payload: facts(1000, 0, 24000), empty: facts(9000, 0, 0), 'user-text': facts(9200, 0, 0) };
+    expect(replay.fidelityFigures({ original, runs } as never)).toEqual({
+      state: 'measured', original_payload: 18200, replay_payload: 16000, original_overhead: 11800, replay_overhead: 9000, user_text_tokens: 200,
+    });
+    const none = replay.readStreamJson(sj(RESULT));
+    expect(replay.fidelityFigures({ original, runs: { ...runs, empty: none } } as never)).toEqual({ state: 'unmeasured', why: 'empty-first-call-absent' });
+    expect(replay.fidelityFigures({ original, runs: { ...runs, 'user-text': facts(9000, 0, 0) } } as never))
+      .toEqual({ state: 'unmeasured', why: 'user-text-nonpositive' });
+    expect(replay.fidelityFigures({ original: { ...original, firstInput: 100 }, runs } as never))
+      .toEqual({ state: 'unmeasured', why: 'original-overhead-negative' });
+    expect(replay.fidelityFigures({ original: { ...original, postInput: 11800 }, runs } as never))
+      .toEqual({ state: 'unmeasured', why: 'original-payload-nonpositive' });
+    expect(replay.fidelityFigures({ original, runs: { ...runs, payload: facts(9000, 0, 0) } } as never))
+      .toEqual({ state: 'unmeasured', why: 'replay-payload-nonpositive' });
+    expect(replay.fidelityFigures({ original: { state: 'unmeasured', why: 'post-boundary-call-absent' }, runs } as never))
+      .toEqual({ state: 'unmeasured', why: 'post-boundary-call-absent' });
+  });
+});
+
+/** A HOME whose store the real sweep built from one family, as Task 1's fixture is built, for sourceQuiz end to end
+ *  (here and in Task 7's --out walk). Leaf N's span holds one Bash command fact the kept list does not hold (`cmd`, a
+ *  plain build command by default; the W2-D67 case passes a key-shaped one); Anthropic
+ *  rows sit on both sides of the boundary (RP5); the summary row holds a sentinel only B carries (its part 1); and every
+ *  row's cwd is a directory that exists, so B's files resolve and its ancestor walk stops at `top`. Nothing is spawned
+ *  but the sweep, and no live store or home is read. */
+type W6SourceBox = { box: w5a1H.HistoryBox; cwd: string; id: string; gen: string; cmd: string; sentinel: string; u: (i: number) => string };
+const w6Indexed = (box: w5a1H.HistoryBox, uuid: string): boolean => {
+  const db = w5a1H.openStoreRO(box);
+  try {
+    const r = db.prepare('SELECT b.fts_indexed AS f FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?').get(uuid) as { f: number } | undefined;
+    return r !== undefined && Number(r.f) === 1;
+  } finally {
+    db.close();
+  }
+};
+/** The fixture's tool_result row, marked is_error when `on` (the fixture builder has no flag for it). */
+function w6ErrorIf<T extends object>(on: boolean, row: T): T {
+  if (on) ((row as { message: { content: Array<Record<string, unknown>> } }).message.content[0]!)['is_error'] = true;
+  return row;
+}
+/** `dropThenDeep` (D-6306): the leaf's first tool_use is a Bash command too short to be a fact (a counted site drop), and a
+ *  second tool_use row after it holds an input nested 10,000 deep (it parses and cannot be rendered), so mining drops one
+ *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
+ *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
+function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
+  nl: { lines: string[]; token: string; toolName?: string } | null = null, legacy = false, readPath: string | null = null): W6SourceBox {
+  const box = w5a1H.makeHistoryBox(prefix);
+  const cwd = join(box.home, 'tree', 'demo');
+  mkdirSync(cwd, { recursive: true });
+  const id = 'claude-a-w5a6';
+  const gen = '0189abcd-1234-4678-9abc-0000000005a6';
+  const u = (i: number): string => `a5a60001-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const ts = (i: number): string => new Date(Date.UTC(2026, 9, 2, 10, 0, i)).toISOString();
+  const sid = u(0);
+  const sentinel = ['zq', 'w5a6', 'sentinel'].join('');
+  const base = { sessionId: sid, cwd };
+  // The fixture serializer cannot stringify a 10,000-deep value, so the row carries a marker and its line is spliced as text.
+  const DEEP_MARK = '__w5a6_deep__';
+  const DEEP_TEXT = `${'{"a":'.repeat(10_000)}"leaf"${'}'.repeat(10_000)}`;
+  const rows = [
+    w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
+    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: readPath !== null ? 'Read' : nl?.toolName ?? 'Bash', input: readPath !== null ? { file_path: readPath } : { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
+      ...(nl === null ? {} : { note: ['first line', ...nl.lines].join('\n') }) } }),
+    ...(dropThenDeep ? [w5a1Fx.toolUseRow({ ...base, uuid: u(8), ts: ts(2), parentUuid: u(2), msgId: 'msg_w5a6_8', toolUseId: 'toolu_02W5A6', name: 'Bash', input: { command: cmd, nest: DEEP_MARK } })] : []),
+    w6ErrorIf(nl !== null, w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6',
+      content: nl !== null ? 'Error: fixture build step failed badly' : key === null ? 'built ok' : `built ok\nkey in env: ${key}` })),
+    w5a1Fx.assistantRow({ ...base, uuid: u(4), ts: ts(4), parentUuid: u(3), msgId: 'msg_w5a6_4', text: 'done with the build' }),
+    w5a1Fx.boundaryRow({ ...base, uuid: u(5), ts: ts(5), parentUuid: u(4), trigger: 'manual', headUuid: u(4), anchorUuid: u(6), tailUuid: u(4), allUuids: [u(4)] }),
+    w5a1Fx.summaryRow({ ...base, uuid: u(6), ts: ts(6), parentUuid: u(5), text: `<summary>\n1. Primary Request and Intent:\n   ${sentinel}\n</summary>` }),
+    w5a1Fx.assistantRow({ ...base, uuid: u(7), ts: ts(7), parentUuid: u(6), msgId: 'msg_w5a6_7', text: 'continuing after the summary' }),
+  ];
+  const lines = rows.map((r) => JSON.stringify(r).replace(`"${DEEP_MARK}"`, DEEP_TEXT)).join('\n') + '\n';
+  w5a1H.seedFamily(box, { id, project: 'demo', generation: gen, uuid: sid, rows: lines as unknown as object[], workdir: cwd });
+  // One more tick derives leaf N (as Task 1's fixture); more, if needed, until the command row's blob is indexed.
+  for (let k = 0; k < 4 && (k === 0 || !w6Indexed(box, u(2))); k += 1) {
+    const t = w5a1H.runSweep(box);
+    if (t.code !== 0) throw new Error(`w6SourceBox: the sweep exited ${String(t.code)}: ${t.stderr}`);
+  }
+  if (!w6Indexed(box, u(2))) throw new Error('w6SourceBox: the command row was never indexed');
+  if (legacy) {
+    // D-6310: a second family from before generations (no generation on its registry row or its SessionStart line): the sweep
+    // stores its session with generation '', and its boundary is admitted like the first's.
+    const lu = (i: number): string => `a5a60002-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const lts = (i: number): string => new Date(Date.UTC(2026, 9, 2, 11, 0, i)).toISOString();
+    const lbase = { sessionId: lu(0), cwd };
+    const lrows = [
+      w5a1Fx.userRow({ ...lbase, uuid: lu(1), ts: lts(1), text: 'please rebuild the legacy package' }),
+      w5a1Fx.toolUseRow({ ...lbase, uuid: lu(2), ts: lts(2), parentUuid: lu(1), msgId: 'msg_w5a6l_2', toolUseId: 'toolu_01W5A6L', name: 'Bash', input: { command: 'make fixture-legacy-target --all' } }),
+      w5a1Fx.toolResultRow({ ...lbase, uuid: lu(3), ts: lts(3), parentUuid: lu(2), toolUseId: 'toolu_01W5A6L', content: 'built ok' }),
+      w5a1Fx.assistantRow({ ...lbase, uuid: lu(4), ts: lts(4), parentUuid: lu(3), msgId: 'msg_w5a6l_4', text: 'done with the legacy build' }),
+      w5a1Fx.boundaryRow({ ...lbase, uuid: lu(5), ts: lts(5), parentUuid: lu(4), trigger: 'manual', headUuid: lu(4), anchorUuid: lu(6), tailUuid: lu(4), allUuids: [lu(4)] }),
+      w5a1Fx.summaryRow({ ...lbase, uuid: lu(6), ts: lts(6), parentUuid: lu(5), text: '<summary>\n1. Primary Request and Intent:\n   legacy\n</summary>' }),
+      w5a1Fx.assistantRow({ ...lbase, uuid: lu(7), ts: lts(7), parentUuid: lu(6), msgId: 'msg_w5a6l_7', text: 'continuing after the legacy summary' }),
+    ];
+    w5a1H.seedFamily(box, { id: 'claude-a-w5a6l', project: 'demo', uuid: lu(0), rows: lrows.map((r) => JSON.stringify(r)).join('\n') + '\n' as unknown as object[], workdir: cwd });
+    for (let k = 0; k < 4 && (k === 0 || !w6Indexed(box, lu(2))); k += 1) {
+      const t = w5a1H.runSweep(box);
+      if (t.code !== 0) throw new Error(`w6SourceBox: the sweep exited ${String(t.code)}: ${t.stderr}`);
+    }
+  }
+  // D-6308: the run's pair-index value, planted after every sweep so only pairIndexOf's read of it redacts it.
+  if (nl !== null) writeFileSync(join(box.home, '.ccrc', 'w6nl.token'), `${nl.token}\n`, { mode: 0o600 });
+  return { box, cwd, id, gen, cmd, sentinel, u };
+}
+
+describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 1 to 6 composed (W2-D71)', () => {
+  let sb: W6SourceBox;
+  w5a1BeforeAll(() => { sb = w6SourceBox('ccrc-w5a6-source-'); }, 360_000);
+  const OTHER_STORE = '00000000-0000-4000-8000-0000000005a6';
+  type Asked = { section: string; item: Record<string, any> };
+  type Sourced = { entries: Array<Record<string, any>>; fidelity: Array<Record<string, any>>; counts: Record<string, any>; asof_same_ms_hits: Record<string, unknown> };
+  /** A writer handle as openWriter answers one, with no spawn: it records each ask and writes one question. */
+  const fakeWriter = (asked: Asked[]) => ({
+    ask: async (section: string, item: Record<string, any>) => {
+      asked.push({ section, item });
+      const qid = replay.qidOf(item as never) as string;
+      return { state: 'question', qid, run: { code: 0, signal: null, skipped: false, tokens: 1, result: true },
+        entry: { qid, store_id: item.store_id, ccrc_id: item.ccrc_id, generation: item.generation, boundary_uuid: item.boundary_uuid,
+          kind: item.kind, fact: item.fact, fact_raw: item.fact_raw, question: 'Which command rebuilt the fixture package?',
+          source_entry_uuid: item.source_entry_uuid, repo_roots: [...item.repo_roots] } };
+    },
+  });
+  type Exclude = { pilotFamilies: Array<Record<string, string>>; assignment: Array<Record<string, string>> };
+  async function source(mode: 'quiz' | 'pilot', asked: Asked[], exclude: Exclude = { pilotFamilies: [], assignment: [] }, box: W6SourceBox = sb, prefix: 7 | 40 = 7): Promise<{ r: Sourced; out: string; storeId: string }> {
+    const rs = replay.openReplayStore(box.box.home) as unknown as { storeId: string; close(): void };
+    try {
+      const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
+      const caps = { family: 5, boundary: 3, kind_per_family: 2 };
+      // No family list in either mode: sourceQuiz walks the store's own admitted families (R10). The exclusions name
+      // OTHER_STORE's families too, as an assignment over every node does; they exclude nothing here.
+      const r = await replay.sourceQuiz({
+        mode, rs, home: box.box.home, out, writer: fakeWriter(asked), seedHex: 'ab'.repeat(32),
+        exclude: { pilotFamilies: [...exclude.pilotFamilies], assignment: [{ store_id: OTHER_STORE, ccrc_id: 'claude-a-elsewhere', generation: box.gen, arm: 'control' }, ...exclude.assignment] },
+        plan: mode === 'quiz' ? { target: 5, caps } : { n_fidelity: 1, n_usage: 5, caps },
+        configDirs: [], shaMinPrefix: prefix, top: box.box.home,
+      } as never) as unknown as Sourced;
+      return { r, out, storeId: rs.storeId };
+    } finally {
+      rs.close();
+    }
+  }
+
+  it('quiz mode: the leaf\'s command fact passes every stage to the writer in Task 2\'s candidate shape and comes back a ranked frozen entry; B is recorded by its counts only', async () => {
+    const asked: Asked[] = [];
+    const { r, out, storeId } = await source('quiz', asked);
+    expect(r.entries).toHaveLength(1);
+    const e = r.entries[0]!;
+    expect(e).toMatchObject({ store_id: storeId, ccrc_id: sb.id, generation: sb.gen, boundary_uuid: sb.u(5), kind: 'command',
+      fact: sb.cmd, fact_raw: sb.cmd, source_entry_uuid: sb.u(2) });
+    expect(e.qid).toBe(replay.qidOf(e as never));
+    expect(e.rank, 'the family\'s order key and its candidate rank (R10)').toEqual([replay.quizFamilyOrderKey('ab'.repeat(32), { store_id: storeId, ccrc_id: sb.id, generation: sb.gen }), 0]);
+    expect(e.repo_roots).toContain(sb.cwd);
+    expect(asked.map((a) => a.section)).toEqual(['quiz']);
+    expect(asked[0]!.item).toMatchObject({ leaf: { text: sb.cmd }, pair: null, id: e.qid });
+    expect((asked[0]!.item.span as Array<{ text: string }>).some((f) => f.text.includes(sb.cmd))).toBe(true);
+    expect(r.asof_same_ms_hits).toEqual({ [e.qid]: { asof_same_ms_hits: 0 } });
+    expect(r.counts.boundaries.admitted).toBe(1);
+    const recText = readFileSync(join(out, 'quiz', 'baseline.json'), 'utf8');
+    expect(JSON.parse(recText).boundaries.map((b: { state: string }) => b.state)).toEqual(['built']);
+    expect(recText).not.toContain(sb.sentinel);
+  }, 120_000);
+
+  // The payload stdin has no parts argument: it is reconstructPayload's own text, so every part of it went through
+  // Task 1's redaction (Task 1's W2-D54 cases plant a pair-index value in the summary, a user text and a tool_use input).
+  it('fidelityStdins: the payload stdin is reconstructPayload\'s own text with an empty question, never parts handed in; the empty-question and user-text runs go through one composer, the user text redacted', () => {
+    const rs = replay.openReplayStore(sb.box.home) as unknown as { db: { prepare(sql: string): { get(...a: unknown[]): unknown } }; close(): void };
+    try {
+      const idOf = (uuid: string): number => Number((rs.db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(uuid) as { entry_id: number }).entry_id);
+      const want = replay.reconstructPayload(rs as never, idOf(sb.u(5)), '') as { state: string; text: string };
+      expect(want.state, 'CONTROL: the box\'s boundary reconstructs').toBe('payload');
+      expect(want.text, 'CONTROL: the payload holds the summary').toContain(sb.sentinel);
+      const k = w6Akia('QRSTUVW');
+      const r = replay.fidelityStdins(rs as never, idOf(sb.u(5)), [w6Field(`rebuild with ${k}`)]);
+      expect(r.state).toBe('stdins');
+      const s = (r as { stdins: Record<string, string> }).stdins;
+      expect(Object.keys(s).sort()).toEqual([...replay.FIDELITY_RUNS].sort());
+      expect(s['payload']).toBe(want.text);
+      expect(s['empty']).toBe(replay.composePayload(replay.FIDELITY_EMPTY_PARTS, ''));
+      expect(s['user-text']).toBe(replay.composePayload(replay.FIDELITY_EMPTY_PARTS, `rebuild with ${t4Lib.REDACTED_MARK}`));
+      expect(s['empty']).not.toContain(sb.sentinel);
+      for (const v of Object.values(s)) {
+        expect(v.endsWith(w6Gate.ANSWER_PROTOCOL)).toBe(true);
+        expect(v).not.toContain(k);
+      }
+      expect(replay.fidelityStdins(rs as never, idOf(sb.u(5)), [{ text: 'x', rawLen: t4Lib.BLOB_DECODE_MAX + 1 }]))
+        .toEqual({ state: 'discard', why: 'over-decode-cap' });
+      expect(replay.fidelityStdins(rs as never, idOf(sb.u(1)), [w6Field('x')]), 'a row that is no boundary answers reconstruction\'s own word')
+        .toEqual({ state: 'discard', why: 'boundary-absent' });
+    } finally {
+      rs.close();
+    }
+  }, 120_000);
+
+  it('pilot mode: one fidelity boundary per family before the usage questions, on the pilot\'s own stream', async () => {
+    const asked: Asked[] = [];
+    const { r, storeId } = await source('pilot', asked);
+    expect(r.fidelity).toEqual([{ store_id: storeId, ccrc_id: sb.id, generation: sb.gen, boundary_uuid: sb.u(5) }]);
+    expect(r.entries.map((x) => x.fact)).toEqual([sb.cmd]);
+    expect(asked.map((a) => a.section)).toEqual(['pilot']);
+  }, 120_000);
+
+  it('quiz mode walks this node\'s own admitted families, never a census list (R10, W2-D71, W2-D77): a family no census names is sourced; CONTROL: a pilot family and a control-held (store_id, ccrc_id) are not', async () => {
+    // The box's family is in no census and no assignment as a quiz family: sourceQuiz is handed no family list at all.
+    const free = await source('quiz', []);
+    expect(free.r.entries.map((x) => [x.ccrc_id, x.fact])).toEqual([[sb.id, sb.cmd]]);
+    expect(free.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 0, legacy: 0 });
+    const own = { store_id: free.storeId, ccrc_id: sb.id, generation: sb.gen };
+    const asked: Asked[] = [];
+    const pilot = await source('quiz', asked, { pilotFamilies: [own], assignment: [] });
+    expect(pilot.r.entries, 'CONTROL: a pilot family is never quizzed').toEqual([]);
+    expect(pilot.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 1, 'control-id': 0, legacy: 0 });
+    // Another generation of the same (store_id, ccrc_id) assigned control excludes every generation of it (W2-D77).
+    const control = await source('quiz', asked, { pilotFamilies: [], assignment: [{ ...own, generation: '00000000-0000-4000-8000-0000000005a7', arm: 'control' }] });
+    expect(control.r.entries, 'CONTROL: a control-held id is never quizzed').toEqual([]);
+    expect(control.r.counts.population).toEqual({ 'no-admitted-boundary': 0, pilot: 0, 'control-id': 1, legacy: 0 });
+    expect(asked, 'neither excluded family reached the writer').toEqual([]);
+  }, 120_000);
+
+  // The shipped stage, not Task 2's functions called directly: writerInputOf sends F as it stands, so sourceQuiz's
+  // redaction stage is what keeps a masked F from the writer's stdin, input.json and the frozen lists (W2-D67, R10 F6).
+  it('W2-D67 on the shipped path: a key-shaped command fact in the store is dropped redact-fact at sourceQuiz\'s redaction stage and never reaches the writer or --out; CONTROL: the plain box\'s command passes that stage', async () => {
+    const key = w6Akia('KLMNOPQ');
+    const kb = w6SourceBox('ccrc-w5a6-source-key-', `aws configure set aws_access_key_id ${key}`);
+    expect(t4Lib.redactField(kb.cmd, W6_IDX), 'CONTROL: lib\'s shape layer masks the fact').not.toContain(key);
+    const asked: Asked[] = [];
+    const { r, out } = await source('quiz', asked, { pilotFamilies: [], assignment: [] }, kb);
+    expect(r.counts.boundaries.admitted, 'CONTROL: the boundary is admitted, so its leaf is mined').toBe(1);
+    expect(r.counts.drops.redaction).toEqual({ 'redact-fact': 1 });
+    expect(r.entries).toEqual([]);
+    expect(asked, 'the writer is never asked').toEqual([]);
+    // sourceQuiz writes one file under --out, the baseline record; the frozen lists and the writer's input.json carry
+    // only what the writer was asked, and it was asked nothing.
+    const recText = readFileSync(join(out, 'quiz', 'baseline.json'), 'utf8');
+    expect(JSON.parse(recText).boundaries, 'no B was built: the drop came before admission').toEqual([]);
+    expect(recText).not.toContain(key.slice(4));
+    // CONTROL: the plain box's command passes the redaction stage and reaches the writer.
+    const plainAsked: Asked[] = [];
+    const plain = await source('quiz', plainAsked);
+    expect(plain.r.counts.drops.redaction).toEqual({});
+    expect(plainAsked.map((a) => a.item.fact)).toEqual([sb.cmd]);
+  }, 600_000);
+
+  // D-6309: the leaf-span base is JSON-rendered, so a command with a quote never occurs verbatim in it.
+  it.each([
+    ['a quoted command', 'git commit -m "fixture build wip"', null],
+    ['a path with a backslash', '/home/u/tree/dir\\name.txt', '/home/u/tree/dir\\name.txt'],
+  ] as const)('D-6309: under leaf-span %s is placed by its JSON-escaped spelling and a question is produced through the real writerInputOf; a fact neither spelling of which occurs is a counted writer-fact-unplaced, never a throw', async (_what, quoted, readPath) => {
+    const qb = w6SourceBox('ccrc-w5a6-source-quoted-', quoted, false, null, null, false, readPath);
+    const through = (idx: never, asked: Asked[], tamper: boolean) => ({
+      ask: async (section: string, item: Record<string, any>) => {
+        const fed = tamper ? { ...item, fact_raw: `${item.fact_raw} but never in the text` } : item;
+        const made = replay.writerInputOf(fed as never, 'leaf-span', idx) as { state: string; why?: string; input?: { excerpt: string } };
+        const qid = replay.qidOf(item as never) as string;
+        if (made.state === 'discard') return { state: 'discard', qid, why: made.why };
+        asked.push({ section, item: { ...item, excerpt: made.input!.excerpt } });
+        return fakeWriter([]).ask(section, item);
+      },
+    });
+    const run = async (tamper: boolean): Promise<{ r: Sourced; asked: Asked[] }> => {
+      const rs = replay.openReplayStore(qb.box.home) as unknown as { idx: never; close(): void };
+      try {
+        const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
+        const asked: Asked[] = [];
+        const r = await replay.sourceQuiz({
+          mode: 'quiz', rs, home: qb.box.home, out, writer: through(rs.idx, asked, tamper), seedHex: 'ab'.repeat(32),
+          exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
+          configDirs: [], shaMinPrefix: 7, top: qb.box.home,
+        } as never) as unknown as Sourced;
+        return { r, asked };
+      } finally {
+        rs.close();
+      }
+    };
+    const ok = await run(false);
+    expect(ok.r.entries.map((e) => e.fact), 'a question is produced for the fact').toEqual([quoted]);
+    expect(ok.asked[0]!.item['excerpt'], 'the excerpt holds the escaped spelling').toContain(JSON.stringify(quoted).slice(1, -1));
+    expect(ok.asked[0]!.item['excerpt'], 'CONTROL: the raw spelling occurs nowhere in the JSON-rendered span').not.toContain(quoted);
+    const lost = await run(true);
+    expect(lost.r.entries).toEqual([]);
+    expect(lost.r.counts.drops.writer, 'counted').toEqual({ 'writer-fact-unplaced': 1 });
+  }, 600_000);
+
+  // D-6312 (W2-D63's sampling half): at a sha_min_prefix of 40 only a 40-character sha can score correct (the gate's labelCorrect).
+  it('D-6312: at sha_min_prefix 40 a 12-character sha fact is dropped sha-short before sampling and a 40-character one is kept; CONTROL: at 7 both are kept', async () => {
+    const short = '1f2a3b4c5d6e';
+    const long = '9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b';
+    const sb2 = w6SourceBox('ccrc-w5a6-source-sha-', `git diff ${short} ${long}`);
+    const at7 = await source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 7);
+    expect(at7.r.entries.filter((e) => e.kind === 'sha').map((e) => e.fact).sort(), 'CONTROL: at 7 both are asked').toEqual([short, long].sort());
+    expect(at7.r.counts.mined['sha-short']).toBe(0);
+    const at40 = await source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 40);
+    expect(at40.r.entries.filter((e) => e.kind === 'sha').map((e) => e.fact), 'at 40 only the 40-character sha is asked').toEqual([long]);
+    expect(at40.r.counts.mined['sha-short'], 'the short one is counted, not hidden').toBe(1);
+    expect(at40.r.entries.map((e) => e.kind).sort(), 'the command fact is not a sha').toEqual(['command', 'sha']);
+    await expect(source('quiz', [], { pilotFamilies: [], assignment: [] }, sb2, 12 as never), 'the prefix is one of the two the gate signs').rejects.toThrow(/shaMinPrefix 12 is not one of 7, 40/);
+  }, 600_000);
+
+  // D-6310: a family from before generations (generation '') has no qid and no place in either walk; it is excluded and counted.
+  it('D-6310: a legacy family (generation \'\') beside a UUID family is excluded in both modes, fidelity sampling included, and counted; CONTROL: its boundary was admitted', async () => {
+    const lb = w6SourceBox('ccrc-w5a6-source-legacy-', undefined, false, null, null, true);
+    const db = w5a1H.openStoreRO(lb.box);
+    try {
+      const gens = db.prepare('SELECT generation FROM sessions ORDER BY session_pk').all().map((r) => String((r as { generation: string }).generation));
+      expect(gens.sort(), 'CONTROL: the store holds a legacy session beside the UUID one').toEqual(['', lb.gen]);
+    } finally {
+      db.close();
+    }
+    for (const mode of ['quiz', 'pilot'] as const) {
+      const asked: Asked[] = [];
+      const { r } = await source(mode, asked, { pilotFamilies: [], assignment: [] }, lb);
+      expect(r.counts.boundaries.admitted, `${mode}: CONTROL: both boundaries are admitted`).toBe(2);
+      expect(r.counts.population.legacy, `${mode}: the legacy family is counted`).toBe(1);
+      expect(r.entries.map((e) => e.generation), `${mode}: no entry carries ''`).toEqual([lb.gen]);
+      expect(r.entries.map((e) => e.fact)).toEqual([lb.cmd]);
+      expect(asked.map((a) => a.item['generation']), `${mode}: the writer was asked about the UUID family only`).toEqual([lb.gen]);
+      expect(r.fidelity.every((f) => f.generation !== ''), `${mode}: no fidelity boundary is the legacy family's`).toBe(true);
+    }
+    const plain = await source('quiz', []);
+    expect(plain.r.counts.population.legacy, 'CONTROL: the plain box has none').toBe(0);
+  }, 600_000);
+
+  // D-6305: a failed writer run is counted apart from a malformed reply; the writer-malformed drop is their sum.
+  it('D-6305: failed runs and malformed replies are counted apart, and the writer-malformed drop count is their sum; CONTROL: a malformed reply on a run that finished is not a failed run', async () => {
+    const run = (code: number | null, signal: string | null, result: boolean) => ({ code, signal, skipped: false, tokens: 1, result });
+    const writerOf = (r: ReturnType<typeof run>) => ({
+      ask: async (_section: string, item: Record<string, any>) => ({ state: 'discard', why: 'writer-malformed', qid: replay.qidOf(item as never), run: r }),
+    });
+    const sourceWith = async (r: ReturnType<typeof run>): Promise<Sourced> => {
+      const rs = replay.openReplayStore(sb.box.home) as unknown as { close(): void };
+      try {
+        const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
+        return await replay.sourceQuiz({
+          mode: 'quiz', rs, home: sb.box.home, out, writer: writerOf(r), seedHex: 'ab'.repeat(32),
+          exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
+          configDirs: [], shaMinPrefix: 7, top: sb.box.home,
+        } as never) as unknown as Sourced;
+      } finally {
+        rs.close();
+      }
+    };
+    const failed = await sourceWith(run(1, null, true));
+    expect(failed.counts.writer).toEqual({ questions: 0, failed_runs: 1, malformed_replies: 0, leaks: 0 });
+    expect(failed.counts.drops.writer).toEqual({ 'writer-malformed': 1 });
+    const killed = await sourceWith(run(null, 'SIGKILL', true));
+    expect(killed.counts.writer).toMatchObject({ failed_runs: 1, malformed_replies: 0 });
+    const noResult = await sourceWith(run(0, null, false));
+    expect(noResult.counts.writer).toMatchObject({ failed_runs: 1, malformed_replies: 0 });
+    const malformed = await sourceWith(run(0, null, true));
+    expect(malformed.counts.writer, 'CONTROL: a finished run with a reply that has no QUESTION line').toEqual({ questions: 0, failed_runs: 0, malformed_replies: 1, leaks: 0 });
+    expect(malformed.counts.drops.writer).toEqual({ 'writer-malformed': 1 });
+  }, 600_000);
+
+  // D-6306: a boundary mining discards whole is counted once, under discards; its partial site drops are not merged.
+  it('D-6306: a boundary discarded whole after a dropped site counts once under discards, and its partial site drops are not in counts.mined; CONTROL: the plain box mines', async () => {
+    const db = w6SourceBox('ccrc-w5a6-source-deep-', 'npm run fixture-build --workspace pkg-a', true);
+    const asked: Asked[] = [];
+    const { r } = await source('quiz', asked, { pilotFamilies: [], assignment: [] }, db);
+    expect(r.counts.boundaries.admitted, 'CONTROL: the boundary is admitted, so it is mined').toBe(1);
+    expect(r.counts.discards).toEqual({ 'body-unrenderable': 1 });
+    expect(r.counts.mined['command-length'], 'the short command before the bad row is not merged').toBe(0);
+    expect(Object.values(r.counts.mined as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(0);
+    expect(asked).toEqual([]);
+    const plain = await source('quiz', []);
+    expect(plain.r.counts.discards, 'CONTROL: the plain box discards nothing').toEqual({});
+  }, 600_000);
+});
+
+// ── W2-5a Task 7: the record subcommands (W2-D84's first half, W2-D24, W2-D73, W2-D21, W2-D19, W2-D20, W2-D25; D-5773) ──
+// Every HOME is a fixture (W2-4's up-a row and recording stub, a fresh limits row, a tagged stamp, and where a node's
+// store is read a createStore store with the case's store id and meta rows). pilot-source and quiz-source run
+// in-process, with sourceQuiz injected or, in the one end-to-end walk, real over Task 6's w6SourceBox store; every other
+// subcommand runs as the operator runs it, node --no-warnings on a driver with the scrubbed env. No case reads the live
+// HOME, spawns a real model, or writes outside its own mkTmp trees.
+import * as r7fs from 'node:fs';
+import * as r7path from 'node:path';
+import { spawnSync as r7SpawnSync } from 'node:child_process';
+import * as r7Store from '../../ccd/history/store.mjs';
+import { describe as r7describe, expect as r7expect, it as r7it, vi as r7vi } from 'vitest';
+import * as r7drv from '../../deploy/history-replay.mjs';
+import * as r7gate from '../../deploy/history-gate.mjs';
+import { RECALL_OFF_KEYS as R7_KEYS, canonicalJson as r7Canon, historyPaths as r7Paths, sha256Hex as r7Sha } from '../../ccd/history/lib.mjs';
+import { mkTmp as r7MkTmp } from './tmpHelpers.js';
+import { REPO as R7_REPO, scrubbedEnv as r7Scrubbed } from './historyHelpers.js';
+
+r7describe('W2-5a Task 7: the record subcommands', () => {
+  type R7 = Record<string, any>;
+  type Ref = { store_id: string; ccrc_id: string; generation: string };
+  type Saved = { path: string; sha: string; value: R7 };
+  const DAY = 86_400_000;
+  const T0 = 1_800_000_000_000;
+  const STORE_A = '00000000-0000-4000-8000-0000000000a7';
+  const STORE_B = '00000000-0000-4000-8000-0000000000b7';
+  const STORE_C = '00000000-0000-4000-8000-0000000000c7';
+  const OPUS = 'claude-opus-9-1';
+  const ARM = 'claude-arm-9-1';
+  const STAMP = 'v9.9.7';
+  const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const hex = (label: string): string => r7Sha(`w2-5a task 7 fixture: ${label}`);
+  const SEED = hex('seed');
+  const SHAS = (root: string): Record<string, string> => (r7drv.codeShas(root) as { files: Record<string, string> }).files;
+  const ROOT_SKIP = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  // ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────
+  /** The first generation of `id` on `store` whose arm under SEED is `arm` (W2-D19), searched from n0, so the fixture
+   *  holds whatever bit the seed gives. */
+  const pick = (store: string, id: string, arm: string, n0: number): Ref => {
+    for (let n = n0; ; n += 1) {
+      const f = { store_id: store, ccrc_id: id, generation: gen(n) };
+      if (r7gate.armOf(SEED, f) === arm) return f;
+    }
+  };
+  const A_T1 = pick(STORE_A, 'a-t1', 'treatment', 100);
+  const A_T2 = pick(STORE_A, 'a-t2', 'treatment', 200);
+  const A_C1 = pick(STORE_A, 'a-c1', 'control', 300);
+  const A_C2 = pick(STORE_A, 'a-c2', 'control', 400);
+  const A_D: Ref = { store_id: STORE_A, ccrc_id: 'a-d', generation: gen(500) };   // registry-absent: dropped before the flip
+  const B_T1 = pick(STORE_B, 'b-t1', 'treatment', 600);
+  const B_C1 = pick(STORE_B, 'b-c1', 'control', 700);
+  const PILOT_FAMILY: Ref = { store_id: STORE_A, ccrc_id: 'pilot-0', generation: gen(900) };
+  /** [measured windows, windows with a read call] per family, as the census plants them. */
+  const SHAPE: Record<string, [number, number]> = { 'a-t1': [3, 2], 'a-t2': [2, 0], 'a-c1': [2, 1], 'a-c2': [1, 1], 'a-d': [2, 2], 'b-t1': [2, 1], 'b-c1': [3, 0] };
+  const keyOf = (f: Ref): string => r7gate.familyKey(f.store_id, f.ccrc_id, f.generation);
+
+  /** Make `home` a fixture node: up-a (upstream) and its stub, a fresh limits row and a tagged stamp. */
+  function node7(home: string): void {
+    writeRoster(home, [FIXTURE_ACCOUNTS[0]!]);
+    plantStub(home, 'up-a');
+    const nowS = Math.floor(Date.now() / 1000);
+    r7fs.mkdirSync(r7path.join(home, '.cc-limits'), { recursive: true });
+    r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    r7fs.writeFileSync(r7path.join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: STAMP }));
+  }
+  /** A fixture HOME (node7), and, with `store`, a store made by store.mjs's createStore with that store id, whose meta
+   *  also holds `meta`: the store a node's subcommand opens through Task 1's openReplayStore. */
+  function home7(store: string | null, meta: Array<[string, string]> = []): string {
+    const home = r7MkTmp('ccrc-w2-5a-t7-home-');
+    node7(home);
+    if (store !== null) {
+      r7Store.createStore(home, { storeId: store });
+      const w = r7Store.openWriter(r7Paths(home).dbFile) as unknown as { prepare(sql: string): { run(...a: unknown[]): unknown } };
+      try {
+        const put = w.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)');
+        for (const [k, v] of meta) put.run(k, v);
+      } finally {
+        r7Store.closeWriter(w as never);
+      }
+    }
+    return home;
+  }
+  /** What the stub answers to --version: the first line of the stream it prints (W2-4 Task 7's measureClaudeVersion). */
+  const versionOf = (home: string): string => r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8').split('\n')[0]!.trim();
+
+  /** A tree the driver runs from: the four gate_code files COPIED (the real gate, which the driver imports since W2-5a),
+   *  every other ccd/history entry, the rest of ccd/ and shared/ symlinked to this checkout. `edit` appends one byte to a
+   *  copied file; `drop` removes one (measure-history.py, which nothing imports), so codeShas() over this tree moves. */
+  function tree7(opts: { edit?: string; drop?: string } = {}): string {
+    const tree = r7MkTmp('ccrc-w2-5a-t7-tree-');
+    for (const rel of r7drv.CODE_SHA_FILES as unknown as string[]) {
+      r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
+      r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
+    }
+    for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd', 'history'))) {
+      if (!r7fs.existsSync(r7path.join(tree, 'ccd', 'history', n))) r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', 'history', n), r7path.join(tree, 'ccd', 'history', n));
+    }
+    for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd'))) {
+      if (n !== 'history') r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', n), r7path.join(tree, 'ccd', n));
+    }
+    r7fs.symlinkSync(r7path.join(R7_REPO, 'shared'), r7path.join(tree, 'shared'));
+    if (opts.edit !== undefined) r7fs.appendFileSync(r7path.join(tree, opts.edit), '\n');
+    if (opts.drop !== undefined) r7fs.rmSync(r7path.join(tree, opts.drop));
+    return tree;
+  }
+  /** The operator's run: node on the driver in `tree` (the checkout's when null), the scrubbed env, a fixture HOME
+   *  (a fresh empty one when none is given), never the live one. */
+  function run7(tree: string | null, home: string | null, args: string[]): { code: number | null; stdout: string; stderr: string } {
+    const h = home ?? r7MkTmp('ccrc-w2-5a-t7-emptyhome-');
+    const script = tree === null ? SCRIPT : r7path.join(tree, 'deploy', 'history-replay.mjs');
+    const r = r7SpawnSync(process.execPath, ['--no-warnings', script, ...args],
+      { cwd: h, env: { ...r7Scrubbed(process.env), HOME: h }, encoding: 'utf8', timeout: 120_000, killSignal: 'SIGKILL' });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+  /** Save a value as the operator does: canonical JSON and one newline, 0600, in a fresh directory outside any git tree. */
+  function save7(value: R7, name = 'input.json'): Saved {
+    const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), name);
+    const text = r7Canon(value) + '\n';
+    r7fs.writeFileSync(p, text, { mode: 0o600 });
+    return { path: p, sha: r7Sha(text), value };
+  }
+  /** Bytes saved as they are (a frozen list has no trailing newline, W2-D73). */
+  function saveText7(text: string, name: string): Saved {
+    const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), name);
+    r7fs.writeFileSync(p, text, { mode: 0o600 });
+    return { path: p, sha: r7Sha(text), value: JSON.parse(text) };
+  }
+  const loaded = (s: Saved): R7 => ({ path: s.path, sha256: s.sha, value: s.value });
+  /** `--<name> PATH --<name>-sha256 HEX`. */
+  const inp = (name: string, s: Saved): string[] => [`--${name}`, s.path, `--${name}-sha256`, s.sha];
+  const outDir = (): string => r7path.join(r7MkTmp('ccrc-w2-5a-t7-out-'), 'out');
+
+  const FLAGS_OK = (mode: string): Record<string, boolean> => Object.fromEntries((r7drv.contractFlags(mode) as string[]).map((f) => [f, true]));
+  /** W2-4's Step0aOutput for a node, measured under `root`'s code, HOME's stamp and HOME's stub. */
+  const step0a7 = (root: string, home: string): R7 => ({
+    kind: r7drv.STEP0A_KIND, v: 1, measured_ms: T0 - 40 * DAY, account: 'up-a', settings_mode: 'restricted',
+    claude_code_version: versionOf(home), wrapper_sha256: null, flags_accepted: FLAGS_OK('restricted'),
+    writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: ['Bash', 'Agent'] },
+    code_shas: SHAS(root), release_stamp: STAMP, budget: 100_000, spend: 600,
+  });
+  /** pilot-source's output, as this task writes it, measured under `root`'s code. */
+  const pilot7 = (root: string, prefix = 7): R7 => ({
+    kind: r7drv.PILOT_SOURCE_KIND, v: 1, store_id: STORE_A, seed: hex('pilot seed'), n_fidelity: 5, n_usage: 5,
+    families: [PILOT_FAMILY], fidelity: [{ ...PILOT_FAMILY, boundary_uuid: gen(901) }], frozen_sha256: hex('pilot frozen'), writer_model: OPUS,
+    used: { labeller: { ...r7gate.LABELLER, path_forms: [...r7gate.LABELLER.path_forms] }, sha_min_prefix: prefix, writer_input: 'excerpt', baseline_files: 'v1',
+      writer_prompt_sha256: r7gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: r7gate.ANSWER_PROTOCOL_SHA256 },
+    code_shas: SHAS(root), release_stamp: STAMP, budget: 3_000_000, spend: 900_000, counts: {},
+  });
+  /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
+   *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a', wrapper: string | null = null, prefix = 7): R7 {
+    const s0 = { ...step0a7(root, home), account, wrapper_sha256: wrapper };
+    return r7drv.buildDraft({
+      nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
+      step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
+      pilot: pilot7(root, prefix), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
+      gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
+      overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
+    }) as R7;
+  }
+  /** measure-history.py --census's report for one store at T0: a 14-day look-back, ticks from T0 - 7 d (so covered_days is
+   *  7), and each family's SHAPE: `windows` measured windows (one copy, no turns, an inclusive end 1 s after the boundary),
+   *  the first `withCall` of them holding one read call. */
+  function census7(store: string, fams: Ref[], over: { since?: number; ticksFirst?: number | null; nTicks?: number; stale?: string } = {}): R7 {
+    return {
+      store_id: store, user_version: 2, script_sha256: hex('script'), counters: { 'card_consumed:main': 3 }, w2: null,
+      census: {
+        as_of_ms: T0, since_ms: over.since ?? T0 - 14 * DAY, row_cap: r7gate.ROW_CAP,
+        ticks: { n: over.nTicks ?? 10, first_ts_ms: over.ticksFirst === undefined ? T0 - 7 * DAY : over.ticksFirst, last_ts_ms: T0 - 1000 },
+        families: fams.map((f, i) => {
+          const [windows, withCall] = SHAPE[f.ccrc_id]!;
+          const at = (w: number): number => T0 - 6 * DAY + i * 1_000_000 + w * 10_000;
+          return {
+            ccrc_id: f.ccrc_id, generation: f.generation, session_pk: i + 1, merged_into: null, first_seen_ms: T0 - 20 * DAY + i,
+            last_main_ts_ms: over.stale === f.ccrc_id ? T0 - 10 * DAY : T0 - 1000, merged_generations: [],
+            calls: Array.from({ length: withCall }, (_, w) => [at(w) + 10, 0, 'grep']),
+            boundaries: Array.from({ length: windows }, (_, w) => ({
+              boundary_uuid: gen(5000 + i * 100 + w), ts_ms: at(w),
+              copies: [{ file_id: 1, source_key: '', boundary_line: 1 + w * 10, after_count: 1, summary_line: null, next_boundary_line: null,
+                next_boundary_ts_ms: null, last_ts_ms: at(w) + 1000, rows: [], models: [], truncated: false }],
+            })),
+          };
+        }),
+      },
+    };
+  }
+  const FAMS_A = [A_T1, A_T2, A_C1, A_C2, A_D];
+  const FAMS_B = [B_T1, B_C1];
+  /** verify --registry's output for a census, every family ok but `states` (built by the driver's own report builder). */
+  function verify7(recordSha: string, census: Saved, states: Record<string, string> = {}): R7 {
+    const active = (r7gate.activeFamilies(census.value.store_id, census.value.census, { lookbackMs: r7gate.ACTIVE_LOOKBACK_MS }) as { active: Ref[] }).active;
+    return r7drv.verifyRegistryReport({ recordSha256: recordSha, storeId: census.value.store_id, censusSha256: census.sha,
+      lookbackMs: r7gate.ACTIVE_LOOKBACK_MS, families: active.map((f) => ({ ccrc_id: f.ccrc_id, generation: f.generation, state: states[f.ccrc_id] ?? 'ok' })) }) as R7;
+  }
+  /** A sourced entry's eleven frozen fields, its rank stripped (Task 6's frozenListText takes exactly FROZEN_ENTRY_KEYS). */
+  const strip7 = (e: R7): any => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
+  /** The frozen list's head as freeze and pilot-source write it: the record's writer and the labeller with its prefix. */
+  const head7 = (prefix = 7): { writer_model: string; labeller: object } => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
+  /** A synthetic family order key: 64 hex digits, in code-unit order by `i` (Task 5's quizFamilyOrderKey is a sha256's
+   *  hex; freeze compares keys, it never recomputes them). Hex LETTERS, so no key reads as a number: a numeric digit
+   *  string would make a subtraction of two keys a number, and M41's numeric comparator would pass unseen. */
+  const K7 = (i: number): string => 'abcdef'[i]!.repeat(64);
+  /** One quiz entry on family `f`: W2-D73's eleven fields, its qid by Task 6's qidOf, and its global rank, `[order key,
+   *  candidate rank]` (R10); a pilot entry's rank is its node's own, `[family index, candidate rank]`, and is stripped. */
+  function entry7(f: Ref, n: number, rank: [string | number, number]): R7 {
+    const fact = (0xabc0000 + n).toString(16);
+    const e = { store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, boundary_uuid: gen(8000 + n), kind: 'sha', fact, fact_raw: fact,
+      question: `Which commit did fixture step ${n} record?`, source_entry_uuid: gen(9000 + n), repo_roots: ['/home/u/tree'] };
+    return { ...e, qid: r7drv.qidOf(e) as string, rank };
+  }
+  /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
+   *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
+   *  pilot result), and the part 2 buildFinal makes from them. */
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a', wrapper: string | null = null, prefix = 7): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account, wrapper, prefix);
+    const d = save7(draft, 'part1.json');
+    const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
+    const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
+    const vA = save7(verify7(d.sha, cA, { 'a-d': 'registry-absent' }), 'verify-a.json');
+    const vB = save7(verify7(d.sha, cB), 'verify-b.json');
+    const assembled = r7drv.assembleCensus(draft, [cA, cB].map(loaded), [vA, vB].map(loaded)) as R7;
+    const assignment = r7drv.deriveAssignment(SEED, assembled) as { list: R7[]; sha256: string };
+    const inputs = (assembled.nodes as R7[]).map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
+    const entriesA = [entry7(A_T1, 1, [K7(0), 0]), entry7(A_T1, 2, [K7(0), 1]), entry7(A_T2, 3, [K7(2), 0])];
+    const entriesB = [entry7(B_T1, 4, [K7(1), 0]), entry7(B_T1, 5, [K7(1), 1])];
+    const sA = save7(r7drv.sourcedReport({ recordSha256: d.sha, storeId: STORE_A, assignmentSha256: assignment.sha256, inputs, sourced: { entries: entriesA, counts: {} }, spend: 0 }) as R7, 'sourced-a.json');
+    const sB = save7(r7drv.sourcedReport({ recordSha256: d.sha, storeId: STORE_B, assignmentSha256: assignment.sha256, inputs, sourced: { entries: entriesB, counts: {} }, spend: 0 }) as R7, 'sourced-b.json');
+    const merged = r7drv.mergeSourced([entriesA, entriesB], draft.quiz.target) as R7[];
+    const fz = saveText7(r7drv.frozenListText('quiz', head7(), merged.map(strip7)) as string, 'frozen.json');
+    const meta = save7(r7drv.quizMetaReport({ recordSha256: d.sha, frozenSha256: fz.sha, assignmentSha256: assignment.sha256, entries: merged,
+      floor: draft.quiz.halt_floor, minFamilies: draft.quiz.min_families, sourced: [sA, sB].map((s) => ({ store_id: s.value.store_id, sha256: s.sha })) }) as R7, 'frozen.meta.json');
+    const power = save7(r7drv.powerReport(draft, d.sha, assembled) as R7, 'power.json');
+    const pilotResult = save7({ kind: r7drv.PILOT_RESULT_KIND, v: 1, fidelity: [{ boundary_uuid: gen(901), pass: true }],
+      usage_extrapolation: { tokens_per_question: 1000 }, step0b_sha256: hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10 } }, 'pilot-result.json');
+    const frozen = { sha256: fz.sha, list: fz.value, families: r7drv.familiesOf(fz.value.entries) };
+    const final = r7drv.buildFinal({ draft, draftSha256: d.sha, priorSha256: null, assembled, assignment, power: power.value, powerSha256: power.sha,
+      frozen, pilotResult: pilotResult.value, spendBudget: 30_000_000, window: { start: T0 + DAY, end: T0 + 15 * DAY }, decision: 'keep', nowMs: T0 }) as R7;
+    return { draft, d, cA, cB, vA, vB, assembled, assignment, inputs, sA, sB, merged, fz, meta, power, pilotResult, frozen, final, f: save7(final, 'part2.json') };
+  }
+  /** The finalize argv over a chain, `over` replacing one input or (null) leaving one out. */
+  function finalizeArgv(c: R7, over: Record<string, string[] | null> = {}): string[] {
+    const parts: Record<string, string[] | null> = {
+      record: inp('record', c.d), census: [...inp('census', c.cA), ...inp('census', c.cB)], verify: [...inp('verify', c.vA), ...inp('verify', c.vB)],
+      power: inp('power', c.power), frozen: inp('frozen', c.fz), 'quiz-meta': inp('quiz-meta', c.meta), 'pilot-result': inp('pilot-result', c.pilotResult),
+      rest: ['--spend-budget', '30000000', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 15 * DAY), '--q18-decision', 'keep'], ...over,
+    };
+    return ['open', '--finalize', ...Object.values(parts).flatMap((v) => v ?? [])];
+  }
+  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory
+   *  is listed entry by entry (a stray file the driver wrote there is seen) but for two things: its own mtime, and
+   *  SQLite's `-wal` and `-shm` sidecars, which a read-only open of a WAL store may leave there and which are SQLite's,
+   *  not the driver's writes. The db file itself is its bytes' sha256 alone. */
+  function snapshot7(root: string): string[] {
+    const out: string[] = [];
+    const dbFile = r7Paths(root).dbFile;
+    const storeDir = r7path.dirname(dbFile);
+    const sidecars = [`${r7path.basename(dbFile)}-wal`, `${r7path.basename(dbFile)}-shm`];
+    const walk = (dir: string, rel: string): void => {
+      for (const n of r7fs.readdirSync(dir).sort()) {
+        const p = r7path.join(dir, n);
+        const r = rel === '' ? n : `${rel}/${n}`;
+        if (dir === storeDir && sidecars.includes(n)) continue;
+        const st = r7fs.lstatSync(p);
+        if (p === dbFile) {
+          out.push(`${r} db ${r7Sha(r7fs.readFileSync(p))}`);
+        } else if (p === storeDir) {
+          out.push(`${r} ${st.mode}`);   // the directory's mtime moves with SQLite's sidecars
+        } else {
+          out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        }
+        if (st.isDirectory()) walk(p, r);
+      }
+    };
+    walk(root, '');
+    return out;
+  }
+  /** An in-process call, its stderr captured (the sha line) and its refusal, if any, answered as {word, detail}. */
+  async function inProcess(fn: () => Promise<unknown>): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
+    const lines: string[] = [];
+    const spy = r7vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
+    try {
+      return { code: await fn(), stderr: lines.join(''), refusal: null };
+    } catch (e) {
+      if (e instanceof r7drv.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as R7).word, detail: (e as R7).detail } };
+      throw e;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const envOf = (home: string): R7 => ({ HOME: home, TMUX_PANE: undefined, LANG: undefined });
+  const printRuns = (home: string): unknown[] => (stubLog(home) ?? []).filter((e) => e.argv.includes('-p'));
+
+  // ── the grammar and the subcommand table ───────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: the grammar and the subcommand table', () => {
+    r7it('a list flag collects every value in order, and a list flag beside its sha partner is paired by position', () => {
+      const { flags } = r7drv.parseArgs(['power', '--census', '/c/a', '--census', '/c/b', '--census-sha256', 'h1', '--census-sha256', 'h2', '--record', '/r']);
+      r7expect(flags).toEqual({ census: ['/c/a', '/c/b'], 'census-sha256': ['h1', 'h2'], record: '/r' });
+    });
+
+    r7it.each([
+      [['pilot-source', '--record', '/r'], '--record is not a pilot-source flag'],
+      [['quiz-source', '--account', 'up-a'], '--account is not a quiz-source flag'],
+      [['freeze', '--census', '/c'], '--census is not a freeze flag'],
+      [['power', '--out', '/o'], '--out is not a power flag'],
+      [['open', '--draft', '--record', '/r'], '--record is not a open --draft flag'],
+      [['open', '--finalize', '--account', 'up-a'], '--account is not a open --finalize flag'],
+      [['open', '--template', '--out', '/o'], '--out is not a open --template flag'],
+      [['verify', '--registry', '--frozen', '/f'], '--frozen is not a verify --registry flag'],
+      [['verify', '--section', 'ab', '--census', '/c'], '--census is not a verify --section ab flag'],
+      [['step0a', '--record', '/r'], '--record is not a step0a flag'],
+    ])('each subcommand refuses a flag it never reads, before anything else: %j', (argv, detail) => {
+      const r = run7(null, home7(null), argv as string[]);
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('args-invalid', detail));
+    });
+
+    r7it('a required flag missing is named; an optional file flag without its sha, or a sha without its file, is refused', () => {
+      const H = 'a'.repeat(64);
+      const base = ['power', '--census', '/c', '--census-sha256', H, '--verify', '/v', '--verify-sha256', H];
+      r7expect(run7(null, home7(null), [...base, '--record', '/r']).stderr).toBe(refusalLine('args-invalid', 'record-sha256-required'));
+      const full = [...base, '--record', '/r', '--record-sha256', H];
+      r7expect(run7(null, home7(null), [...full, '--supersedes', '/s']).stderr).toBe(refusalLine('args-invalid', '--supersedes and --supersedes-sha256 go together'));
+      r7expect(run7(null, home7(null), [...full, '--supersedes-sha256', H]).stderr).toBe(refusalLine('args-invalid', '--supersedes and --supersedes-sha256 go together'));
+    });
+
+    r7it('open wants exactly one mode, and verify exactly one of --registry and --section ab', () => {
+      r7expect(run7(null, null, ['open']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
+      r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
+      r7expect(run7(null, null, ['verify']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
+      r7expect(run7(null, null, ['verify', '--registry', '--section', 'ab']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
+      r7expect(run7(null, null, ['verify', '--section', 'quiz']).stderr).toBe(refusalLine('args-invalid', 'section "quiz": this build verifies ab only'));
+    });
+
+    r7it('no W2-5a subcommand takes --allow-code-change: before window start a code change is a superseding draft (W2-D6, W2-D24)', () => {
+      for (const sub of [['quiz-source'], ['freeze'], ['power'], ['open', '--finalize'], ['verify', '--registry']]) {
+        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', 'unknown flag "--allow-code-change"'));
+      }
+    });
+  });
+
+  // ── parity with the gate and with step 0a ──────────────────────────────────────────────────────────────────
+  // CODE_SHA_FILES parity is Task 1's pin (R3); this describe holds the flags_accepted parity pin.
+  r7describe('W2-5a Task 7: parity with the gate and with step 0a', () => {
+    r7it.each(['restricted', 'fallback'])('step0a records every flag the contract carries, under %s: flags_accepted parity', (mode) => {
+      const home = home7(null);
+      const out = outDir();
+      const r = run7(null, home, ['step0a', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--judge-model', OPUS, '--arm-model', ARM, '--settings-mode', mode]);
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.STEP0A_FILE), 'utf8'));
+      r7expect(Object.keys(rec.flags_accepted).sort()).toEqual(r7drv.contractFlags(mode));
+    });
+
+    r7it('contractFlags is every flag token of every spawn mode\'s argv, and holds the arm-only tools flags', () => {
+      for (const mode of ['restricted', 'fallback']) {
+        const want = new Set<string>();
+        for (const m of r7drv.SPAWN_MODES as string[]) for (const t of r7drv.spawnArgv({ mode: m, model: 'contract-model', settingsMode: mode, home: '/home/u' }) as string[]) if (t.startsWith('-')) want.add(t);
+        r7expect(r7drv.contractFlags(mode)).toEqual([...want].sort());
+      }
+      r7expect(r7drv.contractFlags('restricted')).toEqual(r7expect.arrayContaining(['--allowedTools', '--restricted', '--tools', '--verbose']));
+      r7expect(r7drv.contractFlags('fallback')).toEqual(r7expect.arrayContaining(['--setting-sources', '--settings']));
+    });
+
+    r7it('Q18_FIGURES reads exactly the two levels the validator requires in q18_settings.power (W2-D21, D-5791)', () => {
+      const levels = [...new Set(Object.values(r7drv.Q18_FIGURES as Record<string, { power: number }>).map((f) => f.power))].sort();
+      r7expect(levels).toEqual([0.5, 0.8]);
+      const home = home7(null);
+      const base = draft7(R7_REPO, home);
+      const errs = (power: number[]): unknown[] => {
+        const v = r7gate.validateOpenRecord({ ...base, q18_settings: { ...base.q18_settings, power } }, { draft: null, predecessor: null, frozen: null }) as R7;
+        return v.ok ? [] : v.errors;
+      };
+      r7expect(errs([0.5, 0.8])).toEqual([]);
+      for (const level of levels) r7expect(errs(levels.filter((l) => l !== level)), String(level)).toEqual([{ path: 'q18_settings.power', word: 'value-outside-set' }]);
+    });
+
+    r7it('REGISTRY_STATES is ok plus the validator\'s three drop reasons: each validates as a drop and ok does not (W2-D20)', () => {
+      r7expect([...r7drv.REGISTRY_STATES]).toEqual(['ok', 'registry-mismatch', 'registry-absent', 'unreadable']);
+      const c = chain7(home7(null));
+      const ctx = { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: c.merged.length } };
+      for (const reason of r7drv.REGISTRY_STATES as string[]) {
+        const final = { ...c.final, registry_drops: c.final.registry_drops.map((x: R7) => ({ ...x, reason })) };
+        const v = r7gate.validateOpenRecord(final, ctx) as R7;
+        if (reason === 'ok') r7expect(v.errors).toEqual([{ path: 'registry_drops[0].reason', word: 'value-outside-set' }]);
+        else r7expect(v.ok, reason).toBe(true);
+      }
+    });
+  });
+
+  // ── the record and its inputs ──────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: the record and its inputs', () => {
+    const powerArgv = (d: Saved, extra: string[] = []): string[] => ['power', ...inp('record', d), '--census', '/nowhere/c', '--census-sha256', 'a'.repeat(64), '--verify', '/nowhere/v', '--verify-sha256', 'b'.repeat(64), ...extra];
+
+    r7it('a record whose bytes are not its sha is record-sha-mismatch, checked before the bytes are parsed', () => {
+      const d = saveText7('{"part":"draft"}\n', 'bad.json');
+      r7fs.writeFileSync(d.path, 'not json at all');
+      const got = r7Sha('not json at all');
+      r7expect(run7(null, null, powerArgv(d)).stderr).toBe(refusalLine('record-sha-mismatch', `record: expected ${d.sha}, measured ${got}`));
+    });
+
+    r7it('a non-JSON input whose sha matches is input-invalid; a wrong sha on a non-JSON input is input-sha-mismatch', () => {
+      const home = home7(null);
+      const d = save7(draft7(R7_REPO, home), 'part1.json');
+      const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), 'census.json');
+      r7fs.writeFileSync(p, 'not json');
+      const ok = ['power', ...inp('record', d), '--census', p, '--census-sha256', r7Sha('not json'), '--verify', p, '--verify-sha256', r7Sha('not json')];
+      r7expect(run7(null, null, ok).stderr).toBe(refusalLine('input-invalid', 'census not-json'));
+      const bad = ['power', ...inp('record', d), '--census', p, '--census-sha256', 'c'.repeat(64), '--verify', p, '--verify-sha256', r7Sha('not json')];
+      r7expect(run7(null, null, bad).stderr).toBe(refusalLine('input-sha-mismatch', `census: expected ${'c'.repeat(64)}, measured ${r7Sha('not json')}`));
+    });
+
+    r7it('a record inside a git tree, its .git a directory or a file, is record-invalid before a byte is read (W2-D25)', () => {
+      const repo = r7MkTmp('ccrc-w2-5a-t7-git-');
+      r7fs.mkdirSync(r7path.join(repo, '.git'));
+      const p = r7path.join(repo, 'part1.json');
+      r7fs.writeFileSync(p, '{}\n');
+      r7expect(run7(null, null, ['power', '--record', p, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
+        .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(repo)}`));
+      // A linked worktree (or a submodule) has `.git` as a FILE naming its git directory: the same refusal, before a byte is read.
+      const linked = r7MkTmp('ccrc-w2-5a-t7-gitfile-');
+      r7fs.writeFileSync(r7path.join(linked, '.git'), 'gitdir: /home/u/elsewhere/.git\n');
+      const q = r7path.join(linked, 'part1.json');
+      r7fs.writeFileSync(q, '{}\n');
+      r7expect(run7(null, null, ['power', '--record', q, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
+        .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(linked)}`));
+    });
+
+    r7it('a final given where a draft is read, and a record the validator refuses, are record-invalid with every error', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(null, null, powerArgv(c.f)).stderr).toBe(refusalLine('record-invalid', 'record part "final", wanted draft'));
+      const forged = save7({ ...c.draft, k: 11, row_cap: 1 }, 'forged.json');
+      r7expect(run7(null, null, powerArgv(forged)).stderr).toBe(refusalLine('record-invalid', 'k constant-mismatch; row_cap constant-mismatch'));
+    });
+
+    r7it('a superseding draft is read only with its predecessor: --supersedes, whose sha must be the one it names', () => {
+      const home = home7(null);
+      const first = draft7(R7_REPO, home);
+      const p1 = save7(first, 'part1-first.json');
+      const second = { ...first, drafted_ms: first.drafted_ms + 1, supersedes: p1.sha, window_plan: { planned_days: 21 } };
+      const p2 = save7(second, 'part1-second.json');
+      r7expect(run7(null, null, powerArgv(p2)).stderr).toBe(refusalLine('args-invalid', 'supersedes-required: the record supersedes a draft; pass it as --supersedes'));
+      // With it, the record validates and the next refusal is the absent census, read after the code re-check.
+      r7expect(run7(null, null, powerArgv(p2, inp('supersedes', p1))).stderr).toBe(refusalLine('input-invalid', 'census unreadable ENOENT'));
+    });
+
+    r7it('a final is read with its draft (--part1) and its frozen list (--frozen), whose sha must be the record\'s quiz sha', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const argv = (frozen: Saved): string[] => ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', frozen)];
+      const edited = saveText7(r7fs.readFileSync(c.fz.path, 'utf8').replace('fixture step 1', 'fixture step 7'), 'frozen-edited.json');
+      r7expect(run7(null, home, argv(edited)).stderr).toBe(refusalLine('quiz-sha-mismatch', `frozen ${edited.sha} is not the record's quiz.sha256 ${c.fz.sha}`));
+      r7expect(run7(null, home, ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('frozen', c.fz)]).stderr).toBe(refusalLine('args-invalid', 'part1-required'));
+    });
+  });
+
+  // ── W2-D24: every record subcommand re-checks the code it runs under ────────────────────────────────────────
+  r7describe('W2-5a Task 7: the codeShas re-check on every record subcommand', () => {
+    /** Each subcommand's argv over a valid record, with one input it would read next left unreadable, so a re-check that
+     *  ran after that read would answer the input's word instead. */
+    const rows: Array<[string, (c: R7) => string[]]> = [
+      ['quiz-source', (c) => ['quiz-source', '--out', outDir(), ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha, ...inp('verify', c.vA)]],
+      ['freeze', (c) => ['freeze', '--out', outDir(), ...inp('record', c.d), '--sourced', '/nowhere/s', '--sourced-sha256', c.sA.sha]],
+      ['power', (c) => ['power', ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha, ...inp('verify', c.vA)]],
+      ['open --finalize', (c) => finalizeArgv(c, { census: ['--census', '/nowhere/c', '--census-sha256', c.cA.sha] })],
+      ['verify --registry', (c) => ['verify', '--registry', ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha]],
+      ['verify --section ab', (c) => ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]],
+    ];
+    r7it.each(rows)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);   // no store: verify ab's next read would refuse store-unreadable store-missing
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('code-changed', 'changed deploy/measure-history.py'));
+      r7expect(printRuns(home)).toEqual([]);
+    });
+    r7it.each(rows)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr)
+        .toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it('CONTROL: under an unchanged copy of the tree, each row reaches the read it was built to fail', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const tree = tree7();
+      const want = ['input-invalid: census unreadable ENOENT', 'input-invalid: sourced unreadable ENOENT', 'input-invalid: census unreadable ENOENT',
+        'input-invalid: census unreadable ENOENT', 'input-invalid: census unreadable ENOENT', 'store-unreadable: store-missing'];
+      rows.forEach(([sub, argv], i) => r7expect(run7(tree, home, argv(c)).stderr, sub).toBe(`ccrc history-replay: ${want[i]}\n`));
+    });
+  });
+
+  // ── open --template and open --draft ───────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: open template and draft', () => {
+    r7it('open --template prints a skeleton of both parts from OPEN_RECORD_V1: every fixed or default value, a placeholder elsewhere', () => {
+      const r = run7(null, null, ['open', '--template']);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(r.stderr).toBe('');
+      const t = JSON.parse(r.stdout);
+      r7expect(r.stdout).toBe(r7Canon(t) + '\n');
+      r7expect(t.kind).toBe(r7drv.TEMPLATE_KIND);
+      const walk = (spec: R7, value: R7, at: string): void => {
+        for (const [k, f] of Object.entries(spec) as Array<[string, R7]>) {
+          const p = at === '' ? k : `${at}.${k}`;
+          if (Object.hasOwn(f, 'value')) r7expect(value[k], p).toEqual(f.value);
+          else if (f.fields) walk(f.fields, value[k], p);
+          else if (f.type !== 'array' && !f.values) r7expect(value[k], p).toBe(`<${f.status} ${f.type}${f.nullable ? ' or null' : ''}>`);
+        }
+      };
+      walk(r7gate.OPEN_RECORD_V1.draft, t.draft, '');
+      walk(r7gate.OPEN_RECORD_V1.final, t.final, '');
+      r7expect(t.draft.account).toBe('<operator string>');
+      r7expect(t.final.part).toBe('final');
+    });
+
+    /** open --draft's argv over saved step 0a and pilot-source outputs: two nodes, one step 0a file bound to each. */
+    const draftArgv = (s0: Saved, pilot: Saved, extra: string[] = []): string[] => ['open', '--draft',
+      ...inp('step0a', s0), '--node-label', 'node-a', '--node-store-id', STORE_A, ...inp('step0a', s0), '--node-label', 'node-b', '--node-store-id', STORE_B,
+      ...inp('pilot', pilot), '--account', 'up-a', '--arm-model', ARM, '--writer-model', OPUS, '--judge-model', OPUS, ...extra];
+
+    r7it('open --draft prints part 1, validated, and its sha on stderr; each step 0a output bound to its node; gate_code measured', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot-source.json');
+      const before = snapshot7(home);
+      const r = run7(tree, home, draftArgv(s0, pilot));
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
+      const rec = JSON.parse(r.stdout);
+      r7expect(r.stdout).toBe(r7Canon(rec) + '\n');
+      r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+      r7expect(rec.part).toBe('draft');
+      r7expect(rec.supersedes).toBeNull();
+      r7expect(rec.bootstrap.seed).toMatch(/^[0-9a-f]{64}$/);
+      r7expect(rec.nodes).toEqual([{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }]);
+      r7expect(rec.step0a.map((s: R7) => [s.label, s.store_id])).toEqual([['node-a', STORE_A], ['node-b', STORE_B]]);
+      r7expect(rec.gate_code).toEqual({ release_tag: STAMP, files: SHAS(tree) });
+      r7expect(rec.pilot.seed).toBe(pilot.value.seed);
+      r7expect(rec.pilot.tolerance).toBe(0.25);
+      r7expect(rec.active_rule.text).toBe(r7drv.ACTIVE_RULE_TEXT);
+      const again = JSON.parse(run7(tree, home, draftArgv(s0, pilot)).stdout);
+      r7expect(again.bootstrap.seed, 'a fresh seed each run (W2-D18)').not.toBe(rec.bootstrap.seed);
+    });
+
+    r7it('buildDraft is deterministic with the seed and clock injected, and its record validates', () => {
+      const home = home7(null);
+      const a = draft7(R7_REPO, home);
+      r7expect(r7Canon(draft7(R7_REPO, home))).toBe(r7Canon(a));
+      r7expect(a.bootstrap.seed).toBe(SEED);
+      r7expect(r7gate.validateOpenRecord(a, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('open --draft refuses a step 0a output whose flags_accepted does not name exactly the contract\'s flags (section 7 parity)', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s = step0a7(tree, home);
+      delete s.flags_accepted['--verbose'];
+      s.flags_accepted['--extra-flag'] = true;
+      const r = run7(tree, home, draftArgv(save7(s, 'step0a.json'), save7(pilot7(tree), 'pilot.json')));
+      r7expect(r.stderr).toBe(refusalLine('input-invalid', 'step0a node-a flags-incomplete missing --verbose extra --extra-flag'));
+      r7expect(r.stdout).toBe('');
+    });
+
+    r7it('a step 0a flag measured false is refused by the validator, for every node it binds, with no exception (W2-D25)', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s = step0a7(tree, home);
+      s.flags_accepted['--verbose'] = false;
+      r7expect(run7(tree, home, draftArgv(save7(s, 'step0a.json'), save7(pilot7(tree), 'pilot.json'))).stderr)
+        .toBe(refusalLine('record-invalid', 'step0a[0].flags_accepted.--verbose flag-rejected; step0a[1].flags_accepted.--verbose flag-rejected'));
+    });
+
+    r7it('the overrides file changes default fields only; the pilot-derived and the fixed, measured or operator fields are refused', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot.json');
+      const over = (o: R7): string[] => ['--overrides', save7(o, 'overrides.json').path];
+      const ok = run7(tree, home, draftArgv(s0, pilot, over({ window_plan: { planned_days: 21 }, rubric_id: 'v1-strict', pilot: { tolerance: 0.2 }, q18_settings: { power: [0.5, 0.8, 0.9] } })));
+      r7expect(ok.code, ok.stderr).toBe(0);
+      const rec = JSON.parse(ok.stdout);
+      r7expect([rec.window_plan.planned_days, rec.rubric_id, rec.rubric_sha256, rec.pilot.tolerance, rec.q18_settings.power])
+        .toEqual([21, 'v1-strict', r7gate.RUBRIC_SHA256['v1-strict'], 0.2, [0.5, 0.8, 0.9]]);
+      for (const [o, detail] of [
+        [{ k: 11 }, 'override k is fixed'],
+        [{ labeller: { sha_min_prefix: 40 } }, 'override labeller.sha_min_prefix comes from the pilot-source output'],
+        [{ quiz: { writer_input: 'leaf-span' } }, 'override quiz.writer_input comes from the pilot-source output'],
+        [{ rubric_sha256: 'a'.repeat(64) }, 'override rubric_sha256 follows rubric_id'],
+        [{ pilot: { seed: 'a'.repeat(64) } }, 'override pilot.seed is measured'],
+        [{ nodes: [] }, 'override nodes is operator'],
+        [{ q18_settings: { procedure: 'other' } }, 'override q18_settings.procedure is fixed'],
+        [{ nope: 1 }, 'override nope is not a part 1 field'],
+      ] as Array<[R7, string]>) {
+        r7expect(run7(tree, home, draftArgv(s0, pilot, over(o))).stderr, detail).toBe(refusalLine('args-invalid', detail));
+      }
+    });
+
+    r7it('a superseding draft keeps its predecessor\'s seed and names its sha, and validates against it', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot.json');
+      const first = run7(tree, home, draftArgv(s0, pilot));
+      const prior = saveText7(first.stdout, 'part1.json');
+      const r = run7(tree, home, draftArgv(s0, pilot, inp('supersedes', prior)));
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r.stdout);
+      r7expect(rec.bootstrap.seed).toBe(prior.value.bootstrap.seed);
+      r7expect(rec.supersedes).toBe(prior.sha);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: prior.value, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('--step0a, --node-label and --node-store-id are given the same number of times', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const argv = draftArgv(s0, save7(pilot7(tree), 'pilot.json')).filter((t, i, a) => !(t === '--node-label' && a[i + 1] === 'node-b') && t !== 'node-b');
+      r7expect(run7(tree, home, argv).stderr).toBe(refusalLine('args-invalid', '--step0a, --node-label and --node-store-id are given 2, 1 and 2 times'));
+    });
+  });
+
+  // ── verify --registry ──────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: verify registry', () => {
+    /** HOME on node A with each family's registry generation planted as `plant` says. */
+    function registryHome(plant: Record<string, string | 'dir' | null>): string {
+      const home = home7(STORE_A);
+      const reg = r7Paths(home).reg;
+      r7fs.mkdirSync(reg, { recursive: true });
+      for (const [id, v] of Object.entries(plant)) {
+        const p = r7path.join(reg, `${id}.generation`);
+        if (v === 'dir') r7fs.mkdirSync(p);
+        else if (v !== null) r7fs.writeFileSync(p, v);
+      }
+      return home;
+    }
+    r7it('CONTROL: snapshot7 sees a planted write, a changed file and a stray file beside the store', () => {
+      const home = home7(STORE_A);
+      const base = snapshot7(home);
+      r7expect(snapshot7(home), 'a second look at an untouched HOME is equal').toEqual(base);
+      r7fs.writeFileSync(r7path.join(home, '.ccrc', 'planted'), 'x', { mode: 0o600 });
+      r7expect(snapshot7(home), 'a new file').not.toEqual(base);
+      r7fs.rmSync(r7path.join(home, '.ccrc', 'planted'));
+      r7fs.appendFileSync(r7path.join(home, '.ccrc', 'build.json'), ' ');
+      r7expect(snapshot7(home), 'a changed file').not.toEqual(base);
+      const stray = r7path.join(r7path.dirname(r7Paths(home).dbFile), 'stray');
+      r7fs.writeFileSync(stray, 'x', { mode: 0o600 });
+      r7expect(snapshot7(home).filter((l) => l.includes('/stray ') || l.startsWith('stray ')).length, 'a stray file beside the store').toBeGreaterThan(0);
+    });
+
+    r7it('reports ok, registry-mismatch, registry-absent and unreadable, never one folded into another, and writes nothing (W2-D20, W2-D84)', () => {
+      const home = registryHome({ 'a-t1': A_T1.generation, 'a-t2': `${A_T2.generation}\n`, 'a-c1': gen(399), 'a-c2': 'dir', 'a-d': null });
+      const d = save7(draft7(R7_REPO, home), 'part1.json');
+      const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
+      const before = snapshot7(home);
+      const r = run7(null, home, ['verify', '--registry', ...inp('record', d), ...inp('census', cA)]);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only: the HOME tree is byte-identical').toEqual(before);
+      const out = JSON.parse(r.stdout);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      r7expect(out).toEqual(verify7(d.sha, cA, { 'a-c1': 'registry-mismatch', 'a-c2': 'unreadable', 'a-d': 'registry-absent' }));
+      const byId = Object.fromEntries(out.families.map((f: R7) => [f.ccrc_id, f.state]));
+      r7expect(byId).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'registry-mismatch', 'a-c2': 'unreadable', 'a-d': 'registry-absent' });
+      r7expect(out.counts).toEqual({ ok: 2, 'registry-mismatch': 1, 'registry-absent': 1, unreadable: 1 });
+    });
+    r7it('registryStateOf keeps four answers apart: absent, unreadable, a value equal to the generation, and any other value', () => {
+      r7expect(r7drv.registryStateOf({ state: 'absent' }, gen(1))).toBe('registry-absent');
+      r7expect(r7drv.registryStateOf({ state: 'unreadable' }, gen(1))).toBe('unreadable');
+      r7expect(r7drv.registryStateOf({ state: 'value', value: gen(1) }, gen(1))).toBe('ok');
+      r7expect(r7drv.registryStateOf({ state: 'value', value: '' }, gen(1))).toBe('registry-mismatch');
+    });
+    r7it('refuses on a store the record does not name, and a census of another node\'s store', () => {
+      const d = (home: string): Saved => save7(draft7(R7_REPO, home), 'part1.json');
+      const other = home7(STORE_C);
+      r7expect(run7(null, other, ['verify', '--registry', ...inp('record', d(other)), ...inp('census', save7(census7(STORE_C, FAMS_A)))]).stderr)
+        .toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+      const a = home7(STORE_A);
+      r7expect(run7(null, a, ['verify', '--registry', ...inp('record', d(a)), ...inp('census', save7(census7(STORE_B, FAMS_B)))]).stderr)
+        .toBe(refusalLine('input-invalid', `census store-id ${STORE_B} is not this node's store ${STORE_A}`));
+    });
+  });
+
+  // ── power ──────────────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: power', () => {
+    const powerRun = (c: R7, census: Saved[] = [c.cA, c.cB], verify: Saved[] = [c.vA, c.vB]): ReturnType<typeof run7> =>
+      run7(null, null, ['power', ...inp('record', c.d), ...census.flatMap((s) => inp('census', s)), ...verify.flatMap((s) => inp('verify', s))]);
+
+    r7it('reads q18_settings: one q18Power call per power level at rho_headline and at 0, over the kept families, covered_days from lookback_days', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const before = snapshot7(home);
+      const r = run7(null, home, ['power', ...inp('record', c.d), ...[c.cA, c.cB].flatMap((x) => inp('census', x)), ...[c.vA, c.vB].flatMap((x) => inp('verify', x))]);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      const out = JSON.parse(r.stdout);
+      // The population: every active family but a-d (registry-absent), each with its census windows; ticks from T0 - 7 d.
+      const kept = [A_T1, A_T2, A_C1, A_C2, B_T1, B_C1].map((f) => ({ key: keyOf(f), windows: SHAPE[f.ccrc_id]![0], covered_days: 7 }))
+        .sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+      const s = c.draft.q18_settings;
+      const want = s.power.flatMap((power: number) => [s.rho_headline, 0].map((rho) => {
+        const q = r7gate.q18Power({ families: kept, plannedDays: 14, seedHex: SEED, rho, power, sims: 2, gridStep: 0.45, B: 10_000 }) as R7;
+        return { power, rho, figure: q.figure, points: q.points };
+      }));
+      r7expect(out.figures).toEqual(want);
+      r7expect([out.headline, out.at_power_80, out.at_rho_0]).toEqual([want[0].figure, want[2].figure, want[1].figure]);
+      r7expect(out.n_f.per_family).toEqual(Object.fromEntries(kept.map((k) => [k.key, k.windows * 2])));
+      r7expect(Object.keys(out.n_f.per_family)).not.toContain(keyOf(A_D));
+      // §4's q18: per-node n_f too, each node's the sum over its kept families.
+      const nfOf = (fs: Array<typeof A_T1>): number => fs.reduce((t, f) => t + SHAPE[f.ccrc_id]![0] * 2, 0);
+      r7expect(out.n_f.per_node).toEqual({ [STORE_A]: nfOf([A_T1, A_T2, A_C1, A_C2]), [STORE_B]: nfOf([B_T1, B_C1]) });
+      r7expect(out.coverage[STORE_A].covered_days).toBe(7);
+      r7expect(out.pre_window_uptake.total).toEqual({ windows: 13, with_call: 5 });
+      r7expect(out.pre_window_uptake.card_consumed_main_all_time).toEqual({ [STORE_A]: 3, [STORE_B]: 3 });
+      r7expect(powerRun(c).stdout, 'the same inputs print the same bytes').toBe(r.stdout);
+    });
+
+    r7it('rhoHat: the one-way ANOVA estimate, hand-worked, and null below two clustered families', () => {
+      r7expect(r7drv.rhoHat([{ windows: 2, with_call: 2 }, { windows: 2, with_call: 0 }])).toBe(1);
+      r7expect(r7drv.rhoHat([{ windows: 2, with_call: 1 }, { windows: 2, with_call: 1 }])).toBe(-1);
+      r7expect(r7drv.rhoHat([{ windows: 3, with_call: 1 }])).toBeNull();
+      r7expect(r7drv.rhoHat([{ windows: 1, with_call: 1 }, { windows: 1, with_call: 0 }]), 'no within-family degree of freedom').toBeNull();
+    });
+
+    r7it('coveredDays: the look-back clipped to the tick coverage; null with no tick', () => {
+      const c = (first: number | null, n = 10): R7 => ({ as_of_ms: T0, since_ms: T0 - 14 * DAY, ticks: { n, first_ts_ms: first, last_ts_ms: T0 - 1 } });
+      r7expect(r7drv.coveredDays(c(T0 - 7 * DAY), 14)).toBe(7);
+      r7expect(r7drv.coveredDays(c(T0 - 20 * DAY), 14)).toBe(14);
+      r7expect(r7drv.coveredDays(c(null, 0), 14)).toBeNull();
+    });
+
+    r7it('refuses a census over another span than lookback_days, and one with no tick in its look-back', () => {
+      const c = chain7(home7(null));
+      const since = save7(census7(STORE_A, FAMS_A, { since: T0 - 13 * DAY }), 'census-a.json');
+      const sinceVerify = save7(verify7(c.d.sha, since, { 'a-d': 'registry-absent' }));
+      r7expect(powerRun(c, [since, c.cB], [sinceVerify, c.vB]).stderr)
+        .toBe(refusalLine('input-invalid', `census ${STORE_A} since-mismatch: as_of - since is ${13 * DAY} ms, lookback_days is 14`));
+      const none = save7(census7(STORE_A, FAMS_A, { nTicks: 0, ticksFirst: null }), 'census-a.json');
+      r7expect(powerRun(c, [none, c.cB], [save7(verify7(c.d.sha, none)), c.vB]).stderr).toBe(refusalLine('input-invalid', `census ${STORE_A} no-tick-coverage`));
+    });
+
+    r7it('the census assembler checks nodes only: an unlisted store, a duplicate, a node missing, and each verify binding', () => {
+      const c = chain7(home7(null));
+      const cC = save7(census7(STORE_C, FAMS_B), 'census-c.json');
+      r7expect(powerRun(c, [c.cA, c.cB, cC]).stderr).toBe(refusalLine('input-invalid', `census store-id-unlisted ${STORE_C}`));
+      r7expect(powerRun(c, [c.cA, c.cA]).stderr).toBe(refusalLine('input-invalid', `census store-id-duplicate ${STORE_A}`));
+      r7expect(powerRun(c, [c.cA], [c.vA]).stderr).toBe(refusalLine('input-invalid', 'census node-missing node-b'));
+      r7expect(powerRun(c, [c.cA, c.cB], [c.vA]).stderr).toBe(refusalLine('input-invalid', 'verify node-missing node-b'));
+      const rebound = save7({ ...c.vA.value, census_sha256: c.cB.sha });
+      r7expect(powerRun(c, [c.cA, c.cB], [rebound, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify census-mismatch ${STORE_A}`));
+      const short = save7({ ...c.vA.value, families: c.vA.value.families.slice(1) });
+      r7expect(powerRun(c, [c.cA, c.cB], [short, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify families-mismatch ${STORE_A}`));
+      const look = save7({ ...c.vA.value, lookback_ms: 1 });
+      r7expect(powerRun(c, [c.cA, c.cB], [look, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify lookback-mismatch ${STORE_A}`));
+    });
+  });
+
+  // ── pilot-source and quiz-source (in-process, sourceQuiz injected) ─────────────────────────────────────────
+  r7describe('W2-5a Task 7: pilot-source and quiz-source', () => {
+    const PILOT_SEED = hex('pilot seed injected');
+    const fakeSource = (calls: R7[], result: R7) => async (input: R7): Promise<R7> => { calls.push(input); return result; };
+
+    r7it('pilot-source: preflighted against step 0a, its own seed, the pilot frozen list and its output, which part 1 accepts', async () => {
+      const home = home7(STORE_A);
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const usage = [entry7(PILOT_FAMILY, 31, [0, 0]), entry7(PILOT_FAMILY, 32, [0, 1])];
+      const calls: R7[] = [];
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: usage, fidelity: [{ ...PILOT_FAMILY, boundary_uuid: gen(901) }], counts: { candidates: 7 } }), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(r.code).toBe(0);
+      r7expect(calls).toHaveLength(1);
+      r7expect([calls[0]!.mode, calls[0]!.seedHex, calls[0]!.rs.storeId, Object.hasOwn(calls[0]!, 'families'), calls[0]!.writer.launch.accountId])
+        .toEqual(['pilot', PILOT_SEED, STORE_A, false, 'up-a']);
+      r7expect(calls[0]!.shaMinPrefix, 'D-6312: the prefix is sourceQuiz\'s own argument, the flag\'s default, and not in the plan').toBe(7);
+      r7expect(Object.hasOwn(calls[0]!.plan, 'shaMinPrefix') || Object.hasOwn(calls[0]!.plan, 'sha_min_prefix')).toBe(false);
+      r7expect(calls[0]!.plan).toEqual({ n_fidelity: 5, n_usage: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } });
+      r7expect(calls[0]!.exclude).toEqual({ pilotFamilies: [], assignment: [] });
+      r7expect(printRuns(home), 'the writer handle preflighted with --version only: no writer spawn').toEqual([]);
+      const frozenText = r7fs.readFileSync(r7path.join(out, r7drv.PILOT_FROZEN_FILE), 'utf8');
+      r7expect(frozenText).toBe(r7drv.frozenListText('pilot', head7(), usage.map(strip7)));
+      const bytes = r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(bytes)}\n`);
+      const o = JSON.parse(bytes.toString('utf8'));
+      r7expect(o).toMatchObject({ kind: r7drv.PILOT_SOURCE_KIND, v: 1, store_id: STORE_A, seed: PILOT_SEED, n_fidelity: 5, n_usage: 5,
+        families: [PILOT_FAMILY], frozen_sha256: r7Sha(frozenText), writer_model: OPUS, code_shas: SHAS(R7_REPO), release_stamp: STAMP, budget: 100_000, spend: 0 });
+      // The chain: part 1 built from this output validates (the validator ties pilot.used, code_shas and release_stamp to part 1).
+      const s = step0a7(R7_REPO, home);
+      const rec = r7drv.buildDraft({ nodes: [{ label: 'node-a', store_id: STORE_A }], step0a: [{ ...s, label: 'node-a', store_id: STORE_A }], pilot: o,
+        account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS }, gateCode: { release_tag: STAMP, files: SHAS(R7_REPO) }, seedHex: SEED, nowMs: T0 });
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('D-6312: pilot-source hands --sha-min-prefix to sourceQuiz as its own argument and records it in the output', async () => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, '--sha-min-prefix', '40', ...inp('step0a', s0)]) as R7;
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(calls[0]!.shaMinPrefix).toBe(40);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE), 'utf8')).used.sha_min_prefix).toBe(40);
+    });
+
+    r7it('D-6312: quiz-source hands part 1\'s labeller.sha_min_prefix to sourceQuiz as its own argument: 40 when the pilot used 40, 7 otherwise', async () => {
+      const prefixOf = async (prefix: number): Promise<unknown> => {
+        const home = home7(STORE_A);
+        const c = chain7(home, {}, 'up-a', null, prefix);
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        r7expect(r.refusal).toBeNull();
+        r7expect(c.draft.labeller.sha_min_prefix, 'CONTROL: the record carries it').toBe(prefix);
+        return calls[0]!.shaMinPrefix;
+      };
+      r7expect(await prefixOf(40)).toBe(40);
+      r7expect(await prefixOf(7), 'CONTROL').toBe(7);
+    });
+
+    r7it('pilot-source refuses code-changed against step 0a, and an account other than step 0a\'s, before any writer spawn', async () => {
+      const home = home7(STORE_A);
+      const moved = step0a7(R7_REPO, home);
+      moved.code_shas['deploy/measure-history.py'] = hex('another build');
+      const calls: R7[] = [];
+      const argv = (s0: Saved, account = 'up-a'): R7 => (r7drv.parseArgs(['pilot-source', '--out', outDir(), '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7).flags;
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
+      const r = await inProcess(() => r7drv.pilotSourceCommand(argv(save7(moved)) as never, envOf(home) as never, deps as never));
+      r7expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+      const other = await inProcess(() => r7drv.pilotSourceCommand(argv(save7(step0a7(R7_REPO, home)), 'gen-a') as never, envOf(home) as never, deps as never));
+      r7expect(other.refusal).toEqual({ word: 'input-invalid', detail: 'step0a account up-a is not --account gen-a' });
+      r7expect(calls).toEqual([]);
+      r7expect(printRuns(home)).toEqual([]);
+    });
+
+    r7it('R10: a writer model that is not an exact Opus id refuses before prepareOut makes --out, so the refused run leaves no --out; CONTROL: an exact Opus id makes it', async () => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const calls: R7[] = [];
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
+      const run = async (model: string): Promise<{ refusal: R7 | null; made: boolean }> => {
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', model, ...inp('step0a', s0)]) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, deps as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out) };
+      };
+      r7expect(await run('claude-other-9-1')).toEqual({ refusal: { word: 'args-invalid', detail: 'writer-model "claude-other-9-1" is not an exact Opus model id' }, made: false });
+      r7expect(calls, 'nothing sourced').toEqual([]);
+      r7expect(await run(OPUS), 'CONTROL: an exact Opus id passes, and prepareOut makes --out').toEqual({ refusal: null, made: true });
+      r7expect(calls, 'CONTROL: the Opus run reached sourcing').toHaveLength(1);
+      r7expect(printRuns(home), 'no writer spawn either way').toEqual([]);
+    });
+
+    const quizFlags = (c: R7, out: string): R7 => (r7drv.parseArgs(['quiz-source', '--out', out, ...inp('record', c.d),
+      ...inp('census', c.cA), ...inp('census', c.cB), ...inp('verify', c.vA), ...inp('verify', c.vB)]) as R7).flags;
+
+    r7it('quiz-source: the assignment from the census and verify inputs, control ids and pilot families excluded, sourced.json written', async () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const out = outDir();
+      const calls: R7[] = [];
+      const entries = [entry7(A_T1, 1, [K7(0), 0])];
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries, fidelity: [], counts: { candidates: 3 } }) } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(calls).toHaveLength(1);
+      const input = calls[0]!;
+      r7expect(input.exclude).toEqual({ pilotFamilies: [PILOT_FAMILY], assignment: c.assignment.list });
+      r7expect((input.exclude.assignment as R7[]).filter((a) => a.arm === 'control').map((a) => a.ccrc_id)).toEqual(r7expect.arrayContaining(['a-c1', 'b-c1']));
+      r7expect([input.mode, input.seedHex, input.rs.storeId, input.writer.launch.accountId]).toEqual(['quiz', SEED, STORE_A, 'up-a']);
+      r7expect(input.plan).toEqual(c.draft.quiz);
+      r7expect(input.shaMinPrefix, 'D-6312: part 1\'s labeller.sha_min_prefix, its own argument and not inside the signed plan').toBe(c.draft.labeller.sha_min_prefix);
+      // R10 (C1): the census's kept list feeds the assignment only; sourceQuiz walks the store's own admitted families.
+      r7expect(Object.hasOwn(input, 'families'), 'no family list: never assembled.kept (W2-D71, W2-D73)').toBe(false);
+      r7expect((c.assembled.kept as R7[]).length, 'CONTROL: the census did make a kept list, which the assignment read').toBeGreaterThan(0);
+      const bytes = r7fs.readFileSync(r7path.join(out, r7drv.SOURCED_FILE));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(bytes)}\n`);
+      r7expect(JSON.parse(bytes.toString('utf8'))).toEqual(r7drv.sourcedReport({ recordSha256: c.d.sha, storeId: STORE_A,
+        assignmentSha256: c.assignment.sha256, inputs: c.inputs, sourced: { entries, counts: { candidates: 3 } }, spend: 0 }));
+      r7expect(c.assignment.list.map((a: R7) => a.ccrc_id), 'a-d was dropped by its registry state before the flip').not.toContain('a-d');
+    });
+
+    r7it('quiz-source is preflighted against part 1: tree-moved and claude-version-moved, before any writer spawn (W2-D56)', async () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const calls: R7[] = [];
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) };
+      const recorded = versionOf(home);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), `{"type":"system","note":"another version"}\n` + r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8'));
+      const v = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, deps as never));
+      r7expect(v.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded ${recorded}, measured {"type":"system","note":"another version"}` });
+      const home2 = home7(STORE_A);
+      const c2 = chain7(home2);
+      r7fs.writeFileSync(r7path.join(home2, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: 'v9.9.8' }));
+      const t = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c2, outDir()) as never, envOf(home2) as never, deps as never));
+      r7expect(t.refusal).toEqual({ word: 'tree-moved', detail: `recorded ${STAMP}, measured v9.9.8` });
+      r7expect(calls).toEqual([]);
+      r7expect([...printRuns(home), ...printRuns(home2)]).toEqual([]);
+    });
+
+    // W2-D55's hand-offs: a sourceQuiz that asks the real writer handle twice, so the gate the subcommand built is what stops it.
+    const writerItem7 = (n: number): R7 => {
+      const e = strip7(entry7(A_T1, n, [0, 0]));
+      const f = { text: e.fact_raw, rawLen: Buffer.byteLength(e.fact_raw) };
+      return { ...e, leaf: f, pair: null, span: [f] };
+    };
+    const twoAsks7 = (calls: R7[], section: string) => async (input: R7): Promise<R7> => {
+      calls.push(input);
+      await input.writer.ask(section, writerItem7(1));
+      await input.writer.ask(section, writerItem7(2));
+      return { entries: [], fidelity: [], counts: {} };
+    };
+    /** Like twoAsks7, but the two items it asks come from `seedHex` (as the real sourceQuiz's draw does): the same seed asks
+     *  the same two, another seed asks two others, and each answered ask's qid is pushed on `asked` for the case to compare. */
+    const seedAsks7 = (calls: R7[], asked: string[], section: string) => async (input: R7): Promise<R7> => {
+      calls.push(input);
+      const base = 10 + (Number.parseInt((input.seedHex as string).slice(0, 4), 16) % 5000);
+      for (const n of [base, base + 1]) {
+        const item = writerItem7(n);
+        await input.writer.ask(section, item);
+        asked.push(item.qid as string);
+      }
+      return { entries: [], fidelity: [], counts: {} };
+    };
+    const writerHome7 = (): string => {
+      const home = home7(STORE_A);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which commit did the fixture step record?'));
+      return home;
+    };
+
+    r7it.skipIf(process.platform === 'darwin')('quiz-source hands part 1\'s pilot_budget and limits to the writer gate (W2-D55): a tight record budget stops the second writer batch, a low record threshold stops the writer at open', async () => {
+      const run = async (draftOver: R7): Promise<{ refusal: R7 | null; calls: number; runs: number }> => {
+        const home = writerHome7();   // before chain7, so the draft's step 0a records this stub's version
+        const c = chain7(home, draftOver);
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'quiz') } as never));
+        return { refusal: r.refusal, calls: calls.length, runs: printRuns(home).length };
+      };
+      r7expect(await run({}), 'CONTROL: under the record defaults both asks spawn').toEqual({ refusal: null, calls: 1, runs: 2 });
+      const tight = await run({ pilot_budget: 1 });
+      r7expect(tight.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect(tight.runs, 'the first ask spent past the record budget; the second never spawned').toBe(1);
+      const low = await run({ limits: { threshold_pct: 5 } });
+      r7expect(low.refusal).toMatchObject({ word: 'limits-threshold' });
+      r7expect([low.calls, low.runs], 'refused at open, before sourceQuiz and any writer spawn (the row reads five 10, under the default 70)').toEqual([0, 0]);
+    }, 120_000);
+
+    // D-6313: the pilot's seed is drawn once per --out and pinned there, so the batch W2-D55 says can be resumed is resumed.
+    r7it.skipIf(process.platform === 'darwin')('D-6313: a pilot-source stopped by its budget and re-run on the same --out uses the pinned seed, not a new draw: it asks the same two items, so the first ask is reused (one new spawn, not two) and the spend is counted once; CONTROL: a fresh --out draws deps.seed() and asks other items', async () => {
+      const SEED_A = hex('pilot seed first');
+      const SEED_B = hex('pilot seed second');
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const run = async (budget: number, seed: string, to = out): Promise<{ refusal: R7 | null; calls: R7[]; asked: string[] }> => {
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', to, '--account', 'up-a', '--budget', String(budget), '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const asked: string[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: seedAsks7(calls, asked, 'pilot'), seed: () => seed } as never));
+        return { refusal: r.refusal, calls, asked };
+      };
+      const first = await run(1, SEED_A);
+      r7expect(first.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect(first.calls[0]!.seedHex).toBe(SEED_A);
+      r7expect(first.asked, 'the first ask spent past the budget, so the second item was never asked').toHaveLength(1);
+      r7expect(printRuns(home), 'the first ask spawned and spent past the budget').toHaveLength(1);
+      // The fake's items depend on the seed: the same --out under the other seed would ask other items (the CONTROL below).
+      const second = await run(100_000, SEED_B);
+      r7expect(second.refusal).toBeNull();
+      r7expect(printRuns(home), 'the first ask was reused: only the second spawned, no respawn under a drawn seed').toHaveLength(2);
+      r7expect(r7fs.readFileSync(r7path.join(out, 'spend.jsonl'), 'utf8').trim().split('\n'), 'two spawns, two ledger lines, none orphaned or counted twice').toHaveLength(2);
+      r7expect(second.asked[0], 'the re-run asks the same first item').toBe(first.asked[0]);
+      r7expect(second.calls[0]!.seedHex, 'the re-run reads the pinned seed, not the new draw').toBe(SEED_A);
+      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
+      r7expect(r7fs.readFileSync(seedFile, 'utf8'), 'the seed is pinned under --out').toBe(`${SEED_A}\n`);
+      r7expect(r7fs.statSync(seedFile).mode & 0o777).toBe(0o600);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE), 'utf8')).seed).toBe(SEED_A);
+      const fresh = await run(100_000, SEED_B, outDir());
+      r7expect(fresh.calls[0]!.seedHex, 'CONTROL: a fresh --out draws deps.seed()').toBe(SEED_B);
+      r7expect(fresh.asked.some((q) => second.asked.includes(q)), 'CONTROL: the seed decides the items, so an unpinned seed would ask others').toBe(false);
+    }, 120_000);
+
+    r7it.skipIf(process.platform === 'darwin')('D-6313: a pinned seed that is not a seed, or not a regular file, refuses out-refused, as every --out file does', async () => {
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const run = async (): Promise<R7 | null> => {
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => ({ entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return r.refusal;
+      };
+      r7expect(await run(), 'CONTROL: the first run pins a seed').toBeNull();
+      const seedFile = r7path.join(out, r7drv.PILOT_SEED_FILE);
+      for (const bad of ['', 'not a seed\n', `${PILOT_SEED.toUpperCase()}\n`, PILOT_SEED, `${PILOT_SEED}\n\n`]) {
+        r7fs.writeFileSync(seedFile, bad, { mode: 0o600 });
+        r7expect(await run(), JSON.stringify(bad)).toEqual({ word: 'out-refused', detail: `${r7drv.PILOT_SEED_FILE} is not a seed` });
+      }
+      r7fs.rmSync(seedFile);
+      r7fs.mkdirSync(seedFile);
+      r7expect(await run()).toEqual({ word: 'out-refused', detail: `${r7drv.PILOT_SEED_FILE} not-regular` });
+    }, 120_000);
+
+    r7it.skipIf(process.platform === 'darwin')('pilot-source hands --budget to the writer gate (W2-D55): --budget 1 stops the second writer batch', async () => {
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', outDir(), '--account', 'up-a', '--budget', '1', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'pilot'), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect([calls.length, printRuns(home).length]).toEqual([1, 1]);
+    }, 120_000);
+
+    // Both writer inputs are walked end to end: the default excerpt (what the operator's run uses unless it overrides) and leaf-span.
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, writer input %s, leaves no B text and no key anywhere under --out', async (writerInput) => {
+      const key = w6Akia('WALKKEY');   // a key-shaped value in the span the walk sources from (assembled at runtime, never whole in the tree)
+      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-', undefined, false, key);
+      const home = sb.box.home;
+      node7(home);   // W2-4's up-a row (the roster pilot-source admits from), its stub, a limits row and a tagged stamp
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      // leaf-span: the writer is handed the whole span, so the key goes as far toward a spawn as it can; under the default
+      // excerpt it sees the fact's window only, and the key never reaches its input.
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--writer-input', writerInput, ...inp('step0a', s0)]) as R7;
+      // The real sourceQuiz; `top` keeps B's ancestor walk inside the fixture tree (Task 4's seam, no subcommand passes it).
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(r.code).toBe(0);
+      // CONTROL: B was built for the boundary (so its text existed in memory), and the run wrote what it writes.
+      const rec = JSON.parse(r7fs.readFileSync(r7path.join(out, 'pilot', 'baseline.json'), 'utf8'));
+      r7expect(rec.boundaries.map((b: R7) => b.state)).toEqual(['built']);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_FROZEN_FILE), 'utf8')).entries.map((e: R7) => e.fact)).toEqual([sb.cmd]);
+      r7expect(printRuns(home), 'one writer spawn, the stub').toHaveLength(1);
+      // Task 4's walk over the whole --out: every file, read whole, holds nothing only B holds (the summary's sentinel).
+      const walk = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? walk(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const files = walk(out);
+      r7expect(files.length, 'CONTROL: the walk reads the run\'s files').toBeGreaterThan(3);
+      for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(sb.sentinel), f).toBe(false);
+      // W2-D54, W2-D67: and no file holds any part of the key of 8 or more characters (every 8-character window of it).
+      const windows = Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
+      for (const f of files) {
+        const text = r7fs.readFileSync(f, 'utf8');
+        for (const w of windows) r7expect(text.includes(w), `${f} holds the key's part ${w}`).toBe(false);
+      }
+      // CONTROL: the key really was in the store's span: the seeded transcript the store was swept from holds the key whole,
+      const seeded = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? seeded(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const transcripts = seeded(home).filter((f) => f.endsWith('.jsonl') && r7fs.readFileSync(f, 'utf8').includes(key));
+      r7expect(transcripts, 'CONTROL: a seeded transcript (.jsonl) holds the key whole').not.toEqual([]);
+      // and, under leaf-span, the writer's input was built from that span and masked (the mark is there; M47). Under
+      // excerpt the input holds the fact's window only, so there is no key to mask: the no-key property above is the check.
+      const inputs = files.filter((f) => f.endsWith('.input.json'));
+      r7expect(inputs, 'CONTROL: the writer input is under --out').toHaveLength(1);
+      if (writerInput === 'leaf-span') {
+        r7expect(r7fs.readFileSync(inputs[0]!, 'utf8'), 'CONTROL: the span held a key, and the writer saw it masked').toContain(t4Lib.REDACTED_MARK);
+      }
+    }, 600_000);
+
+    // D-6308 (fix wave, item A): a key that follows a JSON `\n` of a serialised tool_use input is masked. The same four kinds
+    // sit after a newline in one input (a pair-index value, AKIA-, ghp_- and sk-ant-shaped), the failing tool_result pairs an
+    // error fact with that tool_use, and the real sourceQuiz and writer stub run under both writer inputs: under excerpt the
+    // pair line carries the input, under leaf-span the span's rendering of the row does.
+    const nlKeys7 = (): { token: string; lines: string[]; toolName: string; kinds: Array<[string, string]> } => {
+      // A pair-index value: 20 or more characters, one run. End to end the file-backed index carries lib's belt, which masks it
+      // even glued, so this kind does not discriminate here; it leaks at unit level with makePairIndex alone (a recorded-only
+      // pair whose secret file is no longer loaded), which the fix-wave describe pins.
+      const token = ['zq', 'nl', 'pair', 'index', 'value', 'n7x2k9'].join('');
+      const akia = w6Akia('NLAKIA1');
+      const ghp = ['gh', 'p_'].join('') + 'Nl4Fw8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o';
+      const sk = ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd';
+      // The tool's own name is stored data too (R1): a key-shaped one, separated by a space, must not reach the excerpt's pair line.
+      const named = w6Akia('FWNAME1');
+      return { token, lines: [token, akia, ghp, sk], toolName: `mcp ${named}`,
+        kinds: [['pair-index', token], ['AKIA', akia], ['ghp_', ghp], ['sk-ant', sk], ['tool name', named]] };
+    };
+    const windows7 = (key: string): string[] => Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('D-6308: four key kinds after a JSON newline in a tool_use input reach neither the writer stdin nor any file under --out, writer input %s', async (writerInput) => {
+      const k = nlKeys7();
+      const sb = w6SourceBox('ccrc-w2-5a-fw-nl-', undefined, false, null, { lines: k.lines, token: k.token, toolName: k.toolName });
+      const home = sb.box.home;
+      node7(home);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--writer-input', writerInput, ...inp('step0a', s0)]) as R7;
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      const stdins = (printRuns(home) as Array<{ stdin: string }>).map((e) => e.stdin);
+      r7expect(stdins.length, 'CONTROL: the writer ran').toBeGreaterThan(0);
+      r7expect(stdins.some((t) => t.includes('[tool_use mcp ')), 'CONTROL: a writer input carries the tool_use that holds the keys, under its masked name').toBe(true);
+      const walk = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? walk(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const files = walk(out);
+      r7expect(files.some((f) => f.endsWith('.input.json')), 'CONTROL: the writer input is under --out').toBe(true);
+      for (const [kind, key] of k.kinds) {
+        for (const w of windows7(key)) {
+          for (const t of stdins) r7expect(t.includes(w), `${kind}: the writer stdin holds ${w}`).toBe(false);
+          for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(w), `${kind}: ${f} holds ${w}`).toBe(false);
+        }
+        const stored = walk(home).filter((f) => f.endsWith('.jsonl') && r7fs.readFileSync(f, 'utf8').includes(key));
+        r7expect(stored, `CONTROL: the store's transcript holds the ${kind} key whole`).not.toEqual([]);
+      }
+    }, 600_000);
+
+    r7it('quiz-source refuses on a node the record does not name', async () => {
+      const home = home7(STORE_C);
+      const c = chain7(home);
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: async () => { throw new Error('never'); } } as never));
+      r7expect(r.refusal).toEqual({ word: 'input-invalid', detail: `store ${STORE_C} is not one of the record's nodes` });
+    });
+
+    // D-6307 (R10): every refusal that needs no store and no spawn answers before prepareOut makes --out, not the writer
+    // model alone: the roster, the account, the limits row at open and the wrapper's sha (openWriter asks each again).
+    // Each row breaks one input and names the setup of both subcommands; the CONTROL is the same run with that input
+    // admissible, which gets past the check and makes --out (it may refuse at open for another reason: a later word).
+    type AdmRow = { word: string; detail: string | null; pilot: (home: string, broken: boolean) => string;
+      quiz: (home: string, broken: boolean) => { account: string; over: R7 };
+      /** The wrapper sha the step 0a output (pilot) or part 1 (quiz) records: the planted wrapper's own when set (D-6311 checks it). */
+      wrapper?: (home: string, broken: boolean) => string | null };
+    const stamp7 = (home: string, version: string): void => {
+      r7fs.writeFileSync(r7path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version }));
+    };
+    const limitsRow7 = (home: string, five: number): void => {
+      const nowS = Math.floor(Date.now() / 1000);
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    };
+    /** up-a and gen-a rostered, gen-a's declared secrets file planted; its wrapper (the stub) only when `wrapper`. */
+    const genRoster7 = (home: string, wrapper: boolean): void => {
+      writeRoster(home, [FIXTURE_ACCOUNTS[0]!, FIXTURE_ACCOUNTS[1]!]);
+      const secrets = r7path.join(home, '.cc-secrets');
+      r7fs.mkdirSync(secrets, { recursive: true, mode: 0o700 });
+      r7fs.writeFileSync(r7path.join(secrets, 'gen-a.env'), '# fixture file admission stats and never opens\n', { mode: 0o600 });
+      const nowS = Math.floor(Date.now() / 1000);   // gen-a's own fresh limits row, so only the wrapper decides
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'gen-a.json'), JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      if (wrapper) plantStub(home, 'gen-a');
+    };
+    const ADM_ROWS: AdmRow[] = [
+      { word: 'roster-invalid', detail: 'absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'account-refused', detail: 'unknown-id',
+        pilot: (_home, broken) => (broken ? 'nope' : 'up-a'),
+        quiz: (_home, broken) => ({ account: broken ? 'nope' : 'up-a', over: {} }) },
+      { word: 'limits-threshold', detail: null,
+        pilot: (home, broken) => { limitsRow7(home, broken ? 90 : 10); return 'up-a'; },
+        quiz: (_home, broken) => ({ account: 'up-a', over: broken ? { limits: { threshold_pct: 5 } } : {} }) },
+      { word: 'wrapper-unmeasured', detail: 'wrapper',
+        pilot: (home, broken) => { genRoster7(home, !broken); return 'gen-a'; },
+        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; },
+        // The CONTROL records the planted wrapper's sha, so it passes D-6311's wrapper-moved too and --out is made.
+        wrapper: (home) => (r7fs.existsSync(r7path.join(home, '.local', 'bin', 'gen-a')) ? r7Sha(r7fs.readFileSync(r7path.join(home, '.local', 'bin', 'gen-a'))) : null) },
+      // D-6311: preflight's no-spawn half. A tree whose stamp cannot be read, a stamp that moved, and a wrapper whose bytes moved.
+      { word: 'tree-unmeasured', detail: 'the release stamp is absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'build.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'build.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'tree-moved', detail: `recorded ${STAMP}, measured v9.9.8`,
+        pilot: (home, broken) => { if (broken) stamp7(home, 'v9.9.8'); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) stamp7(home, 'v9.9.8'); return { account: 'up-a', over: {} }; } },
+      { word: 'wrapper-moved', detail: null,
+        pilot: (home) => { genRoster7(home, true); return 'gen-a'; },
+        quiz: (home) => { genRoster7(home, true); return { account: 'gen-a', over: {} }; },
+        wrapper: (home, broken) => (broken ? null : r7Sha(r7fs.readFileSync(r7path.join(home, '.local', 'bin', 'gen-a')))) },
+    ];
+    const admDetail = (row: AdmRow, home: string): string | null => (row.detail === 'wrapper' ? `${r7path.join(home, '.local', 'bin', 'gen-a')}: ENOENT` : row.detail);
+    const admit7 = (process.platform === 'darwin' ? r7it.skip : r7it).each(ADM_ROWS.map((r) => [r.word, r] as [string, AdmRow]));
+
+    admit7('pilot-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const account = row.pilot(home, broken);
+        const s0 = save7({ ...step0a7(R7_REPO, home), account, wrapper_sha256: row.wrapper?.(home, broken) ?? null }, 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    admit7('quiz-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const { account, over } = row.quiz(home, broken);
+        const c = chain7(home, over, account, row.wrapper?.(home, broken) ?? null);
+        const out = outDir();
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    // D-6309: a signed record's budget, limits and quiz quotas are typed as bare integers by the gate's validator, so one
+    // out of range gets through `open --draft --overrides` and reaches batchGate's or sampleQuestions' throw, a TypeError
+    // after --out. refuseOutOfRangeValues refuses them `record-invalid` before prepareOut, one row per field. Each CONTROL
+    // is the boundary value (1, and 100 for the threshold), which gets past the range check: its refusal, if any, is a
+    // later word, and --out is made unless that word is itself a pre-check word of the limits row.
+    type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean } };
+    const RANGE_ROWS: RangeRow[] = [
+      { field: 'pilot_budget', path: ['pilot_budget'], bad: [0, -1], edge: 1 },
+      { field: 'limits.threshold_pct', path: ['limits', 'threshold_pct'], bad: [0, 101], edge: 100 },
+      // A one-millisecond age bound is in range and the fixture's limits row is older, so the limits word answers, still before --out.
+      { field: 'limits.max_age_ms', path: ['limits', 'max_age_ms'], bad: [0, -1], edge: 1, after: { word: 'limits-stale', made: false } },
+      { field: 'quiz.target', path: ['quiz', 'target'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.family', path: ['quiz', 'caps', 'family'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.boundary', path: ['quiz', 'caps', 'boundary'], bad: [0, -1], edge: 1 },
+      { field: 'quiz.caps.kind_per_family', path: ['quiz', 'caps', 'kind_per_family'], bad: [0, -1], edge: 1 },
+    ];
+    const overrideAt = (path: string[], v: number): R7 => path.reduceRight((acc: R7 | number, k) => ({ [k]: acc }), v) as R7;
+    const quizRun7 = async (over: R7): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+      const home = home7(STORE_A);
+      const c = chain7(home, over);
+      const out = outDir();
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+      return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+    };
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(RANGE_ROWS.map((r) => [r.field, r] as [string, RangeRow]))(
+      'D-6309: quiz-source, a signed record with %s out of range refuses record-invalid before --out and any spawn; CONTROL: the boundary value passes the range check',
+      async (_field, row) => {
+        for (const v of row.bad) {
+          const bad = await quizRun7(overrideAt(row.path, v));
+          r7expect(bad.made, `${row.field}=${v}: no --out, the refusal answered before prepareOut`).toBe(false);
+          r7expect(bad.refusal, `${row.field}=${v}`).toEqual({ word: 'record-invalid', detail: `${row.field} out-of-range` });
+          r7expect(bad.calls).toBe(0);
+          r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
+        }
+        const ok = await quizRun7(overrideAt(row.path, row.edge));
+        r7expect(ok.refusal?.word, `CONTROL ${row.field}=${row.edge}: past the range check (${JSON.stringify(ok.refusal)})`).not.toBe('record-invalid');
+        if (row.after === undefined) {
+          r7expect(ok.refusal, 'CONTROL: the whole run goes through').toBeNull();
+          r7expect(ok.made, 'CONTROL: prepareOut made --out').toBe(true);
+          r7expect(ok.calls).toBe(1);
+        } else {
+          r7expect(ok.refusal?.word, 'CONTROL: the next word').toBe(row.after.word);
+          r7expect(ok.made).toBe(row.after.made);
+        }
+      }, 240_000);
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('D-6309: a record with every ranged field out of range names each one, in the order batchGate and sampleQuestions read them', async () => {
+      const over = { pilot_budget: 0, limits: { threshold_pct: 150, max_age_ms: 0 }, quiz: { target: 0, caps: { family: 0, boundary: 0, kind_per_family: 0 } } };
+      const bad = await quizRun7(over);
+      r7expect(bad.refusal).toEqual({ word: 'record-invalid', detail: RANGE_ROWS.map((r) => `${r.field} out-of-range`).join('; ') });
+      r7expect(bad.made).toBe(false);
+    }, 120_000);
+
+    r7it('D-6309: refuseOutOfRangeValues takes only positive safe integers (a float, a string, NaN and an absent value are out of range) and writes nothing', () => {
+      const good = { budget: 1, limits: { threshold_pct: 100, max_age_ms: 1 }, quotas: { target: 1, caps: { family: 1, boundary: 1, kind_per_family: 1 } } };
+      r7expect(() => r7drv.refuseOutOfRangeValues(good)).not.toThrow();
+      // pilot-source's own values (the flag grammar's positive integers, LIMITS_DEFAULTS, the draft's caps) are in range.
+      r7expect(() => r7drv.refuseOutOfRangeValues({ budget: 100_000, limits: r7drv.LIMITS_DEFAULTS, quotas: { target: 100, caps: { family: 5, boundary: 3, kind_per_family: 2 } } })).not.toThrow();
+      for (const v of [1.5, '5', Number.NaN, undefined, null, Number.MAX_SAFE_INTEGER + 2]) {
+        r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, budget: v }), `budget ${String(v)}`).toThrow(/record-invalid: pilot_budget out-of-range/);
+        r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, quotas: { ...good.quotas, target: v } }), `target ${String(v)}`).toThrow(/record-invalid: quiz.target out-of-range/);
+      }
+      r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, limits: undefined })).toThrow(/limits.threshold_pct out-of-range; limits.max_age_ms out-of-range/);
+      r7expect(() => r7drv.refuseOutOfRangeValues({ ...good, quotas: { target: 1, caps: undefined } })).toThrow(/quiz.caps.family out-of-range; quiz.caps.boundary out-of-range; quiz.caps.kind_per_family out-of-range/);
+    });
+
+    // D-6311: the code words (the tree the driver runs from is the unmeasurable one), the precedence the pre-check changes,
+    // and the store open that now comes before --out. Each runs the real subcommand as a child, with the real tree.
+    const pilotArgv7 = (out: string, s0: Saved): string[] => ['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)];
+    (process.platform === 'darwin' ? r7it.skip : r7it).each([
+      ['edit', 'code-changed', 'changed deploy/measure-history.py'],
+      ['drop', 'code-unmeasured', 'deploy/measure-history.py is absent'],
+    ] as const)('D-6311: pilot-source, a gate_code file %s in the tree it runs from answers %s before --out exists and before any spawn; CONTROL: an unchanged tree makes --out', (how, word, detail) => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const bad = run7(tree7({ [how]: 'deploy/measure-history.py' }), home, pilotArgv7(out, s0));
+      r7expect(bad.code).toBe(2);
+      r7expect(bad.stderr).toBe(refusalLine(word, detail));
+      r7expect(r7fs.existsSync(out), 'no --out').toBe(false);
+      r7expect(stubLog(home) ?? [], 'no spawn at all').toEqual([]);
+      const out2 = outDir();
+      run7(tree7(), home, pilotArgv7(out2, s0));
+      r7expect(r7fs.existsSync(out2), 'CONTROL: the unchanged tree makes --out').toBe(true);
+    }, 120_000);
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('D-6311: with the Claude Code version and the tree both moved, the pre-check answers tree-moved before --out, where open would have said claude-version-moved; CONTROL: the version alone is open\'s, after --out', async () => {
+      const run = async (moveTree: boolean): Promise<{ refusal: R7 | null; made: boolean; runs: number }> => {
+        const home = home7(STORE_A);
+        const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+        r7fs.writeFileSync(r7path.join(home, STUB_STREAM), `{"type":"system","note":"another version"}\n` + r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8'));
+        if (moveTree) stamp7(home, 'v9.9.8');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(pilotArgv7(out, s0)) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => { throw new Error('never'); }, seed: () => PILOT_SEED } as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out), runs: (stubLog(home) ?? []).length };
+      };
+      const both = await run(true);
+      r7expect(both.refusal).toMatchObject({ word: 'tree-moved' });
+      r7expect([both.made, both.runs], 'no --out and no --version spawn').toEqual([false, 0]);
+      const version = await run(false);
+      r7expect(version.refusal).toMatchObject({ word: 'claude-version-moved' });
+      r7expect([version.made, version.runs], 'CONTROL: the version is measured by a spawn, at open, after --out').toEqual([true, 1]);
+    }, 120_000);
+
+    r7it('D-6311: pilot-source opens its store before --out exists: a node with no store refuses store-unreadable and leaves no --out; CONTROL: with a store --out is made', async () => {
+      const run = async (store: string | null): Promise<{ refusal: R7 | null; made: boolean }> => {
+        const home = home7(store);
+        const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(pilotArgv7(out, s0)) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => ({ entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out) };
+      };
+      const none = await run(null);
+      r7expect(none.refusal).toMatchObject({ word: 'store-unreadable' });
+      r7expect(none.made, 'no --out').toBe(false);
+      r7expect((await run(STORE_A)).made, 'CONTROL').toBe(true);
+    }, 120_000);
+  });
+
+  // ── freeze ─────────────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: freeze', () => {
+    const freezeRun = (c: R7, lists: Saved[], out = outDir()): ReturnType<typeof run7> & { out: string } =>
+      ({ ...run7(null, null, ['freeze', '--out', out, ...inp('record', c.d), ...lists.flatMap((s) => inp('sourced', s))]), out });
+
+    r7it('writes exactly W2-D73\'s bytes 0600, its sha on stderr, and the meta beside it with quiz-source\'s assignment sha', () => {
+      const c = chain7(home7(null));
+      const r = freezeRun(c, [c.sA, c.sB]);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(r.stdout).toBe('');
+      const p = r7path.join(r.out, r7drv.FROZEN_FILE);
+      const text = r7fs.readFileSync(p, 'utf8');
+      r7expect(r7fs.statSync(p).mode & 0o777).toBe(0o600);
+      const fields = r7drv.FROZEN_ENTRY_KEYS as string[];
+      const entries = [...c.merged].map((e: R7) => Object.fromEntries(fields.map((k) => [k, e[k]]))).sort((x, y) => (x.qid < y.qid ? -1 : x.qid > y.qid ? 1 : 0));
+      r7expect(text).toBe(r7Canon({ kind: 'ccrc-history-w2-quiz', version: 1, writer_model: OPUS, writer_prompt_sha256: r7gate.WRITER_PROMPT_SHA256,
+        answer_protocol_sha256: r7gate.ANSWER_PROTOCOL_SHA256, labeller: { ...r7gate.LABELLER, sha_min_prefix: 7 }, entries }));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(text)}\n`);
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect(meta).toMatchObject({ kind: r7drv.QUIZ_META_KIND, record_sha256: c.d.sha, frozen_sha256: r7Sha(text), assignment_sha256: c.assignment.sha256,
+        n_questions: 5, n_families: 3, below_floor: false });
+    });
+
+    r7it('the same inputs give byte-identical output twice, in either order of the sourced lists', () => {
+      const c = chain7(home7(null));
+      const one = freezeRun(c, [c.sA, c.sB]);
+      const two = freezeRun(c, [c.sB, c.sA]);
+      r7expect(r7fs.readFileSync(r7path.join(two.out, r7drv.FROZEN_FILE))).toEqual(r7fs.readFileSync(r7path.join(one.out, r7drv.FROZEN_FILE)));
+      r7expect(two.stderr).toBe(one.stderr);
+      // The meta too: its `sourced` list is sorted by store_id, not in argv order.
+      const metaOne = r7fs.readFileSync(r7path.join(one.out, r7drv.QUIZ_META_FILE));
+      r7expect(r7fs.readFileSync(r7path.join(two.out, r7drv.QUIZ_META_FILE))).toEqual(metaOne);
+      r7expect(JSON.parse(metaOne.toString('utf8')).sourced.map((x: R7) => x.store_id), 'sorted by store_id').toEqual([STORE_A, STORE_B]);
+    });
+
+    r7it('a sourced entry holding an empty string where a text goes, or an empty repo root, refuses input-invalid, never a later TypeError', () => {
+      const c = chain7(home7(null));
+      const entry = c.sB.value.entries[0];
+      for (const k of ['qid', 'store_id', 'ccrc_id', 'generation', 'boundary_uuid', 'fact', 'fact_raw', 'question', 'source_entry_uuid']) {
+        const bad = save7({ ...c.sB.value, entries: [{ ...entry, [k]: '' }, c.sB.value.entries[1]] });
+        r7expect(freezeRun(c, [c.sA, bad]).stderr, k).toBe(refusalLine('input-invalid', `sourced shape entry ${k}`));
+      }
+      const root = save7({ ...c.sB.value, entries: [{ ...entry, repo_roots: ['/home/u/tree', ''] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, root]).stderr).toBe(refusalLine('input-invalid', 'sourced shape entry repo_roots'));
+      r7expect(freezeRun(c, [c.sA, c.sB]).code, 'CONTROL: the unbroken lists freeze').toBe(0);
+    });
+
+    r7it('the merge takes the lists in global rank order and cuts at quiz.target; a smaller list is below the floor', () => {
+      const c = chain7(home7(null), { quiz: { target: 3, halt_floor: { questions: 4, families: 2 } } });
+      const r = freezeRun(c, [c.sA, c.sB]);
+      r7expect(r.code, r.stderr).toBe(0);
+      const list = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.FROZEN_FILE), 'utf8'));
+      // ranks [K0,0] [K0,1] (a-t1), [K1,0] (b-t1) are the first three; [K1,1] (b-t1) and [K2,0] (a-t2) are cut. The
+      // two nodes' lists interleave by key: the merge is the rank order, never a concatenation (R10).
+      r7expect(list.entries.map((e: R7) => e.fact).sort()).toEqual(['abc0001', 'abc0002', 'abc0004']);
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([meta.n_questions, meta.n_families, meta.below_floor]).toEqual([3, 2, true]);
+    });
+
+    r7it('the meta reports short_of_min_families when the list meets quiz.target on fewer families than quiz.min_families, and freeze still writes it (R11); CONTROL: at min_families the flag is false', () => {
+      // target 3 keeps a-t1's two entries and b-t1's first: the list meets the target on 2 families, at a halt floor of
+      // 3 questions and 2 families, so below_floor is false and only min_families can call it short. (At the signed
+      // defaults, target 100 over caps.family 5 needs 20 families; a target that small, or a raised caps.family, is what
+      // lets a full list hold fewer.) chain7's own meta (3 families against the signed 20) is short too, and open
+      // finalize's first case prints part 2 from it: nothing refuses on the flag.
+      const floor = { questions: 3, families: 2 };
+      const short = chain7(home7(null), { quiz: { target: 3, min_families: 3, halt_floor: floor } });
+      const r = freezeRun(short, [short.sA, short.sB]);
+      r7expect(r.code, r.stderr).toBe(0);   // a report, never a refusal (R11)
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([meta.n_questions, meta.n_families, meta.below_floor, meta.short_of_min_families]).toEqual([3, 2, false, true]);
+      // CONTROL: the same list against min_families 2, its own family count, is not short (a `<=` reds here).
+      const at = chain7(home7(null), { quiz: { target: 3, min_families: 2, halt_floor: floor } });
+      const ctl = freezeRun(at, [at.sA, at.sB]);
+      r7expect(ctl.code, ctl.stderr).toBe(0);
+      const ctlMeta = JSON.parse(r7fs.readFileSync(r7path.join(ctl.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([ctlMeta.n_questions, ctlMeta.n_families, ctlMeta.below_floor, ctlMeta.short_of_min_families], 'CONTROL: at min_families')
+        .toEqual([3, 2, false, false]);
+    });
+
+    r7it('refuses a sourced list of another record, two lists whose assignments differ, a forged qid, and a duplicate rank', () => {
+      const c = chain7(home7(null));
+      const otherRecord = save7({ ...c.sA.value, record_sha256: hex('another draft') });
+      r7expect(freezeRun(c, [otherRecord, c.sB]).stderr).toBe(refusalLine('input-invalid', `sourced record-mismatch ${STORE_A}`));
+      const otherAssign = save7({ ...c.sB.value, assignment_sha256: hex('another assignment') });
+      r7expect(freezeRun(c, [c.sA, otherAssign]).stderr).toBe(refusalLine('assignment-mismatch', `sourced lists disagree: ${c.assignment.sha256} and ${hex('another assignment')}`));
+      const forged = save7({ ...c.sA.value, entries: [{ ...c.sA.value.entries[0], fact: 'abc9999' }, ...c.sA.value.entries.slice(1)] });
+      r7expect(freezeRun(c, [forged, c.sB]).stderr).toBe(refusalLine('input-invalid', `sourced entry ${c.sA.value.entries[0].qid} qid-mismatch`));
+      const dup = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [K7(0), 0] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, dup]).stderr).toBe(refusalLine('input-invalid', `sourced rank-duplicate ${K7(0)}:0`));
+      // A repeated qid under distinct ranks is refused here, not as frozenListText's TypeError later (an internal error).
+      const again = save7({ ...c.sB.value, entries: [c.sB.value.entries[0], { ...c.sB.value.entries[0], rank: [K7(1), 9] }] });
+      r7expect(freezeRun(c, [c.sA, again]).stderr).toBe(refusalLine('input-invalid', `sourced qid-duplicate ${c.sB.value.entries[0].qid}`));
+      // R10: a quiz entry's family rank is its order key, 64 lowercase hex; the old numeric family rank is refused.
+      const numeric = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [1, 0] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, numeric]).stderr).toBe(refusalLine('input-invalid', 'sourced shape entry rank'));
+    });
+
+    r7it('refuses a run that lacks a named node\'s sourced list (W2-D71\'s population is the named nodes\' families); CONTROL: one list per named node freezes', () => {
+      const c = chain7(home7(null));
+      r7expect(freezeRun(c, [c.sA]).stderr).toBe(refusalLine('input-invalid', 'sourced node-missing node-b'));
+      r7expect(freezeRun(c, [c.sB]).stderr).toBe(refusalLine('input-invalid', 'sourced node-missing node-a'));
+      const both = freezeRun(c, [c.sA, c.sB]);
+      r7expect(both.code, 'CONTROL: one list per named node freezes').toBe(0);
+    });
+  });
+
+  // ── open --finalize ────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: open finalize', () => {
+    r7it('prints part 2, validated against its draft and frozen list, with the assignment re-derived and the power figures copied', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const before = snapshot7(home);
+      const r = run7(null, home, finalizeArgv(c));
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'writes nothing: the HOME tree is byte-identical').toEqual(before);
+      const rec = JSON.parse(r.stdout);
+      r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: 5 } })).toEqual({ ok: true });
+      r7expect(rec.supersedes).toBe(c.d.sha);
+      r7expect(rec.assignment).toEqual(r7gate.assignArms(SEED, c.assembled.kept));
+      r7expect(rec.assignment_sha256).toBe(c.assignment.sha256);
+      r7expect(rec.registry_drops).toEqual([{ ...A_D, reason: 'registry-absent' }]);
+      r7expect(rec.census).toEqual([{ store_id: STORE_A, census_ms: T0, census_sha256: c.cA.sha }, { store_id: STORE_B, census_ms: T0, census_sha256: c.cB.sha }]);
+      r7expect(rec.q18).toEqual({ headline: c.power.value.headline, at_power_80: c.power.value.at_power_80, at_rho_0: c.power.value.at_rho_0,
+        rho_hat: c.power.value.rho_hat, n_f: c.power.value.n_f, coverage: c.power.value.coverage, pre_window_uptake: c.power.value.pre_window_uptake,
+        power_output_sha256: c.power.sha, decision: 'keep' });
+      r7expect(rec.quiz).toMatchObject({ sha256: c.fz.sha, n_questions: 5, n_families: 3, families: c.frozen.families });
+      r7expect([rec.window, rec.spend_budget, rec.amendments]).toEqual([{ start_ms: T0 + DAY, end_ms: T0 + 15 * DAY }, 30_000_000, []]);
+      r7expect(r7Canon({ ...rec, finalized_ms: T0 })).toBe(r7Canon(c.final));
+    });
+
+    r7it('a census changed between quiz-source and open --finalize refuses assignment-mismatch (W2-D73)', () => {
+      const c = chain7(home7(null));
+      const moved = save7(census7(STORE_A, FAMS_A, { stale: 'a-t2' }), 'census-a.json');   // a-t2 leaves the active list
+      const movedVerify = save7(verify7(c.d.sha, moved, { 'a-d': 'registry-absent' }));
+      const r = run7(null, null, finalizeArgv(c, { census: [...inp('census', moved), ...inp('census', c.cB)], verify: [...inp('verify', movedVerify), ...inp('verify', c.vB)] }));
+      const again = r7drv.deriveAssignment(SEED, r7drv.assembleCensus(c.draft, [moved, c.cB].map(loaded), [movedVerify, c.vB].map(loaded))) as R7;
+      r7expect(r.stderr).toBe(refusalLine('assignment-mismatch', `quiz-source derived ${c.assignment.sha256}, the census and verify inputs give ${again.sha256}`));
+    });
+
+    r7it('refuses a power output of another record or other inputs, a frozen list other than freeze\'s, a below-floor quiz and a bogus decision', () => {
+      const c = chain7(home7(null));
+      const other = save7({ ...c.power.value, record_sha256: hex('another draft') });
+      r7expect(run7(null, null, finalizeArgv(c, { power: inp('power', other) })).stderr).toBe(refusalLine('input-invalid', 'power record-mismatch'));
+      const inputs = save7({ ...c.power.value, inputs: c.power.value.inputs.slice(1) });
+      r7expect(run7(null, null, finalizeArgv(c, { power: inp('power', inputs) })).stderr).toBe(refusalLine('input-invalid', 'power inputs-mismatch'));
+      const edited = saveText7(r7fs.readFileSync(c.fz.path, 'utf8').replace('fixture step 1', 'fixture step 7'), 'frozen.json');
+      r7expect(run7(null, null, finalizeArgv(c, { frozen: inp('frozen', edited) })).stderr)
+        .toBe(refusalLine('quiz-sha-mismatch', `quiz-meta names ${c.fz.sha}, the frozen list is ${edited.sha}`));
+      const below = save7({ ...c.meta.value, below_floor: true });
+      r7expect(run7(null, null, finalizeArgv(c, { 'quiz-meta': inp('quiz-meta', below) })).stderr)
+        .toBe(refusalLine('input-invalid', 'quiz-meta below-floor: a ruling to proceed lowers quiz.halt_floor in a superseding draft'));
+      r7expect(run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 15 * DAY), '--q18-decision', 'maybe'] })).stderr)
+        .toBe(refusalLine('args-invalid', 'q18-decision "maybe" is not one of keep, lengthen, add-nodes'));
+    });
+
+    r7it('a window shorter than planned_days is refused by the validator (W2-D25)', () => {
+      const c = chain7(home7(null));
+      const r = run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep'] }));
+      r7expect(r.stderr).toBe(refusalLine('record-invalid', 'window window-length'));
+    });
+  });
+
+  // ── verify --section ab ────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: verify section ab', () => {
+    /** Node A after the window-start acts: each control file `<generation>\n`, as the verb writes it (W2-D28), `plant`
+     *  overriding one, and seen_ms as `seen` (null: no row). */
+    function abHome(plant: Record<string, string | 'dir' | null> = {}, seen: string | null = String(Date.now() + 60_000)): { home: string; c: R7 } {
+      const home = home7(STORE_A, seen === null ? [] : [[R7_KEYS.seen, seen]]);
+      const c = chain7(home);
+      const dir = r7Paths(home).recallOffDir;
+      r7fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const want: Record<string, string | 'dir' | null> = {};
+      for (const a of c.final.assignment as R7[]) if (a.store_id === STORE_A && a.arm === 'control') want[a.ccrc_id] = `${a.generation}\n`;
+      for (const [id, v] of Object.entries({ ...want, ...plant })) {
+        if (v === 'dir') r7fs.mkdirSync(r7path.join(dir, id));
+        else if (v !== null) r7fs.writeFileSync(r7path.join(dir, id), v, { mode: 0o600 });
+      }
+      return { home, c };
+    }
+    const abRun = (home: string, c: R7): ReturnType<typeof run7> => run7(null, home, ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]);
+    const states = (r: ReturnType<typeof run7>): Record<string, string> => Object.fromEntries(JSON.parse(r.stdout).families.map((f: R7) => [f.ccrc_id, f.state]));
+
+    r7it('every control file holds its generation, no treatment file names its own, and seen_ms follows the newest write: ok', () => {
+      const { home, c } = abHome();
+      const before = snapshot7(home);
+      const r = abRun(home, c);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only').toEqual(before);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      const out = JSON.parse(r.stdout);
+      r7expect(states(r)).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'ok', 'a-c2': 'ok' });
+      r7expect([out.seen_after_write, out.ok, out.newest_write.state]).toEqual([true, true, 'value']);
+    });
+
+    r7it.each([
+      ['a control file absent', { 'a-c1': null }, 'a-c1', 'control-absent'],
+      ['a control file naming another generation', { 'a-c1': `${gen(399)}\n` }, 'a-c1', 'control-mismatch'],
+      ['a control file that is a directory', { 'a-c2': 'dir' }, 'a-c2', 'unreadable'],
+      ['a treatment file naming its own generation', { 'a-t1': `${A_T1.generation}\n` }, 'a-t1', 'treatment-named'],
+    ] as Array<[string, Record<string, string | 'dir' | null>, string, string]>)('%s is reported as itself, and ok is false', (_name, plant, id, state) => {
+      const { home, c } = abHome(plant);
+      const r = abRun(home, c);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(states(r)[id]).toBe(state);
+      r7expect(JSON.parse(r.stdout).ok).toBe(false);
+    });
+
+    r7it('CONTROL: a treatment file naming another generation is ok, and a control file without its newline is ok', () => {
+      const { home, c } = abHome({ 'a-t2': `${gen(299)}\n`, 'a-c2': A_C2.generation });
+      r7expect(states(abRun(home, c))).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'ok', 'a-c2': 'ok' });
+    });
+
+    r7it('seen_ms before the newest write, or no seen_ms at all, is reported and ok is false', () => {
+      for (const seen of ['1', null]) {
+        const { home, c } = abHome({}, seen);
+        const out = JSON.parse(abRun(home, c).stdout);
+        r7expect([out.seen_ms, out.seen_after_write, out.ok], String(seen)).toEqual([seen === null ? null : 1, false, false]);
+      }
+    });
+
+    r7it('refuses on a store the record does not name (W2-D84)', () => {
+      const home = home7(STORE_C);
+      const c = chain7(home);
+      r7expect(abRun(home, c).stderr).toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+    });
+
+    r7it('abStateOf, function level: the five answers', () => {
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'value', value: `${gen(1)}\n` })).toBe('ok');
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'absent' })).toBe('control-absent');
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'value', value: '' })).toBe('control-mismatch');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'value', value: gen(1) })).toBe('treatment-named');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'unreadable' })).toBe('unreadable');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'absent' })).toBe('ok');
+    });
+  });
+});
+
+// ── W2-5a fix wave (the whole-branch review's items A to F): fw-prefixed helpers, one describe per item ────────────────
+// Every key-shaped value is assembled at run time. The pair-index kind is a run of 20 or more characters that
+// makePairIndex knows; the other three are shapes lib's shape layer masks when a word boundary stands before them.
+const FW_PAIR = ['zq', 'fw', 'pair', 'index', 'value', 'm4x9k2'].join('');
+const FW_AKIA = w6Akia('FWAKIA1');
+const FW_GHP = ['gh', 'p_'].join('') + 'Fw4Nl8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o';
+const FW_SK = ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd';
+const FW_KINDS: Array<[string, string]> = [['pair-index', FW_PAIR], ['AKIA', FW_AKIA], ['ghp_', FW_GHP], ['sk-ant', FW_SK]];
+const FW_IDX = t4Lib.makePairIndex([{ len: FW_PAIR.length, sha256: t4Lib.sha256Hex(FW_PAIR) }]);
+/** Four lines, each of which follows a newline, so serialised each sits behind a JSON `\n`. */
+const FW_NOTE = ['first line', FW_PAIR, FW_AKIA, FW_GHP, FW_SK].join('\n');
+/** The kinds whose key has an 8-character window in `text`. */
+const fwLeaks = (text: string): string[] => FW_KINDS
+  .filter(([, key]) => Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8)).some((w) => text.includes(w))).map(([kind]) => kind);
+
+describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', () => {
+  const ALL = FW_KINDS.map(([kind]) => kind);
+  const mined = (): Array<Record<string, any>> => {
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('fw1', 'Bash', { command: 'npm run fixture-build-all', note: FW_NOTE })] },
+      { provenance: 'tool', body: [w5a2Result('fw1', 'Error: fixture build step failed badly', true)] },
+    ]);
+    return w5a2MinedOf(w5a2Mine(sp)).candidates as unknown as Array<Record<string, any>>;
+  };
+
+  it('the premise: redacting the serialised input as text leaves all four kinds (CONTROL), and redacting the value first masks them', () => {
+    const json = JSON.stringify({ command: 'npm run fixture-build-all', note: FW_NOTE });
+    expect(fwLeaks(t4Lib.redactField(json, FW_IDX)), 'CONTROL: the old way of redacting leaks every kind').toEqual(ALL);
+    expect(fwLeaks(JSON.stringify(replay.maskValue({ command: 'x', note: FW_NOTE }, FW_IDX)))).toEqual([]);
+  });
+
+  it.each(['excerpt', 'leaf-span'])('writerInputOf, writer input %s, over candidates mined from a row whose input holds the keys after a newline: no kind reaches the excerpt', (writerInput) => {
+    const cs = mined();
+    expect(cs.map((c) => c.kind).sort(), 'CONTROL: a command fact and an error fact paired with the tool_use').toEqual(['command', 'error']);
+    expect(cs.find((c) => c.kind === 'error')!.pair.input.text, 'CONTROL: the candidate carries the keys').toContain(FW_AKIA);
+    const seen: string[] = [];
+    for (const c of cs) {
+      const r = replay.writerInputOf(c as never, writerInput, FW_IDX) as { state: string; input: { excerpt: string } };
+      expect(r.state).toBe('input');
+      seen.push(r.input.excerpt);
+      expect(fwLeaks(r.input.excerpt), `${c.kind}`).toEqual([]);
+    }
+    expect(seen.some((t) => t.includes('[tool_use Bash]')), 'CONTROL: a tool_use line is in an excerpt').toBe(true);
+    expect(seen.some((t) => t.includes(t4Lib.REDACTED_MARK)), 'CONTROL: the keys were masked, not dropped').toBe(true);
+  });
+
+  it('R1: the excerpt\'s pair line masks the tool\'s name like its input: a key-shaped name, separated, is absent from the excerpt; CONTROL: the name is in the mined item', () => {
+    const named = w6Akia('FWNAME2');
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('fwn', `mcp ${named}`, { command: 'npm run fixture-build-all' })] },
+      { provenance: 'tool', body: [w5a2Result('fwn', 'Error: fixture build step failed badly', true)] },
+    ]);
+    const c = (w5a2MinedOf(w5a2Mine(sp)).candidates as unknown as Array<Record<string, any>>).find((x) => x.kind === 'error')!;
+    expect(c.pair.name, 'CONTROL: the mined item carries the name').toContain(named);
+    const r = replay.writerInputOf(c as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(r.state).toBe('input');
+    expect(r.input.excerpt, 'CONTROL: the pair line is there').toContain('[tool_use mcp ');
+    expect(Array.from({ length: named.length - 7 }, (_, k) => named.slice(k, k + 8)).filter((w) => r.input.excerpt.includes(w)), 'no 8-character window of the name').toEqual([]);
+  });
+
+  it('R1: renderKeptMember masks the row\'s role tag too: a key-shaped row type is absent from the rendering; CONTROL: the tag is there', () => {
+    const named = w6Akia('FWTYPE1');
+    const r = replay.renderKeptMember({ type: `x ${named}` }, { body: 'hello there', rawLen: 11 } as never, FW_IDX) as { state: string; text: string };
+    expect(r.state).toBe('text');
+    expect(r.text, 'CONTROL: the tag and the text are there').toMatch(/^\[x .*\] hello there$/);
+    expect(Array.from({ length: named.length - 7 }, (_, k) => named.slice(k, k + 8)).filter((w) => r.text.includes(w))).toEqual([]);
+  });
+
+  it('renderKeptMember: a tool_use input, an object tool_result content, a nested tool_use in a result, and an object body each mask the keys', () => {
+    const idx = FW_IDX;
+    const note = { note: FW_NOTE };
+    const bodies: Array<[string, unknown]> = [
+      ['tool_use input', [{ type: 'tool_use', id: 't1', name: 'Bash', input: note }]],
+      ['object result content', [{ type: 'tool_result', tool_use_id: 't1', content: note }]],
+      ['nested tool_use in a result', [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'tool_use', name: 'Bash', input: note }] }]],
+      ['object body', note],
+    ];
+    for (const [what, body] of bodies) {
+      const old = t4Lib.redactField(t4Lib.renderEntryText(body), idx);
+      expect(fwLeaks(old).length, `CONTROL: ${what}: text-redacting the rendering leaks`).toBeGreaterThan(0);
+      const r = replay.renderKeptMember({ type: 'assistant' }, { body, rawLen: 100 } as never, idx) as { state: string; text: string };
+      expect(r.state, what).toBe('text');
+      expect(fwLeaks(r.text), what).toEqual([]);
+      expect(r.text, `CONTROL: ${what}: masked, not dropped`).toContain(t4Lib.REDACTED_MARK);
+    }
+  });
+
+  it('an object KEY is data in a stored input: a key-shaped key, and one that follows a newline inside the key, is masked (lib\'s redactFinalJson leaves keys alone)', () => {
+    const input = { [FW_AKIA]: 1, [`k\n${FW_GHP}`]: 2, [`j\n${FW_SK}`]: { [`i\n${FW_PAIR}`]: 3 } };
+    expect(fwLeaks(JSON.stringify(t4Lib.redactFinalJson(input, FW_IDX))), 'CONTROL: lib maps leaves only, so a key survives it').not.toEqual([]);
+    expect(fwLeaks(JSON.stringify(replay.maskValue(input, FW_IDX)))).toEqual([]);
+    const item = { ...Object.fromEntries(Object.entries(mined().find((c) => c.kind === 'error')!)) } as Record<string, any>;
+    const text = JSON.stringify(input);
+    item['pair'] = { name: 'Bash', input: { text, rawLen: Buffer.byteLength(text), value: input } };
+    const r = replay.writerInputOf(item as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(r.state).toBe('input');
+    expect(fwLeaks(r.input.excerpt)).toEqual([]);
+  });
+
+  it('screenRedaction: a repo root that redaction changes drops the candidate redact-fact; CONTROL: a plain root passes', () => {
+    const c = mined().find((x) => x.kind === 'command')!;
+    expect(replay.screenRedaction(c as never, FW_IDX)).toBeNull();
+    expect(replay.screenRedaction({ ...c, repo_roots: ['/home/u/tree', `/home/u/${FW_AKIA}/tree`] } as never, FW_IDX)).toBe('redact-fact');
+  });
+
+  it('a body nested past the stack is a counted discard at the writer, never a throw: writer-input-unrenderable', () => {
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 10_000; i += 1) deep = { a: deep };
+    const c = mined().find((x) => x.kind === 'command')!;
+    const item = { ...c, span: [{ text: 'x', rawLen: 1, body: deep }] };
+    expect(replay.writerInputOf(item as never, 'leaf-span', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
+    const pair = { ...c, pair: { name: 'Bash', input: { text: 'x', rawLen: 1, value: deep } } };
+    expect(replay.writerInputOf(pair as never, 'excerpt', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
+    expect(replay.FACT_DROP_REASONS.slice(16), 'appended in place after Task 5\'s words, each pinned by name (R5)')
+      .toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced', 'sha-short']);
+  });
+});
+
+describe('W2-5a fix wave, D-6309: the leaf-span base is JSON, so a fact is placed by its raw or its escaped spelling, and never throws', () => {
+  const mineOf = (use: Record<string, unknown>) => (w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('fw9', String(use['name']), use['input'] as Record<string, unknown>)] }]))).candidates as unknown as Array<Record<string, any>>);
+
+  it.each([
+    ['a path with a backslash', { name: 'Read', input: { file_path: '/home/u/tree/dir\\name.txt' } }, 'path'],
+    ['a command with a quote', { name: 'Bash', input: { command: 'git commit -m "fixture wip build"' } }, 'command'],
+    ['a command with a newline and a tab', { name: 'Bash', input: { command: 'echo first line &&\n\techo second line' } }, 'command'],
+  ])('%s is placed in the span\'s JSON by its escaped spelling under leaf-span, and by its raw one under excerpt', (_what, use, kind) => {
+    const c = mineOf(use).find((x) => x.kind === kind)!;
+    const span = replay.writerInputOf(c as never, 'leaf-span', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(span.state).toBe('input');
+    expect(span.input.excerpt).toContain(JSON.stringify(c.fact_raw).slice(1, -1));
+    expect(replay.factSpellingIn(span.input.excerpt, c.fact_raw)).toBe(JSON.stringify(c.fact_raw).slice(1, -1));
+    const ex = replay.writerInputOf(c as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(ex.state, 'CONTROL: the excerpt\'s leaf is the raw string').toBe('input');
+    expect(ex.input.excerpt).toContain(c.fact_raw);
+  });
+
+  it('factSpellingIn: the raw spelling first, the escaped one second, else null', () => {
+    expect(replay.factSpellingIn('a "b" c', '"b"')).toBe('"b"');
+    expect(replay.factSpellingIn('a \\"b\\" c', '"b"')).toBe('\\"b\\"');
+    expect(replay.factSpellingIn('a b c', '"b"')).toBeNull();
+    expect(replay.factSpellingIn('anything', '')).toBeNull();
+  });
+
+  it('a fact made unplaceable is a counted writer-fact-unplaced under either input, and FACT_DROP_REASONS appends it in place', () => {
+    const c = mineOf({ name: 'Bash', input: { command: 'npm run fixture-build-all' } }).find((x) => x.kind === 'command')!;
+    for (const w of ['excerpt', 'leaf-span']) {
+      expect(replay.writerInputOf({ ...c, fact_raw: 'never in the text' } as never, w, FW_IDX), w).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
+    }
+    expect(replay.FACT_DROP_REASONS.slice(16, 19), 'R5').toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced']);
+    expect(replay.FACT_DROP_REASONS.at(-1), 'D-6312\'s word follows').toBe('sha-short');
+  });
+});
+
+describe('W2-5a fix wave: the review\'s minors', () => {
+  it('quizFamilyOrderKey: its inner seed is the one the gate\'s substream(seed, \'quiz-sample\') derives, so a gate change reds here', () => {
+    const seed = 'ab'.repeat(32);
+    const fam = { store_id: 'fixture-store', ccrc_id: 'fixture-id', generation: 'fixture-gen' };
+    const inner = t4Lib.sha256Hex(`${seed}:quiz-sample`);
+    // xoshiro128**'s first output is rotl(s1 * 5, 7) * 9, and the gate takes s1 from bytes 4 to 7 of this hash, little-endian.
+    const s1 = (parseInt(inner.slice(8, 10), 16) | (parseInt(inner.slice(10, 12), 16) << 8) | (parseInt(inner.slice(12, 14), 16) << 16) | (parseInt(inner.slice(14, 16), 16) << 24)) >>> 0;
+    const rotl = (x: number, k: number): number => ((x << k) | (x >>> (32 - k))) >>> 0;
+    const first = Math.imul(rotl(Math.imul(s1, 5), 7), 9) >>> 0;
+    expect((w6Gate.substream(seed, 'quiz-sample') as { nextU32(): number }).nextU32(), 'the gate\'s stream starts from this hash').toBe(first);
+    expect(replay.quizFamilyOrderKey(seed, fam), 'the key hashes that same seed with the family key').toBe(t4Lib.sha256Hex(`${inner}:${w6Gate.familyKey(fam.store_id, fam.ccrc_id, fam.generation)}`));
+  });
+
+  it('BASELINE_FILES_ID is the gate\'s open record default itself, read from it', () => {
+    const rec = w6Gate.OPEN_RECORD_V1 as unknown as { draft: { quiz: { fields: { baseline_files: { value: string } } } } };
+    expect(replay.BASELINE_FILES_ID).toBe(rec.draft.quiz.fields.baseline_files.value);
+    expect(replay.BASELINE_FILES_ID).toBe('v1');
+    const src = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => /^export const BASELINE_FILES_ID\b/.test(l));
+    expect(src).toHaveLength(1);
+    expect(src[0], 'not spelled a second time').not.toMatch(/'v1'/);
+  });
 });

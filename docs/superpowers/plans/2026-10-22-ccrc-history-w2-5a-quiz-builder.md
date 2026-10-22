@@ -9,7 +9,7 @@
 - **Task 4 (W2-D68, W2-D69, W2-D33; D-6278, D-6279).** Baseline B, parts 1 to 3 from the store (Task 1's readers) and part 4 from the baseline files (`baseline_files: 'v1'`), held in memory only: its text is non-enumerable, and the baseline record under `--out` carries counts only. A tombstoned or malformed kept list discards as `kept-unreadable`, never as an empty part 2. W2-D61's and W2-D74's B pins.
 - **Task 5 (W2-D70, W2-D34, W2-D71; D-5780).** Answerability with its timed clause, the same-millisecond count over the CLI's family scope as a report that never gates, and seeded sampling: families in seeded order (for the quiz, a per-family seeded key, `quizFamilyOrderKey`, R10), each family's candidates on its own stream, lazy stages, the three caps, the halt floor and the fidelity boundaries.
 - **Task 6 (W2-D72, W2-D73, W2-D64, W2-D54, W2-D71).** The question writer through W2-4's writer-mode spawn (RP1-writer, RP3-writer), its windowed and redacted input, the frozen lists (`frozen.json`, canonical bytes, never replaced), the fidelity pilot's three payload stdins and its overhead arithmetic (the spawns are W2-5b's), and `sourceQuiz`, Tasks 1 to 6 composed, which in quiz mode walks every local admitted family less the exclusions, never the census list (R10).
-- **Task 7 (W2-D84's first half, W2-D24, W2-D21 as amended, W2-D25, W2-D73, W2-D19, W2-D20, W2-D77; D-6280).** The record subcommands: `pilot-source`, `quiz-source`, `freeze`, `power` (with the census assembler that checks nodes only), `open --template`, `open --draft`, `open --finalize`, `verify --registry` and `verify --section ab`, each `--record` consumer re-checking `codeShas()` before it reads any other input. The `flags_accepted parity` pin, and the `--out` walk over a whole stubbed run. A refusal that needs no store and no spawn answers before `prepareOut` makes `--out` (R10). `freeze`'s meta reports `short_of_min_families` against `quiz.min_families`, never refusing on it (R11).
+- **Task 7 (W2-D84's first half, W2-D24, W2-D21 as amended, W2-D25, W2-D73, W2-D19, W2-D20, W2-D77; D-6280, D-6307, D-6311, D-6313).** The record subcommands: `pilot-source`, `quiz-source`, `freeze`, `power` (with the census assembler that checks nodes only), `open --template`, `open --draft`, `open --finalize`, `verify --registry` and `verify --section ab`, each `--record` consumer re-checking `codeShas()` before it reads any other input. The `flags_accepted parity` pin, and the `--out` walk over a whole stubbed run. A refusal that needs no store and no spawn answers before `prepareOut` makes `--out` (R10): the writer model, the roster, the account, the wrapper's sha and a limits row at the threshold (D-6307), the preflight's file half and `pilot-source`'s store open (D-6311), and a signed record's out-of-range budget, limits and quiz quotas (D-6309's range check, `refuseOutOfRangeValues`). `pilot-source`'s seed is pinned under `--out`, so a resumed batch asks the same questions (D-6313). `freeze`'s meta reports `short_of_min_families` against `quiz.min_families`, never refusing on it (R11).
 - **Task 8.** The departures, the whole-PR checks and the PR. It changes no tracked file and has no commit (R2).
 
 Sessions see no change in behaviour: no hook, unit, timer, store, schema, wire or `ccd/**` file changes, and the driver opens every store read-only. Running any subcommand on a real node is the operator's (§5), after the final W2 release is rolled out (W2-D6), never the worker's.
@@ -86,12 +86,12 @@ The sourcing pipeline, in W2-D71's order, composed once by Task 6's `sourceQuiz`
 - **Red-first.** Every new guard is watched red on the unguarded code (the prediction written before the run), then each named mutant is measured red, then green again. A red at a CONTROL is the fixture's to fix, never the guard's to weaken. Scratch goes under `.superpowers/sdd/history-w2-5a/` (gitignored), never `git stash`.
 - **Every commit green.** Each task leaves every suite green at its own commit, the whole of `history-replay.test.ts` included.
 - **Citations and growth.** No added code or test line cites `file.mjs:N`, `file.ts:N` or `ccd:NNNN` (`citations.test.ts`, D-5893): cite symbols. `growth-check.test.ts`'s `GROWTH_FILES` (D-6178) lists neither file, so the driver's growth needs no waiver.
-- **Commits.** One per code task, in task order, each subject `feat(history-replay): … (W2-5a Task <N>; W2-D…)`, each message ending with the Co-Authored-By line the worker's session's attribution reminder gives, passed as a second `-m` from `CO_AUTHORED_BY`. Shell state does not persist between tool calls, so each commit block sets `CO_AUTHORED_BY='<that line>'` in the same command as its `git commit`.
+- **Commits.** One per code task, in task order, each subject `feat(history-replay): … (W2-5a Task <N>; W2-D…)`, each message ending with the Co-Authored-By line the worker's session's attribution reminder gives, passed as a second `-m` from `CO_AUTHORED_BY`. Shell state does not persist between tool calls, so each commit block sets `CO_AUTHORED_BY='<that line>'` in the same command as its `git commit`. A fix round's or fix wave's commit names the task that owns the code it changes (R2), `fix(history-replay): … (W2-5a Task <N>; D-…)`, or `Tasks <N>, <M> and <K>` when one change spans them, and defines the number it first cites; the final fix wave is one commit per lettered item (D-6308, D-6309, D-6310, D-6311, D-6312 and D-6313), one commit for the review's minors and one for this plan's text.
 - **Public repo.** No host, user, account, wrapper, lane, pool, session or person name, no private project name, no IP address, no absolute home path, no private ticket id and no docserver URL, in plan text, fixtures, comments, commits or the PR body. Fixture paths are `mkTmp` paths or synthetic in the `/home/u/tree` style; account ids are W2-4's synthetic `up-a`, `gen-a`, `gen-o`, `cx-a`, `ext-n`, `ext-a` and the rest; model ids are synthetic. Task 8 Step 7 runs the private-name count over every added line, every commit message and the PR body; it must print 0.
 - **Node floor.** `>=22.16.0`, identical in `server/`, `agent/` and `pwa/`; no task changes it.
-- **macOS.** `test-macos` runs the selection and is advisory, but a `history-replay` red there once blocked a stable promotion (D-6122): paths come from `mkTmp`, nothing assumes `/proc`, and spawning describes skip on darwin as W2-4's do.
+- **macOS.** `test-macos` runs the selection and is advisory, but a `history-replay` red there once blocked a stable promotion (D-6122): paths come from `mkTmp`, nothing assumes `/proc`, and the describes that build a store with the real sweep or spawn the writer stub skip on darwin (`skipIf(process.platform === 'darwin')`: Task 1's reconstruction, Task 6's `sourceQuiz` and Task 7's end-to-end and writer cases), as W2-4's spawning describes do.
 - **D-numbers.**
-  - This plan defines five numbers, each in "Deviations found" at its end, naming the first task section that cites it (Task 8 Step 1 checks both): **D-5780** from the W2 block (`history-w2-answerable-timed`; W2-D70; erratum E19, amended by W2-5b; Task 5), and the four issued for the departures found while planning (R1): D-6277 (Task 1), D-6278 and D-6279 (Task 4), and D-6280 (Task 7). No other §6 or ledger departure names W2-5a in its "Defined in".
+  - This plan defines eighteen numbers, each in "Deviations found" at its end, naming the first task section that cites it (Task 8 Step 1 checks both): **D-5780** from the W2 block (`history-w2-answerable-timed`; W2-D70; erratum E19, amended by W2-5b; Task 5), the four issued for the departures found while planning (R1): D-6277 (Task 1), D-6278 and D-6279 (Task 4), and D-6280 (Task 7), and the thirteen issued to the run during the build, each defined in the commit that first cited it: D-6301 and D-6302 (Task 1), D-6303 (Task 2), D-6304 (Task 4), D-6305 and D-6306 (Task 6), D-6307 (Task 7), and the final fix wave's D-6308 (Tasks 1, 2 and 6, first cited in Task 1), D-6309 and D-6310 (Task 6), D-6311 (Task 7), D-6312 (Task 6) and D-6313 (Task 7). No other §6 or ledger departure names W2-5a in its "Defined in".
   - Earlier numbers are cited bare, never defined here: D-5052, D-5765 (W2-2a's, defined by W2-2a's plan in the same docs PR), D-5766 (W2-2a's, W2-D34's cut, defined by W2-2a's plan in the same docs PR; the count here ships no part of it), D-5771, D-5773, D-5774, D-5775, D-5776, D-5779, D-5791, D-5812, D-5813, D-5814, D-5815, D-5848, D-5893, D-5983, D-5984, D-5985, D-5986, D-6122, D-6178, D-6211, D-6223 and D-6238.
   - A departure found while executing takes the next unused number from the run's block named in the brief and is defined in "Deviations found" in the commit that first cites it; otherwise it is reported, never invented. Never write a number that was not issued, and never write a range.
   - Before the PR: `git fetch origin main`, then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
@@ -150,14 +150,14 @@ These five inputs follow from the decisions and the spec, would bite the operato
 1. **A fact that leaks redacted text.** A key-shaped F_raw (assembled at runtime), a whitespace-split bearer token whose F_raw redaction leaves intact and whose F it masks, a fact intact alone but masked inside its leaf, and a span holding a key that reaches the question writer. Expected: `redact-fact` first, then `redact-leaf`, each counted without its value and before any admission (`baseline-hit` never shadows it); the writer's stdin and `<qid>.input.json` carry the redaction mark and no part of the value; B's text is non-enumerable and no B sentinel is found under `--out`. **Task 2** (the screens and `screenCandidate`'s order CONTROL; Task 6's `sourceQuiz` runs the same three Task 2 screens, `screenRedaction`, `screenProducer` and `screenBaseline`, as its first three stages), **Task 5** (the shipped path's order: the sampler runs the stages in `QUIZ_STAGES` order, "the stages run in QUIZ_STAGES order …", M28), **Task 6** (the writer-stub redaction pin; the F6 case: the writer's input carries F as it stands, so the screen is what keeps a masked F from the writer; and the shipped-path case, a key-shaped command in a real store dropped `redact-fact` at `sourceQuiz`'s own redaction stage, never asked of the writer, mutant M39), **Task 4** (B in memory). Both F_raw and F are screened (R10, F6: the writer's input carries F, so an F_raw-only screen would let a whitespace-split bearer token reach it); the reviewer probes that pair, Task 2's bearer case with its CONTROL and mutant M31, Task 2's F_raw-only case (a relative path through a registered value, which resolving removes from F) and mutant M32, and the end-to-end `--out` walk over a whole stubbed run (Task 7, R7).
 2. **A straddling or two-copy boundary admitted wrongly.** Anthropic rows before, a gateway row after the summary; the same boundary held by two copies in either order, and a live copy beside a retired one with a smaller `file_id`; a gateway row between the boundary and its summary; synthetic and model-less rows. Expected: the straddle refused `after-other` on one copy and over a planted store; the holding copy is `holdingCopyOf`'s, never the longest; synthetic rows skipped, never witnesses. **Task 3**, mutants M1 (before side only), M2 (the immediately preceding row only) and M3 (the longest-copy rule). The reviewer probes the unbounded before-witness (R6).
 3. **A NULL-ts or same-millisecond row.** A source row stamped exactly T_N, one stamped T_N + 1, a NULL-ts source, an unlinked sidecar, a sidecar linked to a NULL-ts row, a boundary with a NULL ts, and entries stamped T_N outside the holding copy reached by row, variant and sidecar. Expected: T_N answerable; T_N + 1, NULL ts and unlinked sidecars `unanswerable-untimed` with the failing clause named; a NULL-ts boundary dropped `ts-null` before mining; the same-millisecond count counts each entry once, outside the holding copy, and never changes the sampled list. **Task 5** (D-5780's clause 4, mutants M14 to M20 on the count) and **Task 3** (`ts-null`).
-4. **A writer spawn on a refused account, or on a moved tree.** `cx-a`, `ext-n`, `ext-a` and `gen-o`; a writer model that is not an exact Opus id; a limits row at the threshold at open; a Claude Code version that moves between two asks; a resumed `--out` whose pinned input changed. Expected: each refused before any spawn with the stub's log absent (RP3-writer); RP1-writer's whole argv and env on the admitted `up-a` and `gen-a`; the preflight before every writer batch; a resume that reuses and never respawns, and refuses a changed input. **Task 6**, and **Task 7** for the order against `--out`: a writer model that is not an exact Opus id refuses `args-invalid` before `prepareOut` makes `--out`, so a refused run leaves no `--out` (R10; Task 7's case with its CONTROL, mutant M42). The reviewer probes that order for every refusal that needs no store and no spawn, and `writer-malformed` split by failed runs with its one warning line (R6).
+4. **A writer spawn on a refused account, or on a moved tree.** `cx-a`, `ext-n`, `ext-a` and `gen-o`; a writer model that is not an exact Opus id; a limits row at the threshold at open; a Claude Code version that moves between two asks; a resumed `--out` whose pinned input changed. Expected: each refused before any spawn with the stub's log absent (RP3-writer); RP1-writer's whole argv and env on the admitted `up-a` and `gen-a`; the preflight before every writer batch; a resume that reuses and never respawns, and refuses a changed input. **Task 6**, and **Task 7** for the order against `--out`: a writer model that is not an exact Opus id refuses `args-invalid` before `prepareOut` makes `--out`, so a refused run leaves no `--out` (R10; Task 7's case with its CONTROL, mutant M42). The roster, the account, the wrapper's sha and a limits row at the threshold answer before `prepareOut` too (D-6307; Task 7's two `it.each` sets, one per subcommand, mutants M48, M49, M50, M51, M52 and M53). So do the preflight's file half (D-6311: `tree-unmeasured`, `tree-moved` and `wrapper-moved` in both subcommands, `code-unmeasured` and `code-changed` in `pilot-source`) and `pilot-source`'s store open (`store-unreadable`), and a signed record's out-of-range budget, limits and quiz quotas refuse `record-invalid` there (D-6309; Task 7's `D-6309` set, mutants FW-D1 to FW-D3, FW-H1 and FW-H2). The reviewer probes that order for every refusal that needs no store and no spawn, and `writer-malformed` split by failed runs with its one warning line (R6).
 5. **A record subcommand on a stale code sha, or writing outside `--out`.** A tree whose `measure-history.py` moved after part 1; a record path inside a git worktree (`.git` a file); a superseding draft given without its predecessor; a frozen list edited by one byte; a census taken with a `--since` that is not `lookback_days`; a census changed between `quiz-source` and `open --finalize`. Expected: `code-changed` before any other input is read and before any spawn, for each of the six consumers; `record-invalid` before a byte is read; `args-invalid` `supersedes-required`; `quiz-sha-mismatch` with no spawn; `input-invalid` `since-mismatch`; `assignment-mismatch`; `frozen.json` written 0600 under `--out` and never replaced; `open` and `verify` write nothing. **Task 7** (the `it.each` over the six consumers with its CONTROL) and **Task 6** (the frozen list). The reviewer also probes the quiz population and its merge (R10, C1): a local admitted family that no census lists is sourced, a pilot family and a control-held id are not (**Task 6**'s population case and its CONTROL), and two nodes' outputs merged by rank are the one walk over both (**Task 5**'s keyed-order case, mutants M45 to M50; **Task 7**'s freeze merge, M18 and M41).
 
 ## File Structure
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `deploy/history-replay.mjs` | modify | **Task 1:** the shebang (`--no-warnings`), the header's `Imports:` sentence (R1 carry), every import statement the PR needs (R3), `DRIVER_REASONS` + `store-unreadable`, `CODE_SHA_FILES` as `GATE_CODE_FILES`, `RECON_DISCARDS`, `POINTER_REMOVED`, `removePointerLines`, `composePayload`, `renderToolUseLine`, `summaryIndexOf`, `openReplayStore` (the pair index and the store id), `boundaryCopyOf`, `spanRowsOf`, `keptMembersOf`, `keptRowsOf`, `entryBodyOf`, `renderKeptMember`, `reconstructPayload`. **Task 2:** `MINE_*` constants, `SPAN_LOST`, `FACT_DROP_REASONS`, the span words appended to `RECON_DISCARDS`, `newDropCounts`, `noteDrop`, `storedField`, `rosterConfigDirs`, `mineBoundary` (the one candidate shape, R4), `dedupeFamily`, `screenRedaction`, `screenProducer`, `screenBaseline`, `screenCandidate`. **Task 3:** its words appended to `RECON_DISCARDS`, `admitBoundary`, `admissionStmts`, `admitStoreBoundaries`. **Task 4:** its words appended to `RECON_DISCARDS`, the `BASELINE_*` constants, `baselineOf`, `baselineCandidates`, `baselineFiles`, `baselineRow`, `writeBaselineRecord`, and `readPlain`'s `follow` option. **Task 5:** `QUIZ_STAGES`, `QUOTA_SKIPS`, `SOURCE_FAILS`, the answerability words appended to `FACT_DROP_REASONS`, `checkSource`, `answerability`, `answerableStage`, `familyScopeOf`, `asofSameMsHits`, `sameMsReport`, `familyKeyOf`, `seededOrder`, `quizRng`, `pilotRng`, `familyRng`, `quizFamilyOrderKey` and the module-private `keyedOrder` (R10), `drawSeedHex`, `quizPopulation`, `sampleQuestions` (with each entry's `rank`, and its `familyOrder` option), `quizFloor`, `sampleFidelityBoundaries`. **Task 6:** the `WRITER_*`, `FROZEN_*` and `FIDELITY_*` constants, `writer-input-over-cap` appended to `FACT_DROP_REASONS`, `windowExcerpt`, `writerInputOf`, `writerStdin`, `qidOf`, the module-private `refuseWriterModel` (R10), `openWriter`, `frozenListText`, `writeFrozenList`, `loadFrozenList`, `usageInputOf`, `userTextOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`, and `readStreamJson`'s `firstCallUsage`. **Task 7:** `FlagKind` `'list'`, 42 new flags in `FLAG_SPECS` (49 in all), `parseArgs`' list flags, `step0aCommand`'s flag allow-list, the kinds and paths, `nodeStoreId` (through `openReplayStore`), `controlFileOf`, `warnFailedRuns`, `contractFlags`, `familiesOf`, `mergeSourced`, `assembleCensus`, `deriveAssignment`, `coveredDays`, `rhoHat`, `powerReport`, the `verify` states and reports, `openTemplate`, `buildDraft`, `buildFinal`, `loadInput`, `recheckCode`, the six handlers and their `HANDLERS.set` lines. Every block above the entry guard; no top-level await outside it. | L4 (operator script) | 1–7 |
+| `deploy/history-replay.mjs` | modify | **Task 1:** the shebang (`--no-warnings`), the header's `Imports:` sentence (R1 carry), every import statement the PR needs (R3), `DRIVER_REASONS` + `store-unreadable`, `CODE_SHA_FILES` as `GATE_CODE_FILES`, `RECON_DISCARDS`, `POINTER_REMOVED`, `removePointerLines`, `composePayload`, `renderToolUseLine`, `summaryIndexOf`, `openReplayStore` (the pair index and the store id), `boundaryCopyOf`, `spanRowsOf`, `keptMembersOf`, `keptRowsOf`, `entryBodyOf`, `renderKeptMember`, `reconstructPayload`. **Task 2:** `MINE_*` constants, `SPAN_LOST`, `FACT_DROP_REASONS`, the span words appended to `RECON_DISCARDS`, `newDropCounts`, `noteDrop`, `storedField`, `rosterConfigDirs`, `mineBoundary` (the one candidate shape, R4), `dedupeFamily`, `screenRedaction`, `screenProducer`, `screenBaseline`, `screenCandidate`. **Task 3:** its words appended to `RECON_DISCARDS`, `admitBoundary`, `admissionStmts`, `admitStoreBoundaries`. **Task 4:** its words appended to `RECON_DISCARDS`, the `BASELINE_*` constants, `baselineOf`, `baselineCandidates`, `baselineFiles`, `baselineRow`, `writeBaselineRecord`, and `readPlain`'s `follow` option. **Task 5:** `QUIZ_STAGES`, `QUOTA_SKIPS`, `SOURCE_FAILS`, the answerability words appended to `FACT_DROP_REASONS`, `checkSource`, `answerability`, `answerableStage`, `familyScopeOf`, `asofSameMsHits`, `sameMsReport`, `familyKeyOf`, `seededOrder`, `quizRng`, `pilotRng`, `familyRng`, `quizFamilyOrderKey` and the module-private `keyedOrder` (R10), `drawSeedHex`, `quizPopulation`, `sampleQuestions` (with each entry's `rank`, and its `familyOrder` option), `quizFloor`, `sampleFidelityBoundaries`. **Task 6:** the `WRITER_*`, `FROZEN_*` and `FIDELITY_*` constants, `writer-input-over-cap` appended to `FACT_DROP_REASONS`, `windowExcerpt`, `writerInputOf`, `writerStdin`, `qidOf`, the module-private `refuseWriterModel` (R10), `openWriter`, `frozenListText`, `writeFrozenList`, `loadFrozenList`, `usageInputOf`, `userTextOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`, and `readStreamJson`'s `firstCallUsage`. **Task 7:** `FlagKind` `'list'`, 42 new flags in `FLAG_SPECS` (49 in all), `parseArgs`' list flags, `step0aCommand`'s flag allow-list, the kinds and paths, `nodeStoreId` (through `openReplayStore`), `controlFileOf`, `warnFailedRuns`, `contractFlags`, `familiesOf`, `mergeSourced`, `assembleCensus`, `deriveAssignment`, `coveredDays`, `rhoHat`, `powerReport`, the `verify` states and reports, `openTemplate`, `buildDraft`, `buildFinal`, `loadInput`, `recheckCode`, the six handlers and their `HANDLERS.set` lines. **Fix rounds and the final fix wave, by the task that owns the code:** Task 1: `maskValue` and `renderMasked` (a JSON value redacted as a value before it is serialised, D-6308), `renderOrNull`, `SUMMARY_LOST` and `MEMBER_LOST` (D-6301, D-6302); Task 2: `repo_roots` in `screenRedaction` (D-6308); Task 6: `refuseWriterModel`, `writerField` (the writer's span and pair input as values, D-6308), `factSpellingIn` (D-6309), the legacy-family exclusion and the `shaMinPrefix` argument in `sourceQuiz` (D-6310, D-6312); Task 7: `refuseOnLimits` (the limits half of `batchGate`, factored out for the pre-check, D-6307), `refuseOutOfRangeValues` (D-6309) and `refuseWriterAdmission` (D-6307, D-6311, D-6309), `preflightVersion` and `preflightFiles` (the split of `preflight`, composed in its old order, D-6311), `PILOT_SEED_FILE` and `pinnedPilotSeed` (D-6313). Every block above the entry guard; no top-level await outside it. | L4 (operator script) | 1–7 |
 | `server/test/history-replay.test.ts` | modify | **Task 1:** two describes (the store-read scans, import pins and `CODE_SHA_FILES parity`; reconstruction over a fixture store); `--no-warnings` on W2-4's driver spawns; `t8Tree` copies the real gate; W2-4's import pin rewritten to the PR's whole module list (D-5814); the `withHandler` comment corrected. **Task 2:** one describe (33 cases) and its module-level fixtures (`w5a2*`). **Task 3:** three describes and `w5a3PlantStore`. **Task 4:** four describes and `w5a4*`. **Task 5:** three describes over hand-built, indexed stores. **Task 6:** the writer, frozen-list and fidelity describes, `W6SourceBox` and `w6SourceBox`, and the `sourceQuiz` describe; W2-4 Task 4's empty-stream case gains `firstCallUsage: null`. **Task 7:** one outer describe (prefix `r7`), with the `flags_accepted parity` pin and the `--out` walk; W2-4's `FLAG_SPECS`, `HANDLERS` and recall-off line pins re-pinned, and `withHandler`'s handler type widened to the new `Flags`. | test | 1–7 |
 
 ## Drifts since the decisions document
@@ -239,7 +239,7 @@ The decisions document was written at `bd363a76b`; the base is `cd622b2f6`. Each
 6. `feat(history-replay): the question writer through the writer-mode spawn, the frozen lists, the fidelity pilot's payloads and arithmetic, and sourceQuiz (W2-5a Task 6; W2-D72, W2-D73, W2-D71, W2-D64, W2-D54, W2-D55, W2-D56)`;
 7. `feat(history-replay): the record subcommands, pilot-source, quiz-source, freeze, power, open and verify, each re-checking the code it runs under (W2-5a Task 7; W2-D84, W2-D24, W2-D73, W2-D21, W2-D19, W2-D20, W2-D25, W2-D71; D-5773, D-6280)`.
 
-Task 8 adds no commit of its own (R2); a fix one of its checks calls for is a correction commit under the owning task's number, before the push, and a number issued during the build is defined in this plan's "Deviations found" by the commit that first cites it. Task 1 goes first: every later task reads the store through it, and it settles the imports, the gate and `--no-warnings`. Tasks 2 to 5 each build on the pieces before them; Task 6 needs Tasks 1 to 5; Task 7 composes everything; Task 8 runs last. Every task leaves every suite green at its commit. This PR changes no `.github/` file, so CI runs its selection; the PR body asks the coordinator to check that the `select tests` summary lists `history-replay`, `lifecycle` and `single-definition`. The PR is opened by Task 8 Step 10, only after its Steps 1 to 9 (the departures, the spec untouched, the file list, the carries, the whole file in one process, the whole-PR checks, the private-name count of 0, a clean tree and the body), ready for review (not a draft), titled **"ccrc history wave W2-5a: reconstruction, admission, the quiz builder and the record subcommands"**, with the body Task 8 Step 9 gives.
+The build added correction commits under the same rule: fix rounds on Tasks 1, 2, 4, 6 and 7 (D-6301, D-6302, D-6303, D-6304, D-6305, D-6306 and D-6307), then the final fix wave after the whole-branch review: one commit per lettered item (D-6308, D-6309, D-6310, D-6311, D-6312 and D-6313), one for the review's minors and one for this plan's text, each naming the task that owns its code, then a fix round after the next read of the whole branch: one commit for the record range check (D-6309), one for the seed pin's pin (D-6313) and one for this plan's text. Task 8 adds no commit of its own (R2); a fix one of its checks calls for is a correction commit under the owning task's number, before the push, and a number issued during the build is defined in this plan's "Deviations found" by the commit that first cites it. Task 1 goes first: every later task reads the store through it, and it settles the imports, the gate and `--no-warnings`. Tasks 2 to 5 each build on the pieces before them; Task 6 needs Tasks 1 to 5; Task 7 composes everything; Task 8 runs last. Every task leaves every suite green at its commit. This PR changes no `.github/` file, so CI runs its selection; the PR body asks the coordinator to check that the `select tests` summary lists `history-replay`, `lifecycle` and `single-definition`. The PR is opened by Task 8 Step 10, only after its Steps 1 to 9 (the departures, the spec untouched, the file list, the carries, the whole file in one process, the whole-PR checks, the private-name count of 0, a clean tree and the body), ready for review (not a draft), titled **"ccrc history wave W2-5a: reconstruction, admission, the quiz builder and the record subcommands"**, with the body Task 8 Step 9 gives.
 
 ---
 
@@ -285,7 +285,7 @@ It also does the four things the W2-1 plan and the decisions document hand to "t
 - W2-D51 (`openReader`; the `node:sqlite` scan);
 - W2-D59 (a driver word added by its owner PR: `store-unreadable`).
 
-It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3), and D-5814 (W2-4's import pin). It ships one departure this plan defines, **D-6277** (`history-replay-pointer-lines`, Choices). The answerability task's departure (W2-D70) is not this task's.
+It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3), and D-5814 (W2-4's import pin). It ships three departures this plan defines, **D-6277** (`history-replay-pointer-lines`, Choices) and, found by its review, **D-6301** (`history-replay-unknown-body-word-throws`) and **D-6302** (`history-replay-unrenderable-body-discard`), both in "Deviations found". It also first cites **D-6308** (`history-replay-no-redaction-of-serialised-text`: `maskValue` and `renderMasked` are this task's), whose entry spans Tasks 1, 2 and 6. The answerability task's departure (W2-D70) is not this task's.
 
 **Files:**
 - Modify: `deploy/history-replay.mjs`:
@@ -329,7 +329,7 @@ It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3),
 - Produces (`deploy/history-replay.mjs`, all exported unless marked):
   - `DRIVER_REASONS` gains `'store-unreadable'`, appended after `'interrupted'`.
   - `CODE_SHA_FILES === GATE_CODE_FILES`: the same frozen array, so the four paths are spelled once.
-  - `RECON_DISCARDS: readonly string[]`, frozen: the one list of boundary discards (R5). Task 1's fourteen words come first: `'boundary-absent'`, `'boundary-uncopied'`, `'summary-absent'`, `'summary-unparseable'`, `'summary-tombstone'`, `'summary-over-cap'`, `'summary-undecodable'`, `'kept-absent'`, `'kept-unreadable'`, `'member-tombstone'`, `'member-over-cap'`, `'member-undecodable'`, `'over-decode-cap'` and `'leaf-absent'`. Tasks 2, 3 and 4 append theirs in place. It is disjoint from `DRIVER_REASONS` and from the gate's `GATE_REASONS`.
+  - `RECON_DISCARDS: readonly string[]`, frozen: the one list of boundary discards (R5). Task 1's fifteen words come first: `'boundary-absent'`, `'boundary-uncopied'`, `'summary-absent'`, `'summary-unparseable'`, `'summary-tombstone'`, `'summary-over-cap'`, `'summary-undecodable'`, `'kept-absent'`, `'kept-unreadable'`, `'member-tombstone'`, `'member-over-cap'`, `'member-undecodable'`, `'over-decode-cap'`, `'leaf-absent'` and `'body-unrenderable'` (D-6302). Tasks 2, 3 and 4 append theirs in place. It is disjoint from `DRIVER_REASONS` and from the gate's `GATE_REASONS`.
   - `POINTER_REMOVED = '[pointer removed]'`.
   - `removePointerLines(text: string): { text: string, replaced: number }`, pure.
   - `composePayload(parts: { summary: string, kept: readonly string[] }, question: string): string`, pure: items 1 to 3 joined by one blank line, the question (already redacted) followed by `ANSWER_PROTOCOL`. It accepts `''` as the question and empty parts.
@@ -340,10 +340,10 @@ It cites D-6238 (defined in the W2-1 plan), D-5774 and D-5776 (defined by W2-3),
   - `spanRowsOf(rs, boundaryEntryId: number)` answers `{ state: 'span', rows: { entry_id, uuid, type, model, provenance, ts_ms, blob_id }[] }`, leaf N's sources in their recorded order (N's holding copy's file order), or `{ state: 'discard', why: 'leaf-absent' }`.
   - `keptMembersOf(rs, boundary, budget = { bytes: 0 })` answers `{ state: 'kept', uuids: string[] }`, or `{ state: 'discard', why: 'kept-absent' | 'kept-unreadable' }`. A body that is not a list of strings is `kept-unreadable`. The uuids are deduplicated, in first-occurrence order. Baseline B passes its run budget.
   - `keptRowsOf(rs, uuids, fileId): { rows: { entry_id, uuid, type, blob_id, line: number | null }[], absent: number, offCopy: number }`. The rows are in N's holding copy's file order, and members outside that copy come after them, by `entry_id`.
-  - `entryBodyOf(rs, row: { entry_id, blob_id })` answers `{ state: 'body' | 'unparseable', body, rawLen }` or `{ state: 'lost', word: 'tombstone' | 'over-cap' | 'undecodable' }`.
+  - `entryBodyOf(rs, row: { entry_id, blob_id })` answers `{ state: 'body' | 'unparseable', body, rawLen }` or `{ state: 'lost', word: 'tombstone' | 'over-cap' | 'undecodable' }`. Any other body state throws a `TypeError` naming it, never a discard with no word (D-6301).
   - `renderKeptMember(row: { type }, k, idx)` answers `{ state: 'text', text }` or `{ state: 'discard', why: 'over-decode-cap' }`.
-  - `reconstructPayload(rs, boundaryEntryId: number, question: string)` answers `{ state: 'payload', text, counts: { members, absent, off_copy, unparseable, pointer_lines } }`, or `{ state: 'discard', why: <a RECON_DISCARDS word> }`.
-  - Module-private: `replayStmts(db)`, `storeRefusal(e): never`, `reconDiscard(why)`, `SUMMARY_LOST`, `MEMBER_LOST` and `POINTER_LINE_RE`.
+  - `reconstructPayload(rs, boundaryEntryId: number, question: string)` answers `{ state: 'payload', text, counts: { members, absent, off_copy, unparseable, pointer_lines } }`, or `{ state: 'discard', why: <a RECON_DISCARDS word> }`. A summary or kept-member body that parses and cannot be rendered (nested past `JSON.stringify`'s stack) is the discard `body-unrenderable` (D-6302).
+  - Module-private: `replayStmts(db)`, `storeRefusal(e): never`, `reconDiscard(why)`, `renderOrNull(fn)`, `SUMMARY_LOST`, `MEMBER_LOST` and `POINTER_LINE_RE`.
   - Test side, module level for Tasks 3 to 7: `w5a1H` (`historyHelpers`), `w5a1Fx` (`historyFixtures`), `w5a1BeforeAll`.
 - Produces (test side):
   - the `w5a1`-prefixed imports;
@@ -1063,8 +1063,10 @@ export const RECON_DISCARDS = Object.freeze([
   'kept-absent', 'kept-unreadable',
   'member-tombstone', 'member-over-cap', 'member-undecodable',
   'over-decode-cap', 'leaf-absent',
+  'body-unrenderable',
 ]);
-/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. */
+/** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
+ *  other word, so neither map is ever read with a key it lacks (D-6301). */
 const SUMMARY_LOST = Object.freeze({ tombstone: 'summary-tombstone', 'over-cap': 'summary-over-cap', undecodable: 'summary-undecodable' });
 const MEMBER_LOST = Object.freeze({ tombstone: 'member-tombstone', 'over-cap': 'member-over-cap', undecodable: 'member-undecodable' });
 /** What item 1 puts in place of a transcript-pointer line (spec §10.2 "Reconstruction", item 1). */
@@ -1228,7 +1230,35 @@ export function keptRowsOf(rs, uuids, fileId) {
 export function entryBodyOf(rs, row) {
   const k = expandEntryBody(rs, { entry_id: row.entry_id, blob_id: row.blob_id });
   if (k.state === 'body' || k.state === 'unparseable') return { state: k.state, body: k.body, rawLen: k.blob.bytes.length };
+  // D-6301: a word expandEntryBody gains later has no discard here, so it throws rather than reach a wordless discard.
+  if (!Object.hasOwn(SUMMARY_LOST, k.state) || !Object.hasOwn(MEMBER_LOST, k.state)) throw new TypeError(`entryBodyOf: unknown body state ${k.state}`);
   return { state: 'lost', word: k.state };
+}
+
+/** A JSON value redacted as a VALUE (D-6308): every string leaf, and every object key, through lib's redactFinalJson (the
+ *  field pass and then the final belt, per string), the structure rebuilt around them, before anything serialises it. A
+ *  secret that follows a newline in a tool_use input sits behind a JSON `\n` once the input is serialised (the `n`
+ *  glues onto its run and no layer sees the value whole), so no site redacts text it has already serialised. W2-D54 holds:
+ *  each string leaf IS the field, redactField still runs on every one before any cut, and redactFinal on top only adds.
+ *  lib's redactFinalJson maps leaves and never touches object KEYS (a key is a field name fixed in code, there); a
+ *  stored tool_use input's keys are data, so each key goes through it here too. Two keys that mask to one string
+ *  collapse to the later value, which is the fail-closed direction. A value nested past the stack throws a RangeError,
+ *  which renderOrNull's callers turn into a discard.
+ *  @param {unknown} value  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {unknown} */
+export function maskValue(value, idx) {
+  if (typeof value === 'string') return redactFinalJson(value, idx);
+  if (Array.isArray(value)) return value.map((v) => maskValue(v, idx));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [redactFinalJson(k, idx), maskValue(v, idx)]));
+  }
+  return value;
+}
+
+/** A stored body as lib's renderEntryText renders it, redacted as a value first (maskValue): the one way a body that is
+ *  JSON (a tool_use input, a tool_result's block list or object content, an object body) becomes spawn text (D-6308).
+ *  @param {unknown} body  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {string} */
+export function renderMasked(body, idx) {
+  return renderEntryText(maskValue(body, idx));
 }
 
 /** One kept member as item 2 renders it (W2-D75): each block on its own line. A text block, a bare string block and a
@@ -1239,21 +1269,36 @@ export function entryBodyOf(rs, row) {
  *  @param {{ type: string }} row  @param {{ body: unknown, rawLen: number }} k
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx */
 export function renderKeptMember(row, k, idx) {
-  const pieces = Array.isArray(k.body)
-    ? k.body.map((b) => {
+  // D-6308: the body is redacted as a value before any block of it is rendered, so no JSON the render makes is redacted as text.
+  const body = maskValue(k.body, idx);
+  const pieces = Array.isArray(body)
+    ? body.map((b) => {
       const type = b !== null && typeof b === 'object' ? b.type : null;
       const text = type === 'tool_use' ? renderToolUseLine(typeof b.name === 'string' ? b.name : '', JSON.stringify(b.input ?? null)) : renderEntryText([b]);
       return { type, tagged: typeof b === 'string' || type === 'text', text };
     })
-    : [{ type: null, tagged: true, text: renderEntryText(k.body) }];
+    : [{ type: null, tagged: true, text: renderEntryText(body) }];
   const lines = [];
   for (const p of pieces) {
     const field = { text: p.text, rawLen: k.rawLen };
     const r = p.type === 'tool_result' ? toolResultText(field, idx) : redactForSpawn(field, idx);
     if (r.state !== 'text') return r;
-    lines.push(p.type === 'tool_result' ? `[tool_result] ${r.text}` : p.tagged ? `[${row.type}] ${r.text}` : r.text);
+    lines.push(p.type === 'tool_result' ? `[tool_result] ${r.text}` : p.tagged ? `[${redactFinalJson(row.type, idx)}] ${r.text}` : r.text);
   }
   return { state: 'text', text: lines.join('\n') };
+}
+
+/** `fn()`, or null when it throws a RangeError: a body nested past V8's JSON.stringify stack (about 4,000 levels, far
+ *  inside lib's JSON_DEPTH_MAX) parses and cannot be rendered, as recall.mjs's expandEntryText meets it (D-6302). Any other
+ *  throw is a defect and propagates.
+ *  @template T  @param {() => T} fn  @returns {T | null} */
+function renderOrNull(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof RangeError) return null;
+    throw e;
+  }
 }
 
 /** Boundary N's payload (spec §10.2 "Reconstruction"; W2-D75 items 1 to 3), composed by composePayload:
@@ -1269,7 +1314,9 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
   const sum = entryBodyOf(rs, copy.rows[copy.summaryIndex]);
   if (sum.state === 'lost') return reconDiscard(SUMMARY_LOST[sum.word]);
   if (sum.state === 'unparseable') return reconDiscard('summary-unparseable');
-  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);
+  const sumText = renderOrNull(() => renderMasked(sum.body, rs.idx));
+  if (sumText === null) return reconDiscard('body-unrenderable');
+  const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);
   if (s1.state !== 'text') return s1;
   const item1 = removePointerLines(s1.text);
   const kept = keptMembersOf(rs, copy.boundary);
@@ -1281,7 +1328,8 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
     const k = entryBodyOf(rs, row);
     if (k.state === 'lost') return reconDiscard(MEMBER_LOST[k.word]);
     if (k.state === 'unparseable') unparseable += 1;
-    const m = renderKeptMember(row, k, rs.idx);
+    const m = renderOrNull(() => renderKeptMember(row, k, rs.idx));
+    if (m === null) return reconDiscard('body-unrenderable');
     if (m.state !== 'text') return m;
     rendered.push(m.text);
   }
@@ -1558,7 +1606,7 @@ R 'renderToolUseLine|unsanitised side'
 # Expected RED (predicted): 2 failed: the composePayload case and the W2-D74 store case (READ_LINE).
 
 # M19 (W2-D54): the summary row sent unredacted.
-mut deploy/history-replay.mjs '  const s1 = redactForSpawn({ text: renderEntryText(sum.body), rawLen: sum.rawLen }, rs.idx);' "  const s1 = { state: 'text', text: renderEntryText(sum.body) };"
+mut deploy/history-replay.mjs '  const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);' "  const s1 = { state: 'text', text: sumText };"
 R 'a user text block and a tool_use input'
 # Expected RED (predicted): 1 failed, the summary: expected '<summary>…' not to contain the secret.
 
@@ -1634,6 +1682,13 @@ git commit -m "feat(history-replay): reconstruction reads the store through W2-1
 ```
 
 
+**Fix-round tests and mutants (Task 1's code; measured at the fix rounds and the final fix wave, restored by `cmp` each).**
+- F1 (D-6301): the `Object.hasOwn` guard in `entryBodyOf` dropped; the D-6301 case reds.
+- F2a, F2b and F2c (D-6302): the summary render without `renderOrNull`, the kept-member render without it, and `renderOrNull` no longer catching `RangeError`; the D-6302 case (10,000 levels deep, CONTROL the next row intact) reds with a `RangeError` each.
+- F3a, F3b and F3c (`openReplayStore`'s refusal arms): the `store-id-absent` arm folded into `store-id-unreadable`, the UUID check removed from the id guard, and `storeRefusal`'s `ERR_SQLITE_ERROR` branch removed; the refusal-arm describe reds once each.
+- FW-A1, FW-A6 (D-6308): `renderKeptMember` without `maskValue` (the object-body, tool_use input and object `tool_result` cases red), and the summary rendered with `renderEntryText` instead of `renderMasked` (the object-summary case reds); the D-6308 cases are Task 1's store case and the fix-wave describe.
+- FW-G3, FW-G4: the kept-member and summary renders unwrapped; the D-6302 case still reds at 10,000 levels with a CONTROL at 2,000.
+
 ### Task 2: Fact mining, the producer and the redaction screen (W2-D61, W2-D65, W2-D67)
 
 The quiz builder needs candidate facts before it can admit, check or ask anything. This task adds them to `deploy/history-replay.mjs` as pure functions over the span rows Task 1's `spanRowsOf` reads. Its mined candidate is the one candidate shape every later task reads (R4): the writer's item fields, plus the source fields answerability reads. The sampler (W2-D71), Baseline B (W2-D68), answerability (W2-D70), the writer (W2-D72) and the frozen list (W2-D73) all consume what this task produces.
@@ -1658,7 +1713,7 @@ The quiz builder needs candidate facts before it can admit, check or ask anythin
 
 **Files:**
 - Modify `deploy/history-replay.mjs`:
-  - The one import from `'../ccd/history/lib.mjs'` (about :28 at `cd622b2f6`) gains `UUID_RE`, `backendOf`, `isHistoryCommand`, `isSyntheticModel`, `toolResultIdsOf` and `toolUsesOf`. Each name appears once, and the list is in code-unit order, so `EXIT` stays first.
+  - The one import from `'../ccd/history/lib.mjs'` (about :28 at `cd622b2f6`) gains `backendOf`, `isHistoryCommand`, `isSyntheticModel`, `toolResultIdsOf` and `toolUsesOf` (measured: Task 1 already imports `UUID_RE`, for the store opener's id check, so the line gains five names, not six). Each name appears once, and the list is in code-unit order, so `EXIT` stays first.
   - Task 1's `./history-gate.mjs` import statement gains `admitFact` and `collapseWs`. Task 1 owns the module list and the header sentence, which name the gate already (R3).
   - Task 1's `RECON_DISCARDS` gains, in place after `'leaf-absent'`, the four boundary words a body-less mined row discards with: `'span-unparseable'`, `'span-tombstone'`, `'span-over-cap'` and `'span-undecodable'` (R5).
   - One section goes directly above the comment line `// The entry guard stays the LAST block of this file`, below Task 1's section. It has no top-level await.
@@ -1694,7 +1749,7 @@ The quiz builder needs candidate facts before it can admit, check or ask anythin
   - `rosterConfigDirs(roster: { accounts: readonly { configDirSuffix: string }[] }, home): string[]`: `join(home, configDirSuffix)` for every account the validated roster lists (a hidden one included), deduplicated and sorted by code unit.
   - `mineBoundary({ storeId, ccrcId, generation, boundaryUuid, boundaryTsMs, rows, pick, cwd, cwdReal, configDirs })` answers one of:
     - `{ state: 'mined', boundaryUuid, boundaryTsMs, candidates: FactCandidate[], counts }`;
-    - `{ state: 'discard', boundaryUuid, why: one of the four span words, counts }`.
+    - `{ state: 'discard', boundaryUuid, why: one of the four span words, or `body-unrenderable` (D-6303), counts }`.
     It throws `TypeError('mineBoundary: body pick state …')` for a pick state outside the five.
   - `dedupeFamily(mined: MinedBoundary[], counts): FactCandidate[]`: each `(kind, fact)` once, at its first site. The earliest `boundaryTsMs` comes first, ties go by `boundaryUuid` in code-unit order, then file order. Each later copy counts `duplicate`.
   - `screenRedaction(c, idx, memo?): null | 'redact-fact' | 'redact-leaf'`: `redact-fact` when `redactField` changes `fact_raw` or `fact` (R10, F6), else `redact-leaf` when `fact_raw` is not intact in the redacted leaf.
@@ -1772,7 +1827,7 @@ node --no-warnings --input-type=module -e "const d = await import('./deploy/hist
 ```
 
 Expected:
-- The first five counts print 1, 1, 2, 1 and 1: Task 1's `RECON_DISCARDS` ends with `'leaf-absent'`, and Task 1's gate import is the line Step 4(a) extends.
+- The first five counts print 1, 1, 2, 1 and 1: Task 1's `RECON_DISCARDS` holds `'leaf-absent'` as its fourteenth word and `'body-unrenderable'` (D-6302) as its fifteenth and last, and Task 1's gate import is the line Step 4(a) extends.
 - The sixth prints 0: the driver never spells the column.
 - The seventh prints 1, which is W2-4's `export function redactForSpawn(` line, and no other.
 - The eighth and ninth print 0.
@@ -2263,7 +2318,7 @@ EOF
 grep -n "^import" deploy/history-replay.mjs
 ```
 
-Expected: each module is imported on exactly one line, in Task 1's order (no line is added). The lib line reads `import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';`, and the gate line `import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';`. `RECON_DISCARDS` now ends with the four span words.
+Expected: each module is imported on exactly one line, in Task 1's order (no line is added). The lib line reads `import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';`, and the gate line `import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';`. `RECON_DISCARDS` now holds the four span words at indexes 14 to 17, between `'leaf-absent'` and `'body-unrenderable'`, which is still last (measured over predicted: the list ended with the four span words).
 
 (b) Directly above the comment line `// The entry guard stays the LAST block of this file`, below Task 1's section, insert:
 
@@ -2307,6 +2362,8 @@ const SPAN_LOST = Object.freeze({ unparseable: 'span-unparseable', tombstone: 's
 export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
+  'unanswerable', 'unanswerable-untimed',
+  'writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced', 'sha-short',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -2416,7 +2473,9 @@ function pathFactOf(raw, cwd, configDirs) {
 
 /** Mine one boundary's candidates (W2-D61, W2-D65). Pure: it reads the rows it is handed and calls `pick` once for
  *  each row it mines, never for any other row. The family (`storeId`, `ccrcId`, `generation`) is carried onto every
- *  candidate, so the candidate is the writer's item (R4).
+ *  candidate, so the candidate is the writer's item (R4). A mined body nested too deep to render (a RangeError from
+ *  renderEntryText, caught by renderOrNull) discards the boundary under
+ *  `body-unrenderable`, the word D-6302 gives reconstruction (D-6303).
  *  @param {{ storeId: string, ccrcId: string, generation: string, boundaryUuid: string, boundaryTsMs: number,
  *    rows: readonly SpanRow[], pick: (row: SpanRow) => PickedBody, cwd: string | null, cwdReal: string | null,
  *    configDirs: readonly string[] }} input
@@ -2436,7 +2495,9 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       if (why === undefined) throw new TypeError(`mineBoundary: body pick state ${JSON.stringify(picked.state)} is not one expandEntryBody answers`);
       return { state: 'discard', boundaryUuid, why, counts };
     }
-    span.push(storedField(renderEntryText(picked.body)));
+    const rendered = renderOrNull(() => renderEntryText(picked.body));
+    if (rendered === null) return { state: 'discard', boundaryUuid, why: 'body-unrenderable', counts };
+    span.push({ ...storedField(rendered), body: picked.body });   // D-6308: the body rides beside its rendering, redacted as a value at the writer
     const blocks = Array.isArray(picked.body) ? picked.body : [];
     let producer;
     if (row.provenance === 'model') {
@@ -2487,8 +2548,10 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       const text = sjResultText(b.content);
       if (text === null) return;
       const answered = typeof b.tool_use_id === 'string' ? uses.get(b.tool_use_id) : undefined;
+      // The input needs no guard: that tool_use row's own renderEntryText, guarded above, already stringified it whole.
       const pair = answered?.block === undefined ? null
-        : { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(JSON.stringify(answered.block.input ?? null)) };
+        : { name: typeof answered.block.name === 'string' ? answered.block.name : '',
+          input: { ...storedField(JSON.stringify(answered.block.input ?? null)), value: answered.block.input ?? null } };   // D-6308
       if (b.is_error === true) {
         const line = text.split('\n').find((l) => {
           const c = collapseWs(l);
@@ -2543,6 +2606,8 @@ export function dedupeFamily(mined, counts) {
 export function screenRedaction(c, idx, memo = null) {
   if (redactField(c.fact_raw, idx) !== c.fact_raw) return 'redact-fact';
   if (redactField(c.fact, idx) !== c.fact) return 'redact-fact';
+  // D-6308: repo_roots (an epoch's cwd and cwd_real) reach frozen.json and sourced.json: one that redaction changes drops the candidate.
+  if (c.repo_roots.some((r) => redactField(r, idx) !== r)) return 'redact-fact';
   let masked = memo === null ? undefined : memo.get(c.leaf_key);
   if (masked === undefined) {
     masked = redactField(c.leaf.text, idx);
@@ -2850,6 +2915,10 @@ git commit -m "feat(history-replay): mine quiz facts and screen them by redactio
 ```
 
 
+**Fix-round tests and mutants (Task 2's code).**
+- MA (D-6303): the span render without `renderOrNull`; the D-6303 case (10,000 levels deep discards `body-unrenderable`, CONTROL 2,000 deep mines) reds. MB: `body-unrenderable` moved before the span words; the list pin reds. MC: a word appended after it; the last-word pin reds.
+- FW-A5 (D-6308): `screenRedaction` without the `repo_roots` check; the repo-root case reds. FW-A3 and FW-A4 (D-6308): the span and the pair input mined with their `body` and `value` beside their text; the end-to-end and writer-input cases red when the writer redacts them as text, and when object keys are not masked.
+
 ### Task 3: RP5 boundary admission over the holding copy, with the straddle and two-copy CONTROLs (W2-D66)
 
 The quiz asks only about compactions that an Anthropic model produced on both sides. W2-D66 sets the rule, and spec §10.2's RP5 pins it. A boundary is admitted only when two witnesses both read `'anthropic'`:
@@ -3122,8 +3191,26 @@ describe('W2-5a Task 3: RP5 over one copy, admitBoundary (W2-D66)', () => {
   it('an index outside the copy is a defect: TypeError, never a verdict', () => {
     const c = w5a3Copy([CL], [CL]);
     for (const [b, s] of [[-1, c.si], [c.bi, c.rows.length], [1.5, c.si], [c.bi, Number.NaN]] as Array<[number, number]>) {
-      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(TypeError);
+      expect(() => w5a3Drv.admitBoundary(c.rows, b, s), `${b}, ${s}`).toThrow(/is not a row of the copy/);
     }
+  });
+
+  it('R6: the before witness is not bounded by the previous boundary: with no assistant row between two boundaries, the second is judged by the real row before the first', () => {
+    const c = w5a3Copy([CL], []);
+    const boundary2 = w5a3Uid(0xa3, 0x4001);
+    const summary2 = w5a3Uid(0xa3, 0x4002);
+    const rows: W5a3Row[] = [
+      ...c.rows,
+      w5a3Op(w5a3Uid(0xa3, 0x4000)),
+      { uuid: boundary2, type: 'system', model: null, provenance: 'harness', is_compact_summary: 0 },
+      { uuid: summary2, type: 'user', model: null, provenance: 'summary', is_compact_summary: 1 },
+      w5a3Op(w5a3Uid(0xa3, 0x4003)),
+      w5a3Asst(w5a3Uid(0xa3, 0x4004), CL),
+    ];
+    const bi2 = rows.findIndex((r) => r.uuid === boundary2);
+    const si2 = rows.findIndex((r) => r.uuid === summary2);
+    expect(rows.slice(c.si + 1, bi2).some((r) => r.type === 'assistant'), 'CONTROL: no assistant row between the two boundaries').toBe(false);
+    expect(w5a3Drv.admitBoundary(rows, bi2, si2)).toEqual(ADMITTED);
   });
 });
 
@@ -3292,7 +3379,7 @@ describe('W2-5a Task 3: the population over a planted store, admitStoreBoundarie
 (cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 3')
 ```
 
-Expected (predicted): `19 failed | 4 passed`. The first describe fails on `TypeError: w5a3Drv.admitBoundary is not a function`, and the third on `w5a3Drv.admitStoreBoundaries is not a function` from `planted()`. The second describe's four cases pass: `summaryIndexOf` is Task 1's, and they pin it here, where admission reads it; mutants M8 and M9 measure their red. The store is planted, and opened through `openReplayStore`, before that throw, so the planter itself runs and must not fail. A failure inside `w5a3PlantStore` (a constraint, a missing column) is a fixture defect: fix it before Step 4.
+Expected: `18 failed | 5 passed` (measured; predicted `19 failed | 4 passed`). The first describe fails on `TypeError: w5a3Drv.admitBoundary is not a function`, and the third on `w5a3Drv.admitStoreBoundaries is not a function` from `planted()`. The one exception is the first describe's "an index outside the copy is a defect" case: it passes while `admitBoundary` is undefined, because calling `undefined` throws a `TypeError` too, and M7 is what measures its real red. The second describe's four cases pass: `summaryIndexOf` is Task 1's, and they pin it here, where admission reads it; mutants M8 and M9 measure their red. The store is planted, and opened through `openReplayStore`, before that throw, so the planter itself runs and must not fail. A failure inside `w5a3PlantStore` (a constraint, a missing column) is a fixture defect: fix it before Step 4.
 
 - [ ] **Step 4: Implement.**
 
@@ -3300,7 +3387,7 @@ Expected (predicted): `19 failed | 4 passed`. The first describe fails on `TypeE
 
 (b) Task 1's derive.mjs line becomes `import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';`, and in `server/test/history-replay.test.ts` Task 1's `EXACT_NAMES` entry `'../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, holdingCopyOf }',` becomes `'../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',`.
 
-(c) In `RECON_DISCARDS`, replace `  'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',` with:
+(c) In `RECON_DISCARDS`, replace `  'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',` with the two lines below. The list's next line, `'body-unrenderable'` (D-6302), stays after them as its last word, so the new words are `RECON_DISCARDS.slice(18, 24)` and the list does not end with them:
 
 ```js
   'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',
@@ -3372,7 +3459,9 @@ function admissionStmts(db) {
   return s;
 }
 
-/** One boundary that has a family and a time, judged in Task 1's holding copy. A boundary no copy holds is
+/** One boundary that has a family and a time, judged in Task 1's holding copy. A `boundary-absent` answer from
+ *  boundaryCopyOf throws rather than being counted: the boundary row was read from this same handle a moment earlier,
+ *  and no ccd/history writer deletes boundaries. A boundary no copy holds is
  *  boundary-uncopied, one whose copy has no summary row summary-absent; an admitted row names its summary row
  *  (summary_entry_id), so Baseline B can check the copy it reads again is this one. */
 function admitHeld(rs, b) {
@@ -3462,6 +3551,8 @@ mut deploy/history-replay.mjs "  for (let i = boundaryIndex - 1; i >= 0; i -= 1)
 cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
 # Expected RED (predicted): 2 failed, both with reason 'before-unknown' in place of 'after-other': the row before
 # every fixture boundary is the operator's /compact row, whose model is null.
+# M2 reds on every fixture because the row just before each boundary is the operator's /compact row with a null model, so M2
+# proves the assistant-type filter. M1 is what covers RP5's "only the row before" CONTROL.
 
 # M3 (W2-D66's CONTROL "most rows after", on the two-copy fixtures): the copy with the most rows after the boundary,
 # W1's window rule, ties to the smaller file_id, in place of derive.mjs's holding copy.
@@ -3552,6 +3643,12 @@ cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
 # Expected RED (predicted): 8 failed. On T8, TypeError: admitBoundary: summaryIndex null is not a row of the copy,
 # thrown from planted() in every case.
 
+# M16 (R6, fix round 1): the before witness stops at the previous boundary row.
+mut deploy/history-replay.mjs "  for (let i = boundaryIndex - 1; i >= 0; i -= 1) if (copyRows[i].type === 'assistant') nearestFirst.push(copyRows[i].model);" "  for (let i = boundaryIndex - 1; i >= 0; i -= 1) { if (copyRows[i].type === 'system') break; if (copyRows[i].type === 'assistant') nearestFirst.push(copyRows[i].model); }"
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 3')
+cp "$SCRATCH/replay.orig" deploy/history-replay.mjs
+# Expected RED (measured): 1 failed | 23 passed, the "R6: the before witness is not bounded" case, before 'unknown'.
+
 cmp "$SCRATCH/replay.orig" deploy/history-replay.mjs && echo restored
 ```
 
@@ -3593,6 +3690,9 @@ git commit -m "feat(history-replay): RP5 boundary admission over the holding cop
 | W2-4's driver header: "Imports: node: built-ins, ../ccd/history/lib.mjs and ../shared/roster-json.mjs only"; D-5814 pins the seven modules exactly | Task 1 imports `derive.mjs` and owns the module list and the header (R3) | Step 4(b) adds `epochOfUuid` inside derive.mjs's braces and updates its `EXACT_NAMES` entry |
 | W2-4's node:sqlite scan "a quoted mention inside a comment reds too" | It reds any quoted specifier, a JSDoc `import(...)` type included | `db` is typed `{object}`; Step 4's grep checks for it |
 
+
+**Fix-round tests and mutants (Task 3's code).**
+- FW-G11 (the minors): `admitBoundary`'s out-of-copy index thrown as a `RangeError`; the case that an index outside the copy is a defect now asserts the `TypeError` class beside the message pattern, and reds.
 
 ### Task 4: Baseline B and its files, held in memory only (W2-D68, W2-D69; the kept-list scan, W2-D33)
 
@@ -3707,6 +3807,7 @@ Departures this task ships, each defined in this plan's `## Deviations found`: D
 **Departures this task ships** (each defined in this plan's `## Deviations found`):
 - D-6278: W2-D68 (3) stops part 3 at "the first operator-provenance or assistant row" after the summary. A kept(N) member there is part 2's row (W2-D68 itself pins "a post-summary kept member"), so this task passes over it: it is never the stop. The rows after it, the served card among them, stay in B. The departure only grows B, so it rejects more facts, never fewer. Pins: the case 'a kept member after the summary is never the stop' with its CONTROL; mutant M9.
 - D-6279: W2-D68's second rendering is "its `ftsTextOf` string leaves". `ftsTextOf` answers `''` for an object body, and an attachment row's stored body is its `attachment` object, so the served card would enter B only as JSON, with its quotes escaped. B takes every string leaf of an object body instead. This only grows B. Pins: the case 'part 3 takes the rows after the summary', whose CONTROL is the card's JSON rendering; mutant M6.
+- D-6304 (a fix round before review): B renders each stored body of parts 1 to 3 through `renderOrNull`, and a body nested past about 4,000 levels fails B closed as `body-unrenderable`, the existing word (D-6302, D-6303). Pins: the D-6304 cases and mutants MA to MD.
 - **W2-D74's second pin is here (R7):** a fact only in the sanitised body, the primary that expand passes over, is rejected by B, because B reads the primary and every variant. Pin: its own case; mutant M36.
 
 **Residuals, named:**
@@ -4128,6 +4229,37 @@ describe('W2-5a Task 4: B fails closed, W2-D68', () => {
   });
 });
 
+describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304', () => {
+  /** A fixture whose row `key` stores an object nested `depth` deep. It parses, and lib's renderEntryText throws a
+   *  RangeError on it from about 4,000 levels (the limit moves with the Node build). Built at runtime: the blob is written raw, because JSON.stringify of the
+   *  nested value would throw in the fixture itself. */
+  const nested = (key: string, depth: number): W5a4Fixture => {
+    const fx = w5a4Fixture();
+    fx.rs.close();
+    const w = w5a4St.openWriter(w5a4Lib.historyPaths(fx.home).dbFile);
+    const row = w.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(fx.uuidOf(key)) as { blob_id: number };
+    const raw = Buffer.from(`${'{"a":'.repeat(depth)}"x"${'}'.repeat(depth)}`, 'utf8');
+    w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(w5a4St.brotli(raw), raw.length, Number(row.blob_id));
+    w5a4St.closeWriter(w);
+    const rs = w5a4Drv.openReplayStore(fx.home) as unknown as W5a4Rs;
+    w5a4Open.push(rs);
+    return { ...fx, rs, db: rs.db };
+  };
+
+  it.each([['summary', 'the summary row (part 1)'], ['a3', 'a kept member (part 2)'], ['card', 'a post-summary row (part 3)']])(
+    '%s: a body nested 10,000 deep discards body-unrenderable, and 2,000 deep builds B (%s)', (key) => {
+      expect(w5a4B(nested(key, 10_000))).toEqual({ state: 'discard', why: 'body-unrenderable' });
+      // CONTROL: the same row 2,000 deep renders, so the discard is the depth and not the fixture.
+      expect(w5a4B(nested(key, 2000)).state).toBe('built');
+    });
+
+  it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
+    expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+  });
+});
+
 describe('W2-5a Task 4: B is held in memory only, W2-D68 and W2-D33', () => {
   /** What the default fixture plants in B, as the seven-character variant W2-D62 tests, and the two commands. */
   const IN_B = [1, 2, 3, 5, 6, 7, 8, 9].map((n) => W5A4_FACT(n).slice(0, 7));
@@ -4330,10 +4462,10 @@ describe('W2-5a Task 4: the baseline files, W2-D69', () => {
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5a Task 4'
 ```
 
-Expected RED (predicted): `31 failed` (as root, `29 failed | 2 skipped`).
+Expected RED (predicted): `35 failed` (as root, `33 failed | 2 skipped`).
 - The fixture builds (Tasks 1 to 3 supply its store opener, `rosterConfigDirs` and `admitStoreBoundaries`), and every case that reads B fails at `w5a4Drv.baselineOf is not a function`.
 - The record cases fail at `writeBaselineRecord` or `baselineRow`, `BASELINE_FILES_ID is the open record default` with `expected undefined to be 'v1'`, and `the ancestor walk` at `w5a4Drv.baselineCandidates is not a function`.
-- The `RECON_DISCARDS` case fails: the slice B appends is empty.
+- The `RECON_DISCARDS` case fails: `slice(24, 35)` holds only `body-unrenderable`, which is the list's last word since D-6302 (measured over predicted: the slice is not empty).
 
 A count that differs is a fixture or filter error. Fix it before Step 4, never by weakening an assertion.
 
@@ -4379,7 +4511,7 @@ A count that differs is a fixture or filter error. Fix it before Step 4, never b
 /** The baseline file set this code reads (W2-D69), recorded as the open record's quiz.baseline_files and in the
  *  pilot's `used`. A change to the set is a W2-5a amendment before part 1, under a new id; history-replay.test.ts pins
  *  this id to the open record's default (OPEN_RECORD_V1), as decisions §7 pins CODE_SHA_FILES to GATE_CODE_FILES. */
-export const BASELINE_FILES_ID = 'v1';
+export const BASELINE_FILES_ID = OPEN_RECORD_V1.draft.quiz.fields.baseline_files.value;   // read from the gate's record, never spelled twice
 /** The largest baseline file read (W2-D69): a larger one discards its boundary, `file-over-cap`. */
 export const BASELINE_FILE_MAX = 1024 * 1024;
 /** The most rows B's part 3 takes (W2-D68): one more discards its boundary, `post-over-cap`. */
@@ -4454,8 +4586,15 @@ function blLeaves(body) {
   return ftsTextOf(body, 'entry');
 }
 
-/** One row of parts 1-3 in both renderings (W2-D68). */
-const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];
+/** One row of parts 1-3 in both renderings (W2-D68), or null when renderEntryText cannot render the body: one nested past
+ *  V8's JSON.stringify stack parses and then throws a RangeError, which renderOrNull turns into null so the caller fails
+ *  closed as `body-unrenderable` (D-6304, as D-6302 and D-6303 rule). The string leaves never throw: blObjectLeaves is
+ *  iterative and ftsTextOf is measured fine at every depth.
+ *  @returns {string[] | null} */
+function blRenderings(body) {
+  const rendered = renderOrNull(() => renderEntryText(body));
+  return rendered === null ? null : [rendered, blLeaves(body)];
+}
 
 /** A built B: its counts enumerable, its text not (W2-D68: never written, logged or spawned), the whole frozen. */
 function blHeld(text, counts) {
@@ -4491,7 +4630,9 @@ export function baselineOf(rs, boundary, ctx) {
   // (1) the summary row, whole. Its transcript-pointer line stays here; only the payload replaces it (W2-D75).
   const summary = bodyOf(rs.blobs, Number(sum.blob_id), ctx.budget);
   if (summary === null) return blDiscard('summary-unreadable');
-  parts.push(...blRenderings(summary));
+  const summaryParts = blRenderings(summary);
+  if (summaryParts === null) return blDiscard('body-unrenderable');
+  parts.push(...summaryParts);
   // (2) kept(N), through Task 1's kept-list reader with B's budget: every member's primary and every variant.
   const kept = keptMembersOf(rs, copy.boundary, ctx.budget);
   if (kept.state !== 'kept') return kept;
@@ -4502,7 +4643,9 @@ export function baselineOf(rs, boundary, ctx) {
     for (const blobId of blMemberBlobs(s, m)) {
       const body = bodyOf(rs.blobs, blobId, ctx.budget);
       if (body === null) return blDiscard('kept-member-unreadable');
-      parts.push(...blRenderings(body));
+      const memberParts = blRenderings(body);
+      if (memberParts === null) return blDiscard('body-unrenderable');
+      parts.push(...memberParts);
     }
   }
   // (3) the copy's rows after the summary row, to the first operator or assistant row that is not a kept member.
@@ -4515,7 +4658,9 @@ export function baselineOf(rs, boundary, ctx) {
     if (postRows > BASELINE_POST_ROWS_MAX) { stopped = 'post-over-cap'; break; }
     const body = bodyOf(rs.blobs, Number(r.blob_id), ctx.budget);
     if (body === null) { stopped = 'post-row-unreadable'; break; }
-    parts.push(...blRenderings(body));
+    const rowParts = blRenderings(body);
+    if (rowParts === null) { stopped = 'body-unrenderable'; break; }
+    parts.push(...rowParts);
   }
   if (stopped !== null) return blDiscard(stopped);
   // (4) the baseline files, over N's epoch as Task 3 found its family (derive.mjs's epochOfUuid).
@@ -4707,7 +4852,7 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 ```
 
 Expected:
-- The filtered run is green: `31 passed` (as root, `29 passed | 2 skipped`: the two permission cases).
+- The filtered run is green: `35 passed` (as root, `33 passed | 2 skipped`: the two permission cases).
 - The whole file is green. That includes W2-4's D-5986 cases, which pin `readPlain`'s two-argument behaviour unchanged; Task 1's import pin, unchanged, because no import line or pinned name was added; Task 1's `keptOf` scan; and W2-4 Task 1's `node:sqlite` scan.
 - tsc prints nothing. A line naming only `agent/src/` or a module that is not installed comes from the worktree's install. A line naming `history-replay` is this task's.
 
@@ -4741,8 +4886,9 @@ s = s.replace(old, "  const v = [...keptOf(rs.blobs, boundary.kept_blob_id, budg
 open(p, 'w').write(s)
 EOF
 t4run 'NULL kept id|tombstoned kept blob'
-# Expected RED (predicted): 2 failed. A NULL id and a tombstone both build B, with
-# { state: 'built', … } where { state: 'discard', why: 'kept-absent' } (or 'kept-unreadable') was expected. (Task 1's
+# Expected RED (predicted): 3 failed (measured over predicted 2). A NULL id and a tombstone both build B, with
+# { state: 'built', … } where { state: 'discard', why: 'kept-absent' } (or 'kept-unreadable') was expected. The third is
+# Task 1's case 'kept(N) through bodyOf, never keptOf …', which the filter's 'tombstoned kept blob' also selects. (Task 1's
 # keptOf scan reds too, outside this filter.)
 
 # M2 (W2-D68 (2)): the primary only, no variant.
@@ -4761,7 +4907,7 @@ t4run 'part 2 is every kept member|both renderings'
 # Expected RED (predicted): 2 failed, a kept tool_result: expected true to be false; W2-D61: expected true to be false.
 
 # M5 (W2-D68, both renderings): the string leaves dropped.
-mut deploy/history-replay.mjs "const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];" "const blRenderings = (body) => [renderEntryText(body)];"
+mut deploy/history-replay.mjs "  return rendered === null ? null : [rendered, blLeaves(body)];" "  return rendered === null ? null : [rendered];"
 t4run 'both renderings|part 3 takes the rows'
 # Expected RED (predicted): 2 failed, the quoted command and the card's command admitted: expected true to be false.
 
@@ -4772,7 +4918,7 @@ t4run 'part 3 takes the rows'
 # Expected RED (predicted): 1 failed, the served card: expected true to be false.
 
 # M7 (W2-D68, both renderings): renderEntryText dropped.
-mut deploy/history-replay.mjs "const blRenderings = (body) => [renderEntryText(body), blLeaves(body)];" "const blRenderings = (body) => [blLeaves(body)];"
+mut deploy/history-replay.mjs "  return rendered === null ? null : [rendered, blLeaves(body)];" "  return rendered === null ? null : [blLeaves(body)];"
 t4run 'both renderings'
 # Expected RED (predicted): 1 failed, renderEntryText keeps an input key: expected true to be false.
 
@@ -4833,7 +4979,7 @@ t4run 'summary that cannot be read'
 # Expected RED (predicted): 1 failed, the shifted boundary_index builds B where copy-moved was expected.
 
 # M18 (W2-D68 (1)): the pointer line dropped from B, as the payload drops it.
-mut deploy/history-replay.mjs "  parts.push(...blRenderings(summary));" "  parts.push(...blRenderings(String(summary).split('\n').slice(0, -1).join('\n')));"
+mut deploy/history-replay.mjs "  const summaryParts = blRenderings(summary);" "  const summaryParts = blRenderings(String(summary).split('\n').slice(0, -1).join('\n'));"
 t4run 'part 1 is the summary row'
 # Expected RED (predicted): 1 failed, the transcript-pointer line: expected true to be false.
 
@@ -4959,6 +5105,11 @@ git commit -m "feat(history-replay): Baseline B and its files, held in memory on
 
 ---
 
+
+**Fix-round tests and mutants (Task 4's code).**
+- MA (D-6304): the one `renderOrNull` wrap shared by the three part renders removed; 3 red, one per part kind, at 10,000 levels deep (CONTROL 2,000 builds). MB: the summary's null check removed; MC: the kept member's; MD: the post-row's; ME: the post-row word changed to `post-row-unreadable`. One red each.
+- FW-G2: the same wrap removed again at the final wave's depths; the three part cases red.
+- FW-G10 (the minors): `BASELINE_FILES_ID` spelled `'v1'` a second time instead of read from the gate's record; the pin that it is the record's own reds.
 
 ### Task 5: Answerability with its timed clause, the same-millisecond count, and seeded sampling (W2-D70, W2-D34, W2-D71; D-5780)
 
@@ -5653,6 +5804,7 @@ w5a5describe('W2-5a Task 5: answerability, the same-millisecond count and sampli
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: { ...stages, judge: stages.writer! } })).rejects.toThrow(/'judge' is an unknown stage/);
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: BIG, stages: recorder([], { producer: { x1: '' } }) })).rejects.toThrow(/without a reason word/);
       await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, target: 0 }, stages })).rejects.toThrow(/not a positive integer/);
+      await w5a5expect(D.sampleQuestions({ families: one(), rng: D.quizRng(SEED), quotas: { ...BIG, caps: { ...BIG.caps, boundary: 0 } }, stages })).rejects.toThrow(/caps\.boundary=0 is not a positive integer/);
       await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('y1', 'decision')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/has kind/);
       await w5a5expect(D.sampleQuestions({ families: [fam('fam-a', [cand('z1'), cand('z1', 'path')])], rng: D.quizRng(SEED), quotas: BIG, stages })).rejects.toThrow(/listed twice/);
     });
@@ -6196,7 +6348,7 @@ Confirm that the named case(s) red, restore with `cp .superpowers/sdd/history-w2
 | M12 | delete `if (v.clause === 4) untimed = true;` | every `untimed` expectation, and the stage case's `unanswerable-untimed` |
 | M13 | in `answerableStage`, swap the two reason literals | "answerableStage keeps …" |
 | M14 | `count(DISTINCT e.entry_id)` → `count(*)` | "counts the entries outside N holding copy …" (5) |
-| M15 | delete the `AND NOT EXISTS (SELECT 1 FROM memberships …)` line | the same (6) |
+| M15 | delete the `AND NOT EXISTS (SELECT 1 FROM memberships …)` line, close the template literal after the previous line, and delete the `hold` key from the bound object (measured: an unbound or unknown named parameter is a different red) | the same (6) |
 | M16 | `WHERE e.ts_ms = :t` → `WHERE e.ts_ms <= :t` | the same (5); the hand-picked fixture places one row at T_N − 1 |
 | M17 | delete `AND e.transcript_pk IN (SELECT value FROM json_each(:tpks))` and its `tpks` key | the same (5) |
 | M18 | delete the `UNION SELECT v.entry_id, 'row' …` line | the same (3) |
@@ -6217,8 +6369,8 @@ Confirm that the named case(s) red, restore with `cp .superpowers/sdd/history-w2
 | M33 | move `inFamily += 1;` to directly after the three cap checks, before the stage loop | "a cap counts admitted questions only …" |
 | M34 | delete the inner loop's `if (questions.length >= quotas.target) break;` | "the target stops the draw …" |
 | M35 | delete the outer loop's `if (questions.length >= quotas.target) break;` | the same (the second family is mined) |
-| M36 | after `reports[c.id] = await afterAdmit(cur, f);` add `if (reports[c.id].asof_same_ms_hits > 0) questions.pop();` | "the same-millisecond report never gates …" |
-| M37 | each of the five `TypeError` guards in `sampleQuestions` deleted in turn (missing stage, unknown stage, reason-less drop, quota, kind) | "malformed sampler inputs are defects …", at the matching `rejects` |
+| M36 | replace `if (afterAdmit !== undefined) reports[c.id] = await afterAdmit(cur, f);` with `if (afterAdmit !== undefined) { reports[c.id] = await afterAdmit(cur, f); if (reports[c.id].asof_same_ms_hits > 0) questions.pop(); }` (measured: appending the `if` after the unbraced statement runs it with no `afterAdmit` and reds eleven cases, not the one) | "the same-millisecond report never gates …" |
+| M37 | each of the six `TypeError` guards in `sampleQuestions` deleted in turn (missing stage, unknown stage, reason-less drop, target quota, kind, and the caps loop's quota, measured green until the malformed-inputs case gained its `caps.boundary` line) | "malformed sampler inputs are defects …", at the matching `rejects` |
 | M38 | `controlIds.add(canonicalJson([a.store_id, a.ccrc_id]))` and its reader → keyed by `familyKeyOf(a)` / `familyKeyOf(f)` | "the population drops …" (`fam-a` g2 is kept) |
 | M39 | the same keys → `a.ccrc_id` / `f.ccrc_id` | the same (the s2 `fam-a` is dropped) |
 | M40 | `pilot.has(familyKeyOf(f))` → `pilotFamilies.some((p) => p.ccrc_id === f.ccrc_id)` | the same (`fam-c` g2 is dropped) |
@@ -6389,7 +6541,7 @@ RP1-writer and RP3-writer land here (W2 decisions document §2, W2-5a's Pins). N
 - W2-D52, W2-D55 and W2-D56: the writer goes through admission, the gate and the preflight.
 - W2-D61: F_raw for the excerpt's centring, F for admission.
 
-This task defines no D-number.
+Fix round 1 (the review) ships two departures, each defined in this plan's `## Deviations found`: D-6305 (a failed writer run is `writer-malformed`, counted apart from malformed replies) and D-6306 (mining drop counts merge only for a mined boundary). Pins: the D-6305 cases and the D-6306 case, with mutants X1 to X3.
 
 **Choices this task makes:**
 - **The preflight runs before every writer batch, inside `openWriter` and `ask`.** W2-D56 is written "before every batch", and its wiring is assigned to W2-5b. W2-4's plan ("Not in this plan") puts `loadStep0a` and `preflight` into `pilot-source`, which is W2-5a's. A writer handle that runs them itself means no subcommand can spawn a writer un-preflighted.
@@ -7217,7 +7369,7 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'an e
 ```
 
 Predicted, before any driver change:
-- Every `W2-5a Task 6` case fails, 43 failed. Each fails with `TypeError: replay.<name> is not a function` (`writerInputOf`, `windowExcerpt`, `writerStdin`, `openWriter`, `qidOf`, `frozenListText`, `usageInputOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`), or with `w6Box`'s first call to an absent export. The `sourceQuiz` describe's `beforeAll` builds its box (`w6SourceBox`) first, which proves the fixture: a throw there is the fixture's to fix.
+- Every `W2-5a Task 6` case fails but one, 42 failed and 1 passed (measured over a predicted 43 failed: the case `a raw fact absent from its redacted leaf is a TypeError` passes unguarded, because `replay.writerInputOf is not a function` is itself a `TypeError`). Each failure is `TypeError: replay.<name> is not a function` (`writerInputOf`, `windowExcerpt`, `writerStdin`, `openWriter`, `qidOf`, `frozenListText`, `usageInputOf`, `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `sourceQuiz`), or `w6Box`'s first call to an absent export. The `sourceQuiz` describe's `beforeAll` builds its box (`w6SourceBox`) first, which proves the fixture: a throw there is the fixture's to fix.
 - The `firstCallUsage` case fails on `expected undefined to deeply equal { input: 10, … }`.
 - The re-expected W2-4 case fails with the diff `+ firstCallUsage: null`.
 - No stub runs: no case reaches a spawn (the sourceQuiz box runs only the sweep).
@@ -7330,8 +7482,8 @@ const cpSlice = (cps, start, length) => cps.slice(start, start + length).join(''
 /** The excerpt around the raw fact (W2-D72). Pure. The window holds `firstWindow` code points (never fewer than the fact
  *  has), centred on the fact's FIRST occurrence and clamped to the text's ends, then `pairLine` on its own line. While
  *  the excerpt's UTF-8 is over WRITER_EXCERPT_MAX_BYTES the window shrinks around the same centre, never below the fact;
- *  a fact that cannot fit is `writer-input-over-cap`. A fact absent from `base` is a TypeError: W2-D67 discards such a
- *  candidate before the writer.
+ *  a fact that cannot fit is `writer-input-over-cap`. A fact absent from `base` is a TypeError of this pure function;
+ *  writerInputOf never reaches it (it places the fact by factSpellingIn first, D-6309).
  *  @param {{ base: string, factRaw: string, firstWindow: number, pairLine: string | null }} p
  *  @returns {{ state: 'text', excerpt: string } | { state: 'discard', why: 'writer-input-over-cap' }} */
 export function windowExcerpt({ base, factRaw, firstWindow, pairLine }) {
@@ -7352,11 +7504,37 @@ export function windowExcerpt({ base, factRaw, firstWindow, pairLine }) {
   }
 }
 
+/** One span row or paired tool_use input for the writer (W2-D54, D-6308): a field mined from a row carries the JSON it
+ *  was rendered from (`body` for a span row, `value` for a paired input), and that is redacted as a VALUE (maskValue)
+ *  and rendered again, never the serialised text; a hand-built field with neither is text, redacted whole as before. The
+ *  rendering then goes through redactForSpawn too (the decode cap, and the context rules that read a JSON pair on one
+ *  line). A body too deep to render again is discarded `writer-input-unrenderable`, never a throw.
+ *  @param {{ text: string, rawLen: number, body?: unknown, value?: unknown }} field
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx */
+function writerField(field, idx) {
+  const hasBody = Object.hasOwn(field, 'body');
+  if (!hasBody && !Object.hasOwn(field, 'value')) return redactForSpawn(field, idx);
+  if (blobOverDecodeCap(field.rawLen)) return { state: 'discard', why: 'over-decode-cap' };
+  const text = renderOrNull(() => (hasBody ? renderMasked(field.body, idx) : JSON.stringify(maskValue(field.value, idx))));
+  if (text === null) return { state: 'discard', why: 'writer-input-unrenderable' };
+  return redactForSpawn({ text, rawLen: field.rawLen }, idx);
+}
+
+/** Where the raw fact sits in the redacted base (D-6309): its raw spelling, else its JSON-escaped spelling (a span row is
+ *  rendered as JSON, so a command with a `"`, a backslash or a control character occurs only escaped), else null. Pure.
+ *  @param {string} base  @param {string} factRaw  @returns {string | null} the spelling that occurs in `base` */
+export function factSpellingIn(base, factRaw) {
+  if (typeof factRaw !== 'string' || factRaw === '') return null;
+  if (base.includes(factRaw)) return factRaw;
+  const escaped = JSON.stringify(factRaw).slice(1, -1);
+  return escaped !== factRaw && base.includes(escaped) ? escaped : null;
+}
+
 /** The writer's input for one candidate (W2-D72), every field redacted whole BEFORE any window (W2-D54). Pure.
  *  @param {WriterItem} item  @param {string} writerInput 'excerpt' or 'leaf-span' (WRITER_INPUTS)
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx the run's pair index
  *  @returns {{ state: 'input', input: { v: 1, kind: string, fact: string, excerpt: string } }
- *    | { state: 'discard', why: 'over-decode-cap' | 'writer-input-over-cap' }} */
+ *    | { state: 'discard', why: 'over-decode-cap' | 'writer-input-over-cap' | 'writer-input-unrenderable' | 'writer-fact-unplaced' }} */
 export function writerInputOf(item, writerInput, idx) {
   if (!WRITER_INPUTS.includes(writerInput)) throw new TypeError(`writerInputOf: writer_input ${JSON.stringify(writerInput)} is not one of ${WRITER_INPUTS.join(', ')}`);
   if (!FACT_KINDS.includes(item.kind)) throw new TypeError(`writerInputOf: kind ${JSON.stringify(item.kind)} is not one of ${FACT_KINDS.join(', ')}`);
@@ -7369,21 +7547,25 @@ export function writerInputOf(item, writerInput, idx) {
     base = leaf.text;
     firstWindow = WRITER_LEAF_WINDOW;
     if (item.pair !== null) {
-      const input = redactForSpawn(item.pair.input, idx);
+      const input = writerField(item.pair.input, idx);
       if (input.state === 'discard') return { state: 'discard', why: input.why };
-      pairLine = cpSlice(Array.from(renderToolUseLine(item.pair.name, input.text)), 0, WRITER_PAIR_CAP);
+      // D-6308: the tool's name is stored data too (mining takes it from the block), masked as a value like its input.
+      pairLine = cpSlice(Array.from(renderToolUseLine(redactFinalJson(item.pair.name, idx), input.text)), 0, WRITER_PAIR_CAP);
     }
   } else {
     const texts = [];
     for (const f of item.span) {
-      const r = redactForSpawn(f, idx);
+      const r = writerField(f, idx);
       if (r.state === 'discard') return { state: 'discard', why: r.why };
       texts.push(r.text);
     }
     base = texts.join('\n');
     firstWindow = Number.MAX_SAFE_INTEGER;
   }
-  const w = windowExcerpt({ base, factRaw: item.fact_raw, firstWindow, pairLine });
+  // D-6309: a fact neither spelling of which occurs is a counted drop, never windowExcerpt's TypeError after --out and spend.
+  const spelled = factSpellingIn(base, item.fact_raw);
+  if (spelled === null) return { state: 'discard', why: 'writer-fact-unplaced' };
+  const w = windowExcerpt({ base, factRaw: spelled, firstWindow, pairLine });
   if (w.state === 'discard') return w;
   return { state: 'input', input: { v: 1, kind: item.kind, fact: item.fact, excerpt: w.excerpt } };
 }
@@ -7472,6 +7654,8 @@ export async function openWriter(o) {
     const job = { launch, mode: 'writer', model, settingsMode, stdin: writerStdin(made.input), out, name: `${dir}/${qid}`, lang };
     const [done] = await runBatch([job], { concurrency: 1, gate, claim });
     const run = { code: done.code, signal: done.signal, skipped: done.skipped, tokens: done.tokens, result: done.facts.result !== null };
+    // D-6305: a failed run (a non-zero exit, a signal) or one with no result event is writer-malformed, whatever it printed.
+    if (run.code !== 0 || run.signal !== null || !run.result) return { state: 'discard', qid, why: 'writer-malformed', run };
     const parsed = parseQuestionLine(done.facts.result?.text ?? '');
     if (!parsed.ok) return { state: 'discard', qid, why: parsed.word, run };
     const leak = admitFact(item.kind, item.fact, '', parsed.question, { repoRoots: item.repo_roots });
@@ -7700,11 +7884,13 @@ function sourceStmts(db) {
  *    writer: { ask: (section: string, item: object) => Promise<WriterAnswer> }, seedHex: string,
  *    exclude: { pilotFamilies: Array<{store_id: string, ccrc_id: string, generation: string}>, assignment: Array<object> },
  *    plan: { target?: number, n_fidelity?: number, n_usage?: number, caps: { family: number, boundary: number, kind_per_family: number } },
- *    configDirs: readonly string[], top?: string }} input
+ *    configDirs: readonly string[], shaMinPrefix: 7 | 40, top?: string }} input
  *  @returns {Promise<{ entries: Array<FrozenEntry & { rank: [string | number, number] }>, fidelity: Array<object>, counts: object,
  *    asof_same_ms_hits: Record<string, unknown> }>} */
-export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude, plan, configDirs, top }) {
+export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude, plan, configDirs, shaMinPrefix, top }) {
   if (!WRITER_SECTIONS.includes(mode)) throw new TypeError(`sourceQuiz: mode ${JSON.stringify(mode)} is not one of ${WRITER_SECTIONS.join(', ')}`);
+  // D-6312: the labeller's sha_min_prefix is this function's own argument, never a field of the signed plan.
+  if (!SHA_MIN_PREFIXES.includes(shaMinPrefix)) throw new TypeError(`sourceQuiz: shaMinPrefix ${JSON.stringify(shaMinPrefix)} is not one of ${SHA_MIN_PREFIXES.join(', ')}`);
   const storeId = rs.storeId;
   const admission = admitStoreBoundaries(rs);
   const local = new Map();
@@ -7734,10 +7920,18 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
         storeId, ccrcId: fam.ccrc_id, generation: fam.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms, rows: span.rows,
         pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
       });
-      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
+      // D-6306: a boundary discarded whole is counted once, under counts.discards; its partial site drops are not merged.
       if (m.state !== 'mined') { discard(m.why); continue; }
+      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
       byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
-      mined.push(m);
+      // D-6312 (W2-D63): at a sha_min_prefix of 40 only a 40-character sha can score correct, so a shorter one is dropped
+      // here, counted, before deduplication, sampling and the caps: the quotas count eligible facts only.
+      const eligible = m.candidates.filter((c) => {
+        if (c.kind !== 'sha' || c.fact.length >= shaMinPrefix) return true;
+        noteDrop(counts.mined, 'sha-short');
+        return false;
+      });
+      mined.push({ ...m, candidates: eligible });
     }
     return dedupeFamily(mined, counts.mined).map((c) => ({ ...c, id: qidOf(c) }));
   };
@@ -7765,9 +7959,11 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     writer: async (c) => {
       // The question's source is the one answerability found (W2-D73: the first source that passes).
       const a = await writer.ask(mode, { ...c, source_entry_uuid: c.source.entryUuid });
-      if (a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false)) counts.writer.failed_runs += 1;
+      const failed = a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false);
+      if (failed) counts.writer.failed_runs += 1;
       if (a.state === 'question' || a.why === 'writer-leak') return keep({ ...c, answer: a });
-      if (a.why === 'writer-malformed') counts.writer.malformed_replies += 1;
+      // D-6305: a failed run is counted apart from a malformed reply, so the two counters never overlap.
+      if (a.why === 'writer-malformed' && !failed) counts.writer.malformed_replies += 1;
       return drop(a.why);
     },
     'admit-question': async (c) => {
@@ -7787,7 +7983,11 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
   let familyOrder;
   let walk;
   let fidelity = [];
-  const own = [...local.values()];   // this node's admitted families, each with its admitted boundaries
+  // D-6310: a legacy family (a session from before generations, generation '') has no qid (qidOf needs a generation) and no
+  // place in either mode's walk, fidelity sampling included, so it is excluded here, counted, before anything is sampled.
+  const all = [...local.values()];
+  const own = all.filter((f) => f.generation !== '');   // this node's admitted families, each with its admitted boundaries
+  const legacy = all.length - own.length;
   const walked = (f) => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, admitted: f.boundaries.length, candidates: candidatesOf(f) });
   if (mode === 'quiz') {
     // W2-D71's population over this node (R10): every local admitted family less the exclusions, never a census list.
@@ -7796,7 +7996,7 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     familyOrder = (f) => quizFamilyOrderKey(seedHex, f);
     const pop = quizPopulation(own.map((f) => ({ ...f, admitted: f.boundaries.length })),
       { pilotFamilies: exclude.pilotFamilies, assignment: exclude.assignment });
-    counts.population = pop.excluded;
+    counts.population = { ...pop.excluded, legacy };
     walk = pop.families.map(walked);
   } else {
     rng = pilotRng(seedHex);
@@ -7809,6 +8009,7 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
         return p.state === 'payload' ? { keep: true } : { keep: false, reason: p.why };
       },
     });
+    counts.population = { legacy };
     counts.fidelity = picked.drops;
     fidelity = picked.boundaries.map((p) => ({ store_id: storeId, ccrc_id: p.family.ccrc_id, generation: p.family.generation, boundary_uuid: p.boundary.boundary_uuid }));
     walk = own.map(walked);
@@ -7837,15 +8038,15 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 ```
 
 Expected:
-- The first filter is green, `43 passed` (on darwin, `38 passed | 5 skipped`):
-  - 12 writer-input cases, the F6 bearer case (R10) among them;
-  - 15 writer-spawn cases, two of them RP1-writer and four RP3-writer, and two of the gate before a later writer batch (W2-D55's budget, the limits row);
+- The first filter is green, `50 passed` (measured after the residual round; the first build measured 43 and fix round 1 46; on darwin, `39 passed | 11 skipped`, the sourceQuiz describe being skipped):
+  - 12 writer-input cases, the F6 bearer case (R10) among them, and the case that a fact absent from its text is `windowExcerpt`'s `TypeError` and `writerInputOf`'s counted `writer-fact-unplaced` (D-6309);
+  - 16 writer-spawn cases, two of them RP1-writer and four RP3-writer, two of the gate before a later writer batch (W2-D55's budget, the limits row), and fix round 1's print-mode-exit case (D-6305);
   - 7 frozen-list cases;
   - 4 fidelity cases;
-  - 5 cases in the `sourceQuiz` describe (quiz mode, pilot mode, the store-backed `fidelityStdins` case, the quiz population case with its CONTROL, R10, and the W2-D67 redaction-stage case over a second box whose command is key-shaped).
+  - 11 cases in the `sourceQuiz` describe: quiz mode, pilot mode, the store-backed `fidelityStdins` case, the quiz population case with its CONTROL (R10), the W2-D67 redaction-stage case over a second box whose command is key-shaped, fix round 1's D-6305 and D-6306 cases, and the final wave's D-6309 (a quoted command and a path with a backslash, each placed by its escaped spelling), D-6310 (a legacy family) and D-6312 (`sha_min_prefix` 40) cases.
   Each spawning case runs the stub one to three times in print mode, in well under a second; the sourceQuiz box runs the sweep a few times once, and the W2-D67 case's own box a few times more.
 - The re-expected W2-4 case is green.
-- The whole file is green: every earlier case plus these 43. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
+- The whole file is green: every earlier case plus these 50. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
 - tsc prints nothing. A line that names only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each block makes one exact replacement, which must match exactly once, runs one filter and shows it red, then restores the file with `cp`. The python body is a quoted heredoc.
@@ -7886,7 +8087,7 @@ T 'centred on the first occurrence'
 # Expected RED (predicted): 1 failed; the window lands on the second copy of the fact.
 
 # M5: the paired tool_use line is not capped.
-mut "$D" "      pairLine = cpSlice(Array.from(renderToolUseLine(item.pair.name, input.text)), 0, WRITER_PAIR_CAP);" "      pairLine = renderToolUseLine(item.pair.name, input.text);"
+mut "$D" "      pairLine = cpSlice(Array.from(renderToolUseLine(redactFinalJson(item.pair.name, idx), input.text)), 0, WRITER_PAIR_CAP);" "      pairLine = renderToolUseLine(redactFinalJson(item.pair.name, idx), input.text);"
 T 'capped at 2000 code points'
 # Expected RED (predicted): 1 failed; the last line is longer than 2000 code points.
 
@@ -7913,7 +8114,7 @@ T 'not an exact Opus id'
 # M10: admission is skipped (the writer always runs on the upstream account).
 mut "$D" "  const launch = admitAccount(json, roster, accountId, home);   // RP3-writer" "  const launch = admitAccount(json, roster, 'up-a', home);   // RP3-writer"
 T 'RP3-writer'
-# Expected RED (predicted): 4 failed; each refused account opens, and the stub logs a --version call.
+# Expected RED (measured 5 failed over a predicted 4): each refused account opens, and the stub logs a --version call; RP1-writer gen-a fails too, because admission is pinned to up-a and the generated account's wrapper and config dir are never used.
 
 # M11: the writer spawns in box mode (an arm's tools).
 mut "$D" "    const job = { launch, mode: 'writer', model," "    const job = { launch, mode: 'box', model,"
@@ -8096,6 +8297,11 @@ git commit -m "feat(history-replay): the question writer through the writer-mode
 ---
 
 
+**Fix-round tests and mutants (Task 6's code).**
+- X1 (D-6305): the whole code, signal and result guard removed from `ask`; X1b: only `!run.result` left. X2: malformed replies counted for failed runs. X3 (D-6306): the mined-drop merge before the mined check. X4: the model refusal moved after account admission (the cx-a iteration reds). X5: the `at === -1` throw removed from `windowExcerpt` (the M3 case is non-vacuous). One red each.
+- FW-B1, FW-B2, FW-B3 (D-6309): no escaped spelling in `factSpellingIn`, an unplaceable fact reaching `windowExcerpt`, and the raw spelling only (the code before the fix). FW-C1, FW-C2 (D-6310): no legacy exclusion (the `qidOf` `TypeError`), and fidelity sampling fed the unfiltered list. FW-E1 to FW-E4 (D-6312): no `sha-short` drop, `quiz-source` passing 7, `pilot-source` passing 7, and the prefix read from the plan. FW-A2, FW-A3 and FW-A7 (D-6308): the pair line and the span redacted as text, and the writer's render unguarded.
+- FW-G1 (the minors): the mined span render without `renderOrNull`, red at the D-6303 and D-6306 cases (D-6306's fixture holds an input 10,000 deep). FW-G9: `quizFamilyOrderKey`'s inner label changed; the parity pin against the gate's `substream` reds.
+
 ### Task 7: The record subcommands: pilot-source, quiz-source, freeze, power, open and verify, each re-checking the code it runs under
 
 This task turns Tasks 1 to 6's pieces into the operator's acts before window start (W2 decisions §4, the protocol, and §5, acts 9 to 19). It adds six subcommands to `HANDLERS`, nine forms in all:
@@ -8204,7 +8410,7 @@ This task turns Tasks 1 to 6's pieces into the operator's acts before window sta
 - W2-D18 (the seed), W2-D55 and W2-D56 (budget and preflight), W2-D57 (the printed sha, D-5983), W2-D29 and W2-D59;
 - §4's part 1 and part 2 tables, §5's acts 7 to 19, and §7 (the `flags_accepted` and `CODE_SHA_FILES` parity residuals).
 
-It ships one departure this plan defines, **D-6280** (`history-replay-spend-budget-operator-given`, Choices). It cites D-5773 (W2-D20's departure: this task builds its `verify --registry` half), D-5791 (the validator's q18 and binding refusals this task relies on), D-5774 (deploy-local words), D-5983, D-5985 and D-5986 (W2-4's printed sha, claim and type-checked reads), and D-5812, D-5813 and D-5815 (W2-4's `loadStep0a` shape-only rule, unusable inputs and required flags first).
+It ships four departures this plan defines: **D-6280** (`history-replay-spend-budget-operator-given`, Choices), **D-6307** (`history-replay-writer-admission-before-out`, Choices), and, found by the whole-branch review, **D-6311** (`history-replay-preflight-no-spawn-half-before-out`, in the Refusals-before-`--out` Choice) and **D-6313** (`history-replay-pilot-seed-pinned-under-out`), both in "Deviations found". It also carries the range check of D-6309 (`history-replay-fact-placed-by-escaped-spelling`, a Task 6 number): `refuseOutOfRangeValues` is this task's. It cites D-5773 (W2-D20's departure: this task builds its `verify --registry` half), D-5791 (the validator's q18 and binding refusals this task relies on), D-5774 (deploy-local words), D-5983, D-5985 and D-5986 (W2-4's printed sha, claim and type-checked reads), and D-5812, D-5813 and D-5815 (W2-4's `loadStep0a` shape-only rule, unusable inputs and required flags first).
 
 **Re-anchored against cd622b2f6 (drift from the decisions document, written at bd363a76b):**
 
@@ -8248,7 +8454,7 @@ It ships one departure this plan defines, **D-6280** (`history-replay-spend-budg
 - **Quiz-source hands `sourceQuiz` no family list (R10, C1).** W2-D71's population is every family on the node with an admitted boundary, less the pilot families and every control-held `(store_id, ccrc_id)` (W2-D77). The census's active, registry-ok list (`assembled.kept`) feeds the assignment only (W2-D73): a quiz family need not be active or registry-resolvable, because the headless arm resolves its family from its epochs, never the registry (W2-D40). So `quiz-source` passes the exclusions, never `assembled.kept`, and `sourceQuiz` walks the store's own admitted families.
 - **Freeze merges, it does not re-sample.** It requires exactly one sourced list per named node: W2-D71's population is the families on the named nodes, and each node's walk stops at the target on its own, so a merge missing a node would look full while it froze a subset, and the list would depend on which files the operator passed. A missing node refuses `sourced node-missing <label>`, a second list for one store `sourced store-id-duplicate`. Each node's quiz-source sources its own families in the GLOBAL order, each family's `quizFamilyOrderKey` (Task 6's `rank`, `[order key, candidate rank]`; W2-D71 as amended 2026-10-22), and stops at the target. The global lazy walk stops no later than any node's local walk, so the merged list sorted by rank (the key by code unit, then the candidate rank) and cut at `quiz.target` is the walk one node holding every store would make (Task 5's keyed-order case pins the merge). Two entries with one rank are `input-invalid`, and a quiz entry whose rank is not `[64 lowercase hex, a non-negative integer]` is `input-invalid` `entry rank`. `freeze` takes each node's keys as that node's `sourceQuiz` computed them, under the same `gate_code` it re-checks; it does not recompute them. `freeze` then sorts by qid (W2-D73).
 - **`quiz.min_families` is reported, never a refusal (R11).** The signed default 20 is W2-D71's "at least 20 families". `freeze`'s meta carries `short_of_min_families`, true when the merged list's family count is below the record's `quiz.min_families`; nothing refuses on it, and the halt floor (60 questions, 12 families) stays the only family-count stop. At the signed defaults, target 100 with `caps.family` 5 already implies at least 20 families, so on a list that meets the target the flag matters only when a draft raises `caps.family`; a list short of the target can be short of families too, and the flag reports that beside `below_floor`. The freeze case `the meta reports short_of_min_families …` pins it (CONTROL: at `min_families` it is false), and mutant M44 drops it.
-- **Refusals before `--out` (R10).** A refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, so a refused run leaves no `--out` to clean. In `pilot-source` that is the argv checks and the writer model: `refuseWriterModel` (Task 6's, the one spelling of the Opus test) runs before `prepareOut`, and `openWriter` asks it again for every other caller. `quiz-source`'s writer model is the validated record's, which the validator already holds to an exact Opus id (W2-D25), so it refuses `record-invalid` before `--out` with no second call. `freeze` makes `--out` after every input is read and checked.
+- **Refusals before `--out` (R10).** A refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, so a refused run leaves no `--out` to clean. In `pilot-source` that is the argv checks and the writer model: `refuseWriterModel` (Task 6's, the one spelling of the Opus test) runs before `prepareOut`, and `openWriter` asks it again for every other caller. `quiz-source`'s writer model is the validated record's, which the validator already holds to an exact Opus id (W2-D25), so it refuses `record-invalid` before `--out` with no second call. `freeze` makes `--out` after every input is read and checked. D-6307 (the coordinator's ruling in the operator's place, after the review): the same rule covers the four other refusals `openWriter` makes with no store and no spawn, `roster-invalid`, `account-refused`, `wrapper-unmeasured` and the limits row at open, so `pilot-source` and `quiz-source` ask them in `refuseWriterAdmission` before `prepareOut`, through the same functions (`readRoster`, `admitAccount`, `wrapperSha` and `refuseOnLimits`, the limits half of `batchGate`'s gate, factored so both call one function). `openWriter` keeps its own calls and stays the authority at open; the `--version` probe is a spawn and stays after `prepareOut`. D-6311 (the same ruling, after the whole-branch review) adds the rest of what needs only file reads: `refuseWriterAdmission` also calls `preflightFiles`, the file half of `preflight` (`tree-unmeasured`, `tree-moved`, `wrapper-moved`, and `code-unmeasured` and `code-changed` in `pilot-source`), and `pilot-source` opens its store (`openReplayStore`, `store-unreadable`) before `prepareOut`, as `quiz-source` does, so a node with no store leaves no `--out`. D-6309's range check (`refuseOutOfRangeValues`, `record-invalid`) is the first call in `refuseWriterAdmission`, so a signed record's out-of-range budget, limits and quotas refuse there too. The order that results is the range check, the roster, the account, the wrapper, the limits row, the tree, and then, in `pilot-source` only, the store open, all before `--out`.
 - **`verify --section ab` reads content (R10).** W2-D84 requires it: "each control file's content equals its generation … All reads go through historyPaths, recallOffPath and readBounded". W2-D29's "the driver does not read content" is about the presence check (W2-D78(ii)), which stays W2-4's one `lstatSync(recallOffPath(…))` line. `controlFileOf` is `readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false)` and writes nothing, so single-definition's O13 one-writer pin holds unchanged, and W2-4's recall-off line pin is re-pinned to the two code lines (Step 2).
 - **The floor (W2-D71).** `freeze` writes the list whatever its size and records `below_floor` in its meta. `open --finalize` refuses a below-floor meta (`input-invalid`). A ruling to proceed lowers `quiz.halt_floor`, a signed default, in a superseding draft, and the quiz is sourced again under it. That re-sourcing is a stated cost.
 - **What `power` prints (W2-D21).**
@@ -8442,7 +8648,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
    *  copied file; `drop` removes one (measure-history.py, which nothing imports), so codeShas() over this tree moves. */
   function tree7(opts: { edit?: string; drop?: string } = {}): string {
     const tree = r7MkTmp('ccrc-w2-5a-t7-tree-');
-    for (const rel of r7drv.CODE_SHA_FILES as string[]) {
+    for (const rel of r7drv.CODE_SHA_FILES as unknown as string[]) {
       r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
       r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
     }
@@ -8502,12 +8708,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   });
   /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
    *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
-  function draft7(root: string, home: string, over: R7 = {}): R7 {
-    const s0 = step0a7(root, home);
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a'): R7 {
+    const s0 = { ...step0a7(root, home), account };
     return r7drv.buildDraft({
       nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
       step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
-      pilot: pilot7(root), account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS },
+      pilot: pilot7(root), account, models: { arm: ARM, writer: OPUS, judge: OPUS },
       gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
       overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
     }) as R7;
@@ -8547,12 +8753,13 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       lookbackMs: r7gate.ACTIVE_LOOKBACK_MS, families: active.map((f) => ({ ccrc_id: f.ccrc_id, generation: f.generation, state: states[f.ccrc_id] ?? 'ok' })) }) as R7;
   }
   /** A sourced entry's eleven frozen fields, its rank stripped (Task 6's frozenListText takes exactly FROZEN_ENTRY_KEYS). */
-  const strip7 = (e: R7): R7 => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
+  const strip7 = (e: R7): any => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
   /** The frozen list's head as freeze and pilot-source write it: the record's writer and the labeller with its prefix. */
-  const head7 = (prefix = 7): R7 => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
+  const head7 = (prefix = 7): { writer_model: string; labeller: object } => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
   /** A synthetic family order key: 64 hex digits, in code-unit order by `i` (Task 5's quizFamilyOrderKey is a sha256's
-   *  hex; freeze compares keys, it never recomputes them). */
-  const K7 = (i: number): string => String(i).repeat(64);
+   *  hex; freeze compares keys, it never recomputes them). Hex LETTERS, so no key reads as a number: a numeric digit
+   *  string would make a subtraction of two keys a number, and M41's numeric comparator would pass unseen. */
+  const K7 = (i: number): string => 'abcdef'[i]!.repeat(64);
   /** One quiz entry on family `f`: W2-D73's eleven fields, its qid by Task 6's qidOf, and its global rank, `[order key,
    *  candidate rank]` (R10); a pilot entry's rank is its node's own, `[family index, candidate rank]`, and is stripped. */
   function entry7(f: Ref, n: number, rank: [string | number, number]): R7 {
@@ -8564,8 +8771,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
    *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
    *  pilot result), and the part 2 buildFinal makes from them. */
-  function chain7(home: string, draftOver: R7 = {}): R7 {
-    const draft = draft7(R7_REPO, home, draftOver);
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a'): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account);
     const d = save7(draft, 'part1.json');
     const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
     const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
@@ -8599,22 +8806,28 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     };
     return ['open', '--finalize', ...Object.values(parts).flatMap((v) => v ?? [])];
   }
-  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory is
-   *  summarised by its db file's bytes alone: a read-only open of a WAL store may leave SQLite's sidecars there, which
-   *  are SQLite's, not the driver's writes. */
+  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory
+   *  is listed entry by entry (a stray file the driver wrote there is seen) but for two things: its own mtime, and
+   *  SQLite's `-wal` and `-shm` sidecars, which a read-only open of a WAL store may leave there and which are SQLite's,
+   *  not the driver's writes. The db file itself is its bytes' sha256 alone. */
   function snapshot7(root: string): string[] {
     const out: string[] = [];
     const dbFile = r7Paths(root).dbFile;
+    const storeDir = r7path.dirname(dbFile);
+    const sidecars = [`${r7path.basename(dbFile)}-wal`, `${r7path.basename(dbFile)}-shm`];
     const walk = (dir: string, rel: string): void => {
-      if (dir === r7path.dirname(dbFile)) {
-        out.push(`${rel} db ${r7fs.existsSync(dbFile) ? r7Sha(r7fs.readFileSync(dbFile)) : 'absent'}`);
-        return;
-      }
       for (const n of r7fs.readdirSync(dir).sort()) {
         const p = r7path.join(dir, n);
         const r = rel === '' ? n : `${rel}/${n}`;
+        if (dir === storeDir && sidecars.includes(n)) continue;
         const st = r7fs.lstatSync(p);
-        out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        if (p === dbFile) {
+          out.push(`${r} db ${r7Sha(r7fs.readFileSync(p))}`);
+        } else if (p === storeDir) {
+          out.push(`${r} ${st.mode}`);   // the directory's mtime moves with SQLite's sidecars
+        } else {
+          out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        }
         if (st.isDirectory()) walk(p, r);
       }
     };
@@ -8756,13 +8969,20 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(run7(null, null, bad).stderr).toBe(refusalLine('input-sha-mismatch', `census: expected ${'c'.repeat(64)}, measured ${r7Sha('not json')}`));
     });
 
-    r7it('a record inside a git tree is record-invalid before a byte is read (W2-D25)', () => {
+    r7it('a record inside a git tree, its .git a directory or a file, is record-invalid before a byte is read (W2-D25)', () => {
       const repo = r7MkTmp('ccrc-w2-5a-t7-git-');
       r7fs.mkdirSync(r7path.join(repo, '.git'));
       const p = r7path.join(repo, 'part1.json');
       r7fs.writeFileSync(p, '{}\n');
       r7expect(run7(null, null, ['power', '--record', p, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
         .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(repo)}`));
+      // A linked worktree (or a submodule) has `.git` as a FILE naming its git directory: the same refusal, before a byte is read.
+      const linked = r7MkTmp('ccrc-w2-5a-t7-gitfile-');
+      r7fs.writeFileSync(r7path.join(linked, '.git'), 'gitdir: /home/u/elsewhere/.git\n');
+      const q = r7path.join(linked, 'part1.json');
+      r7fs.writeFileSync(q, '{}\n');
+      r7expect(run7(null, null, ['power', '--record', q, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
+        .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(linked)}`));
     });
 
     r7it('a final given where a draft is read, and a record the validator refuses, are record-invalid with every error', () => {
@@ -9133,7 +9353,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
       const calls: R7[] = [];
       const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
-      const run = async (model: string): Promise<{ refusal: R7; made: boolean }> => {
+      const run = async (model: string): Promise<{ refusal: R7 | null; made: boolean }> => {
         const out = outDir();
         const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', model, ...inp('step0a', s0)]) as R7;
         const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, deps as never));
@@ -9211,7 +9431,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     };
 
     r7it.skipIf(process.platform === 'darwin')('quiz-source hands part 1\'s pilot_budget and limits to the writer gate (W2-D55): a tight record budget stops the second writer batch, a low record threshold stops the writer at open', async () => {
-      const run = async (draftOver: R7): Promise<{ refusal: R7; calls: number; runs: number }> => {
+      const run = async (draftOver: R7): Promise<{ refusal: R7 | null; calls: number; runs: number }> => {
         const home = writerHome7();   // before chain7, so the draft's step 0a records this stub's version
         const c = chain7(home, draftOver);
         const calls: R7[] = [];
@@ -9237,14 +9457,21 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect([calls.length, printRuns(home).length]).toEqual([1, 1]);
     }, 120_000);
 
-    r7it.skipIf(process.platform === 'darwin')('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, leaves no B text anywhere under --out', async () => {
-      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-');
+    // Both writer inputs are walked end to end: the default excerpt (what the operator's run uses unless it overrides) and leaf-span.
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, writer input %s, leaves no B text and no key anywhere under --out', async (writerInput) => {
+      // w6SourceBox's optional fourth parameter, `key` (after Task 6's `dropThenDeep`), plants the key in the command row's
+      // tool_use input and in its tool_result, the span the walk sources from; every other caller passes none.
+      const key = w6Akia('WALKKEY');   // a key-shaped value in the span the walk sources from (assembled at runtime, never whole in the tree)
+      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-', undefined, false, key);
       const home = sb.box.home;
       node7(home);   // W2-4's up-a row (the roster pilot-source admits from), its stub, a limits row and a tagged stamp
       r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
       const out = outDir();
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
-      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      // leaf-span: the writer is handed the whole span, so the key goes as far toward a spawn as it can; under the default
+      // excerpt it sees the fact's window only, and the key never reaches its input.
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--writer-input', writerInput, ...inp('step0a', s0)]) as R7;
       // The real sourceQuiz; `top` keeps B's ancestor walk inside the fixture tree (Task 4's seam, no subcommand passes it).
       const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
         { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
@@ -9261,6 +9488,24 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const files = walk(out);
       r7expect(files.length, 'CONTROL: the walk reads the run\'s files').toBeGreaterThan(3);
       for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(sb.sentinel), f).toBe(false);
+      // W2-D54, W2-D67: and no file holds any part of the key of 8 or more characters (every 8-character window of it).
+      const windows = Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
+      for (const f of files) {
+        const text = r7fs.readFileSync(f, 'utf8');
+        for (const w of windows) r7expect(text.includes(w), `${f} holds the key's part ${w}`).toBe(false);
+      }
+      // CONTROL: the key really was in the store's span: the seeded transcript the store was swept from holds the key whole,
+      const seeded = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? seeded(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const transcripts = seeded(home).filter((f) => f.endsWith('.jsonl') && r7fs.readFileSync(f, 'utf8').includes(key));
+      r7expect(transcripts, 'CONTROL: a seeded transcript (.jsonl) holds the key whole').not.toEqual([]);
+      // and, under leaf-span, the writer's input was built from that span and masked (the mark is there; M47). Under
+      // excerpt the input holds the fact's window only, so there is no key to mask: the no-key property above is the check.
+      const inputs = files.filter((f) => f.endsWith('.input.json'));
+      r7expect(inputs, 'CONTROL: the writer input is under --out').toHaveLength(1);
+      if (writerInput === 'leaf-span') {
+        r7expect(r7fs.readFileSync(inputs[0]!, 'utf8'), 'CONTROL: the span held a key, and the writer saw it masked').toContain(t4Lib.REDACTED_MARK);
+      }
     }, 600_000);
 
     r7it('quiz-source refuses on a node the record does not name', async () => {
@@ -9269,6 +9514,85 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: async () => { throw new Error('never'); } } as never));
       r7expect(r.refusal).toEqual({ word: 'input-invalid', detail: `store ${STORE_C} is not one of the record's nodes` });
     });
+    // D-6307 (R10): every refusal that needs no store and no spawn answers before prepareOut makes --out, not the writer
+    // model alone: the roster, the account, the limits row at open and the wrapper's sha (openWriter asks each again).
+    // Each row breaks one input and names the setup of both subcommands; the CONTROL is the same run with that input
+    // admissible, which gets past the check and makes --out (it may refuse at open for another reason: a later word).
+    type AdmRow = { word: string; detail: string | null; pilot: (home: string, broken: boolean) => string;
+      quiz: (home: string, broken: boolean) => { account: string; over: R7 } };
+    const limitsRow7 = (home: string, five: number): void => {
+      const nowS = Math.floor(Date.now() / 1000);
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    };
+    /** up-a and gen-a rostered, gen-a's declared secrets file planted; its wrapper (the stub) only when `wrapper`. */
+    const genRoster7 = (home: string, wrapper: boolean): void => {
+      writeRoster(home, [FIXTURE_ACCOUNTS[0]!, FIXTURE_ACCOUNTS[1]!]);
+      const secrets = r7path.join(home, '.cc-secrets');
+      r7fs.mkdirSync(secrets, { recursive: true, mode: 0o700 });
+      r7fs.writeFileSync(r7path.join(secrets, 'gen-a.env'), '# fixture file admission stats and never opens\n', { mode: 0o600 });
+      const nowS = Math.floor(Date.now() / 1000);   // gen-a's own fresh limits row, so only the wrapper decides
+      r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'gen-a.json'), JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      if (wrapper) plantStub(home, 'gen-a');
+    };
+    const ADM_ROWS: AdmRow[] = [
+      { word: 'roster-invalid', detail: 'absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'accounts.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'account-refused', detail: 'unknown-id',
+        pilot: (_home, broken) => (broken ? 'nope' : 'up-a'),
+        quiz: (_home, broken) => ({ account: broken ? 'nope' : 'up-a', over: {} }) },
+      { word: 'limits-threshold', detail: null,
+        pilot: (home, broken) => { limitsRow7(home, broken ? 90 : 10); return 'up-a'; },
+        quiz: (_home, broken) => ({ account: 'up-a', over: broken ? { limits: { threshold_pct: 5 } } : {} }) },
+      { word: 'wrapper-unmeasured', detail: 'wrapper',
+        pilot: (home, broken) => { genRoster7(home, !broken); return 'gen-a'; },
+        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; } },
+    ];
+    const admDetail = (row: AdmRow, home: string): string | null => (row.detail === 'wrapper' ? `${r7path.join(home, '.local', 'bin', 'gen-a')}: ENOENT` : row.detail);
+    const admit7 = (process.platform === 'darwin' ? r7it.skip : r7it).each(ADM_ROWS.map((r) => [r.word, r] as [string, AdmRow]));
+
+    admit7('pilot-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const account = row.pilot(home, broken);
+        const s0 = save7({ ...step0a7(R7_REPO, home), account }, 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    admit7('quiz-source: %s answers before prepareOut makes --out, so the refused run leaves no --out; CONTROL: with it admissible --out is made', async (_word, row) => {
+      const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+        const home = home7(STORE_A);
+        const { account, over } = row.quiz(home, broken);
+        const c = chain7(home, over, account);
+        const out = outDir();
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+          { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) } as never));
+        return { home, refusal: r.refusal, made: r7fs.existsSync(out), calls: calls.length };
+      };
+      const bad = await run(true);
+      r7expect(bad.refusal?.word).toBe(row.word);
+      if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
+      r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
+      r7expect(bad.calls).toBe(0);
+      const ok = await run(false);
+      r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
+      r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
   });
 
   // ── freeze ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -10077,7 +10401,9 @@ export function quizMetaReport({ recordSha256, frozenSha256, assignmentSha256, e
   return { kind: QUIZ_META_KIND, v: 1, record_sha256: recordSha256, frozen_sha256: frozenSha256, assignment_sha256: assignmentSha256,
     n_questions: entries.length, n_families: families.length,
     below_floor: quizFloor(entries.length, families.length, floor).halt,
-    short_of_min_families: families.length < minFamilies, sourced };
+    short_of_min_families: families.length < minFamilies,
+    // Sorted by store_id (code unit), so the meta's bytes do not depend on the order the sourced lists were named in.
+    sourced: [...sourced].sort((a, b) => cmpUnit(a.store_id, b.store_id)) };
 }
 
 // ── the record: template, draft and final ──────────────────────────────────────────────────────────────────
@@ -10193,11 +10519,13 @@ export function buildFinal({ draft, draftSha256, priorSha256 = null, assembled, 
 function entryError(e) {
   if (!plainObject(e)) return 'entry';
   for (const k of FROZEN_ENTRY_KEYS) if (!Object.hasOwn(e, k)) return `entry ${k}`;
+  // A string that is empty is no value: qidOf and the frozen list's own checks would throw on it later, a TypeError instead of
+  // this refusal, so every text field and every repo root must be non-empty here.
   for (const k of ['qid', 'store_id', 'ccrc_id', 'generation', 'boundary_uuid', 'fact', 'fact_raw', 'question', 'source_entry_uuid']) {
-    if (typeof e[k] !== 'string') return `entry ${k}`;
+    if (typeof e[k] !== 'string' || e[k] === '') return `entry ${k}`;
   }
   if (!FACT_KINDS.includes(e.kind)) return 'entry kind';
-  if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string')) return 'entry repo_roots';
+  if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string' && r !== '')) return 'entry repo_roots';
   // A quiz entry's rank is [its family's quizFamilyOrderKey, its candidate rank] (W2-D71 as amended 2026-10-22; R10).
   if (!Array.isArray(e.rank) || e.rank.length !== 2 || typeof e.rank[0] !== 'string' || !SHA256_RE.test(e.rank[0])
     || !Number.isSafeInteger(e.rank[1]) || e.rank[1] < 0) return 'entry rank';
@@ -10244,6 +10572,85 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
+/** D-6309: the record's budget, limits and quiz quotas, in range, asked before prepareOut makes --out. The
+ *  gate's validator types these fields as bare integers with no range, so a signed record can carry a value that batchGate
+ *  (`pilot_budget`, `limits.threshold_pct`, `limits.max_age_ms`) or sampleQuestions' assertCount (`quiz.target` and
+ *  `quiz.caps.family`, `boundary` and `kind_per_family`) throws on, a TypeError after --out and, for the quotas, after a
+ *  writer spawn. Every field those two assert on is checked here, each a positive safe integer and `threshold_pct` also at
+ *  most 100; their throws stay as internal assertions behind this check. A bad value refuses `record-invalid` (the word for a
+ *  record the gate would not sign), naming each field as `<path> out-of-range`; nothing is written. One function, reached
+ *  from both subcommands through refuseWriterAdmission: quiz-source passes the signed record's values, pilot-source its
+ *  `--budget` (a positive integer by the flag grammar), LIMITS_DEFAULTS and pilotCaps, with `--n-usage` as the target.
+ *  Tightening W2-3's validator in the gate is not this file's.
+ *  @param {{ budget: unknown, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
+ *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } }} o */
+export function refuseOutOfRangeValues({ budget, limits, quotas }) {
+  const positive = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 1;
+  const checks = [
+    ['pilot_budget', positive(budget)],
+    ['limits.threshold_pct', positive(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
+    ['limits.max_age_ms', positive(limits?.max_age_ms)],
+    ['quiz.target', positive(quotas?.target)],
+    ['quiz.caps.family', positive(quotas?.caps?.family)],
+    ['quiz.caps.boundary', positive(quotas?.caps?.boundary)],
+    ['quiz.caps.kind_per_family', positive(quotas?.caps?.kind_per_family)],
+  ];
+  const bad = checks.filter(([, ok]) => !ok).map(([name]) => `${name} out-of-range`);
+  if (bad.length > 0) refuse('record-invalid', bad.join('; '));
+}
+
+/** D-6307 (R10), D-6311, D-6309: the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes
+ *  --out, so a refused run leaves no --out. First the record's values in range (refuseOutOfRangeValues, `record-invalid`),
+ *  then, in openWriter's order and through the SAME functions it calls, never a second spelling: the roster
+ *  (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`), the limits row at open
+ *  (`limits-threshold` and the other limits words) and preflight's no-spawn half (preflightFiles: `tree-unmeasured`,
+ *  `tree-moved`, `wrapper-moved`, `code-unmeasured`, `code-changed`) against `expected`, the values openWriter is given.
+ *  It writes nothing, and it is a pre-check only: openWriter asks every one again and stays the authority at open, so a
+ *  state that moves between the two still refuses there, after --out was made (an empty --out is that race's residual).
+ *  Two orders differ from openWriter's alone (D-6307): the roster, account, wrapper and limits words answer before
+ *  prepareOut's `out-refused` words, and the limits word answers before `budget-exhausted` (batchGate checks the budget
+ *  first, but the budget needs the ledger under --out, which does not exist yet). D-6311 adds a third: the
+ *  `--version` probe is a spawn and stays openWriter's, so with both the version and the tree moved this answers
+ *  `tree-moved` where open would have said `claude-version-moved`.
+ *  @param {{ home: string, accountId: string, budget: number, limits: { threshold_pct: number, max_age_ms: number },
+ *    quotas: { target: number, caps: { family: number, boundary: number, kind_per_family: number } }, expected: object }} o */
+function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {
+  refuseOutOfRangeValues({ budget, limits, quotas });
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, accountId, home);
+  const wrapperSha256 = wrapperSha(launch);
+  refuseOnLimits(home, accountId, { thresholdPct: limits.threshold_pct, maxAgeMs: limits.max_age_ms }, Date.now());
+  const verdict = preflightFiles(expected, { stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() });
+  if (!verdict.ok) refuse(verdict.word, verdict.detail);
+}
+
+/** Where pilot-source pins its seed under --out (D-6313). */
+export const PILOT_SEED_FILE = 'pilot/seed';
+
+const SEED_HEX_RE = /^[0-9a-f]{64}$/;
+
+/** pilot-source's seed for this --out, drawn once (D-6313): the pinned `<out>/pilot/seed` (0600, one line of 64 lowercase
+ *  hex) when it is there, else `draw()` written there first. A re-run of a stopped batch (W2-D55: the batch can be
+ *  resumed) then samples the same families and asks the same questions, so the writer inputs it pinned match, the finished
+ *  asks are reused and the spend already charged is not orphaned. Read and written as every --out file is (D-5986): a
+ *  seed that is not a regular file, is unreadable, or is not a seed refuses `out-refused`. No flag takes a seed; `draw`
+ *  stays injectable (a test passes it).
+ *  @param {string} out  @param {() => string} draw  @returns {string} */
+function pinnedPilotSeed(out, draw) {
+  const read = readPlain(path.join(out, PILOT_SEED_FILE), 1024);
+  if (read.state === 'bad') refuse('out-refused', `${PILOT_SEED_FILE} ${badWord(read)}`);
+  if (read.state === 'bytes') {
+    const m = read.bytes.toString('utf8').match(/^([0-9a-f]{64})\n$/);
+    if (m === null) refuse('out-refused', `${PILOT_SEED_FILE} is not a seed`);
+    return m[1];
+  }
+  const seed = draw();
+  if (typeof seed !== 'string' || !SEED_HEX_RE.test(seed)) throw new TypeError('pilotSourceCommand: deps.seed answers 64 lowercase hex');
+  ensurePlainDir(out, 'pilot');
+  writePlain(out, PILOT_SEED_FILE, `${seed}\n`);
+  return seed;
+}
+
 // A handler that takes deps after its env names that parameter driverEnv, never env: W2-4 Task 5's env scan reads
 // `, env,` on a code line as an env passed whole, and the value is still main's by-name projection.
 /** `pilot-source` (W2 decisions §5 act 9, one pilot node, R9): before part 1, so its writer is preflighted against the
@@ -10267,20 +10674,22 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
   const writerModel = flags['writer-model'];
   refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
   refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
-  const out = prepareOut(flags.out);
-  refuseColonInRealOut(out);
-  const claim = claimOut(out);
+  refuseWriterAdmission({ home, accountId: flags.account, budget: flags.budget, limits: LIMITS_DEFAULTS, quotas: { target: nUsage, caps: pilotCaps() }, expected: step0a });   // D-6307, D-6311, D-6309: so do the ranges, the roster, the account, the wrapper, the limits row and the tree
+  const rs = openReplayStore(home);   // the run's one store open (R3), read-only and before --out like quiz-source's (D-6311)
   try {
-    const rs = openReplayStore(home);   // the run's one store open (R3)
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    const claim = claimOut(out);
     try {
       // The writer: the model, the account (W2-D52), the gate (W2-D55) and W2-D56's preflight against step 0a, before
       // any writer spawn and before every writer batch (Task 6's openWriter).
       const writer = await openWriter({ home, accountId: flags.account, model: writerModel, settingsMode: step0a.settings_mode, writerInput,
         claim, budget: flags.budget, limits: LIMITS_DEFAULTS, expected: step0a, lang: driverEnv.LANG, idx: rs.idx });
-      const seedHex = deps.seed();
+      const seedHex = pinnedPilotSeed(out, deps.seed);   // D-6313: pinned under --out before the first ask
       const sourced = await deps.sourceQuiz({
         mode: 'pilot', rs, home, out, writer, seedHex, exclude: { pilotFamilies: [], assignment: [] },
         plan: { n_fidelity: nFidelity, n_usage: nUsage, caps: pilotCaps() }, configDirs: rosterConfigDirs(readRoster(home).roster, home),
+        shaMinPrefix,
       });
       warnFailedRuns(sourced.counts);
       const frozenSha = writeFrozenList(out, 'pilot', frozenListText('pilot',
@@ -10297,10 +10706,10 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
       process.stderr.write(`sha256 ${shaOfPlain(out, PILOT_SOURCE_FILE)}\n`);   // D-5983: stderr; stdout stays empty
       return EXIT.OK;
     } finally {
-      rs.close();
+      claim.release();
     }
   } finally {
-    claim.release();
+    rs.close();
   }
 }
 
@@ -10323,6 +10732,10 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     const entry = rec.record.step0a.find((s) => s.store_id === storeId);   // the validator binds exactly one per node
     const writerModel = rec.record.writer_model;
     refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
+    const expected = { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
+      wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files };
+    refuseWriterAdmission({ home, accountId: rec.record.account, budget: rec.record.pilot_budget, limits: rec.record.limits,
+      quotas: { target: rec.record.quiz.target, caps: rec.record.quiz.caps }, expected });   // D-6307, D-6311, D-6309: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);
@@ -10331,13 +10744,13 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
       // this node's part 1 step 0a entry and gate_code before every writer batch (Task 6's openWriter; W2-D56).
       const writer = await openWriter({ home, accountId: rec.record.account, model: writerModel, settingsMode: rec.record.settings_mode,
         writerInput: rec.record.quiz.writer_input, claim, budget: rec.record.pilot_budget, limits: rec.record.limits,
-        expected: { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
-          wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files }, lang: driverEnv.LANG, idx: rs.idx });
+        expected, lang: driverEnv.LANG, idx: rs.idx });
       const sourced = await deps.sourceQuiz({
         // No family list (R10, C1): sourceQuiz walks this store's admitted families; assembled.kept fed the assignment only.
         mode: 'quiz', rs, home, out, writer, seedHex: rec.record.bootstrap.seed,
         exclude: { pilotFamilies: copyJson(rec.record.pilot.families), assignment: copyJson(assignment.list) },
         plan: copyJson(rec.record.quiz), configDirs: rosterConfigDirs(readRoster(home).roster, home),
+        shaMinPrefix: rec.record.labeller.sha_min_prefix,
       });
       warnFailedRuns(sourced.counts);
       const inputs = assembled.nodes.map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
@@ -10363,6 +10776,7 @@ export async function freezeCommand(flags, env) {
   recheckCode(rec.record);   // W2-D24 (freeze)
   const lists = loadInputs(flags, 'sourced');
   const stores = new Set();
+  const qids = new Set();
   let assignmentSha = null;
   for (const l of lists) {
     const bad = sourcedError(l.value);
@@ -10377,6 +10791,9 @@ export async function freezeCommand(flags, env) {
     for (const e of s.entries) {
       if (e.store_id !== s.store_id) refuse('input-invalid', `sourced entry ${e.qid} names another store`);
       if (qidOf(e) !== e.qid) refuse('input-invalid', `sourced entry ${e.qid} qid-mismatch`);
+      // A repeated qid (two ranks, one question) would reach frozenListText's "is repeated" TypeError: refuse it here.
+      if (qids.has(e.qid)) refuse('input-invalid', `sourced qid-duplicate ${e.qid}`);
+      qids.add(e.qid);
     }
   }
   // W2-D71's population is the families on the NAMED nodes: one list per node, or the merge freezes a subset.
@@ -10705,7 +11122,7 @@ t 're-checks the code it runs under: power'
 # M11: the assembler's node checks, each removed.
 mut "$F" "    if (!labels.has(sid)) refuse('input-invalid', \`census store-id-unlisted \${sid}\`);" ""
 t 'census assembler checks nodes only'
-# Expected RED: 1 failed. The unlisted census passes, and the next answer is 'verify node-missing' or exit 0.
+# Expected RED: 1 failed. The unlisted census passes, and the next answer is `input-invalid: verify node-missing undefined` (measured: the unlisted census becomes a node with no label, so the label prints `undefined`; `verify store-id-unlisted` cannot fire for a verify output of node A or B).
 mut "$F" "    if (v.value.census_sha256 !== node.census_sha256) refuse('input-invalid', \`verify census-mismatch \${node.store_id}\`);" ""
 t 'census assembler checks nodes only'
 # Expected RED: 1 failed. A verify output bound to another census is accepted (exit 0 with figures).
@@ -10754,7 +11171,7 @@ t 'W2-5a Task 7: freeze'
 # M19: freeze accepts a forged qid.
 mut "$F" "      if (qidOf(e) !== e.qid) refuse('input-invalid', \`sourced entry \${e.qid} qid-mismatch\`);" ""
 t 'refuses a sourced list of another record'
-# Expected RED: 1 failed. freeze exits 0 with the forged entry.
+# Expected RED: 1 failed (measured). With the guard gone the forged entry reaches Task 6's frozenListText, which throws `TypeError: frozenListText: entry <qid> is not qidOf its own six fields`, so the run ends 'internal error' (exit 1) in place of the 'input-invalid: sourced entry <qid> qid-mismatch' refusal: the guard turns a TypeError into a typed refusal.
 
 # M20: verify ab never reports a treatment file naming its own generation.
 mut "$F" "  return read.value.trim() === generation ? 'treatment-named' : 'ok';" "  return 'ok';"
@@ -10837,7 +11254,7 @@ t 'a control file that is a directory'
 mut "$F" "  counts.drops = sampled.drops;" "  counts.drops = sampled.drops;
   counts.b = [...baselines.values()].map((b) => b.text);"
 t 'leaves no B text anywhere under --out'
-# Expected RED (non-darwin): 1 failed. pilot-source.json carries the counts, and with them the summary's sentinel.
+# Expected RED (non-darwin): 2 failed (measured: the walk runs once per writer input, excerpt and leaf-span). pilot-source.json carries the counts, and with them the summary's sentinel.
 
 # M36 (W2-4 Task 5's env scan): a handler's env parameter spelled env before deps.
 mut "$F" "async function openFinalize(flags, driverEnv, deps) {" "async function openFinalize(flags, env, deps) {"
@@ -10867,7 +11284,7 @@ t 'control ids and pilot families excluded'
 # M41 (R10): freeze merges by a numeric family rank, the rule before the order key.
 mut "$F" "  const byRank = (a, b) => cmpUnit(a.rank[0], b.rank[0]) || a.rank[1] - b.rank[1];" "  const byRank = (a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1];"
 t 'W2-5a Task 7: freeze'
-# Expected RED: 6 failed, every freeze case. Two keys subtract to NaN, so only the candidate ranks compare: chain7's own
+# Expected RED: 6 failed, every freeze case (measured, with K7 as hex LETTERS: a digit-only key such as '000…' or '111…' is a number, so the subtraction works and this mutant passed unseen until K7 was changed). Two letter keys subtract to NaN, so only the candidate ranks compare: chain7's own
 # mergeSourced call refuses `input-invalid sourced rank-duplicate <key>:0` (two families' first candidates tie), and every
 # freeze case builds chain7, R11's short_of_min_families case (twice) included.
 
@@ -10890,6 +11307,34 @@ mut "$F" "    short_of_min_families: families.length < minFamilies, sourced };" 
 t 'reports short_of_min_families'
 # Expected RED: 1 failed. expected [ 3, 2, false, undefined ] to deeply equal [ 3, 2, false, true ]. No other case
 # reads the flag: the first freeze case matches the meta with toMatchObject, and open --finalize never reads it.
+
+# M46 (fix round 1): insideGitTree accepts a `.git` directory only, a linked worktree's `.git` file unseen.
+mut "$F" "    try { lstatSync(dotGit); return { state: 'inside', at: dir }; } catch (e) {" "    try { if (!lstatSync(dotGit).isDirectory()) throw Object.assign(new Error('x'), { code: 'ENOENT' }); return { state: 'inside', at: dir }; } catch (e) {"
+t 'a record inside a git tree'
+# Expected RED: 1 failed (measured). The `.git`-file half answers another refusal where `record in-git-tree <dir>` was expected.
+
+# M47 (fix round 1): the leaf-span writer input is built from the unredacted span.
+mut "$F" "      texts.push(r.text);" "      texts.push(f.text);"
+t 'R7, W2-D68: a whole pilot-source run'
+# Expected RED: 1 failed (measured), the leaf-span row only; the excerpt row stays green (its input holds the fact's window, never the key). `<id>.input.json` under --out holds the key's part `AKIAFIXT`.
+
+# Mx1 to Mx3b (fix round 1): a verify path writes into HOME, the presence directory, or beside the store (`.ccrc/history/db/`).
+# Each adds one `writeFileSync` to verifyRegistry or verifyAb; each is 1 failed (measured), `read-only … expected […(20)] to deeply equal […(19)]`.
+
+# M48 and M49 (fix round 2, D-6307): the early call removed from pilot-source, then from quiz-source.
+mut "$F" "  refuseWriterAdmission({ home, accountId: flags.account, budget: flags.budget, limits: LIMITS_DEFAULTS, quotas: { target: nUsage, caps: pilotCaps() }, expected: step0a });   // D-6307, D-6311, D-6309: so do the ranges, the roster, the account, the wrapper, the limits row and the tree
+" ""
+t 'answers before prepareOut makes --out'
+# Expected RED: 4 failed (measured), each on `no --out: the refusal answered before prepareOut: expected true to be false`: openWriter's later refusal still answers the word, so the word assertion passes and --out exists.
+mut "$F" "    refuseWriterAdmission({ home, accountId: rec.record.account, budget: rec.record.pilot_budget, limits: rec.record.limits,
+      quotas: { target: rec.record.quiz.target, caps: rec.record.quiz.caps }, expected });   // D-6307, D-6311, D-6309: before --out exists
+" ""
+t 'answers before prepareOut makes --out'
+# Expected RED: 4 failed (measured), the same way.
+# M50, M51, M52 and M53 (fix round 2): the helper without its wrapper measurement, its limits row, its account admission
+# (launch = { kind: 'upstream' }), and with a roster refusal swallowed. Measured: M50 and M51 and M53 2 failed each (the
+# subcommand pair of that row, on `--out` existing); M52 4 failed (both account rows, on the word: an unknown id's next
+# answer is `limits-stale`, its limits row being absent; both wrapper rows on `--out` existing).
 
 cmp "$F" "$SCRATCH/replay.t7.orig" && echo restored
 ```
@@ -10925,6 +11370,12 @@ git commit -m "feat(history-replay): the record subcommands, pilot-source, quiz-
 ```
 
 
+**Fix-round tests and mutants (Task 7's code).**
+- M46 (the git-tree case): `insideGitTree` accepting a directory only, red when `.git` is a file. M47: the leaf-span writer input unredacted, red under `leaf-span` only. M35: B's text into the counts, red under both writer inputs. Mx1 and Mx2: a write into HOME by `verifyRegistry` and into the presence directory by `verifyAb`, red at the read-only pins; Mx3a and Mx3b: a stray file beside the store, red at the `snapshot7` listing of its directory.
+- M48 and M49 (D-6307): the early `refuseWriterAdmission` call removed from `pilot-source` and from `quiz-source`, red on `--out` existing and not on the word; M50 to M53: the helper without each of its checks (the wrapper, the limits row, the account, the roster).
+- FW-H1 and FW-H2 (D-6309's range check): the `refuseOutOfRangeValues` call removed from `refuseWriterAdmission` (measured 8 red: the budget case ends in `batchGate`'s `TypeError`, the threshold and age rows answer `limits-threshold` and `limits-stale` where `record-invalid` was expected, the four quota rows and the all-fields row leave `--out` made), and the `<= 100` bound dropped from the threshold (2 red: the threshold row and the all-fields row).
+- FW-D1 to FW-D3 (D-6311): the early `preflightFiles` call removed (9 red, on `--out` existing), the store opened after `--out`, and `preflight` composing the files before the version (W2-4's order pins red). FW-F1 to FW-F4 (D-6313): the pinned seed ignored, never pinned, mode 0644, and read leniently; FW-F5 (D-6313): `const seedHex = deps.seed()`, the seed never read back, red on a third `-p` run in the stub log (3 where 2 was expected) because the re-run asks other items, where it had been red only on the seed file being absent. FW-G5 (the minors): a write into HOME in `power`, in `open --draft` and in `open --finalize`, red at the new `snapshot7` pins, whose CONTROL plants a write; FW-G6 to FW-G8: freeze's meta unsorted, an empty string and an empty repo root accepted; FW-R3: a repeated qid under distinct ranks reaching `frozenListText`'s `TypeError` instead of the `input-invalid` refusal.
+
 ### Task 8: the departures, the whole-PR checks and the PR
 
 Tasks 1 to 7 ship W2-5a's code and pins. This task adds no code, no test and no guard. It measures what the PR holds against what W2-5a may hold:
@@ -10939,7 +11390,7 @@ It then runs the whole-PR suites, one per tool call, writes the PR body and open
 
 **W2-5a never touches the spec.** It is not one of the PRs that hold the spec path (W2-D3: 5h-1, 5h-2, W2-1, W2-5b and W2-6). Three errata come from W2-5a's own decisions: E19 (§10.2's Answerability, W2-D70, D-5780), E20 (§10.2's "sees F and its span", W2-D72, D-5779) and E23 (§10.2's Pre-registration: the two-part record and its code hashes). All three are **amended in place by W2-5b**, as decisions §6's "Amended by" column says. Step 2 asserts that the PR's diff holds no spec path and that each of the three rev 3.6 sentences still stands on this branch, once, unchanged.
 
-**The departures.** This plan defines five numbers in its `## Deviations found`, each naming the task that first cites it (R1):
+**The departures.** This plan defines eighteen numbers in its `## Deviations found`, each naming the task that first cites it (R1 for the first five; the thirteen after them were issued to the run during the build):
 
 | Number | Slug | Task |
 |---|---|---|
@@ -10948,14 +11399,27 @@ It then runs the whole-PR suites, one per tool call, writes the PR body and open
 | D-6278 | `history-replay-baseline-kept-not-a-stop` | 4 |
 | D-6279 | `history-replay-baseline-object-leaves` | 4 |
 | D-6280 | `history-replay-spend-budget-operator-given` | 7 |
+| D-6301 | `history-replay-unknown-body-word-throws` | 1 |
+| D-6302 | `history-replay-unrenderable-body-discard` | 1 |
+| D-6303 | `history-replay-unrenderable-mined-body-discard` | 2 |
+| D-6304 | `history-replay-baseline-unrenderable-body-discard` | 4 |
+| D-6305 | `history-replay-failed-writer-run-is-malformed` | 6 |
+| D-6306 | `history-replay-mined-drops-only-for-mined-boundaries` | 6 |
+| D-6307 | `history-replay-writer-admission-before-out` | 7 |
+| D-6308 | `history-replay-no-redaction-of-serialised-text` | 1, 2 and 6 (first cited in Task 1) |
+| D-6309 | `history-replay-fact-placed-by-escaped-spelling` | 6 |
+| D-6310 | `history-replay-legacy-families-excluded` | 6 |
+| D-6311 | `history-replay-preflight-no-spawn-half-before-out` | 7 |
+| D-6312 | `history-replay-sha-short-dropped-at-40` | 6 |
+| D-6313 | `history-replay-pilot-seed-pinned-under-out` | 7 |
 
-D-5780 is the one number of the ledger's W2 block (the 19 numbers issued on 2026-10-19) whose "Defined in" names W2-5a; the other four were issued for this plan's planning departures. No other number in the W2 block names W2-5a:
+D-5780 is the one number of the ledger's W2 block (the 19 numbers issued on 2026-10-19) whose "Defined in" names W2-5a; the next four were issued for this plan's planning departures, and the thirteen after them to the run during the build, one fix round or fix-wave item each. No other number in the W2 block names W2-5a:
 - D-5773 (`verify --registry`'s half of W2-D20), D-5776 (the answer-field composer, W2-D64) and D-5779 (the writer spawn, W2-D72) all name W2-3 first, and W2-3's plan defines them;
 - D-5766 (W2-D34's same-millisecond count) is W2-2a's, defined in W2-2a's plan in the same docs PR as this one (E11).
 
 W2-5a cites those four bare. It also cites bare D-5774 (W2-3's plan; the driver's words stay deploy-local, W2-D12), D-5812 (W2-4's plan; step 0a's three inits are non-null, which `open --draft` copies) and D-6238 (W2-1's plan; `expandEntryBody`'s five states, each counted by its own reason, W2-D68).
 
-The plan is on `main` before dispatch. Step 1 checks, for each of the five: there is exactly one entry, it carries its slug, the task it names is the first `### Task` section that cites the number, and no other plan on `origin/main` defines it.
+The plan is on `main` before dispatch. Step 1 checks, for each of the eighteen: there is exactly one entry, it carries its slug, the task it names is the first `### Task` section that cites the number, and no other plan on `origin/main` defines it.
 
 A number the coordinator issues to this run during the build is defined in this plan's `## Deviations found`, in the commit that first cites it. The plan path is therefore the one path outside the two W2-5a files that this PR may edit (Step 3).
 
@@ -10993,7 +11457,7 @@ A number the coordinator issues to this run during the build is defined in this 
     - exactly one line holding `lstatSync(recallOffPath(`.
   - `deploy/history-gate.mjs`: `GATE_CODE_FILES` (same four paths, same order), imported by the driver and never edited.
   - `ccd/history/sweep.mjs`: `recallOffPresence(home: string, id: string)`, which the driver never imports, under any name (R6): `verify --section ab` reads content through `readBounded` (W2-D84).
-  - This plan's `## Deviations found`: the five entries above, plus one per number issued during the build.
+  - This plan's `## Deviations found`: the eighteen entries above, plus one per number issued after them.
 - Produces: no code. It produces the PR body file, the PR, and the measured summary lines the body carries.
 
 **Choices this task makes:**
@@ -11042,10 +11506,12 @@ const lines = t.split('\n');
 const dev = t.indexOf('\n## Deviations found');
 const body = dev < 0 ? t : t.slice(0, dev);
 const sections = body.split(/\n(?=### Task \d+:)/).filter((p) => /^### Task \d+:/.test(p));
-for (const d of ['D-5780', 'D-6277', 'D-6278', 'D-6279', 'D-6280']) {
+const NUMBERS = ['D-5780', 'D-6277', 'D-6278', 'D-6279', 'D-6280', 'D-6301', 'D-6302', 'D-6303', 'D-6304', 'D-6305', 'D-6306', 'D-6307',
+  'D-6308', 'D-6309', 'D-6310', 'D-6311', 'D-6312', 'D-6313'];
+for (const d of NUMBERS) {
   const head = `- **${d}** — `;
   const defs = lines.filter((l) => l.startsWith(head));
-  const m = defs.length === 1 ? defs[0].slice(head.length).match(/^`([^`]+)` \(Task (\d+);/) : null;
+  const m = defs.length === 1 ? defs[0].slice(head.length).match(/^`([^`]+)` \(Tasks? ([^;]+);/) : null;
   const first = sections.find((p) => p.includes(d));
   console.log(d, 'defined', defs.length, 'slug', m ? m[1] : 'none', 'entry-task', m ? m[2] : 'none',
     'first-citing', first ? first.match(/^### Task (\d+):/)[1] : 'none');
@@ -11063,9 +11529,12 @@ Expected:
 - `D-6278 defined 1 slug history-replay-baseline-kept-not-a-stop entry-task 4 first-citing 4`;
 - `D-6279 defined 1 slug history-replay-baseline-object-leaves entry-task 4 first-citing 4`;
 - `D-6280 defined 1 slug history-replay-spend-budget-operator-given entry-task 7 first-citing 7`;
-- `plan-defines D-5780 D-6277 D-6278 D-6279 D-6280`, followed by every number the coordinator issued to this run during the build, each defined once.
+- `D-6301 … entry-task 1 first-citing 1`, `D-6302 … 1 … 1`, `D-6303 … 2 … 2`, `D-6304 … 4 … 4`, `D-6305 … 6 … 6`, `D-6306 … 6 … 6` and `D-6307 … 7 … 7`, each `defined 1` with the slug of the table above;
+- `D-6308 defined 1 slug history-replay-no-redaction-of-serialised-text entry-task 1, 2 and 6 first-citing 1`;
+- `D-6309 … entry-task 6 first-citing 6`, `D-6310 … 6 … 6`, `D-6311 … 7 … 7`, `D-6312 … 6 … 6` and `D-6313 … 7 … 7`;
+- `plan-defines D-5780 D-6277 D-6278 D-6279 D-6280 D-6301 D-6302 D-6303 D-6304 D-6305 D-6306 D-6307 D-6308 D-6309 D-6310 D-6311 D-6312 D-6313`, followed by every number the coordinator issues to this run after these, each defined once.
 
-Then the CONTROL: the same checker on a copy whose D-5780 entry is doubled must answer `defined 2` on its first line, so a second definition is visible. Then the cross-tree check: no other plan on `origin/main` defines any of the five, and the decisions document's block stands as §6 says.
+Then the CONTROL: the same checker on a copy whose D-5780 entry is doubled must answer `defined 2` on its first line, so a second definition is visible. Then the cross-tree check: no other plan on `origin/main` defines any of the eighteen, and the decisions document's block stands as §6 says.
 
 ```bash
 PLAN=docs/superpowers/plans/2026-10-22-ccrc-history-w2-5a-quiz-builder.md
@@ -11074,7 +11543,7 @@ cat "$PLAN" .superpowers/sdd/history-w2-5a/scratch/dup.txt > .superpowers/sdd/hi
 node .superpowers/sdd/history-w2-5a/t8-dnum.mjs .superpowers/sdd/history-w2-5a/scratch/plan-control.md | head -1
 rm -r .superpowers/sdd/history-w2-5a/scratch
 git fetch origin main
-for d in D-5780 D-6277 D-6278 D-6279 D-6280; do git grep -l -F -e "- **$d** — " origin/main -- docs/superpowers/plans; done
+for d in D-5780 D-6277 D-6278 D-6279 D-6280 D-6301 D-6302 D-6303 D-6304 D-6305 D-6306 D-6307 D-6308 D-6309 D-6310 D-6311 D-6312 D-6313; do git grep -l -F -e "- **$d** — " origin/main -- docs/superpowers/plans; done
 for n in $(seq 5763 5781); do d="D-$n"
   printf '%s %s\n' "$d" "$(git grep -l -F -e "- **$d** — " origin/main -- docs/superpowers/plans | wc -l)"; done
 ```
@@ -11085,7 +11554,7 @@ Expected:
 - then nineteen lines, the W2 block of 19 numbers: `1` for every number except W2-2b's three (decisions §7 names them), which read `0` until W2-2b's plan merges, and then their path is that PR's plan, never this one. D-5765 and D-5766 read `1`: W2-2a's plan defines them, merged in the same docs PR as this one.
 
 Two outcomes are findings to report to the coordinator, never something to fix here:
-- a second path for any of the five, or any count above 1;
+- a second path for any of the eighteen, or any count above 1;
 - a `first-citing` that differs from `entry-task`. The fix is the owning task's citation, or the entry's task number, whichever the coordinator rules.
 
 - [ ] **Step 2: The spec is untouched, and W2-5b's three sentences stand.** From the repository root:
@@ -11210,7 +11679,7 @@ A run that reports only skipped tests selected nothing, and its step is not gree
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts
 ```
 
-Expected: `Test Files  1 passed (1)`, every case passed or skipped. The skips are the root-only cases (`process.getuid() === 0`) and the darwin-only rows. W2-4's pins are all among the passes: RP1-contract, RP2, RP3-admission, RP4, RP9, the limits parity over `rolloverCases`, step 0a and the probe. So are Tasks 1 to 7's:
+Expected: `Test Files  1 passed (1)`, every case passed or skipped. The skips are the root-only cases (`process.getuid() === 0`) and the darwin-only rows; measured at the final tip on a non-root Linux box: `Tests  773 passed (773)`, no skip. W2-4's pins are all among the passes: RP1-contract, RP2, RP3-admission, RP4, RP9, the limits parity over `rolloverCases`, step 0a and the probe. So are Tasks 1 to 7's:
 - RP5, with the straddle and two-copy CONTROLs;
 - RP1-writer and RP3-writer, where a refused account leaves the stub's log absent;
 - W2-D61 to W2-D75's admission, Baseline B, answerability (D-5780's five pins) and freeze pins;
@@ -11490,10 +11959,30 @@ Every guard this PR adds is in Tasks 1 to 7, each with its own mutant list.
 
 ## Deviations found
 
-Five numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1). A number issued during the build is appended below by the commit that first cites it.
+Eighteen numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found; D-6305 and D-6306 were issued for the two departures Task 6's review found; D-6307 was issued for the one Task 7's review found; D-6308 was issued for the one the whole-branch review's Critical found; D-6309, D-6310 and D-6311 were issued for the first three Important ones found; D-6312 was issued for the fourth, W2-D63's sampling half; D-6313 was issued for the fifth, the pilot's seed. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-5780** — `history-w2-answerable-timed` (Task 5; W2-D70, with spec erratum E19, which W2-5b amends in place): W2-D70's answerability gains a fourth clause. A source entry needs a non-null `ts_ms` at or before boundary N's own `ts_ms` (T_N). A sidecar source needs a non-null `entry_id` whose entry passes the same test. This departs from spec §10.2's "Answerability" bullet ("F must occur in a span row with searchable provenance, within the sidecar FTS window"), which reads no time and admits a sidecar however it is linked. The ground is the as-of cut (W2-D34, W2-D35). A NULL-ts row and a sidecar with a NULL `entry_id` are absent under it. A fact sourced only from one would be asked of a treatment arm whose own cut can never show it, and its miss would measure the cut, not recall. With clause 4, every admitted fact's source is visible under the cut: a leaf-N span row precedes the boundary, so the positional clause never hides it. Read with clause 1, the sidecar sources are those linked to a searchable span row and those linked to nothing in the span's transcript, so the unlinked ones reach clause 4 and are counted. What the clause removes is reported, never hidden: the `answerable` stage drops such a candidate as `unanswerable-untimed`, apart from `unanswerable`, and sampling counts each (decisions section 7: "Facts carried only by NULL-ts rows or by sidecars with no entry are never asked"). The spec sentence is amended by W2-5b (E19); this plan edits no spec. Pins: Task 5's clause-4 cases (a source stamped exactly T_N is answerable, one stamped one ms after is not, a NULL-ts row, an unlinked sidecar, a sidecar linked to a NULL-ts row) and the stage's two words; mutants M6 to M9, M12 and M13 of Task 5.
 - **D-6277** — `history-replay-pointer-lines` (Task 1; W2-D75 item 1, spec §10.2 "Reconstruction"): every whole line of the summary row that names a path ending in `.jsonl` becomes `[pointer removed]`, where the spec says "its transcript-pointer line", one line. Neither the spec nor any code, fixture or lib helper in the tree defines that line, so the rule is the widest reading that still removes it: any whole line naming a `.jsonl` path (`/^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm`). It removes more than the spec's text says, at no quiz cost: any fact on such a line is in B, which keeps the summary whole with its pointer (W2-D68 (1)), so it is never admitted. The fidelity pilot's token count moves by those lines only. Redaction runs first and the replacement after (W2-D54: whole, then any cut). Pins: Task 1's `removePointerLines` case and its item 1 case over the fixture store; mutant M2 of Task 1.
 - **D-6278** — `history-replay-baseline-kept-not-a-stop` (Task 4; W2-D68 (3)): W2-D68 (3) stops B's part 3 at "the first operator-provenance or assistant row" after the summary. A kept(N) member there is part 2's row (W2-D68 itself pins "a post-summary kept member"), so Task 4 passes over it: it is never the stop, and the rows after it, the served card among them, stay in B. The departure only grows B, so admission rejects more facts, never fewer. Pins: Task 4's case 'a kept member after the summary is never the stop' with its CONTROL; mutant M9 of Task 4.
 - **D-6279** — `history-replay-baseline-object-leaves` (Task 4; W2-D68's second rendering): W2-D68's second rendering is "its `ftsTextOf` string leaves". `ftsTextOf` answers `''` for an object body, and an attachment row's stored body is its `attachment` object, so the served card would enter B only as JSON, its quotes escaped. B takes every string leaf of an object body instead. This only grows B, so admission rejects more facts, never fewer. Pins: Task 4's case 'part 3 takes the rows after the summary', whose CONTROL is the card's JSON rendering; mutant M6 of Task 4.
 - **D-6280** — `history-replay-spend-budget-operator-given` (Task 7; decisions §4 part 2, §5 act 17): `open --finalize` takes part 2's `spend_budget` from the operator (`--spend-budget N`) and copies the pilot-result file's fields as given, where §4 derives it from the pilot's extrapolation for the frozen list times 1.25. That extrapolation is W2-5b's usage pilot and has no shape at this base. §5's act 17 already has the operator approve the spend budget, so the figure the operator approves is the figure recorded. W2-5b, which defines the pilot result's producer, tightens `open --finalize` to derive it and refuse a mismatch (a ledger carry, R8). Pins: Task 7's `open --finalize` case that prints part 2 with `spend_budget` equal to the given flag, and `FLAG_SPECS`' `spend-budget` entry.
+- **D-6301** — `history-replay-unknown-body-word-throws` (Task 1; D-6238, the Drifts row "Each word keeps its own discard; an unknown word throws"): Task 1's `entryBodyOf` turned every body state other than `body` and `unparseable` into `{ state: 'lost', word }`, so a word `expandEntryBody` gains later reached `SUMMARY_LOST[word]` or `MEMBER_LOST[word]` as `undefined` and `reconstructPayload` answered a discard with no word. The header's rule governs: `entryBodyOf` throws a `TypeError` naming the state unless both maps own it. A wordless discard would be counted under nothing, and the operator would read an unexplained shortfall. Pins: Task 1's D-6301 case (a stub `expandEntryBody` answering an unknown state throws through `entryBodyOf` and `reconstructPayload`, and a known body-less state keeps its own discard through the same stub); mutant F1 of the fix round.
+- **D-6302** — `history-replay-unrenderable-body-discard` (Task 1; W2-D75 items 1 and 2): Task 1's `reconstructPayload` rendered a summary or kept-member body with `renderEntryText` and `JSON.stringify` unguarded, so a body nested past about 4,000 levels (which parses, far inside lib's `JSON_DEPTH_MAX`, and so reaches `expandEntryBody` as `body`) threw a `RangeError` that ended the run, where `recall.mjs`'s `expandEntryText` already catches the same error. The rendering is now guarded by `renderOrNull`, which catches `RangeError` only and rethrows anything else, and the boundary is discarded under one new `RECON_DISCARDS` word, `body-unrenderable`, kept as the list's LAST word, so an appending task inserts before it (Tasks 2 to 4 do): a counted discard, never a refusal (R5). Pins: Task 1's D-6302 case (a 10,000-level nested kept member and summary row each discard `body-unrenderable`) and the `RECON_DISCARDS` case; mutants F2a, F2b and F2c of the fix round.
+- **D-6303** — `history-replay-unrenderable-mined-body-discard` (Task 2; W2-D65, with D-6302): Task 2's `mineBoundary` rendered each mined row's body with `renderEntryText` unguarded, so a mined body nested past about 4,000 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended the run. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and the boundary is discarded under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 rules for reconstruction; no word is added, and the word is kept last in the list. Pins: Task 2's D-6303 case (10,000 deep discards, CONTROL 2,000 deep mines; the limit is about 4,000 and moves with the Node build, so each side is far from it), the list pin that `body-unrenderable` is last, and the unwrapped-render mutant of the fix round.
+- **D-6304** — `history-replay-baseline-unrenderable-body-discard` (Task 4; W2-D68, with D-6302 and D-6303): Task 4's `baselineOf` rendered each stored body of parts 1 to 3 with `renderEntryText` unguarded, so a body nested past about 4,000 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended B's build, and the run with it. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and B fails closed under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 and D-6303 rule; no word is added, and the word stays last in the list. The string leaves need no guard (`ftsTextOf` and the iterative leaf walk never throw). Pins: Task 4's D-6304 cases (a 10,000-deep summary row, kept member and post-summary row each discard `body-unrenderable`, CONTROL 2,000 deep builds); mutants MA (the `renderOrNull` wrap) and MB, MC and MD (each part's null check).
+- **D-6305** — `history-replay-failed-writer-run-is-malformed` (Task 6; W2-D72, R6): Task 6's `ask` parsed the run's result text without looking at its exit, so a run killed on timeout after it printed a result event, or one that exited non-zero with a `QUESTION:` line, answered `state: 'question'` and could reach the frozen list while `failed_runs` also counted it, and `malformed_replies` counted every `writer-malformed`, failed runs included. R6 says a run that fails, or shows no result event, is `writer-malformed` and is counted apart from malformed replies. `ask` now returns `writer-malformed` (with its run) before parsing when the code is not 0, a signal ended the run or no result event showed, and `sourceQuiz` counts `malformed_replies` only for runs that did not fail, so the `writer-malformed` drop count is failed runs plus malformed replies. Pins: Task 6's print-mode-exit case (with an exit 0 CONTROL) and its counting case; mutants X1 and X2.
+- **D-6306** — `history-replay-mined-drops-only-for-mined-boundaries` (Task 6; W2-D65, W2-D71): the brief's `sourceQuiz` merged `mineBoundary`'s site-drop counts before it checked that the boundary was mined, so a boundary discarded whole (for example `body-unrenderable` after a dropped site) put its partial drops into `counts.mined` as well as counting once under `counts.discards`. The merge now follows the check, so a discarded boundary is counted once and `counts.mined` describes mined boundaries only. Pins: Task 6's D-6306 case (a short command, then a 10,000-deep input, in the real sweep's store) with its plain-box CONTROL; mutant X3.
+
+- **D-6307** — `history-replay-writer-admission-before-out` (Task 7; R10, W2-D52, W2-D55, W2-D56): R10 rules that a refusal that needs no store and no spawn answers before `prepareOut` makes `--out`, but the brief pinned only the writer model. Four more refusals of `pilot-source` and `quiz-source` answered only inside `openWriter`, after `--out` existed: `roster-invalid` (`readRoster`), `account-refused` (`admitAccount`), `wrapper-unmeasured` (`wrapperSha`) and a limits row at the threshold at open (`limits-threshold` and the other limits words). None needs a store or a spawn (a limits row, a roster and a wrapper are files). Both subcommands now ask them in the module-private `refuseWriterAdmission` before `prepareOut`, in `openWriter`'s order and through the same functions, never a second spelling; the limits half of `batchGate`'s gate was factored into `refuseOnLimits`, which the gate and the pre-check both call. The pre-check writes nothing. `openWriter` keeps its own calls unchanged and stays the authority at open, so it is a pre-check only: a state that changes between the two still refuses in `openWriter`, after `--out` was made, and that race leaves an empty `--out`, which is accepted. The `--version` probe is a spawn and stays after `prepareOut`; W2-4's `step0aCommand` is left alone (D-5985). Two orders differ from `openWriter`'s, and both are this number's: the limits word now answers before `budget-exhausted` (the pre-check runs `refuseOnLimits` alone, where `batchGate` checks the budget first, and the budget needs the ledger under `--out`, which does not exist yet), and the roster, account, wrapper and limits words now answer before `prepareOut`'s `out-refused` words (an `--out` that cannot be used and an account over the threshold used to answer `out-refused`; they now answer the limits word). The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the Task 7 review's question. Pins: Task 7's two `it.each` sets (one per subcommand; per refusal a case that answers its word with no `--out` and a CONTROL where, with the input admissible, `--out` is made); mutants M48 and M49 (the early call removed, red on `--out` existing, not on the word), M50, M51, M52 and M53 (the helper without each of its checks).
+
+- **D-6308** — `history-replay-no-redaction-of-serialised-text` (Tasks 1, 2 and 6; W2-D54, W2-D67): the driver serialised a tool_use input with `JSON.stringify` and then ran `redactField` over the text. A secret that follows a newline inside a string leaf sits behind a JSON `\n` once serialised, so the `n` glues onto its run and neither layer of `redactField` sees the value whole (lib's own section 8.3 comment says so). Measured leaking, for the AKIA-, ghp_- and sk-ant-shaped kinds end to end and for the pair-index kind at unit level only (`makePairIndex` with no belt, which models a recorded-only pair whose secret file is no longer loaded; the file-backed index's belt masks it even glued, so Task 7's end-to-end case discriminates the other three), into the writer's stdin and `<out>/<section>/writer/<qid>.input.json` under both writer inputs (an `error` candidate's pair line under the default excerpt, the leaf-span base under `leaf-span`), and into a kept member's rendering, which feeds `reconstructPayload` and the fidelity payloads. A JSON value is now redacted AS A VALUE before anything serialises it: `maskValue` maps every string leaf and every object key through lib's `redactFinalJson` (the field pass, then the final belt, per string) and rebuilds the structure, and `renderMasked` is `renderEntryText` over that. This does not bend W2-D54: each string leaf IS the field, `redactField` still runs on every one before any cut, and `redactFinal` on top only adds; the decode cap and the context rules that read a JSON pair on one line still run, because `redactForSpawn` is applied to the rendering afterwards as it always was. `redactFinalJson` does not touch object KEYS (in the envelope they are field names fixed in code), and a stored tool_use input's keys are data, so `maskValue` redacts each key too and a key that follows a newline inside the key is masked (pinned); two keys that mask to one string collapse to the later value, the fail-closed direction. Every site of `redactField`, `redactFinal` and `redactForSpawn` in the driver was read for the shape "redacting text that is already JSON-serialised". Fixed: mining carries the body a span row was rendered from (`body`) and the value a paired tool_use input was serialised from (`value`) beside their text, and the writer's `writerField` masks them as values and renders again, for the pair line (`writerInputOf`, excerpt) and the span (`writerInputOf`, leaf-span); `renderKeptMember` masks the whole body as a value before any block of it is rendered (a tool_use input, an object or block-list `tool_result` content, a tool_use nested in a result, an object body); `reconstructPayload`'s summary renders through `renderMasked` (an object summary body is JSON-rendered), and the tool's NAME is masked as a value too: the excerpt's pair line rendered the raw `answered.block.name` beside a masked input (a re-review's probe put a separated AKIA-shaped key in it and got it whole into the writer stdin and `input.json`), so `writerInputOf` now passes the name through `redactFinalJson`, and `renderKeptMember` does the same for its role tag (`[<row type>]`), the other stored string it interpolates beside a masked body. These two sites stay under this number as W2-D54 conformance on the same writer-stdin path (every stored string is redacted whole before it is spliced into spawn text) and take none of their own. The defect differs in kind from the entry's first shape: the name and the tag were never redacted at all, where the others were redacted after serialising. So the rule they serve is the coordinator's must-hold (a), "no text reaches a spawn stdin or a file under `--out` unredacted", and not the ruling's "no site redacts already-serialised JSON", which they do not breach. Already safe, each a raw string and not serialised JSON: the excerpt's leaf (`writerInputOf`; a Bash command, a path, a `tool_result`'s text or a sha leaf, all strings), `screenRedaction` (it redacts `fact_raw`, `fact` and the leaf text, strings), the question in `reconstructPayload` (plain text), the user-text rows of `fidelityStdins` (`userTextOf` joins text blocks into one string), and `toolResultText` (it receives text `renderKeptMember` has already masked as a value). Baseline B renders bodies as text but stays in memory and is never spawned (W2-D68). A body nested past the stack cannot be masked or rendered again at the writer (mining rendered it from a shallower stack): it is discarded under the new `FACT_DROP_REASONS` word `writer-input-unrenderable`, appended in place after `writer-input-over-cap`, never a throw after `--out` and spend. `repo_roots` (an epoch's `cwd` and `cwd_real`, carried into `frozen.json` and `sourced.json`) are screened too: `screenRedaction` drops a candidate whose root `redactField` changes, as `redact-fact`. `screenRedaction` keeps the field form for `fact_raw`, `fact` and the leaf, so a fact the final belt alone would alter under `leaf-span` drops at the writer as B's `writer-fact-unplaced` (D-6309), counted, and not as `redact-fact`. The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 7's end-to-end case under both writer inputs (the four kinds absent from the writer stdin and every file under `--out`, with the keys in the store's transcript as CONTROL), the fix-wave describe (`writerInputOf` over mined candidates under both inputs, `renderKeptMember` over four body shapes, the key case, the repo-root case, the unrenderable case), and Task 1's store case (an object summary, a kept tool_use input and an object `tool_result` content); mutants FW-A1 to FW-A7 and FW-R1a, FW-R1b (the excerpt's tool name unmasked, and the role tag unmasked; the kept body unmasked; the pair line and the span as text; keys not masked; repo roots not screened; the summary as text; the writer's render unguarded).
+
+- **D-6309** — `history-replay-fact-placed-by-escaped-spelling` (Task 6; W2-D72, W2-D67): under `leaf-span` the writer's base is the span's rows rendered as JSON, so a command or path fact holding a `"`, a backslash or a control character never occurs in it verbatim, and `windowExcerpt` threw a `TypeError` that ended the run as an internal error after `--out` was made and the earlier asks were spent (a resume hit the same candidate again). `writerInputOf` now places the fact first, by `factSpellingIn`: its raw spelling, else its JSON-escaped spelling (`JSON.stringify(fact_raw).slice(1, -1)`, the spelling `renderEntryText` writes), and hands `windowExcerpt` the spelling that occurs, so the excerpt holds the escaped form and the writer reads it as JSON text. A fact neither spelling of which occurs (the final belt masked part of it under `leaf-span`, which `screenRedaction`'s field form does not see) is a counted discard under the new `FACT_DROP_REASONS` word `writer-fact-unplaced`, appended in place after `writer-input-unrenderable`; the pure `windowExcerpt` keeps its own `TypeError` for a fact absent from its base (its pinned case), and the sourcing path never reaches it. The general rule under this number is the ruling's: a data case reached after `--out` or after spend never exits as an internal error, it refuses or drops under a counted word. The other throws on that path were read and are not data cases: `qidOf` on an empty `generation` is D-6310's, the unknown-body-state throws are D-6301's guard against a future word, and `sampleQuestions`' candidate checks read fields the driver builds. The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 6's `D-6309` case through the real `sourceQuiz` and `writerInputOf` under `leaf-span` (a quoted command produces a question, placed by its escaped spelling, with the raw spelling absent from the base as CONTROL; a tampered fact is the counted drop), the fix-wave describe (a path with a backslash, a quoted command and a command with a newline and a tab, each under both inputs; `factSpellingIn`; the unplaceable fact under both inputs; the list pin), and the amended case that `windowExcerpt` alone throws; mutants FW-B1 (no escaped spelling), FW-B2 (an unplaceable fact reaches `windowExcerpt`) and FW-B3 (the raw spelling only, the code before this fix). The rule reached a second class of data case at review (fix round 1): a signed record's own numbers. The gate's validator types `pilot_budget`, `limits.threshold_pct`, `limits.max_age_ms`, `quiz.target` and `quiz.caps.family`, `boundary` and `kind_per_family` as bare integers with no range, and `open --draft --overrides` can set each of them, so a signed record could carry a budget of 0, a threshold of 150 or a target of 0. `batchGate` throws a `TypeError` on the first three after `--out` was made, and `sampleQuestions`' `assertCount` throws on the quotas after `--out` and after the writer's `--version` probe. `refuseOutOfRangeValues` (Task 7) now asks every one of those seven fields, the whole of what `batchGate` and `sampleQuestions` assert on, before `prepareOut`: each a positive safe integer, and the threshold also at most 100. A bad field refuses `record-invalid`, the word for a record the gate would not sign, naming each as `<path> out-of-range`; it writes nothing, and the two throws stay as internal assertions behind it. It is one function, called from `refuseWriterAdmission`, which both subcommands call before `prepareOut`: `quiz-source` hands it the record's values, and `pilot-source` its `--budget`, `LIMITS_DEFAULTS`, the draft's caps and `--n-usage`, which the flag grammar and the constants already hold in range (so the pins reach it through `quiz-source`; the pilot's `--n-fidelity` is a flag the same grammar holds to a positive integer, and `sampleFidelityBoundaries` is the only reader of it). A threshold of 0 or below now answers `record-invalid` where it used to answer `limits-threshold` from the pre-check. Tightening W2-3's validator in the gate is not this PR's (R2). The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 7's `D-6309` set (one case per field through `open --draft --overrides`'s builder, each refusing `record-invalid` with no `--out` made and no spawn, with a CONTROL at the boundary value 1, or 100 for the threshold, which passes the check; the all-fields case and the unit case for non-integers); mutants FW-H1 and FW-H2.
+
+- **D-6310** — `history-replay-legacy-families-excluded` (Task 6; W2-D71, W2-D73): `admitStoreBoundaries` answers generation `''` for a session from before generations, and `sourceQuiz` kept it in both modes: `quizPopulation` and the pilot's fidelity walk carry the family on, and `qidOf` (which needs a non-empty generation) threw a `TypeError` after `--out` was made. Reproduced over a store the real sweep built from a family seeded with no generation. `sourceQuiz` now excludes every family whose generation is `''` before it samples anything, in both modes and for fidelity sampling too (the sampler is fed the filtered list), and counts them in families under a population-exclusion key of its own: `counts.population.legacy`. `quizPopulation`'s own `excluded` object keeps its three keys (its pins stand); quiz mode's `counts.population` gains `legacy` beside them, and pilot mode, which never ran `quizPopulation`, now reports `counts.population` as `{ legacy }`. This matches `verify --registry`'s rule (D-5773): a legacy family is not a family of the quiz. The 60-question and 12-family floor stays honest, since it counts what is frozen. The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 6's `D-6310` case over a store with a legacy family beside a UUID family (both modes complete; the counter reads 1; no entry and no fidelity boundary carries `''`; the writer is asked about the UUID family only; CONTROL: both boundaries admitted, and the plain box counts 0) and the three amended `counts.population` pins; mutants FW-C1 (no exclusion, the `TypeError`) and FW-C2 (fidelity sampling fed the unfiltered list).
+
+- **D-6311** — `history-replay-preflight-no-spawn-half-before-out` (Task 7; R10, W2-D56, D-6307): D-6307 moved four refusals ahead of `prepareOut`, but the preflight's own file-read comparisons still answered only inside `openWriter`, after `--out` was made and after the `--version` spawn: `tree-unmeasured` and `tree-moved` and `wrapper-moved` in both `pilot-source` and `quiz-source`, and `code-unmeasured` and `code-changed` in `pilot-source` (`quiz-source`'s `recheckCode` already answers its code words first). Each needs only file reads. `preflight` is split into `preflightVersion` (the spawn's comparison, `version-unmeasured` and `claude-version-moved`) and the exported `preflightFiles` (the release stamp, the wrapper and the four code shas), and `preflight` composes the two in its current order (version first, then the files), so its words and their order at open are byte for byte unchanged and W2-4's pins, the pure order pin included, stand untouched. `refuseWriterAdmission` now calls `preflightFiles` itself, the same function and no second spelling, with each subcommand's expected values: `pilot-source` passes its step 0a output, `quiz-source` the one `expected` object it hands `openWriter`, built once. The precedence changes in one place: with both the Claude Code version and the tree moved, the pre-check answers `tree-moved` before `--out` exists, where open would have said `claude-version-moved`; the version alone still refuses at open, after `--out`, because only a spawn can measure it. `pilot-source` also opens its store (`openReplayStore`, read-only through `openReader`, writing nothing) before `prepareOut`, as `quiz-source` does, inside one `try`/`finally` that closes it, after the admission refusals so their order is unchanged; a node with no store now leaves no `--out`. The colon-in-realpath check (D-5813) stays after `prepareOut`. D-6307's wrapper CONTROL (the planted wrapper recorded as null) now refuses `wrapper-moved` at the pre-check, so its fixture records the planted wrapper's sha; that is the same precedence change seen from the other side. The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 7's `it.each` sets gain `tree-unmeasured`, `tree-moved` and `wrapper-moved` rows for both subcommands (the word, no `--out`, sourceQuiz uncalled and no spawn at all, even `--version`; CONTROL: admissible makes `--out`), the two `pilot-source` code cases through the real driver in a copied tree, the both-moved precedence case with its version-alone CONTROL, and the no-store case; mutants FW-D1 (the early call removed, red on `--out` existing and not on the word), FW-D2 (the store opened after `--out`) and FW-D3 (`preflight` composing the files first, red on W2-4's order pins).
+
+- **D-6312** — `history-replay-sha-short-dropped-at-40` (Task 6; W2-D63, W2-D71): W2-D63 says "At 40, quiz-source samples only 40-character SHA facts, and the record states this." Nothing implemented the sampling half: at a `sha_min_prefix` of 40 the 7 to 39 character sha facts were still sourced and frozen, yet none could ever score correct (the gate's `labelCorrect` needs `min(answer run, F)` of at least the prefix). `sourceQuiz` now takes the prefix as an argument of its own, `shaMinPrefix`, and never inside the signed plan object: `quiz-source` passes `rec.record.labeller.sha_min_prefix`, `pilot-source` the `--sha-min-prefix` flag's value (the flag's default is part 1's 7). The argument must be one of the two values the gate signs (`SHA_MIN_PREFIXES`) or it is a `TypeError`, so a caller that forgets it fails loudly instead of defaulting. A sha fact shorter than the prefix is dropped under the new `FACT_DROP_REASONS` word `sha-short`, appended in place after `writer-fact-unplaced`, counted in `counts.mined`, right after mining and before deduplication, sampling and the caps, so every quota counts eligible facts only. It is not `LABELLER.sha_admit_prefix` (7), which cuts the admission variants of a sha F and is untouched. At 7 nothing is dropped, since a mined sha run is 7 to 40 characters long. The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 6's `D-6312` case over a store whose command holds a 12-character and a 40-character sha (at 40 the short one is dropped `sha-short` and counted, the long one and the command are asked; CONTROL: at 7 both shas are asked and the counter reads 0; a prefix outside the signed two is a `TypeError`), and Task 7's two hand-off cases (`quiz-source` passes part 1's prefix, 40 and 7; `pilot-source` passes `--sha-min-prefix` and not inside the plan); mutants FW-E1 (no drop), FW-E2 (`quiz-source` passes 7), FW-E3 (`pilot-source` passes 7) and FW-E4 (the prefix read from the plan).
+
+- **D-6313** — `history-replay-pilot-seed-pinned-under-out` (Task 7; W2-D55, W2-D71): `pilotSourceCommand` drew `deps.seed()` on every invocation, and nothing under `--out` pinned it. W2-D55 says a stopped batch can be resumed, but a re-run after a budget or limits stop drew another seed, sampled other families and questions, orphaned the earlier runs (their spend still counts) and spawned new ones. The seed is now pinned at `<out>/pilot/seed` (`PILOT_SEED_FILE`): one line of 64 lowercase hex, mode 0600, written through the D-5986 writers (`readPlain`, `writePlain`) after `claimOut` and after `openWriter`'s preflight, and before `sourceQuiz` makes the first ask. When the file is there it is read back and used, and `deps.seed()` is called only when it is absent; a file that is not a regular file, cannot be read, or is not exactly a seed and a newline refuses `out-refused` (`pilot/seed is not a seed`, or the file's own word). No flag takes a seed (`drawSeedHex`: "No flag ever takes a seed"; the `flags_accepted` parity pin is untouched) and `deps.seed` stays injectable. The file holds no key and no Baseline B text, so the `--out` walk stays green. Pilot output still records the seed it used (`seed`). The coordinator's ruling in the operator's place under the directive of 2026-10-19, after the whole-branch review. Pins: Task 7's re-run case (stop with `--budget 1`, re-run with a larger budget and a different injected seed, over a `sourceQuiz` whose two items come from `seedHex`: the re-run asks the same items, so the first ask is reused and only one new `-p` run shows in the stub log, the ledger holds two lines, and the pinned seed and the output's `seed` are the first; CONTROL: a fresh `--out` draws `deps.seed()` and asks other items, so the items do depend on the seed), its refusal case (five malformed seeds and a directory), and the file's mode; mutants FW-F1 (always draw), FW-F2 (never pinned), FW-F3 (mode 0644) and FW-F4 (a lenient read).

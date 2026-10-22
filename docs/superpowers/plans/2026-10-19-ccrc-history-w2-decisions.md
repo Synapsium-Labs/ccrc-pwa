@@ -880,6 +880,7 @@ build · **yes** (`D-5766`) · W2-2a (the cut), W2-5a (the count) · SEAM-b1, wi
 - **A leaf** is visible iff its `boundary_entry_id`'s entry is visible.
 - **A parent** is visible iff every descendant leaf is visible, whenever it was formed.
 - **Amended (coordinator, 2026-10-22, W2-2a plan):** a node with no descendant leaf, which only a damaged store holds, is hidden under any cut. Its gist cannot be checked against the cut, so it fails closed.
+- **Amended (coordinator, 2026-10-22, W2-2a build):** under a cut, a leaf other than N is also hidden when its summary row is hidden, or when its stored summary blob is no longer what the read-time pick names (D-6282, D-6284); and a node is hidden when any condensed node at or below it has no leaf below it (D-6283). Each fails closed. These are the coordinator's rulings in the operator's place under the directive of 2026-10-19 (W2-2a's whole-branch review and review 778), each defined in the W2-2a plan.
 - `nodes_fts` hits and `node_refs` follow their node's visibility.
 - **An epoch** is visible iff one of its transcripts holds a visible entry.
 - `entry_variants` and sidecars follow their entry. A sidecar with a NULL entry_id is absent.
