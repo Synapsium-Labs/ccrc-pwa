@@ -20,6 +20,7 @@ import { DIALOG_TAB_REFUSE_TEXT } from '../src/session/askWords';
 import { createSessionStore } from '../src/stores/session';
 import { CC296_LONG, TOOLS_SIZES, pane } from './askPanes';
 import { declValue, ruleIn } from './cssRule';
+import { askFixture } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -289,6 +290,24 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     expect(tab).not.toHaveBeenCalled();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: review().id, to: 'prev' });
+  });
+
+  // The transcript's copy is ONE question, so its own place in the copy is always 0; the key place is the question's
+  // place on the pane's tab row, by its header (`headerTab`). ← must work on tab 2 of a three-tab pane (D-6325).
+  it.each([
+    ['Tracing', true, 'tab 2 of 3: ← moves the pane back'],
+    ['Cache', false, 'tab 1 of 3: nothing before it'],
+    ['A header no tab carries', true, 'a place it cannot tell: the server decides'],
+  ])('a transcript copy with the header %s: ← sends %s (%s)', async (header, sends) => {
+    pointer('fine');
+    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const fx = askFixture(2).dialog!;
+    renderAsk({ ...fx, ask: { ...fx.ask!, header } }, null);
+    await frame();
+    expect(document.querySelector('[data-source="transcript"]')).not.toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+    if (sends) expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: fx.id, to: 'prev' });
+    else expect(tab).not.toHaveBeenCalled();
   });
 
   it('the review\'s ↑/↓ wrap between Submit and Cancel', async () => {
