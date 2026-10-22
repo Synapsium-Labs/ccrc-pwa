@@ -1124,8 +1124,8 @@ button.metachip:active {
   min-width: 0;
   min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
-  /* No ruled box (D-6325): the field opens in place under the `Other` row and is told from the rows by its well. */
-  border: 0;
+  /* The field keeps its own edge (D-6325): "no ruled box between rows" is about the rows; this is a typeable field. */
+  border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-well);
   /* Same well trap as .pr-body-preview, and the worst instance of it in the
@@ -1144,17 +1144,18 @@ button.metachip:active {
 .dlg-reply-input::placeholder { color: var(--syn-comment); }
 /* Inert while a send is under way (its own, an option's, or a commit's): the
    text stays legible in the placeholder's muted ink, which reads on the
-   always-dark well in both themes (the well has no frame to dash since
-   D-6325, so the muted text alone says the field is not typeable). Safari paints a disabled field's text through
+   always-dark well in both themes, and the frame goes dashed, so the field no
+   longer looks typeable. Safari paints a disabled field's text through
    -webkit-text-fill-color and dims it with its own opacity; both are set so
    every engine shows the same field. */
 .dlg-reply-input:disabled {
   color: var(--syn-comment);
   -webkit-text-fill-color: var(--syn-comment);
   opacity: 1;
+  border-style: dashed;
   cursor: default;
 }
-.dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
 /* Send and its busy face share one grid cell (AskParts.tsx), so the button is
    as wide as the wider face whichever shows: its width never changes while
    busy, and neither does the field's beside it. The busy face is the chat's
