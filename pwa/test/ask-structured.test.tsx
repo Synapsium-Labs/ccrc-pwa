@@ -5,6 +5,8 @@
 // asserts the debris is ABSENT from the DOM and, beside it, that what the surface does show is PRESENT (the transcript's
 // question, the can't-read sentence with its way to the terminal, the review's fixed words). The answer path is the
 // one it always was: a tap answers through `/dialog` with the dialog's id and the printed index.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Dialog, FleetSession } from '../../shared/api';
@@ -129,7 +131,8 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
     renderSheet(2);
     expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question })).toBeInTheDocument();
     for (const o of HOOK_QUESTIONS[0]!.options) {
-      expect(screen.getByText(o.label)).toBeInTheDocument();
+      // `Redis (Recommended)` is `Redis` and a tag: the label's own words.
+      expect(screen.getByText(o.label.replace(/ \(Recommended\)$/, ''), { selector: '.opt-label' })).toBeInTheDocument();
       expect(screen.getByText(o.description!)).toBeInTheDocument();
     }
     expect(document.querySelector('[data-source="transcript"]')).not.toBeNull();
@@ -336,5 +339,172 @@ describe('the answer path is unchanged (D-6325)', () => {
     expect(screen.getByRole('button', { name: 'Allow' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
     expect(eyebrow().querySelector('.ask-who')?.textContent).toBe(`${ASKER_SESSION} · ${ASKER_PROJECT}`);
+  });
+});
+
+// D-6325, S3: the rows' copy and shape. The label is the row's name (a trailing `(Recommended)` leaves it for a tag), the
+// description sits under it as its own element, and the free-text row is a row of the list, `Other`.
+describe('the rows\' copy: Recommended, label over description, Other (D-6325)', () => {
+  const rowOf = (name: RegExp): HTMLElement => screen.getByRole('button', { name });
+
+  it('a trailing (Recommended) becomes a tag and leaves the label; \'Recommended reading\' stays whole', () => {
+    renderSheet(1);
+    const first = rowOf(/^Redis/);
+    const label = first.querySelector('.opt-label')!;
+    // The label's own words are `Redis`; the tag is a Chip after them, reading `Recommended`.
+    expect(label.firstChild?.textContent).toBe('Redis');
+    expect(label.textContent).not.toMatch(/\(/);
+    const tag = label.querySelector('.chip');
+    expect(tag?.textContent).toBe('Recommended');
+    expect(tag?.previousSibling?.textContent, 'the tag comes after the label').toBe('Redis');
+    // Only the option that carried it wears it.
+    expect(document.querySelectorAll('.opt-label .chip')).toHaveLength(1);
+    expect(dom()).not.toContain('(Recommended)');
+    cleanup();
+
+    // Any case, any spacing; a label that merely contains the word keeps it whole and wears no tag.
+    const fx = askFixture(1);
+    const ask = structuredClone(fx.ask!);
+    if (!('questions' in ask)) throw new Error('fixture 1 is a question envelope');
+    ask.questions[0]!.options = [
+      { label: 'Fast path (RECOMMENDED)', description: 'Skips the cache.' },
+      { label: 'Recommended reading', description: 'Starts from the docs.' },
+      { label: 'Read the (Recommended) docs first' },
+    ];
+    const dialog: Dialog = {
+      ...fx.dialog!,
+      options: [
+        { index: 1, label: 'Fast path (RECOMMENDED)' }, { index: 2, label: 'Recommended reading' },
+        { index: 3, label: 'Read the (Recommended) docs first' }, { index: 4, label: 'Type something.' },
+        { index: 5, label: 'Chat about this' },
+      ],
+    };
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    const labels = [...document.querySelectorAll('.opt-label')].map((l) => l.firstChild?.textContent);
+    expect(labels.slice(0, 3)).toEqual(['Fast path', 'Recommended reading', 'Read the (Recommended) docs first']);
+    const tagged = [...document.querySelectorAll('.opt-label .chip')].map((c) => c.closest('.opt'));
+    expect(tagged).toHaveLength(1);
+    expect(tagged[0]?.querySelector('.opt-label')?.textContent).toBe('Fast pathRecommended');
+    expect(tagged[0]?.querySelector('.opt-desc')?.textContent).toBe('Skips the cache.');
+  });
+
+  it('each option\'s label and description are separate elements, the description after the label', () => {
+    renderSheet(1);
+    const rows = [...document.querySelectorAll<HTMLElement>('.ask-envelope .opts > .opt')].slice(0, 3);
+    expect(rows).toHaveLength(3);
+    rows.forEach((row, i) => {
+      const label = row.querySelector('.opt-label')!;
+      const desc = row.querySelector('.opt-desc')!;
+      expect(label, `row ${i + 1}`).not.toBe(desc);
+      expect(label.contains(desc) || desc.contains(label), 'neither holds the other').toBe(false);
+      expect(label.compareDocumentPosition(desc) & Node.DOCUMENT_POSITION_FOLLOWING, 'the description follows').toBeTruthy();
+      expect(desc.textContent).toBe(HOOK_QUESTIONS[0]!.options[i]!.description);
+      expect(label.textContent).not.toContain(desc.textContent!);
+    });
+  });
+
+  it('Other is a row; choosing it shows the field and Send; Send answers through /dialog/text with the same body as today', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderSheet(1);
+    // A row of the list, after the three options, at the free-text row's printed index (4), saying what it does.
+    const other = rowOf(/^Other/);
+    expect(other.querySelector('.opt-label')?.textContent).toBe('Other');
+    expect(other.querySelector('.opt-desc')?.textContent).toBe('Type your own answer');
+    expect(other.querySelector('.opt-idx')?.textContent).toBe('4');
+    expect(other.closest('.opts')).toBe(rowOf(/^In-process/).closest('.opts'));
+    // Closed until chosen: no field, no Send.
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+    fireEvent.click(other);
+    expect(option, 'choosing Other sends nothing').not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    // Open in place, under the Other row and before the Chat row.
+    const field = screen.getByRole('textbox');
+    expect(other.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const chat = rowOf(/^Talk it over in the chat instead/);
+    expect(field.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.activeElement, 'choosing it puts the cursor in the field').toBe(field);
+    fireEvent.change(field, { target: { value: '  Memcached  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    // The route's arguments are as they were: session, the screen's id, the free-text row's index, the trimmed text.
+    expect(text).toHaveBeenCalledWith(ID, 'dlg-a1', 4, 'Memcached');
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(option).not.toHaveBeenCalled();
+  });
+
+  it('the Chat row reads Talk it over in the chat instead, and answers by its printed index', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderSheet(1);
+    const chat = rowOf(/^Talk it over in the chat instead/);
+    expect(chat.querySelector('.opt-idx')?.textContent).toBe('5');
+    expect(dom()).not.toContain('Chat about this');
+    fireEvent.click(chat);
+    expect(option).toHaveBeenCalledWith(ID, 'dlg-a1', 5);
+    expect(option).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused send keeps the field open with the text, and says why', async () => {
+    const { ApiError } = await import('../src/lib/api');
+    vi.spyOn(api, 'answerDialogText').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-free-text' }));
+    renderSheet(1);
+    fireEvent.click(rowOf(/^Other/));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    });
+    // The text is kept, so the field is open without another tap on Other.
+    expect(screen.getByRole('textbox')).toHaveValue('Memcached');
+    expect(await screen.findByText(/answer box in the terminal holds something else/i)).toBeInTheDocument();
+  });
+
+  it('the foot line names Other where it is offered, and a pick-several question has none and says why', () => {
+    renderSheet(1);
+    expect(document.querySelector('.sheet-foot')?.textContent).toBe('Choose an option, or Other to type your own');
+    cleanup();
+    // A pick-several question: the boxes, no Other row, and the line that sends the operator to the terminal.
+    const multi = askFixture(9).dialog!;
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: multi });
+      store.getState().apply({
+        type: 'ask', key: null,
+        ask: { questions: [{
+          question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+          options: HOOK_QUESTIONS[2]!.options.map((o) => ({ ...o })),
+        }] },
+      });
+    });
+    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: /^Other/ })).toBeNull();
+    expect(screen.getByText('To add your own answer, use the terminal')).toBeInTheDocument();
+    expect(document.querySelector('.sheet-foot')?.textContent).toBe('Choose an option');
+  });
+});
+
+describe('one scroll region (D-6325)', () => {
+  it('an ask sheet\'s title does not scroll on its own: the sheet body is the one scroller', () => {
+    for (const n of [1, 2, 4, 5, 8, 3]) {
+      renderSheet(n);
+      const title = document.querySelector('.sheet-title')!;
+      expect(title.className, `fixture ${n}`).not.toMatch(/overflow-y-auto|max-h-\[38vh\]/);
+      cleanup();
+    }
+    renderSheet(7);
+    expect(document.querySelector('.sheet-title')!.className).not.toMatch(/overflow-y-auto|max-h-\[38vh\]/);
+  });
+
+  it('no stylesheet rule caps an ask surface\'s body at 38vh', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+    expect(css).not.toMatch(/\.dlg-body\s*\{/);
+    // ...nor a rule above the list: each row has its own rule, so a seam above the first reads as a ruled box.
+    expect(css).not.toMatch(/\n\.opts\s*\{/);
+    expect(css).not.toMatch(/max-height:\s*38vh/);
   });
 });

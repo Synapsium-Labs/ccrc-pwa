@@ -15,6 +15,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { OptionRow } from '@ccrc/ui';
+import { declValue, ruleIn } from './cssRule';
 
 afterEach(cleanup);
 
@@ -132,5 +133,38 @@ describe('checked makes the row a checkbox: role, aria-checked, and the box in t
     const el = screen.getByRole('button', { name: /allow once/i });
     expect(el.hasAttribute('aria-checked')).toBe(false);
     expect(el.querySelector('.opt-glyph')).toBeNull();
+  });
+});
+
+// D-6325: label over description, and a tag after the label. The label is the row's name at medium weight; the
+// description sits under it in secondary ink with a clear gap (the body's gap and the description's own margin together
+// are 8px where they were 3px and 2px); a `tag` is drawn right after the label, inside its span, so the label's own words
+// are unchanged and the tag wraps with them. Every OptionRow wears it (the ask sheets' rows, PickSheet's pickers).
+describe('label over description, and the tag (D-6325)', () => {
+  const ui = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'option-row.css'), 'utf8');
+  const px = (v: string | null): number => {
+    const token = /^var\((--[\w-]+)\)$/.exec(v ?? '')?.[1];
+    const tokens = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
+    return Number(new RegExp(`${token}:\\s*([\\d.]+)px`).exec(tokens)?.[1]);
+  };
+
+  it('the label is medium weight and the description is secondary ink with a gap larger than the old 3px and 2px', () => {
+    expect(declValue(ruleIn(ui, '.opt-label'), 'font-weight')).toBe('var(--weight-medium)');
+    expect(declValue(ruleIn(ui, '.opt-desc'), 'color')).toBe('var(--ink-secondary)');
+    const gap = px(declValue(ruleIn(ui, '.opt-body'), 'gap')) + px(declValue(ruleIn(ui, '.opt-desc'), 'margin-top'));
+    expect(gap).toBeGreaterThan(5);
+  });
+
+  it('a tag is drawn after the label inside its span, and the description follows both', () => {
+    render(<OptionRow label="Redis" tag={<i data-testid="tag">Recommended</i>} sublabel="Shared." onClick={() => {}} />);
+    const label = document.querySelector('.opt-label')!;
+    expect(label.firstChild?.textContent).toBe('Redis');
+    expect(label.lastElementChild).toBe(screen.getByTestId('tag'));
+    expect(label.compareDocumentPosition(document.querySelector('.opt-desc')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('a row with no tag draws nothing after the label', () => {
+    render(<OptionRow label="Redis" onClick={() => {}} />);
+    expect(document.querySelector('.opt-label')!.childNodes).toHaveLength(1);
   });
 });
