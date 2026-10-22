@@ -338,21 +338,32 @@
    state word, then its context, about 40px instead of three lines at 61: no fact is dropped (D-5545), a long name still
    wraps, and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a coarse
    pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only: `SessionLine`
-   keeps its three children, and the grid below puts the second (the state word) beside the first. */
+   keeps its three children, and the wrapping flex row below puts the second (the state word) beside the first. */
 @media (min-width: 900px) and (pointer: fine) {
-  /* Two rows: the name and the state word share the first (the state takes only the room its words need, at most 60%
-     of the line, which holds `waiting · needs you` whole at the narrowest column); the context spans the second. A row
-     without a context is one line, on the floor. */
+  /* A wrapping flex row (fix round 1, ruling on F2): the name and the state word share the first line when they fit
+     side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
+     line breaks on the items' max-content sizes, so the state drops to its own line ONLY when the name and it do not
+     fit together, and the name then has the whole line: a long needs-you row is three lines (name, state, context),
+     never four, and a short one stays two. A row without a context is one line, on the floor. */
   .ins-row .sess-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) fit-content(60%);
+    display: flex;
+    flex-flow: row wrap;
+    align-items: baseline;
     align-content: center;
     column-gap: var(--sp-2);
     row-gap: calc(var(--sp-1) / 2);
     min-height: var(--row-h);
   }
+  .ins-row .sess-body > .sess-open {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ins-row .sess-body > .sess-meta:not(.sess-meta--context) {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+  }
   .ins-row .sess-meta--context {
-    grid-column: 1 / -1;
+    flex: 1 0 100%;
   }
   /* The shared sheet centres the lamp and the actions button on a three-line stack with a margin worked out from the
      tap floor; here the lamp sits on the name's line (it is as tall as that line) and the button on the row's middle.

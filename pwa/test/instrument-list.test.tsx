@@ -19,6 +19,7 @@
 //   the dense block's media prelude without (pointer: fine) ... "nothing of the dense arrangement is declared outside the fine-pointer desk block"
 //                                                                 (and "under a fine pointer at a desk a status row is two lines on --row-h …")
 //   the one-line row's lamp rule removed ..................... "under a fine pointer at a desk a status row is two lines on --row-h …"
+//   the state's flex `0 0 auto` as `0 1 auto` ................. "under a fine pointer at a desk a status row is two lines on --row-h …"
 // The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
 // file's header's.
 import { readFileSync } from 'node:fs';
@@ -439,11 +440,19 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
   const DENSE = '(min-width: 900px) and (pointer: fine)';
 
   it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
-    // The body is a grid of two rows: the name and the state word share the first, the context spans the second.
+    // The body is a wrapping flex row: the state word beside the name when both fit, on a line of its own when they do
+    // not (a flex line breaks on max-content sizes, so the name then has the whole line), and the context on a line of
+    // its own. Never a grid with a capped state column: that squeezed a long name into three lines beside the state.
     const body = declsOf('.ins-row .sess-body', DENSE);
-    expect(body).toMatch(/display:\s*grid/);
+    expect(body).toMatch(/display:\s*flex/);
+    expect(body).toMatch(/flex-flow:\s*row wrap/);
+    expect(body).not.toMatch(/grid/);
     expect(body).toMatch(/min-height:\s*var\(--row-h\)/);
-    expect(declsOf('.ins-row .sess-meta--context', DENSE)).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(declsOf('.ins-row .sess-body > .sess-open', DENSE)).toMatch(/flex:\s*1 1 auto/);
+    expect(declsOf('.ins-row .sess-body > .sess-open', DENSE)).toMatch(/min-width:\s*0/);
+    expect(declsOf('.ins-row .sess-body > .sess-meta:not(.sess-meta--context)', DENSE)).toMatch(/flex:\s*0 0 auto/);
+    expect(declsOf('.ins-row .sess-body > .sess-meta:not(.sess-meta--context)', DENSE)).toMatch(/margin-inline-start:\s*auto/);
+    expect(declsOf('.ins-row .sess-meta--context', DENSE)).toMatch(/flex:\s*1 0 100%/);
     // The lamp and the actions button lose the three-line centring margin they carry from the shared sheet.
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
     expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
@@ -464,10 +473,10 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
 
   it('nothing of the dense arrangement is declared outside the fine-pointer desk block', () => {
     // A coarse pointer, or a width below 900, keeps the shared sheet's `--tap-min` rows, group heads and toggle.
-    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line > :first-child',
-      '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', '.ins-row .sess-actions', '.ins-row .sess-meta--context',
-      '.ins-group-head', '.ins-toggle-option']) {
-      expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|grid-column|display:\s*grid|align-self/);
+    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-body > .sess-open', '.ins-row .sess-body > .sess-meta:not(.sess-meta--context)',
+      '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', '.ins-row .sess-actions',
+      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-toggle-option']) {
+      expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
   });

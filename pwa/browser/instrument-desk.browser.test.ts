@@ -2,11 +2,11 @@
 // suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this geometry;
 // this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail reaches the
 // viewport's edge), one head in the list column (the first row starts higher), and a status row of two lines and
-// about 40 px under a fine pointer (three lines for a long name beside `waiting · needs you` in the 340 column, and
-// under 61 px), which under a touch screen is the tap floor again.
+// about 40 px under a fine pointer (three lines, the name, `waiting · needs you` and the context, when a long name and
+// the state do not fit side by side, and under 61 px), which under a touch screen is the tap floor again.
 //
 // The fixture is 13 sessions of one project in every bucket (2 attention, 3 working, 3 done, 3 idle, 2 dead: eight open
-// rows by default), with realistic workspace names of 17 to 23 characters, like a fleet's slugs, because a row's height
+// rows by default), with realistic workspace names of 17 to 25 characters, like a fleet's slugs, because a row's height
 // is decided by the name beside the state word and a 4-character name hides every wrap. One row is a main checkout
 // (no workspace, so no context fact: a one-line row). Fine pointer is the default context; touch is `openApp`'s
 // `touch: true`.
@@ -17,7 +17,9 @@
 //   fleet.css's `.sess-actions::before` inset without
 //     the border's 2px (the 42 px hit area it documents)  "under touch emulation, every row and control is at least 44 px"
 //                                                         (the hit area is the padding box, clientWidth, not the border box)
-//   the one-line row's lamp rule removed ............... "the lamp sits on the name's line: in a row with no context fact …"
+//   the one-line row's lamp rule removed ............... "the lamp sits on the name's first line in every row …"
+//   the state's flex `0 0 auto` as `0 1 auto` + min-width 0  "at 1280 (the 340 column) … every row is at most three lines and under 61 px"
+//                                                         (and "at 1280 the two needs-you rows … are exactly three lines")
 // The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
 // `--row-h`, which is 44 under a coarse pointer already. That mutant is test/instrument-list.test.tsx's.
 //
@@ -40,7 +42,7 @@ const session = (ws: string, bucket: string, status: string, extra: object = {})
   child: { kind: 'none' }, ...extra,
 });
 const SESSIONS = [
-  session('project-a-review-wave', 'attention', 'busy'), session('ask-routing-follow-up', 'attention', 'idle'),
+  session('project-a-review-wave-two', 'attention', 'busy'), session('ask-routing-follow-up', 'attention', 'idle'),
   session('desk-density-pass', 'working', 'busy'), session('transcript-search-rungs', 'working', 'busy'),
   session('gauge-window-words', 'working', 'busy'),
   session('inspector-sections-tidy', 'done', 'idle'), session('banner-quiet-line', 'done', 'idle'),
@@ -157,9 +159,7 @@ describe('one head in the list column', () => {
 
 /** Every open row's measures in the list column, taken in the page. A line is a cluster of text boxes whose vertical
  *  centres lie within 6 px of each other (the name's 15 px and the state word's 12 px share a line though their tops
- *  differ). The row's lines are the first grid row's (the name's, or the state's when it wraps more) plus the context's:
- *  a state word is centred against a wrapped name, so its centre falls between two name lines and would count as one
- *  of its own. */
+ *  differ). A row's lines are the clusters of everything its body draws: the name, the state word and the context. */
 async function measureRows(page: import('playwright-core').Page) {
   return page.evaluate(() => {
     // The vertical centres of the text boxes the elements draw: the text nodes only (a Range over an element also
@@ -200,11 +200,12 @@ async function measureRows(page: import('playwright-core').Page) {
       const nameLines = centres(labels);
       // The state cell: the state word and its marker (`needs you`), the first `.sess-meta`; the context is the second.
       const state = line.querySelector('.sess-meta:not(.sess-meta--context)');
+      const stateLines = centres(state === null ? [] : [state]);
       return {
-        id: li.getAttribute('data-row')!, height: box.height,
-        lines: Math.max(lineCount(nameLines), lineCount(centres(state === null ? [] : [state])))
-          + lineCount(centres([...body.querySelectorAll('.sess-meta--context')])),
-        nameLines: lineCount(nameLines), stateLines: lineCount(centres(state === null ? [] : [state])),
+        id: li.getAttribute('data-row')!, height: box.height, lines: lineCount(centres([...body.children])),
+        nameLines: lineCount(nameLines),
+        // The state word shares the name's first line (the two centres lie within a line's tolerance).
+        beside: stateLines.length > 0 && Math.abs((stateLines[0] ?? NaN) - (nameLines[0] ?? NaN)) <= 6,
         needsYou: (state?.textContent ?? '').includes('needs you'),
         name: shown(li.querySelector('.sess-open'), box), state: shown(state, box),
         context: shown(li.querySelector('.sess-meta--context'), box),
@@ -219,68 +220,76 @@ async function measureRows(page: import('playwright-core').Page) {
 const NAMES = SESSIONS.map((s) => (s as { workspace: string | null }).workspace).filter((w): w is string => w !== null);
 
 describe('dense rows under a fine pointer', () => {
-  it('the fixture carries realistic names: 17 to 23 characters, like a fleet\'s workspace slugs', () => {
+  it('the fixture carries realistic names: 17 to 25 characters, like a fleet\'s workspace slugs', () => {
     expect(Math.min(...NAMES.map((n) => n.length))).toBeGreaterThanOrEqual(17);
-    expect(Math.max(...NAMES.map((n) => n.length))).toBeGreaterThanOrEqual(23);
+    expect(Math.max(...NAMES.map((n) => n.length))).toBe(25);
   });
 
   for (const theme of THEMES) {
-    it(`at 1280 (the 340 column) a row whose name and state fit is two lines and at most 42 px, and a needs-you row is at most three lines and under 61 px (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
-      try {
-        const rows = await measureRows(page);
-        expect(rows.length, 'open rows').toBeGreaterThanOrEqual(5);
-        for (const r of rows) {
-          expect(r.asks, `${r.id}: no ask`).toBe(false);
-          expect(r.name, `${r.id}: name`).toBe(true);
-          expect(r.state, `${r.id}: state word`).toBe(true);
-          expect(r.context, `${r.id}: context`).toBe(r.id !== 'project-a'); // a main checkout has none
-          if (r.nameLines === 1 && r.stateLines === 1) {
-            // A fact-free row is one line; every other row that fits is the name and state line, then the context.
-            expect(r.lines, `${r.id}: lines`).toBe(r.id === 'project-a' ? 1 : 2);
-            expect(r.height, `${r.id}: height`).toBeLessThanOrEqual(42);
-          } else {
-            // A long name wraps in a 340 column once the state word `waiting · needs you` is beside it; that is the
-            // only row shape that does, and no fact is dropped (D-5545). Under the old 61 px row.
-            expect(r.needsYou, `${r.id}: only a needs-you row wraps`).toBe(true);
+    for (const [width, column] of [[1280, 340], [1600, 420]] as const) {
+      it(`at ${width} (the ${column} column) a row whose name and state fit on one line is two lines and at most 42 px, and every row is at most three lines and under 61 px (${theme})`, async () => {
+        const { ctx, page } = await open(theme, width, 900, '/');
+        try {
+          const rows = await measureRows(page);
+          expect(rows.length, 'open rows').toBeGreaterThanOrEqual(5);
+          for (const r of rows) {
+            expect(r.asks, `${r.id}: no ask`).toBe(false);
+            expect(r.name, `${r.id}: name`).toBe(true);
+            expect(r.state, `${r.id}: state word`).toBe(true);
+            expect(r.context, `${r.id}: context`).toBe(r.id !== 'project-a'); // a main checkout has none
+            // Every fact is drawn, at most as name, state, context: three lines, under the 61 px of main's rows.
             expect(r.lines, `${r.id}: lines`).toBeLessThanOrEqual(3);
             expect(r.height, `${r.id}: height`).toBeLessThan(61);
+            if (r.nameLines === 1 && r.beside) {
+              // The name and the state fit side by side: the name and state line, then the context (a main checkout
+              // has none: one line).
+              expect(r.lines, `${r.id}: lines`).toBe(r.id === 'project-a' ? 1 : 2);
+              expect(r.height, `${r.id}: height`).toBeLessThanOrEqual(42);
+            }
           }
+          expect(rows.filter((r) => r.nameLines === 1 && r.beside).length, 'rows that fit').toBeGreaterThanOrEqual(5);
+        } finally {
+          await ctx.close();
         }
-        expect(rows.filter((r) => r.needsYou).length, 'needs-you rows').toBe(2);
-        expect(rows.filter((r) => r.nameLines === 1 && r.stateLines === 1).length, 'rows that fit').toBeGreaterThanOrEqual(5);
+      });
+    }
+
+    it(`at 1280 the two needs-you rows, a long name beside "waiting · needs you", are exactly three lines: the name, the state, the context (${theme})`, async () => {
+      const { ctx, page } = await open(theme, 1280, 800, '/');
+      try {
+        const rows = (await measureRows(page)).filter((r) => r.needsYou);
+        expect(rows.map((r) => r.id).sort()).toEqual(['project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two']);
+        for (const r of rows) {
+          expect(r.lines, `${r.id}: lines`).toBe(3);
+          expect(r.beside, `${r.id}: the state word has dropped to its own line`).toBe(false);
+        }
       } finally {
         await ctx.close();
       }
     });
 
-    it(`at 1600 (the 420 column) every open row is at most two lines and 42 px (${theme})`, async () => {
+    it(`at 1600 every row but project-a-review-wave-two is two lines (one for the main checkout), and that row is three (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1600, 900, '/');
       try {
         const rows = await measureRows(page);
-        expect(rows.length, 'open rows').toBeGreaterThanOrEqual(5);
         for (const r of rows) {
-          expect(r.lines, `${r.id}: lines`).toBeLessThanOrEqual(2);
-          expect(r.height, `${r.id}: height`).toBeLessThanOrEqual(42);
-          expect(r.name && r.state, `${r.id}: name and state word`).toBe(true);
+          const want = r.id === 'project-a-project-a-review-wave-two' ? 3 : r.id === 'project-a' ? 1 : 2;
+          expect(r.lines, `${r.id}: lines`).toBe(want);
         }
       } finally {
         await ctx.close();
       }
     });
 
-    it(`the lamp sits on the name's line: in a row with no context fact, and in a two-line row (${theme})`, async () => {
+    it(`the lamp sits on the name's first line in every row: one, two and three lines (${theme})`, async () => {
       const { ctx, page } = await open(theme, 1280, 800, '/');
       try {
         const rows = await measureRows(page);
-        const lone = rows.find((r) => r.id === 'project-a')!;
-        expect(lone.lines, 'the main checkout is one line').toBe(1);
-        // The comment in instrument.css says the lamp sits on the name's line; in a one-line row the name is centred
-        // in the floor, so the lamp has to be too.
-        expect(Math.abs(lone.lamp - lone.nameFirst), `project-a: lamp ${lone.lamp} vs name ${lone.nameFirst}`).toBeLessThanOrEqual(1);
-        const two = rows.filter((r) => r.lines === 2);
-        expect(two.length, 'two-line rows').toBeGreaterThanOrEqual(5);
-        for (const r of two) {
+        // The comment in instrument.css says the lamp sits on the name's line; in a one-line row (no context fact) the
+        // name is centred in the floor, so the lamp has to be too.
+        expect(rows.find((r) => r.id === 'project-a')!.lines, 'the main checkout is one line').toBe(1);
+        expect(new Set(rows.map((r) => r.lines)), 'one-, two- and three-line rows are all in the fixture').toEqual(new Set([1, 2, 3]));
+        for (const r of rows) {
           expect(Math.abs(r.lamp - r.nameFirst), `${r.id}: lamp ${r.lamp} vs name ${r.nameFirst}`).toBeLessThanOrEqual(1);
         }
       } finally {
