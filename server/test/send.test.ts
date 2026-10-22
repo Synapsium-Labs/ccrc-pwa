@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_TRIES, SUBMIT_TRIES } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_BUDGET_MS, ECHO_POLL_MS, ECHO_TRIES, SUBMIT_TRIES } from '../src/inject/send.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
 
+/** D-6366: the echo polls a free sleep takes: the wait is the larger of ECHO_TRIES polls and ECHO_BUDGET_MS. */
+const ECHO_WAIT_POLLS = ECHO_BUDGET_MS / ECHO_POLL_MS;
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const noSleep = async () => {};
 
@@ -744,7 +746,7 @@ describe('sendPrompt', () => {
   // fragment). Widening the PWA gate on `code` alone would ship exactly that.
   it('the ATTACHMENT path keeps its residue draft for DISPLAY and never sets the flag', async () => {
     const NONMATCH = '❯ \n';
-    const panes = [...Array(14).fill(NONMATCH), '❯ stubborn leftover\n'];
+    const panes = [...Array(ECHO_WAIT_POLLS + 2).fill(NONMATCH), '❯ stubborn leftover\n'];
     const { tmux } = fakeTmux(panes);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: ['/c/clip-1.png'] },
@@ -1454,7 +1456,7 @@ describe('sendPrompt with attachments', () => {
     // when the clear doesn't take, mirroring the replaceDraft C-u check above.
     const NONMATCH = '❯ \n'; // empty box — never echoes the attachment path
     const panes = [
-      ...Array(14).fill(NONMATCH),      // initial + 12 echo polls + the failure-path `after` read
+      ...Array(ECHO_WAIT_POLLS + 2).fill(NONMATCH), // initial + the echo polls + the failure-path `after` read
       '❯ stubborn leftover\n',          // post-C-u re-capture — still holds text
     ];
     const { tmux, calls } = fakeTmux(panes);
@@ -1481,7 +1483,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // fails in the first place. So every read the cleanup takes says "the box is
     // empty" while both typed lines are really sitting in it, and a clear that
     // stops when the box reads empty stops after ONE press and strands the whole
-    // prompt. (A finite `staleFrames: 14` — initial check + 12 echo polls + the
+    // prompt. (A finite `staleFrames: ECHO_WAIT_POLLS + 2` — initial check + the echo polls + the
     // failure-path plain capture — is the largest staleness whose LAST frame is
     // fresh again, and would hide exactly this.)
     const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
@@ -1556,7 +1558,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     // above, so reporting a dead pane that way told the caller the box had been
     // emptied when the truth is "unknown". The two clear sites now agree on what
     // a null capture means.
-    const { tmux } = boxTmux({ staleFrames: 14, dieFrom: 15 }); // dies on the first post-C-u read
+    const { tmux } = boxTmux({ staleFrames: ECHO_WAIT_POLLS + 2, dieFrom: ECHO_WAIT_POLLS + 3 }); // dies on the first post-C-u read
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
     );
@@ -1587,7 +1589,7 @@ describe('a menu that opens mid-clear stops the clear', () => {
   });
 
   it('the attachment cleanup stops pressing and reports no residual draft', async () => {
-    const panes = [...Array(14).fill('❯ \n'), MENU];
+    const panes = [...Array(ECHO_WAIT_POLLS + 2).fill('❯ \n'), MENU];
     const { tmux, calls } = fakeTmux(panes);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'what is this', { attachments: [P] },
