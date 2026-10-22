@@ -160,6 +160,50 @@ describe('the string arm, against the tree’s PHYSICAL spelling (P12)', () => {
     expect(a.why).toContain(`has its working directory at ${t.phys}/sub`);
   }, 60_000);
 
+  /** `$HOME/x/real/tree` is the real tree, with a `sub` directory in it. `$HOME/x/<name>` is a link to `$HOME/x/real`
+   *  whose target is written with `slashes` before the real path: `//` gives a target that opens with two slashes, which
+   *  bash's `pwd -P`, and so `_ws_dir_physical`, keeps, and `/` gives the single-slash CONTROL. The tree is asked as
+   *  `$HOME/x/<name>/tree`, one plain spelling. `phys` is the tree's spelling as a cwd link and lsof print it: one
+   *  slash. */
+  const linkTo = (name: string, slashes: '//' | '/'): { asked: string; phys: string } => {
+    fs.mkdirSync(path.join(h.home, 'x', 'real', 'tree', 'sub'), { recursive: true });
+    const r = real(path.join(h.home, 'x', 'real'));
+    fs.symlinkSync(`${slashes}${r.replace(/^\/+/, '')}`, path.join(h.home, 'x', name));
+    return { asked: path.join(h.home, 'x', name, 'tree'), phys: path.join(r, 'tree') };
+  };
+  /** Forced Darwin's listing: ccd's own process at `$HOME`, then `pid` at `at`. */
+  const lsofAt = (pid: number, at: string): string =>
+    `_ws_expire_lsof() { printf 'p%s\\nfcwd\\nn%s\\np%s\\nfcwd\\nn%s\\n' "$$" "$HOME" "${pid}" "${at}"; };`;
+
+  it('A17a: forced Darwin, a tree whose parent resolves through a link whose target opens with `//` — lsof lists a live process at the one-slash spelling: in use, by its string (the probe collapses the `//`)', () => {
+    const t = linkTo('dbl', '//');
+    expect(h.sh('_ws_dir_physical "$HOME/x/dbl"; printf \'%s\' "$_WS_PHYS"'), 'the CONTROL: the parent resolves to a `//` spelling')
+      .toBe(`/${real(path.join(h.home, 'x', 'real'))}`);
+    const s = hold(path.join(t.phys, 'sub'));
+    const a = ask(t.asked, `CCD_OS=darwin; ${lsofAt(s.pid, `${t.phys}/sub`)}`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe(String(s.pid));
+    expect(a.why).toContain(`process ${s.pid} `);
+    expect(a.why).toContain(`has its working directory at ${t.phys}/sub`);
+  }, 60_000);
+
+  it('A17b: CONTROL — forced Darwin, the same link written with ONE slash: in use, by its string', () => {
+    const t = linkTo('one', '/');
+    const s = hold(path.join(t.phys, 'sub'));
+    const a = ask(t.asked, `CCD_OS=darwin; ${lsofAt(s.pid, `${t.phys}/sub`)}`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe(String(s.pid));
+    expect(a.why).toContain(`has its working directory at ${t.phys}/sub`);
+  }, 60_000);
+
+  it.skipIf(!LINUX)('A17c: Linux, the same `//` parent and a fake table — the process is in use by its STRING, never only by device and inode', () => {
+    const t = linkTo('dbl', '//');
+    const a = ask(t.asked, `${FAKE} fakep 4242 "${t.phys}/sub" 1;`);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.pids).toBe('4242');
+    expect(a.why, 'found by its string, not by the identity walk alone').toBe(`process 4242 has its working directory at ${t.phys}/sub`);
+  }, 60_000);
+
   it.skipIf(!LINUX)('A13: a LIVE process whose working directory was removed under the tree is in use, by its string (the kernel’s ` (deleted)`)', () => {
     const d = tree();
     const gone = path.join(d, 'sub', 'scratch');

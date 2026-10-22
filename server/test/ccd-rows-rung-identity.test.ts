@@ -585,6 +585,40 @@ describe('a request stream cut short is unmeasured, never "no row"', () => {
   }, 60_000);
 });
 
+describe('an answer word pass B does not list holds the child, never "no row"', () => {
+  /** `_ws_reclaim_idwalk`, wrapped: the real walk answers, its reply is kept in `$HOME/walk-reply`, and with `kind`
+   *  given, the ONE reply line of that kind and index 0 has its answer replaced by the word `zz`, so the line's kind and
+   *  index still match the rung's own requests, as a walk whose vocabulary grew would answer. The walk's rc is kept. */
+  const REWORD = (kind = ''): string => 'eval "_t_walk_real()$(declare -f _ws_reclaim_idwalk | tail -n +2)";'
+    + ' _ws_reclaim_idwalk() { local _t_r; _t_walk_real "$@"; _t_r=$?;'
+    + ' printf \'%s\\n\' "$_WS_IDWALK_OUT" > "$HOME/walk-reply";'
+    + (kind === '' ? '' : ` _WS_IDWALK_OUT=$(printf '%s\\n' "$_WS_IDWALK_OUT" | sed -E 's/^(${kind} 0) .*/\\1 zz/');`)
+    + ' return "$_t_r"; };';
+
+  it.each([
+    ['A', 'row demo-r0'],
+    ['P', 'row demo-r0'],
+    ['T', `${CHILD_ID}'s own tree`],
+    ...(LINUX ? [['M', `the mounts under ${CHILD_ID}'s tree`] as const] : []),
+  ] as const)('unlisted %s word: the walk answering `zz` for it holds the child unmeasured, with the unwalk clause naming the word as read', (kind, what) => {
+    makeChild(h);
+    const d = path.join(h.home, 'elsewhere-0');
+    fs.mkdirSync(d);
+    row('demo-r0', d);
+    const control = evalOf(h, { pre: REWORD() });
+    expect(control.verdict, `the CONTROL: the walk's own words hold nothing — ${control.detail}`).toBe('reclaimable');
+    const reply = linesIn('walk-reply');
+    expect(reply.filter((l) => /^T 0 ok /.test(l)), 'the CONTROL: T 0 ok').toHaveLength(1);
+    expect(reply.filter((l) => /^A 0 ok /.test(l)), 'the CONTROL: A 0 ok').toHaveLength(1);
+    expect(reply.filter((l) => l === 'P 0 clean'), 'the CONTROL: P 0 clean').toHaveLength(1);
+    if (LINUX) expect(reply.filter((l) => /^M 0 clear \d+$/.test(l)), 'the CONTROL: M 0 clear').toHaveLength(1);
+    const r = evalOf(h, { pre: REWORD(kind) });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`${UNWALK}${what} (unexpected walk answer zz)`);
+  }, 60_000);
+});
+
 describe.skipIf(!LINUX)('parity: the walk’s mount point arm answers what `_ws_collect_mounts_clear` answers, on the same tables (R13)', () => {
   /** One copied table plus `lines`, then the walk asked T0 and M of `child`, and the collector's own reader asked of
    *  `child`: `[<walk rc>, <its M line>, <_ws_collect_mounts_clear rc>]`. */

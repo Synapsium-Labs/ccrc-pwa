@@ -4286,7 +4286,10 @@ the spec, never this contract.
   walk accepts a vanished, reaped or outside answer only on a pass whose `task/` listing named no tid not asked before.
   `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`: at that per-pass read only, EACCES followed by a stat file
   that is gone counts as the pid's release. `cwd-probe-holds-a-double-slash-physical-root`: a `//`-leading physical root
-  holds ws-expire's own probe, through its adapter's gate, unmeasured. Spec §4.12 says each in full.
+  still holds ws-expire's own probe, through its adapter's gate, unmeasured, and a tree with a `//`-leading parent
+  holds through the probe itself, on Darwin too. `cwd-probe-collapses-a-double-slash-parent`: the shared probe
+  collapses a `//`-leading parent before its string compare, so the tail's asks compare the spelling `/proc` and lsof
+  print. Spec §4.12 says each in full.
 - `cwd-wait-only-waits`: inside the post-kill wait the probe only waits. It refuses at step 3 and step 4, before each
   `keep_of` and each standing forced removal.
 - `cwd-refusal-reuses-worktree-remove-failed`: an in-use or unmeasured answer there fails as `worktree-remove-failed`,
@@ -4319,13 +4322,16 @@ the spec, never this contract.
 **Departures**, by slug; spec §4.12 says each in full.
 - The field: `workdirid-pending-form` and `workdirid-unreadable-holds`.
 - The rung: `rows-walk-second-mountinfo-reader`, `unproc-also-by-walked-position`, `w2-mount-asks-shadowed-by-the-reask`,
-  `collect-reprove-table-moves-to-the-gap` and `double-slash-rows-placed-by-identity-pins-move`.
+  `collect-reprove-table-moves-to-the-gap`, `double-slash-rows-placed-by-identity-pins-move`,
+  `rows-rung-pass-b-holds-an-unlisted-answer` (an answer word the rung does not list for a row, a target or the table
+  holds the child unmeasured, never no hold) and `pending-hold-remedy-stops-then-starts` (the pending hold's remedy
+  says to stop and start that session, as `ccd start` changes nothing for a session that is running).
 - The main checkout: `ladder-main-checkout-ef`, `record-main-hit-keeps-the-terminal-refusal`,
   `record-by-another-spelling-reads-unmeasured`, `record-two-spellings-reads-unmeasured` and
   `moved-check-identity-failure-preempted-a-proof`.
 - The probe: `cwd-probe-adopts-the-path-users-walk`, `cwd-wait-only-waits`,
   `cwd-refusal-reuses-worktree-remove-failed`, `cwd-probe-holds-a-double-slash-physical-root`,
-  `cwd-probe-confirms-a-vanished-link-by-a-second-read` and
+  `cwd-probe-collapses-a-double-slash-parent`, `cwd-probe-confirms-a-vanished-link-by-a-second-read` and
   `cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid`.
 - The tail window: `reask-words-follow-the-owned-call` and `reappeared-tree-refuses`.
 - The suites: `darwin-prefixes-take-the-identity-shims`, `audit-document-key-pins-outside-the-boundary` and

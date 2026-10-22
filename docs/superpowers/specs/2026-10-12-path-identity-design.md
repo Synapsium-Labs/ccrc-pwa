@@ -1087,7 +1087,8 @@ into a pass.
   through `_spawn_workdirid_pending` directly before each of `_spawn_start`'s two `_tmux_new_session` calls, the
   primary and the retry. The pane replaces it after its `cd` succeeds and before `exec`. A pending field whose logical
   spelling equals the row's current `.workdir` holds every child, and its detail names the row and the remedy,
-  "restart that session". So a pane that cannot record where it entered leaves a hold, as §4.11 asks. A pending write
+  "stop and start that session" (`pending-hold-remedy-stops-then-starts`, below). So a pane that cannot record where
+  it entered leaves a hold, as §4.11 asks. A pending write
   that fails unlinks the field, so a stale valid field never survives it.
 - The reader answers one of seven words in `_WS_WDID_STATE`, by rules taken in a fixed order: `legacy-absent` (no
   field), `legacy-link` (a link, whose target is never read), `unmeasured` (not a regular file, or a failed open or
@@ -1162,6 +1163,10 @@ into a pass.
   resumed tail answers `containment-refuted`, in place of the retryable unmeasured that strings alone gave. A resolved
   `//` row outside the child stays unmeasured, with the unplaced clause. No row is released, and the pins of the
   suites that held the old answers moved to the new ones.
+- `rows-rung-pass-b-holds-an-unlisted-answer`: the rung's reading of the walk's reply holds the child unmeasured for
+  any answer word it does not list for a row, a target or the table, naming the word as read ("unexpected walk answer
+  <word>"), where such a word used to fall through as no hold. The walk's own no-hold words (`T ok`, `A ok`, `P clean`
+  and `M clear`) keep their meaning, and the walk emits no other word today, so no answer it gives changes.
 - What following links leaves to judgement:
   - that a real bind's `stat` returns the source's device and inode for every path below it, a source on another file
     system included;
@@ -1286,10 +1291,17 @@ into a pass.
 - `cwd-probe-holds-a-double-slash-physical-root`: `_ws_dir_physical` answers a `//`-leading physical path for a
   directory reached through a link whose target begins with `//` (and for `//` or `//tmp` given directly). ws-expire's
   adapter, `_ws_expire_cwd_users`, resolves the tree's parent before it asks and hands the probe that `//` spelling,
-  which the probe's plain-path gate refuses, so a `//`-leading physical root holds ws-expire's own probe, through its
-  adapter's gate, unmeasured. The old expiry probe compared that `//` spelling against
+  which the probe's plain-path gate refuses, so a `//`-leading physical root still holds ws-expire's own probe, through
+  its adapter's gate, unmeasured. A tree whose parent resolves to a `//`-leading path holds through the probe itself
+  too, on Darwin as on Linux: the shared probe collapses a `//`-leading parent before its string compare
+  (`cwd-probe-collapses-a-double-slash-parent`, below), so the tail's asks compare the spelling `/proc` and lsof print.
+  The old expiry probe compared that `//` spelling against
   kernel-printed cwds, which never begin with `//`, so it answered nobody there. The new answer fails closed and is not
   redesigned; it was measured at the mechanism, not end to end through the adapter.
+- `cwd-probe-collapses-a-double-slash-parent`: `_ws_dir_physical` keeps the `//` that a link's target opens with,
+  while `/proc` and lsof print one slash, so the probe collapses a `//`-leading parent to one slash before its string
+  compare, as the rows rung's target 0 and W2's mount question already do. Without it, a process inside a tree asked
+  by a spelling under such a link went unseen on Darwin, where the string compare is the only arm.
 
 **The tail window (PI5 A).**
 - The owned call records the tree's identity and the main checkout's identity. Each standing nested checkout's proof
@@ -1316,6 +1328,10 @@ into a pass.
 - The `..` detail is true of a row that is the child: "a '..' in it could not be walked the way that session's own cd
   walked it". The fail-shut order (the rest's `..` test before the head's) is unchanged.
 - The `unproc` clause reads "name a workdir under /proc, or one reached through a link into /proc".
+- `pending-hold-remedy-stops-then-starts`: the pending clause's remedy reads "stop and start that session (ccd stop
+  <id>, then ccd start <id>), or purge its row once its session has ended", because `ccd start` answers "already
+  running" for a live session and changes nothing, and a live pane is the commonest pending case. No other remedy and
+  no refusal word changed.
 
 **The suites.**
 - `darwin-prefixes-take-the-identity-shims`: on a Linux host, a forced-Darwin full tail now measures identities, and GNU

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5bd26089978d72fbb4628c18103343c3c554a18b2251b70f4b9320d694a9c2b6
+# ccrc:generated 1 sha256=ea5764570d1c499d76171bc04f275b2f0d6b20d241b07b13d9eaea51942e7f26
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29643,8 +29643,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # child here: a gone row's arms (`_ws_reclaim_recorded`) read one through
   # `_ws_reclaim_record`'s string match, where device and inode may only refuse
   # (path-identity spec §4.8), and through `_ws_reclaim_admin_entries`, whose
-  # match of git's admin entries gives the count the git arm's
-  # `_ws_reclaim_log_of` call requires to be one. A child
+  # match of git's admin entries gives the count `_ws_reclaim_recorded_git`
+  # requires to be one, read through `_ws_reclaim_log_of`. A child
   # whose own workdir cannot be resolved has no canonical to compare with, so
   # every row not literally at or below it is collected as for a `//` child
   # (`unmine`) — never compared with a fallback; with no such row there is
@@ -30018,6 +30018,15 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
           if [[ "$hi" == 0 ]]; then unwalk+="${unwalk:+, }$id's own tree (${ha:-gone})"
           else unwalk+="${unwalk:+, }a leaf of $id (${ha:-gone})"; fi ;;
         "M hold"|"M un") unmount="$ha" ;;
+        *)   # any other word for a row, a target or the table holds; the walk's own no-hold words, and F, B and end, pass
+          case "$hk $hw" in
+            "T ok"|"P clean"|"M clear") : ;;
+            "T "*)
+              if [[ "$hi" == 0 ]]; then unwalk+="${unwalk:+, }$id's own tree (unexpected walk answer $hw)"
+              else unwalk+="${unwalk:+, }a leaf of $id (unexpected walk answer $hw)"; fi ;;
+            "M "*) unwalk+="${unwalk:+, }the mounts under $id's tree (unexpected walk answer $hw)" ;;
+            "A "*|"P "*) unwalk+="${unwalk:+, }row $o (unexpected walk answer $hw)" ;;
+          esac ;;
       esac
     done <<< "$_WS_IDWALK_OUT"
   fi
@@ -30120,7 +30129,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unmount" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a mount stands at or under $id's tree, or one of its file system's roots lies at or under it ($unmount), or the mount table could not place it, so ccd cannot prove which tree a removal would take — unmount it, or retry once it is gone"
   [[ -z "$unpend" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unpend began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot place them against this child — restart that session (ccd start <id>), or purge its row once its session has ended"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unpend began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot place them against this child — stop and start that session (ccd stop <id>, then ccd start <id>), or purge its row once its session has ended"
   [[ -z "$unfield" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unfield have an entry-identity field that is not a regular file or cannot be read, so ccd cannot place them against this child — remove what stands at that field and restart that session"
   [[ -z "$unrec" ]] \
@@ -30421,8 +30430,9 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # its answer as one of two strings, and the ladder's and `_ws_reclaim_owned`'s
   # main-checkout compares read it beside a compare of device and inode, which
   # may only refuse (path-identity spec §4.8), and `_ws_reclaim_admin_entries`
-  # also reads it, matching git's admin entries for the count the git arm's
-  # `_ws_reclaim_log_of` call requires to be one. `-d` is false on EACCES as on
+  # also reads it, matching git's admin entries for the count
+  # `_ws_reclaim_recorded_git` requires to be one, read through
+  # `_ws_reclaim_log_of`. `-d` is false on EACCES as on
   # ENOENT, so a component that stands but cannot be followed (a link across
   # an unsearchable directory, or one that cannot be looked at) stops the
   # walk as if it were missing and fails the absence proof. Never resolvable:
@@ -33719,6 +33729,7 @@ _ws_cwd_users() {   # dir [say] -> 0 no process has its working directory at dir
   _ws_dir_physical "$parent" \
     || { _WS_CWD_USERS_WHY="the directory $parent that holds $dir cannot be resolved ($_WS_PHYS_WHY), so whether a process works inside it was never asked"; return 2; }
   wt="${_WS_PHYS%/}/$leaf"
+  [[ "$wt" != //[!/]* ]] || wt="${wt#/}"   # Linux and Darwin read `//x` as `/x`, and /proc and lsof never print `//`
   [[ "$CCD_OS" != darwin ]] || mode=lsof
   py='
 import errno, json, os, re, subprocess, sys

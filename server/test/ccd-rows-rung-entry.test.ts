@@ -53,7 +53,7 @@ const SHARED_BY = (id: string): string => `is also named by registry row(s) ${id
 const NESTED_BY = (id: string): string => `has registry row(s) ${id} rooted inside it`;
 const HELD = 'name a workdir that cannot be resolved completely';
 const PENDING = 'began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot'
-  + ' place them against this child — restart that session (ccd start <id>)';
+  + ' place them against this child — stop and start that session (ccd stop <id>, then ccd start <id>)';
 const UNFIELD = 'have an entry-identity field that is not a regular file or cannot be read';
 const UNREC = 'entered a directory other than the one their workdir names now, and where they entered can no longer be placed';
 const UNWALK = 'the identity walk of the registry rows did not answer for row';
