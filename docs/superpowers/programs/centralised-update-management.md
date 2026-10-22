@@ -5474,6 +5474,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       deadline does to such a run is read from the code. If it can revert a healthy box, the worker stops and reports.
       F7 and F8 are text.
     - **Routing is unchanged.** Round 1's first run was unrun, not red, so there is no shallow signal.
+  - **17:05 UTC: F6's stop condition held (mail 8134), and it is fixed in this round (F6b, mail 8136).**
+    - **The reading.** On a console update of a server-role box, the post-gate backup step runs after the report's
+      last re-stamp. If it outlasts the 900 s deadline, the control plane releases the lease `failed`, and the box's
+      later `done` cannot settle a row that is no longer busy. `failed` halts every move until it is acked. Nothing
+      reverts the box: the watchdog stands down while the updater holds the lock. Six full verifications reach the
+      deadline at the plan's own per-set figures. That is argued, not measured.
+    - **The ruling.** Thinning takes a time budget on the control plane's own clock: the re-stamp plus the deadline,
+      less a derived margin. It never starts a verification it cannot expect to finish inside that budget. What it
+      does not reach is left for the next update, with exit 0. An interrupted thinning is still finished. A manual
+      `ccrc backup` stays unbounded. This restores the plan's stated intent, in the safe direction.
+    - **Carried.** The keep-set's own verifications have run inside the same window since wave 9. The worker
+      measures in the as-built note whether they alone can pass the deadline; if so, wave 24 carries it.
 
 - **2026-10-22 14:05 UTC — an operator directive: no new version for a docs-only merge.** Verbatim (in chat): "Docs
   only updates with no changes to code (PRs) should not trigger new build versioning".
