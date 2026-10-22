@@ -961,6 +961,144 @@ describe.skipIf(!PY)('the lock and the commit (codex-bridge spec §2.6, figure 4
     expect(fileRecord(dir)).toEqual(rec);
   });
 
+  // The checkpoint changed between recover's lstat and its open, out of band (the lock excludes only ccrc's own
+  // writers). The race is made exact in a process of its own: an `os.open` that, at the first open of the checkpoint,
+  // first removes it (`gone`) or puts a symlink to `target` in its place (`symlink`).
+  const recoverAfterSwap = (home: string, dir: string, swap: 'gone' | 'symlink', target = ''): Record<string, any> => {
+    const code = [
+      'import importlib.util, json, os, sys',
+      'sys.dont_write_bytecode = True',
+      'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+      'mod = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(mod)',
+      'd, swap, target = sys.argv[2], sys.argv[3], sys.argv[4]',
+      'pending = mod.paths_for(d).pending',
+      'real_open = os.open',
+      'done = []',
+      'def swapping_open(path, *a, **k):',
+      '    if os.fspath(path) == pending and not done:',
+      '        done.append(1)',
+      '        os.unlink(pending)',
+      '        if swap == "symlink":',
+      '            os.symlink(target, pending)',
+      '    return real_open(path, *a, **k)',
+      'os.open = swapping_open',
+      'try:',
+      '    with mod.held(d):',
+      '        print(json.dumps({"result": mod.recover_pending(d)}))',
+      'except mod.AuthError as e:',
+      '    print(json.dumps({"error": e.word, "message": str(e)}))',
+    ].join('\n');
+    const r = spawnSync(PY as string, ['-I', '-c', code, AUTH_LIB, dir, swap, target], {
+      encoding: 'utf8', cwd: home, timeout: 5000,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    return JSON.parse(r.stdout.trim()) as Record<string, any>;
+  };
+
+  it('a checkpoint removed between the lstat and the open answers none, as one absent at the lstat does', async () => {
+    const home = mkTmp('codex-auth-recover-gone-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    expect(recoverAfterSwap(home, dir, 'gone')).toEqual({ result: 'none' });
+    expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+    expect(lstatKey(credPath(dir))).toBe(before);
+  });
+
+  it('a symlink swapped in between the lstat and the open is refused naming the symlink, never chmod; the next recover removes it', async () => {
+    const home = mkTmp('codex-auth-recover-swapped-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: nextRecord() }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    const target = join(home, 'elsewhere.json');
+    writeFileSync(target, 'not the checkpoint', { mode: 0o600 });
+    const bytes = readFileSync(credPath(dir));
+    const before = lstatKey(credPath(dir));
+    const refused = recoverAfterSwap(home, dir, 'symlink', target);
+    expect(refused.error).toBe('credential-unusable');
+    expect(refused.message).toContain(pendingPath(dir));
+    expect(refused.message).toContain('became a symlink while it was read (ELOOP)');
+    expect(refused.message).not.toContain('chmod 600');
+    expect(lstatSync(pendingPath(dir)).isSymbolicLink(), 'the symlink is left for the next recover').toBe(true);
+    expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    const again = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(driverLines(again.stdout)[0].result, again.stderr).toBe('discarded');
+    expect(() => lstatSync(pendingPath(dir)), 'the symlink is gone').toThrow();
+    expect(readFileSync(target, 'utf8'), 'and what it pointed at is untouched').toBe('not the checkpoint');
+    expect(readFileSync(credPath(dir)).equals(bytes)).toBe(true);
+  });
+
+  // A directory fsync opens the directory for reading, and nothing before it needs to: in a 0300 authDir whose lock
+  // already exists, the checkpoint is written, fsynced and renamed into place, and only the directory fsync fails
+  // (EACCES). That is a failed fsync, which this patch can raise, not a lost one, which only a power cut shows.
+  it.skipIf(process.getuid?.() === 0)('a commit whose directory fsync fails keeps its record bound to the file now in place; the held retry re-runs it, never drops it', async () => {
+    const home = mkTmp('codex-auth-dirsync-commit-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const first = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }] });
+    expect(driverLines(first.stdout)[0].result, first.stderr).toBe('none');
+    expect(existsSync(lockPath(dir)), 'the lock exists before the directory loses its read bit').toBe(true);
+    const rec = nextRecord();
+    const barrier = join(home, 'readable-again');
+    let restored = false;
+    chmodSync(dir, 0o300);
+    try {
+      const r = await runAuthDriver(home, {
+        authDir: dir,
+        ops: [
+          { op: 'commit', record: rec }, { op: 'read' }, { op: 'held-retry' },
+          { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'held-retry' }, { op: 'held-retry' },
+        ],
+      }, {}, {
+        onLine: (l) => {
+          if (l.op !== 'held-retry' || restored) return;
+          chmodSync(dir, 0o700);
+          restored = true;
+          writeFileSync(barrier, '');
+        },
+      });
+      const [commit, read, stillUnsaved, , written, none] = driverLines(r.stdout);
+      expect(commit.result, r.stderr).toBe(false);
+      expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+      expect(stillUnsaved.result, 'bound to the file the rename put in place, so never dropped').toBe('still-unsaved');
+      expect(written.result).toBe('written');
+      expect(none.result, 'the written record left the map').toBe('none');
+      expect(fileRecord(dir)).toEqual(rec);
+      expect(existsSync(pendingPath(dir))).toBe(false);
+      expect(r.stderr, 'no record was dropped').toBe('');
+    } finally {
+      if (!restored) chmodSync(dir, 0o700);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a promotion whose directory fsync fails still answers promoted: the checkpoint is the credential', async () => {
+    const home = mkTmp('codex-auth-dirsync-recover-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const rec = nextRecord();
+    const crash = await runAuthDriver(home, { authDir: dir, faults: ['die-before-rename'], ops: [{ op: 'commit', record: rec }] });
+    expect(crash.status, crash.stderr).toBe(9);
+    expect(existsSync(lockPath(dir)), 'the crashed commit made the lock').toBe(true);
+    chmodSync(dir, 0o300);
+    try {
+      const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'recover' }, { op: 'read' }] });
+      const [promoted, read] = driverLines(r.stdout);
+      expect(promoted.result, r.stderr).toBe('promoted');
+      expect(read).toMatchObject({ credential: 'present', account_id: 'acct-fixture-next' });
+      expect(fileRecord(dir)).toEqual(rec);
+      expect(existsSync(pendingPath(dir))).toBe(false);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
   it.each([['enospc-fsync:1', 'made durable'], ['enospc-replace:1', 'renamed into place']])('a promotion that meets a full disk (%s) refuses credential-unusable and keeps both files; the next holder promotes', async (fault, words) => {
     const home = mkTmp('codex-auth-recover-enospc-');
     const dir = laneDir(home);

@@ -711,8 +711,11 @@ def recover_pending(auth_dir: str) -> str:
 
     The checkpoint is fsynced through the descriptor it is read by before it is promoted (its writer may have died
     between its write and its fsync). An `OSError` is `Unreadable`, naming the checkpoint and the errno, with both
-    files kept as they are: from the open or a read of the checkpoint (an unread checkpoint may be the only copy of a
-    refreshed pair, so it is never discarded), from the rename, or from the unlink of a discarded checkpoint. A
+    files kept as they are: from the checkpoint's `lstat` (any errno but ENOENT), from the open or a read of the
+    checkpoint (an unread checkpoint may be the only copy of a refreshed pair, so it is never discarded), from the
+    rename, or from the unlink of a discarded checkpoint. The open's remedy follows its errno: a checkpoint gone
+    since the `lstat` (ENOENT) answers `"none"`, as at the `lstat`; a symlink swapped in since (ELOOP) is refused
+    with a remedy that names it; any other errno names `chmod 600` and the disk. A
     checkpoint that would be promoted but whose fsync failed is refused the same way, never promoted and never
     discarded; one that would be discarded is discarded whatever its fsync answered. A failure of the directory fsync
     after the rename still answers `"promoted"`: the checkpoint is in place."""
@@ -744,6 +747,12 @@ def recover_pending(auth_dir: str) -> str:
             finally:
                 os.close(fd)
         except OSError as e:
+            if e.errno == errno.ENOENT:  # removed out of band since the lstat: what the lstat's ENOENT answers
+                return "none"
+            if e.errno == errno.ELOOP:  # a symlink swapped in since the lstat, refused by O_NOFOLLOW
+                raise Unreadable("the checkpoint " + p.pending + " became a symlink while it was read (ELOOP); ccrc "
+                                 "never follows it and keeps the credential as it is; retry, and the next recover "
+                                 "removes the symlink")
             raise Unreadable("the checkpoint " + p.pending + " cannot be read (" + _errno_word(e) + "); ccrc keeps "
                              "it and the credential as they are; fix its mode with chmod 600 " + p.pending
                              + " or fix the disk, and retry")
