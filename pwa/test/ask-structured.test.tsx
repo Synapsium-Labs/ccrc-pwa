@@ -631,34 +631,46 @@ describe('one scroll region (D-6325)', () => {
 // that `connect()`s through a scripted socket, the socket's own close event for the drop, and the page's `online` event
 // (`ReconnectingSocket.nudge`, which skips the backoff wait) for the reconnect, so `onState` and `onOpen` are the real ones.
 class ScriptedSocket {
-  static all: ScriptedSocket[] = [];
   onopen: ((ev: Event) => void) | null = null;
   onclose: ((ev: CloseEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   readyState = 0;
   readonly url: string;
-  constructor(url: string) {
+  constructor(url: string, sockets: ScriptedSocket[]) {
     this.url = url;
-    ScriptedSocket.all.push(this);
+    sockets.push(this);
   }
   close(): void {}
   send(): void {}
   open(): void { this.readyState = 1; this.onopen?.(new Event('open')); }
   drop(): void { this.readyState = 3; this.onclose?.(new Event('close') as CloseEvent); }
 }
-const lastScripted = (): ScriptedSocket => ScriptedSocket.all[ScriptedSocket.all.length - 1]!;
 
 const RECONNECTING = 'Reconnecting. Answers wait until the session is back.';
 
 describe('the ask holds through a reconnect, and an ask that ends closes with its exit (D-6325)', () => {
+  /** The sockets of the store the case built, in the order its `makeSocket` made them: each store keeps its own list, so
+   *  the current socket never depends on which store's `online` listener ran first. */
+  let sockets: ScriptedSocket[] = [];
+  const lastScripted = (): ScriptedSocket => sockets[sockets.length - 1]!;
+  /** The stores `connected()` built: disconnected after each case, so no `online` listener or presence heartbeat outlives it. */
+  const built: SessionStore[] = [];
+  afterEach(() => {
+    act(() => {
+      for (const store of built.splice(0)) store.getState().disconnect();
+    });
+  });
+
   /** A connected store that has received `fx`'s frames on its first connection. */
   function connected(fx: AskFixture): SessionStore {
-    ScriptedSocket.all = [];
+    sockets = [];
+    const mine = sockets;
     const store = createSessionStore(ID, {
-      makeSocket: (url) => new ScriptedSocket(url) as unknown as WebSocket,
+      makeSocket: (url) => new ScriptedSocket(url, mine) as unknown as WebSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
+    built.push(store);
     act(() => {
       store.getState().connect();
       lastScripted().open();
