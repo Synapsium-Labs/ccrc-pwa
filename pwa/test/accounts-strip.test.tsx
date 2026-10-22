@@ -72,7 +72,7 @@ describe('AccountsStrip', () => {
   // Losing the gauges is fine — losing the one way to REACH the screen that
   // explains why the gauges are gone is the bug.
   describe('never disappears, even with nothing to gauge (Task 6 review fix)', () => {
-    // These two click the strip, a command door now (D-6466): they mount the layer that navigates.
+    // These two click the strip, a command door now (desktop-polish S5a): they mount the layer that navigates.
     it('stays a tappable link when every reporting lane is disabled', async () => {
       stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude9', disabled: true })]);
       render(<><CommandLayer openNewSession={() => {}} /><AccountsStrip /></>);
@@ -114,7 +114,7 @@ describe('AccountsStrip', () => {
   // tappable). It was a plain `<div role="group">` before this; a real
   // interactive element earns the tap-target gate.
   //
-  // The strip is the `go-accounts` command door now (D-6466): a tap asks the command layer, which navigates, so the two
+  // The strip is the `go-accounts` command door now (desktop-polish S5a): a tap asks the command layer, which navigates, so the two
   // nav cases mount the layer beside it.
   describe('nav affordance (Task 6)', () => {
     it('is a link to /accounts, reachable by tap or keyboard', async () => {

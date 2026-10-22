@@ -1,5 +1,5 @@
-// Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, D-6466), in
-// a real Chrome over the production build.
+// Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, desktop-polish
+// S5a), in a real Chrome over the production build.
 //
 // What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Inbox count and five lanes, the
 // header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
