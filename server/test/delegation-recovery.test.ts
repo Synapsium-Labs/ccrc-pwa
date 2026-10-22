@@ -4503,6 +4503,44 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
     expect(rowOf(dur.state().checkpoint, K1)?.activityId).toBe(newId);
   });
 
+  /** The applier's live builder's Bash-call facts, for the fabricated-state rows below: a state no fold reaches, set by cast before the door. */
+  const factsOf = (dur: DelegationDurability): Map<string, Fact> => (dur as unknown as { builder: { bashCalls: Map<string, Fact> } }).builder.bashCalls;
+
+  it('RB9b: a fabricated \'equal\' fact whose preJournalId is not the row\'s identity retires nothing (the identity conjunct; mutant MB7)', async () => {
+    // Unreachable today (a fact starts only on the row's own identity Pre, RB9), so the state is fabricated: K1 meets every other conjunct.
+    const { f, dur, door } = await openB();
+    const k1 = k1Of(dur.state().checkpoint);
+    expect(k1.executionState, 'K1 is ended').toBe('ended');
+    expect(factOf(dur, K1), 'K1 holds the equal fact on its own identity').toEqual({ kind: 'equal', preJournalId: k1.identityJournalId });
+    const other = journalIdOf(f.records, f.e.k2Pre);
+    expect(other, 'the fabricated preJournalId is another record').not.toBe(k1.identityJournalId);
+    factsOf(dur).set(encOf(K1), { kind: 'equal', preJournalId: other });
+    const out = await door();
+    expect(out.retired, 'an equal fact on a record that is not the row\'s identity retires nothing').toBe(0);
+    expect(out.applied, 'and the door writes nothing').toBeNull();
+    expect(rowOf(dur.state().checkpoint, K1), 'K1 is present').toEqual(k1);
+    expect(mapped(dur.state().checkpoint, K1)).toBe(true);
+  });
+
+  it('RB9c: a fabricated \'equal\' fact under a key whose mapped row is not bash-worktree retires nothing (the sourceKind conjunct; mutant MB8)', async () => {
+    // Unreachable today (facts live only under keys encoded with bash-worktree), so the state is fabricated: the ended agent row X meets
+    // every other conjunct. K1 is retired first, so the second door's only candidate is the fabricated one.
+    const { dur, door } = await openB();
+    expect((await door()).retired, 'K1 retires first').toBe(1);
+    const cp = dur.state().checkpoint;
+    const agent = cp.activities.find((a) => a.sourceKind === 'agent' && a.upstreamId === X);
+    expect(agent?.executionState, 'the agent row X is ended').toBe('ended');
+    expect(cp.leases.some((l) => l.activityId === agent!.activityId) || cp.lineage.some((n) => n.activityId === agent!.activityId), 'and unleased').toBe(false);
+    const encoded = Object.keys(cp.activityIdsByNaturalKey).find((k) => cp.activityIdsByNaturalKey[k] === agent!.activityId);
+    expect(encoded, 'X is mapped').toBeDefined();
+    factsOf(dur).set(encoded!, { kind: 'equal', preJournalId: agent!.identityJournalId });
+    const out = await door();
+    expect(out.retired, 'an equal fact under an agent key retires nothing').toBe(0);
+    expect(out.applied, 'and the door writes nothing').toBeNull();
+    expect(dur.state().checkpoint.activities.find((a) => a.activityId === agent!.activityId), 'X is present').toEqual(agent);
+    expect(dur.state().checkpoint.activityIdsByNaturalKey[encoded!], 'and still mapped').toBe(agent!.activityId);
+  });
+
   it('RB10: legacy ended calls that REMOVED a name (R1) or ADDED one (A1) are not retired, hold no fact, and recovery stays ready (mutant MB10)', async () => {
     const records = chainAt(sequenceAt([
       sessionStart(1), bashPre(2, 'toolu_r1', ['a', 'b']), bashPost(3, 'toolu_r1', ['a']), bashPre(4, 'toolu_a1', ['a']), bashPost(5, 'toolu_a1', ['a', 'b']), sessionStart(6),
