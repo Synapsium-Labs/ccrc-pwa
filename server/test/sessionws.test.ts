@@ -728,18 +728,19 @@ describe('hook ask envelope frames', () => {
       expect(cleared(frames)).toHaveLength(1);
     });
 
-    it('an aged multi-question envelope is kept on the pane\'s review screen', async () => {
+    it('an aged multi-question envelope is NOT kept on the review screen of another call', async () => {
+      // The colour/size envelope against `cc296-ask-2q-long-review.txt`, whose review lists two other questions.
       const two = { questions: [
         { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Green' }] },
         { question: 'Which size?', options: [{ label: 'Small' }, { label: 'Large' }] },
       ] };
       const { frames } = await streamWith({
         paneSequence: [fixture('cc296-ask-2q-long-review.txt'), fixture('cc296-ask-2q-long-review.txt')],
-        hookstateSequence: [aged({ ask: two }), aged({ ask: two })],
+        hookstateSequence: [hookBody({ ask: two }), aged({ ask: two })],
       });
       expect(frames.some((f) => f.type === 'dialog')).toBe(true);
-      expect(asks(frames)).toHaveLength(1);
-      expect(cleared(frames)).toHaveLength(0);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that is not its own
     });
 
     it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
