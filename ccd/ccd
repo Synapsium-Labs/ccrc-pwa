@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f4cef2d5033ad6d5f57d1514d20f09b096e4692eaa5a8165550952eb60299a78
+# ccrc:generated 1 sha256=82b9a8f4dff93b1b6b4c0615a81b8a7d3617ff054765df96e76662579cf83de7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30641,7 +30641,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unpend" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unpend began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot place them against this child — stop and start that session (ccd stop <id>, then ccd start <id>), or purge its row once its session has ended"
   [[ -z "$unfield" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unfield have an entry-identity field that is not a regular file or cannot be read, so ccd cannot place them against this child — remove what stands at that field and restart that session"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unfield have an entry-identity field that is not a regular file or cannot be read, so ccd cannot place them against this child — remove what stands at that field, then stop and start that session (ccd stop <id>, then ccd start <id>)"
   [[ -z "$unrec" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unrec entered a directory other than the one their workdir names now, and where they entered can no longer be placed, so ccd cannot place them against this child — stop each session and start it again, or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2

@@ -142,7 +142,7 @@ const DEPARTURES = ['workdirid-pending-form', 'workdirid-unreadable-holds', 'row
   'cwd-probe-confirms-a-vanished-link-by-a-second-read', 'cwd-probe-read-once-more-answers-eacces-for-a-reaped-pid',
   'r77-cases-time-their-race-through-a-python3-shim', 'cwd-probe-collapses-a-double-slash-parent',
   'rows-rung-pass-b-holds-an-unlisted-answer', 'pending-hold-remedy-stops-then-starts',
-  'rows-rung-holds-mask-later-terminal-words'];
+  'rows-rung-holds-mask-later-terminal-words', 'unfield-remedy-restarts-without-a-stop'];
 
 /** The residuals that stand whatever the code says next. */
 const BASE_RESIDUALS = ['reg-purge-inventory-omits-workdirid', 'legacy-row-count-has-no-doctor-line',

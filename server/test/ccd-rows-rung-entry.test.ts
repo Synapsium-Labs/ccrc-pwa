@@ -54,7 +54,9 @@ const NESTED_BY = (id: string): string => `has registry row(s) ${id} rooted insi
 const HELD = 'name a workdir that cannot be resolved completely';
 const PENDING = 'began a spawn that never recorded where its pane entered (its entry identity is pending), so ccd cannot'
   + ' place them against this child — stop and start that session (ccd stop <id>, then ccd start <id>)';
-const UNFIELD = 'have an entry-identity field that is not a regular file or cannot be read';
+const UNFIELD = 'have an entry-identity field that is not a regular file or cannot be read, so ccd cannot place them'
+  + ' against this child — remove what stands at that field, then stop and start that session'
+  + ' (ccd stop <id>, then ccd start <id>)';
 const UNREC = 'entered a directory other than the one their workdir names now, and where they entered can no longer be placed';
 const UNWALK = 'the identity walk of the registry rows did not answer for row';
 

@@ -1356,6 +1356,12 @@ into a pass.
   <id>, then ccd start <id>), or purge its row once its session has ended", because `ccd start` answers "already
   running" for a live session and changes nothing, and a live pane is the commonest pending case. No other remedy and
   no refusal word changed.
+- `unfield-remedy-restarts-without-a-stop`: the `unfield` clause's remedy, for a field that is not a regular file or
+  cannot be read, read "remove what stands at that field and restart that session", which names no stop for a live
+  pane. It reads "remove what stands at that field, then stop and start that session (ccd stop <id>, then ccd start
+  <id>)": the first step clears the hold, and the second lets the pane record its entry again. The wording alone
+  changed. The hold, its return path and the writer of the field are as before, and the verbs are the operator's to
+  run.
 
 **The suites.**
 - `darwin-prefixes-take-the-identity-shims`: on a Linux host, a forced-Darwin full tail now measures identities, and GNU
