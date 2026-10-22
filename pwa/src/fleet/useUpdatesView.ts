@@ -172,7 +172,7 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
 export { nodeVersion, pendingTag } from '../../../shared/update-arrow';
 
 /** The release a waiting update names: the NEWEST `pendingTag` across the inventory in semver order, with the node
- *  behind it. One definition for the update banner (`bannerRelease`) and the Settings release window
+ *  behind it. One definition for the fleet's update line (`bannerRelease`, fleet/releaseWaiting.ts) and the Settings release window
  *  (`releaseWindow`, D-5505), so the two cannot name different waiting releases. `null` when no node has an arrow. */
 export function newestPending(nodes: readonly NodeWire[] | null | undefined): { tag: string; node: NodeWire } | null {
   let best: { tag: string; node: NodeWire } | null = null;

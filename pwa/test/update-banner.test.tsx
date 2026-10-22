@@ -12,14 +12,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
+import type { NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { buttonVariants } from '@ccrc/ui';
 import { useFleetStore } from '../src/stores/fleet';
 import { UPDATES_POLL_MS, UPDATES_STALE_TEXT } from '../src/fleet/useUpdatesView';
-import { bannerRelease, UpdateBanner, updateBannerText } from '../src/fleet/UpdateBanner';
+import { UpdateBanner } from '../src/fleet/UpdateBanner';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -75,221 +75,10 @@ const view = (over: Partial<UpdatesView> = {}): UpdatesView => ({
 
 const banner = (): Element | null => document.querySelector('.update-banner');
 
-describe('UpdateBanner — when it speaks', () => {
-  it('renders on a newer release: the tag, the channel, and what the fleet runs', () => {
-    render(<UpdateBanner updates={view()} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
-    expect(banner()).not.toBeNull();
-    expect(banner()!.getAttribute('role')).toBe('status');
-  });
-
-  it('names each side when the two boxes disagree — the per-node form', () => {
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode(), serverNode({ current: stamp('v0.0.9'), highestVersion: 'v0.0.9' })],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet v0.0.7 · server v0.0.9.')).toBeInTheDocument();
-  });
-
-  it('counts an unversioned node as behind, and the summary says unversioned', () => {
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode({ current: stamp() }), serverNode({ current: stamp('v0.0.9') })],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet unversioned · server v0.0.9.')).toBeInTheDocument();
-  });
-
-  it('reports a never-measured row as a MISSING side, not as an unversioned one', () => {
-    // The server is measured and behind, so the banner speaks; the fleet row is
-    // a placeholder nobody has measured. "unversioned" would state a
-    // measurement nobody made — the summary says the side is missing instead.
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode({ measuredAt: null, current: null, stampRead: 'unreadable', installState: 'unknown', provenance: 'unknown', caps: [], os: 'unknown', highestVersion: null, floorRead: 'unmeasured', previousRead: 'unmeasured', reachable: false, unreachableSince: NOW - 60_000 }), serverNode()],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it("sides are picked from EVERY row, never a pre-filtered subset — two rows share the fleet role, and dropping the unstated one first would change the answer (W5 review 161, F-D)", () => {
-    // Every other case here carries at most ONE row per role, so a caller that
-    // filtered to the rows that vouch (`statedOf`) BEFORE picking sides would
-    // agree with one that did not. Here two LIVE rows are both `role: 'fleet'`:
-    // the first never read its stamp (it occupies the side and renders the
-    // dash), the second is fully stated on v0.0.8. `versionSides` takes the
-    // FIRST fleet row it finds, so the side is the dash; a pre-filter would
-    // drop the first and let the second stand in, naming `v0.0.8`.
-    render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ current: null, stampRead: 'unreadable' }),
-        fleetNode({ nodeId: '7c1d4e9a-3b5f-4a28-8d6e-0f9b2a4c6e81', label: 'fleet-2', current: stamp('v0.0.8') }),
-        serverNode(),
-      ],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it('reads a MEASURED but UNREAD stamp as a MISSING side, never as unversioned (D-3307)', () => {
-    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161,
-    // F-I: `statedOf` asks "ever measured", never "measured this sweep"), but
-    // its stamp did not read (a
-    // local-mode box that cannot read its own build.json). Only the server
-    // side is behind, so the banner speaks off the server's arrow alone; the
-    // fleet side must still read as missing, not "unversioned" — that word
-    // would claim a version measurement nobody made.
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode({ current: null, stampRead: 'unreadable' }), serverNode()],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it('reads a lone both row as both sides ONLY in explicit local mode — unknown/no health states no fleet version (fix round 2, item 3)', () => {
-    // Inverted, review of d5aefc4a: the local both-row fallback nobody
-    // measured must not fire while the fleet mode is UNKNOWN (health null,
-    // the default before it has loaded) — only an EXPLICIT local health
-    // earns it.
-    render(<UpdateBanner health={{ mode: 'local', connected: true, downSince: null }}
-      updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
-  });
-
-  it("picks the NEWEST pending tag in semver order — v0.0.10 over v0.0.9 — with that node's channel", () => {
-    // String order puts 'v0.0.9' above 'v0.0.10'; both node orders are checked,
-    // so neither first-wins nor last-wins can pass by accident.
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode({ desiredTag: 'v0.0.9' }), serverNode({ channel: 'dev', desiredTag: 'v0.0.10' })],
-    })} />);
-    expect(screen.getByText('v0.0.10 is out on dev — fleet and server are on v0.0.7.')).toBeInTheDocument();
-    expect(bannerRelease(view({
-      nodes: [serverNode({ channel: 'dev', desiredTag: 'v0.0.10' }), fleetNode({ desiredTag: 'v0.0.9' })],
-    }))).toEqual({ tag: 'v0.0.10', channel: 'dev' });
-  });
-});
-
-describe('UpdateBanner — when it stays silent (unreachable is not current, spec §7 and §18)', () => {
-  it('is silent when every node runs its desired tag, and when a desired is OLDER than what runs', () => {
-    const equal = render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ current: stamp('v0.0.9'), desiredTag: 'v0.0.9' }),
-        serverNode({ current: stamp('v0.0.9'), desiredTag: 'v0.0.9' }),
-      ],
-    })} />);
-    expect(equal.container).toBeEmptyDOMElement();
-    expect(updateBannerText(view({
-      nodes: [fleetNode({ current: stamp('v0.0.9'), desiredTag: 'v0.0.7' })],
-    }))).toBeNull();
-  });
-
-  it('is silent while the catalogue has never been reached since the server started (lastOkAt: null)', () => {
-    const { container } = render(<UpdateBanner updates={view({
-      catalogue: { lastOkAt: null, lastError: { at: NOW - 30_000, reason: 'rate-limited' } },
-    })} />);
-    expect(container).toBeEmptyDOMElement();
-    expect(updateBannerText(view({ catalogue: { lastOkAt: null, lastError: null } }))).toBeNull();
-  });
-
-  it('is silent when the only node behind has never been measured (measuredAt: null)', () => {
-    // measuredAt is the ONLY field between this fleet row and an arrow: its
-    // stamp was read (stampRead 'ok'), it runs v0.0.7 and desires v0.0.9 on
-    // stable. A placeholder-shaped row (current null, stampRead 'unreadable') would
-    // also be silenced by pendingTag's read-stamp guard, and would keep this
-    // case green over a predicate that lost its measuredAt clause (Step 8, 7).
-    const { container } = render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ measuredAt: null }),
-        serverNode({ current: stamp('v0.0.9') }),
-      ],
-    })} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it('is silent when the only node behind is a macOS node — not centrally managed, so it has no arrow', () => {
-    // D-3309: pendingTag answers null for os 'darwin', so
-    // this banner, BuildLine and the /settings row (which reads the macOS
-    // sentence in place of a desired) say the same thing about the same node.
-    const { container } = render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ os: 'darwin' }),
-        serverNode({ current: stamp('v0.0.9') }),
-      ],
-    })} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it('is silent when the only node behind is UNREACHABLE — no arrow, so the banner does not speak on its account (fix round 2, item 4, D-3316)', () => {
-    // pendingTag now refuses an unreachable node exactly like an unread
-    // stamp (D-3307's own class, widened) — so this node offers nothing to
-    // move up to, and the banner has no OTHER node to speak from.
-    const { container } = render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ reachable: false, unreachableSince: NOW - 60_000 }),
-        serverNode({ current: stamp('v0.0.9') }),
-      ],
-    })} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it('is silent when the only node behind has a channel this build cannot name (channel: null)', () => {
-    const { container } = render(<UpdateBanner updates={view({
-      nodes: [
-        fleetNode({ channel: null, resolveDetail: 'the stored channel is not one this build can read' }),
-        serverNode({ current: stamp('v0.0.9') }),
-      ],
-    })} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
+// The one silent case only a component can show: no answer at all (the render gates on `view !== null`).
+describe('UpdateBanner — when it stays silent', () => {
   it('is silent with no answer at all (updates={null})', () => {
     const { container } = render(<UpdateBanner updates={null} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-});
-
-describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1, widened fix round 2)', () => {
-  const remoteHealth: FleetHealth = { mode: 'remote', connected: true, downSince: null };
-
-  it('states nothing for a fleet side nobody measured — a both row never lends it its version (F1)', () => {
-    // The reviewer's exact rows: a server row recorded `both`, and an actual
-    // fleet-role row whose stamp did not read. `updateBannerText` no longer
-    // pre-filters the nodes before picking sides, so the unreadable fleet
-    // row still occupies its role (rather than vanishing from the array,
-    // which is exactly what let the `both` row's own version stand in for a
-    // fleet nobody measured before this fix).
-    render(<UpdateBanner health={remoteHealth} updates={view({
-      nodes: [serverNode({ role: 'both' }), fleetNode({ current: null, stampRead: 'unreadable' })],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it('on a remote fleet, a lone both row never lends its version to the fleet side (D-3313)', () => {
-    // Narrower than the case above: no fleet-role row exists at all, so only
-    // routing through remoteSides on a remote fleet (never versionSides'
-    // both-fallback) tells the two pickers apart.
-    render(<UpdateBanner health={remoteHealth} updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it('with NO health yet (mode unknown), a lone both row states NO fleet version — inverted, review of d5aefc4a item 3', () => {
-    // This pin previously read the opposite way (health omitted defaulted to
-    // the LOCAL both-fallback). The ruling: while the fleet mode is unknown,
-    // a dash claims nothing, but the local fallback would state a fleet
-    // version off a box that might turn out to be remote — the exact D-3313
-    // hazard, just with "unknown" standing in for "remote". Only an EXPLICIT
-    // local health earns the both-fallback (the case right above this one).
-    render(<UpdateBanner updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-    cleanup();
-    // An explicit remote health reads the same way — remoteSides either way.
-    render(<UpdateBanner health={{ mode: 'remote', connected: true, downSince: null }}
-      updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it('an unreachable fleet row carrying an old version does not state it, and is not read as current (F14, D-3316)', () => {
-    render(<UpdateBanner updates={view({
-      nodes: [fleetNode({ reachable: false, unreachableSince: NOW - 60_000 }), serverNode()],
-    })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
-  });
-
-  it("is silent when lastOkAt is a magnitude this build's Date cannot place — the settings catalogue line's own predicate (F13)", () => {
-    const { container } = render(<UpdateBanner updates={view({ catalogue: { lastOkAt: 1e20, lastError: null } })} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
