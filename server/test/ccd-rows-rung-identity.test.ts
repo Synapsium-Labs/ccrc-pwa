@@ -751,8 +751,7 @@ describe('a `//` spelling the strings cannot place: the walk places it NESTED in
     if (resolved.startsWith('//')) {
       expect(r.verdict, r.detail).toBe('unmeasured');
       expect(r.token).toBe('');
-      expect(r.detail).toContain(`registry row(s) demo-far ${UNPLACED}`);
-      expect(r.detail, 'the reworded remedy is printed').toContain(REMEDY_2);
+      expect(r.detail, 'the reworded remedy follows the clause').toContain(`registry row(s) demo-far ${UNPLACED} ${REMEDY_2}`);
     } else {
       expect(r.verdict, `where pwd -P collapses the //, the row resolves plainly outside: ${r.detail}`).toBe('reclaimable');
     }
