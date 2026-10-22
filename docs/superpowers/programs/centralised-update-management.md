@@ -2705,6 +2705,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         is 1870M, backups total 16320M, and 15059M is free, so the soak's disk question is the operator's again. STATUS:
         fleet and server v0.0.555, newest v0.0.555, stable v0.0.502, intent dev/auto=off, backups fleet 229M/server
         16320M, disk free fleet 163G/work volume 19G/server 15G.
+      - 07:10: no tap. v0.0.556 (#1118, docs) was released, unapplied. The attempt fix holds over its first full hour:
+        none of 55 passes filed an attempt and `cpAttempts` stayed at 56. Passes blocked for a median 7.8 s, with one
+        reconcile-and-repair pass at about 17 s; `stallMid` peaked at 10.0 s. The checkpoint is back to 80.3 MB (+0.85
+        MB since the collapse), the growth the broker's next run (762) addresses. At the broker's coordinator's request
+        (mail 7846), run 762's first boot was measured on copies of the live journal and checkpoint, on the fleet box's
+        root disk (the copy read 12 s of the server's time at idle priority; everything deleted afterwards). Its longest
+        block is 5.1 to 5.4 s against v0.0.555's 3.8 to 4.5 s, and its one-time cleanup blocks for 2.4 to 2.6 s while
+        it retires 97,320 rows (mail 7865). The server still has 15060M free, under the operator's line. STATUS: fleet
+        and server v0.0.555, newest v0.0.556, stable v0.0.502, intent dev/auto=off, backups fleet 229M/server 16320M,
+        disk free fleet 165G/work volume 34G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
