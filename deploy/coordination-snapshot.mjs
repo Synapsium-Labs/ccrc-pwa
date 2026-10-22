@@ -1216,6 +1216,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     } catch (err) {
       if (!(err instanceof SnapError) && !hasCode(err)) throw err;
       warn(ownP, whyOf(err));
+      left++;
     }
   }
 
@@ -1236,6 +1237,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
   }
   const sparse = countable <= keep;
 
+  // Own is kept, or left as it is: a refused own, and one that reads as anything else but still holds a data set, count as left (D-6363, review 806 F2).
   if (ownQ?.word === 'full') {
     try {
       if (!sparse) noteCounted(ownP, ownQ);
@@ -1243,8 +1245,9 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
     } catch (err) {
       if (!(err instanceof SnapError) && !hasCode(err)) throw err;
       warn(ownP, whyOf(err));
+      left++;
     }
-  }
+  } else if (ownQ !== null && holdsData(ownQ)) left++;
 
   for (const [at, dir] of walk.entries()) {
     const name = path.basename(dir);
@@ -1276,8 +1279,11 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, fs = 
         if (verify(dir)) { noteCounted(dir, q); counted++; } else left++;
         continue;
       }
-      // Sparse means the quick pass saw nothing past the count. A dir that reaches here anyway (its quick reading failed then, or
-      // reads differently now) was never verified, and nor were the dirs counted before it, so it is left as it is, never thinned.
+      // Sparse means the quick pass saw nothing past the count. The walk reads again only a dir whose quick reading threw in the pass,
+      // and a stale dir once its record goes (which can only lower the count), so a dir that reaches here is one the pass could not
+      // read. It was never verified, nor were the dirs counted before it, so it is left as it is, never thinned. Outside sparse mode a
+      // dir past the count is thinned on the reading the pass took, before the count's verifications ran (minutes, under the lock):
+      // harmless, because nothing else of ccrc's writes a backup dir while the lock is held (review 806 F8).
       if (sparse) { left++; continue; }
       if (preMigration === 0 && refUv !== null && hasDb(q)) {
         const uv = dbUserVersion(fs, path.join(dir, DB_FILE));

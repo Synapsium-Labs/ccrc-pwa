@@ -2295,7 +2295,7 @@ describe('W23: a thinned backup is its own word (D-6348, D-6349)', () => {
     expect(H.classify({ from: two }).reason).toBe('a thinning did not finish: coordination-snapshot.json is still beside coordination-thinned.json (the next completed update or ccrc backup finishes it)');
   });
 
-  it('W23-H2b (D-6363, review 794 F7): a leftover that differs from what the record says was dropped is invalid, and the reason does not promise that the next run finishes it', () => {
+  it('W23-H2b (D-6349, review 794 F7): a leftover that differs from what the record says was dropped is invalid, and the reason does not promise that the next run finishes it', () => {
     const full = fullSnap();
     let n = 0;
     for (const name of FOUR) {
@@ -3132,5 +3132,47 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(dirListing(d1)).toContain('coord.db');
     expect(dirListing(d3)).toContain('coord.db');
     expect(dirListing(d4)).toEqual(AFTER);
+  });
+
+  it('W23-T24-own (D-6363, review 806 F2): an own that is refused, or that reads damaged, is left, never kept: at keep 2 with three more legacy dirs the summary adds up to the four dirs on disk', () => {
+    const legacyAt = (home: string, ts: string, tables: string[] = ['claims']): string => {
+      const dir = path.join(home, 'ccrc-backups', ts);
+      mkdirSync(dir, { recursive: true });
+      plantDb(path.join(dir, 'coord.db'), { tables });
+      addCode(dir);
+      return dir;
+    };
+    const eio = (): Error => Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+    const cases: Array<[string, (own: string) => any, string[], number]> = [
+      // Only own's 100-byte header read fails: its quick reading is full, and the user_version its count reads is not there.
+      ['its user_version read fails', (own) => ({
+        ...H.realFs,
+        openRead(p: string) {
+          const h = H.realFs.openRead(p);
+          if (h === null || p !== path.join(own, 'coord.db')) return h;
+          return { size: h.size, read(at: number, n: number) { if (at === 0 && n === 100) throw eio(); return h.read(at, n); }, close() { h.close(); } };
+        },
+      }), ['claims'], 1],
+      // Own's quick reading itself throws.
+      ['its quick reading throws', (own) => ({
+        ...H.realFs,
+        lstat(p: string) { if (p === path.join(own, 'coord.db')) throw eio(); return H.realFs.lstat(p); },
+      }), ['claims'], 1],
+      // No WARN: own reads damaged (a coord.db holding a delegation_ table, D-6364) and is left as it is.
+      ['it reads damaged', () => H.realFs, ['delegation_sessions'], 0],
+    ];
+    for (const [why, fsFor, ownTables, refused] of cases) {
+      const home = mkHome();
+      const own = legacyAt(home, stamp(9), ownTables);
+      const [d1, d2, d3] = [8, 7, 6].map((n) => legacyAt(home, stamp(n))) as [string, string, string];
+      const { r, lines } = run({ own, dirs: [d1, d2, d3], keep: 2, by: 'update', fs: fsFor(own) });
+      expect(r, why).toEqual({ kept: 2, thinned: 1, left: 1, refused, stopped: false });
+      expect(r.kept + r.thinned + r.left, `${why}: the summary adds up to the dirs on disk`).toBe(readdirSync(path.join(home, 'ccrc-backups')).length);
+      expect(lines.at(-1), why).toBe('coordination data sets: 2 kept, 1 thinned this run, 1 left as they are');
+      if (refused === 1) expect(lines, why).toContain(`WARN: could not thin ${stamp(9)}: EIO: i/o error, read — it is left as it is`);
+      expect(dirListing(own), `${why}: own is left as it is`).toContain('coord.db');
+      for (const d of [d1, d2]) expect(dirListing(d), why).toContain('coord.db');
+      expect(dirListing(d3), why).toEqual(AFTER);
+    }
   });
 });
