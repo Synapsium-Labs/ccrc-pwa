@@ -77,6 +77,12 @@ function renderScreen(n: number, row: FleetSession) {
   act(() => fleet.setState({ sessions: [row], conn: 'open' }));
   act(() => store.setState({ uuid: 'u1', status: row.status }));
   render(<SessionScreen id={ID} store={store} fleet={fleet} />);
+  // The screen connects the store on mount, and a connecting socket is not live (`onState` lowers `askFrameSeen`, D-6325).
+  // The stream's frames come after the connect, so they are applied again here, as the new connection would send them.
+  act(() => {
+    for (const frame of fx.frames) store.getState().apply(frame);
+  });
+  expect(store.getState().askFrameSeen, 'the fixture says whether a frame was seen').toBe(fx.askFrameSeen);
   return { fx, store };
 }
 
@@ -631,7 +637,11 @@ class ScriptedSocket {
   onerror: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   readyState = 0;
-  constructor(readonly url: string) { ScriptedSocket.all.push(this); }
+  readonly url: string;
+  constructor(url: string) {
+    this.url = url;
+    ScriptedSocket.all.push(this);
+  }
   close(): void {}
   send(): void {}
   open(): void { this.readyState = 1; this.onopen?.(new Event('open')); }
