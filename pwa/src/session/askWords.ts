@@ -14,6 +14,7 @@ import {
   type DialogTabRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
+import { commitWord } from './askLive';
 
 /** The held line of an ask surface's header (D-6325, R4): said while a coordinator holds the question, so the operator
  *  knows why nothing has answered yet and that answering is still theirs. `short` is the coordinator's short name
@@ -117,10 +118,11 @@ export const MULTI_FREE_TEXT_TICKED = "The terminal's answer box is ticked on th
 export const cursorOffOptions = (place: string): string =>
   `In the terminal the cursor is ${place} — move it onto an option there first.`;
 
-/** Where the pane's cursor rests on a multiSelect question, for `cursorOffOptions`: the commit row by its own word, the
- *  free-text row, or neither (`Chat about this`, or no cursor on screen). */
+/** Where the pane's cursor rests on a multiSelect question, for `cursorOffOptions`: the commit row by the sheet's own
+ *  word (`commitWord`, D-6325; never the pane's label for it), the free-text row, or neither (`Chat about this`, or no
+ *  cursor on screen). */
 export function cursorPlace(multi: DialogMulti): string {
-  if (multi.cursor === 'commit') return `on the ${multi.commit.trim()} row`;
+  if (multi.cursor === 'commit') return `on the ${commitWord(multi)} row`;
   if (multi.freeText !== null && multi.cursor === multi.freeText.index) return 'on the answer box';
   return 'off the options';
 }

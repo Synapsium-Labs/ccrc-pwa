@@ -271,6 +271,12 @@ export function commitsToReview(multi: DialogMulti): boolean {
   return COMMIT_LAST_RE.test(multi.commit.trim());
 }
 
+/** The commit row's word as the SHEET says it (D-6325): `Review answers` on the ask's last question, else `Next`. The
+ *  commit button and every sentence that names the row read it from here, never the pane's own label for the row. */
+export const COMMIT_REVIEW = 'Review answers';
+export const COMMIT_NEXT = 'Next';
+export const commitWord = (multi: DialogMulti): string => (commitsToReview(multi) ? COMMIT_REVIEW : COMMIT_NEXT);
+
 /** Which tab of the pane's tab row is the question with this `header` (decision `ask-tab-strip`): its 0-based place when
  *  exactly one tab carries it, else null. The pane marks its active tab by colour alone, so the scraped sheet knows its
  *  place only through the transcript's header for the question, and two tabs with one header say nothing. */

@@ -28,7 +28,7 @@ import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
 import type { AskKeys } from './useAskKeys';
 import {
-  SUBMIT_ANSWERS, commitsToReview, optionCopy, paneTicks, slotHolds, slotHoldsPart, wantedTicks, type AskSource,
+  SUBMIT_ANSWERS, commitWord, optionCopy, paneTicks, slotHolds, slotHoldsPart, wantedTicks, type AskSource,
   type FreeTextSlot, type StructuredQuestion,
 } from './askLive';
 import {
@@ -585,7 +585,7 @@ const MULTI_OWN_WORDS = 'To add your own answer, use the terminal';
  *  - The boxes follow the pane's ticks until the operator touches one here (`Picks.picked`); from then the sheet's set
  *    stands until the question changes. While a commit is under way they show the set it sent.
  *  - The commit reads `Next`, or `Review answers` on the last question, where Tab lands on the review screen
- *    (`commitsToReview`). It is held back where the route would refuse (`multiHeld`): no box ticked, the free-text box
+ *    (`commitWord`). It is held back where the route would refuse (`multiHeld`): no box ticked, the free-text box
  *    ticked, or the cursor off the boxes; each of the last two says so in one line.
  *  - Free text inside such a question is the terminal's, said in one line where the pane paints the row.
  *
@@ -652,7 +652,7 @@ export function MultiPick({
           aria-busy={busy || undefined}
           onClick={() => onCommit(wanted)}
         >
-          {commitsToReview(multi) ? 'Review answers' : 'Next'}
+          {commitWord(multi)}
           {busy && <span className="opt-wait"> answering…</span>}
         </Button>
       </div>
