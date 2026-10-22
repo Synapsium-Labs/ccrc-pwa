@@ -693,7 +693,7 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 
   it('W25-Y2: the decide step holds the job\'s only pre-publish token, and runs the first arm', () => {
-    expect(wf()).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m);
+    expect(wf()).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        continue-on-error: true\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m);
   });
 
   it('W25-Y3: decide runs before setup-node, which a skipped merge leaves out', () => {

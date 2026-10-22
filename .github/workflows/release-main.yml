@@ -60,9 +60,13 @@ jobs:
       # installs nothing. A merge that changes nothing that ships skips the
       # toolchain and its cache below (D-6401). The checkout's persisted
       # credential and the job's OIDC request token still reach every step,
-      # as before this wave (D-6405).
+      # as before this wave (D-6405). The step continues on error: a decide that
+      # crashes must not block a code merge's release, so its output is then
+      # absent, the toolchain step below still runs, and prepare, finding no
+      # decision recorded, releases as it always did.
       - name: Decide whether this merge changes what ships
         id: decide
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash deploy/release-main.sh decide --out release-out

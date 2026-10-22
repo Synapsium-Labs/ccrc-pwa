@@ -366,15 +366,24 @@ function deriveReleaseInputs(read: Read): Derived {
 /** `input` is a path or '' for the repository root, which every file is under. */
 const under = (file: string, input: string): boolean => input === '' || file === input || file.startsWith(`${input}/`);
 
+/** The NOT_SHIPPED trees that a path reads whole: every tree when the path is the repository root, and a tree below it otherwise. */
+function treesBelow(p: string): string[] {
+  const root = p === '' || p === '.';
+  const out: string[] = [];
+  for (const r of NOT_SHIPPED) if ('tree' in r && (root || r.tree.startsWith(`${p}/`))) out.push(r.tree);
+  return out;
+}
+
+/** True when a build reading `p` reaches NOT_SHIPPED: the path is claimed, or it is the root or an ancestor of a tree rule (the root covers the root-file rules). */
+const reachesNotShipped = (p: string): boolean => notShipped(p) || p === '' || p === '.' || treesBelow(p).length > 0;
+
 /** Every tracked file at or under a derived input that notShipped claims, plus every input notShipped claims. */
 function shippedViolations(inputs: string[], files: string[]): string[] {
   const out = new Set<string>();
   for (const input of inputs) {
     if (notShipped(input)) out.add(input);
     // An input that is the root or an ancestor of a tree rule reads the whole of that tree.
-    for (const r of NOT_SHIPPED) {
-      if ('tree' in r && (input === '' || r.tree.startsWith(`${input}/`))) out.add(`${input || '.'} contains ${r.tree}`);
-    }
+    for (const tree of treesBelow(input)) out.add(`${input || '.'} contains ${tree}`);
     for (const f of files) if (under(f, input) && notShipped(f)) out.add(f);
   }
   return [...out].sort();
@@ -386,7 +395,7 @@ function linkEscapes(inputs: string[], links: Map<string, string>): string[] {
   for (const [link, target] of links) {
     if (!inputs.some((i) => under(link, i))) continue;
     const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(link), target)).replace(/\/+$/, '');
-    if (notShipped(resolved)) out.push(`${link} -> ${resolved}`);
+    if (reachesNotShipped(resolved)) out.push(`${link} -> ${resolved}`);
   }
   return out.sort();
 }
@@ -438,7 +447,7 @@ function importEscapes(d: Derived, files: string[], read: Read): string[] {
       else if (file.endsWith('.html') && value !== '') candidates.push(path.posix.join(path.posix.dirname(file), value));
       for (const c of candidates) {
         const resolved = path.posix.normalize(cutGlob(c) || '.').replace(/\/+$/, '');
-        if (notShipped(resolved)) out.add(`${file} -> ${resolved}`);
+        if (reachesNotShipped(resolved)) out.add(`${file} -> ${resolved}`);
       }
     }
   }
@@ -536,6 +545,8 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
       ['a file: dependency subpath', { 'server/src/w25.ts': "import 'ccrc-agent/test/x.js';\n" }, 'agent/test/x.js'],
       ['a css @source', { 'pwa/src/styles/w25.css': "@source '../../../docs/**/*.md';\n" }, 'docs'],
       ['a css @import', { 'pwa/src/styles/w25.css': "@import '../../../docs/a.css';\n" }, 'docs/a.css'],
+      ['a css @source of the repository root', { 'pwa/src/styles/w25.css': "@source '../../../';\n" }, '.'],
+      ['an import.meta.glob of an ancestor of a tree rule', { 'pwa/src/w25.ts': "const m = import.meta.glob('../../server/**/*.ts');\n" }, 'server'],
     ])('%s is reported', (_name, add, resolved) => {
       const got = planted(add);
       expect(got.length).toBeGreaterThan(0);
@@ -556,6 +567,8 @@ describe('W25 the guard: no build input is on the NOT_SHIPPED list', { timeout: 
     expect(linkEscapes(derived.inputs, links)).toEqual([]);
     const planted = new Map(links).set('pwa/src/w25', '../../docs/a.md');
     expect(linkEscapes(derived.inputs, planted)).toEqual(['pwa/src/w25 -> docs/a.md']);
+    const toRoot = new Map(links).set('pwa/src/w25', '../..');
+    expect(linkEscapes(derived.inputs, toRoot).length).toBeGreaterThan(0);
   });
 });
 
