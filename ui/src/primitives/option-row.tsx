@@ -114,6 +114,8 @@ export function OptionRow({
       <span className="opt-body">
         <span className="opt-label">
           {label}
+          {/* A space between them, so the accessible name reads "Fast path Recommended". */}
+          {tag !== undefined && ' '}
           {tag}
         </span>
         {sublabel && <span className="opt-desc">{sublabel}</span>}
