@@ -282,17 +282,23 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // D-5091: and ends a multiSelect commit that landed, and forgets the set touched on the last question; a commit
   // still in FLIGHT keeps its call (the screen it moved on to can arrive before the call's answer), and its settle
   // decides.
+  // D-6325: and when the held surface CLOSES (the ask ended). A pane menu's id is a hash of its labels and title, so the
+  // same menu asked again has the SAME id, and the closed hold keeps the old one: without `closed` here nothing would
+  // run when it ended, and the menu coming back would open with the old answer's marker set (`answering…`, every row
+  // disabled, the dismissal refused). A closed surface is the screen gone, as `dialog` going null once was: it shows no
+  // pane, so a send that landed against it is spent, and clearing it is invisible (the surface is inert and leaving).
   useEffect(() => {
+    const onScreen = closed ? null : dialog;
     setAnswering(null);
-    setOwn((o) => (o.call?.state === 'landed' && !showsSent(dialog, o.call, o.text) ? NO_WORDS : o));
-    if (own.call?.state === 'landed' && !showsSent(dialog, own.call, own.text)) setOtherFor(null);
+    setOwn((o) => (o.call?.state === 'landed' && !showsSent(onScreen, o.call, o.text) ? NO_WORDS : o));
+    if (own.call?.state === 'landed' && !showsSent(onScreen, own.call, own.text)) setOtherFor(null);
     // A chosen Other is spent with its screen: unless text or a call is kept, a new screen starts with the field closed,
     // so it cannot reopen on returning to the question or on a later question with the same words.
     else if (own.text === '' && own.call === null) setOtherFor(null);
     setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dialogId]);
+  }, [dialogId, closed]);
 
   // Anything in flight: an option's answer, a Deny, an own-words send or a multiSelect commit. Each refuses another send and
   // the dismissal.
