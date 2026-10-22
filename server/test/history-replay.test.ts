@@ -9038,8 +9038,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   });
   /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
    *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
-  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a'): R7 {
-    const s0 = { ...step0a7(root, home), account };
+  function draft7(root: string, home: string, over: R7 = {}, account = 'up-a', wrapper: string | null = null): R7 {
+    const s0 = { ...step0a7(root, home), account, wrapper_sha256: wrapper };
     return r7drv.buildDraft({
       nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
       step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
@@ -9101,8 +9101,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
   /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
    *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
    *  pilot result), and the part 2 buildFinal makes from them. */
-  function chain7(home: string, draftOver: R7 = {}, account = 'up-a'): R7 {
-    const draft = draft7(R7_REPO, home, draftOver, account);
+  function chain7(home: string, draftOver: R7 = {}, account = 'up-a', wrapper: string | null = null): R7 {
+    const draft = draft7(R7_REPO, home, draftOver, account, wrapper);
     const d = save7(draft, 'part1.json');
     const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
     const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
@@ -9890,7 +9890,12 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     // Each row breaks one input and names the setup of both subcommands; the CONTROL is the same run with that input
     // admissible, which gets past the check and makes --out (it may refuse at open for another reason: a later word).
     type AdmRow = { word: string; detail: string | null; pilot: (home: string, broken: boolean) => string;
-      quiz: (home: string, broken: boolean) => { account: string; over: R7 } };
+      quiz: (home: string, broken: boolean) => { account: string; over: R7 };
+      /** The wrapper sha the step 0a output (pilot) or part 1 (quiz) records: the planted wrapper's own when set (D-6311 checks it). */
+      wrapper?: (home: string, broken: boolean) => string | null };
+    const stamp7 = (home: string, version: string): void => {
+      r7fs.writeFileSync(r7path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version }));
+    };
     const limitsRow7 = (home: string, five: number): void => {
       const nowS = Math.floor(Date.now() / 1000);
       r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
@@ -9917,7 +9922,20 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
         quiz: (_home, broken) => ({ account: 'up-a', over: broken ? { limits: { threshold_pct: 5 } } : {} }) },
       { word: 'wrapper-unmeasured', detail: 'wrapper',
         pilot: (home, broken) => { genRoster7(home, !broken); return 'gen-a'; },
-        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; } },
+        quiz: (home, broken) => { genRoster7(home, !broken); return { account: 'gen-a', over: {} }; },
+        // The CONTROL records the planted wrapper's sha, so it passes D-6311's wrapper-moved too and --out is made.
+        wrapper: (home) => (r7fs.existsSync(r7path.join(home, '.local', 'bin', 'gen-a')) ? r7Sha(r7fs.readFileSync(r7path.join(home, '.local', 'bin', 'gen-a'))) : null) },
+      // D-6311: preflight's no-spawn half. A tree whose stamp cannot be read, a stamp that moved, and a wrapper whose bytes moved.
+      { word: 'tree-unmeasured', detail: 'the release stamp is absent',
+        pilot: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'build.json')); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) r7fs.rmSync(r7path.join(home, '.ccrc', 'build.json')); return { account: 'up-a', over: {} }; } },
+      { word: 'tree-moved', detail: `recorded ${STAMP}, measured v9.9.8`,
+        pilot: (home, broken) => { if (broken) stamp7(home, 'v9.9.8'); return 'up-a'; },
+        quiz: (home, broken) => { if (broken) stamp7(home, 'v9.9.8'); return { account: 'up-a', over: {} }; } },
+      { word: 'wrapper-moved', detail: null,
+        pilot: (home) => { genRoster7(home, true); return 'gen-a'; },
+        quiz: (home) => { genRoster7(home, true); return { account: 'gen-a', over: {} }; },
+        wrapper: (home, broken) => (broken ? null : r7Sha(r7fs.readFileSync(r7path.join(home, '.local', 'bin', 'gen-a')))) },
     ];
     const admDetail = (row: AdmRow, home: string): string | null => (row.detail === 'wrapper' ? `${r7path.join(home, '.local', 'bin', 'gen-a')}: ENOENT` : row.detail);
     const admit7 = (process.platform === 'darwin' ? r7it.skip : r7it).each(ADM_ROWS.map((r) => [r.word, r] as [string, AdmRow]));
@@ -9926,7 +9944,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
         const home = home7(STORE_A);
         const account = row.pilot(home, broken);
-        const s0 = save7({ ...step0a7(R7_REPO, home), account }, 'step0a.json');
+        const s0 = save7({ ...step0a7(R7_REPO, home), account, wrapper_sha256: row.wrapper?.(home, broken) ?? null }, 'step0a.json');
         const out = outDir();
         const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
         const calls: R7[] = [];
@@ -9939,6 +9957,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
       r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
       r7expect(bad.calls).toBe(0);
+      r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
       const ok = await run(false);
       r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
       r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
@@ -9948,7 +9967,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const run = async (broken: boolean): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
         const home = home7(STORE_A);
         const { account, over } = row.quiz(home, broken);
-        const c = chain7(home, over, account);
+        const c = chain7(home, over, account, row.wrapper?.(home, broken) ?? null);
         const out = outDir();
         const calls: R7[] = [];
         const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
@@ -9960,9 +9979,66 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       if (admDetail(row, bad.home) !== null) r7expect(bad.refusal?.detail).toBe(admDetail(row, bad.home));
       r7expect(bad.made, 'no --out: the refusal answered before prepareOut').toBe(false);
       r7expect(bad.calls).toBe(0);
+      r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
       const ok = await run(false);
       r7expect(ok.refusal?.word, 'CONTROL: past the check').not.toBe(row.word);
       r7expect(ok.made, `CONTROL: prepareOut made --out (${JSON.stringify(ok.refusal)})`).toBe(true);
+    }, 120_000);
+
+    // D-6311: the code words (the tree the driver runs from is the unmeasurable one), the precedence the pre-check changes,
+    // and the store open that now comes before --out. Each runs the real subcommand as a child, with the real tree.
+    const pilotArgv7 = (out: string, s0: Saved): string[] => ['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)];
+    (process.platform === 'darwin' ? r7it.skip : r7it).each([
+      ['edit', 'code-changed', 'changed deploy/measure-history.py'],
+      ['drop', 'code-unmeasured', 'deploy/measure-history.py is absent'],
+    ] as const)('D-6311: pilot-source, a gate_code file %s in the tree it runs from answers %s before --out exists and before any spawn; CONTROL: an unchanged tree makes --out', (how, word, detail) => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const out = outDir();
+      const bad = run7(tree7({ [how]: 'deploy/measure-history.py' }), home, pilotArgv7(out, s0));
+      r7expect(bad.code).toBe(2);
+      r7expect(bad.stderr).toBe(refusalLine(word, detail));
+      r7expect(r7fs.existsSync(out), 'no --out').toBe(false);
+      r7expect(stubLog(home) ?? [], 'no spawn at all').toEqual([]);
+      const out2 = outDir();
+      run7(tree7(), home, pilotArgv7(out2, s0));
+      r7expect(r7fs.existsSync(out2), 'CONTROL: the unchanged tree makes --out').toBe(true);
+    }, 120_000);
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('D-6311: with the Claude Code version and the tree both moved, the pre-check answers tree-moved before --out, where open would have said claude-version-moved; CONTROL: the version alone is open\'s, after --out', async () => {
+      const run = async (moveTree: boolean): Promise<{ refusal: R7 | null; made: boolean; runs: number }> => {
+        const home = home7(STORE_A);
+        const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+        r7fs.writeFileSync(r7path.join(home, STUB_STREAM), `{"type":"system","note":"another version"}\n` + r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8'));
+        if (moveTree) stamp7(home, 'v9.9.8');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(pilotArgv7(out, s0)) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => { throw new Error('never'); }, seed: () => PILOT_SEED } as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out), runs: (stubLog(home) ?? []).length };
+      };
+      const both = await run(true);
+      r7expect(both.refusal).toMatchObject({ word: 'tree-moved' });
+      r7expect([both.made, both.runs], 'no --out and no --version spawn').toEqual([false, 0]);
+      const version = await run(false);
+      r7expect(version.refusal).toMatchObject({ word: 'claude-version-moved' });
+      r7expect([version.made, version.runs], 'CONTROL: the version is measured by a spawn, at open, after --out').toEqual([true, 1]);
+    }, 120_000);
+
+    r7it('D-6311: pilot-source opens its store before --out exists: a node with no store refuses store-unreadable and leaves no --out; CONTROL: with a store --out is made', async () => {
+      const run = async (store: string | null): Promise<{ refusal: R7 | null; made: boolean }> => {
+        const home = home7(store);
+        const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(pilotArgv7(out, s0)) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+          { sourceQuiz: async () => ({ entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED } as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out) };
+      };
+      const none = await run(null);
+      r7expect(none.refusal).toMatchObject({ word: 'store-unreadable' });
+      r7expect(none.made, 'no --out').toBe(false);
+      r7expect((await run(STORE_A)).made, 'CONTROL').toBe(true);
     }, 120_000);
   });
 

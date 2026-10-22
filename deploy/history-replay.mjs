@@ -2059,17 +2059,21 @@ export async function measureClaudeVersion(launch, out, lang) {
   return { state: 'value', version };
 }
 
-/** Compare what was recorded with what is measured, in W2-D56's fixed order: the Claude Code version, the release
- *  stamp (W2-D6's tree-moved), the wrapper, the four code shas. A moved word names a MEASURED mismatch only; an
- *  input that cannot be measured refuses its own word at its place (coordinator ruling): version-unmeasured,
- *  tree-unmeasured, code-unmeasured (the wrapper's, wrapper-unmeasured, is wrapperSha's refusal, before this is
- *  reached: measured.wrapperSha256 is a sha or upstream's null). Only the code-changed word, a MEASURED change,
- *  may become a stamp, and only with allowCodeChange (W2-D24's --allow-code-change); no unmeasured word ever
- *  does. Pure. */
-export function preflight(expected, measured, opts = {}) {
+/** The version half of the preflight (W2-D56): the one comparison that needs a spawn (`--version`), asked first. Pure.
+ *  @returns {{ ok: false, word: string, detail: string } | null} the refusal, or null when the version holds */
+function preflightVersion(expected, measured) {
   const v = measured.version;
   if (v.state !== 'value') return { ok: false, word: 'version-unmeasured', detail: `--version failed (code ${v.code}, signal ${v.signal})` };
   if (v.version !== expected.claude_code_version) return { ok: false, word: 'claude-version-moved', detail: `recorded ${expected.claude_code_version}, measured ${v.version}` };
+  return null;
+}
+
+/** The no-spawn half of the preflight (D-6311): the release stamp, the wrapper and the four code shas, in W2-D56's order.
+ *  Each is a file read, so a caller that has measured them can ask before it spawns anything: refuseWriterAdmission asks it
+ *  before --out exists, and `preflight` asks it again, after the version, at open. Pure. `measured` carries `stamp`,
+ *  `wrapperSha256` and `codeShas`, no version.
+ *  @returns {{ ok: false, word: string, detail: string } | { ok: true, stamps: string[] }} */
+export function preflightFiles(expected, measured, opts = {}) {
   const s = measured.stamp;
   if (s.state !== 'value') return { ok: false, word: 'tree-unmeasured', detail: `the release stamp is ${s.state}${s.state === 'unreadable' ? ` (${s.code})` : ''}` };
   if (s.tag !== expected.release_stamp) return { ok: false, word: 'tree-moved', detail: `recorded ${expected.release_stamp}, measured ${s.tag}` };
@@ -2081,6 +2085,17 @@ export function preflight(expected, measured, opts = {}) {
   if (moved.length === 0) return { ok: true, stamps: [] };
   if (opts.allowCodeChange === true) return { ok: true, stamps: ['code-changed'] };
   return { ok: false, word: 'code-changed', detail: `changed ${moved.join(' ')}` };
+}
+
+/** Compare what was recorded with what is measured, in W2-D56's fixed order: the Claude Code version
+ *  (preflightVersion), then preflightFiles' release stamp (W2-D6's tree-moved), wrapper and four code shas. A moved word
+ *  names a MEASURED mismatch only; an input that cannot be measured refuses its own word at its place (coordinator ruling):
+ *  version-unmeasured, tree-unmeasured, code-unmeasured (the wrapper's, wrapper-unmeasured, is wrapperSha's refusal, before
+ *  this is reached: measured.wrapperSha256 is a sha or upstream's null). Only the code-changed word, a MEASURED change,
+ *  may become a stamp, and only with allowCodeChange (W2-D24's --allow-code-change); no unmeasured word ever
+ *  does. Pure. */
+export function preflight(expected, measured, opts = {}) {
+  return preflightVersion(expected, measured) ?? preflightFiles(expected, measured, opts);
 }
 
 const plainObject = (o) => o !== null && typeof o === 'object' && !Array.isArray(o);
@@ -5333,18 +5348,23 @@ function pilotResultError(o) {
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
-/** D-6307 (R10): the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes --out, so a
- *  refused run leaves no --out. In openWriter's order, through the SAME functions it calls, never a second spelling: the
- *  roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`) and the limits row
- *  at open (`limits-threshold` and the other limits words). It writes nothing, and it is a pre-check only: openWriter
- *  asks every one again and stays the authority at open, so a state that moves between the two still refuses there,
- *  after --out was made (an empty --out is that race's residual). The `--version` spawn stays openWriter's.
- *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number } }} o */
-function refuseWriterAdmission({ home, accountId, limits }) {
+/** D-6307 (R10), D-6311: the refusals openWriter makes that need no store and no spawn, asked before prepareOut makes --out,
+ *  so a refused run leaves no --out. In openWriter's order, through the SAME functions it calls, never a second spelling:
+ *  the roster (`roster-invalid`), the account (`account-refused`), the wrapper's sha (`wrapper-unmeasured`), the limits row
+ *  at open (`limits-threshold` and the other limits words) and preflight's no-spawn half (preflightFiles: `tree-unmeasured`,
+ *  `tree-moved`, `wrapper-moved`, `code-unmeasured`, `code-changed`) against `expected`, the values openWriter is given.
+ *  It writes nothing, and it is a pre-check only: openWriter asks every one again and stays the authority at open, so a
+ *  state that moves between the two still refuses there, after --out was made (an empty --out is that race's residual).
+ *  The `--version` probe is a spawn and stays openWriter's, so with both the version and the tree moved this answers
+ *  `tree-moved` where open would have said `claude-version-moved`.
+ *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number }, expected: object }} o */
+function refuseWriterAdmission({ home, accountId, limits, expected }) {
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);
-  wrapperSha(launch);
+  const wrapperSha256 = wrapperSha(launch);
   refuseOnLimits(home, accountId, { thresholdPct: limits.threshold_pct, maxAgeMs: limits.max_age_ms }, Date.now());
+  const verdict = preflightFiles(expected, { stamp: readReleaseStamp(home), wrapperSha256, codeShas: codeShas() });
+  if (!verdict.ok) refuse(verdict.word, verdict.detail);
 }
 
 // A handler that takes deps after its env names that parameter driverEnv, never env: W2-4 Task 5's env scan reads
@@ -5370,12 +5390,12 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
   const writerModel = flags['writer-model'];
   refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
   refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
-  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS });   // D-6307: so do the roster, the account, the wrapper and the limits row
-  const out = prepareOut(flags.out);
-  refuseColonInRealOut(out);
-  const claim = claimOut(out);
+  refuseWriterAdmission({ home, accountId: flags.account, limits: LIMITS_DEFAULTS, expected: step0a });   // D-6307, D-6311: so do the roster, the account, the wrapper, the limits row and the tree
+  const rs = openReplayStore(home);   // the run's one store open (R3), read-only and before --out like quiz-source's (D-6311)
   try {
-    const rs = openReplayStore(home);   // the run's one store open (R3)
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    const claim = claimOut(out);
     try {
       // The writer: the model, the account (W2-D52), the gate (W2-D55) and W2-D56's preflight against step 0a, before
       // any writer spawn and before every writer batch (Task 6's openWriter).
@@ -5401,10 +5421,10 @@ export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, 
       process.stderr.write(`sha256 ${shaOfPlain(out, PILOT_SOURCE_FILE)}\n`);   // D-5983: stderr; stdout stays empty
       return EXIT.OK;
     } finally {
-      rs.close();
+      claim.release();
     }
   } finally {
-    claim.release();
+    rs.close();
   }
 }
 
@@ -5427,7 +5447,9 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     const entry = rec.record.step0a.find((s) => s.store_id === storeId);   // the validator binds exactly one per node
     const writerModel = rec.record.writer_model;
     refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
-    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits });   // D-6307: before --out exists
+    const expected = { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
+      wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files };
+    refuseWriterAdmission({ home, accountId: rec.record.account, limits: rec.record.limits, expected });   // D-6307, D-6311: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);
@@ -5436,8 +5458,7 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
       // this node's part 1 step 0a entry and gate_code before every writer batch (Task 6's openWriter; W2-D56).
       const writer = await openWriter({ home, accountId: rec.record.account, model: writerModel, settingsMode: rec.record.settings_mode,
         writerInput: rec.record.quiz.writer_input, claim, budget: rec.record.pilot_budget, limits: rec.record.limits,
-        expected: { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
-          wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files }, lang: driverEnv.LANG, idx: rs.idx });
+        expected, lang: driverEnv.LANG, idx: rs.idx });
       const sourced = await deps.sourceQuiz({
         // No family list (R10, C1): sourceQuiz walks this store's admitted families; assembled.kept fed the assignment only.
         mode: 'quiz', rs, home, out, writer, seedHex: rec.record.bootstrap.seed,
