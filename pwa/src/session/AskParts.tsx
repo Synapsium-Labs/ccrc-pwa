@@ -1,7 +1,8 @@
 // The parts of an AskUserQuestion surface (D-5089, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2),
 // written once and shared by the structured content (`EnvelopeSheet.tsx`) and the controller's own surfaces
 // (`DialogSheet.tsx`: the review, the menu, the terminal door): the same container, the same eyebrow, the same review
-// screen, the same sentence for a question the sheet cannot answer yet.
+// screen, the same sentence for a question the sheet cannot answer yet. `DialogSheet` is the one controller and the one
+// sender: it decides which surface shows through `askSource`, and on an AskUserQuestion it shows no pane text.
 //
 // The hook's envelope ages out and `ask_cleared` arrives 30 minutes into an unanswered ask ONLY when no menu
 // corresponding to its call is up (D-6324, Task T1a): while the pane shows such a menu, the review screen of a
