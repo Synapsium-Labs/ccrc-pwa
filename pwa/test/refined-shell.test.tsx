@@ -142,11 +142,11 @@ describe('the app bar (W2 Task S4b)', () => {
       { seq: 3, at: after + 1, kind: 'interrupt', sessionId: 'x', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
       { seq: 4, at: after + 2, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5', runId: null },
     ];
-    // The same feed through the phone's mail door and the desk's Inbox tab.
+    // The same feed through the phone header's Inbox door (W2 Task S5) and the desk's Inbox tab.
     atWidth(899);
     render(<App />);
     act(() => useFleetStore.setState({ conn: 'open', feed }));
-    expect(screen.getByRole('button', { name: 'Mail — 2 unread' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inbox, 2 unread' })).toBeInTheDocument();
     cleanup();
     vi.unstubAllGlobals();
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
@@ -231,7 +231,8 @@ describe('the app bar (W2 Task S4b)', () => {
         expect(document.querySelector('header.shell-accounts')).toBeNull();
         expect(fleet.contains(readouts[0]!)).toBe(true);
         expect(fleet.contains(slot)).toBe(true);
-        expect(within(fleet).getByRole('button', { name: /^Mail —/ })).toBeInTheDocument();
+        // Below 900 the column holds the chrome: Refined's phone header and its Inbox door (W2 Task S5).
+        expect(within(fleet).getByRole('button', { name: /^Inbox/ })).toHaveAttribute('data-command', 'go-inbox');
       }
     });
   }

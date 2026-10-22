@@ -17,6 +17,7 @@ import {
 } from '../../../shared/api';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { doorMark } from '../command/door';
 import './digest.css';
 
 const DAY_MS = 86_400_000;
@@ -172,7 +173,7 @@ export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
   return (
     <div className="digest-screen">
       <header className="digest-head">
-        <BackButton className="digest-back" aria-label="Back to fleet" onClick={() => navigate('/')}>‹</BackButton>
+        <BackButton className="digest-back" aria-label="Back to fleet" onClick={() => navigate('/')} {...doorMark('go-fleet')}>‹</BackButton>
         <h1 className="digest-title">Coordinator digest</h1>
       </header>
       {shown !== null && (
