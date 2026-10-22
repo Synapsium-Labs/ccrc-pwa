@@ -452,7 +452,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     // The group heads and the toggle sit at --row-h.
     expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
-    // Every dense value is a token: no literal length, no colour.
+    // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl).
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line', '.ins-group-head', '.ins-toggle-option']) {
       expect(declsOf(sel, DENSE), sel).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
     }
