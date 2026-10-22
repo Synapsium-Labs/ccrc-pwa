@@ -2715,6 +2715,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         it retires 97,320 rows (mail 7865). The server still has 15060M free, under the operator's line. STATUS: fleet
         and server v0.0.555, newest v0.0.556, stable v0.0.502, intent dev/auto=off, backups fleet 229M/server 16320M,
         disk free fleet 165G/work volume 34G/server 15G.
+      - 07:55: mail 7877, the broker's growth fix merged (#1115, run 762, prerelease v0.0.557): Bash calls open only on
+        a changed listing, and a one-time retirement removes the zero-delta stock (about 97k rows; the checkpoint from
+        about 80 MB to about 12.5 MB). The probe now reads its boot line, each `retired=` value, any retirement failure
+        and any failed, refused or reconstructing recovery (an ANOMALY), from the last hour. Baseline: `cpActivities`
+        111,320. Unapplied; the rollout is the operator's.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
