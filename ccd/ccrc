@@ -2499,7 +2499,7 @@ already running).
             to the newest CCRC_BACKUP_KEEP (default 10, read from the process
             environment only) timestamped backups, never this run's own; then
             every backup past the newest CCRC_BACKUP_DATA_KEEP (default 3; the
-            environment, else ~/.ccrc/ccrc.env) that carry the coordination
+            environment, else the box's ccrc.env) that carry the coordination
             data set is thinned to its code and coordination-thinned.json.
             With no --to the target is the control plane's projection
             (~/.ccrc/update-intent): its desired, or for one run
@@ -23683,10 +23683,19 @@ _bak_ours() {
 # The process environment, else ~/.ccrc/ccrc.env (as `_upd_deadline_ms` reads its knob: thinning cannot be undone, and a
 # console-driven move or the watchdog runs under an environment that carries none unless it was set there), else 3. A whole number
 # from 2 to 9999, through `_keep_ok`; 0 and 1 are refused, never clamped. rc 0 sets BAK_DATA_KEEP (decimal); rc 1 sets
-# BAK_DATA_KEEP_WHY to the refusal sentence.
+# BAK_DATA_KEEP_WHY to the refusal sentence. Unmeasured is not unset (D-6365): a ccrc.env that is there but cannot be read, or
+# that names the knob on a line `_box_env_value` does not take (an `export`, a space before `=`), refuses like an invalid value,
+# naming the file and never its bytes; only an absent file, or one that never names the knob, falls back to 3. The same
+# fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
 _bak_data_keep() {
+  local f="$BOX_ENV_FILE" g=0 why=""
   BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
-  [ -n "$BAK_DATA_KEEP" ] || { [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && BAK_DATA_KEEP="$(_box_env_value "$BOX_ENV_FILE" CCRC_BACKUP_DATA_KEEP)"; }
+  if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
+    if [ -f "$f" ] && [ -r "$f" ]; then grep -Eq '^[[:space:]]*(export[[:space:]]+CCRC_BACKUP_DATA_KEEP[[:space:]]*|CCRC_BACKUP_DATA_KEEP[[:space:]]+)=' "$f" || g=$?; else g=3; fi
+    case "$g" in 0) why="names it on a line this reader does not take (only KEY=value: no export, no space before =)" ;; 2) why="could not be scanned" ;; 3) why="is there but cannot be read" ;; esac
+    [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${f/#"$HOME"/\~} $why"; return 1; }
+    BAK_DATA_KEEP="$(_box_env_value "$f" CCRC_BACKUP_DATA_KEEP)"
+  fi
   BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"
   if _keep_ok "$BAK_DATA_KEEP" && [ "$((10#$BAK_DATA_KEEP))" -ge 2 ]; then BAK_DATA_KEEP=$((10#$BAK_DATA_KEEP)); return 0; fi
   BAK_DATA_KEEP_WHY="$(_keep_why CCRC_BACKUP_DATA_KEEP "$BAK_DATA_KEEP" 2)"; return 1
@@ -23779,8 +23788,8 @@ _bak_snap_class() {
 # snapshot (D-3595, widened by delegation broker wave 3: `_bak_snap_class` asks `coordination-snapshot.mjs classify`, so a v1
 # snapshot with sidecars and no coord.db counts, and an invalid manifest never does) and, beside it, the newest valid snapshot that HOLDS DATA (D-4641:
 # a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
-# means nothing is pruned. An UPDATE (never a rollback: a flip takes no backup, so it adds no data set to thin, and its tree's helper may
-# predate `thin`, D-6355) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
+# means nothing is pruned. An UPDATE (never a rollback by flip: a flip takes no backup, so it adds no data set to thin, and its tree's
+# helper may predate `thin`, D-6355; a rollback by re-install runs `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
 # D-6346), under the same lock; an invalid CCRC_BACKUP_DATA_KEEP stops the prune and the thinning alike (D-6347). It still never
 # writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356).
 _bak_gc() {   # <lead word: update|rollback>
