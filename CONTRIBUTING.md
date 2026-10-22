@@ -100,6 +100,7 @@ preference.
 
 Small, focused PRs get read quickly. Large mechanical sweeps are fine but say so in the
 description, and keep the mechanical part separate from the judgement part.
+Documentation-only changes take the same path through pull requests and CI as code changes.
 
 `main` is protected: every change lands by pull request, and there are no direct pushes —
 including by the maintainer. A pull request needs one approving review; the maintainers
