@@ -5006,9 +5006,9 @@ describe('run 762: workflow runs end on their task notification, start-less stop
     expect(wfRows(disk).map((r) => r?.executionState), 'the disk checkpoint has both ended (needsSave)').toEqual(['ended', 'ended']);
     const projected = h.store.readDelegationProjection().activities.filter((a) => a.sourceKind === 'workflow');
     expect(projected.map((a) => a.executionState), 'SQLite shows both ended').toEqual(['ended', 'ended']);
-    const ours = lines.filter((l) => l.includes('delegation recovery ended'));
+    const ours = lines.filter((l) => l.includes('delegation recovery changed'));
     expect(ours, 'one warn line, naming 2 rows').toHaveLength(1);
-    expect(ours[0]).toContain('ccrc-server: delegation recovery ended 2 activity row(s) from covered task notifications');
+    expect(ours[0]).toContain('ccrc-server: delegation recovery changed 2 activity row(s) from covered task notifications');
   });
 
   it('D-WF13: a covered SubagentStop never edits a row: an agent hand-set back to active stays active, and coveredEnds is 0 (green by design; mutant MW14)', () => {

@@ -770,7 +770,7 @@ export class DelegationCheckpointBuilder {
     return { byIdentity: (k) => this.leaseByIdentity.get(k), byPath: (p) => this.leaseByPath.get(p) };
   }
 
-  /** D-6269: how many rows covered task notifications changed (in practice, ended) since this builder was made. */
+  /** D-6269: how many activity rows covered task notifications changed (ended, or only `lastEventAt` moved) since this builder was made. */
   coveredEndsCount(): number { return this.coveredEnds; }
 
   activityOf(activityId: string): DelegationActivityRow | undefined { return this.activities.get(activityId); }
@@ -1314,7 +1314,8 @@ export interface DelegationRecoveryReport {
   replayed: number;
   /** Records read. */
   scanned: number;
-  /** D-6269: the rows covered task notifications changed (in practice, ended): a backfill on a checkpoint built before the rule. */
+  /** D-6269: the activity rows covered task notifications changed (ended, or only `lastEventAt` moved for an `unknown` status): a backfill
+   *  on a checkpoint built before the rule. A row changed twice counts twice. */
   coveredEnds: number;
   journal: DelegationJournalCoverage | null;
   facts: DelegationRecoveryFacts | null;
@@ -1916,7 +1917,7 @@ export class DelegationDurability {
         }
       }
       // Told only once the rows it names are durable (D-6269).
-      if (report.coveredEnds > 0) this.deps.warn?.(`ccrc-server: delegation recovery ended ${report.coveredEnds} activity row(s) from covered task notifications`);
+      if (report.coveredEnds > 0) this.deps.warn?.(`ccrc-server: delegation recovery changed ${report.coveredEnds} activity row(s) from covered task notifications`);
       this.failureNow = null;
       await this.repairLocked();
       return { ...report, state: this.current };
