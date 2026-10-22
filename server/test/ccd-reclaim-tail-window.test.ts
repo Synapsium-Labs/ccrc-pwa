@@ -83,6 +83,12 @@ const AT_NPROOF = 'eval "_t_nproof_real()$(declare -f _ws_reclaim_nested_proven 
   + ' _ws_reclaim_nested_proven() { local r; _t_nproof_real "$@"; r=$?;'
   + ' if (( r == 0 && ! _WS_NPROOF_GONE )) && [[ -f "$HOME/at-nproof.sh" && ! -e "$HOME/at-nproof-ran" ]]; then'
   + ' : > "$HOME/at-nproof-ran"; . "$HOME/at-nproof.sh"; fi; return "$r"; };';
+/** `_ws_dir_physical`, wrapped: when the RE-ASK itself asks it (`FUNCNAME[1]`: the second nested proof's root, asked
+ *  directly after the checkout's identity compare and directly before that proof), sources `$HOME/at-phys.sh` ONCE, then
+ *  asks the real one. A fixture's wrap of a real ccd function, never a seam of the shipped code. */
+const AT_PHYS = 'eval "_t_phys_real()$(declare -f _ws_dir_physical | tail -n +2)";'
+  + ' _ws_dir_physical() { if [[ "${FUNCNAME[1]-}" == _ws_reclaim_reask && -f "$HOME/at-phys.sh" && ! -e "$HOME/at-phys-ran" ]]; then'
+  + ' : > "$HOME/at-phys-ran"; . "$HOME/at-phys.sh"; fi; _t_phys_real "$@"; };';
 /** `_ws_reclaim_owned`, wrapped: logs its `$2` to `$HOME/owned-calls`, runs the real one, and after that FIRST answer
  *  (the tail's own call: the ladder never asks owned) sources `$HOME/after-owned.sh` ONCE. */
 const OWNED_HOOK = 'eval "_t_owned_real()$(declare -f _ws_reclaim_owned | tail -n +2)";'
@@ -131,6 +137,13 @@ const workdirOf = (id: string): string => {
 /** A standing nested checkout of the child's own repository, holding a file of its own. */
 const nested = (c: Child): string => {
   const inner = path.join(c.wt, 'inner');
+  h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+  fs.writeFileSync(path.join(inner, 'f'), 'nested work\n');
+  return inner;
+};
+/** A standing nested checkout one directory down, `<wt>/<dir>/inner`, so a directory sits between it and the child. */
+const nestedBelow = (c: Child, dir: string): string => {
+  const inner = path.join(c.wt, dir, 'inner');
   h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
   fs.writeFileSync(path.join(inner, 'f'), 'nested work\n');
   return inner;
@@ -255,6 +268,35 @@ describe.skipIf(!LINUX)('the tail re-proves the tree, the rows and the main chec
     stoppedAt(r, R(c), 'worktree-remove-failed', 'children', `the checkout is not the one proven inside the tree: ${realInner} measures`);
     expect(fs.readFileSync(path.join(realInner, 'f'), 'utf8'), 'the copy stands').toBe('nested work\n');
     expect(fs.readFileSync(path.join(`${realInner}.orig`, 'f'), 'utf8'), 'the checkout the act proved stands').toBe('nested work\n');
+    expect(keptFor(realInner), 'keep_of was never asked of the checkout').toEqual([]);
+    failedPairAgrees(r);
+  }, 120_000);
+
+  it('I5: a nested checkout moved out of the child with a link left in its parent path after its proof: worktree-remove-failed, and the moved checkout stands', () => {
+    const c = makeChild(h);
+    const realInner = fs.realpathSync(nestedBelow(c, 'sub'));
+    const sub = path.dirname(realInner);
+    const moved = path.join(h.home, 'moved-sub');
+    hook('at-nproof.sh', `mv "${sub}" "${moved}" && ln -s "${moved}" "${sub}";\n`);
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${WAIT} ${KEEP_HOOK} ${AT_NPROOF}` });
+    expect(fs.existsSync(path.join(h.home, 'at-nproof-ran')), 'the CONTROL: the checkout’s parent was moved and linked inside the tail').toBe(true);
+    stoppedAt(r, R(c), 'worktree-remove-failed', 'children', `the checkout is no longer proven inside the tree: ${sub} is a symbolic link`);
+    expect(fs.lstatSync(sub).isSymbolicLink(), 'the link stands where the parent was').toBe(true);
+    expect(fs.readFileSync(path.join(moved, 'inner', 'f'), 'utf8'), 'the moved checkout stands, with its files').toBe('nested work\n');
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'its branch stands').toContain('ws/nested');
+    expect(keptFor(realInner), 'keep_of was never asked of the checkout').toEqual([]);
+    failedPairAgrees(r);
+  }, 120_000);
+
+  it('I6: a nested checkout that vanishes between the re-ask’s identity compare and its second proof: worktree-remove-failed, nothing kept', () => {
+    const c = makeChild(h);
+    const realInner = fs.realpathSync(nested(c));
+    hook('at-phys.sh', `rm -rf "${realInner}";\n`);
+    const r = childReclaimVerb(h, reclaimToken(), { pre: `${WAIT} ${KEEP_HOOK} ${AT_PHYS}` });
+    expect(fs.existsSync(path.join(h.home, 'at-phys-ran')), 'the CONTROL: the checkout vanished inside the re-ask').toBe(true);
+    expect(fs.existsSync(realInner), 'the CONTROL: it is gone').toBe(false);
+    stoppedAt(r, R(c), 'worktree-remove-failed', 'children', `the checkout at ${realInner} vanished after its identity was compared`);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'its branch stands').toContain('ws/nested');
     expect(keptFor(realInner), 'keep_of was never asked of the checkout').toEqual([]);
     failedPairAgrees(r);
   }, 120_000);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=82b9a8f4dff93b1b6b4c0615a81b8a7d3617ff054765df96e76662579cf83de7
+# ccrc:generated 1 sha256=d674cffd38c9decd3d62f1513a20da69b18c68db4947ec45598bbb9c72c24157
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33705,8 +33705,10 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   #                        else. In order, each fresh, nothing cached: (1) `_ws_reclaim_owned` whole, 1 -> 1, any other
   #                        non-zero -> 2; (2) `_ws_path_ident "$main" follow` against mainid, `_ws_path_ident "$workdir"`
   #                        against wdid (an EMPTY wdid with the tree standing is `reappeared-tree-refuses`), and with
-  #                        cpath, `_ws_path_ident "$cpath"` against cid. An empty recorded value, `_ws_ident_eq` 1 or 2,
-  #                        or a measure that is not 0 -> 2
+  #                        cpath, `_ws_path_ident "$cpath"` against cid, then `_ws_reclaim_nested_proven` again on the
+  #                        tree's freshly resolved root (`_ws_dir_physical "$wd"`) and cpath. An empty recorded value,
+  #                        `_ws_ident_eq` 1 or 2, a measure that is not 0, a second proof that is not 0 or that finds
+  #                        the checkout gone, or a root that cannot be resolved -> 2
   # THE WINDOW BEFORE A FORCED REMOVAL, NARROWED (path-identity spec §4.7).
   # `_ws_reclaim_tail` asks `_ws_reclaim_owned` once, before the settle, and the
   # settle and the nested steps run after it. Before this re-ask, none of these
@@ -33732,6 +33734,26 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   #   by a measure that failed. An EMPTY recorded value matches nothing: for the
   #   tree it means the owned call proved it gone, so a tree that stands at a
   #   removal now is not the tree the act proved (`reappeared-tree-refuses`).
+  # - THEN, FOR A CHECKOUT, ITS PATH IS PROVEN AGAIN (review 790 F7). The
+  #   identity compare above resolves the checkout's PARENT through any link
+  #   (`_ws_path_ident` refuses a link only at the leaf), so a checkout moved
+  #   out of the child with a link left in its parent path measures the same
+  #   and passes it; `git worktree remove --force` then removes it through the
+  #   link. So, after the compare and only with a cpath, the tree's physical
+  #   root is derived afresh (`_ws_dir_physical "$wd"`, its `_WS_PHYS`: a
+  #   root that cannot be resolved is 2, never a stale one) and
+  #   `_ws_reclaim_nested_proven` runs on it again, the first proof's whole
+  #   test: no link at any component, each a directory, resolving to itself.
+  #   Only an answer of exactly 0 with its own `_WS_NPROOF_GONE` 0 goes on:
+  #   a refusal, or a checkout that vanished in the window (a proof of absence
+  #   is no proof of what stands), is 2 here. The second proof's globals are
+  #   tested first; the FIRST proof's three (`_WS_NPROOF_GONE`, `_WS_NPROOF_WHY`,
+  #   `_WS_NPROOF_IDENT`) are restored on every exit, because the tail reads
+  #   the first proof's GONE after the removal and `cid` is never reassigned.
+  #   The tail's call arguments and order are unchanged. This NARROWS the
+  #   race and does not close it: it is a second proof at one instant, not an
+  #   atomic one, and the window from here to git's own opendir stays
+  #   (`reask-to-opendir-window`, `reask-re-proves-the-nested-checkouts-path`).
   # - NOT HERE: the working-directory probe (`_ws_cwd_users`) is the site's own
   #   line, asked directly BEFORE this one, so its bounded walk of the process
   #   table never sits between the last compare here and the removal. The
@@ -33751,7 +33773,7 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   #   they can outrun the runner's act row. A kill there lands at a step the breadcrumb
   #   resumes, and the next attempt re-proves from its start
   #   (`tail-reasks-can-outrun-the-act-row`).
-  local id="$1" wd="$2" main="$3" wdid="$4" mainid="$5" cpath="${6-}" cid="${7-}" rc
+  local id="$1" wd="$2" main="$3" wdid="$4" mainid="$5" cpath="${6-}" cid="${7-}" rc np_gone np_why np_ident np_verdict
   _WS_REASK_WHY=''
   _ws_reclaim_owned "$id" "$wd" "$main"; rc=$?
   (( rc != 1 )) || { _WS_REASK_WHY="$_WS_OWNED_WHY"; return 1; }
@@ -33766,6 +33788,15 @@ _ws_reclaim_reask() {   # id workdir main wdid mainid [cpath cid] -> 0 nothing r
   [[ -n "$cid" ]] || { _WS_REASK_WHY="no identity of the checkout was recorded when it was proven, so whether $cpath is still that checkout was never asked"; return 2; }
   _ws_path_ident "$cpath" || { _WS_REASK_WHY="the checkout could not be measured again (${_WS_IDENT_WHY:-it reads as $_WS_IDENT_KIND}), so whether $cpath is still the one proven inside the tree was never asked"; return 2; }
   _ws_ident_eq "$_WS_IDENT" "$cid" || { _WS_REASK_WHY="the checkout is not the one proven inside the tree: $cpath measures $_WS_IDENT, recorded $cid"; return 2; }
+  _ws_dir_physical "$wd" || { _WS_REASK_WHY="the tree could not be resolved again (${_WS_PHYS_WHY:-it reads as unresolvable}), so whether the checkout at $cpath still lies inside it was never asked"; return 2; }
+  np_gone="$_WS_NPROOF_GONE"; np_why="$_WS_NPROOF_WHY"; np_ident="$_WS_NPROOF_IDENT"
+  _ws_reclaim_nested_proven "$_WS_PHYS" "$cpath"; rc=$?
+  np_verdict=''
+  if (( rc != 0 )); then np_verdict="the checkout is no longer proven inside the tree: ${_WS_NPROOF_WHY:-the second proof answered $rc}"
+  elif (( _WS_NPROOF_GONE )); then np_verdict="the checkout at $cpath vanished after its identity was compared, so what stands there to remove was never proven"
+  fi
+  _WS_NPROOF_GONE="$np_gone"; _WS_NPROOF_WHY="$np_why"; _WS_NPROOF_IDENT="$np_ident"
+  [[ -z "$np_verdict" ]] || { _WS_REASK_WHY="$np_verdict"; return 2; }
   return 0
 }
 
@@ -33797,7 +33828,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its twelve callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its thirteen callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -33818,10 +33849,12 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # path (the main checkout, which `git -C` follows).
   # The twelfth is the shared working-directory probe, `_ws_cwd_users`: the parent of the
   # directory it is asked is resolved here, a fourth newline site (path-identity spec §4.6).
+  # The thirteenth is the tail's re-ask, `_ws_reclaim_reask`, which resolves the child's own
+  # tree afresh for the second proof of a nested checkout's path (review 790 F7).
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its twelve callers only. Bare captures stand elsewhere, and the ones
+  # for its thirteen callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
