@@ -4224,6 +4224,9 @@ export async function openWriter(o) {
     const job = { launch, mode: 'writer', model, settingsMode, stdin: writerStdin(made.input), out, name: `${dir}/${qid}`, lang };
     const [done] = await runBatch([job], { concurrency: 1, gate, claim });
     const run = { code: done.code, signal: done.signal, skipped: done.skipped, tokens: done.tokens, result: done.facts.result !== null };
+    // D-6305: a run that failed (a non-zero exit, a signal) or showed no result event is writer-malformed, whatever text
+    // it printed: a run killed after its result event, or one that exited non-zero with a QUESTION line, never yields a question.
+    if (run.code !== 0 || run.signal !== null || !run.result) return { state: 'discard', qid, why: 'writer-malformed', run };
     const parsed = parseQuestionLine(done.facts.result?.text ?? '');
     if (!parsed.ok) return { state: 'discard', qid, why: parsed.word, run };
     const leak = admitFact(item.kind, item.fact, '', parsed.question, { repoRoots: item.repo_roots });
@@ -4486,8 +4489,9 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
         storeId, ccrcId: fam.ccrc_id, generation: fam.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms, rows: span.rows,
         pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
       });
-      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
+      // D-6306: a boundary discarded whole is counted once, under counts.discards; its partial site drops are not merged.
       if (m.state !== 'mined') { discard(m.why); continue; }
+      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
       byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
       mined.push(m);
     }
@@ -4517,9 +4521,11 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     writer: async (c) => {
       // The question's source is the one answerability found (W2-D73: the first source that passes).
       const a = await writer.ask(mode, { ...c, source_entry_uuid: c.source.entryUuid });
-      if (a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false)) counts.writer.failed_runs += 1;
+      const failed = a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false);
+      if (failed) counts.writer.failed_runs += 1;
       if (a.state === 'question' || a.why === 'writer-leak') return keep({ ...c, answer: a });
-      if (a.why === 'writer-malformed') counts.writer.malformed_replies += 1;
+      // D-6305: a failed run is counted apart from a malformed reply, so the two counters never overlap.
+      if (a.why === 'writer-malformed' && !failed) counts.writer.malformed_replies += 1;
       return drop(a.why);
     },
     'admit-question': async (c) => {

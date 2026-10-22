@@ -6484,7 +6484,7 @@ RP1-writer and RP3-writer land here (W2 decisions document §2, W2-5a's Pins). N
 - W2-D52, W2-D55 and W2-D56: the writer goes through admission, the gate and the preflight.
 - W2-D61: F_raw for the excerpt's centring, F for admission.
 
-This task defines no D-number.
+Fix round 1 (the review) ships two departures, each defined in this plan's `## Deviations found`: D-6305 (a failed writer run is `writer-malformed`, counted apart from malformed replies) and D-6306 (mining drop counts merge only for a mined boundary). Pins: the D-6305 cases and the D-6306 case, with mutants X1 to X3.
 
 **Choices this task makes:**
 - **The preflight runs before every writer batch, inside `openWriter` and `ask`.** W2-D56 is written "before every batch", and its wiring is assigned to W2-5b. W2-4's plan ("Not in this plan") puts `loadStep0a` and `preflight` into `pilot-source`, which is W2-5a's. A writer handle that runs them itself means no subcommand can spawn a writer un-preflighted.
@@ -7567,6 +7567,8 @@ export async function openWriter(o) {
     const job = { launch, mode: 'writer', model, settingsMode, stdin: writerStdin(made.input), out, name: `${dir}/${qid}`, lang };
     const [done] = await runBatch([job], { concurrency: 1, gate, claim });
     const run = { code: done.code, signal: done.signal, skipped: done.skipped, tokens: done.tokens, result: done.facts.result !== null };
+    // D-6305: a failed run (a non-zero exit, a signal) or one with no result event is writer-malformed, whatever it printed.
+    if (run.code !== 0 || run.signal !== null || !run.result) return { state: 'discard', qid, why: 'writer-malformed', run };
     const parsed = parseQuestionLine(done.facts.result?.text ?? '');
     if (!parsed.ok) return { state: 'discard', qid, why: parsed.word, run };
     const leak = admitFact(item.kind, item.fact, '', parsed.question, { repoRoots: item.repo_roots });
@@ -7829,8 +7831,9 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
         storeId, ccrcId: fam.ccrc_id, generation: fam.generation, boundaryUuid: b.uuid, boundaryTsMs: b.ts_ms, rows: span.rows,
         pick: (row) => expandEntryBody(rs, row), cwd: e?.cwd ?? null, cwdReal: e?.cwd_real ?? null, configDirs,
       });
-      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
+      // D-6306: a boundary discarded whole is counted once, under counts.discards; its partial site drops are not merged.
       if (m.state !== 'mined') { discard(m.why); continue; }
+      for (const [w, n] of Object.entries(m.counts)) counts.mined[w] += n;
       byBoundary.set(b.uuid, { row: b, spanEntryIds: span.rows.map((r) => Number(r.entry_id)) });
       mined.push(m);
     }
@@ -7860,9 +7863,11 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     writer: async (c) => {
       // The question's source is the one answerability found (W2-D73: the first source that passes).
       const a = await writer.ask(mode, { ...c, source_entry_uuid: c.source.entryUuid });
-      if (a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false)) counts.writer.failed_runs += 1;
+      const failed = a.run !== undefined && (a.run.code !== 0 || a.run.signal !== null || a.run.result === false);
+      if (failed) counts.writer.failed_runs += 1;
       if (a.state === 'question' || a.why === 'writer-leak') return keep({ ...c, answer: a });
-      if (a.why === 'writer-malformed') counts.writer.malformed_replies += 1;
+      // D-6305: a failed run is counted apart from a malformed reply, so the two counters never overlap.
+      if (a.why === 'writer-malformed' && !failed) counts.writer.malformed_replies += 1;
       return drop(a.why);
     },
     'admit-question': async (c) => {
@@ -7932,7 +7937,7 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 ```
 
 Expected:
-- The first filter is green, `43 passed` (on darwin, `38 passed | 5 skipped`):
+- The first filter is green, `46 passed` (measured after fix round 1; the first build measured 43; on darwin, `39 passed | 7 skipped`, the sourceQuiz describe being skipped):
   - 12 writer-input cases, the F6 bearer case (R10) among them;
   - 15 writer-spawn cases, two of them RP1-writer and four RP3-writer, and two of the gate before a later writer batch (W2-D55's budget, the limits row);
   - 7 frozen-list cases;
@@ -7940,7 +7945,7 @@ Expected:
   - 5 cases in the `sourceQuiz` describe (quiz mode, pilot mode, the store-backed `fidelityStdins` case, the quiz population case with its CONTROL, R10, and the W2-D67 redaction-stage case over a second box whose command is key-shaped).
   Each spawning case runs the stub one to three times in print mode, in well under a second; the sourceQuiz box runs the sweep a few times once, and the W2-D67 case's own box a few times more.
 - The re-expected W2-4 case is green.
-- The whole file is green: every earlier case plus these 43. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
+- The whole file is green: every earlier case plus these 46. That includes W2-4 Task 5's env scan, Task 1's import pin (unchanged: this task adds names to the gate's braces only, which `EXACT_NAMES` does not pin), and W2-4 Task 4's `redactDisplayWindow` scan.
 - tsc prints nothing. A line that names only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each block makes one exact replacement, which must match exactly once, runs one filter and shows it red, then restores the file with `cp`. The python body is a quoted heredoc.
@@ -11585,7 +11590,7 @@ Every guard this PR adds is in Tasks 1 to 7, each with its own mutant list.
 
 ## Deviations found
 
-Nine numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found. A number issued during the build is appended below by the commit that first cites it.
+Eleven numbers are defined here. D-5780 is the W2 decisions document's (its block of 19, issued 2026-10-19); D-6277, D-6278, D-6279 and D-6280 were issued for the departures found while planning (R1); D-6301 and D-6302 were issued for the two departures Task 1's review found; D-6303 was issued for the one Task 2's review found; D-6304 was issued for the one Task 4's pre-review fix round found; D-6305 and D-6306 were issued for the two departures Task 6's review found. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-5780** — `history-w2-answerable-timed` (Task 5; W2-D70, with spec erratum E19, which W2-5b amends in place): W2-D70's answerability gains a fourth clause. A source entry needs a non-null `ts_ms` at or before boundary N's own `ts_ms` (T_N). A sidecar source needs a non-null `entry_id` whose entry passes the same test. This departs from spec §10.2's "Answerability" bullet ("F must occur in a span row with searchable provenance, within the sidecar FTS window"), which reads no time and admits a sidecar however it is linked. The ground is the as-of cut (W2-D34, W2-D35). A NULL-ts row and a sidecar with a NULL `entry_id` are absent under it. A fact sourced only from one would be asked of a treatment arm whose own cut can never show it, and its miss would measure the cut, not recall. With clause 4, every admitted fact's source is visible under the cut: a leaf-N span row precedes the boundary, so the positional clause never hides it. Read with clause 1, the sidecar sources are those linked to a searchable span row and those linked to nothing in the span's transcript, so the unlinked ones reach clause 4 and are counted. What the clause removes is reported, never hidden: the `answerable` stage drops such a candidate as `unanswerable-untimed`, apart from `unanswerable`, and sampling counts each (decisions section 7: "Facts carried only by NULL-ts rows or by sidecars with no entry are never asked"). The spec sentence is amended by W2-5b (E19); this plan edits no spec. Pins: Task 5's clause-4 cases (a source stamped exactly T_N is answerable, one stamped one ms after is not, a NULL-ts row, an unlinked sidecar, a sidecar linked to a NULL-ts row) and the stage's two words; mutants M6 to M9, M12 and M13 of Task 5.
 - **D-6277** — `history-replay-pointer-lines` (Task 1; W2-D75 item 1, spec §10.2 "Reconstruction"): every whole line of the summary row that names a path ending in `.jsonl` becomes `[pointer removed]`, where the spec says "its transcript-pointer line", one line. Neither the spec nor any code, fixture or lib helper in the tree defines that line, so the rule is the widest reading that still removes it: any whole line naming a `.jsonl` path (`/^.*\/\S*\.jsonl(?![A-Za-z0-9_]).*$/gm`). It removes more than the spec's text says, at no quiz cost: any fact on such a line is in B, which keeps the summary whole with its pointer (W2-D68 (1)), so it is never admitted. The fidelity pilot's token count moves by those lines only. Redaction runs first and the replacement after (W2-D54: whole, then any cut). Pins: Task 1's `removePointerLines` case and its item 1 case over the fixture store; mutant M2 of Task 1.
@@ -11596,3 +11601,5 @@ Nine numbers are defined here. D-5780 is the W2 decisions document's (its block 
 - **D-6302** — `history-replay-unrenderable-body-discard` (Task 1; W2-D75 items 1 and 2): Task 1's `reconstructPayload` rendered a summary or kept-member body with `renderEntryText` and `JSON.stringify` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`, and so reaches `expandEntryBody` as `body`) threw a `RangeError` that ended the run, where `recall.mjs`'s `expandEntryText` already catches the same error. The rendering is now guarded by `renderOrNull`, which catches `RangeError` only and rethrows anything else, and the boundary is discarded under one new `RECON_DISCARDS` word, `body-unrenderable`, appended after `leaf-absent`: a counted discard, never a refusal (R5). Pins: Task 1's D-6302 case (a 10,000-level nested kept member and summary row each discard `body-unrenderable`) and the `RECON_DISCARDS` case; mutants F2a, F2b and F2c of the fix round.
 - **D-6303** — `history-replay-unrenderable-mined-body-discard` (Task 2; W2-D65, with D-6302): Task 2's `mineBoundary` rendered each mined row's body with `renderEntryText` unguarded, so a mined body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended the run. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and the boundary is discarded under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 rules for reconstruction; no word is added, and the word is kept last in the list. Pins: Task 2's D-6303 case (5,000 deep discards, CONTROL 4,000 deep mines), the list pin that `body-unrenderable` is last, and the unwrapped-render mutant of the fix round.
 - **D-6304** — `history-replay-baseline-unrenderable-body-discard` (Task 4; W2-D68, with D-6302 and D-6303): Task 4's `baselineOf` rendered each stored body of parts 1 to 3 with `renderEntryText` unguarded, so a body nested past about 4,500 levels (which parses, far inside lib's `JSON_DEPTH_MAX`) threw a `RangeError` that ended B's build, and the run with it. The rendering is now guarded by Task 1's `renderOrNull`, which catches `RangeError` only, and B fails closed under the existing `RECON_DISCARDS` word `body-unrenderable`, as D-6302 and D-6303 rule; no word is added, and the word stays last in the list. The string leaves need no guard (`ftsTextOf` and the iterative leaf walk never throw). Pins: Task 4's D-6304 cases (a 5,000-deep summary row, kept member and post-summary row each discard `body-unrenderable`, CONTROL 4,000 deep builds); mutants MA (the `renderOrNull` wrap) and MB, MC and MD (each part's null check).
+- **D-6305** — `history-replay-failed-writer-run-is-malformed` (Task 6; W2-D72, R6): Task 6's `ask` parsed the run's result text without looking at its exit, so a run killed on timeout after it printed a result event, or one that exited non-zero with a `QUESTION:` line, answered `state: 'question'` and could reach the frozen list while `failed_runs` also counted it, and `malformed_replies` counted every `writer-malformed`, failed runs included. R6 says a run that fails, or shows no result event, is `writer-malformed` and is counted apart from malformed replies. `ask` now returns `writer-malformed` (with its run) before parsing when the code is not 0, a signal ended the run or no result event showed, and `sourceQuiz` counts `malformed_replies` only for runs that did not fail, so the `writer-malformed` drop count is failed runs plus malformed replies. Pins: Task 6's print-mode-exit case (with an exit 0 CONTROL) and its counting case; mutants X1 and X2.
+- **D-6306** — `history-replay-mined-drops-only-for-mined-boundaries` (Task 6; W2-D65, W2-D71): the brief's `sourceQuiz` merged `mineBoundary`'s site-drop counts before it checked that the boundary was mined, so a boundary discarded whole (for example `body-unrenderable` after a dropped site) put its partial drops into `counts.mined` as well as counting once under `counts.discards`. The merge now follows the check, so a discarded boundary is counted once and `counts.mined` describes mined boundaries only. Pins: Task 6's D-6306 case (a short command, then a 5,000-deep input, in the real sweep's store) with its plain-box CONTROL; mutant X3.

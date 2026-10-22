@@ -8015,6 +8015,15 @@ function w6Open(b: W6Box, id: string, over: Record<string, unknown> = {}): Retur
 }
 /** The stub's print-mode runs: the writer spawns, not the `--version` calls. */
 const w6Runs = (home: string) => (stubLog(home) ?? []).filter((e) => e.argv.includes('-p'));
+/** A launcher that is the recording stub with one more control: an exit code keyed to print mode (`-p`) only, so its
+ *  `--version` call still exits 0 while the writer run exits non-zero (D-6305). The shared stub is not touched. */
+const W6_PRINT_EXIT = 'stub-exit-print';
+function w6PlantPrintExit(home: string, id: string): void {
+  const tail = `process.exitCode = Number(opt(${JSON.stringify(T5_STUB_EXIT)}) ?? '0');`;
+  expect(T5_STUB_SOURCE.split(tail)).toHaveLength(2);
+  const src = T5_STUB_SOURCE.replace(tail, `${tail}\n  const pe = opt(${JSON.stringify(W6_PRINT_EXIT)});\n  if (pe !== null && process.argv.slice(2).includes('-p')) process.exitCode = Number(pe);`);
+  writeFileSync(join(home, '.local', 'bin', id), src, { mode: 0o700 });
+}
 const w6Excerpt = (r: unknown): string => {
   expect((r as { state: string }).state).toBe('input');
   return (r as { input: { excerpt: string } }).input.excerpt;
@@ -8118,8 +8127,8 @@ describe('W2-5a Task 6: the writer input, W2-D72 and W2-D54', () => {
   });
 
   it('a raw fact absent from its redacted leaf is a TypeError, never an empty excerpt', () => {
-    expect(() => replay.writerInputOf(w6Item({ leaf: w6Field('some other command') }), 'excerpt', W6_IDX)).toThrow(TypeError);
-    expect(() => replay.writerInputOf(w6Item(), 'whole-session' as never, W6_IDX)).toThrow(TypeError);
+    expect(() => replay.writerInputOf(w6Item({ leaf: w6Field('some other command') }), 'excerpt', W6_IDX)).toThrow(/does not occur/);
+    expect(() => replay.writerInputOf(w6Item(), 'whole-session' as never, W6_IDX)).toThrow(/writer_input "whole-session" is not one of/);
   });
 
   it('writerStdin is the writer prompt, a blank line, the canonical input and one newline', () => {
@@ -8187,6 +8196,11 @@ describe('W2-5a Task 6: the writer spawn, RP1-writer and RP3-writer', () => {
       expect(err, model).toMatchObject({ word: 'args-invalid' });
       expect(stubLog(b.home), model).toBeNull();
     }
+    // The model refusal comes first: a refused account with a bad model is args-invalid, not account-refused.
+    const bad = w6Box('ccrc-w2-5a-t6-model-refused-');
+    const err = await w6Open(bad, 'cx-a', { model: 'opus' }).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'args-invalid' });
+    expect(stubLog(bad.home), 'no spawn, not even --version').toBeNull();
   }, 60_000);
 
   it('a stub question holding the 7-character SHA prefix is discarded as writer-leak, and a 6-character one is kept', async () => {
@@ -8283,6 +8297,21 @@ describe('W2-5a Task 6: the writer spawn, RP1-writer and RP3-writer', () => {
     const err = await w.ask('pilot', w6Item()).then(() => null, (e: unknown) => e);
     expect(err).toMatchObject({ word: 'limits-threshold' });
     expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('D-6305: a print-mode run that exits non-zero, or is killed, after printing a valid QUESTION result is writer-malformed and no question; CONTROL: exit 0 yields the question', async () => {
+    const b = w6Box('ccrc-w2-5a-t6-failed-run-');
+    w6PlantPrintExit(b.home, 'up-a');
+    const w = await w6Open(b, 'up-a');
+    const item = w6Item();
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    expect(await w.ask('quiz', item), 'CONTROL: exit 0').toMatchObject({ state: 'question', run: { code: 0, result: true } });
+    const failed = w6Item({ fact: W6_CMD2, fact_raw: W6_CMD2, leaf: w6Field(W6_CMD2) });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '3');
+    const r = await w.ask('quiz', failed);
+    expect(r).toMatchObject({ state: 'discard', why: 'writer-malformed', run: { code: 3, signal: null, result: true } });
+    expect((r as { entry?: unknown }).entry).toBeUndefined();
+    expect(w6Runs(b.home), 'the --version calls exit 0 and the two print runs ran').toHaveLength(2);
   }, 60_000);
 
   it('a resumed ask reuses the finished run with no spawn, and changed input for the same qid refuses out-refused', async () => {
@@ -8500,7 +8529,10 @@ const w6Indexed = (box: w5a1H.HistoryBox, uuid: string): boolean => {
     db.close();
   }
 };
-function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a'): W6SourceBox {
+/** `dropThenDeep` (D-6306): the leaf's first tool_use is a Bash command too short to be a fact (a counted site drop), and a
+ *  second tool_use row after it holds an input nested 5,000 deep (it parses and cannot be rendered), so mining drops one
+ *  site and then discards the whole boundary as `body-unrenderable`. */
+function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false): W6SourceBox {
   const box = w5a1H.makeHistoryBox(prefix);
   const cwd = join(box.home, 'tree', 'demo');
   mkdirSync(cwd, { recursive: true });
@@ -8511,16 +8543,21 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
   const sid = u(0);
   const sentinel = ['zq', 'w5a6', 'sentinel'].join('');
   const base = { sessionId: sid, cwd };
+  // The fixture serializer cannot stringify a 5,000-deep value, so the row carries a marker and its line is spliced as text.
+  const DEEP_MARK = '__w5a6_deep__';
+  const DEEP_TEXT = `${'{"a":'.repeat(5000)}"leaf"${'}'.repeat(5000)}`;
   const rows = [
     w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
-    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: cmd } }),
-    w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: u(2), toolUseId: 'toolu_01W5A6', content: 'built ok' }),
+    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd } }),
+    ...(dropThenDeep ? [w5a1Fx.toolUseRow({ ...base, uuid: u(8), ts: ts(2), parentUuid: u(2), msgId: 'msg_w5a6_8', toolUseId: 'toolu_02W5A6', name: 'Bash', input: { command: cmd, nest: DEEP_MARK } })] : []),
+    w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6', content: 'built ok' }),
     w5a1Fx.assistantRow({ ...base, uuid: u(4), ts: ts(4), parentUuid: u(3), msgId: 'msg_w5a6_4', text: 'done with the build' }),
     w5a1Fx.boundaryRow({ ...base, uuid: u(5), ts: ts(5), parentUuid: u(4), trigger: 'manual', headUuid: u(4), anchorUuid: u(6), tailUuid: u(4), allUuids: [u(4)] }),
     w5a1Fx.summaryRow({ ...base, uuid: u(6), ts: ts(6), parentUuid: u(5), text: `<summary>\n1. Primary Request and Intent:\n   ${sentinel}\n</summary>` }),
     w5a1Fx.assistantRow({ ...base, uuid: u(7), ts: ts(7), parentUuid: u(6), msgId: 'msg_w5a6_7', text: 'continuing after the summary' }),
   ];
-  w5a1H.seedFamily(box, { id, project: 'demo', generation: gen, uuid: sid, rows, workdir: cwd });
+  const lines = rows.map((r) => JSON.stringify(r).replace(`"${DEEP_MARK}"`, DEEP_TEXT)).join('\n') + '\n';
+  w5a1H.seedFamily(box, { id, project: 'demo', generation: gen, uuid: sid, rows: lines as unknown as object[], workdir: cwd });
   // One more tick derives leaf N (as Task 1's fixture); more, if needed, until the command row's blob is indexed.
   for (let k = 0; k < 4 && (k === 0 || !w6Indexed(box, u(2))); k += 1) {
     const t = w5a1H.runSweep(box);
@@ -8665,5 +8702,50 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     const plain = await source('quiz', plainAsked);
     expect(plain.r.counts.drops.redaction).toEqual({});
     expect(plainAsked.map((a) => a.item.fact)).toEqual([sb.cmd]);
+  }, 600_000);
+
+  // D-6305: a failed writer run is counted apart from a malformed reply; the writer-malformed drop is their sum.
+  it('D-6305: failed runs and malformed replies are counted apart, and the writer-malformed drop count is their sum; CONTROL: a malformed reply on a run that finished is not a failed run', async () => {
+    const run = (code: number | null, signal: string | null, result: boolean) => ({ code, signal, skipped: false, tokens: 1, result });
+    const writerOf = (r: ReturnType<typeof run>) => ({
+      ask: async (_section: string, item: Record<string, any>) => ({ state: 'discard', why: 'writer-malformed', qid: replay.qidOf(item as never), run: r }),
+    });
+    const sourceWith = async (r: ReturnType<typeof run>): Promise<Sourced> => {
+      const rs = replay.openReplayStore(sb.box.home) as unknown as { close(): void };
+      try {
+        const out = replay.prepareOut(join(mkTmp('ccrc-w5a6-out-'), 'out'));
+        return await replay.sourceQuiz({
+          mode: 'quiz', rs, home: sb.box.home, out, writer: writerOf(r), seedHex: 'ab'.repeat(32),
+          exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } },
+          configDirs: [], top: sb.box.home,
+        } as never) as unknown as Sourced;
+      } finally {
+        rs.close();
+      }
+    };
+    const failed = await sourceWith(run(1, null, true));
+    expect(failed.counts.writer).toEqual({ questions: 0, failed_runs: 1, malformed_replies: 0, leaks: 0 });
+    expect(failed.counts.drops.writer).toEqual({ 'writer-malformed': 1 });
+    const killed = await sourceWith(run(null, 'SIGKILL', true));
+    expect(killed.counts.writer).toMatchObject({ failed_runs: 1, malformed_replies: 0 });
+    const noResult = await sourceWith(run(0, null, false));
+    expect(noResult.counts.writer).toMatchObject({ failed_runs: 1, malformed_replies: 0 });
+    const malformed = await sourceWith(run(0, null, true));
+    expect(malformed.counts.writer, 'CONTROL: a finished run with a reply that has no QUESTION line').toEqual({ questions: 0, failed_runs: 0, malformed_replies: 1, leaks: 0 });
+    expect(malformed.counts.drops.writer).toEqual({ 'writer-malformed': 1 });
+  }, 600_000);
+
+  // D-6306: a boundary mining discards whole is counted once, under discards; its partial site drops are not merged.
+  it('D-6306: a boundary discarded whole after a dropped site counts once under discards, and its partial site drops are not in counts.mined; CONTROL: the plain box mines', async () => {
+    const db = w6SourceBox('ccrc-w5a6-source-deep-', 'npm run fixture-build --workspace pkg-a', true);
+    const asked: Asked[] = [];
+    const { r } = await source('quiz', asked, { pilotFamilies: [], assignment: [] }, db);
+    expect(r.counts.boundaries.admitted, 'CONTROL: the boundary is admitted, so it is mined').toBe(1);
+    expect(r.counts.discards).toEqual({ 'body-unrenderable': 1 });
+    expect(r.counts.mined['command-length'], 'the short command before the bad row is not merged').toBe(0);
+    expect(Object.values(r.counts.mined as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(0);
+    expect(asked).toEqual([]);
+    const plain = await source('quiz', []);
+    expect(plain.r.counts.discards, 'CONTROL: the plain box discards nothing').toEqual({});
   }, 600_000);
 });
