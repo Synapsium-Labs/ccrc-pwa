@@ -646,15 +646,10 @@ export class SessionStream {
     this.send({ type: 'mail', mail: outstanding });
   }
 
-  /** Read this session's hookstate and send `ask` / `ask_cleared` when the
-   *  hook-sourced envelope appears, changes (JSON-compare), or goes away —
-   *  null, stale, or the file itself missing all read the same here: nothing
-   *  fresh to report. `foldHookStateRead` gates freshness and identity
-   *  (uuid match against the registry), so a null return covers all three
-   *  uniformly — this frame just tracks the transition, not the reason.
-   *  D-6324: ONE raw read per tick feeds both the fold and `keepAgedAsk`, which
-   *  keeps an envelope past the 30-minute cut while this tick's menu
-   *  (`seenDialog`, set by `checkDialog` just before) is that envelope's call. */
+  /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
+   *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
+   *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
+   *  menu (`seenDialog`, set by `checkDialog` just before) is that envelope's call (`keepAgedAsk`, D-6324). */
   private async checkHookAsk(uuid: string): Promise<void> {
     if (this.stopped) return;
     const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
@@ -662,7 +657,7 @@ export class SessionStream {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    const ask = hs?.ask ?? (raw.ok && keepAgedAsk(raw, this.seenDialog) ? raw.state.ask : null);
+    const ask = hs?.ask ?? (raw.ok && this.seenDialog.id !== null && keepAgedAsk(raw, this.seenDialog) ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;

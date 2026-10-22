@@ -389,8 +389,8 @@ export function foldHookStateRead(raw: HookStateRawRead, now: number): HookState
 /**
  * The folded form, unchanged in signature and in every answer it gives: null
  * for all nine conditions the measured read tells apart. Its callers
- * (`watch.ts`'s dialog sweep and mail gate, `sessionws.ts`'s stream,
- * `server.ts`'s ask route) all want the same thing from a `null` — there is
+ * (`watch.ts`'s dialog sweep and mail gate, `server.ts`'s ask route; the
+ * session stream folds its own raw read through `foldHookStateRead`, D-6324) all want the same thing from a `null` — there is
  * no fresh turn to report — and widening them to carry a distinction they do
  * not act on is the defect this task removes, one type over.
  *
