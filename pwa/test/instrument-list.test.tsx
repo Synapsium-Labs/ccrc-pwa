@@ -12,9 +12,13 @@
 //   the toggle as two aria-pressed buttons ............... "the toggle is a radiogroup…"
 //   rows at min-h-[32px] ................................. "rows are 44px under a coarse pointer"
 //   the toggle read without try/catch .................... "…storage that throws leaves status"
-// W2 Task T2e (D-6335): the two-line dense row, under the desk's fine pointer only. Its browser measures are
-// `browser/instrument-desk.browser.test.ts`'s; its mutation table is that file's header and the report's.
 //   Idle open by default ................................. "…the last four folded"
+//
+// W2 Task T2e (D-6335): the two-line dense row, under the desk's fine pointer only. Its browser measures are
+// `browser/instrument-desk.browser.test.ts`'s. MUTATION TABLE (plan Task T2e Step 3; RUN, this suite alone):
+//   the dense block's media prelude without (pointer: fine) ... "nothing of the dense arrangement is declared outside the fine-pointer desk block"
+//                                                                 (and "under a fine pointer at a desk a status row is two lines on --row-h …")
+// The browser file's row, a literal 32px floor outside (pointer: fine), is that file's header's.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,11 +94,25 @@ const rowIds = (el: HTMLElement): string[] =>
 const toggle = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Group sessions by' });
 const pick = (mode: 'Status' | 'Project'): void => { fireEvent.click(within(toggle()).getByRole('radio', { name: mode })); };
 
-/** The declarations of every rule whose selector list includes `selector`, outside any at-rule. */
-function declsOf(selector: string): string {
-  const top = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
+/** The declarations of every rule whose selector list includes `selector`: outside any at-rule, or, with `media`, inside
+ *  the `@media` blocks whose prelude is exactly that (the sheet nests no at-rule in another). */
+function declsOf(selector: string, media: string | null = null): string {
+  let scope = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
+  if (media !== null) {
+    const bodies: string[] = [];
+    const at = /@media\s*([^{]+)\{/g;
+    let m: RegExpExecArray | null;
+    while ((m = at.exec(CSS)) !== null) {
+      let depth = 1;
+      let i = at.lastIndex;
+      for (; i < CSS.length && depth > 0; i += 1) depth += CSS[i] === '{' ? 1 : CSS[i] === '}' ? -1 : 0;
+      if (m[1]!.trim() === media) bodies.push(CSS.slice(at.lastIndex, i - 1));
+      at.lastIndex = i;
+    }
+    scope = bodies.join('\n');
+  }
   const out: string[] = [];
-  for (const r of top.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+  for (const r of scope.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
     if (r[1]!.split(',').map((s) => s.trim()).includes(selector)) out.push(r[2]!);
   }
   return out.join(';');
@@ -415,48 +433,28 @@ describe('review fixes', () => {
   });
 });
 
-/** The declarations of every rule whose selector list includes `selector` inside the one `@media` block whose
- *  prelude is exactly `media` (the sheet nests no at-rule in another). */
-function declsIn(media: string, selector: string): string {
-  const out: string[] = [];
-  const at = /@media\s*([^{]+)\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = at.exec(CSS)) !== null) {
-    let depth = 1;
-    let i = at.lastIndex;
-    for (; i < CSS.length && depth > 0; i += 1) depth += CSS[i] === '{' ? 1 : CSS[i] === '}' ? -1 : 0;
-    if (m[1]!.trim() === media) {
-      for (const r of CSS.slice(at.lastIndex, i - 1).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-        if (r[1]!.split(',').map((x) => x.trim()).includes(selector)) out.push(r[2]!);
-      }
-    }
-    at.lastIndex = i;
-  }
-  return out.join(';');
-}
-
 describe('dense rows at the desk (T2e, D-6335)', () => {
   const DENSE = '(min-width: 900px) and (pointer: fine)';
 
   it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
     // The body is a grid of two rows: the name and the state word share the first, the context spans the second.
-    const body = declsIn(DENSE, '.ins-row .sess-body');
+    const body = declsOf('.ins-row .sess-body', DENSE);
     expect(body).toMatch(/display:\s*grid/);
     expect(body).toMatch(/min-height:\s*var\(--row-h\)/);
-    expect(declsIn(DENSE, '.ins-row .sess-meta--context')).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(declsOf('.ins-row .sess-meta--context', DENSE)).toMatch(/grid-column:\s*1\s*\/\s*-1/);
     // The lamp and the actions button lose the three-line centring margin they carry from the shared sheet.
     // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
-    expect(declsIn(DENSE, '.ins-row .sess-line > :first-child')).toMatch(/margin-top:\s*0/);
+    expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
     mount();
     expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
-    expect(declsIn(DENSE, '.ins-row .sess-actions')).toMatch(/margin-top:\s*0/);
-    expect(declsIn(DENSE, '.ins-row .sess-actions')).toMatch(/align-self:\s*center/);
+    expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
+    expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/align-self:\s*center/);
     // The group heads and the toggle sit at --row-h.
-    expect(declsIn(DENSE, '.ins-group-head')).toMatch(/min-height:\s*var\(--row-h\)/);
-    expect(declsIn(DENSE, '.ins-toggle-option')).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     // Every dense value is a token: no literal length, no colour.
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line', '.ins-group-head', '.ins-toggle-option']) {
-      expect(declsIn(DENSE, sel), sel).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
+      expect(declsOf(sel, DENSE), sel).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
     }
   });
 
@@ -465,7 +463,7 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-line > :first-child', '.ins-row .sess-actions', '.ins-row .sess-meta--context',
       '.ins-group-head', '.ins-toggle-option']) {
       expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|grid-column|display:\s*grid/);
-      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsIn(media, sel), `${sel} in ${media}`).toBe('');
+      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
   });
 });

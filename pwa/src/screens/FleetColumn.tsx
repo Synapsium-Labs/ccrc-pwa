@@ -15,8 +15,8 @@ import { useFleetStore } from '../stores/fleet';
 /** The skin's frame holds part of the fleet's chrome at a desk, and the column leaves out what it holds; below 900 it
  *  keeps all of it (one instance of each at any width, as with the accounts strip). Two flags, because the two things
  *  are held by different parts (W2 desk polish T2e, D-6335; before it, one `barHoldsChrome` drove both):
- *  - `headChrome`: the head's wordmark and its Docs, Account, Settings, Mail and Bell doors. Instrument's top bar holds
- *    the wordmark and its rail holds the doors, so its column draws none of them; the head keeps its count line and the
+ *  - `headChrome`: the head's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors. Instrument's top bar
+ *    holds the wordmark and its rail holds the doors, so its column draws none of them; the head keeps its count line and the
  *    pool-lag readout, which it draws outside that gate.
  *  - `banners`: the banner stack. Refined's frame places the stack under its bar; Instrument's `Banners` part is `null`,
  *    so its column is where the stack is drawn, and a flag tied to the head's would drop it there altogether.

@@ -10,7 +10,9 @@
 //
 // MUTATION TABLE (plan Task T2e Step 3; RUN, this file alone, each mutant reverted):
 //   the fourth track unconditional ..................... "at 1600 the session's reading column is 860 …"
-//   the dense floor outside `(pointer: fine)` .......... "under touch emulation, every row and control is at least 44 px"
+//   a literal 32px floor outside (pointer: fine) ....... "under touch emulation, every row and control is at least 44 px"
+// The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
+// `--row-h`, which is 44 under a coarse pointer already. That mutant is test/instrument-list.test.tsx's.
 //
 // Chrome comes from `resolveChrome()` in `beforeAll`, which THROWS when neither `CCRC_CHROME` nor
 // `/usr/bin/google-chrome` is an executable file: a box without Chrome gives a red leg, never a skipped one.
