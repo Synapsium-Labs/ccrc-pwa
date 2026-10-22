@@ -2695,6 +2695,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 02:55: no tap. v0.0.555 (#1105, a history wave) was released, unapplied. The work volume is back to 21G, so its
         ANOMALY has cleared. Server 15895M free. STATUS: fleet and server v0.0.544, newest v0.0.555, stable v0.0.502,
         intent dev/auto=off, backups fleet 228M/server 15508M, disk free fleet 159G/work volume 21G/server 16G.
+      - 05:55: an operator tap moved both boxes to v0.0.555, which carries the broker's attempt fix: the fleet box
+        05:42:22 to 05:43:21, then the server 05:43:48 to 05:46:49. Both gates passed, doctor reported 0 failed on
+        each, and the watchdog left the move in flight; the fleet sweep skipped the same three long-failed units. The
+        first pass after the restart (05:52:33) collapsed the repeats as designed: 743 attempt rows removed,
+        `cpAttempts` 799 to 56, the checkpoint 34 MB smaller, one long pass (block 46.0 s, `stallMid` 20.1 s). Ordinary
+        passes since block for 5.7 to 9.1 s; none has reached the attempt step yet. No collapse failure or mismatch
+        line. Sent to the broker's coordinator. **The server is now under the operator's 15G line**: the move's backup
+        is 1870M, backups total 16320M, and 15059M is free, so the soak's disk question is the operator's again. STATUS:
+        fleet and server v0.0.555, newest v0.0.555, stable v0.0.502, intent dev/auto=off, backups fleet 229M/server
+        16320M, disk free fleet 163G/work volume 19G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
