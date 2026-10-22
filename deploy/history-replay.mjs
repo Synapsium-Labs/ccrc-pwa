@@ -33,7 +33,7 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { CONTROL_FILE_MAX, EXIT, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { CONTROL_FILE_MAX, EXIT, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, readBounded, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
@@ -617,6 +617,32 @@ export function cutToolResult(redacted) {
 export function toolResultText(field, idx) {
   const r = redactForSpawn(field, idx);
   return r.state === 'text' ? { state: 'text', text: cutToolResult(r.text) } : r;
+}
+
+/** A JSON value redacted as a VALUE (D-6308): every string leaf, and every object key, through lib's redactFinalJson (the
+ *  field pass and then the final belt, per string), the structure rebuilt around them, before anything serialises it. A
+ *  secret that follows a newline in a tool_use input sits behind a JSON `\n` once the input is serialised (the `n`
+ *  glues onto its run and no layer sees the value whole), so no site redacts text it has already serialised. W2-D54 holds:
+ *  each string leaf IS the field, redactField still runs on every one before any cut, and redactFinal on top only adds.
+ *  lib's redactFinalJson maps leaves and never touches object KEYS (a key is a field name fixed in code, there); a
+ *  stored tool_use input's keys are data, so each key goes through it here too. Two keys that mask to one string
+ *  collapse to the later value, which is the fail-closed direction. A value nested past the stack throws a RangeError,
+ *  which renderOrNull's callers turn into a discard.
+ *  @param {unknown} value  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {unknown} */
+export function maskValue(value, idx) {
+  if (typeof value === 'string') return redactFinalJson(value, idx);
+  if (Array.isArray(value)) return value.map((v) => maskValue(v, idx));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [redactFinalJson(k, idx), maskValue(v, idx)]));
+  }
+  return value;
+}
+
+/** A stored body as lib's renderEntryText renders it, redacted as a value first (maskValue): the one way a body that is
+ *  JSON (a tool_use input, a tool_result's block list or object content, an object body) becomes spawn text (D-6308).
+ *  @param {unknown} body  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {string} */
+export function renderMasked(body, idx) {
+  return renderEntryText(maskValue(body, idx));
 }
 
 const sjObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -2775,13 +2801,15 @@ export function entryBodyOf(rs, row) {
  *  @param {{ type: string }} row  @param {{ body: unknown, rawLen: number }} k
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx */
 export function renderKeptMember(row, k, idx) {
-  const pieces = Array.isArray(k.body)
-    ? k.body.map((b) => {
+  // D-6308: the body is redacted as a value before any block of it is rendered, so no JSON the render makes is redacted as text.
+  const body = maskValue(k.body, idx);
+  const pieces = Array.isArray(body)
+    ? body.map((b) => {
       const type = b !== null && typeof b === 'object' ? b.type : null;
       const text = type === 'tool_use' ? renderToolUseLine(typeof b.name === 'string' ? b.name : '', JSON.stringify(b.input ?? null)) : renderEntryText([b]);
       return { type, tagged: typeof b === 'string' || type === 'text', text };
     })
-    : [{ type: null, tagged: true, text: renderEntryText(k.body) }];
+    : [{ type: null, tagged: true, text: renderEntryText(body) }];
   const lines = [];
   for (const p of pieces) {
     const field = { text: p.text, rawLen: k.rawLen };
@@ -2818,7 +2846,7 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
   const sum = entryBodyOf(rs, copy.rows[copy.summaryIndex]);
   if (sum.state === 'lost') return reconDiscard(SUMMARY_LOST[sum.word]);
   if (sum.state === 'unparseable') return reconDiscard('summary-unparseable');
-  const sumText = renderOrNull(() => renderEntryText(sum.body));
+  const sumText = renderOrNull(() => renderMasked(sum.body, rs.idx));
   if (sumText === null) return reconDiscard('body-unrenderable');
   const s1 = redactForSpawn({ text: sumText, rawLen: sum.rawLen }, rs.idx);
   if (s1.state !== 'text') return s1;
@@ -2885,7 +2913,7 @@ export const FACT_DROP_REASONS = Object.freeze([
   'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
   'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
   'unanswerable', 'unanswerable-untimed',
-  'writer-input-over-cap',
+  'writer-input-over-cap', 'writer-input-unrenderable',
 ]);
 /** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
 const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
@@ -2904,8 +2932,10 @@ const EXIT_CODE_LINE = /^Exit code -?[0-9]+$/;
 /** Who produced a candidate's row (W2-D65): its own assistant row, the assistant row its result answers, or nobody.
  *  @typedef {{ state: 'row', backend: string } | { state: 'paired', backend: string, tool_use_uuid: string }
  *    | { state: 'unpaired' }} FactProducer */
-/** A stored text as a spawn's input reads it (W2-D54): the text and its UTF-8 length.
- *  @typedef {{ text: string, rawLen: number }} StoredField */
+/** A stored text as a spawn's input reads it (W2-D54): the text and its UTF-8 length. A span row's field also carries the
+ *  `body` it was rendered from, and a paired tool_use input the `value` it was serialised from, so the writer redacts
+ *  the JSON as a value and renders it again (D-6308).
+ *  @typedef {{ text: string, rawLen: number, body?: unknown, value?: unknown }} StoredField */
 /** One candidate fact (W2-D61, W2-D65), the one candidate shape every later task reads (R4). Its first twelve fields are
  *  the writer's item: the family, boundary N, `kind`, `fact` (F), `fact_raw` (F_raw), `source_entry_uuid`, `repo_roots`,
  *  `leaf` (the raw, unredacted text block, tool_use input string, Bash command, path field or tool_result text it was
@@ -3019,7 +3049,7 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
     }
     const rendered = renderOrNull(() => renderEntryText(picked.body));
     if (rendered === null) return { state: 'discard', boundaryUuid, why: 'body-unrenderable', counts };
-    span.push(storedField(rendered));
+    span.push({ ...storedField(rendered), body: picked.body });   // D-6308: the body rides beside its rendering, redacted as a value at the writer
     const blocks = Array.isArray(picked.body) ? picked.body : [];
     let producer;
     if (row.provenance === 'model') {
@@ -3072,7 +3102,8 @@ export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, bounda
       const answered = typeof b.tool_use_id === 'string' ? uses.get(b.tool_use_id) : undefined;
       // The input needs no guard: that tool_use row's own renderEntryText, guarded above, already stringified it whole.
       const pair = answered?.block === undefined ? null
-        : { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(JSON.stringify(answered.block.input ?? null)) };
+        : { name: typeof answered.block.name === 'string' ? answered.block.name : '',
+          input: { ...storedField(JSON.stringify(answered.block.input ?? null)), value: answered.block.input ?? null } };   // D-6308
       if (b.is_error === true) {
         const line = text.split('\n').find((l) => {
           const c = collapseWs(l);
@@ -3127,6 +3158,8 @@ export function dedupeFamily(mined, counts) {
 export function screenRedaction(c, idx, memo = null) {
   if (redactField(c.fact_raw, idx) !== c.fact_raw) return 'redact-fact';
   if (redactField(c.fact, idx) !== c.fact) return 'redact-fact';
+  // D-6308: repo_roots (an epoch's cwd and cwd_real) reach frozen.json and sourced.json: one that redaction changes drops the candidate.
+  if (c.repo_roots.some((r) => redactField(r, idx) !== r)) return 'redact-fact';
   let masked = memo === null ? undefined : memo.get(c.leaf_key);
   if (masked === undefined) {
     masked = redactField(c.leaf.text, idx);
@@ -4130,6 +4163,22 @@ export function windowExcerpt({ base, factRaw, firstWindow, pairLine }) {
   }
 }
 
+/** One span row or paired tool_use input for the writer (W2-D54, D-6308): a field mined from a row carries the JSON it
+ *  was rendered from (`body` for a span row, `value` for a paired input), and that is redacted as a VALUE (maskValue)
+ *  and rendered again, never the serialised text; a hand-built field with neither is text, redacted whole as before. The
+ *  rendering then goes through redactForSpawn too (the decode cap, and the context rules that read a JSON pair on one
+ *  line). A body too deep to render again is discarded `writer-input-unrenderable`, never a throw.
+ *  @param {{ text: string, rawLen: number, body?: unknown, value?: unknown }} field
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx */
+function writerField(field, idx) {
+  const hasBody = Object.hasOwn(field, 'body');
+  if (!hasBody && !Object.hasOwn(field, 'value')) return redactForSpawn(field, idx);
+  if (blobOverDecodeCap(field.rawLen)) return { state: 'discard', why: 'over-decode-cap' };
+  const text = renderOrNull(() => (hasBody ? renderMasked(field.body, idx) : JSON.stringify(maskValue(field.value, idx))));
+  if (text === null) return { state: 'discard', why: 'writer-input-unrenderable' };
+  return redactForSpawn({ text, rawLen: field.rawLen }, idx);
+}
+
 /** The writer's input for one candidate (W2-D72), every field redacted whole BEFORE any window (W2-D54). Pure.
  *  @param {WriterItem} item  @param {string} writerInput 'excerpt' or 'leaf-span' (WRITER_INPUTS)
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx the run's pair index
@@ -4147,14 +4196,14 @@ export function writerInputOf(item, writerInput, idx) {
     base = leaf.text;
     firstWindow = WRITER_LEAF_WINDOW;
     if (item.pair !== null) {
-      const input = redactForSpawn(item.pair.input, idx);
+      const input = writerField(item.pair.input, idx);
       if (input.state === 'discard') return { state: 'discard', why: input.why };
       pairLine = cpSlice(Array.from(renderToolUseLine(item.pair.name, input.text)), 0, WRITER_PAIR_CAP);
     }
   } else {
     const texts = [];
     for (const f of item.span) {
-      const r = redactForSpawn(f, idx);
+      const r = writerField(f, idx);
       if (r.state === 'discard') return { state: 'discard', why: r.why };
       texts.push(r.text);
     }

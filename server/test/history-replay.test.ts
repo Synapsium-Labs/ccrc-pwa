@@ -5910,6 +5910,34 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: reconstruction fro
     });
     expect(parts(payload())[1], 'CONTROL: every column is back').toBe(USER_PART);
   }, HEAVY);
+
+  // D-6308: a key that follows a newline in a stored object body sits behind a JSON `\n` once the body is rendered as JSON.
+  it('D-6308: an object summary body, a kept tool_use input and an object tool_result content, each holding keys after a newline, reach the payload masked', () => {
+    const keys = [['AKIA', ['AK', 'IA'].join('') + ['FIXTURE', 'W5A1', 'NLKEY'].join('')], ['ghp_', ['gh', 'p_'].join('') + 'Nl4Fw8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o'],
+      ['sk-ant', ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd']] as const;
+    const note = ['first line', ...keys.map(([, k]) => k)].join('\n');
+    const leaks = (t: string): string[] => keys.filter(([, k]) => Array.from({ length: k.length - 7 }, (_, i) => k.slice(i, i + 8)).some((w) => t.includes(w))).map(([n]) => n);
+    withBlob(blobOf(u(6)), stored(JSON.stringify({ kind: 'summary-object', note })), () => {
+      expect(JSON.stringify(picked(u(6)).body), 'CONTROL: the stored summary holds the keys').toContain(keys[0][1]);
+      expect(leaks(w5a1Lib.redactField(w5a1Lib.renderEntryText(picked(u(6)).body), w5a1Lib.makePairIndex([]))), 'CONTROL: redacting the rendered JSON as text leaks').toEqual(['AKIA', 'ghp_', 'sk-ant']);
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(leaks(p.text), 'the summary part').toEqual([]);
+      expect(p.text).toContain(w5a1Lib.REDACTED_MARK);
+    });
+    withBlob(blobOf(u(2)), stored(JSON.stringify([{ type: 'tool_use', id: 'toolu_01W5A1', name: 'Read', input: { file_path: '/home/u/tree/demo/b.md', note } }])), () => {
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(p.text, 'CONTROL: the tool_use is in the payload').toContain('[tool_use Read]');
+      expect(leaks(p.text), 'the kept tool_use input').toEqual([]);
+    });
+    withBlob(blobOf(u(3)), stored(JSON.stringify([{ type: 'tool_result', tool_use_id: 'toolu_01W5A1', content: { note } }])), () => {
+      const p = payload() as { state: string; text: string };
+      expect(p.state).toBe('payload');
+      expect(p.text, 'CONTROL: the tool_result is in the payload').toContain('[tool_result]');
+      expect(leaks(p.text), 'the kept tool_result object content').toEqual([]);
+    });
+  }, HEAVY);
 });
 
 describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: openReplayStore\'s refusal arms on a fixture HOME (W2-D51, W2-D59)', () => {
@@ -6049,7 +6077,8 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
       leaf: { text, rawLen: Buffer.byteLength(text, 'utf8') },
     });
     // R4: the writer's span is each mined row's rendering, one list the boundary's candidates share.
-    expect(r.candidates[0]!.span).toEqual([{ text, rawLen: Buffer.byteLength(text, 'utf8') }]);
+    // D-6308: each rendering carries the body it was rendered from, which the writer redacts as a value.
+    expect(r.candidates[0]!.span).toEqual([{ text, rawLen: Buffer.byteLength(text, 'utf8'), body: [w5a2Text(text)] }]);
     expect(r.candidates.every((c) => c.span === r.candidates[0]!.span)).toBe(true);
   });
 
@@ -6148,7 +6177,7 @@ describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () 
     const first = r.candidates.find((c) => c.kind === 'error')!;
     expect(first.leaf.text).toBe('Exit code 1\n\n  fatal:   not a git repository (or any parent)\nmore');
     expect(first.producer).toEqual({ state: 'paired', backend: 'anthropic', tool_use_uuid: sp.rows[0]!.uuid });
-    expect(first.pair).toEqual({ name: 'Bash', input: { text: '{"command":"npm run check-e1"}', rawLen: 30 } });
+    expect(first.pair).toEqual({ name: 'Bash', input: { text: '{"command":"npm run check-e1"}', rawLen: 30, value: { command: 'npm run check-e1' } } });   // D-6308: the value beside its text
   });
 
   it.each(['operator', 'summary', 'harness', 'ccrc-injected', 'recall-echo'])('W2-D65 never mined: the %s row, whatever its body holds, and its body is never picked', (prov) => {
@@ -8541,10 +8570,17 @@ const w6Indexed = (box: w5a1H.HistoryBox, uuid: string): boolean => {
     db.close();
   }
 };
+/** The fixture's tool_result row, marked is_error when `on` (the fixture builder has no flag for it). */
+function w6ErrorIf<T extends object>(on: boolean, row: T): T {
+  if (on) ((row as { message: { content: Array<Record<string, unknown>> } }).message.content[0]!)['is_error'] = true;
+  return row;
+}
 /** `dropThenDeep` (D-6306): the leaf's first tool_use is a Bash command too short to be a fact (a counted site drop), and a
  *  second tool_use row after it holds an input nested 5,000 deep (it parses and cannot be rendered), so mining drops one
- *  site and then discards the whole boundary as `body-unrenderable`. */
-function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null): W6SourceBox {
+ *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
+ *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
+function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
+  nl: { lines: string[]; token: string } | null = null): W6SourceBox {
   const box = w5a1H.makeHistoryBox(prefix);
   const cwd = join(box.home, 'tree', 'demo');
   mkdirSync(cwd, { recursive: true });
@@ -8560,9 +8596,11 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
   const DEEP_TEXT = `${'{"a":'.repeat(5000)}"leaf"${'}'.repeat(5000)}`;
   const rows = [
     w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
-    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }) } }),
+    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
+      ...(nl === null ? {} : { note: ['first line', ...nl.lines].join('\n') }) } }),
     ...(dropThenDeep ? [w5a1Fx.toolUseRow({ ...base, uuid: u(8), ts: ts(2), parentUuid: u(2), msgId: 'msg_w5a6_8', toolUseId: 'toolu_02W5A6', name: 'Bash', input: { command: cmd, nest: DEEP_MARK } })] : []),
-    w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6', content: key === null ? 'built ok' : `built ok\nkey in env: ${key}` }),
+    w6ErrorIf(nl !== null, w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6',
+      content: nl !== null ? 'Error: fixture build step failed badly' : key === null ? 'built ok' : `built ok\nkey in env: ${key}` })),
     w5a1Fx.assistantRow({ ...base, uuid: u(4), ts: ts(4), parentUuid: u(3), msgId: 'msg_w5a6_4', text: 'done with the build' }),
     w5a1Fx.boundaryRow({ ...base, uuid: u(5), ts: ts(5), parentUuid: u(4), trigger: 'manual', headUuid: u(4), anchorUuid: u(6), tailUuid: u(4), allUuids: [u(4)] }),
     w5a1Fx.summaryRow({ ...base, uuid: u(6), ts: ts(6), parentUuid: u(5), text: `<summary>\n1. Primary Request and Intent:\n   ${sentinel}\n</summary>` }),
@@ -8576,6 +8614,8 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
     if (t.code !== 0) throw new Error(`w6SourceBox: the sweep exited ${String(t.code)}: ${t.stderr}`);
   }
   if (!w6Indexed(box, u(2))) throw new Error('w6SourceBox: the command row was never indexed');
+  // D-6308: the run's pair-index value, planted after every sweep so only pairIndexOf's read of it redacts it.
+  if (nl !== null) writeFileSync(join(box.home, '.ccrc', 'w6nl.token'), `${nl.token}\n`, { mode: 0o600 });
   return { box, cwd, id, gen, cmd, sentinel, u };
 }
 
@@ -9712,6 +9752,48 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       }
     }, 600_000);
 
+    // D-6308 (fix wave, item A): a key that follows a JSON `\n` of a serialised tool_use input is masked. The same four kinds
+    // sit after a newline in one input (a pair-index value, AKIA-, ghp_- and sk-ant-shaped), the failing tool_result pairs an
+    // error fact with that tool_use, and the real sourceQuiz and writer stub run under both writer inputs: under excerpt the
+    // pair line carries the input, under leaf-span the span's rendering of the row does.
+    const nlKeys7 = (): { token: string; lines: string[]; kinds: Array<[string, string]> } => {
+      const token = ['zq', 'nl', 'pair', 'index', 'value', 'n7x2k9'].join('');   // a pair-index value: 20 or more characters, one run
+      const akia = w6Akia('NLAKIA1');
+      const ghp = ['gh', 'p_'].join('') + 'Nl4Fw8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o';
+      const sk = ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd';
+      return { token, lines: [token, akia, ghp, sk], kinds: [['pair-index', token], ['AKIA', akia], ['ghp_', ghp], ['sk-ant', sk]] };
+    };
+    const windows7 = (key: string): string[] => Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('D-6308: four key kinds after a JSON newline in a tool_use input reach neither the writer stdin nor any file under --out, writer input %s', async (writerInput) => {
+      const k = nlKeys7();
+      const sb = w6SourceBox('ccrc-w2-5a-fw-nl-', undefined, false, null, { lines: k.lines, token: k.token });
+      const home = sb.box.home;
+      node7(home);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--writer-input', writerInput, ...inp('step0a', s0)]) as R7;
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      const stdins = (printRuns(home) as Array<{ stdin: string }>).map((e) => e.stdin);
+      r7expect(stdins.length, 'CONTROL: the writer ran').toBeGreaterThan(0);
+      r7expect(stdins.some((t) => t.includes('[tool_use Bash]')), 'CONTROL: a writer input carries the tool_use that holds the keys').toBe(true);
+      const walk = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? walk(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const files = walk(out);
+      r7expect(files.some((f) => f.endsWith('.input.json')), 'CONTROL: the writer input is under --out').toBe(true);
+      for (const [kind, key] of k.kinds) {
+        for (const w of windows7(key)) {
+          for (const t of stdins) r7expect(t.includes(w), `${kind}: the writer stdin holds ${w}`).toBe(false);
+          for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(w), `${kind}: ${f} holds ${w}`).toBe(false);
+        }
+        const stored = walk(home).filter((f) => f.endsWith('.jsonl') && r7fs.readFileSync(f, 'utf8').includes(key));
+        r7expect(stored, `CONTROL: the store's transcript holds the ${kind} key whole`).not.toEqual([]);
+      }
+    }, 600_000);
+
     r7it('quiz-source refuses on a node the record does not name', async () => {
       const home = home7(STORE_C);
       const c = chain7(home);
@@ -10014,5 +10096,100 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'unreadable' })).toBe('unreadable');
       r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'absent' })).toBe('ok');
     });
+  });
+});
+
+// ── W2-5a fix wave (the whole-branch review's items A to F): fw-prefixed helpers, one describe per item ────────────────
+// Every key-shaped value is assembled at run time. The pair-index kind is a run of 20 or more characters that
+// makePairIndex knows; the other three are shapes lib's shape layer masks when a word boundary stands before them.
+const FW_PAIR = ['zq', 'fw', 'pair', 'index', 'value', 'm4x9k2'].join('');
+const FW_AKIA = w6Akia('FWAKIA1');
+const FW_GHP = ['gh', 'p_'].join('') + 'Fw4Nl8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o';
+const FW_SK = ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd';
+const FW_KINDS: Array<[string, string]> = [['pair-index', FW_PAIR], ['AKIA', FW_AKIA], ['ghp_', FW_GHP], ['sk-ant', FW_SK]];
+const FW_IDX = t4Lib.makePairIndex([{ len: FW_PAIR.length, sha256: t4Lib.sha256Hex(FW_PAIR) }]);
+/** Four lines, each of which follows a newline, so serialised each sits behind a JSON `\n`. */
+const FW_NOTE = ['first line', FW_PAIR, FW_AKIA, FW_GHP, FW_SK].join('\n');
+/** The kinds whose key has an 8-character window in `text`. */
+const fwLeaks = (text: string): string[] => FW_KINDS
+  .filter(([, key]) => Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8)).some((w) => text.includes(w))).map(([kind]) => kind);
+
+describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', () => {
+  const ALL = FW_KINDS.map(([kind]) => kind);
+  const mined = (): Array<Record<string, any>> => {
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('fw1', 'Bash', { command: 'npm run fixture-build-all', note: FW_NOTE })] },
+      { provenance: 'tool', body: [w5a2Result('fw1', 'Error: fixture build step failed badly', true)] },
+    ]);
+    return w5a2MinedOf(w5a2Mine(sp)).candidates as unknown as Array<Record<string, any>>;
+  };
+
+  it('the premise: redacting the serialised input as text leaves all four kinds (CONTROL), and redacting the value first masks them', () => {
+    const json = JSON.stringify({ command: 'npm run fixture-build-all', note: FW_NOTE });
+    expect(fwLeaks(t4Lib.redactField(json, FW_IDX)), 'CONTROL: the old way of redacting leaks every kind').toEqual(ALL);
+    expect(fwLeaks(JSON.stringify(replay.maskValue({ command: 'x', note: FW_NOTE }, FW_IDX)))).toEqual([]);
+  });
+
+  it.each(['excerpt', 'leaf-span'])('writerInputOf, writer input %s, over candidates mined from a row whose input holds the keys after a newline: no kind reaches the excerpt', (writerInput) => {
+    const cs = mined();
+    expect(cs.map((c) => c.kind).sort(), 'CONTROL: a command fact and an error fact paired with the tool_use').toEqual(['command', 'error']);
+    expect(cs.find((c) => c.kind === 'error')!.pair.input.text, 'CONTROL: the candidate carries the keys').toContain(FW_AKIA);
+    const seen: string[] = [];
+    for (const c of cs) {
+      const r = replay.writerInputOf(c as never, writerInput, FW_IDX) as { state: string; input: { excerpt: string } };
+      expect(r.state).toBe('input');
+      seen.push(r.input.excerpt);
+      expect(fwLeaks(r.input.excerpt), `${c.kind}`).toEqual([]);
+    }
+    expect(seen.some((t) => t.includes('[tool_use Bash]')), 'CONTROL: a tool_use line is in an excerpt').toBe(true);
+    expect(seen.some((t) => t.includes(t4Lib.REDACTED_MARK)), 'CONTROL: the keys were masked, not dropped').toBe(true);
+  });
+
+  it('renderKeptMember: a tool_use input, an object tool_result content, a nested tool_use in a result, and an object body each mask the keys', () => {
+    const idx = FW_IDX;
+    const note = { note: FW_NOTE };
+    const bodies: Array<[string, unknown]> = [
+      ['tool_use input', [{ type: 'tool_use', id: 't1', name: 'Bash', input: note }]],
+      ['object result content', [{ type: 'tool_result', tool_use_id: 't1', content: note }]],
+      ['nested tool_use in a result', [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'tool_use', name: 'Bash', input: note }] }]],
+      ['object body', note],
+    ];
+    for (const [what, body] of bodies) {
+      const old = t4Lib.redactField(t4Lib.renderEntryText(body), idx);
+      expect(fwLeaks(old).length, `CONTROL: ${what}: text-redacting the rendering leaks`).toBeGreaterThan(0);
+      const r = replay.renderKeptMember({ type: 'assistant' }, { body, rawLen: 100 } as never, idx) as { state: string; text: string };
+      expect(r.state, what).toBe('text');
+      expect(fwLeaks(r.text), what).toEqual([]);
+      expect(r.text, `CONTROL: ${what}: masked, not dropped`).toContain(t4Lib.REDACTED_MARK);
+    }
+  });
+
+  it('an object KEY is data in a stored input: a key-shaped key, and one that follows a newline inside the key, is masked (lib\'s redactFinalJson leaves keys alone)', () => {
+    const input = { [FW_AKIA]: 1, [`k\n${FW_GHP}`]: 2, [`j\n${FW_SK}`]: { [`i\n${FW_PAIR}`]: 3 } };
+    expect(fwLeaks(JSON.stringify(t4Lib.redactFinalJson(input, FW_IDX))), 'CONTROL: lib maps leaves only, so a key survives it').not.toEqual([]);
+    expect(fwLeaks(JSON.stringify(replay.maskValue(input, FW_IDX)))).toEqual([]);
+    const item = { ...Object.fromEntries(Object.entries(mined().find((c) => c.kind === 'error')!)) } as Record<string, any>;
+    const text = JSON.stringify(input);
+    item['pair'] = { name: 'Bash', input: { text, rawLen: Buffer.byteLength(text), value: input } };
+    const r = replay.writerInputOf(item as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(r.state).toBe('input');
+    expect(fwLeaks(r.input.excerpt)).toEqual([]);
+  });
+
+  it('screenRedaction: a repo root that redaction changes drops the candidate redact-fact; CONTROL: a plain root passes', () => {
+    const c = mined().find((x) => x.kind === 'command')!;
+    expect(replay.screenRedaction(c as never, FW_IDX)).toBeNull();
+    expect(replay.screenRedaction({ ...c, repo_roots: ['/home/u/tree', `/home/${FW_AKIA}/tree`] } as never, FW_IDX)).toBe('redact-fact');
+  });
+
+  it('a body nested past the stack is a counted discard at the writer, never a throw: writer-input-unrenderable, the last of FACT_DROP_REASONS', () => {
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 10_000; i += 1) deep = { a: deep };
+    const c = mined().find((x) => x.kind === 'command')!;
+    const item = { ...c, span: [{ text: 'x', rawLen: 1, body: deep }] };
+    expect(replay.writerInputOf(item as never, 'leaf-span', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
+    const pair = { ...c, pair: { name: 'Bash', input: { text: 'x', rawLen: 1, value: deep } } };
+    expect(replay.writerInputOf(pair as never, 'excerpt', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
+    expect(replay.FACT_DROP_REASONS.slice(16, 18), 'appended in place after writer-input-over-cap (R5)').toEqual(['writer-input-over-cap', 'writer-input-unrenderable']);
   });
 });
