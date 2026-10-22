@@ -229,6 +229,72 @@ describe('D-3097: cmd_swap mints the pin, and only on the operator path', () => 
   });
 });
 
+// ── D-6181: the characterization (spec §3.3, D4) ────────────────────────────
+// Today's answers over the rows D-6181 touches. "today:" rows are the ones its
+// behaviour commit flips; "kept:" rows it must not. The other kept rows of the
+// task (the rescue above the pin, the automatic clear, `pin-ended`, the floored
+// `pin-hold`, `prefer`'s clear) are the D-3097 to D-3099 blocks above, unchanged.
+
+/** `_avail` answering per account: `claude-a` (the row's current, pinned
+ *  account) at its ceiling, every other account with room. */
+const STUBS_CUR_AT_CEILING = (target = 'claude'): string =>
+  STUBS(PROMPT, target).replace('_avail() { return 0; };', '_avail() { [[ "$1" != claude-a ]]; };');
+
+const epoch = (): number => Math.floor(Date.now() / 1000);
+
+describe('D-6181 characterization: the pin', () => {
+  it('today: a pin minted 25 h ago, home recovered → pin-hold, no move', () => {
+    // The expiry field is written as the new cmd_swap would write it; today's
+    // reader does not look at it, so the pin holds however old it is.
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 3600} ttl"`);
+    tick();
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
+    expect(pin()).toBe('claude-a');
+  });
+
+  it('today: a pin on an account whose five reads 100 → pin-hold', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 3600} ttl"`);
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
+  });
+
+  it('today: a pin minted while home’s seven read 99 with sevenResetAt passed → pin-hold', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 60} reset"`);
+    tick();
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
+  });
+});
+
+describe('D-6181 characterization: the ceiling-leave', () => {
+  it('kept: a session at its ceiling whose target is home dispatches on the tick even while home’s slot is taken', () => {
+    // A ceiling-leave pays overage on every turn while it waits, so it is
+    // never staggered (spec §3.1): the slot files below must not delay it.
+    seed(); sessionJson();
+    const slots = reg('.affslot');
+    fs.mkdirSync(slots, { recursive: true });
+    fs.writeFileSync(path.join(slots, 'claude'), String(epoch()));
+    fs.writeFileSync(path.join(slots, '.fleet'), String(epoch()));
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+  });
+
+  it('kept: a ceiling-leave to a non-home account logs auto-home and dispatches on the affinity arm', () => {
+    seed(); sessionJson();
+    tick(STUBS_CUR_AT_CEILING('claude-b').replace(
+      '_dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };',
+      '_dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; echo "arm $3" >> "$HOME/ccd-calls"; };'));
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`]);
+    expect(h.calls()).toContain('arm affinity');
+    expect(swapLog()).toMatch(/auto-home myid: claude-a -> claude-b \[home=claude\]/);
+  });
+});
+
 describe('D-3099: an explicit `prefer` supersedes a pin', () => {
   it('setting home by hand removes the pin, so one session never has two answers', () => {
     // `prefer` says "keep it here" in the field the affinity arm actually
