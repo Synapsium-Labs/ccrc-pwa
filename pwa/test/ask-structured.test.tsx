@@ -861,4 +861,139 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     expect(panel()!.querySelector('[inert]')).not.toBeNull();
     expect(status()).toBeNull();
   });
+
+  // What the pane could paint on the new connection before its envelope arrives: the NEXT question of fixture 1's ask
+  // (another id, other rows), or, for any other menu, the same menu repainted under another id with other words.
+  const repainted = (n: number): Dialog => {
+    const dialog = askFixture(n).dialog!;
+    if (n === 1 || n === 8) {
+      return {
+        ...dialog, id: 'dlg-gap', selectedIndex: 2,
+        options: [
+          { index: 1, label: 'Yes' }, { index: 2, label: 'No' }, { index: 3, label: 'Type something.' },
+          { index: 4, label: 'Chat about this' },
+        ],
+        raw: ['╭ pane chrome ╮', '←  ☒ Cache  ☐ Tracing  ☐ Regions  ✔ Submit  →', '  1. Yes', '  2. No', '  3. Type something.',
+          '  4. Chat about this'].join('\n'),
+      };
+    }
+    return { ...dialog, id: 'dlg-gap', title: 'Something else?', options: dialog.options.map((o) => ({ ...o, label: `Changed ${o.label}` })) };
+  };
+  const heldText = (): string => (panel()?.textContent ?? '').replace(RECONNECTING, '');
+
+  it.each([1, 4, 8])(
+    'a dialog frame in the gap, with another id and other rows, does not repaint the held surface: fixture %i',
+    (n) => {
+      const store = connected(askFixture(n));
+      mount(store);
+      const before = panel();
+      const text = heldText();
+      const heading = screen.getAllByRole('heading')[0]!.textContent;
+
+      drop();
+      reconnect();
+      act(() => store.getState().apply({ type: 'dialog', dialog: repainted(n) }));
+      expect(store.getState().dialog?.id, 'the store did take the new frame').toBe('dlg-gap');
+      expect(panel()).toBe(before);
+      expect(screen.getAllByRole('heading')[0]!.textContent, 'the question changed under the operator').toBe(heading);
+      expect(heldText(), 'the held surface was repainted').toBe(text);
+      expect(status()?.textContent).toBe(RECONNECTING);
+    },
+  );
+
+  it('a dialog frame in the gap, with another id and other rows, leaves the Other field its node, its text and its focus', () => {
+    const fx = askFixture(1);
+    const store = connected(fx);
+    mount(store);
+    fireEvent.click(screen.getByRole('button', { name: /^Other/ }));
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: 'Memcached' } });
+    const heading = screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question });
+    const labels = [...document.querySelectorAll('.opt-label')].map((el) => el.textContent);
+
+    drop();
+    reconnect();
+    act(() => store.getState().apply({ type: 'dialog', dialog: repainted(1) }));
+    expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[0]!.question })).toBe(heading);
+    expect([...document.querySelectorAll('.opt-label')].map((el) => el.textContent)).toEqual(labels);
+    expect(screen.getByRole('textbox'), 'the field was remounted').toBe(field);
+    expect((field as HTMLInputElement).value).toBe('Memcached');
+    expect(document.activeElement, 'the focus (a phone keyboard) was lost').toBe(field);
+
+    // The deciding frame hands the surface to what the pane now shows: the next question, live.
+    act(() => store.getState().apply({ type: 'ask', ask: fx.ask!, key: 'ask-key-b' }));
+    expect(status()).toBeNull();
+    expect(screen.getByRole('heading', { name: HOOK_QUESTIONS[1]!.question })).toBeInTheDocument();
+  });
+
+  it('hiding the sheet works in the gap, makes no call, and the hidden sheet stays hidden when the connection speaks', () => {
+    holdClosingContent();
+    const calls = [
+      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {})),
+      vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {})),
+      vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never),
+    ];
+    const fx = askFixture(1);
+    const store = connected(fx);
+    mount(store);
+    const before = panel();
+    expect(before?.getAttribute('data-state')).toBe('open');
+
+    drop();
+    fireEvent.keyDown(document.activeElement ?? before!, { key: 'Escape' });
+    expect(panel(), 'the sheet is kept mounted for its exit').toBe(before);
+    expect(panel()?.getAttribute('data-state'), 'Escape hides the held sheet in the gap').toBe('closed');
+    for (const call of calls) expect(call).not.toHaveBeenCalled();
+
+    // The same ask comes back live: a dismissal applies as it always did.
+    reconnect();
+    act(() => store.getState().apply({ type: 'dialog', dialog: fx.dialog! }));
+    act(() => store.getState().apply({ type: 'ask', ask: fx.ask!, key: 'ask-key-b' }));
+    expect(status()).toBeNull();
+    expect(panel()?.getAttribute('data-state')).toBe('closed');
+  });
+
+  it('a tab move, a pick-several commit and the review\'s Submit send nothing in the gap', () => {
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+
+    // A multi-tab question (fixture 1): the strip's chip and the arrow key.
+    const one = connected(askFixture(1));
+    mount(one);
+    drop();
+    fireEvent.click(screen.getByRole('button', { name: /^Go to Tracing/ }));
+    fireEvent.keyDown(screen.getByRole('button', { name: /^In-process/ }), { key: 'ArrowRight' });
+    expect(tab).not.toHaveBeenCalled();
+    expect(answer).not.toHaveBeenCalled();
+    cleanup();
+
+    // A pick-several question: a box ticked in the gap is local, its commit is a send.
+    const base = askFixture(9).dialog!;
+    const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
+    const ask = { questions: [{
+      question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+      options: [{ label: 'North' }, { label: 'East' }, { label: 'South' }],
+    }] };
+    const picks = connected({
+      ask, dialog, askFrameSeen: true,
+      frames: [{ type: 'dialog', dialog }, { type: 'ask', ask, key: 'ask-key-m' }],
+    });
+    mount(picks);
+    drop();
+    fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.click(screen.getByRole('button', { name: /^(Next|Review answers)/ }));
+    expect(multi).not.toHaveBeenCalled();
+    cleanup();
+
+    // The review: Submit answers and Cancel.
+    const review = connected(askFixture(8));
+    mount(review);
+    drop();
+    fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel/ }));
+    expect(answer).not.toHaveBeenCalled();
+    expect(tab).not.toHaveBeenCalled();
+    expect(multi).not.toHaveBeenCalled();
+  });
 });
