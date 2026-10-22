@@ -1007,6 +1007,43 @@ export class DelegationCheckpointBuilder {
     return { dropped: plan.drop.length, unparseable: plan.unparseable.length };
   }
 
+  /** D-6268: [encoded key, activityId] for every mapped Bash call the door may retire, sorted by activityId. Read only. */
+  private retirableZeroDeltaEntries(): (readonly [string, string])[] {
+    const named = new Set<string>();
+    for (const l of this.leases.values()) named.add(l.activityId);                                  // released or not (a released lease still names it)
+    for (const n of this.lineage.values()) if (n.activityId !== null) named.add(n.activityId);      // open or closed
+    const out: (readonly [string, string])[] = [];
+    for (const [encoded, f] of this.bashCalls) {
+      if (f.kind !== 'equal' || !Object.hasOwn(this.mapping, encoded)) continue;
+      const id = this.mapping[encoded]!;
+      const a = this.activities.get(id);
+      if (a === undefined) continue;
+      if (a.sourceKind !== 'bash-worktree') continue;                 // declared equivalent (MB8), kept
+      if (a.executionState !== 'ended') continue;                     // equivalent while 'unknown' has no writer (MB5), kept, pinned by RB6
+      if (a.identityJournalId !== f.preJournalId) continue;           // equivalent under the start rule (MB7), kept, RB9
+      if (named.has(id)) continue;                                    // no lease row, no lineage row names it
+      out.push([encoded, id] as const);
+    }
+    return out.sort(([, x], [, y]) => (x < y ? -1 : x > y ? 1 : 0));
+  }
+
+  /** D-6268: the activity IDs of the mapped Bash calls the door would retire now (read only). */
+  retirableZeroDeltaBash(): string[] { return this.retirableZeroDeltaEntries().map(([, id]) => id); }
+
+  /** D-6268: the ONE builder code that deletes from the mapping or the activities. Row, map entry and fact leave together. */
+  retireZeroDeltaBash(): number {
+    const list = this.retirableZeroDeltaEntries();
+    for (const [encoded, id] of list) { delete this.mapping[encoded]; this.activities.delete(id); this.bashCalls.delete(encoded); }
+    return list.length;
+  }
+
+  /** D-6268: whether this row's call is a zero-delta Bash call (its fact is 'equal'): such a call created no worktree and is never a lease activity. */
+  isZeroDeltaBashCall(a: DelegationActivityRow): boolean {
+    if (a.sourceKind !== 'bash-worktree') return false;
+    const encoded = encodeDelegationNaturalKey({ parentId: a.parentId, parentIncarnation: a.parentIncarnation, sourceKind: a.sourceKind, upstreamId: a.upstreamId });
+    return this.bashCalls.get(encoded)?.kind === 'equal';
+  }
+
   /** Replaces the ROWS from a checkpoint a checkpoint-only change produced, keeping the applied position, the identity candidates
    *  and the lease facts (a change cannot move any of them). A candidate whose key the change mapped is no longer one. */
   replaceRows(cp: DelegationCheckpointV1): void {
@@ -1027,7 +1064,8 @@ export class DelegationCheckpointBuilder {
    *     unpaired stop), and the first listing-carrying PreToolUse of each PENDING Bash call on an unmapped key (D-6267; spec §5.12: its
    *     identity event precedes its opening). POSITION IS NOT COVERAGE (W3-M17): such a record stays held although the checkpoint has applied a later
    *     sequence, until a checkpoint holds the ID. A Workflow run is never a candidate: its launch response is its join (R44).
-   * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4).
+   * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4). A retired zero-delta Bash call needs none
+   * either: neither of its records is a qualifying join, so nothing it named can open again (D-6268).
    */
   computeHolds(): DelegationPruningHold[] {
     const holds = new Map<string, DelegationPruningHold>();
@@ -1178,7 +1216,7 @@ export interface DelegationRecoveryReport {
 
 /**
  * Incremental recovery: construct with the checkpoint's bytes (or null for none), `accept` the retained journal's records in
- * file order, then `finish`. Holds only the indexes (event IDs, identity candidates, lease facts), never the records, so a journal
+ * file order, then `finish`. Holds only the indexes (event IDs, identity candidates, lease facts, the Bash-call facts), never the records, so a journal
  * of millions of records recovers in bounded memory. `fail` records a failure the caller found while reading (a torn tail).
  */
 export class DelegationRecovery {
@@ -1582,7 +1620,7 @@ export interface DelegationApplyOutcome {
 }
 
 /** Why `createLease` declined to create a lease. */
-export type DelegationLeaseRefusalReason = 'canonical-path-held' | 'unmeasured-request' | 'unmeasured-activity' | 'source-kind-mismatch';
+export type DelegationLeaseRefusalReason = 'canonical-path-held' | 'unmeasured-request' | 'unmeasured-activity' | 'source-kind-mismatch' | 'zero-delta-call';
 
 export type DelegationLeaseOutcome =
   | { kind: 'created'; leaseId: string; lineageId: string; sequence: number; applied: DelegationApplyOutcome }
@@ -2027,7 +2065,8 @@ export class DelegationDurability {
               refuse('change-refused', `a change removed the session (${s.sessionId}, ${s.parentIncarnation}): wave 3 never removes a session from the checkpoint (it would delete its SQLite events on the event loop)`);
             }
           }
-          // O4, the immutable mapping: only the fold and the meta door open an activity, and nothing drops or re-derives one. A change
+          // O4, the immutable mapping: only the fold and the meta door open an activity, and nothing re-derives one; the ONE door that drops an
+          // activity and its mapping is `retireZeroDeltaBashActivities` (the O4 amendment, D-6268), never a checkpoint-only change. A change
           // that edited the rows AND the map together would stay self-consistent, so `build()` cannot catch it; this does.
           const beforeIds = before.activityIdsByNaturalKey;
           const afterIds = after.activityIdsByNaturalKey;
@@ -2127,6 +2166,24 @@ export class DelegationDurability {
   }
 
   /**
+   * Retires, under the applier's lock and on the builder's own rows, every `bash-worktree` activity whose call was zero-delta (one measured
+   * PreToolUse, then one measured PostToolUse naming the same records), whose identity record is that PreToolUse, which has ended, and which
+   * no lease and no lineage row names: row and natural-key mapping together (the O4 amendment, D-6268). A checkpoint replacement through the
+   * one application path, like `pruneBucketCursors`: no journal record, no new edge. Nothing retirable writes nothing and encodes nothing.
+   * Sound only beside the fold rule that a zero-delta call is never a qualifying join (D-6267): recovery then meets no unmapped join for a
+   * retired key. One more `commitLocked` caller beside those the applier's other entries list; it never goes through `applyCheckpointChange`.
+   */
+  retireZeroDeltaBashActivities(): Promise<{ retired: number; applied: DelegationApplyOutcome | null }> {
+    return this.enqueue(async () => {
+      this.requireReady();
+      if (this.builder.retirableZeroDeltaBash().length === 0) return { retired: 0, applied: null };   // idle: no clone, build, encode or write
+      const box = { retired: 0 };
+      const applied = await this.commitLocked({ items: [], mutate: (b) => { box.retired = b.retireZeroDeltaBash(); }, force: false });
+      return { retired: box.retired, applied };
+    });
+  }
+
+  /**
    * The serialized journal adapter for a lease. It DEDUPLICATES first (an unreleased identity already held answers
    * `duplicate`; a canonical path held by another identity is REFUSED, since nothing releases a lease in wave 3 and the
    * active-path index would otherwise fail every later projection), and only then calls the injected `randomUUID`, exactly once.
@@ -2180,6 +2237,9 @@ export class DelegationDurability {
     }
     if (leaseSourceKindOfActivity(activity.sourceKind) !== r.sourceKind) {
       return { kind: 'refused', reason: 'source-kind-mismatch', detail: `an ${activity.sourceKind} activity's lease is ${leaseSourceKindOfActivity(activity.sourceKind)}, not ${r.sourceKind}` };
+    }
+    if (this.builder.isZeroDeltaBashCall(activity)) {
+      return { kind: 'refused', reason: 'zero-delta-call', detail: 'a zero-delta Bash call created no worktree: it is never a lease activity' };
     }
     return null;
   }
@@ -2358,6 +2418,7 @@ const DELEGATION_OWN_FAILURE_CODES: Readonly<Record<DelegationOwnFailureCode, tr
 /** Why `createLease` declined, as a TOTAL table over `DelegationLeaseRefusalReason`. */
 const DELEGATION_LEASE_REFUSAL_REASONS: Readonly<Record<DelegationLeaseRefusalReason, true>> = {
   'canonical-path-held': true, 'unmeasured-request': true, 'unmeasured-activity': true, 'source-kind-mismatch': true,
+  'zero-delta-call': true,
 };
 
 /** The kinds of a meta-open answer (the builder's and the applier's), as a TOTAL table over both unions' `kind`. */

@@ -9964,7 +9964,7 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
  *  `rewrites - (projectDelta + projectFull)` is the bare `project()` calls (repair, heal, wipe, forced full) plus any delta call that threw (the `delegation
  *  projection stale:` warn line names it). `encodes` is the whole-checkpoint canonical encodes the applier made during the pass
  *  (its no-op compare's two, the written checkpoint's one, `verifyDecodable`'s re-encode) and `cpBytes` the bytes of the last checkpoint it wrote, absent on a pass that
- *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  wrote none; both sit beside `cpCursors`, before `censusAge`, so they drop late. `retired` (D-6268) is the zero-delta retirement's count on a pass that called its door. The formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
  *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
@@ -9974,7 +9974,7 @@ export const DELEGATION_PASS_SLOW_KEYS = [
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
-  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes', 'retired',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -10506,6 +10506,7 @@ class DelegationLane {
   private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
   private lastPruneHour = -1;
+  private lastRetireHour = -1;
   private cursorsPruned = 0;
   private warnedUnparseableCursors = false;
   private evidenceLoaded = false;
@@ -11142,7 +11143,7 @@ class DelegationLane {
       } finally { endUpkeep(); }
       if (pass.signal.aborted) return;
       const endPrune = this.phase(pass, 'prune');
-      try { await this.pruneCursors(pass, durable); } finally { endPrune(); }
+      try { await this.pruneCursors(pass, durable); await this.retireZeroDelta(pass, durable); } finally { endPrune(); }
       await this.turn(pass, null);                                      // D-5835: turn 2, before the reconcile (which writes `reconciledAt` before its first check)
       if (pass.signal.aborted) return;
 
@@ -11198,6 +11199,16 @@ class DelegationLane {
       try { this.cursorsPruned += (await durable.pruneBucketCursors(pass.now)).dropped; }
       catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); }
     }
+  }
+
+  /** D-6268: the zero-delta retirement, at most once per UTC hour. The applier decides, under its lock, on its own rows and facts; an idle
+   *  door writes nothing and encodes nothing. The hour is spent BEFORE the attempt (N6), so a failure is retried at most once an hour. */
+  private async retireZeroDelta(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    const hour = laneHourOf(pass.now);
+    if (hour === this.lastRetireHour) return;
+    this.lastRetireHour = hour;
+    try { this.size(pass, 'retired', (await durable.retireZeroDeltaBashActivities()).retired); }
+    catch (err) { console.warn(`ccrc-server: the delegation zero-delta retirement failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death

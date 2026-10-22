@@ -524,6 +524,14 @@ hooks never delete; no session invokes these verbs and no skill names them.
   minted identity survives pruning in the checkpoint, not by keeping every identity event forever. A
   meta read is never journalled, has no writer and is never hashed (§5.2), so neither restoring nor
   deriving an id reads one as an event (amended 2026-10-07, review 328 F1).
+- **Zero-delta Bash calls (amended 2026-10-21, operator ruling "retire that class", D-6268):** a Bash call
+  whose PostToolUse found its listing-carrying PreToolUse pending and named the same admin records created
+  no worktree and opens nothing (§5.2); its identity is not kept. An activity such a call opened before the
+  amendment is retired with its natural-key mapping once it has ended and no lease or lineage edge names it,
+  through one dedicated applier door and never through a checkpoint-only change. Its PreToolUse and
+  PostToolUse stay in the journal and in `delegation_events` as listing windows (overlap and loss vetoes for
+  rung 4). On replay they open nothing, so reconstruction neither refuses them nor derives an id for them.
+  Compaction must never retain such a call's PostToolUse without its PreToolUse.
 - **Retention (proposed):** the journal keeps ≥ 30 days and never drops an event an open lease or
   lineage edge references.
 - **Pruning (amended 2026-10-07, review 328 F1):** whatever the retention, pruning may not pass an
