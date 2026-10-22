@@ -8542,7 +8542,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
    *  copied file; `drop` removes one (measure-history.py, which nothing imports), so codeShas() over this tree moves. */
   function tree7(opts: { edit?: string; drop?: string } = {}): string {
     const tree = r7MkTmp('ccrc-w2-5a-t7-tree-');
-    for (const rel of r7drv.CODE_SHA_FILES as string[]) {
+    for (const rel of r7drv.CODE_SHA_FILES as unknown as string[]) {
       r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
       r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
     }
@@ -8647,12 +8647,13 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       lookbackMs: r7gate.ACTIVE_LOOKBACK_MS, families: active.map((f) => ({ ccrc_id: f.ccrc_id, generation: f.generation, state: states[f.ccrc_id] ?? 'ok' })) }) as R7;
   }
   /** A sourced entry's eleven frozen fields, its rank stripped (Task 6's frozenListText takes exactly FROZEN_ENTRY_KEYS). */
-  const strip7 = (e: R7): R7 => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
+  const strip7 = (e: R7): any => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
   /** The frozen list's head as freeze and pilot-source write it: the record's writer and the labeller with its prefix. */
-  const head7 = (prefix = 7): R7 => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
+  const head7 = (prefix = 7): { writer_model: string; labeller: object } => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
   /** A synthetic family order key: 64 hex digits, in code-unit order by `i` (Task 5's quizFamilyOrderKey is a sha256's
-   *  hex; freeze compares keys, it never recomputes them). */
-  const K7 = (i: number): string => String(i).repeat(64);
+   *  hex; freeze compares keys, it never recomputes them). Hex LETTERS, so no key reads as a number: a numeric digit
+   *  string would make a subtraction of two keys a number, and M41's numeric comparator would pass unseen. */
+  const K7 = (i: number): string => 'abcdef'[i]!.repeat(64);
   /** One quiz entry on family `f`: W2-D73's eleven fields, its qid by Task 6's qidOf, and its global rank, `[order key,
    *  candidate rank]` (R10); a pilot entry's rank is its node's own, `[family index, candidate rank]`, and is stripped. */
   function entry7(f: Ref, n: number, rank: [string | number, number]): R7 {
@@ -8706,13 +8707,13 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     const out: string[] = [];
     const dbFile = r7Paths(root).dbFile;
     const walk = (dir: string, rel: string): void => {
-      if (dir === r7path.dirname(dbFile)) {
-        out.push(`${rel} db ${r7fs.existsSync(dbFile) ? r7Sha(r7fs.readFileSync(dbFile)) : 'absent'}`);
-        return;
-      }
       for (const n of r7fs.readdirSync(dir).sort()) {
         const p = r7path.join(dir, n);
         const r = rel === '' ? n : `${rel}/${n}`;
+        if (p === r7path.dirname(dbFile)) {   // the store's directory: its db file's bytes alone (its own mtime moves with SQLite's sidecars)
+          out.push(`${r} db ${r7fs.existsSync(dbFile) ? r7Sha(r7fs.readFileSync(dbFile)) : 'absent'}`);
+          continue;
+        }
         const st = r7fs.lstatSync(p);
         out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
         if (st.isDirectory()) walk(p, r);
@@ -9233,7 +9234,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
       const calls: R7[] = [];
       const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
-      const run = async (model: string): Promise<{ refusal: R7; made: boolean }> => {
+      const run = async (model: string): Promise<{ refusal: R7 | null; made: boolean }> => {
         const out = outDir();
         const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', model, ...inp('step0a', s0)]) as R7;
         const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, deps as never));
@@ -9311,7 +9312,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     };
 
     r7it.skipIf(process.platform === 'darwin')('quiz-source hands part 1\'s pilot_budget and limits to the writer gate (W2-D55): a tight record budget stops the second writer batch, a low record threshold stops the writer at open', async () => {
-      const run = async (draftOver: R7): Promise<{ refusal: R7; calls: number; runs: number }> => {
+      const run = async (draftOver: R7): Promise<{ refusal: R7 | null; calls: number; runs: number }> => {
         const home = writerHome7();   // before chain7, so the draft's step 0a records this stub's version
         const c = chain7(home, draftOver);
         const calls: R7[] = [];
@@ -10805,7 +10806,7 @@ t 're-checks the code it runs under: power'
 # M11: the assembler's node checks, each removed.
 mut "$F" "    if (!labels.has(sid)) refuse('input-invalid', \`census store-id-unlisted \${sid}\`);" ""
 t 'census assembler checks nodes only'
-# Expected RED: 1 failed. The unlisted census passes, and the next answer is 'verify node-missing' or exit 0.
+# Expected RED: 1 failed. The unlisted census passes, and the next answer is 'input-invalid: verify store-id-unlisted <store>' (measured; not 'verify node-missing').
 mut "$F" "    if (v.value.census_sha256 !== node.census_sha256) refuse('input-invalid', \`verify census-mismatch \${node.store_id}\`);" ""
 t 'census assembler checks nodes only'
 # Expected RED: 1 failed. A verify output bound to another census is accepted (exit 0 with figures).
@@ -10854,7 +10855,7 @@ t 'W2-5a Task 7: freeze'
 # M19: freeze accepts a forged qid.
 mut "$F" "      if (qidOf(e) !== e.qid) refuse('input-invalid', \`sourced entry \${e.qid} qid-mismatch\`);" ""
 t 'refuses a sourced list of another record'
-# Expected RED: 1 failed. freeze exits 0 with the forged entry.
+# Expected RED: 1 failed (measured). With the guard gone the forged entry reaches Task 6's frozenListText, which throws `TypeError: frozenListText: entry <qid> is not qidOf its own six fields`, so the run ends 'internal error' (exit 1) in place of the 'input-invalid: sourced entry <qid> qid-mismatch' refusal: the guard turns a TypeError into a typed refusal.
 
 # M20: verify ab never reports a treatment file naming its own generation.
 mut "$F" "  return read.value.trim() === generation ? 'treatment-named' : 'ok';" "  return 'ok';"
@@ -10967,7 +10968,7 @@ t 'control ids and pilot families excluded'
 # M41 (R10): freeze merges by a numeric family rank, the rule before the order key.
 mut "$F" "  const byRank = (a, b) => cmpUnit(a.rank[0], b.rank[0]) || a.rank[1] - b.rank[1];" "  const byRank = (a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1];"
 t 'W2-5a Task 7: freeze'
-# Expected RED: 6 failed, every freeze case. Two keys subtract to NaN, so only the candidate ranks compare: chain7's own
+# Expected RED: 6 failed, every freeze case (measured, with K7 as hex LETTERS: a digit-only key such as '000…' or '111…' is a number, so the subtraction works and this mutant passed unseen until K7 was changed). Two letter keys subtract to NaN, so only the candidate ranks compare: chain7's own
 # mergeSourced call refuses `input-invalid sourced rank-duplicate <key>:0` (two families' first candidates tie), and every
 # freeze case builds chain7, R11's short_of_min_families case (twice) included.
 

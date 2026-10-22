@@ -190,10 +190,21 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
     }
   };
 
-  it('FLAG_SPECS declares exactly the seven flags W2-4 uses, frozen', () => {
+  it('FLAG_SPECS declares exactly W2-4\'s seven flags and W2-5a Task 7\'s, frozen', () => {
     expect(Object.isFrozen(replay.FLAG_SPECS)).toBe(true);
     expect(replay.FLAG_SPECS).toEqual({ out: 'string', account: 'string', budget: 'int', 'writer-model': 'string',
-      'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string' });
+      'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string',
+      // W2-5a Task 7 (W2-D25, W2-D73, W2-D84, W2-D21): a list flag repeats, one value per node, paired by position
+      step0a: 'list', 'step0a-sha256': 'list', 'node-label': 'list', 'node-store-id': 'list',
+      pilot: 'string', 'pilot-sha256': 'string', overrides: 'string',
+      record: 'string', 'record-sha256': 'string', supersedes: 'string', 'supersedes-sha256': 'string',
+      part1: 'string', 'part1-sha256': 'string', 'prior-final': 'string', 'prior-final-sha256': 'string',
+      census: 'list', 'census-sha256': 'list', verify: 'list', 'verify-sha256': 'list', sourced: 'list', 'sourced-sha256': 'list',
+      frozen: 'string', 'frozen-sha256': 'string', 'quiz-meta': 'string', 'quiz-meta-sha256': 'string',
+      power: 'string', 'power-sha256': 'string', 'pilot-result': 'string', 'pilot-result-sha256': 'string',
+      'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
+      'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
+      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -283,7 +294,7 @@ describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a
    *  on, main sets process.umask(0o077) before parseArgs, and these cases call main in this test process (vitest's fork
    *  pool), so the worker's umask is saved first and restored afterwards. From W2-5a Task 1 importing the driver loads
    *  cli.mjs, which sets this worker's umask to 077 at import, so the saved value is 077 too. */
-  const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean>, env: Record<string, string | undefined>) => Promise<number>,
+  const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean | string[]>, env: Record<string, string | undefined>) => Promise<number>,
     fn: () => Promise<void>): Promise<void> => {
     replay.HANDLERS.set(sub, h);
     const umask = process.umask(0o022);
@@ -3043,11 +3054,11 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   const EXACT_NAMES: Record<string, string> = {
     'node:child_process': '{ spawn }',
     'node:crypto': '{ randomBytes }',
-    '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
+    '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
     '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
-    '../ccd/history/sweep.mjs': '{ ftsTextOfBlob }',
+    '../ccd/history/sweep.mjs': '{ ftsTextOfBlob, readRegPresence }',
   };
   const importViolations = (text: string): string[] => {
     const found: string[] = [];
@@ -3873,12 +3884,12 @@ t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off 
       t7expect(refusalOf(() => t7drv.refuseRecallOff(t7MkTmp('t7-ro-'), ['fam-a', '../escape'])), 'refuseRecallOff carries the same refusal')
         .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
     });
-    t7it('the driver names recall-off on exactly one code line, an lstatSync of recallOffPath, and never spells the directory', () => {
+    t7it('the driver names recall-off on exactly two code lines, W2-4\'s lstatSync presence check and verify\'s readBounded content read (W2-D84, R6), and never spells the directory', () => {
       const code = t7fs.readFileSync(t7path.join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
         .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
       const naming = (lines: string[]): string[] => lines.filter((l) => l.includes('recallOffPath(')).map((l) => l.trim());
       const spells = (lines: string[]): string[] => lines.filter((l) => /\/recall-off|'recall-off'|RECALL_OFF_DIR/.test(l));
-      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));']);
+      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));', 'const r = readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false);']);
       t7expect(spells(code)).toEqual([]);
       // CONTROL: both needles see a planted line.
       t7expect(naming(['  writeFileSync(recallOffPath(home, id), g);'])).toHaveLength(1);
@@ -4802,8 +4813,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
       'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
     ]);
-    // This PR's whole subcommand set, in registration order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe']);
+    // The driver's whole subcommand set, in registration order: W2-4's two, then W2-5a Task 7's six (Task 1's grammar
+    // cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -8748,4 +8760,1143 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 6: sourceQuiz, Tasks 
     const plain = await source('quiz', []);
     expect(plain.r.counts.discards, 'CONTROL: the plain box discards nothing').toEqual({});
   }, 600_000);
+});
+
+// ── W2-5a Task 7: the record subcommands (W2-D84's first half, W2-D24, W2-D73, W2-D21, W2-D19, W2-D20, W2-D25; D-5773) ──
+// Every HOME is a fixture (W2-4's up-a row and recording stub, a fresh limits row, a tagged stamp, and where a node's
+// store is read a createStore store with the case's store id and meta rows). pilot-source and quiz-source run
+// in-process, with sourceQuiz injected or, in the one end-to-end walk, real over Task 6's w6SourceBox store; every other
+// subcommand runs as the operator runs it, node --no-warnings on a driver with the scrubbed env. No case reads the live
+// HOME, spawns a real model, or writes outside its own mkTmp trees.
+import * as r7fs from 'node:fs';
+import * as r7path from 'node:path';
+import { spawnSync as r7SpawnSync } from 'node:child_process';
+import * as r7Store from '../../ccd/history/store.mjs';
+import { describe as r7describe, expect as r7expect, it as r7it, vi as r7vi } from 'vitest';
+import * as r7drv from '../../deploy/history-replay.mjs';
+import * as r7gate from '../../deploy/history-gate.mjs';
+import { RECALL_OFF_KEYS as R7_KEYS, canonicalJson as r7Canon, historyPaths as r7Paths, sha256Hex as r7Sha } from '../../ccd/history/lib.mjs';
+import { mkTmp as r7MkTmp } from './tmpHelpers.js';
+import { REPO as R7_REPO, scrubbedEnv as r7Scrubbed } from './historyHelpers.js';
+
+r7describe('W2-5a Task 7: the record subcommands', () => {
+  type R7 = Record<string, any>;
+  type Ref = { store_id: string; ccrc_id: string; generation: string };
+  type Saved = { path: string; sha: string; value: R7 };
+  const DAY = 86_400_000;
+  const T0 = 1_800_000_000_000;
+  const STORE_A = '00000000-0000-4000-8000-0000000000a7';
+  const STORE_B = '00000000-0000-4000-8000-0000000000b7';
+  const STORE_C = '00000000-0000-4000-8000-0000000000c7';
+  const OPUS = 'claude-opus-9-1';
+  const ARM = 'claude-arm-9-1';
+  const STAMP = 'v9.9.7';
+  const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const hex = (label: string): string => r7Sha(`w2-5a task 7 fixture: ${label}`);
+  const SEED = hex('seed');
+  const SHAS = (root: string): Record<string, string> => (r7drv.codeShas(root) as { files: Record<string, string> }).files;
+  const ROOT_SKIP = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  // ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────
+  /** The first generation of `id` on `store` whose arm under SEED is `arm` (W2-D19), searched from n0, so the fixture
+   *  holds whatever bit the seed gives. */
+  const pick = (store: string, id: string, arm: string, n0: number): Ref => {
+    for (let n = n0; ; n += 1) {
+      const f = { store_id: store, ccrc_id: id, generation: gen(n) };
+      if (r7gate.armOf(SEED, f) === arm) return f;
+    }
+  };
+  const A_T1 = pick(STORE_A, 'a-t1', 'treatment', 100);
+  const A_T2 = pick(STORE_A, 'a-t2', 'treatment', 200);
+  const A_C1 = pick(STORE_A, 'a-c1', 'control', 300);
+  const A_C2 = pick(STORE_A, 'a-c2', 'control', 400);
+  const A_D: Ref = { store_id: STORE_A, ccrc_id: 'a-d', generation: gen(500) };   // registry-absent: dropped before the flip
+  const B_T1 = pick(STORE_B, 'b-t1', 'treatment', 600);
+  const B_C1 = pick(STORE_B, 'b-c1', 'control', 700);
+  const PILOT_FAMILY: Ref = { store_id: STORE_A, ccrc_id: 'pilot-0', generation: gen(900) };
+  /** [measured windows, windows with a read call] per family, as the census plants them. */
+  const SHAPE: Record<string, [number, number]> = { 'a-t1': [3, 2], 'a-t2': [2, 0], 'a-c1': [2, 1], 'a-c2': [1, 1], 'a-d': [2, 2], 'b-t1': [2, 1], 'b-c1': [3, 0] };
+  const keyOf = (f: Ref): string => r7gate.familyKey(f.store_id, f.ccrc_id, f.generation);
+
+  /** Make `home` a fixture node: up-a (upstream) and its stub, a fresh limits row and a tagged stamp. */
+  function node7(home: string): void {
+    writeRoster(home, [FIXTURE_ACCOUNTS[0]!]);
+    plantStub(home, 'up-a');
+    const nowS = Math.floor(Date.now() / 1000);
+    r7fs.mkdirSync(r7path.join(home, '.cc-limits'), { recursive: true });
+    r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 10, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    r7fs.writeFileSync(r7path.join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: STAMP }));
+  }
+  /** A fixture HOME (node7), and, with `store`, a store made by store.mjs's createStore with that store id, whose meta
+   *  also holds `meta`: the store a node's subcommand opens through Task 1's openReplayStore. */
+  function home7(store: string | null, meta: Array<[string, string]> = []): string {
+    const home = r7MkTmp('ccrc-w2-5a-t7-home-');
+    node7(home);
+    if (store !== null) {
+      r7Store.createStore(home, { storeId: store });
+      const w = r7Store.openWriter(r7Paths(home).dbFile) as unknown as { prepare(sql: string): { run(...a: unknown[]): unknown } };
+      try {
+        const put = w.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)');
+        for (const [k, v] of meta) put.run(k, v);
+      } finally {
+        r7Store.closeWriter(w as never);
+      }
+    }
+    return home;
+  }
+  /** What the stub answers to --version: the first line of the stream it prints (W2-4 Task 7's measureClaudeVersion). */
+  const versionOf = (home: string): string => r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8').split('\n')[0]!.trim();
+
+  /** A tree the driver runs from: the four gate_code files COPIED (the real gate, which the driver imports since W2-5a),
+   *  every other ccd/history entry, the rest of ccd/ and shared/ symlinked to this checkout. `edit` appends one byte to a
+   *  copied file; `drop` removes one (measure-history.py, which nothing imports), so codeShas() over this tree moves. */
+  function tree7(opts: { edit?: string; drop?: string } = {}): string {
+    const tree = r7MkTmp('ccrc-w2-5a-t7-tree-');
+    for (const rel of r7drv.CODE_SHA_FILES as unknown as string[]) {
+      r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
+      r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
+    }
+    for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd', 'history'))) {
+      if (!r7fs.existsSync(r7path.join(tree, 'ccd', 'history', n))) r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', 'history', n), r7path.join(tree, 'ccd', 'history', n));
+    }
+    for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd'))) {
+      if (n !== 'history') r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', n), r7path.join(tree, 'ccd', n));
+    }
+    r7fs.symlinkSync(r7path.join(R7_REPO, 'shared'), r7path.join(tree, 'shared'));
+    if (opts.edit !== undefined) r7fs.appendFileSync(r7path.join(tree, opts.edit), '\n');
+    if (opts.drop !== undefined) r7fs.rmSync(r7path.join(tree, opts.drop));
+    return tree;
+  }
+  /** The operator's run: node on the driver in `tree` (the checkout's when null), the scrubbed env, a fixture HOME
+   *  (a fresh empty one when none is given), never the live one. */
+  function run7(tree: string | null, home: string | null, args: string[]): { code: number | null; stdout: string; stderr: string } {
+    const h = home ?? r7MkTmp('ccrc-w2-5a-t7-emptyhome-');
+    const script = tree === null ? SCRIPT : r7path.join(tree, 'deploy', 'history-replay.mjs');
+    const r = r7SpawnSync(process.execPath, ['--no-warnings', script, ...args],
+      { cwd: h, env: { ...r7Scrubbed(process.env), HOME: h }, encoding: 'utf8', timeout: 120_000, killSignal: 'SIGKILL' });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+  /** Save a value as the operator does: canonical JSON and one newline, 0600, in a fresh directory outside any git tree. */
+  function save7(value: R7, name = 'input.json'): Saved {
+    const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), name);
+    const text = r7Canon(value) + '\n';
+    r7fs.writeFileSync(p, text, { mode: 0o600 });
+    return { path: p, sha: r7Sha(text), value };
+  }
+  /** Bytes saved as they are (a frozen list has no trailing newline, W2-D73). */
+  function saveText7(text: string, name: string): Saved {
+    const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), name);
+    r7fs.writeFileSync(p, text, { mode: 0o600 });
+    return { path: p, sha: r7Sha(text), value: JSON.parse(text) };
+  }
+  const loaded = (s: Saved): R7 => ({ path: s.path, sha256: s.sha, value: s.value });
+  /** `--<name> PATH --<name>-sha256 HEX`. */
+  const inp = (name: string, s: Saved): string[] => [`--${name}`, s.path, `--${name}-sha256`, s.sha];
+  const outDir = (): string => r7path.join(r7MkTmp('ccrc-w2-5a-t7-out-'), 'out');
+
+  const FLAGS_OK = (mode: string): Record<string, boolean> => Object.fromEntries((r7drv.contractFlags(mode) as string[]).map((f) => [f, true]));
+  /** W2-4's Step0aOutput for a node, measured under `root`'s code, HOME's stamp and HOME's stub. */
+  const step0a7 = (root: string, home: string): R7 => ({
+    kind: r7drv.STEP0A_KIND, v: 1, measured_ms: T0 - 40 * DAY, account: 'up-a', settings_mode: 'restricted',
+    claude_code_version: versionOf(home), wrapper_sha256: null, flags_accepted: FLAGS_OK('restricted'),
+    writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: ['Bash', 'Agent'] },
+    code_shas: SHAS(root), release_stamp: STAMP, budget: 100_000, spend: 600,
+  });
+  /** pilot-source's output, as this task writes it, measured under `root`'s code. */
+  const pilot7 = (root: string): R7 => ({
+    kind: r7drv.PILOT_SOURCE_KIND, v: 1, store_id: STORE_A, seed: hex('pilot seed'), n_fidelity: 5, n_usage: 5,
+    families: [PILOT_FAMILY], fidelity: [{ ...PILOT_FAMILY, boundary_uuid: gen(901) }], frozen_sha256: hex('pilot frozen'), writer_model: OPUS,
+    used: { labeller: { ...r7gate.LABELLER, path_forms: [...r7gate.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt', baseline_files: 'v1',
+      writer_prompt_sha256: r7gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: r7gate.ANSWER_PROTOCOL_SHA256 },
+    code_shas: SHAS(root), release_stamp: STAMP, budget: 3_000_000, spend: 900_000, counts: {},
+  });
+  /** Part 1 over nodes A and B, through the driver's own buildDraft, the seed injected (W2-D19: no flag takes one).
+   *  Q18 is kept cheap (sims 2, a 0.45 grid) and the floor low, so the five-question fixture quiz passes it. */
+  function draft7(root: string, home: string, over: R7 = {}): R7 {
+    const s0 = step0a7(root, home);
+    return r7drv.buildDraft({
+      nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
+      step0a: [{ ...s0, label: 'node-a', store_id: STORE_A }, { ...s0, label: 'node-b', store_id: STORE_B }],
+      pilot: pilot7(root), account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS },
+      gateCode: { release_tag: STAMP, files: SHAS(root) }, seedHex: SEED, nowMs: T0 - 30 * DAY,
+      overrides: { q18_settings: { sims: 2, grid_step: 0.45 }, quiz: { halt_floor: { questions: 4, families: 2 } }, ...over }, supersedes: null,
+    }) as R7;
+  }
+  /** measure-history.py --census's report for one store at T0: a 14-day look-back, ticks from T0 - 7 d (so covered_days is
+   *  7), and each family's SHAPE: `windows` measured windows (one copy, no turns, an inclusive end 1 s after the boundary),
+   *  the first `withCall` of them holding one read call. */
+  function census7(store: string, fams: Ref[], over: { since?: number; ticksFirst?: number | null; nTicks?: number; stale?: string } = {}): R7 {
+    return {
+      store_id: store, user_version: 2, script_sha256: hex('script'), counters: { 'card_consumed:main': 3 }, w2: null,
+      census: {
+        as_of_ms: T0, since_ms: over.since ?? T0 - 14 * DAY, row_cap: r7gate.ROW_CAP,
+        ticks: { n: over.nTicks ?? 10, first_ts_ms: over.ticksFirst === undefined ? T0 - 7 * DAY : over.ticksFirst, last_ts_ms: T0 - 1000 },
+        families: fams.map((f, i) => {
+          const [windows, withCall] = SHAPE[f.ccrc_id]!;
+          const at = (w: number): number => T0 - 6 * DAY + i * 1_000_000 + w * 10_000;
+          return {
+            ccrc_id: f.ccrc_id, generation: f.generation, session_pk: i + 1, merged_into: null, first_seen_ms: T0 - 20 * DAY + i,
+            last_main_ts_ms: over.stale === f.ccrc_id ? T0 - 10 * DAY : T0 - 1000, merged_generations: [],
+            calls: Array.from({ length: withCall }, (_, w) => [at(w) + 10, 0, 'grep']),
+            boundaries: Array.from({ length: windows }, (_, w) => ({
+              boundary_uuid: gen(5000 + i * 100 + w), ts_ms: at(w),
+              copies: [{ file_id: 1, source_key: '', boundary_line: 1 + w * 10, after_count: 1, summary_line: null, next_boundary_line: null,
+                next_boundary_ts_ms: null, last_ts_ms: at(w) + 1000, rows: [], models: [], truncated: false }],
+            })),
+          };
+        }),
+      },
+    };
+  }
+  const FAMS_A = [A_T1, A_T2, A_C1, A_C2, A_D];
+  const FAMS_B = [B_T1, B_C1];
+  /** verify --registry's output for a census, every family ok but `states` (built by the driver's own report builder). */
+  function verify7(recordSha: string, census: Saved, states: Record<string, string> = {}): R7 {
+    const active = (r7gate.activeFamilies(census.value.store_id, census.value.census, { lookbackMs: r7gate.ACTIVE_LOOKBACK_MS }) as { active: Ref[] }).active;
+    return r7drv.verifyRegistryReport({ recordSha256: recordSha, storeId: census.value.store_id, censusSha256: census.sha,
+      lookbackMs: r7gate.ACTIVE_LOOKBACK_MS, families: active.map((f) => ({ ccrc_id: f.ccrc_id, generation: f.generation, state: states[f.ccrc_id] ?? 'ok' })) }) as R7;
+  }
+  /** A sourced entry's eleven frozen fields, its rank stripped (Task 6's frozenListText takes exactly FROZEN_ENTRY_KEYS). */
+  const strip7 = (e: R7): any => Object.fromEntries((r7drv.FROZEN_ENTRY_KEYS as string[]).map((k) => [k, e[k]]));
+  /** The frozen list's head as freeze and pilot-source write it: the record's writer and the labeller with its prefix. */
+  const head7 = (prefix = 7): { writer_model: string; labeller: object } => ({ writer_model: OPUS, labeller: { ...r7gate.LABELLER, sha_min_prefix: prefix } });
+  /** A synthetic family order key: 64 hex digits, in code-unit order by `i` (Task 5's quizFamilyOrderKey is a sha256's
+   *  hex; freeze compares keys, it never recomputes them). Hex LETTERS, so no key reads as a number: a numeric digit
+   *  string would make a subtraction of two keys a number, and M41's numeric comparator would pass unseen. */
+  const K7 = (i: number): string => 'abcdef'[i]!.repeat(64);
+  /** One quiz entry on family `f`: W2-D73's eleven fields, its qid by Task 6's qidOf, and its global rank, `[order key,
+   *  candidate rank]` (R10); a pilot entry's rank is its node's own, `[family index, candidate rank]`, and is stripped. */
+  function entry7(f: Ref, n: number, rank: [string | number, number]): R7 {
+    const fact = (0xabc0000 + n).toString(16);
+    const e = { store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, boundary_uuid: gen(8000 + n), kind: 'sha', fact, fact_raw: fact,
+      question: `Which commit did fixture step ${n} record?`, source_entry_uuid: gen(9000 + n), repo_roots: ['/home/u/tree'] };
+    return { ...e, qid: r7drv.qidOf(e) as string, rank };
+  }
+  /** Everything open --finalize reads, built through the driver's own builders (part 1, the census and verify outputs, the
+   *  assembled census and its assignment, two nodes' sourced lists, the frozen list and its meta, the power output, a
+   *  pilot result), and the part 2 buildFinal makes from them. */
+  function chain7(home: string, draftOver: R7 = {}): R7 {
+    const draft = draft7(R7_REPO, home, draftOver);
+    const d = save7(draft, 'part1.json');
+    const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
+    const cB = save7(census7(STORE_B, FAMS_B), 'census-b.json');
+    const vA = save7(verify7(d.sha, cA, { 'a-d': 'registry-absent' }), 'verify-a.json');
+    const vB = save7(verify7(d.sha, cB), 'verify-b.json');
+    const assembled = r7drv.assembleCensus(draft, [cA, cB].map(loaded), [vA, vB].map(loaded)) as R7;
+    const assignment = r7drv.deriveAssignment(SEED, assembled) as { list: R7[]; sha256: string };
+    const inputs = (assembled.nodes as R7[]).map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
+    const entriesA = [entry7(A_T1, 1, [K7(0), 0]), entry7(A_T1, 2, [K7(0), 1]), entry7(A_T2, 3, [K7(2), 0])];
+    const entriesB = [entry7(B_T1, 4, [K7(1), 0]), entry7(B_T1, 5, [K7(1), 1])];
+    const sA = save7(r7drv.sourcedReport({ recordSha256: d.sha, storeId: STORE_A, assignmentSha256: assignment.sha256, inputs, sourced: { entries: entriesA, counts: {} }, spend: 0 }) as R7, 'sourced-a.json');
+    const sB = save7(r7drv.sourcedReport({ recordSha256: d.sha, storeId: STORE_B, assignmentSha256: assignment.sha256, inputs, sourced: { entries: entriesB, counts: {} }, spend: 0 }) as R7, 'sourced-b.json');
+    const merged = r7drv.mergeSourced([entriesA, entriesB], draft.quiz.target) as R7[];
+    const fz = saveText7(r7drv.frozenListText('quiz', head7(), merged.map(strip7)) as string, 'frozen.json');
+    const meta = save7(r7drv.quizMetaReport({ recordSha256: d.sha, frozenSha256: fz.sha, assignmentSha256: assignment.sha256, entries: merged,
+      floor: draft.quiz.halt_floor, minFamilies: draft.quiz.min_families, sourced: [sA, sB].map((s) => ({ store_id: s.value.store_id, sha256: s.sha })) }) as R7, 'frozen.meta.json');
+    const power = save7(r7drv.powerReport(draft, d.sha, assembled) as R7, 'power.json');
+    const pilotResult = save7({ kind: r7drv.PILOT_RESULT_KIND, v: 1, fidelity: [{ boundary_uuid: gen(901), pass: true }],
+      usage_extrapolation: { tokens_per_question: 1000 }, step0b_sha256: hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10 } }, 'pilot-result.json');
+    const frozen = { sha256: fz.sha, list: fz.value, families: r7drv.familiesOf(fz.value.entries) };
+    const final = r7drv.buildFinal({ draft, draftSha256: d.sha, priorSha256: null, assembled, assignment, power: power.value, powerSha256: power.sha,
+      frozen, pilotResult: pilotResult.value, spendBudget: 30_000_000, window: { start: T0 + DAY, end: T0 + 15 * DAY }, decision: 'keep', nowMs: T0 }) as R7;
+    return { draft, d, cA, cB, vA, vB, assembled, assignment, inputs, sA, sB, merged, fz, meta, power, pilotResult, frozen, final, f: save7(final, 'part2.json') };
+  }
+  /** The finalize argv over a chain, `over` replacing one input or (null) leaving one out. */
+  function finalizeArgv(c: R7, over: Record<string, string[] | null> = {}): string[] {
+    const parts: Record<string, string[] | null> = {
+      record: inp('record', c.d), census: [...inp('census', c.cA), ...inp('census', c.cB)], verify: [...inp('verify', c.vA), ...inp('verify', c.vB)],
+      power: inp('power', c.power), frozen: inp('frozen', c.fz), 'quiz-meta': inp('quiz-meta', c.meta), 'pilot-result': inp('pilot-result', c.pilotResult),
+      rest: ['--spend-budget', '30000000', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 15 * DAY), '--q18-decision', 'keep'], ...over,
+    };
+    return ['open', '--finalize', ...Object.values(parts).flatMap((v) => v ?? [])];
+  }
+  /** Every entry under `root`, with its mode, size, mtime and (for a file) its bytes' sha256. The store's own directory is
+   *  summarised by its db file's bytes alone: a read-only open of a WAL store may leave SQLite's sidecars there, which
+   *  are SQLite's, not the driver's writes. */
+  function snapshot7(root: string): string[] {
+    const out: string[] = [];
+    const dbFile = r7Paths(root).dbFile;
+    const walk = (dir: string, rel: string): void => {
+      for (const n of r7fs.readdirSync(dir).sort()) {
+        const p = r7path.join(dir, n);
+        const r = rel === '' ? n : `${rel}/${n}`;
+        if (p === r7path.dirname(dbFile)) {   // the store's directory: its db file's bytes alone (its own mtime moves with SQLite's sidecars)
+          out.push(`${r} db ${r7fs.existsSync(dbFile) ? r7Sha(r7fs.readFileSync(dbFile)) : 'absent'}`);
+          continue;
+        }
+        const st = r7fs.lstatSync(p);
+        out.push(`${r} ${st.mode} ${st.size} ${st.mtimeMs}${st.isFile() ? ` ${r7Sha(r7fs.readFileSync(p))}` : ''}`);
+        if (st.isDirectory()) walk(p, r);
+      }
+    };
+    walk(root, '');
+    return out;
+  }
+  /** An in-process call, its stderr captured (the sha line) and its refusal, if any, answered as {word, detail}. */
+  async function inProcess(fn: () => Promise<unknown>): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
+    const lines: string[] = [];
+    const spy = r7vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
+    try {
+      return { code: await fn(), stderr: lines.join(''), refusal: null };
+    } catch (e) {
+      if (e instanceof r7drv.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as R7).word, detail: (e as R7).detail } };
+      throw e;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const envOf = (home: string): R7 => ({ HOME: home, TMUX_PANE: undefined, LANG: undefined });
+  const printRuns = (home: string): unknown[] => (stubLog(home) ?? []).filter((e) => e.argv.includes('-p'));
+
+  // ── the grammar and the subcommand table ───────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: the grammar and the subcommand table', () => {
+    r7it('a list flag collects every value in order, and a list flag beside its sha partner is paired by position', () => {
+      const { flags } = r7drv.parseArgs(['power', '--census', '/c/a', '--census', '/c/b', '--census-sha256', 'h1', '--census-sha256', 'h2', '--record', '/r']);
+      r7expect(flags).toEqual({ census: ['/c/a', '/c/b'], 'census-sha256': ['h1', 'h2'], record: '/r' });
+    });
+
+    r7it.each([
+      [['pilot-source', '--record', '/r'], '--record is not a pilot-source flag'],
+      [['quiz-source', '--account', 'up-a'], '--account is not a quiz-source flag'],
+      [['freeze', '--census', '/c'], '--census is not a freeze flag'],
+      [['power', '--out', '/o'], '--out is not a power flag'],
+      [['open', '--draft', '--record', '/r'], '--record is not a open --draft flag'],
+      [['open', '--finalize', '--account', 'up-a'], '--account is not a open --finalize flag'],
+      [['open', '--template', '--out', '/o'], '--out is not a open --template flag'],
+      [['verify', '--registry', '--frozen', '/f'], '--frozen is not a verify --registry flag'],
+      [['verify', '--section', 'ab', '--census', '/c'], '--census is not a verify --section ab flag'],
+      [['step0a', '--record', '/r'], '--record is not a step0a flag'],
+    ])('each subcommand refuses a flag it never reads, before anything else: %j', (argv, detail) => {
+      const r = run7(null, home7(null), argv as string[]);
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('args-invalid', detail));
+    });
+
+    r7it('a required flag missing is named; an optional file flag without its sha, or a sha without its file, is refused', () => {
+      const H = 'a'.repeat(64);
+      const base = ['power', '--census', '/c', '--census-sha256', H, '--verify', '/v', '--verify-sha256', H];
+      r7expect(run7(null, home7(null), [...base, '--record', '/r']).stderr).toBe(refusalLine('args-invalid', 'record-sha256-required'));
+      const full = [...base, '--record', '/r', '--record-sha256', H];
+      r7expect(run7(null, home7(null), [...full, '--supersedes', '/s']).stderr).toBe(refusalLine('args-invalid', '--supersedes and --supersedes-sha256 go together'));
+      r7expect(run7(null, home7(null), [...full, '--supersedes-sha256', H]).stderr).toBe(refusalLine('args-invalid', '--supersedes and --supersedes-sha256 go together'));
+    });
+
+    r7it('open wants exactly one mode, and verify exactly one of --registry and --section ab', () => {
+      r7expect(run7(null, null, ['open']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
+      r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
+      r7expect(run7(null, null, ['verify']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
+      r7expect(run7(null, null, ['verify', '--registry', '--section', 'ab']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
+      r7expect(run7(null, null, ['verify', '--section', 'quiz']).stderr).toBe(refusalLine('args-invalid', 'section "quiz": this build verifies ab only'));
+    });
+
+    r7it('no W2-5a subcommand takes --allow-code-change: before window start a code change is a superseding draft (W2-D6, W2-D24)', () => {
+      for (const sub of [['quiz-source'], ['freeze'], ['power'], ['open', '--finalize'], ['verify', '--registry']]) {
+        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', 'unknown flag "--allow-code-change"'));
+      }
+    });
+  });
+
+  // ── parity with the gate and with step 0a ──────────────────────────────────────────────────────────────────
+  // CODE_SHA_FILES parity is Task 1's pin (R3); this describe holds the flags_accepted parity pin.
+  r7describe('W2-5a Task 7: parity with the gate and with step 0a', () => {
+    r7it.each(['restricted', 'fallback'])('step0a records every flag the contract carries, under %s: flags_accepted parity', (mode) => {
+      const home = home7(null);
+      const out = outDir();
+      const r = run7(null, home, ['step0a', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
+        '--judge-model', OPUS, '--arm-model', ARM, '--settings-mode', mode]);
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.STEP0A_FILE), 'utf8'));
+      r7expect(Object.keys(rec.flags_accepted).sort()).toEqual(r7drv.contractFlags(mode));
+    });
+
+    r7it('contractFlags is every flag token of every spawn mode\'s argv, and holds the arm-only tools flags', () => {
+      for (const mode of ['restricted', 'fallback']) {
+        const want = new Set<string>();
+        for (const m of r7drv.SPAWN_MODES as string[]) for (const t of r7drv.spawnArgv({ mode: m, model: 'contract-model', settingsMode: mode, home: '/home/u' }) as string[]) if (t.startsWith('-')) want.add(t);
+        r7expect(r7drv.contractFlags(mode)).toEqual([...want].sort());
+      }
+      r7expect(r7drv.contractFlags('restricted')).toEqual(r7expect.arrayContaining(['--allowedTools', '--restricted', '--tools', '--verbose']));
+      r7expect(r7drv.contractFlags('fallback')).toEqual(r7expect.arrayContaining(['--setting-sources', '--settings']));
+    });
+
+    r7it('Q18_FIGURES reads exactly the two levels the validator requires in q18_settings.power (W2-D21, D-5791)', () => {
+      const levels = [...new Set(Object.values(r7drv.Q18_FIGURES as Record<string, { power: number }>).map((f) => f.power))].sort();
+      r7expect(levels).toEqual([0.5, 0.8]);
+      const home = home7(null);
+      const base = draft7(R7_REPO, home);
+      const errs = (power: number[]): unknown[] => {
+        const v = r7gate.validateOpenRecord({ ...base, q18_settings: { ...base.q18_settings, power } }, { draft: null, predecessor: null, frozen: null }) as R7;
+        return v.ok ? [] : v.errors;
+      };
+      r7expect(errs([0.5, 0.8])).toEqual([]);
+      for (const level of levels) r7expect(errs(levels.filter((l) => l !== level)), String(level)).toEqual([{ path: 'q18_settings.power', word: 'value-outside-set' }]);
+    });
+
+    r7it('REGISTRY_STATES is ok plus the validator\'s three drop reasons: each validates as a drop and ok does not (W2-D20)', () => {
+      r7expect([...r7drv.REGISTRY_STATES]).toEqual(['ok', 'registry-mismatch', 'registry-absent', 'unreadable']);
+      const c = chain7(home7(null));
+      const ctx = { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: c.merged.length } };
+      for (const reason of r7drv.REGISTRY_STATES as string[]) {
+        const final = { ...c.final, registry_drops: c.final.registry_drops.map((x: R7) => ({ ...x, reason })) };
+        const v = r7gate.validateOpenRecord(final, ctx) as R7;
+        if (reason === 'ok') r7expect(v.errors).toEqual([{ path: 'registry_drops[0].reason', word: 'value-outside-set' }]);
+        else r7expect(v.ok, reason).toBe(true);
+      }
+    });
+  });
+
+  // ── the record and its inputs ──────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: the record and its inputs', () => {
+    const powerArgv = (d: Saved, extra: string[] = []): string[] => ['power', ...inp('record', d), '--census', '/nowhere/c', '--census-sha256', 'a'.repeat(64), '--verify', '/nowhere/v', '--verify-sha256', 'b'.repeat(64), ...extra];
+
+    r7it('a record whose bytes are not its sha is record-sha-mismatch, checked before the bytes are parsed', () => {
+      const d = saveText7('{"part":"draft"}\n', 'bad.json');
+      r7fs.writeFileSync(d.path, 'not json at all');
+      const got = r7Sha('not json at all');
+      r7expect(run7(null, null, powerArgv(d)).stderr).toBe(refusalLine('record-sha-mismatch', `record: expected ${d.sha}, measured ${got}`));
+    });
+
+    r7it('a non-JSON input whose sha matches is input-invalid; a wrong sha on a non-JSON input is input-sha-mismatch', () => {
+      const home = home7(null);
+      const d = save7(draft7(R7_REPO, home), 'part1.json');
+      const p = r7path.join(r7MkTmp('ccrc-w2-5a-t7-in-'), 'census.json');
+      r7fs.writeFileSync(p, 'not json');
+      const ok = ['power', ...inp('record', d), '--census', p, '--census-sha256', r7Sha('not json'), '--verify', p, '--verify-sha256', r7Sha('not json')];
+      r7expect(run7(null, null, ok).stderr).toBe(refusalLine('input-invalid', 'census not-json'));
+      const bad = ['power', ...inp('record', d), '--census', p, '--census-sha256', 'c'.repeat(64), '--verify', p, '--verify-sha256', r7Sha('not json')];
+      r7expect(run7(null, null, bad).stderr).toBe(refusalLine('input-sha-mismatch', `census: expected ${'c'.repeat(64)}, measured ${r7Sha('not json')}`));
+    });
+
+    r7it('a record inside a git tree is record-invalid before a byte is read (W2-D25)', () => {
+      const repo = r7MkTmp('ccrc-w2-5a-t7-git-');
+      r7fs.mkdirSync(r7path.join(repo, '.git'));
+      const p = r7path.join(repo, 'part1.json');
+      r7fs.writeFileSync(p, '{}\n');
+      r7expect(run7(null, null, ['power', '--record', p, '--record-sha256', r7Sha('{}\n'), '--census', '/c', '--census-sha256', 'a'.repeat(64), '--verify', '/v', '--verify-sha256', 'a'.repeat(64)]).stderr)
+        .toBe(refusalLine('record-invalid', `record in-git-tree ${r7fs.realpathSync(repo)}`));
+    });
+
+    r7it('a final given where a draft is read, and a record the validator refuses, are record-invalid with every error', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(null, null, powerArgv(c.f)).stderr).toBe(refusalLine('record-invalid', 'record part "final", wanted draft'));
+      const forged = save7({ ...c.draft, k: 11, row_cap: 1 }, 'forged.json');
+      r7expect(run7(null, null, powerArgv(forged)).stderr).toBe(refusalLine('record-invalid', 'k constant-mismatch; row_cap constant-mismatch'));
+    });
+
+    r7it('a superseding draft is read only with its predecessor: --supersedes, whose sha must be the one it names', () => {
+      const home = home7(null);
+      const first = draft7(R7_REPO, home);
+      const p1 = save7(first, 'part1-first.json');
+      const second = { ...first, drafted_ms: first.drafted_ms + 1, supersedes: p1.sha, window_plan: { planned_days: 21 } };
+      const p2 = save7(second, 'part1-second.json');
+      r7expect(run7(null, null, powerArgv(p2)).stderr).toBe(refusalLine('args-invalid', 'supersedes-required: the record supersedes a draft; pass it as --supersedes'));
+      // With it, the record validates and the next refusal is the absent census, read after the code re-check.
+      r7expect(run7(null, null, powerArgv(p2, inp('supersedes', p1))).stderr).toBe(refusalLine('input-invalid', 'census unreadable ENOENT'));
+    });
+
+    r7it('a final is read with its draft (--part1) and its frozen list (--frozen), whose sha must be the record\'s quiz sha', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const argv = (frozen: Saved): string[] => ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', frozen)];
+      const edited = saveText7(r7fs.readFileSync(c.fz.path, 'utf8').replace('fixture step 1', 'fixture step 7'), 'frozen-edited.json');
+      r7expect(run7(null, home, argv(edited)).stderr).toBe(refusalLine('quiz-sha-mismatch', `frozen ${edited.sha} is not the record's quiz.sha256 ${c.fz.sha}`));
+      r7expect(run7(null, home, ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('frozen', c.fz)]).stderr).toBe(refusalLine('args-invalid', 'part1-required'));
+    });
+  });
+
+  // ── W2-D24: every record subcommand re-checks the code it runs under ────────────────────────────────────────
+  r7describe('W2-5a Task 7: the codeShas re-check on every record subcommand', () => {
+    /** Each subcommand's argv over a valid record, with one input it would read next left unreadable, so a re-check that
+     *  ran after that read would answer the input's word instead. */
+    const rows: Array<[string, (c: R7) => string[]]> = [
+      ['quiz-source', (c) => ['quiz-source', '--out', outDir(), ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha, ...inp('verify', c.vA)]],
+      ['freeze', (c) => ['freeze', '--out', outDir(), ...inp('record', c.d), '--sourced', '/nowhere/s', '--sourced-sha256', c.sA.sha]],
+      ['power', (c) => ['power', ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha, ...inp('verify', c.vA)]],
+      ['open --finalize', (c) => finalizeArgv(c, { census: ['--census', '/nowhere/c', '--census-sha256', c.cA.sha] })],
+      ['verify --registry', (c) => ['verify', '--registry', ...inp('record', c.d), '--census', '/nowhere/c', '--census-sha256', c.cA.sha]],
+      ['verify --section ab', (c) => ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]],
+    ];
+    r7it.each(rows)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);   // no store: verify ab's next read would refuse store-unreadable store-missing
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('code-changed', 'changed deploy/measure-history.py'));
+      r7expect(printRuns(home)).toEqual([]);
+    });
+    r7it.each(rows)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr)
+        .toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it('CONTROL: under an unchanged copy of the tree, each row reaches the read it was built to fail', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const tree = tree7();
+      const want = ['input-invalid: census unreadable ENOENT', 'input-invalid: sourced unreadable ENOENT', 'input-invalid: census unreadable ENOENT',
+        'input-invalid: census unreadable ENOENT', 'input-invalid: census unreadable ENOENT', 'store-unreadable: store-missing'];
+      rows.forEach(([sub, argv], i) => r7expect(run7(tree, home, argv(c)).stderr, sub).toBe(`ccrc history-replay: ${want[i]}\n`));
+    });
+  });
+
+  // ── open --template and open --draft ───────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: open template and draft', () => {
+    r7it('open --template prints a skeleton of both parts from OPEN_RECORD_V1: every fixed or default value, a placeholder elsewhere', () => {
+      const r = run7(null, null, ['open', '--template']);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(r.stderr).toBe('');
+      const t = JSON.parse(r.stdout);
+      r7expect(r.stdout).toBe(r7Canon(t) + '\n');
+      r7expect(t.kind).toBe(r7drv.TEMPLATE_KIND);
+      const walk = (spec: R7, value: R7, at: string): void => {
+        for (const [k, f] of Object.entries(spec) as Array<[string, R7]>) {
+          const p = at === '' ? k : `${at}.${k}`;
+          if (Object.hasOwn(f, 'value')) r7expect(value[k], p).toEqual(f.value);
+          else if (f.fields) walk(f.fields, value[k], p);
+          else if (f.type !== 'array' && !f.values) r7expect(value[k], p).toBe(`<${f.status} ${f.type}${f.nullable ? ' or null' : ''}>`);
+        }
+      };
+      walk(r7gate.OPEN_RECORD_V1.draft, t.draft, '');
+      walk(r7gate.OPEN_RECORD_V1.final, t.final, '');
+      r7expect(t.draft.account).toBe('<operator string>');
+      r7expect(t.final.part).toBe('final');
+    });
+
+    /** open --draft's argv over saved step 0a and pilot-source outputs: two nodes, one step 0a file bound to each. */
+    const draftArgv = (s0: Saved, pilot: Saved, extra: string[] = []): string[] => ['open', '--draft',
+      ...inp('step0a', s0), '--node-label', 'node-a', '--node-store-id', STORE_A, ...inp('step0a', s0), '--node-label', 'node-b', '--node-store-id', STORE_B,
+      ...inp('pilot', pilot), '--account', 'up-a', '--arm-model', ARM, '--writer-model', OPUS, '--judge-model', OPUS, ...extra];
+
+    r7it('open --draft prints part 1, validated, and its sha on stderr; each step 0a output bound to its node; gate_code measured', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot-source.json');
+      const r = run7(tree, home, draftArgv(s0, pilot));
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r.stdout);
+      r7expect(r.stdout).toBe(r7Canon(rec) + '\n');
+      r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+      r7expect(rec.part).toBe('draft');
+      r7expect(rec.supersedes).toBeNull();
+      r7expect(rec.bootstrap.seed).toMatch(/^[0-9a-f]{64}$/);
+      r7expect(rec.nodes).toEqual([{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }]);
+      r7expect(rec.step0a.map((s: R7) => [s.label, s.store_id])).toEqual([['node-a', STORE_A], ['node-b', STORE_B]]);
+      r7expect(rec.gate_code).toEqual({ release_tag: STAMP, files: SHAS(tree) });
+      r7expect(rec.pilot.seed).toBe(pilot.value.seed);
+      r7expect(rec.pilot.tolerance).toBe(0.25);
+      r7expect(rec.active_rule.text).toBe(r7drv.ACTIVE_RULE_TEXT);
+      const again = JSON.parse(run7(tree, home, draftArgv(s0, pilot)).stdout);
+      r7expect(again.bootstrap.seed, 'a fresh seed each run (W2-D18)').not.toBe(rec.bootstrap.seed);
+    });
+
+    r7it('buildDraft is deterministic with the seed and clock injected, and its record validates', () => {
+      const home = home7(null);
+      const a = draft7(R7_REPO, home);
+      r7expect(r7Canon(draft7(R7_REPO, home))).toBe(r7Canon(a));
+      r7expect(a.bootstrap.seed).toBe(SEED);
+      r7expect(r7gate.validateOpenRecord(a, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('open --draft refuses a step 0a output whose flags_accepted does not name exactly the contract\'s flags (section 7 parity)', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s = step0a7(tree, home);
+      delete s.flags_accepted['--verbose'];
+      s.flags_accepted['--extra-flag'] = true;
+      const r = run7(tree, home, draftArgv(save7(s, 'step0a.json'), save7(pilot7(tree), 'pilot.json')));
+      r7expect(r.stderr).toBe(refusalLine('input-invalid', 'step0a node-a flags-incomplete missing --verbose extra --extra-flag'));
+      r7expect(r.stdout).toBe('');
+    });
+
+    r7it('a step 0a flag measured false is refused by the validator, for every node it binds, with no exception (W2-D25)', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s = step0a7(tree, home);
+      s.flags_accepted['--verbose'] = false;
+      r7expect(run7(tree, home, draftArgv(save7(s, 'step0a.json'), save7(pilot7(tree), 'pilot.json'))).stderr)
+        .toBe(refusalLine('record-invalid', 'step0a[0].flags_accepted.--verbose flag-rejected; step0a[1].flags_accepted.--verbose flag-rejected'));
+    });
+
+    r7it('the overrides file changes default fields only; the pilot-derived and the fixed, measured or operator fields are refused', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot.json');
+      const over = (o: R7): string[] => ['--overrides', save7(o, 'overrides.json').path];
+      const ok = run7(tree, home, draftArgv(s0, pilot, over({ window_plan: { planned_days: 21 }, rubric_id: 'v1-strict', pilot: { tolerance: 0.2 }, q18_settings: { power: [0.5, 0.8, 0.9] } })));
+      r7expect(ok.code, ok.stderr).toBe(0);
+      const rec = JSON.parse(ok.stdout);
+      r7expect([rec.window_plan.planned_days, rec.rubric_id, rec.rubric_sha256, rec.pilot.tolerance, rec.q18_settings.power])
+        .toEqual([21, 'v1-strict', r7gate.RUBRIC_SHA256['v1-strict'], 0.2, [0.5, 0.8, 0.9]]);
+      for (const [o, detail] of [
+        [{ k: 11 }, 'override k is fixed'],
+        [{ labeller: { sha_min_prefix: 40 } }, 'override labeller.sha_min_prefix comes from the pilot-source output'],
+        [{ quiz: { writer_input: 'leaf-span' } }, 'override quiz.writer_input comes from the pilot-source output'],
+        [{ rubric_sha256: 'a'.repeat(64) }, 'override rubric_sha256 follows rubric_id'],
+        [{ pilot: { seed: 'a'.repeat(64) } }, 'override pilot.seed is measured'],
+        [{ nodes: [] }, 'override nodes is operator'],
+        [{ q18_settings: { procedure: 'other' } }, 'override q18_settings.procedure is fixed'],
+        [{ nope: 1 }, 'override nope is not a part 1 field'],
+      ] as Array<[R7, string]>) {
+        r7expect(run7(tree, home, draftArgv(s0, pilot, over(o))).stderr, detail).toBe(refusalLine('args-invalid', detail));
+      }
+    });
+
+    r7it('a superseding draft keeps its predecessor\'s seed and names its sha, and validates against it', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const pilot = save7(pilot7(tree), 'pilot.json');
+      const first = run7(tree, home, draftArgv(s0, pilot));
+      const prior = saveText7(first.stdout, 'part1.json');
+      const r = run7(tree, home, draftArgv(s0, pilot, inp('supersedes', prior)));
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r.stdout);
+      r7expect(rec.bootstrap.seed).toBe(prior.value.bootstrap.seed);
+      r7expect(rec.supersedes).toBe(prior.sha);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: prior.value, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('--step0a, --node-label and --node-store-id are given the same number of times', () => {
+      const home = home7(null);
+      const tree = tree7();
+      const s0 = save7(step0a7(tree, home), 'step0a.json');
+      const argv = draftArgv(s0, save7(pilot7(tree), 'pilot.json')).filter((t, i, a) => !(t === '--node-label' && a[i + 1] === 'node-b') && t !== 'node-b');
+      r7expect(run7(tree, home, argv).stderr).toBe(refusalLine('args-invalid', '--step0a, --node-label and --node-store-id are given 2, 1 and 2 times'));
+    });
+  });
+
+  // ── verify --registry ──────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: verify registry', () => {
+    /** HOME on node A with each family's registry generation planted as `plant` says. */
+    function registryHome(plant: Record<string, string | 'dir' | null>): string {
+      const home = home7(STORE_A);
+      const reg = r7Paths(home).reg;
+      r7fs.mkdirSync(reg, { recursive: true });
+      for (const [id, v] of Object.entries(plant)) {
+        const p = r7path.join(reg, `${id}.generation`);
+        if (v === 'dir') r7fs.mkdirSync(p);
+        else if (v !== null) r7fs.writeFileSync(p, v);
+      }
+      return home;
+    }
+    r7it('reports ok, registry-mismatch, registry-absent and unreadable, never one folded into another, and writes nothing (W2-D20, W2-D84)', () => {
+      const home = registryHome({ 'a-t1': A_T1.generation, 'a-t2': `${A_T2.generation}\n`, 'a-c1': gen(399), 'a-c2': 'dir', 'a-d': null });
+      const d = save7(draft7(R7_REPO, home), 'part1.json');
+      const cA = save7(census7(STORE_A, FAMS_A), 'census-a.json');
+      const before = snapshot7(home);
+      const r = run7(null, home, ['verify', '--registry', ...inp('record', d), ...inp('census', cA)]);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only: the HOME tree is byte-identical').toEqual(before);
+      const out = JSON.parse(r.stdout);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      r7expect(out).toEqual(verify7(d.sha, cA, { 'a-c1': 'registry-mismatch', 'a-c2': 'unreadable', 'a-d': 'registry-absent' }));
+      const byId = Object.fromEntries(out.families.map((f: R7) => [f.ccrc_id, f.state]));
+      r7expect(byId).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'registry-mismatch', 'a-c2': 'unreadable', 'a-d': 'registry-absent' });
+      r7expect(out.counts).toEqual({ ok: 2, 'registry-mismatch': 1, 'registry-absent': 1, unreadable: 1 });
+    });
+    r7it('registryStateOf keeps four answers apart: absent, unreadable, a value equal to the generation, and any other value', () => {
+      r7expect(r7drv.registryStateOf({ state: 'absent' }, gen(1))).toBe('registry-absent');
+      r7expect(r7drv.registryStateOf({ state: 'unreadable' }, gen(1))).toBe('unreadable');
+      r7expect(r7drv.registryStateOf({ state: 'value', value: gen(1) }, gen(1))).toBe('ok');
+      r7expect(r7drv.registryStateOf({ state: 'value', value: '' }, gen(1))).toBe('registry-mismatch');
+    });
+    r7it('refuses on a store the record does not name, and a census of another node\'s store', () => {
+      const d = (home: string): Saved => save7(draft7(R7_REPO, home), 'part1.json');
+      const other = home7(STORE_C);
+      r7expect(run7(null, other, ['verify', '--registry', ...inp('record', d(other)), ...inp('census', save7(census7(STORE_C, FAMS_A)))]).stderr)
+        .toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+      const a = home7(STORE_A);
+      r7expect(run7(null, a, ['verify', '--registry', ...inp('record', d(a)), ...inp('census', save7(census7(STORE_B, FAMS_B)))]).stderr)
+        .toBe(refusalLine('input-invalid', `census store-id ${STORE_B} is not this node's store ${STORE_A}`));
+    });
+  });
+
+  // ── power ──────────────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: power', () => {
+    const powerRun = (c: R7, census: Saved[] = [c.cA, c.cB], verify: Saved[] = [c.vA, c.vB]): ReturnType<typeof run7> =>
+      run7(null, null, ['power', ...inp('record', c.d), ...census.flatMap((s) => inp('census', s)), ...verify.flatMap((s) => inp('verify', s))]);
+
+    r7it('reads q18_settings: one q18Power call per power level at rho_headline and at 0, over the kept families, covered_days from lookback_days', () => {
+      const c = chain7(home7(null));
+      const r = powerRun(c);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      const out = JSON.parse(r.stdout);
+      // The population: every active family but a-d (registry-absent), each with its census windows; ticks from T0 - 7 d.
+      const kept = [A_T1, A_T2, A_C1, A_C2, B_T1, B_C1].map((f) => ({ key: keyOf(f), windows: SHAPE[f.ccrc_id]![0], covered_days: 7 }))
+        .sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+      const s = c.draft.q18_settings;
+      const want = s.power.flatMap((power: number) => [s.rho_headline, 0].map((rho) => {
+        const q = r7gate.q18Power({ families: kept, plannedDays: 14, seedHex: SEED, rho, power, sims: 2, gridStep: 0.45, B: 10_000 }) as R7;
+        return { power, rho, figure: q.figure, points: q.points };
+      }));
+      r7expect(out.figures).toEqual(want);
+      r7expect([out.headline, out.at_power_80, out.at_rho_0]).toEqual([want[0].figure, want[2].figure, want[1].figure]);
+      r7expect(out.n_f.per_family).toEqual(Object.fromEntries(kept.map((k) => [k.key, k.windows * 2])));
+      r7expect(Object.keys(out.n_f.per_family)).not.toContain(keyOf(A_D));
+      // §4's q18: per-node n_f too, each node's the sum over its kept families.
+      const nfOf = (fs: Array<typeof A_T1>): number => fs.reduce((t, f) => t + SHAPE[f.ccrc_id]![0] * 2, 0);
+      r7expect(out.n_f.per_node).toEqual({ [STORE_A]: nfOf([A_T1, A_T2, A_C1, A_C2]), [STORE_B]: nfOf([B_T1, B_C1]) });
+      r7expect(out.coverage[STORE_A].covered_days).toBe(7);
+      r7expect(out.pre_window_uptake.total).toEqual({ windows: 13, with_call: 5 });
+      r7expect(out.pre_window_uptake.card_consumed_main_all_time).toEqual({ [STORE_A]: 3, [STORE_B]: 3 });
+      r7expect(powerRun(c).stdout, 'the same inputs print the same bytes').toBe(r.stdout);
+    });
+
+    r7it('rhoHat: the one-way ANOVA estimate, hand-worked, and null below two clustered families', () => {
+      r7expect(r7drv.rhoHat([{ windows: 2, with_call: 2 }, { windows: 2, with_call: 0 }])).toBe(1);
+      r7expect(r7drv.rhoHat([{ windows: 2, with_call: 1 }, { windows: 2, with_call: 1 }])).toBe(-1);
+      r7expect(r7drv.rhoHat([{ windows: 3, with_call: 1 }])).toBeNull();
+      r7expect(r7drv.rhoHat([{ windows: 1, with_call: 1 }, { windows: 1, with_call: 0 }]), 'no within-family degree of freedom').toBeNull();
+    });
+
+    r7it('coveredDays: the look-back clipped to the tick coverage; null with no tick', () => {
+      const c = (first: number | null, n = 10): R7 => ({ as_of_ms: T0, since_ms: T0 - 14 * DAY, ticks: { n, first_ts_ms: first, last_ts_ms: T0 - 1 } });
+      r7expect(r7drv.coveredDays(c(T0 - 7 * DAY), 14)).toBe(7);
+      r7expect(r7drv.coveredDays(c(T0 - 20 * DAY), 14)).toBe(14);
+      r7expect(r7drv.coveredDays(c(null, 0), 14)).toBeNull();
+    });
+
+    r7it('refuses a census over another span than lookback_days, and one with no tick in its look-back', () => {
+      const c = chain7(home7(null));
+      const since = save7(census7(STORE_A, FAMS_A, { since: T0 - 13 * DAY }), 'census-a.json');
+      const sinceVerify = save7(verify7(c.d.sha, since, { 'a-d': 'registry-absent' }));
+      r7expect(powerRun(c, [since, c.cB], [sinceVerify, c.vB]).stderr)
+        .toBe(refusalLine('input-invalid', `census ${STORE_A} since-mismatch: as_of - since is ${13 * DAY} ms, lookback_days is 14`));
+      const none = save7(census7(STORE_A, FAMS_A, { nTicks: 0, ticksFirst: null }), 'census-a.json');
+      r7expect(powerRun(c, [none, c.cB], [save7(verify7(c.d.sha, none)), c.vB]).stderr).toBe(refusalLine('input-invalid', `census ${STORE_A} no-tick-coverage`));
+    });
+
+    r7it('the census assembler checks nodes only: an unlisted store, a duplicate, a node missing, and each verify binding', () => {
+      const c = chain7(home7(null));
+      const cC = save7(census7(STORE_C, FAMS_B), 'census-c.json');
+      r7expect(powerRun(c, [c.cA, c.cB, cC]).stderr).toBe(refusalLine('input-invalid', `census store-id-unlisted ${STORE_C}`));
+      r7expect(powerRun(c, [c.cA, c.cA]).stderr).toBe(refusalLine('input-invalid', `census store-id-duplicate ${STORE_A}`));
+      r7expect(powerRun(c, [c.cA], [c.vA]).stderr).toBe(refusalLine('input-invalid', 'census node-missing node-b'));
+      r7expect(powerRun(c, [c.cA, c.cB], [c.vA]).stderr).toBe(refusalLine('input-invalid', 'verify node-missing node-b'));
+      const rebound = save7({ ...c.vA.value, census_sha256: c.cB.sha });
+      r7expect(powerRun(c, [c.cA, c.cB], [rebound, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify census-mismatch ${STORE_A}`));
+      const short = save7({ ...c.vA.value, families: c.vA.value.families.slice(1) });
+      r7expect(powerRun(c, [c.cA, c.cB], [short, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify families-mismatch ${STORE_A}`));
+      const look = save7({ ...c.vA.value, lookback_ms: 1 });
+      r7expect(powerRun(c, [c.cA, c.cB], [look, c.vB]).stderr).toBe(refusalLine('input-invalid', `verify lookback-mismatch ${STORE_A}`));
+    });
+  });
+
+  // ── pilot-source and quiz-source (in-process, sourceQuiz injected) ─────────────────────────────────────────
+  r7describe('W2-5a Task 7: pilot-source and quiz-source', () => {
+    const PILOT_SEED = hex('pilot seed injected');
+    const fakeSource = (calls: R7[], result: R7) => async (input: R7): Promise<R7> => { calls.push(input); return result; };
+
+    r7it('pilot-source: preflighted against step 0a, its own seed, the pilot frozen list and its output, which part 1 accepts', async () => {
+      const home = home7(STORE_A);
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const usage = [entry7(PILOT_FAMILY, 31, [0, 0]), entry7(PILOT_FAMILY, 32, [0, 1])];
+      const calls: R7[] = [];
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries: usage, fidelity: [{ ...PILOT_FAMILY, boundary_uuid: gen(901) }], counts: { candidates: 7 } }), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(r.code).toBe(0);
+      r7expect(calls).toHaveLength(1);
+      r7expect([calls[0]!.mode, calls[0]!.seedHex, calls[0]!.rs.storeId, Object.hasOwn(calls[0]!, 'families'), calls[0]!.writer.launch.accountId])
+        .toEqual(['pilot', PILOT_SEED, STORE_A, false, 'up-a']);
+      r7expect(calls[0]!.plan).toEqual({ n_fidelity: 5, n_usage: 5, caps: { family: 5, boundary: 3, kind_per_family: 2 } });
+      r7expect(calls[0]!.exclude).toEqual({ pilotFamilies: [], assignment: [] });
+      r7expect(printRuns(home), 'the writer handle preflighted with --version only: no writer spawn').toEqual([]);
+      const frozenText = r7fs.readFileSync(r7path.join(out, r7drv.PILOT_FROZEN_FILE), 'utf8');
+      r7expect(frozenText).toBe(r7drv.frozenListText('pilot', head7(), usage.map(strip7)));
+      const bytes = r7fs.readFileSync(r7path.join(out, r7drv.PILOT_SOURCE_FILE));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(bytes)}\n`);
+      const o = JSON.parse(bytes.toString('utf8'));
+      r7expect(o).toMatchObject({ kind: r7drv.PILOT_SOURCE_KIND, v: 1, store_id: STORE_A, seed: PILOT_SEED, n_fidelity: 5, n_usage: 5,
+        families: [PILOT_FAMILY], frozen_sha256: r7Sha(frozenText), writer_model: OPUS, code_shas: SHAS(R7_REPO), release_stamp: STAMP, budget: 100_000, spend: 0 });
+      // The chain: part 1 built from this output validates (the validator ties pilot.used, code_shas and release_stamp to part 1).
+      const s = step0a7(R7_REPO, home);
+      const rec = r7drv.buildDraft({ nodes: [{ label: 'node-a', store_id: STORE_A }], step0a: [{ ...s, label: 'node-a', store_id: STORE_A }], pilot: o,
+        account: 'up-a', models: { arm: ARM, writer: OPUS, judge: OPUS }, gateCode: { release_tag: STAMP, files: SHAS(R7_REPO) }, seedHex: SEED, nowMs: T0 });
+      r7expect(r7gate.validateOpenRecord(rec, { draft: null, predecessor: null, frozen: null })).toEqual({ ok: true });
+    });
+
+    r7it('pilot-source refuses code-changed against step 0a, and an account other than step 0a\'s, before any writer spawn', async () => {
+      const home = home7(STORE_A);
+      const moved = step0a7(R7_REPO, home);
+      moved.code_shas['deploy/measure-history.py'] = hex('another build');
+      const calls: R7[] = [];
+      const argv = (s0: Saved, account = 'up-a'): R7 => (r7drv.parseArgs(['pilot-source', '--out', outDir(), '--account', account, '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7).flags;
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
+      const r = await inProcess(() => r7drv.pilotSourceCommand(argv(save7(moved)) as never, envOf(home) as never, deps as never));
+      r7expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+      const other = await inProcess(() => r7drv.pilotSourceCommand(argv(save7(step0a7(R7_REPO, home)), 'gen-a') as never, envOf(home) as never, deps as never));
+      r7expect(other.refusal).toEqual({ word: 'input-invalid', detail: 'step0a account up-a is not --account gen-a' });
+      r7expect(calls).toEqual([]);
+      r7expect(printRuns(home)).toEqual([]);
+    });
+
+    r7it('R10: a writer model that is not an exact Opus id refuses before prepareOut makes --out, so the refused run leaves no --out; CONTROL: an exact Opus id makes it', async () => {
+      const home = home7(STORE_A);
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const calls: R7[] = [];
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }), seed: () => PILOT_SEED };
+      const run = async (model: string): Promise<{ refusal: R7 | null; made: boolean }> => {
+        const out = outDir();
+        const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', model, ...inp('step0a', s0)]) as R7;
+        const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, deps as never));
+        return { refusal: r.refusal, made: r7fs.existsSync(out) };
+      };
+      r7expect(await run('claude-other-9-1')).toEqual({ refusal: { word: 'args-invalid', detail: 'writer-model "claude-other-9-1" is not an exact Opus model id' }, made: false });
+      r7expect(calls, 'nothing sourced').toEqual([]);
+      r7expect(await run(OPUS), 'CONTROL: an exact Opus id passes, and prepareOut makes --out').toEqual({ refusal: null, made: true });
+      r7expect(calls, 'CONTROL: the Opus run reached sourcing').toHaveLength(1);
+      r7expect(printRuns(home), 'no writer spawn either way').toEqual([]);
+    });
+
+    const quizFlags = (c: R7, out: string): R7 => (r7drv.parseArgs(['quiz-source', '--out', out, ...inp('record', c.d),
+      ...inp('census', c.cA), ...inp('census', c.cB), ...inp('verify', c.vA), ...inp('verify', c.vB)]) as R7).flags;
+
+    r7it('quiz-source: the assignment from the census and verify inputs, control ids and pilot families excluded, sourced.json written', async () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const out = outDir();
+      const calls: R7[] = [];
+      const entries = [entry7(A_T1, 1, [K7(0), 0])];
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, out) as never, envOf(home) as never,
+        { sourceQuiz: fakeSource(calls, { entries, fidelity: [], counts: { candidates: 3 } }) } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(calls).toHaveLength(1);
+      const input = calls[0]!;
+      r7expect(input.exclude).toEqual({ pilotFamilies: [PILOT_FAMILY], assignment: c.assignment.list });
+      r7expect((input.exclude.assignment as R7[]).filter((a) => a.arm === 'control').map((a) => a.ccrc_id)).toEqual(r7expect.arrayContaining(['a-c1', 'b-c1']));
+      r7expect([input.mode, input.seedHex, input.rs.storeId, input.writer.launch.accountId]).toEqual(['quiz', SEED, STORE_A, 'up-a']);
+      r7expect(input.plan).toEqual(c.draft.quiz);
+      // R10 (C1): the census's kept list feeds the assignment only; sourceQuiz walks the store's own admitted families.
+      r7expect(Object.hasOwn(input, 'families'), 'no family list: never assembled.kept (W2-D71, W2-D73)').toBe(false);
+      r7expect((c.assembled.kept as R7[]).length, 'CONTROL: the census did make a kept list, which the assignment read').toBeGreaterThan(0);
+      const bytes = r7fs.readFileSync(r7path.join(out, r7drv.SOURCED_FILE));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(bytes)}\n`);
+      r7expect(JSON.parse(bytes.toString('utf8'))).toEqual(r7drv.sourcedReport({ recordSha256: c.d.sha, storeId: STORE_A,
+        assignmentSha256: c.assignment.sha256, inputs: c.inputs, sourced: { entries, counts: { candidates: 3 } }, spend: 0 }));
+      r7expect(c.assignment.list.map((a: R7) => a.ccrc_id), 'a-d was dropped by its registry state before the flip').not.toContain('a-d');
+    });
+
+    r7it('quiz-source is preflighted against part 1: tree-moved and claude-version-moved, before any writer spawn (W2-D56)', async () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const calls: R7[] = [];
+      const deps = { sourceQuiz: fakeSource(calls, { entries: [], fidelity: [], counts: {} }) };
+      const recorded = versionOf(home);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), `{"type":"system","note":"another version"}\n` + r7fs.readFileSync(r7path.join(home, STUB_STREAM), 'utf8'));
+      const v = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, deps as never));
+      r7expect(v.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded ${recorded}, measured {"type":"system","note":"another version"}` });
+      const home2 = home7(STORE_A);
+      const c2 = chain7(home2);
+      r7fs.writeFileSync(r7path.join(home2, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: 'v9.9.8' }));
+      const t = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c2, outDir()) as never, envOf(home2) as never, deps as never));
+      r7expect(t.refusal).toEqual({ word: 'tree-moved', detail: `recorded ${STAMP}, measured v9.9.8` });
+      r7expect(calls).toEqual([]);
+      r7expect([...printRuns(home), ...printRuns(home2)]).toEqual([]);
+    });
+
+    // W2-D55's hand-offs: a sourceQuiz that asks the real writer handle twice, so the gate the subcommand built is what stops it.
+    const writerItem7 = (n: number): R7 => {
+      const e = strip7(entry7(A_T1, n, [0, 0]));
+      const f = { text: e.fact_raw, rawLen: Buffer.byteLength(e.fact_raw) };
+      return { ...e, leaf: f, pair: null, span: [f] };
+    };
+    const twoAsks7 = (calls: R7[], section: string) => async (input: R7): Promise<R7> => {
+      calls.push(input);
+      await input.writer.ask(section, writerItem7(1));
+      await input.writer.ask(section, writerItem7(2));
+      return { entries: [], fidelity: [], counts: {} };
+    };
+    const writerHome7 = (): string => {
+      const home = home7(STORE_A);
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which commit did the fixture step record?'));
+      return home;
+    };
+
+    r7it.skipIf(process.platform === 'darwin')('quiz-source hands part 1\'s pilot_budget and limits to the writer gate (W2-D55): a tight record budget stops the second writer batch, a low record threshold stops the writer at open', async () => {
+      const run = async (draftOver: R7): Promise<{ refusal: R7 | null; calls: number; runs: number }> => {
+        const home = writerHome7();   // before chain7, so the draft's step 0a records this stub's version
+        const c = chain7(home, draftOver);
+        const calls: R7[] = [];
+        const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'quiz') } as never));
+        return { refusal: r.refusal, calls: calls.length, runs: printRuns(home).length };
+      };
+      r7expect(await run({}), 'CONTROL: under the record defaults both asks spawn').toEqual({ refusal: null, calls: 1, runs: 2 });
+      const tight = await run({ pilot_budget: 1 });
+      r7expect(tight.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect(tight.runs, 'the first ask spent past the record budget; the second never spawned').toBe(1);
+      const low = await run({ limits: { threshold_pct: 5 } });
+      r7expect(low.refusal).toMatchObject({ word: 'limits-threshold' });
+      r7expect([low.calls, low.runs], 'refused at open, before sourceQuiz and any writer spawn (the row reads five 10, under the default 70)').toEqual([0, 0]);
+    }, 120_000);
+
+    r7it.skipIf(process.platform === 'darwin')('pilot-source hands --budget to the writer gate (W2-D55): --budget 1 stops the second writer batch', async () => {
+      const home = writerHome7();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', outDir(), '--account', 'up-a', '--budget', '1', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      const calls: R7[] = [];
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never, { sourceQuiz: twoAsks7(calls, 'pilot'), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toMatchObject({ word: 'budget-exhausted' });
+      r7expect([calls.length, printRuns(home).length]).toEqual([1, 1]);
+    }, 120_000);
+
+    r7it.skipIf(process.platform === 'darwin')('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, leaves no B text anywhere under --out', async () => {
+      const sb = w6SourceBox('ccrc-w2-5a-t7-walk-');
+      const home = sb.box.home;
+      node7(home);   // W2-4's up-a row (the roster pilot-source admits from), its stub, a limits row and a tagged stamp
+      r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
+      const out = outDir();
+      const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
+      const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS, ...inp('step0a', s0)]) as R7;
+      // The real sourceQuiz; `top` keeps B's ancestor walk inside the fixture tree (Task 4's seam, no subcommand passes it).
+      const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
+      r7expect(r.refusal).toBeNull();
+      r7expect(r.code).toBe(0);
+      // CONTROL: B was built for the boundary (so its text existed in memory), and the run wrote what it writes.
+      const rec = JSON.parse(r7fs.readFileSync(r7path.join(out, 'pilot', 'baseline.json'), 'utf8'));
+      r7expect(rec.boundaries.map((b: R7) => b.state)).toEqual(['built']);
+      r7expect(JSON.parse(r7fs.readFileSync(r7path.join(out, r7drv.PILOT_FROZEN_FILE), 'utf8')).entries.map((e: R7) => e.fact)).toEqual([sb.cmd]);
+      r7expect(printRuns(home), 'one writer spawn, the stub').toHaveLength(1);
+      // Task 4's walk over the whole --out: every file, read whole, holds nothing only B holds (the summary's sentinel).
+      const walk = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
+        .flatMap((d) => (d.isDirectory() ? walk(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
+      const files = walk(out);
+      r7expect(files.length, 'CONTROL: the walk reads the run\'s files').toBeGreaterThan(3);
+      for (const f of files) r7expect(r7fs.readFileSync(f, 'utf8').includes(sb.sentinel), f).toBe(false);
+    }, 600_000);
+
+    r7it('quiz-source refuses on a node the record does not name', async () => {
+      const home = home7(STORE_C);
+      const c = chain7(home);
+      const r = await inProcess(() => r7drv.quizSourceCommand(quizFlags(c, outDir()) as never, envOf(home) as never, { sourceQuiz: async () => { throw new Error('never'); } } as never));
+      r7expect(r.refusal).toEqual({ word: 'input-invalid', detail: `store ${STORE_C} is not one of the record's nodes` });
+    });
+  });
+
+  // ── freeze ─────────────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: freeze', () => {
+    const freezeRun = (c: R7, lists: Saved[], out = outDir()): ReturnType<typeof run7> & { out: string } =>
+      ({ ...run7(null, null, ['freeze', '--out', out, ...inp('record', c.d), ...lists.flatMap((s) => inp('sourced', s))]), out });
+
+    r7it('writes exactly W2-D73\'s bytes 0600, its sha on stderr, and the meta beside it with quiz-source\'s assignment sha', () => {
+      const c = chain7(home7(null));
+      const r = freezeRun(c, [c.sA, c.sB]);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(r.stdout).toBe('');
+      const p = r7path.join(r.out, r7drv.FROZEN_FILE);
+      const text = r7fs.readFileSync(p, 'utf8');
+      r7expect(r7fs.statSync(p).mode & 0o777).toBe(0o600);
+      const fields = r7drv.FROZEN_ENTRY_KEYS as string[];
+      const entries = [...c.merged].map((e: R7) => Object.fromEntries(fields.map((k) => [k, e[k]]))).sort((x, y) => (x.qid < y.qid ? -1 : x.qid > y.qid ? 1 : 0));
+      r7expect(text).toBe(r7Canon({ kind: 'ccrc-history-w2-quiz', version: 1, writer_model: OPUS, writer_prompt_sha256: r7gate.WRITER_PROMPT_SHA256,
+        answer_protocol_sha256: r7gate.ANSWER_PROTOCOL_SHA256, labeller: { ...r7gate.LABELLER, sha_min_prefix: 7 }, entries }));
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(text)}\n`);
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect(meta).toMatchObject({ kind: r7drv.QUIZ_META_KIND, record_sha256: c.d.sha, frozen_sha256: r7Sha(text), assignment_sha256: c.assignment.sha256,
+        n_questions: 5, n_families: 3, below_floor: false });
+    });
+
+    r7it('the same inputs give byte-identical output twice, in either order of the sourced lists', () => {
+      const c = chain7(home7(null));
+      const one = freezeRun(c, [c.sA, c.sB]);
+      const two = freezeRun(c, [c.sB, c.sA]);
+      r7expect(r7fs.readFileSync(r7path.join(two.out, r7drv.FROZEN_FILE))).toEqual(r7fs.readFileSync(r7path.join(one.out, r7drv.FROZEN_FILE)));
+      r7expect(two.stderr).toBe(one.stderr);
+    });
+
+    r7it('the merge takes the lists in global rank order and cuts at quiz.target; a smaller list is below the floor', () => {
+      const c = chain7(home7(null), { quiz: { target: 3, halt_floor: { questions: 4, families: 2 } } });
+      const r = freezeRun(c, [c.sA, c.sB]);
+      r7expect(r.code, r.stderr).toBe(0);
+      const list = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.FROZEN_FILE), 'utf8'));
+      // ranks [K0,0] [K0,1] (a-t1), [K1,0] (b-t1) are the first three; [K1,1] (b-t1) and [K2,0] (a-t2) are cut. The
+      // two nodes' lists interleave by key: the merge is the rank order, never a concatenation (R10).
+      r7expect(list.entries.map((e: R7) => e.fact).sort()).toEqual(['abc0001', 'abc0002', 'abc0004']);
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([meta.n_questions, meta.n_families, meta.below_floor]).toEqual([3, 2, true]);
+    });
+
+    r7it('the meta reports short_of_min_families when the list meets quiz.target on fewer families than quiz.min_families, and freeze still writes it (R11); CONTROL: at min_families the flag is false', () => {
+      // target 3 keeps a-t1's two entries and b-t1's first: the list meets the target on 2 families, at a halt floor of
+      // 3 questions and 2 families, so below_floor is false and only min_families can call it short. (At the signed
+      // defaults, target 100 over caps.family 5 needs 20 families; a target that small, or a raised caps.family, is what
+      // lets a full list hold fewer.) chain7's own meta (3 families against the signed 20) is short too, and open
+      // finalize's first case prints part 2 from it: nothing refuses on the flag.
+      const floor = { questions: 3, families: 2 };
+      const short = chain7(home7(null), { quiz: { target: 3, min_families: 3, halt_floor: floor } });
+      const r = freezeRun(short, [short.sA, short.sB]);
+      r7expect(r.code, r.stderr).toBe(0);   // a report, never a refusal (R11)
+      const meta = JSON.parse(r7fs.readFileSync(r7path.join(r.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([meta.n_questions, meta.n_families, meta.below_floor, meta.short_of_min_families]).toEqual([3, 2, false, true]);
+      // CONTROL: the same list against min_families 2, its own family count, is not short (a `<=` reds here).
+      const at = chain7(home7(null), { quiz: { target: 3, min_families: 2, halt_floor: floor } });
+      const ctl = freezeRun(at, [at.sA, at.sB]);
+      r7expect(ctl.code, ctl.stderr).toBe(0);
+      const ctlMeta = JSON.parse(r7fs.readFileSync(r7path.join(ctl.out, r7drv.QUIZ_META_FILE), 'utf8'));
+      r7expect([ctlMeta.n_questions, ctlMeta.n_families, ctlMeta.below_floor, ctlMeta.short_of_min_families], 'CONTROL: at min_families')
+        .toEqual([3, 2, false, false]);
+    });
+
+    r7it('refuses a sourced list of another record, two lists whose assignments differ, a forged qid, and a duplicate rank', () => {
+      const c = chain7(home7(null));
+      const otherRecord = save7({ ...c.sA.value, record_sha256: hex('another draft') });
+      r7expect(freezeRun(c, [otherRecord, c.sB]).stderr).toBe(refusalLine('input-invalid', `sourced record-mismatch ${STORE_A}`));
+      const otherAssign = save7({ ...c.sB.value, assignment_sha256: hex('another assignment') });
+      r7expect(freezeRun(c, [c.sA, otherAssign]).stderr).toBe(refusalLine('assignment-mismatch', `sourced lists disagree: ${c.assignment.sha256} and ${hex('another assignment')}`));
+      const forged = save7({ ...c.sA.value, entries: [{ ...c.sA.value.entries[0], fact: 'abc9999' }, ...c.sA.value.entries.slice(1)] });
+      r7expect(freezeRun(c, [forged, c.sB]).stderr).toBe(refusalLine('input-invalid', `sourced entry ${c.sA.value.entries[0].qid} qid-mismatch`));
+      const dup = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [K7(0), 0] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, dup]).stderr).toBe(refusalLine('input-invalid', `sourced rank-duplicate ${K7(0)}:0`));
+      // R10: a quiz entry's family rank is its order key, 64 lowercase hex; the old numeric family rank is refused.
+      const numeric = save7({ ...c.sB.value, entries: [{ ...c.sB.value.entries[0], rank: [1, 0] }, c.sB.value.entries[1]] });
+      r7expect(freezeRun(c, [c.sA, numeric]).stderr).toBe(refusalLine('input-invalid', 'sourced shape entry rank'));
+    });
+
+    r7it('refuses a run that lacks a named node\'s sourced list (W2-D71\'s population is the named nodes\' families); CONTROL: one list per named node freezes', () => {
+      const c = chain7(home7(null));
+      r7expect(freezeRun(c, [c.sA]).stderr).toBe(refusalLine('input-invalid', 'sourced node-missing node-b'));
+      r7expect(freezeRun(c, [c.sB]).stderr).toBe(refusalLine('input-invalid', 'sourced node-missing node-a'));
+      const both = freezeRun(c, [c.sA, c.sB]);
+      r7expect(both.code, 'CONTROL: one list per named node freezes').toBe(0);
+    });
+  });
+
+  // ── open --finalize ────────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: open finalize', () => {
+    r7it('prints part 2, validated against its draft and frozen list, with the assignment re-derived and the power figures copied', () => {
+      const c = chain7(home7(null));
+      const r = run7(null, null, finalizeArgv(c));
+      r7expect(r.code, r.stderr).toBe(0);
+      const rec = JSON.parse(r.stdout);
+      r7expect(r.stderr).toBe(`sha256 ${r7gate.recordSha256(rec)}\n`);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: 5 } })).toEqual({ ok: true });
+      r7expect(rec.supersedes).toBe(c.d.sha);
+      r7expect(rec.assignment).toEqual(r7gate.assignArms(SEED, c.assembled.kept));
+      r7expect(rec.assignment_sha256).toBe(c.assignment.sha256);
+      r7expect(rec.registry_drops).toEqual([{ ...A_D, reason: 'registry-absent' }]);
+      r7expect(rec.census).toEqual([{ store_id: STORE_A, census_ms: T0, census_sha256: c.cA.sha }, { store_id: STORE_B, census_ms: T0, census_sha256: c.cB.sha }]);
+      r7expect(rec.q18).toEqual({ headline: c.power.value.headline, at_power_80: c.power.value.at_power_80, at_rho_0: c.power.value.at_rho_0,
+        rho_hat: c.power.value.rho_hat, n_f: c.power.value.n_f, coverage: c.power.value.coverage, pre_window_uptake: c.power.value.pre_window_uptake,
+        power_output_sha256: c.power.sha, decision: 'keep' });
+      r7expect(rec.quiz).toMatchObject({ sha256: c.fz.sha, n_questions: 5, n_families: 3, families: c.frozen.families });
+      r7expect([rec.window, rec.spend_budget, rec.amendments]).toEqual([{ start_ms: T0 + DAY, end_ms: T0 + 15 * DAY }, 30_000_000, []]);
+      r7expect(r7Canon({ ...rec, finalized_ms: T0 })).toBe(r7Canon(c.final));
+    });
+
+    r7it('a census changed between quiz-source and open --finalize refuses assignment-mismatch (W2-D73)', () => {
+      const c = chain7(home7(null));
+      const moved = save7(census7(STORE_A, FAMS_A, { stale: 'a-t2' }), 'census-a.json');   // a-t2 leaves the active list
+      const movedVerify = save7(verify7(c.d.sha, moved, { 'a-d': 'registry-absent' }));
+      const r = run7(null, null, finalizeArgv(c, { census: [...inp('census', moved), ...inp('census', c.cB)], verify: [...inp('verify', movedVerify), ...inp('verify', c.vB)] }));
+      const again = r7drv.deriveAssignment(SEED, r7drv.assembleCensus(c.draft, [moved, c.cB].map(loaded), [movedVerify, c.vB].map(loaded))) as R7;
+      r7expect(r.stderr).toBe(refusalLine('assignment-mismatch', `quiz-source derived ${c.assignment.sha256}, the census and verify inputs give ${again.sha256}`));
+    });
+
+    r7it('refuses a power output of another record or other inputs, a frozen list other than freeze\'s, a below-floor quiz and a bogus decision', () => {
+      const c = chain7(home7(null));
+      const other = save7({ ...c.power.value, record_sha256: hex('another draft') });
+      r7expect(run7(null, null, finalizeArgv(c, { power: inp('power', other) })).stderr).toBe(refusalLine('input-invalid', 'power record-mismatch'));
+      const inputs = save7({ ...c.power.value, inputs: c.power.value.inputs.slice(1) });
+      r7expect(run7(null, null, finalizeArgv(c, { power: inp('power', inputs) })).stderr).toBe(refusalLine('input-invalid', 'power inputs-mismatch'));
+      const edited = saveText7(r7fs.readFileSync(c.fz.path, 'utf8').replace('fixture step 1', 'fixture step 7'), 'frozen.json');
+      r7expect(run7(null, null, finalizeArgv(c, { frozen: inp('frozen', edited) })).stderr)
+        .toBe(refusalLine('quiz-sha-mismatch', `quiz-meta names ${c.fz.sha}, the frozen list is ${edited.sha}`));
+      const below = save7({ ...c.meta.value, below_floor: true });
+      r7expect(run7(null, null, finalizeArgv(c, { 'quiz-meta': inp('quiz-meta', below) })).stderr)
+        .toBe(refusalLine('input-invalid', 'quiz-meta below-floor: a ruling to proceed lowers quiz.halt_floor in a superseding draft'));
+      r7expect(run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 15 * DAY), '--q18-decision', 'maybe'] })).stderr)
+        .toBe(refusalLine('args-invalid', 'q18-decision "maybe" is not one of keep, lengthen, add-nodes'));
+    });
+
+    r7it('a window shorter than planned_days is refused by the validator (W2-D25)', () => {
+      const c = chain7(home7(null));
+      const r = run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep'] }));
+      r7expect(r.stderr).toBe(refusalLine('record-invalid', 'window window-length'));
+    });
+  });
+
+  // ── verify --section ab ────────────────────────────────────────────────────────────────────────────────────
+  r7describe('W2-5a Task 7: verify section ab', () => {
+    /** Node A after the window-start acts: each control file `<generation>\n`, as the verb writes it (W2-D28), `plant`
+     *  overriding one, and seen_ms as `seen` (null: no row). */
+    function abHome(plant: Record<string, string | 'dir' | null> = {}, seen: string | null = String(Date.now() + 60_000)): { home: string; c: R7 } {
+      const home = home7(STORE_A, seen === null ? [] : [[R7_KEYS.seen, seen]]);
+      const c = chain7(home);
+      const dir = r7Paths(home).recallOffDir;
+      r7fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const want: Record<string, string | 'dir' | null> = {};
+      for (const a of c.final.assignment as R7[]) if (a.store_id === STORE_A && a.arm === 'control') want[a.ccrc_id] = `${a.generation}\n`;
+      for (const [id, v] of Object.entries({ ...want, ...plant })) {
+        if (v === 'dir') r7fs.mkdirSync(r7path.join(dir, id));
+        else if (v !== null) r7fs.writeFileSync(r7path.join(dir, id), v, { mode: 0o600 });
+      }
+      return { home, c };
+    }
+    const abRun = (home: string, c: R7): ReturnType<typeof run7> => run7(null, home, ['verify', '--section', 'ab', ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]);
+    const states = (r: ReturnType<typeof run7>): Record<string, string> => Object.fromEntries(JSON.parse(r.stdout).families.map((f: R7) => [f.ccrc_id, f.state]));
+
+    r7it('every control file holds its generation, no treatment file names its own, and seen_ms follows the newest write: ok', () => {
+      const { home, c } = abHome();
+      const before = snapshot7(home);
+      const r = abRun(home, c);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only').toEqual(before);
+      r7expect(r.stderr).toBe(`sha256 ${r7Sha(r.stdout)}\n`);
+      const out = JSON.parse(r.stdout);
+      r7expect(states(r)).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'ok', 'a-c2': 'ok' });
+      r7expect([out.seen_after_write, out.ok, out.newest_write.state]).toEqual([true, true, 'value']);
+    });
+
+    r7it.each([
+      ['a control file absent', { 'a-c1': null }, 'a-c1', 'control-absent'],
+      ['a control file naming another generation', { 'a-c1': `${gen(399)}\n` }, 'a-c1', 'control-mismatch'],
+      ['a control file that is a directory', { 'a-c2': 'dir' }, 'a-c2', 'unreadable'],
+      ['a treatment file naming its own generation', { 'a-t1': `${A_T1.generation}\n` }, 'a-t1', 'treatment-named'],
+    ] as Array<[string, Record<string, string | 'dir' | null>, string, string]>)('%s is reported as itself, and ok is false', (_name, plant, id, state) => {
+      const { home, c } = abHome(plant);
+      const r = abRun(home, c);
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(states(r)[id]).toBe(state);
+      r7expect(JSON.parse(r.stdout).ok).toBe(false);
+    });
+
+    r7it('CONTROL: a treatment file naming another generation is ok, and a control file without its newline is ok', () => {
+      const { home, c } = abHome({ 'a-t2': `${gen(299)}\n`, 'a-c2': A_C2.generation });
+      r7expect(states(abRun(home, c))).toEqual({ 'a-t1': 'ok', 'a-t2': 'ok', 'a-c1': 'ok', 'a-c2': 'ok' });
+    });
+
+    r7it('seen_ms before the newest write, or no seen_ms at all, is reported and ok is false', () => {
+      for (const seen of ['1', null]) {
+        const { home, c } = abHome({}, seen);
+        const out = JSON.parse(abRun(home, c).stdout);
+        r7expect([out.seen_ms, out.seen_after_write, out.ok], String(seen)).toEqual([seen === null ? null : 1, false, false]);
+      }
+    });
+
+    r7it('refuses on a store the record does not name (W2-D84)', () => {
+      const home = home7(STORE_C);
+      const c = chain7(home);
+      r7expect(abRun(home, c).stderr).toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+    });
+
+    r7it('abStateOf, function level: the five answers', () => {
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'value', value: `${gen(1)}\n` })).toBe('ok');
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'absent' })).toBe('control-absent');
+      r7expect(r7drv.abStateOf('control', gen(1), { state: 'value', value: '' })).toBe('control-mismatch');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'value', value: gen(1) })).toBe('treatment-named');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'unreadable' })).toBe('unreadable');
+      r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'absent' })).toBe('ok');
+    });
+  });
 });

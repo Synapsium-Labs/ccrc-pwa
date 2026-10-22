@@ -33,13 +33,13 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { EXIT, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
-import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
+import { CONTROL_FILE_MAX, EXIT, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, entryIndexText, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { StoreError, openReader, readBounded, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
-import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, OPUS_MODEL_RE, PILOT_SUBSTREAM, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, admitFact, collapseWs, familyKey, parseQuestionLine, randInt, substream } from './history-gate.mjs';
+import { ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, collapseWs, expectedWindows, familyKey, parseQuestionLine, q18Power, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -101,8 +101,8 @@ export function refuse(word, detail) {
 }
 
 // ── the argument grammar ──────────────────────────────────────────────────
-/** @typedef {'string' | 'int' | 'bool'} FlagKind */
-/** @typedef {Record<string, string | number | boolean>} Flags */
+/** @typedef {'string' | 'int' | 'bool' | 'list'} FlagKind */
+/** @typedef {Record<string, string | number | boolean | string[]>} Flags */
 /** @typedef {Record<string, string | undefined>} DriverEnv */
 
 /** Every flag the driver knows and its kind. A string or int flag takes the next argv entry as its value; a bool flag
@@ -115,6 +115,18 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   'judge-model': 'string',
   'arm-model': 'string',
   'settings-mode': 'string',
+  // W2-5a Task 7 (W2-D25, W2-D73, W2-D84, W2-D21): the record subcommands' flags. A `list` flag repeats, one value per
+  // node; its `-sha256` partner repeats with it and is paired by position (pairedInputs).
+  step0a: 'list', 'step0a-sha256': 'list', 'node-label': 'list', 'node-store-id': 'list',
+  pilot: 'string', 'pilot-sha256': 'string', overrides: 'string',
+  record: 'string', 'record-sha256': 'string', supersedes: 'string', 'supersedes-sha256': 'string',
+  part1: 'string', 'part1-sha256': 'string', 'prior-final': 'string', 'prior-final-sha256': 'string',
+  census: 'list', 'census-sha256': 'list', verify: 'list', 'verify-sha256': 'list', sourced: 'list', 'sourced-sha256': 'list',
+  frozen: 'string', 'frozen-sha256': 'string', 'quiz-meta': 'string', 'quiz-meta-sha256': 'string',
+  power: 'string', 'power-sha256': 'string', 'pilot-result': 'string', 'pilot-result-sha256': 'string',
+  'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
+  'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
+  draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -124,7 +136,7 @@ export const HANDLERS = new Map();
 
 const INT_TEXT = /^[1-9][0-9]*$/;
 
-/** `<sub> [--flag value | --bool]...`: the subcommand first, then flags, each at most once. `--name=value` is not
+/** `<sub> [--flag value | --bool]...`: the subcommand first, then flags, each at most once but a `list` flag, whose values are kept in order. `--name=value` is not
  *  this grammar (it reads as an unknown flag). A value may not begin with `--`, so a flag left without its value never
  *  swallows the next flag. An int is a positive safe integer written in plain decimal.
  *  @param {string[]} argv
@@ -144,12 +156,16 @@ export function parseArgs(argv, opts = {}) {
     if (!tok.startsWith('--')) refuse('args-invalid', `unexpected argument ${JSON.stringify(tok)}`);
     const name = tok.slice(2);
     if (!Object.hasOwn(specs, name)) refuse('args-invalid', `unknown flag ${JSON.stringify(tok)}`);
-    if (Object.hasOwn(flags, name)) refuse('args-invalid', `repeated flag --${name}`);
     const kind = specs[name];
+    if (kind !== 'list' && Object.hasOwn(flags, name)) refuse('args-invalid', `repeated flag --${name}`);
     if (kind === 'bool') { flags[name] = true; continue; }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) refuse('args-invalid', `missing value for --${name}`);
     i += 1;
+    if (kind === 'list') {   // W2-5a Task 7: every value, in argv order
+      flags[name] = [...(/** @type {string[]} */ (flags[name] ?? [])), value];
+      continue;
+    }
     if (kind === 'int') {
       const n = Number(value);
       if (!INT_TEXT.test(value) || !Number.isSafeInteger(n)) {
@@ -2091,7 +2107,8 @@ export function loadStep0a(p, sha256) {
  *  so a directory, an empty file and a dangling symlink are each present. ENOENT alone is absent; any other lstat
  *  error is unmeasured. An id that fails idOk makes recallOffPath throw a TypeError with no code, which refuses
  *  input-invalid (coordinator ruling): never read as absent, never a defect's exit 1.
- *  The driver never opens the entry (W2-D29): this lstat line is its one recall-off line. */
+ *  It never opens the entry (W2-D29): this lstat line is the presence check's one recall-off line (W2-D78(ii)).
+ *  verify --section ab's controlFileOf reads a control file's content, through readBounded (W2-D84). */
 export function recallOffPresence(home, ids) {
   const present = [];
   const unmeasured = [];
@@ -2242,6 +2259,8 @@ function pinStep0aLaunch(out, now) {
 }
 
 export async function step0aCommand(flags, env) {
+  // W2-5a Task 7: the driver's flags now include many step 0a never reads; one given is refused, never ignored (as the probe's).
+  for (const k of Object.keys(flags)) if (!STEP0A_REQUIRED.includes(k) && k !== 'settings-mode') refuse('args-invalid', `--${k} is not a step0a flag`);
   if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
   const home = path.resolve(env.HOME);   // D-5813: one spelling of HOME for every path and every taught spelling below
   // D-5815: every required flag first, before --out is made and before admission (a missing --budget answers
@@ -4581,6 +4600,1005 @@ export async function sourceQuiz({ mode, rs, home, out, writer, seedHex, exclude
     fidelity, counts, asof_same_ms_hits: sampled.reports,
   };
 }
+
+// ── W2-5a Task 7: the record subcommands (W2-D84's first half, W2-D24, W2-D73, W2-D21, W2-D19, W2-D20, W2-D25; D-5773) ──
+// The operator's acts before window start (W2 decisions §4 and §5, acts 9 to 19), one subcommand each:
+//   pilot-source         writer spawns before part 1, under its own --budget and LIMITS_DEFAULTS, preflighted against the
+//                        one step 0a output it is given (W2-D56); its own crypto seed (W2-D71); `<out>/pilot/frozen.json`
+//                        and `<out>/pilot-source.json`, the values part 1's pilot section copies (W2-D73, W2-D76);
+//   open --template      a skeleton of both parts from the gate's OPEN_RECORD_V1 (W2-D25);
+//   open --draft         each node's step 0a output bound to its node, the overrides on default fields only, the seed
+//                        (W2-D18), gate_code measured, part 1 validated and printed (W2-D25);
+//   verify --registry    one node's active families against their registry generations (W2-D20, D-5773);
+//   power                Q18 over every node's census and verify outputs: one q18Power call per power level at
+//                        rho_headline and at 0, covered_days from lookback_days (W2-D21, amended 2026-10-20);
+//   quiz-source          writer spawns after part 1, under part 1's pilot_budget, limits, account and models, preflighted
+//                        against part 1; the assignment derived from the census and verify inputs (W2-D19, W2-D71, W2-D77);
+//   freeze               one sourced list per named node, merged in global rank order, cut at quiz.target, written as
+//                        W2-D73's exact bytes, with quiz-source's assignment_sha256 in the meta beside it;
+//   open --finalize      the assignment re-derived from the same inputs (assignment-mismatch), part 2 printed (W2-D73);
+//   verify --section ab  one node's control and treatment files, and the presence record's seen_ms (W2-D84).
+// W2-D24: every subcommand that takes --record re-checks the four gate_code files through codeShas() (recheckCode) right
+// after the record validates, before any other input is read and before any spawn. None declares --allow-code-change:
+// each runs before window start, where W2-D6's remedy for a code change is a re-pilot and a superseding draft, and
+// neither the record nor the frozen list has a place for a stamp.
+// Every input's sha256 is checked before its bytes are parsed, and a path inside a git tree is refused (W2-D25, as
+// loadStep0a does). A record is validated with the context the validator requires: --supersedes names the record it
+// supersedes, --part1 a final's draft, --frozen a final's frozen list.
+// The record and every report print as canonical JSON and one newline on stdout, `sha256 <hex>` of those bytes on stderr
+// (open, power, verify); a subcommand that writes under --out prints only that file's sha on stderr (D-5983).
+// verify reads, never writes: the registry through sweep.mjs's readRegPresence, a presence file's content as W2-D84
+// says, through historyPaths, recallOffPath and store.mjs's readBounded (controlFileOf; the driver imports no
+// recallOffPresence, R6), the presence directory's mtime as the newest write (the writer renames into it, W2-D28), and
+// seen_ms from the store's meta through lib's recallOffStatusOf, status's own reader.
+// Every subcommand that reads this node's store opens it once, through Task 1's openReplayStore, and passes it down
+// (R3); the sourcing subcommands open the question writer (Task 6's openWriter, which preflights) and hand both to
+// Task 6's sourceQuiz.
+
+export const PILOT_SOURCE_KIND = 'ccrc-history-w2-pilot-source';
+export const PILOT_SOURCE_FILE = 'pilot-source.json';
+/** Where Task 6's writeFrozenList puts each section's list. */
+export const PILOT_FROZEN_FILE = `pilot/${FROZEN_LIST_FILE}`;
+export const SOURCED_KIND = 'ccrc-history-w2-quiz-sourced';
+export const SOURCED_FILE = 'quiz/sourced.json';
+export const FROZEN_FILE = `quiz/${FROZEN_LIST_FILE}`;
+export const QUIZ_META_KIND = 'ccrc-history-w2-quiz-meta';
+export const QUIZ_META_FILE = 'quiz/frozen.meta.json';
+export const VERIFY_REGISTRY_KIND = 'ccrc-history-w2-verify-registry';
+export const VERIFY_AB_KIND = 'ccrc-history-w2-verify-ab';
+export const POWER_KIND = 'ccrc-history-w2-power';
+/** The pilot's result as open --finalize reads it; W2-5b's pilot writes it. */
+export const PILOT_RESULT_KIND = 'ccrc-history-w2-pilot-result';
+export const TEMPLATE_KIND = 'ccrc-history-w2-open-template';
+/** verify --registry's answers (W2-D20): `ok`, and the gate's three drop reasons, which its validator holds in a
+ *  module-private list; a parity case holds the two equal. */
+export const REGISTRY_STATES = Object.freeze(['ok', 'registry-mismatch', 'registry-absent', 'unreadable']);
+/** verify --section ab's answers per family (W2-D84). */
+export const AB_STATES = Object.freeze(['ok', 'control-absent', 'control-mismatch', 'treatment-named', 'unreadable']);
+/** The operator's Q18 decision (W2 decisions §5 act 12): keep the window, lengthen it, or name more nodes. */
+export const Q18_DECISIONS = Object.freeze(['keep', 'lengthen', 'add-nodes']);
+/** Which q18Power call each of part 2's q18 figures reads (W2-D21, D-5791). The gate's own Q18_FIGURE_POWER is
+ *  module-private, so the two levels are spelled here once more, held equal to it by a parity case. */
+export const Q18_FIGURES = Object.freeze({
+  headline: Object.freeze({ power: 0.5, rho: 'headline' }),
+  at_power_80: Object.freeze({ power: 0.8, rho: 'headline' }),
+  at_rho_0: Object.freeze({ power: 0.5, rho: 'zero' }),
+});
+/** active_rule.text's default: W2-D20's rule in words (the schema gives the field no value). */
+export const ACTIVE_RULE_TEXT = 'W2-D20: a family (store_id, ccrc_id, generation) is active iff its merged_into is null and its generation '
+  + 'is a UUID, it is its id\'s newest unmerged family (first_seen_ms DESC, then session_pk DESC), and a main transcript of one '
+  + 'of its confirmed epochs has an entry with ts_ms in [T0 - lookback_ms, T0), T0 being its node\'s census instant; a legacy '
+  + 'family (an empty generation) is excluded, fixed (D-5773)';
+
+const DRAFT_SPEC = OPEN_RECORD_V1.draft;
+const Q18_DAY_MS = 86_400_000;
+const INPUT_WORDS = Object.freeze({ sha: 'input-sha-mismatch', invalid: 'input-invalid' });
+const RECORD_WORDS = Object.freeze({ sha: 'record-sha-mismatch', invalid: 'record-invalid' });
+/** Part 1 fields that come from the pilot-source output (the validator ties them to what the pilot used, W2-D71): an
+ *  override naming one is refused. rubric_sha256 is refused too: it follows rubric_id (buildDraft). */
+const PILOT_DERIVED = Object.freeze(['labeller.sha_min_prefix', 'quiz.writer_input', 'quiz.baseline_files', 'pilot.n_fidelity', 'pilot.n_usage']);
+const DRAFT_INPUT = Object.freeze(['record', 'record-sha256']);
+const PRED_INPUT = Object.freeze(['supersedes', 'supersedes-sha256']);
+const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);
+/** Each subcommand form's flags: a flag outside both lists is refused, a required one missing is refused. */
+const SUBCOMMAND_FLAGS = Object.freeze({
+  'pilot-source': { required: ['out', 'account', 'budget', 'writer-model', 'step0a', 'step0a-sha256'], optional: ['sha-min-prefix', 'writer-input', 'n-fidelity', 'n-usage'] },
+  'quiz-source': { required: ['out', ...DRAFT_INPUT, ...NODE_INPUTS], optional: [...PRED_INPUT] },
+  freeze: { required: ['out', ...DRAFT_INPUT, 'sourced', 'sourced-sha256'], optional: [...PRED_INPUT] },
+  power: { required: [...DRAFT_INPUT, ...NODE_INPUTS], optional: [...PRED_INPUT] },
+  'open --template': { required: ['template'], optional: [] },
+  'open --draft': { required: ['draft', 'step0a', 'step0a-sha256', 'node-label', 'node-store-id', 'pilot', 'pilot-sha256', 'account', 'arm-model', 'writer-model', 'judge-model'],
+    optional: ['overrides', ...PRED_INPUT] },
+  'open --finalize': { required: ['finalize', ...DRAFT_INPUT, ...NODE_INPUTS, 'power', 'power-sha256', 'frozen', 'frozen-sha256', 'quiz-meta', 'quiz-meta-sha256',
+    'pilot-result', 'pilot-result-sha256', 'spend-budget', 'window-start', 'window-end', 'q18-decision'], optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256'] },
+  'verify --registry': { required: ['registry', ...DRAFT_INPUT, 'census', 'census-sha256'], optional: [...PRED_INPUT] },
+  'verify --section ab': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+});
+
+const copyJson = (v) => JSON.parse(JSON.stringify(v));
+/** Families in familyKey order, by code unit: Task 5's familyKeyOf and cmpUnit, never a second key helper (W2-D12, R3).
+ *  Seeds come from Task 5's drawSeedHex and the halt floor from Task 5's quizFloor, never a copy here. */
+const byFamilyKey = (a, b) => cmpUnit(familyKeyOf(a), familyKeyOf(b));
+
+/** Unknown flags first, then required ones, then each sha flag given with its file flag and only with it. */
+function checkFlags(form, flags) {
+  const spec = SUBCOMMAND_FLAGS[form];
+  const known = new Set([...spec.required, ...spec.optional]);
+  for (const k of Object.keys(flags)) if (!known.has(k)) refuse('args-invalid', `--${k} is not a ${form} flag`);
+  for (const k of spec.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
+  for (const k of known) {
+    if (!k.endsWith('-sha256')) continue;
+    const file = k.slice(0, -'-sha256'.length);
+    if ((flags[k] === undefined) !== (flags[file] === undefined)) refuse('args-invalid', `--${file} and --${k} go together`);
+  }
+}
+
+/** `--<name>` and `--<name>-sha256`, paired by position. */
+function pairedInputs(flags, name) {
+  const asList = (v) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+  const paths = asList(flags[name]);
+  const shas = asList(flags[`${name}-sha256`]);
+  if (paths.length !== shas.length) refuse('args-invalid', `--${name} given ${paths.length} times, --${name}-sha256 ${shas.length}`);
+  return paths.map((p, i) => [p, shas[i]]);
+}
+
+/** One JSON input: outside any git tree, its bytes' sha256 checked BEFORE they are parsed (W2-D25, W2-D59), as loadStep0a
+ *  checks step 0a's. `words` names the two refusals (a record's, a frozen list's or any other input's).
+ *  @param {string} label  @param {string} p  @param {string} sha256
+ *  @returns {{path: string, sha256: string, value: any}} */
+export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {
+  if (typeof sha256 !== 'string' || !SHA256_RE.test(sha256)) refuse('args-invalid', `--${label}-sha256 is not 64 lowercase hex`);
+  if (typeof p !== 'string' || p === '') refuse('args-invalid', `--${label} names no path`);
+  const abs = path.resolve(p);
+  const g = insideGitTree(path.dirname(abs));
+  if (g.state === 'inside') refuse(words.invalid, `${label} in-git-tree ${g.at}`);
+  if (g.state === 'unmeasured') refuse(words.invalid, `${label} git-unmeasured ${g.at} ${g.code}`);
+  const read = readPlain(abs, cap);
+  if (read.state === 'absent') refuse(words.invalid, `${label} unreadable ENOENT`);
+  if (read.state === 'bad') refuse(words.invalid, read.why === 'unreadable' ? `${label} unreadable ${read.code}` : `${label} ${read.why}`);
+  const got = sha256Hex(read.bytes);
+  if (got !== sha256) refuse(words.sha, `${label}: expected ${sha256}, measured ${got}`);
+  let value;
+  try {
+    value = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse(words.invalid, `${label} not-json`);
+  }
+  return { path: abs, sha256: got, value };
+}
+/** Every `--<name>` input, in argv order. A census can be large (raw rows over every family), so it reads to OUT_STREAM_CAP. */
+function loadInputs(flags, name, cap = OUT_JSON_CAP) {
+  return pairedInputs(flags, name).map(([p, h]) => loadInput(name, p, h, INPUT_WORDS, cap));
+}
+
+/** The quiz's frozen list (W2-D73) through Task 6's one reader, loadFrozenList (its sha checked before a byte is parsed,
+ *  quiz-sha-mismatch; its bytes the canonical list their own fields give, input-invalid), after loadInput's git-tree
+ *  rule (W2-D25); and its families. */
+function loadFrozen(p, sha256) {
+  if (typeof p !== 'string' || p === '') refuse('args-invalid', '--frozen names no path');
+  const g = insideGitTree(path.dirname(path.resolve(p)));
+  if (g.state === 'inside') refuse('input-invalid', `frozen in-git-tree ${g.at}`);
+  if (g.state === 'unmeasured') refuse('input-invalid', `frozen git-unmeasured ${g.at} ${g.code}`);
+  const list = loadFrozenList(p, sha256, 'quiz');
+  return { sha256, list, families: familiesOf(list.entries) };
+}
+
+/** `--record` as `part`, validated with the context the validator requires (W2-D25, amended 2026-10-19): a draft that
+ *  supersedes another is read only beside it (--supersedes); a final beside its draft (--part1) and its frozen list
+ *  (--frozen, whose sha must be the record's quiz.sha256) and, when it supersedes a final, that final (--supersedes). */
+function loadRecordInput(flags, part) {
+  const rec = loadInput('record', flags.record, flags['record-sha256'], RECORD_WORDS);
+  const r = rec.value;
+  if (!plainObject(r) || r.part !== part) refuse('record-invalid', `record part ${JSON.stringify(r?.part)}, wanted ${part}`);
+  const pred = flags.supersedes === undefined ? null : loadInput('supersedes', flags.supersedes, flags['supersedes-sha256'], RECORD_WORDS).value;
+  let draft = null;
+  let frozen = null;
+  let fz = null;
+  if (part === 'final') {
+    if (flags.part1 === undefined) refuse('args-invalid', 'part1-required');
+    draft = loadInput('part1', flags.part1, flags['part1-sha256'], RECORD_WORDS).value;
+    fz = loadFrozen(flags.frozen, flags['frozen-sha256']);
+    const want = plainObject(r.quiz) ? r.quiz.sha256 : undefined;
+    if (fz.sha256 !== want) refuse('quiz-sha-mismatch', `frozen ${fz.sha256} is not the record's quiz.sha256 ${want}`);
+    frozen = { families: fz.families, n_questions: fz.list.entries.length };
+  } else if (r.supersedes !== null && pred === null) {
+    refuse('args-invalid', 'supersedes-required: the record supersedes a draft; pass it as --supersedes');
+  }
+  const v = validateOpenRecord(r, { draft, predecessor: pred, frozen });
+  if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));
+  return { record: r, sha256: rec.sha256, frozen: fz };
+}
+
+/** W2-D24: the four gate_code files' installed bytes, measured now through codeShas(), against the record's gate_code.
+ *  An unmeasured file is code-unmeasured, a measured change code-changed; no flag stamps either here (W2-D6). */
+export function recheckCode(record, root = TREE_ROOT) {
+  const shas = codeShas(root);
+  if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
+  const c = checkGateCode(record.gate_code, shas.files);
+  if (c.ok) return;
+  if (c.word === 'code-unmeasured') refuse('code-unmeasured', `gate_code lacks ${c.unmeasured.join(' ')}`);
+  refuse('code-changed', `changed ${c.mismatched.join(' ')}`);
+}
+
+function subcommandHome(env) {
+  if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
+  return path.resolve(env.HOME);
+}
+/** This node's store id, through Task 1's one store opener (openReplayStore, W2-D51, R3), closed at once: a store that
+ *  cannot be opened refuses store-unreadable with the store's own word, so an absent store is never an unreadable one. */
+function nodeStoreId(home) {
+  const rs = openReplayStore(home);
+  try {
+    return rs.storeId;
+  } finally {
+    rs.close();
+  }
+}
+/** W2-D84: a subcommand reading this node refuses unless its store is one of the record's nodes. */
+function requireNamedNode(record, storeId) {
+  if (!record.nodes.some((n) => n.store_id === storeId)) refuse('input-invalid', `store ${storeId} is not one of the record's nodes`);
+}
+/** A sourced entry as the frozen list takes it: its eleven W2-D73 fields, its rank left behind. */
+const frozenEntryOf = (e) => Object.fromEntries(FROZEN_ENTRY_KEYS.map((k) => [k, e[k]]));
+/** The pilot's caps: part 1's quiz caps as the open record's defaults give them (the pilot runs before part 1; W2-D71). */
+const pilotCaps = () => Object.fromEntries(['family', 'boundary', 'kind_per_family'].map((k) => [k, DRAFT_SPEC.quiz.fields.caps.fields[k].value]));
+/** One warning line when any writer run failed (R6): a non-zero exit, a signal or no result event. Each such run's
+ *  candidate is counted writer-malformed, so a failing account would otherwise drain the population quietly. */
+function warnFailedRuns(counts) {
+  const n = counts?.writer?.failed_runs ?? 0;
+  if (n > 0) process.stderr.write(`ccrc history-replay: warning: ${n} writer run(s) failed (a non-zero exit, a signal or no result event); each is counted writer-malformed\n`);
+}
+/** One control file's content, read as W2-D84 says: through historyPaths' recallOffPath and store.mjs's readBounded at
+ *  CONTROL_FILE_MAX, never following a link. Three answers, never folded: value, absent, unreadable (over-cap included,
+ *  as sweep.mjs's reader folds it). The driver imports no recallOffPresence (R6), and this reads, never writes, so
+ *  O13's one-writer pin holds. W2-D84 requires the content; W2-D29's "the driver does not read content" is the
+ *  presence check's (W2-D78(ii)), still W2-4's one lstat line (R10).
+ *  @param {string} home  @param {string} id */
+function controlFileOf(home, id) {
+  const r = readBounded(recallOffPath(home, id), CONTROL_FILE_MAX, false);
+  return r.state === 'value' ? { state: 'value', value: r.value } : r.state === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
+}
+
+/** Canonical JSON and one newline on stdout, `sha256 <hex>` of exactly those bytes on stderr. For a record that is
+ *  recordSha256 (W2-D25). */
+function printWithSha(value) {
+  const text = canonicalJson(value) + '\n';
+  process.stdout.write(text);
+  process.stderr.write(`sha256 ${sha256Hex(text)}\n`);
+  return EXIT.OK;
+}
+
+// ── the contract's flags, the frozen list and its merge ─────────────────────────────────────────────────────
+/** Every flag token of every spawn mode's argv under `settingsMode`: the set step 0a's `flags_accepted` must name
+ *  exactly (W2-D25 amended 2026-10-20, section 7). The model and home are placeholders; neither is a flag.
+ *  @param {string} settingsMode  @returns {string[]} */
+export function contractFlags(settingsMode) {
+  const flags = new Set();
+  for (const mode of SPAWN_MODES) {
+    for (const t of spawnArgv({ mode, model: 'contract-model', settingsMode, home: '/contract-home' })) if (t.startsWith('-')) flags.add(t);
+  }
+  return [...flags].sort();
+}
+
+/** The families a list of entries or boundaries names, each once, sorted by familyKey. Pure. */
+export function familiesOf(items) {
+  const seen = new Map();
+  for (const e of items) {
+    const f = { store_id: e.store_id, ccrc_id: e.ccrc_id, generation: e.generation };
+    seen.set(familyKeyOf(f), f);
+  }
+  return [...seen.values()].sort(byFamilyKey);
+}
+
+/** Every node's sourced entries in global rank order (W2-D71 as amended 2026-10-22: families by their
+ *  quizFamilyOrderKey, by code unit, then candidates by their rank in the family's own stream; R10), cut at the target.
+ *  Each node walked that order over its own families and stopped at the target, so the merged walk is the one a node
+ *  holding every store would make. Two entries with one rank refuse. */
+export function mergeSourced(lists, target) {
+  const byRank = (a, b) => cmpUnit(a.rank[0], b.rank[0]) || a.rank[1] - b.rank[1];
+  const all = lists.flat().sort(byRank);
+  for (let i = 1; i < all.length; i += 1) {
+    if (byRank(all[i - 1], all[i]) === 0) refuse('input-invalid', `sourced rank-duplicate ${all[i].rank.join(':')}`);
+  }
+  return all.slice(0, target);
+}
+
+// ── the census assembler (checks nodes only), the assignment, and Q18 ────────────────────────────────────────
+function censusError(o) {
+  if (!plainObject(o)) return 'not-object';
+  if (typeof o.store_id !== 'string' || !UUID_RE.test(o.store_id)) return 'store_id';
+  if (!plainObject(o.counters)) return 'counters';
+  const c = o.census;
+  if (!plainObject(c)) return 'census';
+  for (const k of ['as_of_ms', 'since_ms', 'row_cap']) if (!Number.isSafeInteger(c[k])) return `census.${k}`;
+  if (!plainObject(c.ticks) || !Number.isSafeInteger(c.ticks.n) || c.ticks.n < 0) return 'census.ticks';
+  for (const k of ['first_ts_ms', 'last_ts_ms']) if (c.ticks[k] !== null && !Number.isSafeInteger(c.ticks[k])) return `census.ticks.${k}`;
+  if (!Array.isArray(c.families)) return 'census.families';
+  return null;
+}
+function verifyError(o) {
+  if (!plainObject(o) || o.kind !== VERIFY_REGISTRY_KIND || o.v !== 1) return 'kind';
+  if (typeof o.store_id !== 'string') return 'store_id';
+  if (typeof o.census_sha256 !== 'string' || !SHA256_RE.test(o.census_sha256)) return 'census_sha256';
+  if (!Number.isSafeInteger(o.lookback_ms)) return 'lookback_ms';
+  if (!Array.isArray(o.families) || !o.families.every((f) => plainObject(f) && typeof f.ccrc_id === 'string'
+    && typeof f.generation === 'string' && REGISTRY_STATES.includes(f.state))) return 'families';
+  return null;
+}
+
+/** The census assembler W2-D21 names, which checks NODES only: each census names a node's store, once, and every node
+ *  has one; each verify output names a census by its sha, the record's look-back and exactly that census's active list
+ *  (W2-D20). No window, row cap or script sha is checked here (assembleReports does that, after the window). Answers
+ *  every node with its census and states, the active list, the registry drops and the families kept (W2-D20: drops
+ *  removed before Q18 and before the flip). */
+export function assembleCensus(record, censusIn, verifyIn) {
+  const labels = new Map(record.nodes.map((n) => [n.store_id, n.label]));
+  const nodes = new Map();
+  for (const c of censusIn) {
+    const bad = censusError(c.value);
+    if (bad !== null) refuse('input-invalid', `census shape ${bad}`);
+    const sid = c.value.store_id;
+    if (!labels.has(sid)) refuse('input-invalid', `census store-id-unlisted ${sid}`);
+    if (nodes.has(sid)) refuse('input-invalid', `census store-id-duplicate ${sid}`);
+    let act;
+    try {
+      act = activeFamilies(sid, c.value.census, { lookbackMs: record.active_rule.lookback_ms });
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e;
+      refuse('input-invalid', `census ${sid} ${e.message}`);
+    }
+    nodes.set(sid, { store_id: sid, label: labels.get(sid), census_sha256: c.sha256, report: c.value, active: act.active, verify_sha256: null, states: null });
+  }
+  for (const [sid, label] of labels) if (!nodes.has(sid)) refuse('input-invalid', `census node-missing ${label}`);
+  for (const v of verifyIn) {
+    const bad = verifyError(v.value);
+    if (bad !== null) refuse('input-invalid', `verify shape ${bad}`);
+    const node = nodes.get(v.value.store_id);
+    if (node === undefined) refuse('input-invalid', `verify store-id-unlisted ${v.value.store_id}`);
+    if (node.states !== null) refuse('input-invalid', `verify store-id-duplicate ${node.store_id}`);
+    if (v.value.census_sha256 !== node.census_sha256) refuse('input-invalid', `verify census-mismatch ${node.store_id}`);
+    if (v.value.lookback_ms !== record.active_rule.lookback_ms) refuse('input-invalid', `verify lookback-mismatch ${node.store_id}`);
+    const want = node.active.map(familyKeyOf).join('\n');
+    const got = v.value.families.map((f) => familyKey(node.store_id, f.ccrc_id, f.generation)).join('\n');
+    if (got !== want) refuse('input-invalid', `verify families-mismatch ${node.store_id}`);
+    node.verify_sha256 = v.sha256;
+    node.states = v.value.families;
+  }
+  for (const node of nodes.values()) if (node.states === null) refuse('input-invalid', `verify node-missing ${node.label}`);
+  const list = [...nodes.values()].sort((a, b) => (a.store_id < b.store_id ? -1 : a.store_id > b.store_id ? 1 : 0));
+  const active = list.flatMap((n) => n.active).sort(byFamilyKey);
+  const drops = list.flatMap((n) => n.states.filter((s) => s.state !== 'ok')
+    .map((s) => ({ store_id: n.store_id, ccrc_id: s.ccrc_id, generation: s.generation, reason: s.state }))).sort(byFamilyKey);
+  const dropped = new Set(drops.map(familyKeyOf));
+  return { nodes: list, active, drops, kept: active.filter((f) => !dropped.has(familyKeyOf(f))) };
+}
+
+/** W2-D19's assignment over the kept families, and its sha. */
+export function deriveAssignment(seedHex, assembled) {
+  const list = assignArms(seedHex, assembled.kept);
+  return { list, sha256: assignmentSha256(list) };
+}
+
+/** W2-D21's covered_days: the look-back clipped to the node's tick coverage, in days; null with no tick in it. Pure. */
+export function coveredDays(census, lookbackDays) {
+  const t = census.ticks;
+  if (t.n === 0 || t.first_ts_ms === null) return null;
+  const from = Math.max(census.since_ms, t.first_ts_ms);
+  const days = (census.as_of_ms - from) / Q18_DAY_MS;
+  return days > 0 ? Math.min(lookbackDays, days) : null;
+}
+
+/** rho_hat (W2-D21, reported beside the figures): the one-way ANOVA estimate of the intra-cluster correlation of "a
+ *  window holds a read call", over families with at least one window. Unclipped; null with fewer than two such families,
+ *  no within-family degree of freedom, or a zero denominator. Pure. */
+export function rhoHat(clusters) {
+  const cs = clusters.filter((c) => c.windows > 0);
+  const m = cs.length;
+  const n = cs.reduce((s, c) => s + c.windows, 0);
+  if (m < 2 || n - m < 1) return null;
+  const pbar = cs.reduce((s, c) => s + c.with_call, 0) / n;
+  const ssb = cs.reduce((s, c) => s + c.windows * (c.with_call / c.windows - pbar) ** 2, 0);
+  const ssw = cs.reduce((s, c) => s + c.with_call - (c.with_call * c.with_call) / c.windows, 0);
+  const msb = ssb / (m - 1);
+  const msw = ssw / (n - m);
+  const n0 = (n - cs.reduce((s, c) => s + c.windows * c.windows, 0) / n) / (m - 1);
+  const den = msb + (n0 - 1) * msw;
+  return den === 0 ? null : (msb - msw) / den;
+}
+
+/** The power output (W2-D21, amended 2026-10-20 after W2-3's review 664, F3 and F8): q18_settings read from the
+ *  record; one q18Power call per power level with rho = rho_headline and with rho = 0; covered_days from lookback_days;
+ *  the population the flip uses (the kept families). It holds no clock reading, so the same inputs print the same bytes. */
+export function powerReport(record, recordSha256, assembled) {
+  const s = record.q18_settings;
+  const plannedDays = record.window_plan.planned_days;
+  const lookbackMs = s.lookback_days * Q18_DAY_MS;
+  const kept = new Set(assembled.kept.map(familyKeyOf));
+  const coverage = {};
+  const perNode = {};
+  const consumed = {};
+  const fams = [];
+  for (const node of assembled.nodes) {
+    const c = node.report.census;
+    if (c.as_of_ms - c.since_ms !== lookbackMs) {
+      refuse('input-invalid', `census ${node.store_id} since-mismatch: as_of - since is ${c.as_of_ms - c.since_ms} ms, lookback_days is ${s.lookback_days}`);
+    }
+    const covered = coveredDays(c, s.lookback_days);
+    if (covered === null) refuse('input-invalid', `census ${node.store_id} no-tick-coverage`);
+    coverage[node.store_id] = { covered_days: covered, ticks: copyJson(c.ticks) };
+    const per = { windows: 0, with_call: 0 };
+    for (const row of c.families) {
+      const key = familyKey(node.store_id, row.ccrc_id, row.generation);
+      if (!kept.has(key)) continue;
+      // A census row is a family the store holds: buildWindows reads it as a family report once `found` says so.
+      const t = windowTotals(buildWindows({ ccrc_id: row.ccrc_id, generation: row.generation, found: true,
+        merged_generations: row.merged_generations, calls: row.calls, boundaries: row.boundaries }));
+      fams.push({ key, store_id: node.store_id, windows: t.windows, with_call: t.with_call, covered_days: covered });
+      per.windows += t.windows;
+      per.with_call += t.with_call;
+    }
+    perNode[node.store_id] = per;
+    const n = node.report.counters['card_consumed:main'];
+    consumed[node.store_id] = Number.isSafeInteger(n) ? n : 0;
+  }
+  fams.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const q18In = fams.map(({ key, windows, covered_days }) => ({ key, windows, covered_days }));
+  const figures = [];
+  for (const power of s.power) {
+    for (const rho of [s.rho_headline, 0]) {
+      const q = q18Power({ families: q18In, plannedDays, seedHex: record.bootstrap.seed, rho, power, sims: s.sims, gridStep: s.grid_step, B: record.bootstrap.B });
+      figures.push({ power, rho, figure: q.figure, points: q.points });
+    }
+  }
+  const figureOf = (f) => figures.find((x) => x.power === f.power && x.rho === (f.rho === 'zero' ? 0 : s.rho_headline))?.figure ?? null;
+  const total = Object.values(perNode).reduce((t, p) => ({ windows: t.windows + p.windows, with_call: t.with_call + p.with_call }), { windows: 0, with_call: 0 });
+  // §4's q18 carries n_f per family and per node: a node's n_f is the sum over its kept families.
+  const expected = expectedWindows(q18In, plannedDays);
+  const storeOfKey = new Map(fams.map((f) => [f.key, f.store_id]));
+  const nfPerNode = Object.fromEntries(assembled.nodes.map((n) => [n.store_id, 0]));
+  for (const x of expected) nfPerNode[storeOfKey.get(x.key)] += x.n;
+  return {
+    kind: POWER_KIND, v: 1, record_sha256: recordSha256,
+    inputs: assembled.nodes.map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 })),
+    q18_settings: copyJson(s), planned_days: plannedDays, population: fams.length, registry_drops: assembled.drops.length, figures,
+    headline: figureOf(Q18_FIGURES.headline), at_power_80: figureOf(Q18_FIGURES.at_power_80), at_rho_0: figureOf(Q18_FIGURES.at_rho_0),
+    rho_hat: rhoHat(fams),
+    n_f: { per_family: Object.fromEntries(expected.map((x) => [x.key, x.n])), per_node: nfPerNode },
+    coverage,
+    pre_window_uptake: { per_node: perNode, total, card_consumed_main_all_time: consumed },
+  };
+}
+
+// ── the reports the subcommands write, as pure builders ───────────────────────────────────────────────────
+/** A registry read against the census generation (W2-D20): four answers, never folded. Pure. */
+export function registryStateOf(read, generation) {
+  if (read.state === 'absent') return 'registry-absent';
+  if (read.state !== 'value') return 'unreadable';
+  return read.value === generation ? 'ok' : 'registry-mismatch';
+}
+export function verifyRegistryReport({ recordSha256, storeId, censusSha256, lookbackMs, families }) {
+  const counts = Object.fromEntries(REGISTRY_STATES.map((s) => [s, families.filter((f) => f.state === s).length]));
+  return { kind: VERIFY_REGISTRY_KIND, v: 1, record_sha256: recordSha256, store_id: storeId, census_sha256: censusSha256,
+    lookback_ms: lookbackMs, families, counts };
+}
+/** One assigned family's presence file against its arm (W2-D84). A control file must hold its generation (trimmed, as
+ *  decideRecallOff trims); a treatment file must not name its own (another generation is not this family's). Unreadable
+ *  is its own answer, never absent. Pure. */
+export function abStateOf(arm, generation, read) {
+  if (read.state === 'unreadable') return 'unreadable';
+  if (arm === 'control') {
+    if (read.state === 'absent') return 'control-absent';
+    return read.value.trim() === generation ? 'ok' : 'control-mismatch';
+  }
+  if (read.state === 'absent') return 'ok';
+  return read.value.trim() === generation ? 'treatment-named' : 'ok';
+}
+export function verifyAbReport({ recordSha256, storeId, families, newest, seen }) {
+  const seenAfter = seen !== null && (newest.state === 'absent' || (newest.state === 'value' && seen > newest.ms));
+  const counts = Object.fromEntries(AB_STATES.map((s) => [s, families.filter((f) => f.state === s).length]));
+  return { kind: VERIFY_AB_KIND, v: 1, record_sha256: recordSha256, store_id: storeId, families, counts,
+    newest_write: newest, seen_ms: seen, seen_after_write: seenAfter, ok: seenAfter && families.every((f) => f.state === 'ok') };
+}
+export function sourcedReport({ recordSha256, storeId, assignmentSha256, inputs, sourced, spend }) {
+  return { kind: SOURCED_KIND, v: 1, record_sha256: recordSha256, store_id: storeId, assignment_sha256: assignmentSha256,
+    inputs, entries: sourced.entries, counts: sourced.counts, asof_same_ms_hits: sourced.asof_same_ms_hits ?? {}, spend };
+}
+/** The meta beside the frozen list: quiz-source's assignment_sha256 (W2-D73), the counts, the floor verdict (W2-D71),
+ *  and whether the list names fewer families than the record's quiz.min_families (`minFamilies`, the signed default 20,
+ *  W2-D71's "at least 20 families"). That flag is a report, never a refusal (R11): the halt floor stays the only
+ *  family-count stop, and nothing reads the flag to decide. */
+export function quizMetaReport({ recordSha256, frozenSha256, assignmentSha256, entries, floor, minFamilies, sourced }) {
+  const families = familiesOf(entries);
+  return { kind: QUIZ_META_KIND, v: 1, record_sha256: recordSha256, frozen_sha256: frozenSha256, assignment_sha256: assignmentSha256,
+    n_questions: entries.length, n_families: families.length,
+    below_floor: quizFloor(entries.length, families.length, floor).halt,
+    short_of_min_families: families.length < minFamilies, sourced };
+}
+
+// ── the record: template, draft and final ──────────────────────────────────────────────────────────────────
+function skeletonField(f) {
+  if (Object.hasOwn(f, 'value')) return copyJson(f.value);
+  if (f.fields) return skeletonOf(f.fields);
+  if (f.type === 'array') return f.items ? [skeletonField(f.items)] : [];
+  if (f.values) return { '<key>': skeletonField(f.values) };
+  return `<${f.status} ${f.type}${f.nullable ? ' or null' : ''}>`;
+}
+function skeletonOf(spec) {
+  return Object.fromEntries(Object.entries(spec).map(([k, f]) => [k, skeletonField(f)]));
+}
+/** open --template's skeleton: both parts, from OPEN_RECORD_V1, every fixed or default value filled. Pure. */
+export function openTemplate() {
+  return { kind: TEMPLATE_KIND, v: 1, draft: skeletonOf(OPEN_RECORD_V1.draft), final: skeletonOf(OPEN_RECORD_V1.final) };
+}
+
+/** The values a schema gives: a field's value when it has one, an object of its fields' values when it has fields (a key
+ *  with no value left out), nothing otherwise. */
+function schemaValues(spec) {
+  const o = {};
+  for (const [k, f] of Object.entries(spec)) {
+    if (Object.hasOwn(f, 'value')) o[k] = copyJson(f.value);
+    else if (f.fields) {
+      const inner = schemaValues(f.fields);
+      if (Object.keys(inner).length > 0) o[k] = inner;
+    }
+  }
+  return o;
+}
+/** The operator's overrides, applied to `default` fields only (W2-D25: the values the operator confirms or changes when
+ *  signing). An array is replaced whole; a fixed, measured, derived or operator field, an unknown key, and a field that
+ *  comes from the pilot-source output are args-invalid. */
+function applyOverrides(target, over, spec, prefix) {
+  for (const [k, v] of Object.entries(over)) {
+    const p = prefix === '' ? k : `${prefix}.${k}`;
+    const f = spec[k];
+    if (f === undefined) refuse('args-invalid', `override ${p} is not a part 1 field`);
+    if (PILOT_DERIVED.includes(p)) refuse('args-invalid', `override ${p} comes from the pilot-source output`);
+    if (p === 'rubric_sha256') refuse('args-invalid', 'override rubric_sha256 follows rubric_id');
+    if (f.fields && !Object.hasOwn(f, 'value') && plainObject(v)) {
+      if (!plainObject(target[k])) target[k] = {};
+      applyOverrides(target[k], v, f.fields, p);
+      continue;
+    }
+    if (f.status === 'default') {
+      target[k] = copyJson(v);
+      continue;
+    }
+    refuse('args-invalid', `override ${p} is ${f.status}`);
+  }
+}
+function readOverrides(p) {
+  const read = readPlain(path.resolve(p), OUT_JSON_CAP);
+  if (read.state !== 'bytes') refuse('args-invalid', `overrides ${read.state === 'absent' ? 'absent' : badWord(read)}`);
+  let o;
+  try {
+    o = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('args-invalid', 'overrides not-json');
+  }
+  if (!plainObject(o)) refuse('args-invalid', 'overrides is not a JSON object');
+  return o;
+}
+
+/** Part 1 (W2 decisions §4): the schema's fixed and default values, the overrides, then what the operator named, what
+ *  step 0a and the pilot measured, the seed and gate_code. Pure: the caller draws the seed and reads the clock.
+ *  @param {Record<string, any>} input  @returns {Record<string, any>} */
+export function buildDraft({ nodes, step0a, pilot, account, models, gateCode, seedHex, nowMs, overrides = {}, supersedes = null }) {
+  const d = schemaValues(DRAFT_SPEC);
+  applyOverrides(d, overrides, DRAFT_SPEC, '');
+  return {
+    ...d,
+    drafted_ms: nowMs, supersedes, nodes: copyJson(nodes), account,
+    arm_model: models.arm, writer_model: models.writer, judge_model: models.judge,
+    step0a: copyJson(step0a),
+    bootstrap: { ...d.bootstrap, seed: seedHex },
+    labeller: { ...d.labeller, sha_min_prefix: pilot.used.sha_min_prefix },
+    rubric_sha256: Object.hasOwn(RUBRIC_SHA256, d.rubric_id) ? RUBRIC_SHA256[d.rubric_id] : d.rubric_sha256,
+    quiz: { ...d.quiz, writer_input: pilot.used.writer_input, baseline_files: pilot.used.baseline_files },
+    active_rule: { ...d.active_rule, text: d.active_rule.text ?? ACTIVE_RULE_TEXT },
+    pilot: { seed: pilot.seed, n_fidelity: pilot.n_fidelity, n_usage: pilot.n_usage, tolerance: d.pilot.tolerance,
+      families: copyJson(pilot.families), frozen_sha256: pilot.frozen_sha256, writer_model: pilot.writer_model, used: copyJson(pilot.used),
+      code_shas: copyJson(pilot.code_shas), release_stamp: pilot.release_stamp, budget: pilot.budget, spend: pilot.spend },
+    gate_code: copyJson(gateCode),
+  };
+}
+
+/** Part 2 (W2 decisions §4): part 1 whole, then the census instants, the registry drops, the power figures, the pilot's
+ *  result, the approved spend budget, the re-derived assignment, the frozen quiz and the window. Pure.
+ *  @param {Record<string, any>} input  @returns {Record<string, any>} */
+export function buildFinal({ draft, draftSha256, priorSha256 = null, assembled, assignment, power, powerSha256, frozen, pilotResult, spendBudget, window, decision, nowMs }) {
+  return {
+    ...copyJson(draft),
+    part: 'final', supersedes: priorSha256 ?? draftSha256, finalized_ms: nowMs,
+    census: assembled.nodes.map((n) => ({ store_id: n.store_id, census_ms: n.report.census.as_of_ms, census_sha256: n.census_sha256 })),
+    registry_drops: copyJson(assembled.drops),
+    q18: { headline: power.headline, at_power_80: power.at_power_80, at_rho_0: power.at_rho_0, rho_hat: power.rho_hat,
+      n_f: copyJson(power.n_f), coverage: copyJson(power.coverage), pre_window_uptake: copyJson(power.pre_window_uptake),
+      power_output_sha256: powerSha256, decision },
+    pilot_result: { fidelity: copyJson(pilotResult.fidelity), usage_extrapolation: copyJson(pilotResult.usage_extrapolation),
+      step0b_sha256: pilotResult.step0b_sha256, settings_mode: pilotResult.settings_mode, absent_rate: copyJson(pilotResult.absent_rate) },
+    spend_budget: spendBudget,
+    assignment: copyJson(assignment.list), assignment_sha256: assignment.sha256,
+    quiz: { ...copyJson(draft.quiz), sha256: frozen.sha256, n_questions: frozen.list.entries.length, n_families: frozen.families.length, families: copyJson(frozen.families) },
+    window: { start_ms: window.start, end_ms: window.end },
+    amendments: [],
+  };
+}
+
+// ── input shapes the subcommands read ──────────────────────────────────────────────────────────────────────
+function entryError(e) {
+  if (!plainObject(e)) return 'entry';
+  for (const k of FROZEN_ENTRY_KEYS) if (!Object.hasOwn(e, k)) return `entry ${k}`;
+  for (const k of ['qid', 'store_id', 'ccrc_id', 'generation', 'boundary_uuid', 'fact', 'fact_raw', 'question', 'source_entry_uuid']) {
+    if (typeof e[k] !== 'string') return `entry ${k}`;
+  }
+  if (!FACT_KINDS.includes(e.kind)) return 'entry kind';
+  if (!Array.isArray(e.repo_roots) || !e.repo_roots.every((r) => typeof r === 'string')) return 'entry repo_roots';
+  // A quiz entry's rank is [its family's quizFamilyOrderKey, its candidate rank] (W2-D71 as amended 2026-10-22; R10).
+  if (!Array.isArray(e.rank) || e.rank.length !== 2 || typeof e.rank[0] !== 'string' || !SHA256_RE.test(e.rank[0])
+    || !Number.isSafeInteger(e.rank[1]) || e.rank[1] < 0) return 'entry rank';
+  return null;
+}
+function sourcedError(o) {
+  if (!plainObject(o) || o.kind !== SOURCED_KIND || o.v !== 1) return 'kind';
+  for (const k of ['record_sha256', 'assignment_sha256']) if (typeof o[k] !== 'string' || !SHA256_RE.test(o[k])) return k;
+  if (typeof o.store_id !== 'string') return 'store_id';
+  if (!Array.isArray(o.entries)) return 'entries';
+  for (const e of o.entries) { const bad = entryError(e); if (bad !== null) return bad; }
+  return plainObject(o.counts) ? null : 'counts';
+}
+function quizMetaError(o) {
+  if (!plainObject(o) || o.kind !== QUIZ_META_KIND || o.v !== 1) return 'kind';
+  for (const k of ['record_sha256', 'frozen_sha256', 'assignment_sha256']) if (typeof o[k] !== 'string' || !SHA256_RE.test(o[k])) return k;
+  if (!Number.isSafeInteger(o.n_questions) || !Number.isSafeInteger(o.n_families)) return 'counts';
+  return typeof o.below_floor === 'boolean' ? null : 'below_floor';
+}
+function powerError(o) {
+  if (!plainObject(o) || o.kind !== POWER_KIND || o.v !== 1) return 'kind';
+  if (typeof o.record_sha256 !== 'string' || !SHA256_RE.test(o.record_sha256)) return 'record_sha256';
+  if (!Array.isArray(o.inputs)) return 'inputs';
+  for (const k of ['headline', 'at_power_80', 'at_rho_0', 'rho_hat']) if (o[k] !== null && typeof o[k] !== 'number') return k;
+  for (const k of ['n_f', 'coverage', 'pre_window_uptake']) if (!plainObject(o[k])) return k;
+  return null;
+}
+function pilotSourceError(o) {
+  if (!plainObject(o) || o.kind !== PILOT_SOURCE_KIND || o.v !== 1) return 'kind';
+  for (const k of ['seed', 'frozen_sha256']) if (typeof o[k] !== 'string' || !SHA256_RE.test(o[k])) return k;
+  for (const k of ['n_fidelity', 'n_usage', 'budget', 'spend']) if (!Number.isSafeInteger(o[k])) return k;
+  if (!Array.isArray(o.families)) return 'families';
+  if (typeof o.writer_model !== 'string' || typeof o.release_stamp !== 'string') return 'writer_model';
+  if (!plainObject(o.used) || !plainObject(o.code_shas)) return 'used';
+  return null;
+}
+function pilotResultError(o) {
+  if (!plainObject(o) || o.kind !== PILOT_RESULT_KIND || o.v !== 1) return 'kind';
+  if (!Array.isArray(o.fidelity) || !o.fidelity.every(plainObject)) return 'fidelity';
+  if (!plainObject(o.usage_extrapolation)) return 'usage_extrapolation';
+  if (typeof o.step0b_sha256 !== 'string' || !SHA256_RE.test(o.step0b_sha256)) return 'step0b_sha256';
+  if (!SETTINGS_MODES.includes(o.settings_mode)) return 'settings_mode';
+  return plainObject(o.absent_rate) ? null : 'absent_rate';
+}
+
+// ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
+// A handler that takes deps after its env names that parameter driverEnv, never env: W2-4 Task 5's env scan reads
+// `, env,` on a code line as an env passed whole, and the value is still main's by-name projection.
+/** `pilot-source` (W2 decisions §5 act 9, one pilot node, R9): before part 1, so its writer is preflighted against the
+ *  one step 0a output it is given (Task 6's openWriter), under its own --budget and the driver's LIMITS_DEFAULTS (W2-D55,
+ *  W2-D56). It records the code shas and the stamp the preflight held equal to step 0a's, which part 1's validator checks
+ *  against gate_code (W2-D24). Its seed is its own (W2-D71), drawn by deps.seed. */
+export async function pilotSourceCommand(flags, driverEnv, deps = { sourceQuiz, seed: drawSeedHex }) {
+  checkFlags('pilot-source', flags);
+  const home = subcommandHome(driverEnv);
+  const pairs = pairedInputs(flags, 'step0a');
+  if (pairs.length !== 1) refuse('args-invalid', 'pilot-source reads one step 0a output, this node\'s');
+  const step0a = loadStep0a(pairs[0][0], pairs[0][1]);
+  if (step0a.account !== flags.account) refuse('input-invalid', `step0a account ${step0a.account} is not --account ${flags.account}`);
+  const shaMinPrefix = flags['sha-min-prefix'] ?? DRAFT_SPEC.labeller.fields.sha_min_prefix.value;
+  if (!SHA_MIN_PREFIXES.includes(shaMinPrefix)) refuse('args-invalid', `sha-min-prefix ${shaMinPrefix} is not one of ${SHA_MIN_PREFIXES.join(', ')}`);
+  const writerInput = flags['writer-input'] ?? DRAFT_SPEC.quiz.fields.writer_input.value;
+  if (!WRITER_INPUTS.includes(writerInput)) refuse('args-invalid', `writer-input ${JSON.stringify(writerInput)} is not one of ${WRITER_INPUTS.join(', ')}`);
+  const nFidelity = flags['n-fidelity'] ?? DRAFT_SPEC.pilot.fields.n_fidelity.value;
+  const nUsage = flags['n-usage'] ?? DRAFT_SPEC.pilot.fields.n_usage.value;
+  const baselineFiles = DRAFT_SPEC.quiz.fields.baseline_files.value;
+  const writerModel = flags['writer-model'];
+  refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
+  refuseWriterModel(writerModel);   // R10: a refusal that needs no store and no spawn answers before --out exists
+  const out = prepareOut(flags.out);
+  refuseColonInRealOut(out);
+  const claim = claimOut(out);
+  try {
+    const rs = openReplayStore(home);   // the run's one store open (R3)
+    try {
+      // The writer: the model, the account (W2-D52), the gate (W2-D55) and W2-D56's preflight against step 0a, before
+      // any writer spawn and before every writer batch (Task 6's openWriter).
+      const writer = await openWriter({ home, accountId: flags.account, model: writerModel, settingsMode: step0a.settings_mode, writerInput,
+        claim, budget: flags.budget, limits: LIMITS_DEFAULTS, expected: step0a, lang: driverEnv.LANG, idx: rs.idx });
+      const seedHex = deps.seed();
+      const sourced = await deps.sourceQuiz({
+        mode: 'pilot', rs, home, out, writer, seedHex, exclude: { pilotFamilies: [], assignment: [] },
+        plan: { n_fidelity: nFidelity, n_usage: nUsage, caps: pilotCaps() }, configDirs: rosterConfigDirs(readRoster(home).roster, home),
+      });
+      warnFailedRuns(sourced.counts);
+      const frozenSha = writeFrozenList(out, 'pilot', frozenListText('pilot',
+        { writer_model: writerModel, labeller: { ...copyJson(LABELLER), sha_min_prefix: shaMinPrefix } }, sourced.entries.map(frozenEntryOf)));
+      const output = {
+        kind: PILOT_SOURCE_KIND, v: 1, store_id: rs.storeId, seed: seedHex, n_fidelity: nFidelity, n_usage: nUsage,
+        families: familiesOf([...sourced.entries, ...sourced.fidelity]), fidelity: copyJson(sourced.fidelity),
+        frozen_sha256: frozenSha, writer_model: writerModel,
+        used: { labeller: copyJson(LABELLER), sha_min_prefix: shaMinPrefix, writer_input: writerInput, baseline_files: baselineFiles,
+          writer_prompt_sha256: WRITER_PROMPT_SHA256, answer_protocol_sha256: ANSWER_PROTOCOL_SHA256 },
+        code_shas: copyJson(step0a.code_shas), release_stamp: step0a.release_stamp, budget: flags.budget, spend: spentSoFar(out), counts: sourced.counts,
+      };
+      writePlain(out, PILOT_SOURCE_FILE, canonicalJson(output) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, PILOT_SOURCE_FILE)}\n`);   // D-5983: stderr; stdout stays empty
+      return EXIT.OK;
+    } finally {
+      rs.close();
+    }
+  } finally {
+    claim.release();
+  }
+}
+
+/** `quiz-source` (W2 decisions §5 act 16): after part 1, under part 1's account, models, settings mode, limits and
+ *  pilot_budget (W2-D55), preflighted against part 1 (W2-D56). The assignment comes from the census and verify inputs
+ *  (W2-D19, W2-D73); control-held ids and pilot families are excluded from sourcing (W2-D77), which walks this node's
+ *  own admitted families, never the census's kept list (W2-D71, R10). Its writer model is the validated record's, held
+ *  to an exact Opus id by the validator, so no refusal here needs --out first. */
+export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz }) {
+  checkFlags('quiz-source', flags);
+  const home = subcommandHome(driverEnv);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (quiz-source)
+  const assembled = assembleCensus(rec.record, loadInputs(flags, 'census', OUT_STREAM_CAP), loadInputs(flags, 'verify'));
+  const assignment = deriveAssignment(rec.record.bootstrap.seed, assembled);
+  const rs = openReplayStore(home);   // the run's one store open (R3)
+  try {
+    const storeId = rs.storeId;
+    requireNamedNode(rec.record, storeId);
+    const entry = rec.record.step0a.find((s) => s.store_id === storeId);   // the validator binds exactly one per node
+    const writerModel = rec.record.writer_model;
+    refuseUnusableInputs(home, flags.out, [['writer-model', writerModel]]);
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    const claim = claimOut(out);
+    try {
+      // The writer under part 1's account, models, settings mode, limits and pilot_budget (W2-D55), preflighted against
+      // this node's part 1 step 0a entry and gate_code before every writer batch (Task 6's openWriter; W2-D56).
+      const writer = await openWriter({ home, accountId: rec.record.account, model: writerModel, settingsMode: rec.record.settings_mode,
+        writerInput: rec.record.quiz.writer_input, claim, budget: rec.record.pilot_budget, limits: rec.record.limits,
+        expected: { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
+          wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files }, lang: driverEnv.LANG, idx: rs.idx });
+      const sourced = await deps.sourceQuiz({
+        // No family list (R10, C1): sourceQuiz walks this store's admitted families; assembled.kept fed the assignment only.
+        mode: 'quiz', rs, home, out, writer, seedHex: rec.record.bootstrap.seed,
+        exclude: { pilotFamilies: copyJson(rec.record.pilot.families), assignment: copyJson(assignment.list) },
+        plan: copyJson(rec.record.quiz), configDirs: rosterConfigDirs(readRoster(home).roster, home),
+      });
+      warnFailedRuns(sourced.counts);
+      const inputs = assembled.nodes.map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
+      ensurePlainDir(out, 'quiz');
+      writePlain(out, SOURCED_FILE, canonicalJson(sourcedReport({ recordSha256: rec.sha256, storeId, assignmentSha256: assignment.sha256,
+        inputs, sourced, spend: spentSoFar(out) })) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, SOURCED_FILE)}\n`);
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+/** `freeze --record <draft>` (W2-D73): every named node's sourced list, exactly one each (a node with none refuses
+ *  `sourced node-missing`, as the census assembler's word), of this record and one assignment, merged in global rank
+ *  order (each family's order key, then its candidate rank; R10) and cut at quiz.target; `<out>/quiz/frozen.json` as W2-D73's exact bytes, 0600, and its meta beside it. */
+export async function freezeCommand(flags, env) {
+  checkFlags('freeze', flags);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (freeze)
+  const lists = loadInputs(flags, 'sourced');
+  const stores = new Set();
+  let assignmentSha = null;
+  for (const l of lists) {
+    const bad = sourcedError(l.value);
+    if (bad !== null) refuse('input-invalid', `sourced shape ${bad}`);
+    const s = l.value;
+    if (s.record_sha256 !== rec.sha256) refuse('input-invalid', `sourced record-mismatch ${s.store_id}`);
+    requireNamedNode(rec.record, s.store_id);
+    if (stores.has(s.store_id)) refuse('input-invalid', `sourced store-id-duplicate ${s.store_id}`);
+    stores.add(s.store_id);
+    if (assignmentSha !== null && s.assignment_sha256 !== assignmentSha) refuse('assignment-mismatch', `sourced lists disagree: ${assignmentSha} and ${s.assignment_sha256}`);
+    assignmentSha = s.assignment_sha256;
+    for (const e of s.entries) {
+      if (e.store_id !== s.store_id) refuse('input-invalid', `sourced entry ${e.qid} names another store`);
+      if (qidOf(e) !== e.qid) refuse('input-invalid', `sourced entry ${e.qid} qid-mismatch`);
+    }
+  }
+  // W2-D71's population is the families on the NAMED nodes: one list per node, or the merge freezes a subset.
+  for (const n of rec.record.nodes) if (!stores.has(n.store_id)) refuse('input-invalid', `sourced node-missing ${n.label}`);
+  const entries = mergeSourced(lists.map((l) => l.value.entries), rec.record.quiz.target);
+  const text = frozenListText('quiz', { writer_model: rec.record.writer_model,
+    labeller: { ...copyJson(LABELLER), sha_min_prefix: rec.record.labeller.sha_min_prefix } }, entries.map(frozenEntryOf));
+  const out = prepareOut(flags.out);
+  const claim = claimOut(out);
+  try {
+    const sha = writeFrozenList(out, 'quiz', text);   // Task 6's one writer: 0600, never replaced (W2-D73)
+    writePlain(out, QUIZ_META_FILE, canonicalJson(quizMetaReport({ recordSha256: rec.sha256, frozenSha256: sha, assignmentSha256: assignmentSha,
+      entries, floor: rec.record.quiz.halt_floor, minFamilies: rec.record.quiz.min_families,
+      sourced: lists.map((l) => ({ store_id: l.value.store_id, sha256: l.sha256 })) })) + '\n');
+    process.stderr.write(`sha256 ${sha}\n`);
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
+}
+
+/** `power --record <draft>` (W2-D21, amended 2026-10-20): the census and verify outputs through the assembler that checks
+ *  nodes only; prints to stdout, its sha on stderr. Reads no HOME and writes no file. */
+export async function powerCommand(flags, env) {
+  checkFlags('power', flags);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (power)
+  const assembled = assembleCensus(rec.record, loadInputs(flags, 'census', OUT_STREAM_CAP), loadInputs(flags, 'verify'));
+  return printWithSha(powerReport(rec.record, rec.sha256, assembled));
+}
+
+async function openDraft(flags, driverEnv, deps) {
+  checkFlags('open --draft', flags);
+  const home = subcommandHome(driverEnv);
+  const pairs = pairedInputs(flags, 'step0a');
+  const labels = flags['node-label'];
+  const stores = flags['node-store-id'];
+  if (labels.length !== pairs.length || stores.length !== pairs.length) {
+    refuse('args-invalid', `--step0a, --node-label and --node-store-id are given ${pairs.length}, ${labels.length} and ${stores.length} times`);
+  }
+  const step0a = pairs.map(([p, h], i) => {
+    const o = loadStep0a(p, h);
+    const want = contractFlags(o.settings_mode);
+    const have = Object.keys(o.flags_accepted).sort();
+    const missing = want.filter((f) => !have.includes(f));
+    const extra = have.filter((f) => !want.includes(f));
+    if (missing.length + extra.length > 0) {
+      refuse('input-invalid', `step0a ${labels[i]} flags-incomplete${missing.length > 0 ? ` missing ${missing.join(' ')}` : ''}${extra.length > 0 ? ` extra ${extra.join(' ')}` : ''}`);
+    }
+    return { ...o, label: labels[i], store_id: stores[i] };
+  });
+  const pilot = loadInput('pilot', flags.pilot, flags['pilot-sha256']).value;
+  const pbad = pilotSourceError(pilot);
+  if (pbad !== null) refuse('input-invalid', `pilot shape ${pbad}`);
+  const overrides = flags.overrides === undefined ? {} : readOverrides(flags.overrides);
+  const pred = flags.supersedes === undefined ? null : loadInput('supersedes', flags.supersedes, flags['supersedes-sha256'], RECORD_WORDS);
+  if (pred !== null && !(plainObject(pred.value) && pred.value.part === 'draft' && plainObject(pred.value.bootstrap) && typeof pred.value.bootstrap.seed === 'string')) {
+    refuse('record-invalid', 'supersedes is not a draft with a seed');
+  }
+  const shas = codeShas();
+  if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
+  const stamp = readReleaseStamp(home);
+  if (stamp.state !== 'value') refuse('tree-unmeasured', `stamp ${stamp.state}${stamp.code === undefined ? '' : ` ${stamp.code}`}`);
+  const record = buildDraft({
+    nodes: step0a.map((s) => ({ label: s.label, store_id: s.store_id })), step0a, pilot, account: flags.account,
+    models: { arm: flags['arm-model'], writer: flags['writer-model'], judge: flags['judge-model'] },
+    gateCode: { release_tag: stamp.tag, files: shas.files },
+    seedHex: pred === null ? deps.seed() : pred.value.bootstrap.seed, nowMs: deps.now(), overrides,
+    supersedes: pred === null ? null : pred.sha256,
+  });
+  const v = validateOpenRecord(record, { draft: null, predecessor: pred === null ? null : pred.value, frozen: null });
+  if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));
+  return printWithSha(record);
+}
+
+async function openFinalize(flags, driverEnv, deps) {
+  checkFlags('open --finalize', flags);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (open --finalize)
+  const assembled = assembleCensus(rec.record, loadInputs(flags, 'census', OUT_STREAM_CAP), loadInputs(flags, 'verify'));
+  const assignment = deriveAssignment(rec.record.bootstrap.seed, assembled);
+  const meta = loadInput('quiz-meta', flags['quiz-meta'], flags['quiz-meta-sha256']).value;
+  const mbad = quizMetaError(meta);
+  if (mbad !== null) refuse('input-invalid', `quiz-meta shape ${mbad}`);
+  if (meta.record_sha256 !== rec.sha256) refuse('input-invalid', 'quiz-meta record-mismatch');
+  const frozen = loadFrozen(flags.frozen, flags['frozen-sha256']);
+  if (meta.frozen_sha256 !== frozen.sha256) refuse('quiz-sha-mismatch', `quiz-meta names ${meta.frozen_sha256}, the frozen list is ${frozen.sha256}`);
+  if (meta.assignment_sha256 !== assignment.sha256) {
+    refuse('assignment-mismatch', `quiz-source derived ${meta.assignment_sha256}, the census and verify inputs give ${assignment.sha256}`);
+  }
+  if (meta.below_floor) refuse('input-invalid', 'quiz-meta below-floor: a ruling to proceed lowers quiz.halt_floor in a superseding draft');
+  const powerIn = loadInput('power', flags.power, flags['power-sha256']);
+  const pwbad = powerError(powerIn.value);
+  if (pwbad !== null) refuse('input-invalid', `power shape ${pwbad}`);
+  if (powerIn.value.record_sha256 !== rec.sha256) refuse('input-invalid', 'power record-mismatch');
+  const inputs = assembled.nodes.map((n) => ({ store_id: n.store_id, census_sha256: n.census_sha256, verify_sha256: n.verify_sha256 }));
+  if (canonicalJson(powerIn.value.inputs) !== canonicalJson(inputs)) refuse('input-invalid', 'power inputs-mismatch');
+  const pilotResult = loadInput('pilot-result', flags['pilot-result'], flags['pilot-result-sha256']).value;
+  const prbad = pilotResultError(pilotResult);
+  if (prbad !== null) refuse('input-invalid', `pilot-result shape ${prbad}`);
+  const decision = flags['q18-decision'];
+  if (!Q18_DECISIONS.includes(decision)) refuse('args-invalid', `q18-decision ${JSON.stringify(decision)} is not one of ${Q18_DECISIONS.join(', ')}`);
+  const prior = flags['prior-final'] === undefined ? null : loadInput('prior-final', flags['prior-final'], flags['prior-final-sha256'], RECORD_WORDS);
+  const final = buildFinal({
+    draft: rec.record, draftSha256: rec.sha256, priorSha256: prior === null ? null : prior.sha256, assembled, assignment,
+    power: powerIn.value, powerSha256: powerIn.sha256, frozen, pilotResult, spendBudget: flags['spend-budget'],
+    window: { start: flags['window-start'], end: flags['window-end'] }, decision, nowMs: deps.now(),
+  });
+  const v = validateOpenRecord(final, { draft: rec.record, predecessor: prior === null ? null : prior.value,
+    frozen: { families: frozen.families, n_questions: frozen.list.entries.length } });
+  if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));
+  return printWithSha(final);
+}
+
+/** `open --draft | --finalize | --template` (W2-D25): writes no file. */
+export async function openCommand(flags, driverEnv, deps = { seed: drawSeedHex, now: () => Date.now() }) {
+  const modes = ['draft', 'finalize', 'template'].filter((m) => flags[m] === true);
+  if (modes.length !== 1) refuse('args-invalid', 'open wants exactly one of --draft, --finalize and --template');
+  if (modes[0] === 'template') {
+    checkFlags('open --template', flags);
+    process.stdout.write(canonicalJson(openTemplate()) + '\n');
+    return EXIT.OK;
+  }
+  return modes[0] === 'draft' ? openDraft(flags, driverEnv, deps) : openFinalize(flags, driverEnv, deps);
+}
+
+/** The presence directory's mtime: every write of the one writer renames into it (W2-D28), so it is the newest write. */
+function newestPresenceWrite(home) {
+  let st;
+  try {
+    st = lstatSync(historyPaths(home).recallOffDir);
+  } catch (e) {
+    return e?.code === 'ENOENT' ? { state: 'absent' } : { state: 'unmeasured', code: errCode(e) };
+  }
+  return st.isDirectory() ? { state: 'value', ms: st.mtimeMs } : { state: 'unmeasured', code: 'not-a-directory' };
+}
+/** status's recall_off.seen_ms, from the store's presence meta rows through lib's own reader (W2-D31), on the run's one
+ *  open store. */
+function presenceSeenMs(rs) {
+  const rows = rs.db.prepare('SELECT k, v FROM meta WHERE substr(k, 1, ?) = ?').all(RECALL_OFF_META.length, RECALL_OFF_META);
+  return recallOffStatusOf(new Map(rows.map((r) => [String(r.k), String(r.v)]))).seen_ms;
+}
+
+async function verifyRegistry(flags, env) {
+  checkFlags('verify --registry', flags);
+  const home = subcommandHome(env);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (verify --registry)
+  const census = loadInputs(flags, 'census', OUT_STREAM_CAP);
+  if (census.length !== 1) refuse('args-invalid', 'verify --registry reads one census, this node\'s');
+  const c = census[0];
+  const bad = censusError(c.value);
+  if (bad !== null) refuse('input-invalid', `census shape ${bad}`);
+  const storeId = nodeStoreId(home);
+  requireNamedNode(rec.record, storeId);
+  if (c.value.store_id !== storeId) refuse('input-invalid', `census store-id ${c.value.store_id} is not this node's store ${storeId}`);
+  let act;
+  try {
+    act = activeFamilies(storeId, c.value.census, { lookbackMs: rec.record.active_rule.lookback_ms });
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    refuse('input-invalid', `census ${storeId} ${e.message}`);
+  }
+  const reg = historyPaths(home).reg;
+  const families = act.active.map((f) => {
+    if (!idOk(f.ccrc_id)) refuse('input-invalid', `census family id ${JSON.stringify(f.ccrc_id)} is not a session id`);
+    return { ccrc_id: f.ccrc_id, generation: f.generation, state: registryStateOf(readRegPresence(path.join(reg, `${f.ccrc_id}.generation`)), f.generation) };
+  });
+  return printWithSha(verifyRegistryReport({ recordSha256: rec.sha256, storeId, censusSha256: c.sha256, lookbackMs: rec.record.active_rule.lookback_ms, families }));
+}
+
+async function verifyAb(flags, env) {
+  checkFlags('verify --section ab', flags);
+  const home = subcommandHome(env);
+  const rec = loadRecordInput(flags, 'final');
+  recheckCode(rec.record);   // W2-D24 (verify --section ab)
+  const rs = openReplayStore(home);   // the run's one store open (R3)
+  try {
+    const storeId = rs.storeId;
+    requireNamedNode(rec.record, storeId);
+    const families = rec.record.assignment.filter((a) => a.store_id === storeId).map((a) => {
+      if (!idOk(a.ccrc_id)) refuse('input-invalid', `assignment family id ${JSON.stringify(a.ccrc_id)} is not a session id`);
+      return { ccrc_id: a.ccrc_id, generation: a.generation, arm: a.arm, state: abStateOf(a.arm, a.generation, controlFileOf(home, a.ccrc_id)) };
+    });
+    const newest = newestPresenceWrite(home);
+    const seen = presenceSeenMs(rs);
+    return printWithSha(verifyAbReport({ recordSha256: rec.sha256, storeId, families, newest, seen }));
+  } finally {
+    rs.close();
+  }
+}
+
+/** `verify --registry | --section ab` (W2-D84, this PR's half): read-only on one node; a finding is data, exit 0. */
+export async function verifyCommand(flags, env) {
+  const registry = flags.registry === true;
+  if (registry === (flags.section !== undefined)) refuse('args-invalid', 'verify wants exactly one of --registry and --section');
+  if (registry) return verifyRegistry(flags, env);
+  if (flags.section !== 'ab') refuse('args-invalid', `section ${JSON.stringify(flags.section)}: this build verifies ab only`);
+  return verifyAb(flags, env);
+}
+
+HANDLERS.set('pilot-source', (flags, env) => pilotSourceCommand(flags, env));
+HANDLERS.set('quiz-source', (flags, env) => quizSourceCommand(flags, env));
+HANDLERS.set('freeze', freezeCommand);
+HANDLERS.set('power', powerCommand);
+HANDLERS.set('open', (flags, env) => openCommand(flags, env));
+HANDLERS.set('verify', verifyCommand);
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
