@@ -13,6 +13,8 @@ import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { pageAt, treeOk, treeResponse } from './docsFixtures';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
 
 // The bell renders only where the browser can push; this one can, so a bell left in the header would show.
 vi.mock('../src/lib/push', () => ({
@@ -29,6 +31,14 @@ const { useFleetStore } = await import('../src/stores/fleet');
 const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
+const { DocsHead } = await import('../src/docs/DocsHead');
+
+/** A Docs visit whose actions are inert: the up door reads only the page. */
+const docsVisit = (): DocsVisit => ({
+  tree: { s: 'ok', answer: treeResponse(treeOk()), receivedAt: Date.now() },
+  file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+  retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+});
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
@@ -173,7 +183,7 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it('the gauges grid has one gauge per lane, two columns, each a door to /accounts', async () => {
+  it('the gauges grid has one gauge per lane, two columns, the grid one door to /accounts', async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
@@ -228,7 +238,17 @@ describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row
   });
 
   it("the Docs index's up door, whose target is the fleet, carries go-fleet; deeper up doors do not", () => {
-    const code = readFileSync(path.join(SRC, 'docs', 'DocsHead.tsx'), 'utf8');
-    expect(code).toMatch(/className="docs-back"[\s\S]{0,400}doorMark\('go-fleet'\)/);
+    const upDoor = (url: string): HTMLElement => {
+      cleanup();
+      const visit = { ...docsVisit(), tree: null };
+      render(<DocsHead page={pageAt(url)} visit={visit} tree={null} />);
+      const b = document.querySelector<HTMLElement>('.docs-back');
+      expect(b, url).not.toBeNull();
+      return b!;
+    };
+    expect(upDoor('/docs')).toHaveAttribute('data-command', 'go-fleet');
+    for (const url of ['/docs/demo', '/docs/demo/specs', '/docs/demo/specs/a.md']) {
+      expect(upDoor(url), url).not.toHaveAttribute('data-command');
+    }
   });
 });

@@ -266,7 +266,9 @@
   align-items: center;
   gap: var(--sp-2);
 }
-/* A finger's square: the glyph centred, the badge pinned to its corner so a three-digit count never widens the row. */
+/* A finger's square: the glyph centred, the badge pinned to its corner so a three-digit count never widens the row.
+   The badge starts at the glyph's middle, so a "99+" covers only the glyph's top-right corner (the glyph is the door's
+   only visible label); what it sticks out over the gap stays the door's neighbour's to tap. */
 .ref-phone-door {
   position: relative;
   padding: 0;
@@ -274,7 +276,8 @@
 .ref-phone-badge {
   position: absolute;
   top: 2px;
-  right: -2px;
+  left: calc(50% + 1px);
+  pointer-events: none;
 }
 .ref-phone-sub {
   display: flex;

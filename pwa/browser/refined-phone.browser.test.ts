@@ -98,7 +98,15 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           }
           const badge = row.querySelector<HTMLElement>('.ref-phone-badge');
           if (badge === null) out.push('no badge on Inbox');
-          else if (badge.getBoundingClientRect().right > rr.right + 0.5) out.push('the badge is cut');
+          else {
+            const br = badge.getBoundingClientRect();
+            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            // The glyph is the door's only visible label: a "99+" may sit on its top-right corner, never its middle.
+            const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
+            const cx = (g.left + g.right) / 2;
+            const cy = (g.top + g.bottom) / 2;
+            if (br.left < cx - 0.5 || br.bottom > cy + 0.5) out.push(`the badge covers the glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+          }
           const sub = document.querySelector<HTMLElement>('.ref-phone-sub .fleet-count');
           if (sub === null) out.push('no readout');
           else if (sub.getClientRects().length !== 1) out.push('the readout wraps');
@@ -160,7 +168,9 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
     const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width: 390 }, FIXTURE);
     try {
       await page.goto(server!.origin + '/');
-      await page.waitForFunction(() => document.querySelectorAll('.proj-card, tr').length > 0, undefined, { timeout: 20_000 });
+      // Wait on the fleet itself, not one grouping's rows: the list may open grouped by status or by project.
+      await page.waitForFunction(() => document.querySelector('.fleet-head') !== null && document.querySelector('.fab') !== null
+        && document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
       const seen = await page.evaluate(() => ({
         head: document.querySelectorAll('.fleet-head').length,
         fab: document.querySelectorAll('.fab').length,
