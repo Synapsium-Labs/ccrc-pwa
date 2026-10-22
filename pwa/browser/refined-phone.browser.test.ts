@@ -1,13 +1,15 @@
-// Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, D-6466), in a
-// real Chrome over the production build.
+// Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, D-6466), in
+// a real Chrome over the production build.
 //
 // What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Inbox count and five lanes, the
 // header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
-// line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its end and sits
-// above the home indicator, a toast's host sits above it, and the page does not scroll sideways. At 900, 1280 and 1920
-// no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round `+` (S11).
+// line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
+// end and sits above the home indicator, a toast's host sits above it, and the page does not scroll sideways. At 900,
+// 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
+// `+` (S11).
 //
-// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
+// vitest.browser.config.ts browser/refined-phone.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';

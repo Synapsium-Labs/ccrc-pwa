@@ -2,10 +2,10 @@
 //
 // What a person on a phone sees first, held through `App` in the Refined skin: one header row of the wordmark and four
 // icon doors (each a registry command, each named by its word, a badged one by its count too), one mono readout under
-// it from `fleetSummary`, the full accounts strip (each lane's 5h and 7d rows, the strip one `go-accounts` door), and an
-// extended `+ New` in the thumb's corner that publishes its height so a toast clears it. jsdom applies no media queries and no layout, so a width is a `matchMedia` stub that
-// answers every `min-width` and `max-width` query against one number, and what this file counts is what is MOUNTED;
-// what is visible at each width is the per-width render pass.
+// it from `fleetSummary`, the full accounts strip (each lane's 5h and 7d rows, the strip one `go-accounts` door), and
+// an extended `+ New` in the thumb's corner that publishes its height so a toast clears it. jsdom applies no media
+// queries and no layout, so a width is a `matchMedia` stub that answers every `min-width` and `max-width` query against
+// one number, and what this file counts is what is MOUNTED; what is visible at each width is the per-width render pass.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
