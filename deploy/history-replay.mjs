@@ -2831,7 +2831,7 @@ export function renderKeptMember(row, k, idx) {
     const field = { text: p.text, rawLen: k.rawLen };
     const r = p.type === 'tool_result' ? toolResultText(field, idx) : redactForSpawn(field, idx);
     if (r.state !== 'text') return r;
-    lines.push(p.type === 'tool_result' ? `[tool_result] ${r.text}` : p.tagged ? `[${row.type}] ${r.text}` : r.text);
+    lines.push(p.type === 'tool_result' ? `[tool_result] ${r.text}` : p.tagged ? `[${redactFinalJson(row.type, idx)}] ${r.text}` : r.text);
   }
   return { state: 'text', text: lines.join('\n') };
 }
@@ -4251,7 +4251,8 @@ export function writerInputOf(item, writerInput, idx) {
     if (item.pair !== null) {
       const input = writerField(item.pair.input, idx);
       if (input.state === 'discard') return { state: 'discard', why: input.why };
-      pairLine = cpSlice(Array.from(renderToolUseLine(item.pair.name, input.text)), 0, WRITER_PAIR_CAP);
+      // D-6308: the tool's name is stored data too (mining takes it from the block), masked as a value like its input.
+      pairLine = cpSlice(Array.from(renderToolUseLine(redactFinalJson(item.pair.name, idx), input.text)), 0, WRITER_PAIR_CAP);
     }
   } else {
     const texts = [];

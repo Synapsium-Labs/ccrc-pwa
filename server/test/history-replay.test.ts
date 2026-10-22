@@ -8584,7 +8584,7 @@ function w6ErrorIf<T extends object>(on: boolean, row: T): T {
  *  site and then discards the whole boundary as `body-unrenderable`. `nl` (D-6308): the tool_use input also carries a
  *  `note` whose lines follow a newline, each a key (`lines`), and the tool_result is an error, so an error fact pairs with it. */
 function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pkg-a', dropThenDeep = false, key: string | null = null,
-  nl: { lines: string[]; token: string } | null = null, legacy = false): W6SourceBox {
+  nl: { lines: string[]; token: string; toolName?: string } | null = null, legacy = false): W6SourceBox {
   const box = w5a1H.makeHistoryBox(prefix);
   const cwd = join(box.home, 'tree', 'demo');
   mkdirSync(cwd, { recursive: true });
@@ -8600,7 +8600,7 @@ function w6SourceBox(prefix: string, cmd = 'npm run fixture-build --workspace pk
   const DEEP_TEXT = `${'{"a":'.repeat(10_000)}"leaf"${'}'.repeat(10_000)}`;
   const rows = [
     w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fixture package' }),
-    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
+    w5a1Fx.toolUseRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_w5a6_2', toolUseId: 'toolu_01W5A6', name: nl?.toolName ?? 'Bash', input: { command: dropThenDeep ? 'ls -la' : cmd, ...(key === null ? {} : { env: `AWS_ACCESS_KEY_ID=${key}` }),
       ...(nl === null ? {} : { note: ['first line', ...nl.lines].join('\n') }) } }),
     ...(dropThenDeep ? [w5a1Fx.toolUseRow({ ...base, uuid: u(8), ts: ts(2), parentUuid: u(2), msgId: 'msg_w5a6_8', toolUseId: 'toolu_02W5A6', name: 'Bash', input: { command: cmd, nest: DEEP_MARK } })] : []),
     w6ErrorIf(nl !== null, w5a1Fx.toolResultRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: dropThenDeep ? u(8) : u(2), toolUseId: 'toolu_01W5A6',
@@ -9959,17 +9959,23 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     // sit after a newline in one input (a pair-index value, AKIA-, ghp_- and sk-ant-shaped), the failing tool_result pairs an
     // error fact with that tool_use, and the real sourceQuiz and writer stub run under both writer inputs: under excerpt the
     // pair line carries the input, under leaf-span the span's rendering of the row does.
-    const nlKeys7 = (): { token: string; lines: string[]; kinds: Array<[string, string]> } => {
-      const token = ['zq', 'nl', 'pair', 'index', 'value', 'n7x2k9'].join('');   // a pair-index value: 20 or more characters, one run
+    const nlKeys7 = (): { token: string; lines: string[]; toolName: string; kinds: Array<[string, string]> } => {
+      // A pair-index value: 20 or more characters, one run. End to end the file-backed index carries lib's belt, which masks it
+      // even glued, so this kind does not discriminate here; it leaks at unit level with makePairIndex alone (a recorded-only
+      // pair whose secret file is no longer loaded), which the fix-wave describe pins.
+      const token = ['zq', 'nl', 'pair', 'index', 'value', 'n7x2k9'].join('');
       const akia = w6Akia('NLAKIA1');
       const ghp = ['gh', 'p_'].join('') + 'Nl4Fw8Qz2Lm7Xr3TnV9bYc1HdS6uJe5Pa0o';
       const sk = ['sk', '-ant-'].join('') + 'api03-Zr7Qm2LkV9xTb4HnYc8Wd';
-      return { token, lines: [token, akia, ghp, sk], kinds: [['pair-index', token], ['AKIA', akia], ['ghp_', ghp], ['sk-ant', sk]] };
+      // The tool's own name is stored data too (R1): a key-shaped one, separated by a space, must not reach the excerpt's pair line.
+      const named = w6Akia('FWNAME1');
+      return { token, lines: [token, akia, ghp, sk], toolName: `mcp ${named}`,
+        kinds: [['pair-index', token], ['AKIA', akia], ['ghp_', ghp], ['sk-ant', sk], ['tool name', named]] };
     };
     const windows7 = (key: string): string[] => Array.from({ length: key.length - 7 }, (_, i) => key.slice(i, i + 8));
     (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('D-6308: four key kinds after a JSON newline in a tool_use input reach neither the writer stdin nor any file under --out, writer input %s', async (writerInput) => {
       const k = nlKeys7();
-      const sb = w6SourceBox('ccrc-w2-5a-fw-nl-', undefined, false, null, { lines: k.lines, token: k.token });
+      const sb = w6SourceBox('ccrc-w2-5a-fw-nl-', undefined, false, null, { lines: k.lines, token: k.token, toolName: k.toolName });
       const home = sb.box.home;
       node7(home);
       r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
@@ -9982,7 +9988,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(r.refusal).toBeNull();
       const stdins = (printRuns(home) as Array<{ stdin: string }>).map((e) => e.stdin);
       r7expect(stdins.length, 'CONTROL: the writer ran').toBeGreaterThan(0);
-      r7expect(stdins.some((t) => t.includes('[tool_use Bash]')), 'CONTROL: a writer input carries the tool_use that holds the keys').toBe(true);
+      r7expect(stdins.some((t) => t.includes('[tool_use mcp ')), 'CONTROL: a writer input carries the tool_use that holds the keys, under its masked name').toBe(true);
       const walk = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
         .flatMap((d) => (d.isDirectory() ? walk(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
       const files = walk(out);
@@ -10443,6 +10449,28 @@ describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', ()
     expect(seen.some((t) => t.includes(t4Lib.REDACTED_MARK)), 'CONTROL: the keys were masked, not dropped').toBe(true);
   });
 
+  it('R1: the excerpt\'s pair line masks the tool\'s name like its input: a key-shaped name, separated, is absent from the excerpt; CONTROL: the name is in the mined item', () => {
+    const named = w6Akia('FWNAME2');
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('fwn', `mcp ${named}`, { command: 'npm run fixture-build-all' })] },
+      { provenance: 'tool', body: [w5a2Result('fwn', 'Error: fixture build step failed badly', true)] },
+    ]);
+    const c = (w5a2MinedOf(w5a2Mine(sp)).candidates as unknown as Array<Record<string, any>>).find((x) => x.kind === 'error')!;
+    expect(c.pair.name, 'CONTROL: the mined item carries the name').toContain(named);
+    const r = replay.writerInputOf(c as never, 'excerpt', FW_IDX) as { state: string; input: { excerpt: string } };
+    expect(r.state).toBe('input');
+    expect(r.input.excerpt, 'CONTROL: the pair line is there').toContain('[tool_use mcp ');
+    expect(Array.from({ length: named.length - 7 }, (_, k) => named.slice(k, k + 8)).filter((w) => r.input.excerpt.includes(w)), 'no 8-character window of the name').toEqual([]);
+  });
+
+  it('R1: renderKeptMember masks the row\'s role tag too: a key-shaped row type is absent from the rendering; CONTROL: the tag is there', () => {
+    const named = w6Akia('FWTYPE1');
+    const r = replay.renderKeptMember({ type: `x ${named}` }, { body: 'hello there', rawLen: 11 } as never, FW_IDX) as { state: string; text: string };
+    expect(r.state).toBe('text');
+    expect(r.text, 'CONTROL: the tag and the text are there').toMatch(/^\[x .*\] hello there$/);
+    expect(Array.from({ length: named.length - 7 }, (_, k) => named.slice(k, k + 8)).filter((w) => r.text.includes(w))).toEqual([]);
+  });
+
   it('renderKeptMember: a tool_use input, an object tool_result content, a nested tool_use in a result, and an object body each mask the keys', () => {
     const idx = FW_IDX;
     const note = { note: FW_NOTE };
@@ -10480,7 +10508,7 @@ describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', ()
     expect(replay.screenRedaction({ ...c, repo_roots: ['/home/u/tree', `/home/${FW_AKIA}/tree`] } as never, FW_IDX)).toBe('redact-fact');
   });
 
-  it('a body nested past the stack is a counted discard at the writer, never a throw: writer-input-unrenderable, the last of FACT_DROP_REASONS', () => {
+  it('a body nested past the stack is a counted discard at the writer, never a throw: writer-input-unrenderable', () => {
     let deep: unknown = 'leaf';
     for (let i = 0; i < 10_000; i += 1) deep = { a: deep };
     const c = mined().find((x) => x.kind === 'command')!;
@@ -10488,7 +10516,8 @@ describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', ()
     expect(replay.writerInputOf(item as never, 'leaf-span', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
     const pair = { ...c, pair: { name: 'Bash', input: { text: 'x', rawLen: 1, value: deep } } };
     expect(replay.writerInputOf(pair as never, 'excerpt', FW_IDX)).toEqual({ state: 'discard', why: 'writer-input-unrenderable' });
-    expect(replay.FACT_DROP_REASONS.slice(16, 18), 'appended in place after writer-input-over-cap (R5)').toEqual(['writer-input-over-cap', 'writer-input-unrenderable']);
+    expect(replay.FACT_DROP_REASONS.slice(16), 'appended in place after Task 5\'s words, each pinned by name (R5)')
+      .toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced', 'sha-short']);
   });
 });
 
@@ -10523,6 +10552,7 @@ describe('W2-5a fix wave, D-6309: the leaf-span base is JSON, so a fact is place
       expect(replay.writerInputOf({ ...c, fact_raw: 'never in the text' } as never, w, FW_IDX), w).toEqual({ state: 'discard', why: 'writer-fact-unplaced' });
     }
     expect(replay.FACT_DROP_REASONS.slice(16, 19), 'R5').toEqual(['writer-input-over-cap', 'writer-input-unrenderable', 'writer-fact-unplaced']);
+    expect(replay.FACT_DROP_REASONS.at(-1), 'D-6312\'s word follows').toBe('sha-short');
   });
 });
 
