@@ -11782,3 +11782,37 @@ describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsO
       .toEqual({ value: G2, via: 'env' });
   });
 });
+
+describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env anchor as stored, and the tmux registry text trimmed (W2-D40, W2-D41; D-5767)', () => {
+  const v = (value: string): libScope.Presence<string> => ({ state: 'value', value });
+  const at = (source: string, workdir: libScope.Presence<string>): unknown => libScope.decideScope({
+    source, id: 'claude-a-demo', generation: { value: null, via: 'newest' },
+    flags: { project: false, workspace: true, session: null },
+    reg: { project: v('demo'), workdir, sessionProject: null },
+  });
+  const ok = (source: string, workdir: string): unknown =>
+    ({ ok: true, kind: 'workspace', source, id: 'claude-a-demo', generation: null, project: 'demo', workdir });
+  const refused = { ok: false, rc: 2, reason: 'workspace-unreadable' };
+
+  it('the env source returns the anchor untrimmed, a trailing or a leading space kept', () => {
+    expect(at('env', v('/t/a ')), 'env: a trailing space is part of the stored directory name').toEqual(ok('env', '/t/a '));
+    expect(at('env', v(' /t/a')), 'env: a leading space too').toEqual(ok('env', ' /t/a'));
+    expect(at('env', v('/t/a')), 'env: an anchor with none is unchanged').toEqual(ok('env', '/t/a'));
+  });
+
+  it('CONTROL: the tmux source with the same input returns it trimmed, as a registry file\'s text is', () => {
+    expect(at('tmux', v('/t/a ')), 'CONTROL: tmux trims a registry file\'s text').toEqual(ok('tmux', '/t/a'));
+    expect(at('tmux', v(' /t/a\n')), 'CONTROL: tmux trims both ends and the newline').toEqual(ok('tmux', '/t/a'));
+  });
+
+  it('the refusals stay under env: a blank or whitespace-only anchor, an absent one and an unreadable one are each workspace-unreadable', () => {
+    for (const [name, workdir] of [['empty', v('')], ['whitespace only', v('  \t')], ['absent', { state: 'absent' }], ['unreadable', { state: 'unreadable' }]] as const) {
+      expect(at('env', workdir), `env: ${name}`).toEqual(refused);
+      expect(at('tmux', workdir), `CONTROL tmux: ${name}`).toEqual(refused);
+    }
+    expect(libScope.decideScope({
+      source: 'env', id: 'claude-a-demo', generation: { value: null, via: 'newest' }, flags: { project: false, workspace: true, session: null },
+      reg: { project: { state: 'absent' }, workdir: v('/t/a '), sessionProject: null },
+    }), 'env: the project refusal stays').toEqual(refused);
+  });
+});

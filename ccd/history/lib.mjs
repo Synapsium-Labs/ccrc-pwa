@@ -4560,7 +4560,9 @@ export function decideScope(i) {
     return verdict('project', {});
   }
   if (workspace) {
-    const workdir = presenceText(i.reg.workdir);
+    // D-6445: the env anchor is a stored cwd_real or cwd, matched as stored, so it keeps its edge whitespace; tmux's is a file's text.
+    const text = presenceText(i.reg.workdir);
+    const workdir = text !== null && i.source === SCOPE_SOURCES[1] ? i.reg.workdir.value : text;
     if (workdir === null || ownProject === null) return refuseScope('workspace-unreadable');
     return verdict('workspace', { workdir });
   }

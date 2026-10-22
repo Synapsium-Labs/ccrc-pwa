@@ -2205,6 +2205,51 @@ describe('W2-2b Task 3: the headless path, wired in the W2-D46 order (C4, C16, C
     expect(q(), 'one byte more: malformed, never read as a prefix').toEqual([2, 'headless-malformed']);
     armWith(f, f.list);
   }, 900_000);
+
+  it('seam workspace edge space: D-6445, --workspace on env matches the stored anchor untrimmed: the epoch ASOF sits in ran in "a ", so the scope is its families, never the sibling "a" in the same project', async () => {
+    const fx = await import('./historyFixtures.js');
+    const L = (await import('../../ccd/history/lib.mjs')) as unknown as { RECALL_ARMS: readonly string[] };
+    const XS = 'acct-a-seamxs';
+    const SPW = 'acct-a-seamsw';
+    const SPN = 'acct-a-seamsn';
+    const GXS = '0189abcd-1234-4678-9abc-00000000e211';
+    const GSW = '0189abcd-1234-4678-9abc-00000000e212';
+    const GSN = '0189abcd-1234-4678-9abc-00000000e213';
+    const TXS = 'e2b30011';
+    const TSW = 'e2b30012';
+    const TSN = 'e2b30013';
+    const box = makeHistoryBox('ccrc-hist-cli-seamsp-', { role: 'fleet', shim: true });
+    // Two real sibling directories whose names differ only by the space at the end; both resolve to themselves.
+    const spaced = path.join(fs.realpathSync(box.home), 'tree', 'a ');
+    const plain = path.join(fs.realpathSync(box.home), 'tree', 'a');
+    fs.mkdirSync(spaced, { recursive: true });
+    fs.mkdirSync(plain, { recursive: true });
+    healthHh.seedFamily(box, { id: XS, project: 'demo', uuid: u(TXS, 0), generation: GXS, rows: leafRows(fx, TXS, spaced, 'zqseamxs') });
+    healthHh.seedFamily(box, { id: SPW, project: 'demo', uuid: u(TSW, 0), generation: GSW, rows: plainRows(fx, TSW, spaced, 1, 'zqseamsw') });
+    healthHh.seedFamily(box, { id: SPN, project: 'demo', uuid: u(TSN, 0), generation: GSN, rows: plainRows(fx, TSN, plain, 1, 'zqseamsn') });
+    healthHh.plantSession(box, XS, { workdir: '/home/u/tree/elsewhere' });
+    const db = healthHh.openStoreRO(box);
+    try {
+      expect(db.prepare(`SELECT s.ccrc_id AS id, e.cwd AS cwd, e.cwd_real AS cwd_real FROM epochs e
+        JOIN sessions s ON s.session_pk = e.session_pk WHERE e.confirmed_ms IS NOT NULL AND s.ccrc_id IN (?, ?, ?) ORDER BY s.ccrc_id`).all(XS, SPW, SPN),
+      'CONTROL: the stored anchor keeps the space at its end, cwd verbatim and cwd_real resolved at ingest').toEqual([
+        { id: SPN, cwd: plain, cwd_real: plain },
+        { id: SPW, cwd: spaced, cwd_real: spaced },
+        { id: XS, cwd: spaced, cwd_real: spaced },
+      ]);
+    } finally {
+      db.close();
+    }
+    const marker = path.join(box.root, 'headless-on');
+    fs.writeFileSync(marker, markerText(metaStoreId(box), [[XS, GXS]]), { mode: 0o600 });
+    const env = { CCRC_RECALL_SESSION: XS, CCRC_RECALL_ARM: L.RECALL_ARMS[1]!, CCRC_RECALL_ASOF: u(TXS, 4) };
+    const r = healthHh.runCli(box, ['tree', '--workspace', '--json'], { env });
+    expect(ans(r), r.stderr).toEqual([0, undefined]);
+    expect(r.json?.['scope']).toMatchObject({ kind: 'workspace' });
+    const got = ((r.json?.['scope'] as { families?: Array<{ ccrc_id: string; generation: string }> }).families ?? [])
+      .map((x) => `${x.ccrc_id}:${x.generation}`).sort();
+    expect(got, 'the families whose epochs ran in "a "; never the sibling "a" of the same project').toEqual([`${SPW}:${GSW}`, `${XS}:${GXS}`]);
+  }, 900_000);
 });
 
 // ── W2-2b Task 3 (W2-D47): the box verbs ignore the seam (C28 extended) ──────────────────────────────────────────────
