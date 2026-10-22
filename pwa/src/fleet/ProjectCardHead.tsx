@@ -21,6 +21,7 @@ import { accountColorVar, accountLabel } from '../lib/accounts';
 import type { FleetGroup, FleetPin } from './groupFleet';
 import { POOL_UNAVAILABLE_TEXT } from './ProjectCard';
 import { formatAge } from './formatReset';
+import { actionDoor } from '../command/door';
 import './fleet.css';
 
 /** The project's measured route pool as one chip. A non-measured read yields
@@ -69,7 +70,7 @@ function PoolChip({ pool, project, dim, onTap }: {
       data-pool={dataPool}
       aria-label={label}
       title={label}
-      onClick={() => onTap(project)}
+      {...actionDoor('open-pool', () => onTap(project))}
     >
       {word}
     </button>

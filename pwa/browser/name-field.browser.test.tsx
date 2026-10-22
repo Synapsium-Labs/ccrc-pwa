@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
+import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { TEST_ROSTER } from '../test/rosterFixture';
@@ -71,6 +72,16 @@ const answerCreate = async (ctx: BrowserContext, status: number, body: unknown):
   }));
 };
 
+/** These cases measure the project cards, which Instrument draws in its project mode (D-5473): seed that mode before
+ *  the first paint. Refined ignores the key. */
+const openCards = async (view: AppView): ReturnType<typeof openApp> => {
+  const opened = await openApp(browser!, view, FIXTURE);
+  await opened.ctx.addInitScript((key) => {
+    try { localStorage.setItem(key, 'project'); } catch { /* no storage: Instrument opens on status */ }
+  }, GROUP_MODE_KEY);
+  return opened;
+};
+
 const PANEL = '.sheet-panel[data-state="open"]';
 const settle = async (page: Page): Promise<void> => {
   await page.locator(PANEL).waitFor({ timeout: 10_000 });
@@ -118,7 +129,7 @@ const whole = (m: Awaited<ReturnType<typeof measure>>, where: string, justOpened
 describe('the + sheet', () => {
   for (const view of VIEWS) {
     it(named(view), async () => {
-      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      const { ctx, page } = await openCards(view);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
         await page.goto(server!.origin + '/');
@@ -156,7 +167,7 @@ describe('the + sheet', () => {
 
   it('a taken slug keeps the sheet open with the text in the field', async () => {
     const view = VIEWS[1]!;
-    const { ctx, page } = await openApp(browser!, view, FIXTURE);
+    const { ctx, page } = await openCards(view);
     try {
       await answerCreate(ctx, 409, { ok: false, error: 'slug-taken' });
       await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -179,7 +190,7 @@ describe('the + sheet', () => {
 describe('the new-session sheet', () => {
   for (const view of VIEWS) {
     it(named(view), async () => {
-      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      const { ctx, page } = await openCards(view);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
         await page.goto(server!.origin + '/');
@@ -217,7 +228,7 @@ describe('the new-session sheet', () => {
 
   it('an account refusal returns to the account step with ccd\'s reason', async () => {
     const view = VIEWS[1]!;
-    const { ctx, page } = await openApp(browser!, view, FIXTURE);
+    const { ctx, page } = await openCards(view);
     try {
       await answerCreate(ctx, 409, { ok: false, error: 'account-refused', reason: 'claude9:auth-dead' });
       await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -240,7 +251,7 @@ describe('the new-session sheet', () => {
     // Second blind review, S4-1: the error line sat 14px over the "Class" label. Footer and divider are the sheets' own
     // (no pinned-footer sheet has a divider), so only the spacing is this field's.
     for (const view of [VIEWS[0]!, VIEWS[1]!]) {
-      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      const { ctx, page } = await openCards(view);
       try {
         await answerCreate(ctx, 409, { ok: false, error: 'slug-taken' });
         await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -266,7 +277,7 @@ describe('the new-session sheet', () => {
 
   it('an overflow account closes the door with its sentence', async () => {
     const view = VIEWS[1]!;
-    const { ctx, page } = await openApp(browser!, view, FIXTURE);
+    const { ctx, page } = await openCards(view);
     try {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.goto(server!.origin + '/');
@@ -334,7 +345,7 @@ describe('a request in flight', () => {
   for (const door of ['the + sheet', 'the new-session sheet'] as const) {
     it(`${door} dims the field, which is disabled and holds no focus`, async () => {
       const view = VIEWS[1]!;
-      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      const { ctx, page } = await openCards(view);
       let release: () => void = () => {};
       const gate = new Promise<void>((resolve) => { release = resolve; });
       try {
@@ -386,7 +397,7 @@ describe('a lookup answer does not move the sheet', () => {
   for (const view of VIEWS) {
     for (const door of ['the + sheet', 'the new-session sheet'] as const) {
       it(`${door}, ${named(view)}`, async () => {
-        const { ctx, page } = await openApp(browser!, view, FIXTURE);
+        const { ctx, page } = await openCards(view);
         try {
           await answerResolve(ctx);
           await page.emulateMedia({ reducedMotion: 'reduce' });
