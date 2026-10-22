@@ -2762,6 +2762,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `ccd ws-add` floor (9.9G), waiting on another coordinator's worktree cleanup. Server 14460M free. STATUS: fleet
         and server v0.0.559, newest v0.0.570, stable v0.0.502, intent dev/auto=off, backups fleet 230M/server 16763M,
         disk free fleet 167G/work volume 10G/server 15G.
+      - 17:55: an operator tap moved both boxes to v0.0.570. The fleet box went 17:00:45 to 17:03:06, its sweep
+        skipping the same three long-failed units, then the server 17:03:18 to 17:07:03, sweep ok. Both read `done`,
+        and the watchdog had nothing to do. This was the first tap since the keep of 5, and it held: 5 dated backups,
+        9208M (10 at 16763M before), and the server has 21996M free. Nothing in v0.0.560 to v0.0.570 touches the
+        broker's lane or the snapshot helper. After the restart (17:05:27), five broker passes were cut at their 45 s
+        budget before the first full one (17:11:47, block 4.9 s). That is about the six minutes the morning's boots
+        took. Sent to the broker's coordinator. v0.0.571 (#1146, a plan) and v0.0.572 (#1134, history tooling) are
+        unapplied. The work volume is back to 17G as another coordinator's worktree cleanup runs. STATUS: fleet and
+        server v0.0.570, newest v0.0.572, stable v0.0.502, intent dev/auto=off, backups fleet 231M/server 9209M, disk
+        free fleet 165G/work volume 17G/server 22G, no anomalies.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
