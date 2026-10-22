@@ -669,53 +669,72 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(wf()).toMatch(/fetch-depth: 0/);
   });
 
-  it('runs prepare, attests, then publish — the bundle path handed to the script, the attest step skipped when nothing was built (D-3122)', () => {
+  it('runs prepare, compare, attests, then publish — the bundle path handed to the script, the attest step run only on an explicit release decision (D-3122, D-6499)', () => {
     const src = wf();
     expectAttestingWorkflow(src, 'release-main.yml');
     expect(src).toContain('bash deploy/release-main.sh prepare --out release-out');
+    expect(src).toContain('bash deploy/release-main.sh compare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh publish --out release-out');
-    expect(src).toContain("if: hashFiles('release-out/ccrc-*.tar.gz') != ''");
+    expect(src).toContain("if: steps.compare.outputs.release == 'true'");
+    expect(src).not.toContain('hashFiles');
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
     const prepare = src.search(/^        run: bash deploy\/release-main\.sh prepare /m);
+    const compare = src.search(/^        run: bash deploy\/release-main\.sh compare /m);
     const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
     const publish = src.search(/^        run: bash deploy\/release-main\.sh publish /m);
     expect(prepare).toBeGreaterThan(-1);
-    expect(attest).toBeGreaterThan(prepare);
+    expect(compare).toBeGreaterThan(prepare);
+    expect(attest).toBeGreaterThan(compare);
     expect(publish).toBeGreaterThan(attest);
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
   });
 
-  // W25 (D-6397, D-6401): the decision is its own step, before the toolchain.
+  // W25 (D-6397, D-6401, D-6499): every merge builds, then compare decides.
   it('W25-Y1: no trigger filter — a paths list would be a second, hand-kept list, judged over the push\'s own range', () => {
     expect(wf()).not.toMatch(/^\s+paths(-ignore)?:/m);
   });
 
-  it('W25-Y2: the decide step holds the job\'s only pre-publish token, and runs the first arm', () => {
-    expect(wf()).toMatch(/^      - name: Decide whether this merge changes what ships\n        id: decide\n        continue-on-error: true\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh decide --out release-out$/m);
+  it('W25-Y2: the compare step holds the token for the base check and the download, and runs the second arm', () => {
+    expect(wf()).toMatch(/^      - name: Compare the build with the newest release it contains\n        id: compare\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh compare --out release-out$/m);
   });
 
-  it('W25-Y3: decide runs before setup-node, which a skipped merge leaves out', () => {
+  it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, attest, publish — and setup-node carries no condition', () => {
     const src = wf();
-    const setup = src.indexOf("      - uses: actions/setup-node@v4\n        if: steps.decide.outputs.build != 'false'\n");
-    const decide = src.search(/^        run: bash deploy\/release-main\.sh decide /m);
-    const prepare = src.search(/^        run: bash deploy\/release-main\.sh prepare /m);
-    expect(setup, 'setup-node is gated on decide\'s output').toBeGreaterThan(-1);
-    expect(decide).toBeGreaterThan(-1);
-    expect(decide).toBeLessThan(setup);
-    expect(setup).toBeLessThan(prepare);
+    const at = (re: RegExp): number => src.search(re);
+    const order = [
+      at(/^      - uses: actions\/checkout@v4$/m),
+      at(/^      - uses: actions\/setup-node@v4$/m),
+      at(/^        run: bash deploy\/release-main\.sh prepare /m),
+      at(/^        run: bash deploy\/release-main\.sh compare /m),
+      at(/^      - uses: actions\/attest-build-provenance@v4$/m),
+      at(/^        run: bash deploy\/release-main\.sh publish /m),
+    ];
+    expect(order.every((i) => i > -1), `every step is present: ${order.join(',')}`).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    const setup = src.indexOf('      - uses: actions/setup-node@v4\n');
+    const setupBlock = src.slice(setup, src.indexOf('\n      - ', setup + 1));
+    expect(setupBlock, 'setup-node runs on every merge').not.toMatch(/^\s+if:/m);
   });
 
-  it('W25-Y4: the step that installs carries no token and no expression', () => {
+  it('W25-Y4: GH_TOKEN reaches compare and publish only; the step that installs has no env, no expression, and nothing continues on error', () => {
     const src = wf();
-    const from = src.indexOf('      - name: Derive the next tag and build the artifact');
-    expect(from).toBeGreaterThan(-1);
-    const rest = src.slice(from + 1);
-    const next = rest.indexOf('\n      - ');
-    const block = rest.slice(0, next === -1 ? undefined : next);
-    expect(block).not.toContain('env:');
-    expect(block).not.toContain('${{');
+    expect(src.match(/^\s+GH_TOKEN:/gm) ?? [], 'exactly two GH_TOKEN lines: compare and publish').toHaveLength(2);
+    const stepBlock = (name: string): string => {
+      const from = src.indexOf(`      - name: ${name}`);
+      expect(from, `step ${name} is present`).toBeGreaterThan(-1);
+      const rest = src.slice(from + 1);
+      const next = rest.indexOf('\n      - ');
+      return rest.slice(0, next === -1 ? undefined : next);
+    };
+    expect(stepBlock('Compare the build with the newest release it contains')).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(stepBlock('Push the tag and publish the prerelease')).toContain('GH_TOKEN: ${{ github.token }}');
+    const prepare = stepBlock('Derive the next tag and build the candidate');
+    expect(prepare).not.toContain('env:');
+    expect(prepare).not.toContain('${{');
+    expect(prepare).not.toContain('GH_TOKEN');
+    expect(src).not.toContain('continue-on-error');
   });
 });
 

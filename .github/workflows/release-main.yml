@@ -1,10 +1,12 @@
-# Every merge to main that changes what ships becomes a PRERELEASE carrying
-# a provenance bundle (designs 2026-09-18 §3 and 2026-09-20 §4). Thin by design, like release.yml:
-# deploy/release-main.sh owns the derivation, the local tag, the build, the
-# push and the publish — in TWO ARMS, so the attest ACTION can run between
-# them — and both arms are tested locally (server/test/release-main.test.ts).
-# The two expressions this file decides, setup-node's `if:` and the attest
-# step's `if:`, are pinned in server/test/build-release.test.ts.
+# Every merge to main whose build differs from the newest release it contains
+# becomes a PRERELEASE carrying a provenance bundle (designs 2026-09-18 §3 and
+# 2026-09-20 §4). Thin by design, like release.yml: deploy/release-main.sh owns
+# the derivation, the local tag, the build, the comparison, the push and the
+# publish — in THREE ARMS, so the attest ACTION can run between the comparison
+# and the publish — and all three are tested locally
+# (server/test/release-main.test.ts). The expression this file decides, the
+# attest step's `if:`, and the step order and token placement are pinned in
+# server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge (spec §2, decision 4). There is no post-merge test run to
@@ -49,35 +51,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The next tag is derived from the highest existing one, and the
-          # release script names the artifact by `git tag --points-at HEAD`:
-          # both need the tags present, not a shallow single-commit fetch.
+          # The next tag is derived from the highest existing one, the base is
+          # the newest release tag this commit contains, and the release script
+          # names the artifact by `git tag --points-at HEAD`: all three need the
+          # tags and the history present, not a shallow single-commit fetch.
           fetch-depth: 0
 
-      # Decide first, with the runner's own node, as release-stable.yml's gate
-      # does: does this merge change what ships? GH_TOKEN serves only the
-      # published-base check, and it is not passed to the helpers'
-      # environment. This step installs nothing. A merge that changes
-      # nothing that ships skips the toolchain and its cache below (D-6401).
-      # The base tag's own classifier runs only after HEAD's answered
-      # unchanged against that tag, and since deploy/ ships, its bytes then
-      # equal HEAD's (D-6402). The checkout's persisted credential and the
-      # job's OIDC request token still reach every step, as before this wave
-      # (D-6405). The step continues on error: a decide that crashes must not
-      # block a code merge's release, so its output is then absent, the
-      # toolchain step below still runs, and prepare, finding no decision
-      # recorded, releases as it always did.
-      - name: Decide whether this merge changes what ships
-        id: decide
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash deploy/release-main.sh decide --out release-out
-
-      # Only when a build follows: a skipped merge installs nothing, and the cache
-      # would have nothing to save.
+      # Every merge builds, so the toolchain is set up unconditionally: the
+      # release decision is made on the built artifact, not on which paths
+      # changed (D-6390, D-6401).
       - uses: actions/setup-node@v4
-        if: steps.decide.outputs.build != 'false'
         with:
           node-version-file: server/package.json
           cache: npm
@@ -87,28 +70,44 @@ jobs:
             pwa/package-lock.json
             ui/package-lock.json
 
-      # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing
-      # reaches origin here. On a merge decide skipped, it records that and
-      # builds nothing.
-      - name: Derive the next tag and build the artifact
+      # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds the candidate
+      # into release-out/candidate, outside the attest glob below. Nothing
+      # reaches origin here. The step has no env: it installs the dependencies,
+      # and it takes no token and runs no gh (D-6401).
+      - name: Derive the next tag and build the candidate
         run: bash deploy/release-main.sh prepare --out release-out
+
+      # Arm 2: sets the candidate against the newest release this commit
+      # contains, by a fingerprint of the two extracted tarballs (D-6390), and
+      # records `release=true` or `release=false`. Only a positive, exact,
+      # non-empty match skips; anything else releases (D-6393), as does a change
+      # to this workflow or to the script (D-6409). It holds the token for the
+      # published-base check and the download. It runs after the install in the
+      # same job, so it is not a boundary against a hostile dependency: two
+      # credentials already reach every step (D-6405). A crash here fails the
+      # job before the attest step, with nothing pushed (D-6499).
+      - name: Compare the build with the newest release it contains
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash deploy/release-main.sh compare --out release-out
 
       # Keyless provenance (design 2026-09-20 §4, §5): THIS workflow's OIDC
       # identity at refs/heads/main signs the tarball's digest; the bundle
       # is published beside the tarball and every `ccrc update` verifies it
       # against exactly this identity (…/release-main.yml@refs/heads/main).
-      # Skipped when prepare built nothing — an already-tagged HEAD is
-      # release.yml's, or prepare cut no release because nothing that ships
-      # changed — because the action refuses an empty subject glob;
-      # `hashFiles` is '' when nothing matches.
+      # Runs only on an explicit release decision (D-6499): a skipped build is
+      # never attested, an already-tagged HEAD is release.yml's, and the action
+      # refuses an empty subject glob.
       - uses: actions/attest-build-provenance@v4
         id: attest
-        if: hashFiles('release-out/ccrc-*.tar.gz') != ''
+        if: steps.compare.outputs.release == 'true'
         with:
           subject-path: release-out/ccrc-*.tar.gz
 
-      # Arm 2: copies the bundle to its release name, pushes the tag, publishes
-      # all three artifacts as a prerelease, deletes the tag on failure.
+      # Arm 3: copies the bundle to its release name, pushes the tag, publishes
+      # all three artifacts as a prerelease, deletes the tag on failure. On a
+      # skip it does nothing and the job ends green.
       - name: Push the tag and publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
