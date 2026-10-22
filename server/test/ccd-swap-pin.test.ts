@@ -243,31 +243,30 @@ const STUBS_CUR_AT_CEILING = (target = 'claude'): string =>
 const epoch = (): number => Math.floor(Date.now() / 1000);
 
 describe('D-6181 characterization: the pin', () => {
-  it('today: a pin minted 25 h ago, home recovered → pin-hold, no move', () => {
-    // The expiry field is written as the new cmd_swap would write it; today's
-    // reader does not look at it, so the pin holds however old it is.
+  it('flipped by D4 (was today: pin-hold, no move): a pin minted 25 h ago, home recovered → pin-expired, home', () => {
     seed(); sessionJson();
     h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 3600} ttl"`);
     tick();
-    expect(dispatches()).toEqual([]);
-    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
-    expect(pin()).toBe('claude-a');
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).toMatch(/pin-expired myid: pinned to claude-a until ttl/);
+    expect(swapLog()).not.toMatch(/pin-hold/);
+    expect(pin()).toBeNull();
   });
 
-  it('today: a pin on an account whose five reads 100 → pin-hold', () => {
+  it('flipped by D4 (was today: pin-hold): a pin on an account whose five reads 100 → the ceiling-leave runs', () => {
     seed(); sessionJson();
     h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 3600} ttl"`);
     tick(STUBS_CUR_AT_CEILING());
-    expect(dispatches()).toEqual([]);
-    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).not.toMatch(/pin-hold/);
   });
 
-  it('today: a pin minted while home’s seven read 99 with sevenResetAt passed → pin-hold', () => {
+  it('flipped by D4 (was today: pin-hold): a pin minted while home’s seven read 99 with sevenResetAt passed → pin-expired at that reset', () => {
     seed(); sessionJson();
     h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 60} reset"`);
     tick();
-    expect(dispatches()).toEqual([]);
-    expect(swapLog()).toMatch(/pin-hold myid: pinned to claude-a/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).toMatch(/pin-expired myid: pinned to claude-a until reset/);
   });
 });
 
@@ -487,14 +486,14 @@ describe('D-6181: the pin ends at its expiry', () => {
     h.sh(`rm -f "$REG/${ID}.swappinexp"`);
     tick();
     expect(h.reg(ID, 'swappinexp')).toBeNull();
-    // The marker is read on the tick, not cached: removed, the next tick expires.
+    // The marker is read on every call, never cached: one shell, the marker
+    // removed then put back, the same expired pin each time.
     fs.rmSync(reg('swap-pin-expiry-off'));
-    h.sh(`_reg_set ${ID} swappinexp "${epoch() - 60} ttl"
-          _now_s_to() { printf -v "$1" '%s' ${epoch()}; }
-          ${STUBS()} _auto_swap_check ${ID}; touch "$REG/swap-pin-expiry-off"; _reg_set ${ID} swappin claude-a
-          _reg_set ${ID} swappinexp "${epoch() - 60} ttl"; rm -f "$REG/${ID}.swappinnote"; _auto_swap_check ${ID}`);
+    h.sh(`_reg_set ${ID} swappinexp "${epoch() - 60} ttl"; _swap_pin_tick ${ID} claude-a
+          touch "$REG/swap-pin-expiry-off"; _reg_set ${ID} swappin claude-a
+          _reg_set ${ID} swappinexp "${epoch() - 60} ttl"; _swap_pin_tick ${ID} claude-a`);
     expect(swapLog().match(/pin-expired myid/g)).toHaveLength(1);
-    expect(swapLog().match(/pin-hold myid/g)).toHaveLength(3);
+    expect(pin()).toBe('claude-a');
   });
 });
 
@@ -528,7 +527,7 @@ describe('source pins: the two properties no fixture can observe', () => {
     expect(pinCheck, 'the pin check fell below the hold; keep it beside its own argument').toBeLessThan(hold);
   });
 
-  it('the pin carries no epoch, so nothing about it can expire or reach arithmetic', () => {
+  it('the pin itself carries no epoch: its expiry is its own field (D-6181), so the pin never reaches arithmetic', () => {
     // "The operator picked this account" does not become less true after an
     // hour. The file holds ONE account name; the end of a pin is a measurement
     // (`_swap_pin_tick`), never a clock — and a field with no number in it is a

@@ -18972,10 +18972,29 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
 # placement, never a reason to leave a limited one wedged. `_auto_swap_check`'s
 # own header makes the same split for the hold file, which sits on the next line.
 #
-# NO EPOCH, SO NO EXPIRY AND NO ARITHMETIC. The file holds one account name. A
-# pin does not time out, because "the operator picked this account" does not
-# become less true after an hour; it ends when the row is no longer on that
-# account, which is a MEASUREMENT (`_swap_pin_tick`) rather than a clock.
+# NO EPOCH IN THE PIN ITSELF. The file holds one account name, and it ends when
+# the row is no longer on that account, which is a MEASUREMENT
+# (`_swap_pin_tick`). It ALSO ends at its expiry (D-6181, D4's ruling: pins
+# that stuck for days were §2's fourth cause), which lives in its own field,
+# `swappinexp` (`_swap_pin_expiry_to`), so the pin's value never changes shape.
+# And it never holds a session on an account at its ceiling: `_swap_pinned`
+# reads `_avail`, the predicate the ceiling-leave itself uses. Both are off
+# while `$REG/swap-pin-expiry-off` stands (today's pin, read on every tick).
+_swap_pin_expiry_off() { [[ -e "$REG/swap-pin-expiry-off" || -L "$REG/swap-pin-expiry-off" ]]; }   # D-6181's brake: present -> today's pin
+
+# A LEGACY PIN (no `swappinexp`: minted before D-6181) is given one on the
+# first tick that reads it — never from its mtime — plus an offset from 0 to
+# SWAP_PIN_TTL derived from the session id, so the pins one deploy sweep reads
+# on one tick expire spread over a further day rather than together. djb2 in
+# bash arithmetic: deterministic, and no fork.
+_swap_pin_legacy_offset_to() {   # var id -> var = 0 .. SWAP_PIN_TTL-1
+  local __po_h=5381 __po_i __po_c
+  for (( __po_i = 0; __po_i < ${#2}; __po_i++ )); do
+    printf -v __po_c '%d' "'${2:__po_i:1}"
+    __po_h=$(( (__po_h * 33 + __po_c) % 2147483647 ))
+  done
+  printf -v "$1" '%s' "$(( __po_h % SWAP_PIN_TTL ))"
+}
 _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099)
   # `_strand_mark`/`_compact_note`'s rule, applied to a marker that names an
   # ACCOUNT rather than a reason: a pin still on disk after the row has moved
@@ -18987,11 +19006,24 @@ _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099
   # a read that FAILED is a destructive act on a false reason. Absent is not
   # unreadable; only a pin this tick could read and that names another account
   # is removed.
-  local id="$1" w="$2" pin rc
+  local id="$1" w="$2" pin rc exp at now off
   [[ -e "$REG/$id.swappin" ]] || return 0
   pin=$(_reg_read "$id" swappin); rc=$?
   [[ "$rc" -eq 0 ]] || return 0
-  [[ "$pin" == "$w" ]] && return 0
+  if [[ "$pin" == "$w" ]]; then
+    # THE PIN ENDS AT ITS EXPIRY (D-6181), as it ends when the truth leaves it.
+    _swap_pin_expiry_off && return 0
+    _now_s_to now; _reg_get_to exp "$id" swappinexp; at="${exp%% *}"
+    if [[ "$at" =~ ^[0-9]+$ && "${exp#* }" =~ ^(reset|ttl)$ ]]; then
+      (( now >= 10#$at )) || return 0
+      rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"
+      echo "$(date '+%F %T') pin-expired $id: pinned to $pin until ${exp#* }" >> "$REG/swap.log"
+      return 0
+    fi
+    _swap_pin_legacy_offset_to off "$id"
+    _reg_set "$id" swappinexp "$(( now + SWAP_PIN_TTL + off )) ttl" 2>/dev/null || true
+    return 0
+  fi
   rm -f -- "$REG/$id.swappin"
   rm -f -- "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: every pin clear takes its expiry
   echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
@@ -19028,11 +19060,18 @@ _swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for T
   # session for cosmetic reasons — and the cost of standing down wrongly is one
   # session left where it already was, against an operator's deliberate choice
   # being undone by a file nobody could read.
-  local pin rc
+  local pin rc exp now
   [[ -e "$REG/$1.swappin" ]] || return 1
   pin=$(_reg_read "$1" swappin); rc=$?
   [[ "$rc" -eq 0 ]] || return 0
-  [[ "$pin" == "$2" ]]
+  [[ "$pin" == "$2" ]] || return 1
+  _swap_pin_expiry_off && return 0
+  # D-6181: never at the ceiling (the leave runs; if nothing can take the
+  # session the pin holds again once the account recovers), never past expiry.
+  _avail "$2" || return 1
+  _reg_get_to exp "$1" swappinexp; exp="${exp%% *}"
+  [[ "$exp" =~ ^[0-9]+$ ]] && { _now_s_to now; (( now >= 10#$exp )) && return 1; }
+  return 0
 }
 
 # THE AFFINITY SLOTS (D-6181, spec §3.1). A non-forced move while `cur` still
