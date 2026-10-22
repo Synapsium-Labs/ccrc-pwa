@@ -2757,6 +2757,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         that refused review run 806's dispatch. Server 14490M free. STATUS: fleet and server v0.0.559, newest
         v0.0.568, stable v0.0.502, intent dev/auto=off, backups fleet 230M/server 16763M, disk free fleet 167G/work
         volume 10G/server 15G.
+      - 16:55: no tap. v0.0.569 (#1136, transcript search) and v0.0.570 (#1139, the phone UI) were released,
+        unapplied; neither touches the broker's lane or the snapshot helper. The work volume is still at the
+        `ccd ws-add` floor (9.9G), waiting on another coordinator's worktree cleanup. Server 14460M free. STATUS: fleet
+        and server v0.0.559, newest v0.0.570, stable v0.0.502, intent dev/auto=off, backups fleet 230M/server 16763M,
+        disk free fleet 167G/work volume 10G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
