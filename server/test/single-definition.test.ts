@@ -8463,8 +8463,8 @@ describe('ccrc history: the as-of cut is defined once, in lib.mjs (W2-D38; W2-2a
     expect(DEFINES('asOfBinds').test('  const b = xlib.asOfBinds(cut);')).toBe(false);
   });
 
-  it('asOfCut, asOfEntrySql and asOfBinds are each defined in lib.mjs alone', () => {
-    for (const name of ['asOfCut', 'asOfEntrySql', 'asOfBinds']) expect(definers(name), name).toEqual(['ccd/history/lib.mjs']);
+  it('asOfCut, asOfEntrySql, asOfBinds and the node, epoch and entry statements are each defined in lib.mjs alone', () => {
+    for (const name of ['asOfCut', 'asOfEntrySql', 'asOfBinds', 'asOfHiddenNodesSql', 'asOfVisibleEpochsSql', 'asOfVisibleEntriesSql']) expect(definers(name), name).toEqual(['ccd/history/lib.mjs']);
   });
 });
 

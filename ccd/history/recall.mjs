@@ -498,14 +498,16 @@ function uuidVisible(rc, uuid) {
 /** W2-D39's store half (R2): the as-of cut at the boundary whose uuid is `asof`, measured on `rc.db` (nothing else of `rc`
  *  is read) and decided by lib's asOfCut, whose answer it returns unchanged: `{ ok: true, cut }`, or exit 2
  *  `asof-invalid` (D-5765 (history-w2-asof-invalid-word)). It measures the entries row of `asof` joined to its
- *  boundaries row and its transcript (main: agent_id ''); the transcript's files and whether each holds N, the copy
+ *  boundaries row and that row's transcript (main: agent_id ''); the transcript's files and whether each holds N, the copy
  *  picked by lib's pickHoldingCopy as producerOfLeaf picks it; that copy's rows in derive.mjs's copyRows column names,
  *  in file order; and kept(N) through derive.mjs's keptOf, the set derivation spans with (W2-D34, option (a)). Only
  *  tests call it in W2-2a; W2-2b's env path sets rc.scope.cut from it (W2-D46 step 7). */
 export function asOfCutOf(rc, asof) {
-  const b = rc.db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.transcript_pk AS transcript_pk, t.agent_id AS agent_id,
+  // The transcript is the boundaries row's, the one derive.mjs spans with and producerOfLeaf reads, never the entries
+  // row's: the two columns are written independently and can differ. D-6281 (history-w2-asof-boundary-transcript)
+  const b = rc.db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, bd.transcript_pk AS transcript_pk, t.agent_id AS agent_id,
       bd.anchor_uuid AS anchor_uuid, bd.kept_blob_id AS kept_blob_id
-    FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+    FROM entries e JOIN boundaries bd ON bd.entry_id = e.entry_id JOIN transcripts t ON t.transcript_pk = bd.transcript_pk
     WHERE e.uuid = :uuid`).get({ uuid: asof });
   if (b === undefined) return asOfCut({ asof, boundary: null, copy: null, kept: new Set() });
   const boundary = { entryId: Number(b.entry_id), uuid: b.uuid, main: b.agent_id === '', anchorUuid: b.anchor_uuid ?? null };
@@ -530,7 +532,7 @@ export function asOfCutOf(rc, asof) {
  *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice.
  *  Under an as-of cut each arm keeps only the referrers whose entry is visible, inside the CTE, so before the scope
  *  filter, the ranking, the LIMIT and the count (W2-D35, W2-D36; C27). A variant follows its entry, and a sidecar the
- *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is false over the LEFT JOIN's NULL row. */
+ *  entry it is linked to. A sidecar linked to none is absent: lib's predicate is never true over the LEFT JOIN's NULL row. */
 function referrerSql(rc, matchSql) {
   const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
   return `WITH m(blob_id, rank) AS (${matchSql}),

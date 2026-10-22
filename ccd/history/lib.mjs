@@ -4431,7 +4431,9 @@ export function asOfCut({ asof, boundary, copy, kept }) {
  *    matches nothing.
  *  Everything else is absent: every NULL-ts row, and every row after N in its holding copy whatever its stamp. Outside
  *  the holding copy the decision is the stamp alone, so a row written after N in another copy but stamped at or before
- *  T_N stays visible: the residual W2-5a counts for the same millisecond. Over a LEFT JOIN's all-NULL row it is false.
+ *  T_N stays visible: the residual W2-5a counts for the same millisecond. The term is three-valued: for a hidden row it is
+ *  never true but NULL or false (NULL for a NULL-ts row, and for every hidden row when N has no summary), and over a LEFT
+ *  JOIN's all-NULL row it is NULL. Use it only as a filter (WHERE, ON, AND); negate it only through coalesce((…), 0).
  *  `alias` is interpolated, so it must be an SQL name; the inner memberships alias is `asof_hm`. Keyed on entries,
  *  never on blobs. D-5766 (history-w2-asof-time-cut) */
 export function asOfEntrySql(alias) {

@@ -6103,6 +6103,36 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
     expect(at(c(7)), 'CONTROL: restored, the store half cuts again').toEqual({ ok: true, cut });
   }, HEAVY);
 
+  it('cut-A7: asOfCutOf finds N\'s holding copy among the files of the boundaries row\'s transcript, the key derivation uses, not the entries row\'s (D-6281)', async () => {
+    const mod = (await GRX.recall()) as unknown as { asOfCutOf(rc: { db: RDatabaseSync }, asof: string): unknown };
+    const REFUSED = { ok: false, rc: 2, reason: 'asof-invalid' };
+    const at = (asof: string): unknown => {
+      const db = rH.openStoreRO(box);
+      try { return mod.asOfCutOf({ db }, asof); } finally { db.close(); }
+    };
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    const one = (sql: string, ...a: Array<string | number>): { n: number } => w.prepare(sql).get(...a) as unknown as { n: number };
+    const nId = Number(cut.boundaryEntryId);
+    const tpkOfBoundary = one('SELECT transcript_pk AS n FROM boundaries WHERE entry_id = ?', nId).n;
+    const tpkOther = one('SELECT t.transcript_pk AS n FROM transcripts t WHERE t.cc_session_uuid = ?', OU).n;
+    const fileOther = one('SELECT file_id AS n FROM ingest_files WHERE transcript_pk = ? ORDER BY file_id LIMIT 1', tpkOther).n;
+    try {
+      expect(one('SELECT transcript_pk AS n FROM entries WHERE entry_id = ?', nId).n, 'CONTROL: the two columns agree at first').toBe(tpkOfBoundary);
+      expect(tpkOther, 'CONTROL: another main transcript with a file of its own').not.toBe(tpkOfBoundary);
+      expect(Number(w.prepare('UPDATE entries SET transcript_pk = ? WHERE entry_id = ?').run(tpkOther, nId).changes), 'CONTROL: the entries row names the other transcript').toBe(1);
+      expect(at(c(7)), 'no file of the entries row\'s transcript holds N: the boundaries row\'s transcript decides, and its copy cuts').toEqual({ ok: true, cut });
+      expect(Number(w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, 1)').run(fileOther, nId).changes), 'CONTROL: the other transcript\'s file now holds N too').toBe(1);
+      expect(at(c(7)), 'with a copy in each transcript, the cut is still the boundaries row\'s transcript\'s copy').toEqual({ ok: true, cut });
+    } finally {
+      w.prepare('DELETE FROM memberships WHERE file_id = ? AND entry_id = ?').run(fileOther, nId);
+      w.prepare('UPDATE entries SET transcript_pk = ? WHERE entry_id = ?').run(tpkOfBoundary, nId);
+      store.closeWriter(w);
+    }
+    expect(at(c(7)), 'CONTROL: restored, the store half cuts again').toEqual({ ok: true, cut });
+    expect(at(c(1)), 'CONTROL: a stored row that is no boundary is still refused').toEqual(REFUSED);
+  }, HEAVY);
+
   it('cut-B1: expand <uuid> of a hidden row is exit 3 with no reason; a kept NULL-ts row still expands', async () => {
     for (const u of [c(3), c(9), c(11)]) {
       const r = await expand({ target: u });
@@ -6543,6 +6573,34 @@ describe.skipIf(process.platform === 'darwin')('W2-D35: the as-of cut hides node
     expect(p8.exit, all(p8)).toBe(0);
     expect(all(p8), 'a hidden descendant source drops the parent\'s mined ref').not.toContain('zqw2d35minedparent');
     expect(all(p8), 'the parent\'s summary ref stays (R6)').toContain('zqw2d35modelparent');
+  }, HEAVY);
+
+  it('the node rule under a cut with no summary entry: the predicate is NULL, not false, for a hidden boundary, and only asOfHiddenNodesSql\'s coalesce keeps the node hidden', async () => {
+    const IDS = [...L, P, VIS, HID, EMPTY];
+    const hiddenBy = (c: W35Cut): Promise<string[]> => under(c, (rc) => {
+      const rows = rc.db.prepare(libRead.asOfHiddenNodesSql()).all({ ...libRead.asOfBinds(c), asof_nodes: JSON.stringify(IDS) }) as unknown as Array<{ node_id: string }>;
+      return rows.map((r) => r.node_id).sort();
+    });
+    const HIDDEN = [L[7]!, P, HID, EMPTY].sort();
+    expect(cut7.summaryEntryId, 'CONTROL: cut 7 has a summary').not.toBeNull();
+    expect(await hiddenBy(cut7), 'CONTROL: with its summary the cut hides leaf 8, the parent over it, the crafted leaf bound to boundary 8 and the leafless node').toEqual(HIDDEN);
+    // Each variant drops the summary; the second takes the positional arm away (no holding file), the third the stamp arm (T_N past every stamp).
+    const variants: Array<[string, W35Cut]> = [
+      ['stamp and position', { ...cut7, summaryEntryId: null }],
+      ['the stamp alone', { ...cut7, summaryEntryId: null, holdingFileId: -1 }],
+      ['the position alone', { ...cut7, summaryEntryId: null, tsCut: ms(100) }],
+    ];
+    for (const [name, c] of variants) {
+      expect(libRead.asOfBinds(c).asof_summary, `${name}: the summary parameter is NULL`).toBeNull();
+      expect(await hiddenBy(c), `${name}: a leaf stamped after T_N or after N in its holding copy is hidden, and what stands over it`).toEqual(HIDDEN);
+      const tree = await under(c, treeOf);
+      expect(tree.exit, all(tree)).toBe(0);
+      expect(treeIds(tree), `${name}: the tree shows the other leaves only`).toEqual([...L.slice(0, 7), VIS].sort());
+      for (const h of [L[7]!, P, EMPTY]) expect(all(tree), `${name}: ${h}`).not.toContain(pre7(h));
+      expect(all(tree), `${name}: the crafted leaf (its prefix is VIS's too, so its whole id)`).not.toContain(HID);
+    }
+    const open = await under(undefined, treeOf);
+    expect(treeIds(open), 'CONTROL: with no cut the same nodes are visible').toEqual([...L, P, VIS, HID, EMPTY].sort());
   }, HEAVY);
 });
 

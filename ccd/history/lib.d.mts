@@ -559,7 +559,8 @@ export function asOfCut(i: {
   copy: { fileId: number; rows: readonly AsOfCopyRow[] } | null;
   kept: Iterable<unknown>;
 }): { ok: true; cut: AsOfCut } | ScopeRefusal<'asof-invalid'>;
-/** The cut's one SQL predicate over an entries alias: one parenthesised boolean term, named `asof_` parameters only. */
+/** The cut's one SQL predicate over an entries alias: one parenthesised boolean term, named `asof_` parameters only. For a
+ *  hidden row it is never true (NULL or false): use it only as a filter; negate it only through coalesce((…), 0). */
 export function asOfEntrySql(alias: string): string;
 /** asOfEntrySql's named parameters for a cut, by bare name: exactly the names it uses; kept(N) as JSON text. */
 export function asOfBinds(cut: AsOfCut): {
