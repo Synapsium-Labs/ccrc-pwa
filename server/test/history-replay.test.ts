@@ -5942,3 +5942,438 @@ describe.skipIf(process.platform === 'darwin')('W2-5a Task 1: openReplayStore\'s
     expect(detail).toMatch(/^store-read-failed: .+/);
   });
 });
+
+// ── W2-5a Task 2: fact mining, the producer and the redaction screen (W2-D61, W2-D65, W2-D67) ───────────────────
+// Pure and in-process: no spawn, no HOME, no store and no network. Span rows are built in memory with the entries
+// columns mining reads, and each row's body comes from a stand-in for W2-1's expandEntryBody answer ({state, body,
+// primary, causes, blob}; mining reads state and body only), which records every row it is asked for. Redaction runs
+// through lib's own redactField over pair indexes built with makePairIndex, standing in for the run's pairIndexOf
+// index. Key-shaped fixtures are assembled at runtime and never written whole; paths are /home/u fixtures.
+// MODULE-LEVEL below: w5a2Akia, w5a2Span, the w5a2 block builders and the W5A2_ constants, which later W2-5a tasks call
+// from their own describes (Task 6's W2-D67 pin: a span holding a key-shaped value reaches the stub redacted, R7).
+import { readFileSync as w5a2Read } from 'node:fs';
+import * as w5a2Lib from '../../ccd/history/lib.mjs';
+import * as w5a2Gate from '../../deploy/history-gate.mjs';
+import * as w5a2Drv from '../../deploy/history-replay.mjs';
+
+/** A synthetic access-key-shaped value lib's shape layer masks, assembled at runtime and never written whole. */
+function w5a2Akia(): string {
+  return ['AK', 'IA', 'Q7V2M9X4', 'P8W3N6Z5'].join('');
+}
+/** Model names: backendOf reads the first as anthropic and the second as other. */
+const W5A2_CLAUDE = 'claude-fixture-model';
+const W5A2_GATEWAY = 'fixture-gateway-model';
+const W5A2_CWD = '/home/u/tree';
+const W5A2_CONFIG_DIRS = ['/home/u/.claude', '/home/u/.gen-a'];
+const W5A2_IDX0 = w5a2Lib.makePairIndex([]);
+type W5a2Spec = { provenance: string; body: unknown; model?: string | null; type?: string; state?: string; source_tool_use_id?: string | null };
+type W5a2Row = {
+  entry_id: number; uuid: string; type: string; model: string | null; provenance: string; ts_ms: number | null; blob_id: number;
+  source_tool_use_id: string | null;
+};
+type W5a2Pick = (r: { entry_id: number }) => { state: string; body: unknown; primary: unknown; causes: string[]; blob: null };
+let w5a2NextId = 1000;
+/** Span rows in file order, entry ids unique across the file, and a pick that answers like expandEntryBody and records
+ *  every row it is asked for. An assistant row defaults to W5A2_CLAUDE; `state` other than 'body' gives a null body. */
+function w5a2Span(specs: W5a2Spec[]): { rows: W5a2Row[]; pick: W5a2Pick; picked: number[] } {
+  const bodies = new Map<number, { state: string; body: unknown }>();
+  const rows = specs.map((s): W5a2Row => {
+    const entry_id = w5a2NextId++;
+    const state = s.state ?? 'body';
+    bodies.set(entry_id, { state, body: state === 'body' ? s.body : null });
+    const model = 'model' in s ? s.model ?? null : (s.provenance === 'model' ? W5A2_CLAUDE : null);
+    return {
+      entry_id, uuid: `fixture-${entry_id}`, type: s.type ?? (s.provenance === 'model' ? 'assistant' : 'user'), model,
+      provenance: s.provenance, ts_ms: entry_id, blob_id: entry_id + 50_000, source_tool_use_id: s.source_tool_use_id ?? null,
+    };
+  });
+  const picked: number[] = [];
+  const pick: W5a2Pick = (r) => {
+    picked.push(r.entry_id);
+    const b = bodies.get(r.entry_id)!;
+    return { state: b.state, body: b.body, primary: b.body, causes: [], blob: null };
+  };
+  return { rows, pick, picked };
+}
+const w5a2Text = (text: string) => ({ type: 'text', text });
+const w5a2Use = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use', id, name, input });
+const w5a2Result = (id: string, content: unknown, isError?: boolean) =>
+  (isError === undefined ? { type: 'tool_result', tool_use_id: id, content } : { type: 'tool_result', tool_use_id: id, content, is_error: isError });
+type W5a2MineInput = Parameters<typeof w5a2Drv.mineBoundary>[0];
+type W5a2Mined = Extract<ReturnType<typeof w5a2Drv.mineBoundary>, { state: 'mined' }>;
+type W5a2Candidate = W5a2Mined['candidates'][number];
+/** mineBoundary over a w5a2Span, as boundary 'fixture-boundary' of family ('fixture-store', 'fixture-a', 'fixture-gen')
+ *  with cwd and cwd_real W5A2_CWD; `over` replaces any input. */
+function w5a2Mine(sp: { rows: W5a2Row[]; pick: W5a2Pick }, over: Partial<W5a2MineInput> = {}): ReturnType<typeof w5a2Drv.mineBoundary> {
+  return w5a2Drv.mineBoundary({
+    storeId: 'fixture-store', ccrcId: 'fixture-a', generation: 'fixture-gen',
+    boundaryUuid: 'fixture-boundary', boundaryTsMs: 900_000, rows: sp.rows, pick: sp.pick, cwd: W5A2_CWD, cwdReal: W5A2_CWD,
+    configDirs: W5A2_CONFIG_DIRS, ...over,
+  });
+}
+/** The mined answer; a discard fails the case. */
+function w5a2MinedOf(r: ReturnType<typeof w5a2Drv.mineBoundary>): W5a2Mined {
+  expect(r.state).toBe('mined');
+  return r as W5a2Mined;
+}
+
+describe('W2-5a Task 2: fact mining, the producer and the redaction screen', () => {
+  const screen = (c: W5a2Candidate) => w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: '' });
+  const DRIVER_URL = new URL('../../deploy/history-replay.mjs', import.meta.url);
+
+  // ── mining (W2-D65) and the two forms of a fact (W2-D61) ──
+  it('W2-D65 sha: maximal runs of 7 to 40 lower-case hex with a digit and a letter, bounded, never inside a UUID', () => {
+    const text = `commit 9f3e2d1 in session 4d1c9e2a-7b3f-4a6c-9d8e-1f2a3b4c5d6e; build-1f2a3b4c5d6e-x; deadbeef 1234567 ABC1234f g1f2a3b4c ${'a1'.repeat(20)}9 ${'0a'.repeat(20)}`;
+    const sp = w5a2Span([{ provenance: 'model', body: [w5a2Text(text)] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact, c.fact_raw])).toEqual([
+      ['sha', '9f3e2d1', '9f3e2d1'], ['sha', '1f2a3b4c5d6e', '1f2a3b4c5d6e'], ['sha', '0a'.repeat(20), '0a'.repeat(20)],
+    ]);
+    expect(r.candidates.every((c) => c.leaf.text === text && c.source_provenance === 'model')).toBe(true);
+    expect(r.candidates[0]).toMatchObject({
+      store_id: 'fixture-store', ccrc_id: 'fixture-a', generation: 'fixture-gen',
+      producer: { state: 'row', backend: 'anthropic' }, repo_roots: [W5A2_CWD], boundary_uuid: 'fixture-boundary',
+      source_entry_uuid: sp.rows[0]!.uuid, source_entry_id: sp.rows[0]!.entry_id, pair: null,
+      leaf: { text, rawLen: Buffer.byteLength(text, 'utf8') },
+    });
+    // R4: the writer's span is each mined row's rendering, one list the boundary's candidates share.
+    expect(r.candidates[0]!.span).toEqual([{ text, rawLen: Buffer.byteLength(text, 'utf8') }]);
+    expect(r.candidates.every((c) => c.span === r.candidates[0]!.span)).toBe(true);
+  });
+
+  it('W2-D65 command: a Bash input command, collapsed, 12 to 300 characters, never a recall, and only from Bash', () => {
+    const at300 = `echo ${'x'.repeat(295)}`;
+    const sp = w5a2Span([{ provenance: 'model', body: [
+      w5a2Use('c1', 'Bash', { command: 'ls -la /tmp' }),
+      w5a2Use('c2', 'Bash', { command: 'npm run test' }),
+      w5a2Use('c3', 'Bash', { command: at300 }),
+      w5a2Use('c4', 'Bash', { command: `${at300}x` }),
+      w5a2Use('c5', 'Bash', { command: 'ccrc history grep thing' }),
+      w5a2Use('c6', 'Bash', { command: '/home/u/.local/bin/ccrc history expand x' }),
+      w5a2Use('c7', 'Task', { command: 'npm run build', prompt: 'look' }),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.filter((c) => c.kind === 'command').map((c) => c.fact)).toEqual(['npm run test', at300]);
+    expect([r.counts['command-length'], r.counts['command-recall']]).toEqual([2, 2]);
+  });
+
+  it('W2-D61: a multi-line command is mined, F collapsed and F_raw exact, and the redaction screen keeps it', () => {
+    const raw = 'cd server &&\n  ./node_modules/.bin/vitest run \\\n    test/a.test.ts';
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('m1', 'Bash', { command: raw })] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'command', fact: 'cd server && ./node_modules/.bin/vitest run \\ test/a.test.ts', fact_raw: raw, leaf: { text: raw } });
+    expect(c.fact).toBe(w5a2Gate.collapseWs(raw));
+    expect(screen(c), 'the source side reads F_raw, which its leaf holds verbatim').toEqual({ state: 'pass' });
+  });
+
+  it('W2-D61: a short quoted command present in a kept tool_use is rejected by B, CONTROL the JSON rendering alone would admit it', () => {
+    const raw = 'git commit -m "wip"';
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('q1', 'Bash', { command: raw })] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'command', fact: raw, fact_raw: raw });
+    // A stand-in for W2-D68's B over one kept member, in both of its renderings; the B task re-asserts this on real B.
+    const kept = (command: string) => [w5a2Use('toolu_k', 'Bash', { command })];
+    const both = (command: string) => `${w5a2Lib.renderEntryText(kept(command))}\n${w5a2Lib.ftsTextOf(kept(command), 'entry')}`;
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: both(raw) })).toEqual({ state: 'drop', reason: 'baseline-hit' });
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: w5a2Lib.renderEntryText(kept(raw)) }), 'CONTROL: the JSON rendering escapes the quotes')
+      .toEqual({ state: 'pass' });
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText: both('git commit -m "wap"') }), 'CONTROL: another command in B')
+      .toEqual({ state: 'pass' });
+  });
+
+  it('W2-D65 path: the path fields of the seven tools, made absolute against the epoch cwd, never under a rostered config dir', () => {
+    const sp = w5a2Span([{ provenance: 'model', body: [
+      w5a2Use('p1', 'Read', { file_path: '/home/u/tree/src/app.ts' }),
+      w5a2Use('p2', 'Edit', { file_path: 'src/lib/x.ts', old_string: 'a', new_string: 'b' }),
+      w5a2Use('p3', 'Glob', { pattern: '**/*.ts', path: 'server' }),
+      w5a2Use('p4', 'Grep', { pattern: 'TODO', path: '/home/u/tree/docs' }),
+      w5a2Use('p5', 'NotebookEdit', { notebook_path: 'nb/a.ipynb', new_source: 'x' }),
+      w5a2Use('p6', 'MultiEdit', { file_path: '../other/y.ts', edits: [] }),
+      w5a2Use('p7', 'Write', { file_path: '/home/u/.claude/settings.json', content: '{}' }),
+      w5a2Use('p8', 'Read', { file_path: '/home/u/.gen-a/projects/p/memory/m.md' }),
+      w5a2Use('p9', 'Read', { file_path: '~/notes.md' }),
+      w5a2Use('p10', 'WebFetch', { url: 'https://example.com/a', path: '/home/u/tree/web' }),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact, c.fact_raw])).toEqual([
+      ['path', '/home/u/tree/src/app.ts', '/home/u/tree/src/app.ts'],
+      ['path', '/home/u/tree/src/lib/x.ts', 'src/lib/x.ts'],
+      ['path', '/home/u/tree/server', 'server'],
+      ['path', '/home/u/tree/docs', '/home/u/tree/docs'],
+      ['path', '/home/u/tree/nb/a.ipynb', 'nb/a.ipynb'],
+      ['path', '/home/u/other/y.ts', '../other/y.ts'],
+    ]);
+    expect([r.counts['path-config-dir'], r.counts['path-tilde'], r.counts['path-no-cwd']]).toEqual([2, 1, 0]);
+  });
+
+  it('W2-D65 path: with no epoch cwd a relative path is not mined, and the repo roots are the distinct cwd and cwd_real', () => {
+    const body = [w5a2Use('q1', 'Read', { file_path: 'src/a.ts' }), w5a2Use('q2', 'Read', { file_path: '/srv/tree/src/b.ts' })];
+    const none = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body }]), { cwd: null, cwdReal: null }));
+    expect(none.candidates.map((c) => [c.fact, c.repo_roots])).toEqual([['/srv/tree/src/b.ts', []]]);
+    expect(none.counts['path-no-cwd']).toBe(1);
+    const two = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body }]), { cwd: W5A2_CWD, cwdReal: '/srv/tree' }));
+    expect(two.candidates.map((c) => c.repo_roots)).toEqual([[W5A2_CWD, '/srv/tree'], [W5A2_CWD, '/srv/tree']]);
+  });
+
+  it('W2-D65 error: an is_error result gives its first non-empty line that is not just Exit code N, collapsed, 16 to 300 characters', () => {
+    const uses = ['e1', 'e2', 'e3', 'e4', 'e5'].map((id) => w5a2Use(id, 'Bash', { command: `npm run check-${id}` }));
+    const sp = w5a2Span([
+      { provenance: 'model', body: uses },
+      { provenance: 'tool', body: [w5a2Result('e1', 'Exit code 1\n\n  fatal:   not a git repository (or any parent)\nmore', true)] },
+      { provenance: 'tool', body: [w5a2Result('e2', 'Exit code 2\nshort failure', true)] },
+      { provenance: 'tool', body: [w5a2Result('e3', 'Exit code 3\n   \n', true)] },
+      { provenance: 'tool', body: [w5a2Result('e4', 'error: this result is not marked as an error', false)] },
+      { provenance: 'tool', body: [w5a2Result('e5', [w5a2Text('Exit code 1'), w5a2Text('npm ERR! missing script: lint')], true)] },
+    ]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.filter((c) => c.kind === 'error').map((c) => [c.fact, c.fact_raw])).toEqual([
+      ['fatal: not a git repository (or any parent)', '  fatal:   not a git repository (or any parent)'],
+      ['npm ERR! missing script: lint', 'npm ERR! missing script: lint'],
+    ]);
+    expect([r.counts['error-length'], r.counts['error-no-line']]).toEqual([1, 1]);
+    const first = r.candidates.find((c) => c.kind === 'error')!;
+    expect(first.leaf.text).toBe('Exit code 1\n\n  fatal:   not a git repository (or any parent)\nmore');
+    expect(first.producer).toEqual({ state: 'paired', backend: 'anthropic', tool_use_uuid: sp.rows[0]!.uuid });
+    expect(first.pair).toEqual({ name: 'Bash', input: { text: '{"command":"npm run check-e1"}', rawLen: 30 } });
+  });
+
+  it.each(['operator', 'summary', 'harness', 'ccrc-injected', 'recall-echo'])('W2-D65 never mined: the %s row, whatever its body holds, and its body is never picked', (prov) => {
+    const sp = w5a2Span([{ provenance: prov, body: [
+      w5a2Text('commit 9f3e2d1 at /home/u/tree/src/app.ts'),
+      w5a2Use('o1', 'Read', { file_path: '/home/u/tree/src/app.ts' }),
+      w5a2Result('o1', 'see 9f3e2d1 and a long enough failure line here', true),
+    ] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates).toEqual([]);
+    expect(sp.picked).toEqual([]);
+  });
+
+  it('W2-D65 never mined: a synthetic assistant row, and a path an operator row names in its text', () => {
+    const sp = w5a2Span([
+      { provenance: 'model', model: '<synthetic>', body: [w5a2Text('commit 9f3e2d1'), w5a2Use('s1', 'Read', { file_path: '/home/u/tree/a.ts' })] },
+      { provenance: 'operator', body: [w5a2Text('please open /home/u/tree/src/app.ts')] },
+      { provenance: 'model', body: [w5a2Use('s2', 'Read', { file_path: '/home/u/tree/src/b.ts' })] },
+    ]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => [c.kind, c.fact])).toEqual([['path', '/home/u/tree/src/b.ts']]);
+    expect(sp.picked).toEqual([sp.rows[2]!.entry_id]);
+  });
+
+  // ── the producer and its pairing (W2-D65) ──
+  it('W2-D65 producer: a tool_result answering a gateway tool_use is dropped as producer-other, CONTROL the same result answering an anthropic one passes', () => {
+    const run = (useModel: string) => {
+      const sp = w5a2Span([
+        { provenance: 'model', model: useModel, body: [w5a2Use('g1', 'Bash', { command: 'git rev-parse HEAD' })] },
+        { provenance: 'model', model: W5A2_CLAUDE, body: [w5a2Text('checking the head')] },
+        { provenance: 'tool', body: [w5a2Result('g1', 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')] },
+      ]);
+      return { sha: w5a2MinedOf(w5a2Mine(sp)).candidates.find((c) => c.kind === 'sha')!, sp };
+    };
+    const gw = run(W5A2_GATEWAY);
+    expect(gw.sha.producer).toEqual({ state: 'paired', backend: 'other', tool_use_uuid: gw.sp.rows[0]!.uuid });
+    expect(screen(gw.sha)).toEqual({ state: 'drop', reason: 'producer-other' });
+    expect(screen(run(W5A2_CLAUDE).sha), 'CONTROL: an anthropic tool_use').toEqual({ state: 'pass' });
+  });
+
+  it('W2-D65 pairing: a tool_result row with a NULL source_tool_use_id but a paired block id is mined and passes, and the block id wins over the column', () => {
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('n1', 'Bash', { command: 'git log -1 --format=%H' })] },
+      { provenance: 'model', model: W5A2_GATEWAY, body: [w5a2Use('n2', 'Bash', { command: 'git log -2 --format=%H' })] },
+      { provenance: 'tool', source_tool_use_id: null, body: [w5a2Result('n1', '0123456789abcdef0123456789abcdef01234567')] },
+      { provenance: 'tool', source_tool_use_id: 'n1', body: [w5a2Result('n2', '89abcdef0123456789abcdef0123456789abcdef')] },
+    ]);
+    const shas = w5a2MinedOf(w5a2Mine(sp)).candidates.filter((c) => c.kind === 'sha');
+    expect(shas.map((c) => [c.fact, c.producer])).toEqual([
+      ['0123456789abcdef0123456789abcdef01234567', { state: 'paired', backend: 'anthropic', tool_use_uuid: sp.rows[0]!.uuid }],
+      ['89abcdef0123456789abcdef0123456789abcdef', { state: 'paired', backend: 'other', tool_use_uuid: sp.rows[1]!.uuid }],
+    ]);
+    expect(shas.map((c) => screen(c))).toEqual([{ state: 'pass' }, { state: 'drop', reason: 'producer-other' }]);
+  });
+
+  it('W2-D65 pairing: a result whose tool_use is outside the span or written after it is result-unpaired, as the sweep pairs in file order', () => {
+    const outside = w5a2Span([{ provenance: 'tool', body: [w5a2Result('x1', 'fixed in 9f3e2d1')] }]);
+    const later = w5a2Span([
+      { provenance: 'tool', body: [w5a2Result('x2', 'fixed in 9f3e2d1')] },
+      { provenance: 'model', body: [w5a2Use('x2', 'Bash', { command: 'git show --stat HEAD' })] },
+    ]);
+    for (const sp of [outside, later]) {
+      const sha = w5a2MinedOf(w5a2Mine(sp)).candidates.find((c) => c.kind === 'sha')!;
+      expect(sha.producer).toEqual({ state: 'unpaired' });
+      expect(sha.pair).toBeNull();
+      expect(screen(sha)).toEqual({ state: 'drop', reason: 'result-unpaired' });
+    }
+  });
+
+  it('W2-D65: the driver never reads the source_tool_use_id column, CONTROL the pattern sees a planted read', () => {
+    const COLUMN = /source_tool_use_id|sourceToolUseID/;
+    const code = (t: string): string[] => t.split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l) && COLUMN.test(l));
+    expect(code('      const first = row.source_tool_use_id ?? undefined;')).toHaveLength(1);
+    expect(code(w5a2Read(DRIVER_URL, 'utf8'))).toEqual([]);
+  });
+
+  // ── the body pick (W2-D74 through W2-D65) ──
+  it.each(['tombstone', 'over-cap', 'undecodable', 'unparseable'])('W2-D74 via W2-D65: a mined row whose body pick answers %s discards the boundary by its own word', (state) => {
+    const sp = w5a2Span([{ provenance: 'model', body: [w5a2Text('commit 9f3e2d1')] }, { provenance: 'model', state, body: null }]);
+    expect(w5a2Mine(sp)).toMatchObject({ state: 'discard', why: `span-${state}`, boundaryUuid: 'fixture-boundary' });
+  });
+
+  it('W2-D65: a body pick state outside expandEntryBody words is a defect that throws, never a discard word', () => {
+    expect(() => w5a2Mine(w5a2Span([{ provenance: 'model', state: 'mystery', body: null }]))).toThrow(/body pick state/);
+  });
+
+  it('W2-D65 CONTROL: an unmined row whose body is pruned never discards the boundary and is never picked', () => {
+    const sp = w5a2Span([{ provenance: 'operator', state: 'tombstone', body: null }, { provenance: 'model', body: [w5a2Text('commit 9f3e2d1')] }]);
+    const r = w5a2MinedOf(w5a2Mine(sp));
+    expect(r.candidates.map((c) => c.fact)).toEqual(['9f3e2d1']);
+    expect(sp.picked).toEqual([sp.rows[1]!.entry_id]);
+  });
+
+  it('W2-D65: kind and fact are deduplicated within a family, the earliest boundary first and file order within it, and another kind with the same text is kept', () => {
+    const body = (extra: unknown[]) => [w5a2Text('commit 9f3e2d1'), w5a2Use('d1', 'Bash', { command: 'npm run test' }), ...extra];
+    const mine = (uuid: string, ts: number, sp: ReturnType<typeof w5a2Span>) => w5a2MinedOf(w5a2Mine(sp, { boundaryUuid: uuid, boundaryTsMs: ts }));
+    const early = mine('b-early', 100, w5a2Span([{ provenance: 'model', body: body([w5a2Text('again 9f3e2d1')]) }]));
+    const late = mine('b-late', 200, w5a2Span([
+      { provenance: 'model', body: body([w5a2Use('d2', 'Read', { file_path: '/home/u/tree/src/app.ts' })]) },
+      { provenance: 'tool', body: [w5a2Result('d2', '/home/u/tree/src/app.ts', true)] },
+    ]));
+    const counts = w5a2Drv.newDropCounts();
+    const kept = w5a2Drv.dedupeFamily([late, early], counts);
+    expect(kept.map((c) => [c.boundary_uuid, c.kind, c.fact])).toEqual([
+      ['b-early', 'sha', '9f3e2d1'], ['b-early', 'command', 'npm run test'],
+      ['b-late', 'path', '/home/u/tree/src/app.ts'], ['b-late', 'error', '/home/u/tree/src/app.ts'],
+    ]);
+    expect(counts.duplicate).toBe(3);
+  });
+
+  // ── the redaction discard (W2-D67) ──
+  it('W2-D67: a synthetic key-shaped fact assembled at runtime is discarded first as redact-fact, for a command and for an error line, and counted without its value', () => {
+    const key = w5a2Akia();
+    const sp = w5a2Span([
+      { provenance: 'model', body: [w5a2Use('k1', 'Bash', { command: `aws configure set aws_access_key_id ${key}` })] },
+      { provenance: 'tool', body: [w5a2Result('k1', `InvalidClientTokenId: key ${key} rejected`, true)] },
+    ]);
+    const cands = w5a2MinedOf(w5a2Mine(sp)).candidates;
+    expect(cands.map((c) => c.kind)).toEqual(['command', 'error']);
+    const counts = w5a2Drv.newDropCounts();
+    for (const c of cands) {
+      const s = screen(c);
+      expect(s).toEqual({ state: 'drop', reason: 'redact-fact' });
+      w5a2Drv.noteDrop(counts, (s as { reason: string }).reason);
+    }
+    expect(counts['redact-fact']).toBe(2);
+    expect(JSON.stringify(counts), 'counts carry words, never a value').not.toMatch(new RegExp(`${key.slice(0, 4)}|${key.slice(4)}`));
+  });
+
+  it('W2-D67: a fact intact alone but masked inside the leaf it was mined from is discarded as redact-leaf', () => {
+    const leaf = `rotate key ${['sk', 'a1b2c3d4e5f6'].join('-')} now`;
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Text(leaf)] }])));
+    expect(r.candidates).toHaveLength(1);
+    const c = r.candidates[0]!;
+    expect(c).toMatchObject({ kind: 'sha', fact_raw: 'a1b2c3d4e5f6', leaf: { text: leaf } });
+    expect(w5a2Lib.redactField(c.fact_raw, W5A2_IDX0), 'CONTROL: the fact alone is not masked').toBe('a1b2c3d4e5f6');
+    expect(w5a2Lib.redactField(leaf, W5A2_IDX0), 'CONTROL: its leaf masks it').not.toContain('a1b2c3d4e5f6');
+    expect(screen(c)).toEqual({ state: 'drop', reason: 'redact-leaf' });
+  });
+
+  it('W2-D67 (R10, F6): a whitespace-split bearer token leaves F_raw intact under redaction but not F, and is discarded as redact-fact; CONTROL: the same split command with no Authorization header passes', () => {
+    // The token is assembled at runtime. A newline splits the header from its value, so lib's bearer rule ([ \t]+ only)
+    // misses F_raw; collapseWs joins them in F, which the rule masks.
+    const tok = ['zq', 'w5a2', 'bearer', 'value'].join('');
+    const split = `curl -H "Authorization: Bearer\n${tok}" https://api.example.test/v1`;
+    const plain = `curl -H "Accept: text/plain"\n${tok} https://api.example.test/v1`;
+    const cands = w5a2MinedOf(w5a2Mine(w5a2Span([
+      { provenance: 'model', body: [w5a2Use('f6', 'Bash', { command: split })] },
+      { provenance: 'model', body: [w5a2Use('f7', 'Bash', { command: plain })] },
+    ]))).candidates.filter((x) => x.kind === 'command');
+    expect(cands.map((x) => x.fact_raw)).toEqual([split, plain]);
+    const [c, ctl] = [cands[0]!, cands[1]!];
+    expect(c.fact, 'F joins the header and its value').toBe(`curl -H "Authorization: Bearer ${tok}" https://api.example.test/v1`);
+    expect(w5a2Lib.redactField(c.fact_raw, W5A2_IDX0), 'CONTROL: F_raw alone is not masked, so an F_raw-only screen passes it').toBe(c.fact_raw);
+    expect(w5a2Lib.redactField(c.leaf.text, W5A2_IDX0), 'CONTROL: nor is its leaf, so redact-leaf does not fire').toContain(c.fact_raw);
+    expect(w5a2Lib.redactField(c.fact, W5A2_IDX0), 'CONTROL: F is masked').not.toContain(tok);
+    expect(w5a2Drv.screenRedaction(c, W5A2_IDX0)).toBe('redact-fact');
+    expect(screen(c)).toEqual({ state: 'drop', reason: 'redact-fact' });
+    expect(w5a2Lib.redactField(ctl.fact, W5A2_IDX0), 'CONTROL: the header-less command\'s F is not masked').toBe(ctl.fact);
+    expect(w5a2Drv.screenRedaction(ctl, W5A2_IDX0), 'CONTROL: so it passes the screen').toBeNull();
+  });
+
+  it('W2-D67: an F_raw the redaction masks under an F it does not (a relative path through a registered value, resolved away) is discarded as redact-fact, never redact-leaf', () => {
+    // W2-D67's first clause alone: the AKIA cases fire both clauses (F equals F_raw) and the bearer case only the F
+    // clause. The value is assembled at runtime and registered in this case's own pair index; path.posix.resolve
+    // removes it from F.
+    const secret = ['zq', 'w5a2', 'fraw', 'pathvalue'].join('');
+    const idx = w5a2Lib.makePairIndex([{ len: secret.length, sha256: w5a2Lib.sha256Hex(secret) }]);
+    const raw = `${secret}/../src/app.ts`;
+    const cands = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('fr1', 'Read', { file_path: raw })] }]))).candidates;
+    expect(cands.map((x) => [x.kind, x.fact, x.fact_raw])).toEqual([['path', '/home/u/tree/src/app.ts', raw]]);
+    const c = cands[0]!;
+    expect(w5a2Lib.redactField(c.fact_raw, idx), 'CONTROL: F_raw is masked').not.toContain(secret);
+    expect(w5a2Lib.redactField(c.fact, idx), 'CONTROL: F, resolved past the value, is not').toBe(c.fact);
+    expect(w5a2Lib.redactField(c.leaf.text, idx), 'CONTROL: the redacted leaf no longer holds F_raw, so redact-leaf is the next word').not.toContain(c.fact_raw);
+    expect(w5a2Drv.screenRedaction(c, idx)).toBe('redact-fact');
+    expect(w5a2Drv.screenCandidate(c, { idx, baselineText: '' })).toEqual({ state: 'drop', reason: 'redact-fact' });
+  });
+
+  it('W2-D67 order CONTROL: redaction runs before admission, so a masked fact that B also holds is counted redact-fact, never baseline-hit', () => {
+    const command = `aws configure set aws_access_key_id ${w5a2Akia()}`;
+    const c = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Use('o1', 'Bash', { command })] }]))).candidates[0]!;
+    const baselineText = `notes\n${command}`;
+    expect(w5a2Gate.admitFact('command', c.fact, baselineText, '', { repoRoots: [] }).admitted, 'CONTROL: B holds the fact').toBe(false);
+    expect(w5a2Drv.screenCandidate(c, { idx: W5A2_IDX0, baselineText })).toEqual({ state: 'drop', reason: 'redact-fact' });
+  });
+
+  it('W2-D67: admission compares unredacted F against unredacted B, so a fact B holds only inside a masked value is still rejected', () => {
+    const secret = ['9f3e2d1', 'Q7mZx4Kp', 'W3n6Z5r1H8t2'].join('');
+    const idx = w5a2Lib.makePairIndex([{ len: secret.length, sha256: w5a2Lib.sha256Hex(secret) }]);
+    const r = w5a2MinedOf(w5a2Mine(w5a2Span([{ provenance: 'model', body: [w5a2Text('cherry-pick 9f3e2d1 onto main')] }])));
+    expect(r.candidates).toHaveLength(1);
+    const baselineText = `token was ${secret} yesterday`;
+    expect(w5a2Lib.redactField(baselineText, idx), 'CONTROL: redaction would hide the fact from B').not.toContain('9f3e2d1');
+    expect(w5a2Drv.screenCandidate(r.candidates[0]!, { idx, baselineText })).toEqual({ state: 'drop', reason: 'baseline-hit' });
+  });
+
+  it('W2-D67, R5: drop counts carry reason words only, each starting at 0, and a word outside FACT_DROP_REASONS throws; the two driver-local lists are disjoint from each other and from DRIVER_REASONS and GATE_REASONS', () => {
+    // This task's fourteen come first; Tasks 5 and 6 append their fact drops after them, in place, each pinning its slice.
+    expect(w5a2Drv.FACT_DROP_REASONS.slice(0, 14)).toEqual([
+      'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
+      'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
+    ]);
+    expect(w5a2Drv.RECON_DISCARDS.slice(14, 18), 'the span words, appended to Task 1\'s list').toEqual(['span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable']);
+    expect(Object.isFrozen(w5a2Drv.FACT_DROP_REASONS)).toBe(true);
+    expect(new Set(w5a2Drv.FACT_DROP_REASONS).size).toBe(w5a2Drv.FACT_DROP_REASONS.length);
+    // R5 as amended by R10: only the pairs that involve a drop list are pinned. DRIVER_REASONS and GATE_REASONS already
+    // share three words at the base (W2-3's and W2-4's), so that pair is never pinned; QUOTA_SKIPS is a report list.
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => w5a2Drv.DRIVER_REASONS.includes(w)), 'a drop is a count, not a refusal').toEqual([]);
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => (w5a2Gate.GATE_REASONS as readonly string[]).includes(w)), 'one spelling per word').toEqual([]);
+    expect(w5a2Drv.FACT_DROP_REASONS.filter((w) => (w5a2Drv.RECON_DISCARDS as readonly string[]).includes(w)), 'a fact drop is not a boundary discard').toEqual([]);
+    const counts = w5a2Drv.newDropCounts();
+    expect(Object.keys(counts)).toEqual([...w5a2Drv.FACT_DROP_REASONS]);
+    expect(Object.values(counts).every((n) => n === 0)).toBe(true);
+    expect(() => w5a2Drv.noteDrop(counts, 'not-a-reason')).toThrow(/^noteDrop: /);
+    expect(Object.keys(counts)).toEqual([...w5a2Drv.FACT_DROP_REASONS]);
+  });
+
+  it('W2-D61 and W2-D67: the driver imports collapseWs and lib redaction and declares no copy of either, CONTROL planted copies are seen', () => {
+    const COPY = /^\s*(?:export\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)(collapseWs|FACT_KINDS|SECRET_SHAPE_RES|redact(?!ForSpawn\b)[A-Za-z]*)\b/;
+    const copies = (t: string): string[] => t.split('\n').filter((l) => COPY.test(l));
+    // The FACT_KINDS line is built from parts, as measure-history.test.ts's OWN_WORDS are: W2-D12's scan there reads
+    // every server/test file and is not anchored to a line start, so a whole planted declaration would be a second holder.
+    for (const planted of ['function collapseWs(s) {', `export const ${'FACT' + '_KINDS'} = Object.freeze([]);`, 'const redactLeaf = (t) => t;',
+      'export function redactField(text, idx) {', 'const SECRET_SHAPE_RES = [];']) expect(copies(planted), planted).toHaveLength(1);
+    expect(copies('export function redactForSpawn(field, idx) {'), "W2-4's door is lib's redactField behind the decode cap").toEqual([]);
+    const src = w5a2Read(DRIVER_URL, 'utf8');
+    expect(copies(src)).toEqual([]);
+    expect(src).toMatch(/^import \{[^}]*\bcollapseWs\b[^}]*\} from '\.\/history-gate\.mjs';$/m);
+    expect(src).toMatch(/^import \{[^}]*\bredactField\b[^}]*\} from '\.\.\/ccd\/history\/lib\.mjs';$/m);
+  });
+
+  it('W2-D65: rosterConfigDirs lists every rostered account config dir under HOME, hidden ones included, once each and sorted', () => {
+    const roster = rosterFromJson({ version: 1, accounts: FIXTURE_ACCOUNTS });
+    expect(w5a2Drv.rosterConfigDirs(roster, '/home/u')).toEqual([
+      '/home/u/.claude', '/home/u/.cx-a', '/home/u/.ext-a', '/home/u/.ext-n', '/home/u/.gen-a', '/home/u/.gen-d',
+      '/home/u/.gen-h', '/home/u/.gen-m', '/home/u/.gen-o', '/home/u/.gen-r', '/home/u/.gen-s', '/home/u/.gen-u',
+    ]);
+  });
+});

@@ -33,13 +33,13 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { EXIT, SCHEMA_ADDED, UUID_RE, blobOverDecodeCap, canonicalJson, historyPaths, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor } from '../ccd/history/lib.mjs';
+import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { ftsTextOfBlob } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, GATE_CODE_FILES } from './history-gate.mjs';
+import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -2560,6 +2560,7 @@ export const RECON_DISCARDS = Object.freeze([
   'kept-absent', 'kept-unreadable',
   'member-tombstone', 'member-over-cap', 'member-undecodable',
   'over-decode-cap', 'leaf-absent',
+  'span-unparseable', 'span-tombstone', 'span-over-cap', 'span-undecodable',
   'body-unrenderable',
 ]);
 /** expandEntryBody's three body-less words (D-6238), each mapped to a discard word of its own. entryBodyOf throws on any
@@ -2808,6 +2809,320 @@ export function reconstructPayload(rs, boundaryEntryId, question) {
     state: 'payload', text: composePayload({ summary: item1.text, kept: rendered }, q.text),
     counts: { members: members.rows.length, absent: members.absent, off_copy: members.offCopy, unparseable, pointer_lines: item1.replaced },
   };
+}
+
+// ── W2-5a Task 2: fact mining, the producer and the redaction screen (W2-D61, W2-D65, W2-D67) ───────────────────
+// Mining (W2-D65) reads leaf N's span rows only, in holding-copy file order, each body through W2-1's body pick
+// (expandEntryBody, which the caller hands in as `pick`; W2-D74). It yields every candidate of the four fact kinds
+// (W2-D60) with both of its forms (W2-D61): `fact_raw`, the exact stored leaf or line, which the source side reads
+// (the redaction screen below, answerability's index-text check, the writer's excerpt and the arm-time re-check), and
+// `fact`, which admission and scoring read: collapseWs(fact_raw) for a command or an error, the run lower-cased for a
+// sha, and the path made absolute against the epoch's cwd for a path. collapseWs is the gate's (W2-3); this file
+// keeps no copy of it. Rows of any provenance but model and tool, and assistant rows whose model is Claude Code's own
+// notice, are never mined and never picked. A mined row whose pick is not a body discards the boundary, by its own word.
+// The producer (W2-D65) is decided per row through lib's backendOf alone. A tool result takes the backend of the
+// assistant row in the SAME span whose tool_use ids hold its first answered id: the sweep's own pairing (prepareLines:
+// the tool_uses seen so far, in file order). The entries column the sweep fills from the row's own field is never
+// read, and nor is the sweep's walk up the parent chain, which can leave the span. A result with no such row is
+// unpaired. The producer is recorded at mining and applied by the screen, in W2-D71's lazy order.
+// The screen (W2-D71's first three filters): redaction (W2-D67), then the producer, then admission against Baseline B
+// (W2-D62: the gate's admitFact over unredacted F and unredacted B, in memory only). Redaction is lib's redactField,
+// the composed door 5h-2 left (5h-2's R11), over the run's pair index (pairIndexOf, built once per run by the caller): a
+// candidate is dropped when its fact_raw is masked alone, or no longer occurs verbatim in its leaf once the leaf is
+// masked. Every drop is counted by its word and never by its value.
+
+/** The tools whose path fields are path facts (W2-D65). */
+export const MINE_PATH_TOOLS = Object.freeze(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Glob', 'Grep']);
+/** The path fields read from those tools' inputs, in this order (W2-D65). */
+export const MINE_PATH_FIELDS = Object.freeze(['file_path', 'path', 'notebook_path']);
+/** A command fact's collapsed length bounds, in UTF-16 code units, the unit the gate measures F in (W2-D65). */
+export const MINE_COMMAND_CHARS = Object.freeze({ min: 12, max: 300 });
+/** An error fact's collapsed length bounds, in the same unit (W2-D65). */
+export const MINE_ERROR_CHARS = Object.freeze({ min: 16, max: 300 });
+/** The boundary discard a mined row with no body gives, one per non-body state of W2-1's body pick (D-6238), never
+ *  folded into one (W2-D74: a tombstone discards the boundary; W2-D54: so does over-cap). The words are RECON_DISCARDS'
+ *  (R5). */
+const SPAN_LOST = Object.freeze({ unparseable: 'span-unparseable', tombstone: 'span-tombstone', 'over-cap': 'span-over-cap', undecodable: 'span-undecodable' });
+/** Every word a fact site or a candidate is dropped with: the one list of fact drops (R5). Drops are counted by word,
+ *  never by value (W2-D67, W2-D71). A drop is a count, not a refusal, so no word here is a DRIVER_REASONS word, none is a
+ *  gate word (the writer's two discards are the gate's GATE_REASONS), and none is a RECON_DISCARDS word. Tasks 5 and 6
+ *  append theirs here, in place. */
+export const FACT_DROP_REASONS = Object.freeze([
+  'path-no-cwd', 'path-tilde', 'path-config-dir', 'command-recall', 'command-length', 'error-no-line', 'error-length',
+  'duplicate', 'redact-fact', 'redact-leaf', 'result-unpaired', 'producer-other', 'producer-unknown', 'baseline-hit',
+]);
+/** The span-row provenances mining reads. Operator, summary, harness, ccrc-injected and recall-echo rows never are. */
+const MINED_PROVENANCE = Object.freeze(['model', 'tool']);
+/** A sha fact's run: 7 to 40 lower-case hex, with no [0-9A-Za-z] on either side, so a longer run yields none. */
+const SHA_RUN = /(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])/g;
+/** lib's UUID grammar, unanchored and in either case: a run inside one of these is a UUID segment, not a sha. */
+const UUID_SPAN = new RegExp(UUID_RE.source.slice(1, -1), 'gi');
+/** A line that says only which exit code a command returned: never an error fact by itself. */
+const EXIT_CODE_LINE = /^Exit code -?[0-9]+$/;
+
+/** One span row, in holding-copy file order: the entries columns mining reads.
+ *  @typedef {{ entry_id: number, uuid: string, type: string, model: string | null, provenance: string,
+ *    ts_ms: number | null, blob_id: number }} SpanRow */
+/** W2-1's expandEntryBody answer as mining reads it: the state word and, for 'body', the picked body.
+ *  @typedef {{ state: string, body: unknown }} PickedBody */
+/** Who produced a candidate's row (W2-D65): its own assistant row, the assistant row its result answers, or nobody.
+ *  @typedef {{ state: 'row', backend: string } | { state: 'paired', backend: string, tool_use_uuid: string }
+ *    | { state: 'unpaired' }} FactProducer */
+/** A stored text as a spawn's input reads it (W2-D54): the text and its UTF-8 length.
+ *  @typedef {{ text: string, rawLen: number }} StoredField */
+/** One candidate fact (W2-D61, W2-D65), the one candidate shape every later task reads (R4). Its first twelve fields are
+ *  the writer's item: the family, boundary N, `kind`, `fact` (F), `fact_raw` (F_raw), `source_entry_uuid`, `repo_roots`,
+ *  `leaf` (the raw, unredacted text block, tool_use input string, Bash command, path field or tool_result text it was
+ *  mined from), `pair` (the tool_use a tool_result leaf answers, its input as JSON; W2-D72's excerpt reads it) and `span`
+ *  (leaf N's span, each mined row's rendering). The rest are mining's: `leaf_key` names the leaf within the run, and the
+ *  source fields are W2-D70's.
+ *  @typedef {{ store_id: string, ccrc_id: string, generation: string, boundary_uuid: string,
+ *    kind: 'sha' | 'path' | 'command' | 'error', fact: string, fact_raw: string, source_entry_uuid: string,
+ *    repo_roots: string[], leaf: StoredField, pair: { name: string, input: StoredField } | null, span: StoredField[],
+ *    leaf_key: string, boundary_ts_ms: number, source_entry_id: number, source_ts_ms: number | null,
+ *    source_blob_id: number, source_provenance: string, producer: FactProducer, ord: number }} FactCandidate */
+/** @typedef {{ state: 'mined', boundaryUuid: string, boundaryTsMs: number, candidates: FactCandidate[],
+ *    counts: Record<string, number> }} MinedBoundary */
+/** @typedef {{ state: 'discard', boundaryUuid: string, why: string, counts: Record<string, number> }} DiscardedBoundary */
+
+/** A fresh drop tally: every FACT_DROP_REASONS word at 0, in that order.
+ *  @returns {Record<string, number>} */
+export function newDropCounts() {
+  return Object.fromEntries(FACT_DROP_REASONS.map((w) => [w, 0]));
+}
+
+/** Count one drop. A word outside FACT_DROP_REASONS is a defect: it throws and counts nothing.
+ *  @param {Record<string, number>} counts  @param {string} reason */
+export function noteDrop(counts, reason) {
+  if (!FACT_DROP_REASONS.includes(reason)) throw new TypeError(`noteDrop: ${JSON.stringify(reason)} is not a FACT_DROP_REASONS word`);
+  counts[reason] += 1;
+}
+
+/** A stored field from a mined leaf: its text and its own UTF-8 length. A mined row's body decoded under the cap (any
+ *  other pick discards the boundary), so no leaf is past it. */
+const storedField = (text) => ({ text, rawLen: Buffer.byteLength(text, 'utf8') });
+
+/** Every rostered account's config dir under `home`, once each, sorted by code unit: the directories a path fact may
+ *  not sit under (W2-D65), and W2-D69's (b) and (c) (Task 4). `roster` is readRoster's validated roster, which lists hidden accounts too and carries no
+ *  hidden flag (shared/roster-json.d.mts), so a hidden account's dir is excluded like any other.
+ *  @param {{ accounts: readonly { configDirSuffix: string }[] }} roster  @param {string} home
+ *  @returns {string[]} */
+export function rosterConfigDirs(roster, home) {
+  return [...new Set(roster.accounts.map((a) => join(home, a.configDirSuffix)))].sort();
+}
+
+/** Every sha fact of one leaf, in position order (W2-D65): a SHA_RUN that holds a digit and a letter and overlaps no
+ *  UUID-shaped span. */
+function shaRunsOf(leaf) {
+  const uuids = [...leaf.matchAll(UUID_SPAN)].map((m) => [m.index, m.index + m[0].length]);
+  const out = [];
+  for (const m of leaf.matchAll(SHA_RUN)) {
+    const run = m[0];
+    if (!/[0-9]/.test(run) || !/[a-f]/.test(run)) continue;
+    if (uuids.some(([from, to]) => m.index < to && m.index + run.length > from)) continue;
+    out.push(run);
+  }
+  return out;
+}
+
+/** The string leaves of a tool_use input, depth-first in key order: the leaves lib's ftsTextOf indexes (its walker
+ *  is module-private, and W2-5a never edits lib). */
+function inputLeavesOf(input) {
+  const out = [];
+  const stack = [input];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) for (let i = v.length - 1; i >= 0; i -= 1) stack.push(v[i]);
+    else if (sjObject(v)) {
+      const keys = Object.keys(v);
+      for (let i = keys.length - 1; i >= 0; i -= 1) stack.push(v[keys[i]]);
+    }
+  }
+  return out;
+}
+
+/** A path field's fact, made absolute against the epoch's cwd, or the word it is dropped with (W2-D65). An absolute
+ *  field is kept as stored; the config-dir test reads its resolved form, so a `..` cannot walk under one unseen. */
+function pathFactOf(raw, cwd, configDirs) {
+  if (raw.startsWith('~')) return { drop: 'path-tilde' };
+  let fact = raw;
+  if (!raw.startsWith('/')) {
+    if (typeof cwd !== 'string' || !cwd.startsWith('/')) return { drop: 'path-no-cwd' };
+    fact = path.posix.resolve(cwd, raw);
+  }
+  const where = path.posix.resolve(fact);
+  const under = (d) => where === d || where.startsWith(d + '/');
+  if (configDirs.some(under)) return { drop: 'path-config-dir' };
+  return { fact };
+}
+
+/** Mine one boundary's candidates (W2-D61, W2-D65). Pure: it reads the rows it is handed and calls `pick` once for
+ *  each row it mines, never for any other row. The family (`storeId`, `ccrcId`, `generation`) is carried onto every
+ *  candidate, so the candidate is the writer's item (R4).
+ *  @param {{ storeId: string, ccrcId: string, generation: string, boundaryUuid: string, boundaryTsMs: number,
+ *    rows: readonly SpanRow[], pick: (row: SpanRow) => PickedBody, cwd: string | null, cwdReal: string | null,
+ *    configDirs: readonly string[] }} input
+ *  @returns {MinedBoundary | DiscardedBoundary} */
+export function mineBoundary({ storeId, ccrcId, generation, boundaryUuid, boundaryTsMs, rows, pick, cwd, cwdReal, configDirs }) {
+  const counts = newDropCounts();
+  const repoRoots = [...new Set([cwd, cwdReal].filter((r) => typeof r === 'string' && r !== ''))];
+  const uses = new Map();
+  const span = [];
+  const candidates = [];
+  for (const row of rows) {
+    if (!MINED_PROVENANCE.includes(row.provenance)) continue;
+    if (row.provenance === 'model' && isSyntheticModel(row.model)) continue;
+    const picked = pick(row);
+    if (picked.state !== 'body') {
+      const why = Object.hasOwn(SPAN_LOST, picked.state) ? SPAN_LOST[picked.state] : undefined;
+      if (why === undefined) throw new TypeError(`mineBoundary: body pick state ${JSON.stringify(picked.state)} is not one expandEntryBody answers`);
+      return { state: 'discard', boundaryUuid, why, counts };
+    }
+    span.push(storedField(renderEntryText(picked.body)));
+    const blocks = Array.isArray(picked.body) ? picked.body : [];
+    let producer;
+    if (row.provenance === 'model') {
+      producer = { state: 'row', backend: backendOf(row.model) };
+      for (const u of toolUsesOf(picked.body)) uses.set(u.id, { row, block: blocks.find((b) => sjObject(b) && b.type === 'tool_use' && b.id === u.id) });
+    } else {
+      const first = toolResultIdsOf(picked.body)[0];
+      const pair = first === undefined ? undefined : uses.get(first);
+      producer = pair === undefined ? { state: 'unpaired' } : { state: 'paired', backend: backendOf(pair.row.model), tool_use_uuid: pair.row.uuid };
+    }
+    const add = (kind, fact, factRaw, leaf, leafKey, pair) => {
+      candidates.push({
+        store_id: storeId, ccrc_id: ccrcId, generation, boundary_uuid: boundaryUuid, kind, fact, fact_raw: factRaw,
+        source_entry_uuid: row.uuid, repo_roots: repoRoots, leaf: storedField(leaf), pair, span,
+        leaf_key: leafKey, boundary_ts_ms: boundaryTsMs, source_entry_id: row.entry_id, source_ts_ms: row.ts_ms,
+        source_blob_id: row.blob_id, source_provenance: row.provenance, producer, ord: candidates.length,
+      });
+    };
+    const addShas = (leaf, leafKey, pair) => {
+      for (const run of shaRunsOf(leaf)) add('sha', run.toLowerCase(), run, leaf, leafKey, pair);
+    };
+    blocks.forEach((b, bi) => {
+      if (!sjObject(b)) return;
+      const key = `${row.entry_id}:${bi}`;
+      if (row.provenance === 'model') {
+        if (b.type === 'text' && typeof b.text === 'string') addShas(b.text, key, null);
+        if (b.type !== 'tool_use') return;
+        const input = sjObject(b.input) ? b.input : {};
+        if (b.name === 'Bash' && typeof input.command === 'string') {
+          const fact = collapseWs(input.command);
+          if (isHistoryCommand(input.command)) noteDrop(counts, 'command-recall');
+          else if (fact.length < MINE_COMMAND_CHARS.min || fact.length > MINE_COMMAND_CHARS.max) noteDrop(counts, 'command-length');
+          else add('command', fact, input.command, input.command, `${key}:command`, null);
+        }
+        if (MINE_PATH_TOOLS.includes(b.name)) {
+          for (const field of MINE_PATH_FIELDS) {
+            const raw = input[field];
+            if (typeof raw !== 'string' || raw === '') continue;
+            const p = pathFactOf(raw, cwd, configDirs);
+            if (p.drop !== undefined) noteDrop(counts, p.drop);
+            else add('path', p.fact, raw, raw, `${key}:${field}`, null);
+          }
+        }
+        inputLeavesOf(b.input).forEach((leaf, li) => addShas(leaf, `${key}:${li}`, null));
+        return;
+      }
+      if (b.type !== 'tool_result') return;
+      const text = sjResultText(b.content);
+      if (text === null) return;
+      const answered = typeof b.tool_use_id === 'string' ? uses.get(b.tool_use_id) : undefined;
+      const pair = answered?.block === undefined ? null
+        : { name: typeof answered.block.name === 'string' ? answered.block.name : '', input: storedField(JSON.stringify(answered.block.input ?? null)) };
+      if (b.is_error === true) {
+        const line = text.split('\n').find((l) => {
+          const c = collapseWs(l);
+          return c !== '' && !EXIT_CODE_LINE.test(c);
+        });
+        if (line === undefined) noteDrop(counts, 'error-no-line');
+        else {
+          const fact = collapseWs(line);
+          if (fact.length < MINE_ERROR_CHARS.min || fact.length > MINE_ERROR_CHARS.max) noteDrop(counts, 'error-length');
+          else add('error', fact, line, text, key, pair);
+        }
+      }
+      addShas(text, key, pair);
+    });
+  }
+  Object.freeze(span);
+  return { state: 'mined', boundaryUuid, boundaryTsMs, candidates, counts };
+}
+
+/** Earliest boundary first, ties by boundary uuid in code-unit order. */
+function byBoundaryTime(a, b) {
+  if (a.boundaryTsMs !== b.boundaryTsMs) return a.boundaryTsMs - b.boundaryTsMs;
+  return a.boundaryUuid < b.boundaryUuid ? -1 : a.boundaryUuid > b.boundaryUuid ? 1 : 0;
+}
+
+/** One family's candidate pool (W2-D65): (kind, fact) once, kept at its first site, the earliest boundary first and
+ *  file order within it, whatever order the boundaries arrive in. Each later copy counts `duplicate`.
+ *  @param {readonly MinedBoundary[]} mined  @param {Record<string, number>} counts
+ *  @returns {FactCandidate[]} */
+export function dedupeFamily(mined, counts) {
+  const order = [...mined].sort(byBoundaryTime);
+  const seen = new Set();
+  const kept = [];
+  for (const m of order) {
+    for (const c of m.candidates) {
+      const key = canonicalJson([c.kind, c.fact]);
+      if (seen.has(key)) { noteDrop(counts, 'duplicate'); continue; }
+      seen.add(key);
+      kept.push(c);
+    }
+  }
+  return kept;
+}
+
+/** The redaction screen (W2-D67): 'redact-fact' when lib's redactField changes fact_raw alone, or changes F alone
+ *  (R10, F6: collapseWs can join a header and the value a newline split, and the writer's input carries F), then
+ *  'redact-leaf' when fact_raw no longer occurs verbatim in its leaf once the leaf is redacted, else null. `memo`
+ *  (optional) keeps each redacted leaf by leaf_key for the caller's scope, so a leaf holding many candidates is
+ *  redacted once.
+ *  @param {FactCandidate} c  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @param {Map<string, string> | null} [memo]
+ *  @returns {null | 'redact-fact' | 'redact-leaf'} */
+export function screenRedaction(c, idx, memo = null) {
+  if (redactField(c.fact_raw, idx) !== c.fact_raw) return 'redact-fact';
+  if (redactField(c.fact, idx) !== c.fact) return 'redact-fact';
+  let masked = memo === null ? undefined : memo.get(c.leaf_key);
+  if (masked === undefined) {
+    masked = redactField(c.leaf.text, idx);
+    if (memo !== null) memo.set(c.leaf_key, masked);
+  }
+  return masked.includes(c.fact_raw) ? null : 'redact-leaf';
+}
+
+/** The producer screen (W2-D65): null for an anthropic producer, else the word.
+ *  @param {FactCandidate} c
+ *  @returns {null | 'result-unpaired' | 'producer-other' | 'producer-unknown'} */
+export function screenProducer(c) {
+  if (c.producer.state === 'unpaired') return 'result-unpaired';
+  if (c.producer.backend === 'anthropic') return null;
+  return c.producer.backend === 'other' ? 'producer-other' : 'producer-unknown';
+}
+
+/** W2-D71's third filter, the one spelling of admission against Baseline B (W2-D62): the gate's admitFact over
+ *  unredacted F and B's unredacted text, with no question yet. screenCandidate and Task 6's sourceQuiz 'admit-baseline'
+ *  stage both call it, so the admission call is written once.
+ *  @param {FactCandidate} c  @param {string} baselineText
+ *  @returns {null | 'baseline-hit'} */
+export function screenBaseline(c, baselineText) {
+  const admission = admitFact(c.kind, c.fact, baselineText, '', { repoRoots: c.repo_roots });
+  return admission.admitted ? null : 'baseline-hit';
+}
+
+/** W2-D71's first three filters, in its order: redaction, the producer, then admission against Baseline B
+ *  (screenBaseline). `baselineText` is B's unredacted text, held in memory by the caller.
+ *  @param {FactCandidate} c
+ *  @param {{ idx: import('../ccd/history/lib.mjs').PairIndex, baselineText: string, memo?: Map<string, string> | null }} ctx
+ *  @returns {{ state: 'pass' } | { state: 'drop', reason: string }} */
+export function screenCandidate(c, { idx, baselineText, memo = null }) {
+  const early = screenRedaction(c, idx, memo) ?? screenProducer(c);
+  if (early !== null) return { state: 'drop', reason: early };
+  const late = screenBaseline(c, baselineText);
+  return late === null ? { state: 'pass' } : { state: 'drop', reason: late };
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

@@ -1678,7 +1678,7 @@ The quiz builder needs candidate facts before it can admit, check or ask anythin
 
 **Files:**
 - Modify `deploy/history-replay.mjs`:
-  - The one import from `'../ccd/history/lib.mjs'` (about :28 at `cd622b2f6`) gains `UUID_RE`, `backendOf`, `isHistoryCommand`, `isSyntheticModel`, `toolResultIdsOf` and `toolUsesOf`. Each name appears once, and the list is in code-unit order, so `EXIT` stays first.
+  - The one import from `'../ccd/history/lib.mjs'` (about :28 at `cd622b2f6`) gains `backendOf`, `isHistoryCommand`, `isSyntheticModel`, `toolResultIdsOf` and `toolUsesOf` (measured: Task 1 already imports `UUID_RE`, for the store opener's id check, so the line gains five names, not six). Each name appears once, and the list is in code-unit order, so `EXIT` stays first.
   - Task 1's `./history-gate.mjs` import statement gains `admitFact` and `collapseWs`. Task 1 owns the module list and the header sentence, which name the gate already (R3).
   - Task 1's `RECON_DISCARDS` gains, in place after `'leaf-absent'`, the four boundary words a body-less mined row discards with: `'span-unparseable'`, `'span-tombstone'`, `'span-over-cap'` and `'span-undecodable'` (R5).
   - One section goes directly above the comment line `// The entry guard stays the LAST block of this file`, below Task 1's section. It has no top-level await.
@@ -1792,7 +1792,7 @@ node --no-warnings --input-type=module -e "const d = await import('./deploy/hist
 ```
 
 Expected:
-- The first five counts print 1, 1, 2, 1 and 1: Task 1's `RECON_DISCARDS` ends with `'leaf-absent'`, and Task 1's gate import is the line Step 4(a) extends.
+- The first five counts print 1, 1, 2, 1 and 1: Task 1's `RECON_DISCARDS` holds `'leaf-absent'` as its fourteenth word and `'body-unrenderable'` (D-6302) as its fifteenth and last, and Task 1's gate import is the line Step 4(a) extends.
 - The sixth prints 0: the driver never spells the column.
 - The seventh prints 1, which is W2-4's `export function redactForSpawn(` line, and no other.
 - The eighth and ninth print 0.
@@ -2283,7 +2283,7 @@ EOF
 grep -n "^import" deploy/history-replay.mjs
 ```
 
-Expected: each module is imported on exactly one line, in Task 1's order (no line is added). The lib line reads `import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';`, and the gate line `import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';`. `RECON_DISCARDS` now ends with the four span words.
+Expected: each module is imported on exactly one line, in Task 1's order (no line is added). The lib line reads `import { EXIT, SCHEMA_ADDED, UUID_RE, backendOf, blobOverDecodeCap, canonicalJson, historyPaths, isHistoryCommand, isSyntheticModel, recallOffPath, redactField, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';`, and the gate line `import { ANSWER_PROTOCOL, GATE_CODE_FILES, admitFact, collapseWs } from './history-gate.mjs';`. `RECON_DISCARDS` now holds the four span words at indexes 14 to 17, between `'leaf-absent'` and `'body-unrenderable'`, which is still last (measured over predicted: the list ended with the four span words).
 
 (b) Directly above the comment line `// The entry guard stays the LAST block of this file`, below Task 1's section, insert:
 
