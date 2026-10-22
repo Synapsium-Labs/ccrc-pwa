@@ -143,9 +143,10 @@ describe('the skin at boot', () => {
     expect(stamped()).toBe(REFINED);
   });
 
-  it('with nothing stored, a skin is stamped — never left absent (refined on a device with no desk rule to answer)', () => {
-    // No `matchMedia` stub: jsdom has none, which both halves read as not a
-    // desk, so the stamp is Refined and, above all, PRESENT.
+  it('with nothing stored, a skin is stamped — never left absent (refined where the device is not a desk)', () => {
+    // No `matchMedia` stub here: `test/setup.ts` shims one that matches
+    // nothing, so the device is not a desk and the stamp is Refined and, above
+    // all, PRESENT.
     localStorage.removeItem(SKIN_STORAGE_KEY);
     document.documentElement.removeAttribute('data-skin');
     initSkin();
@@ -467,6 +468,7 @@ describe("index.html's pre-paint stamp", () => {
     expect(asked).toEqual([DEVICE_QUERY]);
     asked.length = 0;
     expect(runSnippet(() => null, 'desk', snippetAsPreview(), asked), 'a preview is never the default').toBe(REFINED);
+    expect(asked, 'the preview world still asks the device').toEqual([]);
   });
 
   it("the snippet names SKIN_STORAGE_KEY, AUTO and DEVICE_QUERY, and REFINED and INSTRUMENT once each as the device rule's results — no other skin id", () => {

@@ -2,9 +2,9 @@
 // line that names the fonts and their licence (D-5095).
 //
 // THREE CHOICES (spec §7): Match this device, then the catalogue in its own
-// order, a preview (none today) marked as one — the same three the palette's "Switch
-// layout" offers (command/commands.ts). The catalogue is @ccrc/ui's; this file
-// never names a skin.
+// order, a preview (none today) marked as one — the same three the palette's
+// "Switch layout" offers (command/commands.ts). The catalogue is @ccrc/ui's;
+// this file never names a skin.
 //
 // IT SHOWS THE CHOICE, NOT THE SKIN. AUTO is a stored choice that resolves to
 // a skin; the picker shows the choice (`useSkinChoice()`), so a desk on AUTO

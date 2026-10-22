@@ -29,8 +29,8 @@
 // (O2). Instrument is no longer a `preview` (S18 set the flag false, D-6389), so
 // AUTO is Instrument at a desk and Refined on a phone or a tablet. The rule
 // existed in code from W0 and changed nobody's screen until that flip; it still
-// answers Refined on every device while a skin is a `preview`, which is how a
-// skin can be offered in the picker before its shell has landed.
+// answers Refined on every device while Instrument is a `preview`, which is how
+// a skin can be offered in the picker before its shell has landed.
 
 /** Skin A: roomy and touch-first, today's console evolved. `:root`. */
 export const REFINED = 'refined' as const;
