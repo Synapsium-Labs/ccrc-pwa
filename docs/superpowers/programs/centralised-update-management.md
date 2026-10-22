@@ -2720,6 +2720,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         about 80 MB to about 12.5 MB). The probe now reads its boot line, each `retired=` value, any retirement failure
         and any failed, refused or reconstructing recovery (an ANOMALY), from the last hour. Baseline: `cpActivities`
         111,320. Unapplied; the rollout is the operator's.
+      - 08:55: no tap. v0.0.558 (#1122, the broker's ledger) was released, unapplied. Server 15051M free, still under
+        the operator's line. STATUS: fleet and server v0.0.555, newest v0.0.558, stable v0.0.502, intent dev/auto=off,
+        backups fleet 229M/server 16320M, disk free fleet 166G/work volume 38G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
