@@ -9663,7 +9663,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect([calls.length, printRuns(home).length]).toEqual([1, 1]);
     }, 120_000);
 
-    r7it.skipIf(process.platform === 'darwin')('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, leaves no B text anywhere under --out', async () => {
+    // Both writer inputs are walked end to end: the default excerpt (what the operator's run uses unless it overrides) and leaf-span.
+    (process.platform === 'darwin' ? r7it.skip : r7it).each(['excerpt', 'leaf-span'])('R7, W2-D68: a whole pilot-source run over a fixture store, the real sourceQuiz and the writer stub, writer input %s, leaves no B text and no key anywhere under --out', async (writerInput) => {
       const key = w6Akia('WALKKEY');   // a key-shaped value in the span the walk sources from (assembled at runtime, never whole in the tree)
       const sb = w6SourceBox('ccrc-w2-5a-t7-walk-', undefined, false, key);
       const home = sb.box.home;
@@ -9671,9 +9672,10 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7fs.writeFileSync(r7path.join(home, STUB_STREAM), w6Reply('QUESTION: Which command rebuilt the fixture package?'));
       const out = outDir();
       const s0 = save7(step0a7(R7_REPO, home), 'step0a.json');
-      // --writer-input leaf-span: the writer is handed the whole span, so the key goes as far toward a spawn as it can.
+      // leaf-span: the writer is handed the whole span, so the key goes as far toward a spawn as it can; under the default
+      // excerpt it sees the fact's window only, and the key never reaches its input.
       const { flags } = r7drv.parseArgs(['pilot-source', '--out', out, '--account', 'up-a', '--budget', '100000', '--writer-model', OPUS,
-        '--writer-input', 'leaf-span', ...inp('step0a', s0)]) as R7;
+        '--writer-input', writerInput, ...inp('step0a', s0)]) as R7;
       // The real sourceQuiz; `top` keeps B's ancestor walk inside the fixture tree (Task 4's seam, no subcommand passes it).
       const r = await inProcess(() => r7drv.pilotSourceCommand(flags as never, envOf(home) as never,
         { sourceQuiz: (input: R7) => r7drv.sourceQuiz({ ...input, top: home } as never), seed: () => PILOT_SEED } as never));
@@ -9696,15 +9698,18 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
         const text = r7fs.readFileSync(f, 'utf8');
         for (const w of windows) r7expect(text.includes(w), `${f} holds the key's part ${w}`).toBe(false);
       }
-      // CONTROL: the key really was in the store's span: the writer's input was masked (the mark is there), and the
-      // seeded transcript the store was swept from holds the key whole.
-      const inputs = files.filter((f) => f.endsWith('.input.json'));
-      r7expect(inputs, 'CONTROL: the writer input is under --out').toHaveLength(1);
-      r7expect(r7fs.readFileSync(inputs[0]!, 'utf8'), 'CONTROL: the span held a key, and the writer saw it masked').toContain(t4Lib.REDACTED_MARK);
+      // CONTROL: the key really was in the store's span: the seeded transcript the store was swept from holds the key whole,
       const seeded = (dir: string): string[] => r7fs.readdirSync(dir, { withFileTypes: true })
         .flatMap((d) => (d.isDirectory() ? seeded(r7path.join(dir, d.name)) : [r7path.join(dir, d.name)]));
-      r7expect(seeded(home).some((f) => r7fs.statSync(f).size < 1_000_000 && r7fs.readFileSync(f, 'utf8').includes(key)),
-        'CONTROL: the seeded transcript holds the key whole').toBe(true);
+      const transcripts = seeded(home).filter((f) => f.endsWith('.jsonl') && r7fs.readFileSync(f, 'utf8').includes(key));
+      r7expect(transcripts, 'CONTROL: a seeded transcript (.jsonl) holds the key whole').not.toEqual([]);
+      // and, under leaf-span, the writer's input was built from that span and masked (the mark is there; M47). Under
+      // excerpt the input holds the fact's window only, so there is no key to mask: the no-key property above is the check.
+      const inputs = files.filter((f) => f.endsWith('.input.json'));
+      r7expect(inputs, 'CONTROL: the writer input is under --out').toHaveLength(1);
+      if (writerInput === 'leaf-span') {
+        r7expect(r7fs.readFileSync(inputs[0]!, 'utf8'), 'CONTROL: the span held a key, and the writer saw it masked').toContain(t4Lib.REDACTED_MARK);
+      }
     }, 600_000);
 
     r7it('quiz-source refuses on a node the record does not name', async () => {
