@@ -94,7 +94,7 @@ import { DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHo
 import {
   DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_HOUR_NEVER_CLOSED, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION,
   DelegationModelError,
-  canonicalDelegationJson, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
+  canonicalDelegationJson, collapseDelegationAttempts, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
   parseDelegationInstant, upkeepDelegationIntervals,
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
   type DelegationObservationInterval, type DelegationRecoveryState,
@@ -11119,13 +11119,25 @@ class DelegationLane {
       if (pass.signal.aborted) return;
 
       // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
-      // something to do (the same array comes back otherwise). Cursors are never in it.
+      // something to do (the same array comes back otherwise). Cursors are never in it. It also collapses attempts that repeat one decision
+      // (D-6191: the earliest row of each key stays), by a second checkpoint-only change, and makes no change when none repeat.
       const endUpkeep = this.phase(pass, 'upkeep');
       try {
         if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
           try {
             await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
           } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
+        }
+        if (collapseDelegationAttempts(durable.state().checkpoint.attempts).removed > 0) {
+          try {
+            let removed = 0;
+            await durable.applyCheckpointChange((cp) => {
+              const c = collapseDelegationAttempts(cp.attempts);
+              removed = c.removed;
+              return c.removed === 0 ? cp : { ...cp, attempts: [...c.attempts] };
+            });
+            console.warn(`ccrc-server: delegation attempts: ${removed} row(s) that repeated a decision already on file were removed`);
+          } catch (err) { console.warn(`ccrc-server: delegation attempt collapse failed: ${err instanceof Error ? err.message : String(err)}`); }
         }
       } finally { endUpkeep(); }
       if (pass.signal.aborted) return;
@@ -12069,7 +12081,9 @@ class DelegationLane {
   /** Makes the pass's attempts durable through a checkpoint-only change (an attempt already on file is skipped, so an upsert is a no-op),
    *  one change for the lot and, if the lot is refused, each alone. Answers the IDs now on file. D-5834: the attempts already on file, and the
    *  repeats within the list (the first kept), are dropped BEFORE the change, and when nothing is left no change is made at all (it would build
-   *  twice, clone once and encode twice to write nothing); the line's `attemptsSkipped` says which happened. */
+   *  twice, clone once and encode twice to write nothing); the line's `attemptsSkipped` says which happened. Policy already deduplicates by
+   *  decision key (D-6190): for a v2 row the ID and the key are one-to-one, so this ID filter is the key filter, and a v1 row's key is
+   *  covered in policy. */
   private async fileAttempts(pass: LanePass, durable: DelegationDurability, attempts: readonly DelegationAttemptRow[]): Promise<Set<string>> {
     const add = (list: readonly DelegationAttemptRow[]) => (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
       const have = new Set(cp.attempts.map((a) => a.attemptId));

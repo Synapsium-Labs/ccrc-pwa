@@ -46,8 +46,10 @@ import {
   DELEGATION_SPOOL_LOOKBACK_HOURS,
   DELEGATION_UNMEASURED_INCARNATION,
   canonicalDelegationJson,
+  delegationSha256Hex,
   emptyDelegationCheckpoint,
   formatDelegationInstant,
+  type DelegationAttemptRow,
   type DelegationCensusRecord,
   type DelegationCheckpointV1,
 } from '../src/coord/delegation-model.js';
@@ -1066,6 +1068,37 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     expect(w.watcher.delegationReport().verdicts.unresolved).toBe(1);
   });
 
+  it('C-W1 (D-6190): evidence that grows after a decision was filed files nothing: a parent whose cwd evidence grows on two passes after the decision was filed leaves ONE attempt, and those passes make no checkpoint change', async () => {
+    const w = world();
+    const tree = '/w/demo/.claude/worktrees/scratch-tree';
+    /** Another subagent of the same parent, working in the tree: a new (agent, cwd) tuple, so the evidence of the same `parent-cwd` decision grows by its events. */
+    const anotherAgent = (n: number): string[] => [
+      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: `ag${n}`, agentType: null, cwd: '/w/demo' }, `2026-10-15T10:0${3 + n}:00.000Z`)),
+      lineOf(common('demo-a', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_s${n}`, outcome: 'completed', agentId: `ag${n}`, cwd: tree }, `2026-10-15T10:0${3 + n}:30.000Z`)),
+    ];
+    writeBucket(w, 'demo-a', BUCKET10,
+      lineOf(common('demo-a', { eventKind: 'SessionStart', source: 'startup', cwd: tree }, '2026-10-15T10:01:00.000Z')),
+      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: 'ag1', agentType: null, cwd: '/w/demo' }, '2026-10-15T10:02:00.000Z')),
+      lineOf(common('demo-a', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_s1', outcome: 'completed', agentId: 'ag1', cwd: tree }, '2026-10-15T10:03:00.000Z')));
+    const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
+    const census = { demo: [record('demo', 'scratch-tree')] };
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), census);        // the birth wait is two passes: the third files the decision
+    const shape = (rows: readonly DelegationAttemptRow[]) => rows.map((a) => [a.adminRecord, a.verdict, a.detail, a.parentId]);
+    expect(shape(attemptsOf(w.home)), 'the third pass filed the decision').toEqual([['scratch-tree', 'unresolved', 'parent-cwd', 'demo-a']]);
+    const calls = change.mock.calls.length;
+    const corr = vi.spyOn(correlation, 'correlateDelegation');
+    const seen: number[] = [];
+    for (const n of [2, 3]) {
+      appendBucket(w, 'demo-a', BUCKET10, ...anotherAgent(n));
+      await censusPass(w, at(n + 1), census);
+      seen.push((corr.mock.results.at(-1)!.value as { evidenceJournalIds: string[] }).evidenceJournalIds.length);
+    }
+    expect(seen[1]! > seen[0]! && seen[0]! > 3, 'the pass\'s evidence for the decision grew on each of the two passes (the fixture is sound)').toBe(true);
+    expect(shape(attemptsOf(w.home)), 'still one attempt after two passes whose evidence grew').toEqual([['scratch-tree', 'unresolved', 'parent-cwd', 'demo-a']]);
+    expect(change.mock.calls.length - calls, 'the two passes made no checkpoint change (fileAttempts made none)').toBe(0);
+    expect(w.watcher.delegationReport().verdicts.unresolved).toBe(1);
+  });
+
   it('hand-off 12: a request re-emitted after a crash (the attempt is durable, the lease is not) upserts the attempt and creates the lease once', async () => {
     const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
@@ -1084,6 +1117,32 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     expect(attemptsOf(w.home), 'the attempt was filed twice').toHaveLength(1);
     await censusPass(w, at(4), census);
     expect(leasesOf(w.home)).toHaveLength(1);
+  });
+
+  it('C-W2 (D-6190): a rung-4 attempt filed under an old, evidence-hashed ID is the one a re-emitted request keeps: the lease is created once on the pass after the rejected create, and no second attempt is filed', async () => {
+    const w = await rawTreeWorld();
+    const census = { demo: [OLD, RAW] };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, at(0), census);                              // the spool is ingested: the session exists, and the raw tree waits (a ccd workspace may be being born)
+    const legacy: DelegationAttemptRow = {
+      attemptId: delegationSha256Hex('fixture-watch-legacy-linked'), parentId: 'demo-a', parentIncarnation: INC, project: 'demo', adminRecord: 'raw-tree',
+      canonicalPath: '/w/demo/.claude/worktrees/raw-tree', attemptedAt: iso(at(0)), rung: 4, verdict: 'linked',
+      evidenceJournalIds: [delegationSha256Hex('fixture-watch-legacy-evidence')], detail: null,
+    };
+    const applier = await w.watcher.delegationApplier();
+    await applier!.applyCheckpointChange((cp) => ({ ...cp, attempts: [...cp.attempts, legacy] }));
+    const realCreate = DelegationDurability.prototype.createLease;
+    const boom = vi.spyOn(DelegationDurability.prototype, 'createLease').mockRejectedValueOnce(new Error('crash between the attempt and the lease'));
+    await censusPass(w, at(1), census);
+    await censusPass(w, at(2), census);                              // the lease is requested here (the attempt is on file under the old ID), and the first create throws
+    expect(boom).toHaveBeenCalledTimes(1);
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(attemptsOf(w.home).map((a) => a.attemptId), 'the request filed no attempt beside the old one').toEqual([legacy.attemptId]);
+    boom.mockImplementation(realCreate);
+    await censusPass(w, at(3), census);                              // re-emitted: the old row is still the request's attempt, so the lease gate passes
+    expect(boom, 'the pass after the rejected create reached createLease exactly once').toHaveBeenCalledTimes(2);
+    expect(leasesOf(w.home)).toHaveLength(1);
+    expect(attemptsOf(w.home).map((a) => a.attemptId), 'and the old row is still the only attempt').toEqual([legacy.attemptId]);
   });
 
   it('a lease is never requested when the registry holds the tree as a ccd workspace: unresolved, no effect, never run-child-owned', async () => {
@@ -1113,6 +1172,98 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     ]);
     expect(leasesOf(w.home).map((l) => [l.parentageState, l.releasedAt]), 'wave 3 has no lease transition').toEqual([['linked', null]]);
     expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8').split('"kind":"lease-created"').length - 1).toBe(1);
+  });
+});
+
+describe('D-6191: attempts that repeat one decision collapse to the earliest, in the upkeep phase (C-K4, C-K5)', () => {
+  const H = (s: string): string => delegationSha256Hex(`fixture-watch-collapse-${s}`);
+  const DECIDED = {
+    parentId: 'demo-a', parentIncarnation: INC, project: 'demo', adminRecord: 'scratch-tree', canonicalPath: '/w/demo/.claude/worktrees/scratch-tree',
+    rung: null, verdict: 'unresolved' as const, detail: 'parent-cwd',
+  };
+  const row = (name: string, attemptedAt: string, evidence: string[]): DelegationAttemptRow =>
+    ({ ...DECIDED, attemptId: H(name), attemptedAt, evidenceJournalIds: evidence.map(H).sort() });
+  // One decision, three rows with growing evidence, seeded so that the earliest is neither the first nor the last.
+  const ROWS = [row('a', '2026-10-15T10:20:00.000Z', ['e1', 'e2', 'e3']), row('b', '2026-10-15T10:10:00.000Z', ['e1']), row('c', '2026-10-15T10:15:00.000Z', ['e1', 'e2'])];
+  const ids = (rows: readonly DelegationAttemptRow[]): string[] => rows.map((a) => a.attemptId);
+  /** The lane's first pass has run (the session exists) and the three rows are on file, put there through the applier's own change door. */
+  async function seeded(): Promise<World> {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, at(0), { demo: [] });
+    const applier = await w.watcher.delegationApplier();
+    await applier!.applyCheckpointChange((cp) => ({ ...cp, attempts: [...cp.attempts, ...ROWS] }));
+    expect(ids(attemptsOf(w.home)), 'the three rows are on file').toEqual(ids(ROWS));
+    return w;
+  }
+  /** The last phase the lane announced (`onPassPhase`), kept for whoever asks while a change runs. */
+  const phaseOf = (w: World): { last: string | null } => {
+    const phase = { last: null as string | null };
+    w.watcher.setDelegationSeams({ onPassPhase: (k: string): void => { if (k !== 'rewrite' && k !== 'yields') phase.last = k; } } as never);
+    return phase;
+  };
+
+  it('C-K4: a census pass that plans no attempt collapses the three rows to the earliest, in the upkeep phase, by ONE change that takes the full projection; one line names the 2 rows; the next pass makes no change', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const w = await seeded();
+    const phase = phaseOf(w);
+    const projected = vi.spyOn(w.coord, 'projectDelegationCheckpointChanges');
+    const real = DelegationDurability.prototype.applyCheckpointChange;
+    const changes: { phase: string | null; modes: string[] }[] = [];
+    vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange').mockImplementation(async function (this: DelegationDurability, change) {
+      const during = phase.last;
+      const from = projected.mock.results.length;
+      try { return await real.call(this, change); } finally { changes.push({ phase: during, modes: projected.mock.results.slice(from).map((r) => (r.value as { mode: string }).mode) }); }
+    });
+    await censusPass(w, at(1), { demo: [] });
+    expect(ids(attemptsOf(w.home)), 'one row remains: the earliest of the decision').toEqual([H('b')]);
+    expect(changes.map((c) => c.phase), 'the pass made one checkpoint change, in the upkeep phase').toEqual(['upkeep']);
+    expect(changes[0]!.modes, 'whose projection could not be a delta (rows left): it took the full projection').toEqual(['full']);
+    const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('delegation attempts:'));
+    expect(lines, 'one log line').toHaveLength(1);
+    expect(lines[0]).toMatch(/delegation attempts: 2 row\(s\)/);
+    await censusPass(w, at(2), { demo: [] });
+    expect(changes, 'the next pass made no checkpoint change').toHaveLength(1);
+    expect(ids(attemptsOf(w.home))).toEqual([H('b')]);
+  });
+
+  it('C-K5: a collapse faulted before the checkpoint rename leaves all three rows; recovery keeps them; the next pass collapses them; a collapse that landed survives recovery', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fault = { armed: false, fired: 0 };
+    const phases: { last: string | null }[] = [];
+    const realOpen = DelegationDurability.open.bind(DelegationDurability);
+    vi.spyOn(DelegationDurability, 'open').mockImplementation((deps) => realOpen({
+      ...deps,
+      onEdge: async (edge, when) => {
+        if (fault.armed && edge === 'checkpoint-rename' && when === 'before' && phases.at(-1)?.last === 'upkeep') {
+          fault.armed = false;
+          fault.fired += 1;
+          throw new Error('a fixture fault before the rename');
+        }
+      },
+    }));
+    // the faulted pass
+    const w = await seeded();
+    phases.push(phaseOf(w));
+    fault.armed = true;
+    await censusPass(w, at(1), { demo: [] });
+    expect(fault.fired, 'the pass\'s upkeep reached the rename and was faulted').toBe(1);
+    expect(ids(attemptsOf(w.home)), 'the faulted collapse left the three rows on file').toEqual(ids(ROWS));
+    const applier = (await w.watcher.delegationApplier())!;
+    expect(applier.failure(), 'the applier is failed').not.toBeNull();
+    await applier.recover();
+    expect(applier.failure()).toBeNull();
+    expect(ids(applier.state().checkpoint.attempts), 'recovery keeps the three rows').toEqual(ids(ROWS));
+    await censusPass(w, at(2), { demo: [] });
+    expect(ids(attemptsOf(w.home)), 'the next pass collapses them to the earliest').toEqual([H('b')]);
+    // the clean case
+    const clean = await seeded();
+    await censusPass(clean, at(1), { demo: [] });
+    expect(ids(attemptsOf(clean.home))).toEqual([H('b')]);
+    const again = (await clean.watcher.delegationApplier())!;
+    await again.recover();
+    expect(again.state().checkpoint.attempts, 'recovery reads back exactly the collapsed list').toEqual([ROWS[1]]);
+    expect(attemptsOf(clean.home)).toEqual([ROWS[1]]);
   });
 });
 

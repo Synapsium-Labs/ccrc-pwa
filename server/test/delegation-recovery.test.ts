@@ -3915,7 +3915,7 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
   async function pass(l: Lane): Promise<{ report: PerPassReport; projected: boolean }> {
     l.h.log.length = 0;
     const report = await perPassOf(l.dur);
-    return { report, projected: l.h.log.includes('project') };
+    return { report, projected: l.h.log.some((x) => x === 'project' || x === 'projectChanged') };
   }
   /** The CONTROL: a per-pass repair that takes the short path. It runs immediately before each case's perturbation, so a case cannot
    *  pass for the reason that the short path never exists. */
