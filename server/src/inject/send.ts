@@ -148,10 +148,12 @@ const PANE_TAIL = 2000;
  *  queues the message — so this is bounded by render time, not by Claude. */
 const SUBMIT_POLL_MS = 120;
 export const SUBMIT_TRIES = 8;
-/** D-6366: a blind run (consecutive failed post-Enter captures) also ends the watch when this much time is spent in it,
- *  the larger of the wall time and the sleeps asked for, counted from the run's first failed capture (and its own cost).
- *  Any capture that returns ends the run, so a link blip keeps the watch's remaining polls at any capture latency, and
- *  a hung tmux whose captures each fail after their own timeout ends the watch at its first, as before. */
+/** D-6366: a blind run (consecutive failed post-Enter captures) also ends the watch when this much time is spent in it:
+ *  the larger of the wall time and the sleeps asked for, counted from the run's first failed capture. Any capture that
+ *  returns ends the run, so a blip keeps the watch's remaining polls while a failed capture itself takes under this long
+ *  (about 1 s). The run counts its first capture's own time, which is the price of keeping a hung tmux (each capture
+ *  failing after its own timeout) at one failed capture per watch. The sleeps arm never decides inside one watch (the
+ *  run's sleeps reach 840 ms at most), so on a frozen clock the poll count is the only bound. */
 export const SUBMIT_BLIND_MS = SUBMIT_TRIES * SUBMIT_POLL_MS;
 
 /** How long to wait for the input box to echo the typed text (~2.4 s of sleeping
@@ -341,7 +343,8 @@ async function watchSubmit(
     const pane = await d.tmux.captureAnsi(id);
     // D-6366: a failed capture is a blind poll, exactly like an absent box. One dropped read (a link drop) used to end
     // the whole watch with the box unread; the poll count (`SUBMIT_TRIES`) bounds it, and `SUBMIT_BLIND_MS` the time
-    // spent in one blind run (it starts at the run's first failed capture, so one blip never ends a slow healthy watch).
+    // spent in one blind run, from its first failed capture (that capture's own time included, so a blip whose capture
+    // takes under `SUBMIT_BLIND_MS` keeps the watch's polls; a hung tmux still ends at its first failed capture).
     if (pane === null) {
       failedSinceRead = true;
       if (runStart === null) { runStart = askedAt; runSlept = 0; }
