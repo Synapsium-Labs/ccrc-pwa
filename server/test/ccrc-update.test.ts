@@ -4101,8 +4101,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     let r = runUpdate(moved);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     // W4 Task 5: the gate writes `checking` BEFORE the sweep's `restarting`
-    // (design §11 — the gate precedes the sweep; nothing reads the order).
-    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // (design §11 — the gate precedes the sweep; nothing reads the order). Wave 23 (D-6356): a second `restarting`, the
+    // re-stamp right before the prune and thinning take the lock again, so the deadline measures from it.
+    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'restarting', 'done']);
+    expect(reportWrites(moved).map((w) => w['detail']).slice(-2, -1)).toEqual(['pruning and thinning ~/ccrc-backups']);
     // The stub box answers no KillMode, so its sweep is REFUSED, and the update's own `done` records that (R10k, D-5315):
     // exit 0, `detail` null, the word in `sweep`. On Darwin the arm reads job files instead, so only its presence is pinned.
     const movedSweep = lastReport(moved)['sweep'];
@@ -4157,15 +4159,16 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
 
     for (const home of [moved, same, refused, restoreHome, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
-      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the sweep's own `done` is the one write that
-      // carries the eighth, after them. The converged no-op, the refusal and the restore never sweep, so they keep seven.
+      // Wave 17 (D-5314): every write before the sweep keeps the seven keys; the writes after the sweep carry the eighth,
+      // after them: the re-stamp before the prune and thinning (wave 23, D-6356) and the update's own `done`. The converged
+      // no-op, the refusal and the restore never sweep, so they keep seven.
       const swept = home === moved;
-      for (const l of raw) {
+      raw.forEach((l, i) => {
         const w = JSON.parse(l) as { phase: string };
         expect(Object.keys(w), `${home}: the ${w.phase} write`)
-          .toEqual(swept && w.phase === 'done' ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
-      }
-      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the write after the sweep carries it').toHaveLength(1);
+          .toEqual(swept && i >= raw.length - 2 ? [...REPORT_KEYS, 'sweep'] : REPORT_KEYS);
+      });
+      if (swept) expect(raw.filter((l) => l.includes('"sweep"')), 'only the writes after the sweep carry it').toHaveLength(2);
       // The file on disk IS the last rename, and no staged copy is left beside it.
       expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(`${raw[raw.length - 1]}\n`);
       expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
@@ -4184,8 +4187,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     const w = reportWrites(home);
     // W4 Task 5: the gate's `checking` is the eighth report; the order and
-    // the count are pinned together, so neither can drift alone.
-    expect(w.map((x) => x['phase'])).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
+    // the count are pinned together, so neither can drift alone. Wave 23 (D-6356) adds the second `restarting`, the
+    // re-stamp before the prune and thinning.
+    expect(w.map((x) => x['phase'])).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'restarting', 'done']);
     // latest/download: nothing names a tag until SHA256SUMS has been read.
     expect(w[0]!['phase']).toBe('resolving');
     expect(w[0]!['target']).toBeNull();
@@ -4202,7 +4206,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       prev = Number(x['updatedAt']);
       expect(x['from']).toBe('cli');
       expect(Number.isInteger(x['pid'])).toBe(true);
-      expect(x['detail']).toBeNull();   // no phase of a clean run carries one
+      // No phase of a clean run carries one, except the re-stamp before the prune and thinning (wave 23, D-6356): the
+      // second `restarting`, the write before `done`.
+      expect(x['detail']).toBe(x === w[w.length - 2] ? 'pruning and thinning ~/ccrc-backups' : null);
     }
   });
 
