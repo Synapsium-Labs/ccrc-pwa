@@ -231,8 +231,14 @@ def claims_of(jwt: str) -> dict:
 
 def _finite_number(value: object) -> bool:
     """A JSON number usable as an epoch: not a bool, and finite (Python's `json.loads` accepts NaN and Infinity, and
-    a NaN expiry compares false both ways, so it would read as never expired)."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    a NaN expiry compares false both ways, so it would read as never expired). Total: a JSON integer too large for a
+    float makes `math.isfinite` raise OverflowError, and that answers False too."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _exp_of(token: Optional[str]) -> Optional[int]:
@@ -273,7 +279,7 @@ class Reading(NamedTuple):
 # The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock).
 # `read` answers from one while the file's identity still equals its identity, and otherwise ignores it, leaving
 # the map unchanged and printing nothing. Only the writer side (`commit_record`, `retry_unsaved`) changes the map.
-_UNSAVED: Dict[str, Tuple[dict, Identity]] = {}
+_UNSAVED: Dict[str, Tuple[dict, Optional[Identity]]] = {}
 
 
 def _identity(st: os.stat_result) -> Identity:
@@ -328,8 +334,8 @@ _UNMEASURED = object()
 
 
 def _current_identity(path: str) -> object:
-    """The identity of the regular file at `path`; `None` ONLY when nothing is there (ENOENT); `_UNMEASURED`
-    otherwise."""
+    """The identity of the regular file at `path` (an `Identity`); `None` ONLY when nothing is there (ENOENT);
+    `_UNMEASURED` (a bare `object()` sentinel, hence the `object` return type) otherwise."""
     try:
         st = os.lstat(path)
     except OSError as e:
@@ -338,13 +344,16 @@ def _current_identity(path: str) -> object:
 
 
 def _remedy(e: OSError, auth_dir: str, opened: bool) -> str:
-    """The remedy for an `OSError` the read met, chosen by its errno: a symlink the open refused (ELOOP), a file whose
-    own mode refuses the open (EACCES or EPERM, once `lstat` succeeded), or a directory on the way that cannot be
-    searched (anything else, an `lstat` EACCES or ENOTDIR included)."""
-    if e.errno == errno.ELOOP:
+    """The remedy for an `OSError` the read met, chosen by its errno and by whether `lstat` had already succeeded
+    (`opened`): a symlink the open refused (ELOOP on the open), a file whose own mode refuses the open (EACCES or
+    EPERM on the open), a path on the way that is not a directory or loops (ENOTDIR, or ELOOP from `lstat`), or a
+    directory on the way that cannot be searched (anything else, an `lstat` EACCES included)."""
+    if opened and e.errno == errno.ELOOP:
         return "the path is a symlink; move it aside and sign the lane in"
     if opened and e.errno in (errno.EACCES, errno.EPERM):
         return "fix its mode with chmod 600"
+    if e.errno in (errno.ENOTDIR, errno.ELOOP):
+        return auth_dir + " or a directory above it is not a directory, or is a symlink loop; fix the lane's authDir"
     return "check the permissions of " + auth_dir + " and the directories above it"
 
 
@@ -354,10 +363,10 @@ def read(auth_dir: str) -> Reading:
     Answers the unsaved record first while its identity still matches the file. A non-regular file at the path, a
     symlink included, is `unreadable` by `lstat`, without being opened. The open is `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`,
     so a file swapped in between the two never blocks the read: a symlink fails the open (ELOOP), and a FIFO opens at
-    once and is refused by the `fstat` that follows. A JSON parse failure (a file LiteLLM is rewriting in place) is re-read up to
-    READ_RETRIES times, READ_RETRY_S apart, and then answers `unreadable`, never `absent`. Any `OSError` other than
-    ENOENT is `unreadable`, its remedy chosen by errno. A file nested past the parser's recursion limit is
-    `unreadable` at once, with no re-read."""
+    once and is refused by the `fstat` that follows. A JSON parse failure (a file LiteLLM is rewriting in place) is
+    re-read up to READ_RETRIES times, READ_RETRY_S apart, and then answers `unreadable`, never `absent`. Any
+    `OSError` other than ENOENT is `unreadable`, its remedy chosen by errno. A file nested past the parser's
+    recursion limit is `unreadable` at once, with no re-read."""
     p = paths_for(auth_dir)
     where = p.credential
     unsaved = _UNSAVED.get(os.path.normpath(auth_dir))
@@ -389,6 +398,7 @@ def read(auth_dir: str) -> Reading:
                 return _empty("absent", "no credential at " + where + "; sign the lane in")
             return _empty("unreadable", "the credential at " + where + " cannot be opened (" + errno.errorcode.get(
                 e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=True), _identity(st))
+        identity = None  # type: Optional[Identity]
         try:
             fst = os.fstat(fd)
             if not stat.S_ISREG(fst.st_mode):
@@ -403,7 +413,7 @@ def read(auth_dir: str) -> Reading:
                 chunks.append(chunk)
         except OSError as e:
             return _empty("unreadable", "the credential at " + where + " cannot be read (" + errno.errorcode.get(
-                e.errno or 0, "error") + ")")
+                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=True), identity)
         finally:
             os.close(fd)
         try:

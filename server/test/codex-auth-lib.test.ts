@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
@@ -37,6 +37,25 @@ const lstatKey = (p: string): string => {
 /** Each token, and every `.`-separated segment of it long enough to be identifying. */
 const secretPieces = (tokens: string[]): string[] =>
   tokens.flatMap((t) => [t, ...t.split('.').filter((s) => s.length >= 12)]);
+
+/** Make `dir` an authDir under which `lstat` cannot measure the credential path: a regular file where the directory
+ *  should be (ENOTDIR), a symlink loop in its place (ELOOP), or a directory with no search permission (EACCES). The
+ *  returned function restores what the cleanup needs (the directory's mode). */
+type Unstatable = 'enotdir' | 'dir-loop' | 'unsearchable';
+function plantUnstatable(dir: string, kind: Unstatable): () => void {
+  mkdirSync(dirname(dir), { recursive: true });
+  if (kind === 'enotdir') {
+    writeFileSync(dir, 'not a directory', { mode: 0o600 });
+    return () => undefined;
+  }
+  if (kind === 'dir-loop') {
+    symlinkSync(basename(dir), dir);
+    return () => undefined;
+  }
+  mkdirSync(dir);
+  chmodSync(dir, 0o000);
+  return () => chmodSync(dir, 0o700);
+}
 
 /** Write `content` (a string as is, anything else as JSON) as the credential, mode 0600. */
 function writeCred(dir: string, content: unknown): string {
@@ -142,14 +161,15 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     // Two whole credentials, each renamed over the torn one (atomically: a rename is never seen half-done).
     plantBackendCredential(join(home, 'whole-1'));
     plantBackendCredential(join(home, 'whole-2'));
-    // The driver prints the `paths` line and starts the read at once; the heal lands 150 ms later, after the read's
-    // first attempt and well inside its first READ_RETRY_S (1 s) wait. A read with no re-read answers unreadable.
+    // The driver prints the `paths` line and starts the read at once; the heal lands 450 ms later, well after the read's
+    // first attempt and well inside its first READ_RETRY_S (1 s) wait. A read with no re-read answers unreadable, and
+    // so does one that binds READ_RETRY_S as 0.05: its three re-reads are done about 150 ms in, before the heal.
     const run = async (whole: string, consts: object): Promise<Record<string, any>> => {
       let healed: Promise<void> = Promise.resolve();
       const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'paths' }, { op: 'read' }], consts }, {}, {
         onLine: (line) => {
           if (line.op === 'paths') {
-            healed = new Promise((resolve) => { setTimeout(() => { renameSync(credPath(join(home, whole)), p); resolve(); }, 150); });
+            healed = new Promise((resolve) => { setTimeout(() => { renameSync(credPath(join(home, whole)), p); resolve(); }, 450); });
           }
         },
       });
@@ -192,6 +212,10 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     writeCred(join(home, 'nan-stored'), raw(rawJwt(`{"exp": ${exp}}`), 'NaN'));
     writeCred(join(home, 'deep-claims'), raw(rawJwt('['.repeat(100000)), 'null'));
     writeCred(join(home, 'deep-file'), '['.repeat(200000));
+    // A JSON integer too large for a float (json.loads parses it as an int; math.isfinite on it raises OverflowError).
+    const huge = '1' + '0'.repeat(400);
+    writeCred(join(home, 'huge-stored'), raw(rawJwt(`{"exp": ${exp}}`), huge));
+    writeCred(join(home, 'huge-exp'), raw(rawJwt(`{"exp": ${huge}}`), 'null'));
     const at = (name: string): string => join(home, name);
     const r = await runAuthDriver(home, {
       authDir: at('nan'),
@@ -201,10 +225,13 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
         { op: 'read', authDir: at('nan-stored') },
         { op: 'read', authDir: at('deep-claims') },
         { op: 'read', authDir: at('deep-file') },
+        { op: 'read', authDir: at('huge-stored') },
+        { op: 'read', authDir: at('huge-exp') }, { op: 'expired', authDir: at('huge-exp') },
       ],
     });
     expect(r.status, r.stderr).toBe(0);
-    const [nan, nanExpired, inf, infExpired, nanStored, deepClaims, deepFile] = driverLines(r.stdout);
+    const [nan, nanExpired, inf, infExpired, nanStored, deepClaims, deepFile, hugeStored, hugeExp, hugeExpired] =
+      driverLines(r.stdout);
     expect(nan).toMatchObject({ credential: 'present', expires_at: null });
     expect(nanExpired.result, 'a NaN expiry is expired, never fresh forever').toBe(true);
     expect(inf).toMatchObject({ credential: 'present', expires_at: null });
@@ -213,6 +240,10 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     expect(deepClaims).toMatchObject({ credential: 'present', expires_at: null, account_id: null });
     expect(deepFile.credential).toBe('unreadable');
     expect(deepFile.detail).toMatch(/nested too deeply/);
+    expect(hugeStored, 'a stored integer past the float range falls through to the exp claim')
+      .toMatchObject({ credential: 'present', expires_at: exp });
+    expect(hugeExp, 'an exp claim past the float range is no expiry').toMatchObject({ credential: 'present', expires_at: null });
+    expect(hugeExpired.result).toBe(true);
   });
 
   it.each(['fifo', 'symlink'])('a non-regular file at the credential path reads unreadable at once, without opening it (%s)', async (kind) => {
@@ -231,16 +262,48 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     expect(r.timedOut, 'the read opened the file').toBe(false);
     const [line] = driverLines(r.stdout);
     expect(line.credential).toBe('unreadable');
-    expect(line.detail).toMatch(/not a regular file/);
+    // Only the lstat arm says this; the open (a symlink's ELOOP) and the fstat arm ("was replaced by a non-regular
+    // file", a FIFO the non-blocking open let through) each say something else.
+    expect(line.detail).toContain(`${credPath(dir)} is not a regular file; move it aside`);
+    expect(line.detail).not.toMatch(/replaced|cannot be opened/);
+  });
+
+  it.each([
+    ['enotdir', 'ENOTDIR'], ['dir-loop', 'ELOOP'],
+  ] as Array<[Unstatable, string]>)('a credential path whose authDir is not a directory reads unreadable, naming the authDir (%s)', async (kind, code) => {
+    const home = mkTmp('codex-auth-notdir-');
+    const dir = laneDir(home);
+    plantUnstatable(dir, kind);
+    const line = await readAt(home, dir);
+    expect(line).toMatchObject({ credential: 'unreadable', identity: null });
+    expect(line.detail).toContain(`cannot be read (${code}); ${dir} or a directory above it is not a directory, or is a symlink loop`);
+    expect(line.detail, 'neither the file-mode nor the symlink remedy can fix a directory').not.toMatch(/chmod|the path is a symlink/);
+  });
+
+  // Root searches a 0000 directory, so the case cannot measure anything there.
+  it.skipIf(process.getuid?.() === 0)('a credential under an authDir that cannot be searched reads unreadable, naming the directories\' permissions', async () => {
+    const home = mkTmp('codex-auth-unsearchable-');
+    const dir = laneDir(home);
+    const restore = plantUnstatable(dir, 'unsearchable');
+    try {
+      const line = await readAt(home, dir);
+      expect(line).toMatchObject({ credential: 'unreadable', identity: null });
+      expect(line.detail).toContain(`cannot be read (EACCES); check the permissions of ${dir} and the directories above it`);
+      expect(line.detail, 'the file\'s own mode is not what refused').not.toMatch(/chmod/);
+    } finally {
+      restore();
+    }
   });
 
   // The unsaved map is only ever filled by Task 2's writers; this case fills it directly, in a process of its own, to
   // pin what `read` compares it against: an absent file (identity None) matches a record bound to None, and nothing
-  // else does.
-  it.each(['absent', 'fifo', 'symlink'])('an unsaved record bound to an absent file is served only while the file is absent (%s)', (kind) => {
+  // else does, a path `lstat` cannot measure (ENOTDIR, ELOOP, EACCES) included.
+  const unsavedRead = (kind: string): string => {
     const home = mkTmp('codex-auth-unsaved-');
     const dir = laneDir(home);
-    mkdirSync(dir, { recursive: true });
+    let restore = (): void => undefined;
+    if (kind === 'enotdir' || kind === 'dir-loop' || kind === 'unsearchable') restore = plantUnstatable(dir, kind);
+    else mkdirSync(dir, { recursive: true });
     if (kind === 'fifo') {
       const mk = spawnSync('mkfifo', [credPath(dir)]);
       expect(mk.status, String(mk.stderr)).toBe(0);
@@ -258,12 +321,24 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
       'mod._UNSAVED[os.path.normpath(sys.argv[2])] = ({"access_token": "atok-fixture-u", "refresh_token": "rtok-fixture-u"}, None)',
       'print(mod.read(sys.argv[2]).credential)',
     ].join('\n');
-    const r = spawnSync(PY as string, ['-I', '-c', code, AUTH_LIB, dir], {
-      encoding: 'utf8', cwd: home, timeout: 5000,
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE },
-    });
-    expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe(kind === 'absent' ? 'present' : 'unreadable');
+    try {
+      const r = spawnSync(PY as string, ['-I', '-c', code, AUTH_LIB, dir], {
+        encoding: 'utf8', cwd: home, timeout: 5000,
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout.trim();
+    } finally {
+      restore();
+    }
+  };
+  const UNSAVED_TITLE = 'an unsaved record bound to an absent file is served only while the file is absent (%s)';
+  it.each(['absent', 'fifo', 'symlink', 'enotdir', 'dir-loop'])(UNSAVED_TITLE, (kind) => {
+    expect(unsavedRead(kind)).toBe(kind === 'absent' ? 'present' : 'unreadable');
+  });
+  // Root searches a 0000 directory, so this kind cannot be measured there.
+  it.skipIf(process.getuid?.() === 0).each(['unsearchable'])(UNSAVED_TITLE, (kind) => {
+    expect(unsavedRead(kind)).toBe('unreadable');
   });
 
   it.each(FOREIGN)('another family\'s file reads foreign-family (%s)', async (_name, content, family) => {
