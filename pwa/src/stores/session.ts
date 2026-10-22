@@ -108,6 +108,12 @@ export interface SessionState {
    *  rationale and how it relates to (and takes display priority over)
    *  `dialog` above. */
   ask: HookAsk | null;
+  /** D-6325: has an `ask` or `ask_cleared` frame arrived on THIS connection? `ask` above survives a dropped socket
+   *  (the automatic reconnect never calls `disconnect()`), so by itself it cannot tell "no envelope" from "not yet
+   *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). False when
+   *  the store is created, on every socket open (automatic reconnects included) and on `disconnect()`; a dialog frame
+   *  never sets it. Per connection, never persisted. */
+  askFrameSeen: boolean;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
@@ -177,6 +183,9 @@ export type SessionSnapshot = Pick<
   SessionState,
   'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'tasksTouchedAt' | 'mail'
 > & {
+  /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
+   *  reducer's own suites) reads as false. */
+  askFrameSeen?: boolean;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -292,10 +301,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // initial state) null it out — `rotated` below touches events/uuid/offset
     // only, because a transcript switch does not itself mean a live menu (or
     // the hook's envelope for one) went away.
+    // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
-      return { ...s, ask: msg.ask };
+      return { ...s, ask: msg.ask, askFrameSeen: true };
     case 'ask_cleared':
-      return { ...s, ask: null };
+      return { ...s, ask: null, askFrameSeen: true };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -346,6 +356,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   statusUpdatedAt: s.statusUpdatedAt,
   dialog: s.dialog,
   ask: s.ask,
+  askFrameSeen: s.askFrameSeen,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -753,6 +764,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       statusUpdatedAt: null,
       dialog: null,
       ask: null,
+      askFrameSeen: false,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,
@@ -823,7 +835,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
           // looking at would quietly start pushing notifications again.
-          onOpen: () => reportVisible(),
+          onOpen: () => {
+            // D-6325: a new connection has said nothing about the envelope yet. The `ask` the store holds is the last
+            // connection's; it is not current until this one's first `ask` or `ask_cleared` frame sets the flag again.
+            set({ askFrameSeen: false });
+            reportVisible();
+          },
           makeSocket: deps.makeSocket,
         });
         socket.start();
@@ -891,7 +908,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // `workflows` too (D-5560): its server half states the first read on
         // every connect (`lastWorkflowsJson`), and an explicit teardown clears
         // the rows here so a finished workflow is never left on screen as running.
-        set({ ask: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false });
+        //
+        // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
+        set({
+          ask: null, askFrameSeen: false, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+        });
       },
 
       async send(text, opts = {}) {
