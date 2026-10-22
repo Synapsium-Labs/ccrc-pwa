@@ -1140,6 +1140,27 @@ describe('2.1.300 AskUserQuestion (recorded)', () => {
       expect(reviewQuestions(parseDialog(lines.join('\n')))).toEqual([]);
     });
 
+    // Each bound of the listing alone, on panes built from a recorded review: still a review (`reviewRows`), so the
+    // listing is read, and each case reds when its bound is dropped.
+    const reviewPane = (edit: (lines: string[]) => string[]): Dialog => {
+      const d = parseDialog(edit(fixture('cc300-ask-review-1q-multiselect.txt').split('\n')).join('\n'));
+      expect(reviewRows(d)).not.toBeNull();
+      return d!;
+    };
+
+    it('still lists with the heading removed: the tab row is the upper boundary', () => {
+      expect(reviewQuestions(reviewPane((ls) => ls.filter((l) => l.trim() !== 'Review your answers')))).toEqual(['Which tools?']);
+    });
+
+    it('still lists with the tab row removed: the heading is the upper boundary', () => {
+      expect(reviewQuestions(reviewPane((ls) => ls.filter((l) => !l.trim().startsWith('←'))))).toEqual(['Which tools?']);
+    });
+
+    it('lists no ● line below the ready line', () => {
+      const below = reviewPane((ls) => ls.flatMap((l) => (l.trim() === 'Ready to submit your answers?' ? [l, ' ● Not a listed question'] : [l])));
+      expect(reviewQuestions(below)).toEqual(['Which tools?']);
+    });
+
     it('Cancel is row 2, the cursor on it keeps the id, and after it no menu is left: the whole ask was declined', () => {
       const review = parseDialog(fixture('cc300-ask-review-same-labels.txt'))!;
       const onCancel = parseDialog(fixture('cc300-ask-review-cancel-focused.txt'))!;

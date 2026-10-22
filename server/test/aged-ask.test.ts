@@ -114,6 +114,12 @@ describe('keepAgedAsk (D-6324)', () => {
     // Same leading labels, different count.
     expect(keepAgedAsk(raw(), parsedMenu(0, ['Red', 'Green']))).toBe(false);
   });
+
+  it("matches the parsed menu's question by sameQuestion: case and wrapped whitespace are folded", () => {
+    const m = parsedMenu(0);
+    expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'WHICH colour?' } })).toBe(true);
+    expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'Which\n   colour?' } })).toBe(true);
+  });
 });
 
 describe('keepAgedAsk: the multi menu\'s length and the review screen (D-6324)', () => {
@@ -131,7 +137,7 @@ describe('keepAgedAsk: the multi menu\'s length and the review screen (D-6324)',
 
   it('keeps an aged envelope on a review screen whose listed questions are all its own', () => {
     expect(keepAgedAsk(raw(), REVIEW)).toBe(true);
-    // "Every listed", not "all listed": a tall review can lose rows from the capture.
+    // "Every listed", not "all listed": a review lists only the questions that were answered (a skipped one is absent).
     expect(keepAgedAsk(raw(), reviewOf('Which size?'))).toBe(true);
     // A wrapped question lists only its first line, a prefix of the question (the one normalised-prefix rule).
     expect(keepAgedAsk(raw(), reviewOf('Which col', 'Which size?'))).toBe(true);

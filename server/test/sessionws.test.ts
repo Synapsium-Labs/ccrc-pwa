@@ -680,6 +680,13 @@ describe('hook ask envelope frames', () => {
       throw new Error('fixture holds no AskUserQuestion');
     })();
     const MENU = { pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl') };
+    /** The garden-club call whose review `cc296-ask-2q-long-review.txt` paints (and `-right-review`, unanswered). */
+    const GARDEN = { questions: [
+      { question: 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?',
+        options: [{ label: 'Split shifts (Recommended)' }, { label: 'Wait for the second tank' }] },
+      { question: 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?',
+        options: [{ label: 'Borrow and transport (Recommended)' }, { label: 'Move the swap outdoors' }, { label: 'Hire five big tables' }] },
+    ] };
     const asks = (frames: any[]) => frames.filter((f) => f.type === 'ask');
     const cleared = (frames: any[]) => frames.filter((f) => f.type === 'ask_cleared');
 
@@ -756,16 +763,22 @@ describe('hook ask envelope frames', () => {
 
     it('an aged envelope whose questions are the ones the review screen lists is kept', async () => {
       // The listed text is the first line of each question, a prefix of the full text the envelope carries.
-      const own = { questions: [
-        { question: 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?',
-          options: [{ label: 'Split shifts (Recommended)' }, { label: 'Wait for the second tank' }] },
-        { question: 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?',
-          options: [{ label: 'Borrow and transport (Recommended)' }, { label: 'Move the swap outdoors' }, { label: 'Hire five big tables' }] },
-      ] };
       const review = fixture('cc296-ask-2q-long-review.txt');
-      const { frames } = await streamWith({ paneSequence: [review, review], hookstateSequence: [aged({ ask: own }), aged({ ask: own })] });
+      const { frames } = await streamWith({ paneSequence: [review, review], hookstateSequence: [aged({ ask: GARDEN }), aged({ ask: GARDEN })] });
       expect(asks(frames)).toHaveLength(1);
       expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope is NOT kept on its own review screen while no question is answered (the review lists none)', async () => {
+      // `cc296-ask-2q-long-right-review.txt` is the garden-club call's review reached by → with nothing answered: it
+      // lists no question, and an empty listing cannot tell this call's review from another call's (fail-closed).
+      const review = fixture('cc296-ask-2q-long-right-review.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [hookBody({ ask: GARDEN }), aged({ ask: GARDEN })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that lists no answered question
     });
 
     it('a mid-redraw capture followed by a failed capture is not two redraws', async () => {
