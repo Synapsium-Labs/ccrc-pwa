@@ -2790,6 +2790,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - **The cure** is the operator's: restart `ccrc.service` on the server box. The fix goes through a wave: bound
           the pre-ready phase (the library's handshake timeout, plus a timer from `open` to `ready` that terminates and
           reconnects), pinned by a row against a listener that accepts the TCP connection and never answers.
+      - 20:55: still wedged, 55 minutes in. The same socket, with nothing received; `ccrc.service` has not been restarted
+        (up since 17:05:27) and has logged no line since 20:03:30. `/health` answers, and the server node's own
+        inventory tick runs. The fleet node was last measured at 20:01:46, and the v0.0.572 request still stands.
+        STATUS: fleet and server v0.0.570, newest v0.0.573, stable v0.0.502, intent dev/auto=off, backups fleet
+        231M/server 9209M, disk free fleet 150G/work volume 16G/server 22G; fleet node unreachable.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
