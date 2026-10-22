@@ -343,3 +343,29 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
     expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude');
   });
 });
+
+// D-6181: the raw reset reader. `_limit_field_to` blanks a window whose reset
+// has passed (a value nobody measured since); the pin's expiry needs the reset
+// itself, as written, whether or not it has passed. One definition, over the
+// same `_limit_pick_to` source; D-6182's "window ended" reader is built on it.
+describe('_limit_reset_to: the raw reset, as written (D-6181)', () => {
+  it('reads a future reset', () => {
+    const r = now() + 3600;
+    writeLimits('claude.json', json({ five: 99, fiveResetAt: r, seven: 10, sevenResetAt: r + 9, ts: now() }));
+    expect(sh('_limit_reset_to v claude five; echo "$?:$v"')).toBe(`0:${r}`);
+    expect(sh('_limit_reset_to v claude seven; echo "$?:$v"')).toBe(`0:${r + 9}`);
+  });
+
+  it('reads a reset that has passed, which _limit_field_to blanks', () => {
+    const r = now() - 60;
+    writeLimits('claude.json', json({ five: 99, fiveResetAt: r, ts: now() - 100 }));
+    expect(sh('_limit_field_to f claude five; echo "[$f]"')).toBe('[]');
+    expect(sh('_limit_reset_to v claude five; echo "$?:$v"')).toBe(`0:${r}`);
+  });
+
+  it('a missing file or field answers empty and rc 1', () => {
+    expect(sh('_limit_reset_to v claude-b five; echo "$?:[$v]"')).toBe('1:[]');
+    writeLimits('claude.json', json({ five: 20, ts: now() }));
+    expect(sh('_limit_reset_to v claude five; echo "$?:[$v]"')).toBe('1:[]');
+  });
+});
