@@ -62,6 +62,12 @@ import * as w5a1Recall from '../../ccd/history/recall.mjs';
 import { createStore as w5a1CreateStore } from '../../ccd/history/store.mjs';
 import * as w5a1Gate from '../../deploy/history-gate.mjs';
 import * as w5a1Drv from '../../deploy/history-replay.mjs';
+import { removeTmpFixturesEachTest as w5a8EachTest } from './tmpHelpers.js';
+
+// Each case's fixture homes and stores go when the case ends (R20a's opt-in): with W2-5a's cases the one end-of-file
+// sweep overran vitest's 20 s hook timeout under load while every test passed. Registered before the root afterEach
+// hooks below, so it runs after them: claims are released and children killed before their directories go.
+w5a8EachTest();
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
@@ -6703,6 +6709,8 @@ describe('W2-5a Task 3: the population over a planted store, admitStoreBoundarie
     }
     return memo;
   }
+  // Made before the cases, so the per-case fixture removal (w5a8EachTest) leaves its home for every case of this describe.
+  w5a1BeforeAll(() => { planted(); });
   const rowOf = (pk: number) => planted().res.boundaries.find((b) => b.transcript_pk === pk)!;
   /** W1's measure: a copy's membership rows after the boundary row (the window's longest-copy rule, W2-D15). */
   function afterCount(fileId: number, uuid: string): number {
@@ -10510,7 +10518,7 @@ describe('W2-5a fix wave, D-6308: no site redacts text that is already JSON', ()
   it('screenRedaction: a repo root that redaction changes drops the candidate redact-fact; CONTROL: a plain root passes', () => {
     const c = mined().find((x) => x.kind === 'command')!;
     expect(replay.screenRedaction(c as never, FW_IDX)).toBeNull();
-    expect(replay.screenRedaction({ ...c, repo_roots: ['/home/u/tree', `/home/${FW_AKIA}/tree`] } as never, FW_IDX)).toBe('redact-fact');
+    expect(replay.screenRedaction({ ...c, repo_roots: ['/home/u/tree', `/home/u/${FW_AKIA}/tree`] } as never, FW_IDX)).toBe('redact-fact');
   });
 
   it('a body nested past the stack is a counted discard at the writer, never a throw: writer-input-unrenderable', () => {
