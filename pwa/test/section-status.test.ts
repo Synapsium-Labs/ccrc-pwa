@@ -43,7 +43,7 @@ describe('Updates', () => {
   });
 
   it('leads with available exactly when a tag is pending (bannerRelease), in the attention tone', async () => {
-    const { bannerRelease } = await import('../src/fleet/UpdateBanner');
+    const { bannerRelease } = await import('../src/fleet/releaseWaiting');
     const w = waiting();
     expect(bannerRelease(w)?.tag).toBe('v0.0.10');
     const s = of('updates', settings({ updates: { view: w, failure: null, seq: 1, reload: () => 0 } }));
