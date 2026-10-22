@@ -463,21 +463,64 @@ describe('the tab strip (decision ask-tab-strip)', () => {
     expect(screen.getByRole('heading', { name: "Claude is asking a question this screen can't read yet." })).toBeInTheDocument();
   });
 
-  it('the chip of the screen showing is scrolled into the strip\'s view, and again when the screen changes', async () => {
-    const seen: string[] = [];
-    const scroll = vi.fn(function (this: HTMLElement) { seen.push(this.getAttribute('aria-label') ?? ''); });
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scroll, configurable: true });
+  it('the chip of the screen showing is brought into the strip sideways only, and again when the screen changes', async () => {
+    // D-6325: the strip's chip used to be `scrollIntoView`ed, whose `block: 'nearest'` also scrolled the sheet body
+    // (with one scroller a long question put the strip below the fold, so the body opened scrolled down to the chip).
+    // Now the strip's own `scrollLeft` moves, from the rectangles, and nothing else scrolls: `scrollIntoView` is never
+    // called. jsdom lays nothing out, so each rectangle is staged: the strip is 100px wide at the page's left edge and
+    // a chip sits at `chipLeft - strip.scrollLeft`, 80px wide.
+    const intoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: intoView, configurable: true });
+    const rect = (left: number, width: number): DOMRect => ({
+      left, right: left + width, top: 0, bottom: 44, width, height: 44, x: left, y: 0, toJSON: () => ({}),
+    });
+    const chipLeft: Record<string, number> = {
+      'Go to Table supply, not answered yet': 150, 'Go to Submit': 240,
+    };
+    const rects = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('ask-tabs')) return rect(0, 100);
+      const name = this.getAttribute('aria-label') ?? '';
+      const at = chipLeft[name];
+      const strip = this.closest<HTMLElement>('.ask-tabs');
+      return at === undefined || strip === null ? rect(0, 0) : rect(at - strip.scrollLeft, 80);
+    });
     try {
       vi.spyOn(api, 'answerDialogTab').mockResolvedValue({ ok: true, next: review() });
       renderAsk(q2());
-      expect(seen).toEqual(['Go to Table supply, not answered yet']);
-      expect(scroll).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+      const strip = screen.getByRole('group', { name: 'Questions in this ask' });
+      // Chip 1 spans 150-230 against a 0-100 strip: its right edge is brought to the strip's (230 - 100).
+      expect(strip.scrollLeft).toBe(130);
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Go to Submit' }));
       });
-      expect(seen.at(-1)).toBe('Go to Submit');
+      // Submit spans 240-320 at the page. The review is a new screen with its own strip, which starts at 0 and is
+      // scrolled by its chip's right edge over the strip's (320 - 100).
+      expect(screen.getByRole('group', { name: 'Questions in this ask' }).scrollLeft).toBe(220);
+      expect(intoView, 'the sheet body is never scrolled by the strip').not.toHaveBeenCalled();
     } finally {
+      rects.mockRestore();
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('the open-time focus never scrolls the sheet (D-6325), and an arrow key\'s focus keeps its scroll', async () => {
+    pointer('fine');
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderAsk(q2());
+      await frame();
+      // The calls that landed on an option row: the open-time focus of `useAskKeys`.
+      const onRow = (): FocusOptions[] => focus.mock.calls.flatMap((c, i) =>
+        (focus.mock.contexts[i] as HTMLElement).classList.contains('opt') ? [(c[0] ?? {}) as FocusOptions] : []);
+      expect(onRow().length, 'the open-time focus ran on a row').toBeGreaterThan(0);
+      expect(onRow().every((o) => o.preventScroll === true), 'and with preventScroll').toBe(true);
+      focus.mockClear();
+      fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+      expect(focus, 'an arrow key moved the focus').toHaveBeenCalled();
+      expect(onRow().length, 'on a row').toBeGreaterThan(0);
+      expect(onRow().every((o) => o.preventScroll === undefined), 'with the normal scroll').toBe(true);
+    } finally {
+      focus.mockRestore();
     }
   });
 

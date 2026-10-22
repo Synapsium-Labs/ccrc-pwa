@@ -10,10 +10,14 @@
 //     of `auto` or `scroll` AND `scrollHeight > clientHeight + 1`), it is the sheet body, and the title is not it;
 //   - "no horizontal page scroll": the document is no wider than the window;
 //   - "no page error": nothing uncaught was thrown.
-// Each view also asserts what the surface DOES show: the question's first line and the who line.
+// Each view also asserts what the surface DOES show (the question's first line and the who line) and that the question
+// "reads from its top when the sheet opens": measured as the sheet settled, with nothing scrolled by the test, the body
+// is at its top and both lines lie inside the body's own rectangle. A desk view (1280, a fine pointer) holds that case
+// alone, since the open-time focus differs there.
 //
-// The fixture's data is `test/askFixtures.ts`'s (`askFixture(1)`, `longHookEnvelope()`), the one copy every Step 1
-// suite reads; the browser config imports from `../test/` as `name-field.browser.test.tsx` already does.
+// The fixture's data is `test/askFixtures.ts`'s (`askFixture(1)` and `longHookEnvelope()`, the forty-line variant
+// this file alone reads), so no copy is kept here; the browser config imports from `../test/` as
+// `name-field.browser.test.tsx` already does.
 //
 // For the per-width review: `CCRC_SHOTS=<a directory>` keeps one picture per view. Run: `( cd pwa &&
 // CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
@@ -26,7 +30,8 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
-import { ASKER_PROJECT, ASKER_SESSION, askFixture, longHookEnvelope } from '../test/askFixtures';
+import { ASKER_PROJECT, ASKER_SESSION, LONG_QUESTION, askFixture, longHookEnvelope } from '../test/askFixtures';
+import type { HookAsk } from '../../shared/api';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
   [360, 390].map((width) => ({ skin, theme, width }))));
@@ -66,12 +71,17 @@ const BACKLOG = {
 
 /** The session socket's frames, in the order the stream sends them: the transcript, the status, then fixture 1's own
  *  `dialog` and `ask` frames with the forty-line question in the envelope. */
-const FRAMES = (): object[] => {
+const FRAMES = (twice: boolean): object[] => {
   const { frames } = askFixture(1);
+  const envelope = (): HookAsk => {
+    const ask = longHookEnvelope();
+    if (twice && 'questions' in ask) ask.questions[0] = { ...ask.questions[0]!, question: `${LONG_QUESTION}\n${LONG_QUESTION}` };
+    return ask;
+  };
   return [
     BACKLOG,
     { type: 'status', status: 'busy', statusUpdatedAt: null },
-    ...frames.map((f) => (f.type === 'ask' ? { ...f, ask: longHookEnvelope() } : f)),
+    ...frames.map((f) => (f.type === 'ask' ? { ...f, ask: envelope() } : f)),
   ];
 };
 
@@ -96,92 +106,121 @@ afterAll(async () => {
 });
 
 interface Scroller { cls: string; overflowY: string; scrollHeight: number; clientHeight: number }
+interface Box { top: number; bottom: number }
 interface Measure {
   scrollers: Scroller[];
   titleScrolls: boolean;
   pageSide: number;
   panelText: string;
-  /** With the body scrolled to its top: the question's first line and the who line, as rectangles. */
+  /** As the sheet opened and settled, nothing scrolled by the test: the body's scroll offset, the panel's and the
+   *  body's rectangles, and the question's first line and the who line as rectangles. */
+  bodyScrollTop: number | null;
+  panel: Box;
+  body: Box | null;
   first: Box | null;
   who: Box | null;
-  viewportHeight: number;
 }
-interface Box { top: number; bottom: number }
+
+/** Open fixture 1 at `view`, let the sheet settle, and measure it as it stands. `twice` doubles the question to eighty
+ *  lines: at a desk the first option of the forty-line question is already on screen, so only a longer one makes the
+ *  open-time focus want to scroll. */
+async function openAndMeasure(view: AppView, twice = false): Promise<{ measured: Measure; errors: string[] }> {
+  const opened = await openApp(browser!, view, FIXTURE);
+  try {
+    await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+      for (const frame of FRAMES(twice)) ws.send(JSON.stringify(frame));
+    });
+    await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+    await opened.page.waitForSelector('.sheet-panel .ask-who', { timeout: 30_000 });
+    await opened.page.waitForTimeout(800); // the sheet's entrance (vaul) and its open-time focus settle
+    const shots = process.env['CCRC_SHOTS'];
+    if (shots !== undefined && shots !== '') {
+      mkdirSync(shots, { recursive: true });
+      await opened.page.screenshot({ path: path.join(shots, shotName(view)) });
+    }
+    const measured = await opened.page.evaluate(([FIRST_LINE_ARG, WHO_LINE_ARG]): Measure => {
+      // The panel is found from the ask itself: the who line is the ask's own.
+      const panel = document.querySelector('.ask-who')!.closest<HTMLElement>('.sheet-panel')!;
+      const title = panel.querySelector<HTMLElement>('.sheet-title');
+      const scrolls = (el: HTMLElement): boolean => {
+        const oy = getComputedStyle(el).overflowY;
+        return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1;
+      };
+      const scrollers = [panel, ...panel.querySelectorAll<HTMLElement>('*')].filter(scrolls).map((el) => ({
+        cls: el.getAttribute('class') ?? el.tagName, overflowY: getComputedStyle(el).overflowY,
+        scrollHeight: el.scrollHeight, clientHeight: el.clientHeight,
+      }));
+      // The text itself, laid out where Chrome put it: a Range over the substring, because the question is one
+      // element of forty lines.
+      const boxOf = (text: string): Box | null => {
+        const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+          const at = (n.textContent ?? '').indexOf(text);
+          if (at < 0) continue;
+          const range = document.createRange();
+          range.setStart(n, at);
+          range.setEnd(n, at + text.length);
+          const r = range.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom };
+        }
+        return null;
+      };
+      const body = panel.querySelector<HTMLElement>('.sheet-body');
+      const bodyRect = body?.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      return {
+        scrollers,
+        titleScrolls: title !== null && scrolls(title),
+        pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        panelText: panel.innerText,
+        bodyScrollTop: body?.scrollTop ?? null,
+        panel: { top: panelRect.top, bottom: panelRect.bottom },
+        body: bodyRect === undefined ? null : { top: bodyRect.top, bottom: bodyRect.bottom },
+        first: boxOf(FIRST_LINE_ARG),
+        who: boxOf(WHO_LINE_ARG),
+      };
+    }, [FIRST_LINE, WHO_LINE] as const);
+    return { measured, errors: opened.errors };
+  } finally {
+    await opened.ctx.close();
+  }
+}
+
+/** The claim of the open sheet: nothing has scrolled the question away, its first line sits inside the body's own
+ *  rectangle (not merely inside the window), and the who line, which the eyebrow keeps above the body, sits inside the
+ *  panel. (Two pixels of slack: a Range's rectangle is the glyphs' box, which a tight line height lets reach a pixel
+ *  past the line.) */
+function expectReadsFromTop(m: Measure): void {
+  expect(m.body, 'the sheet has a body').not.toBeNull();
+  expect(m.bodyScrollTop, 'the body opens at its top').toBeLessThanOrEqual(1);
+  const inside = (what: string, box: Box | null, within: Box, name: string): void => {
+    expect(box, `${what} is in the sheet`).not.toBeNull();
+    expect(box!.top, `${what} starts inside the ${name}`).toBeGreaterThanOrEqual(within.top - 2);
+    expect(box!.bottom, `${what} ends inside the ${name}`).toBeLessThanOrEqual(within.bottom + 2);
+  };
+  inside('the first line', m.first, m.body!, 'body');
+  inside('the who line', m.who, m.panel, 'panel');
+}
 
 describe('an ask holds one vertical scroller (D-6325)', () => {
   for (const view of VIEWS) {
     describe(named(view), () => {
-      // One page load per view, measured by the three cases below (the plan's names stay greppable).
+      // One page load per view, measured by the cases below (the plan's names stay greppable).
       let measured: Measure | undefined;
       let errors: string[] = [];
 
       beforeAll(async () => {
-        const opened = await openApp(browser!, view, FIXTURE);
-        errors = opened.errors;
-        try {
-          await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
-            for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
-          });
-          await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
-          await opened.page.waitForSelector('.sheet-panel .ask-who', { timeout: 30_000 });
-          await opened.page.waitForTimeout(500); // the sheet's entrance (vaul) settles
-          const shots = process.env['CCRC_SHOTS'];
-          if (shots !== undefined && shots !== '') {
-            mkdirSync(shots, { recursive: true });
-            await opened.page.screenshot({ path: path.join(shots, shotName(view)) });
-          }
-          measured = await opened.page.evaluate(([FIRST_LINE_ARG, WHO_LINE_ARG]): Measure => {
-            const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
-            const title = panel.querySelector<HTMLElement>('.sheet-title');
-            const scrolls = (el: HTMLElement): boolean => {
-              const oy = getComputedStyle(el).overflowY;
-              return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1;
-            };
-            const scrollers = [panel, ...panel.querySelectorAll<HTMLElement>('*')].filter(scrolls).map((el) => ({
-              cls: el.className.toString(), overflowY: getComputedStyle(el).overflowY,
-              scrollHeight: el.scrollHeight, clientHeight: el.clientHeight,
-            }));
-            // The text itself, laid out where Chrome put it once the body is back at its top: a Range over the
-            // substring, because the question is one element of forty lines.
-            const boxOf = (text: string): Box | null => {
-              const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
-              for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
-                const at = (n.textContent ?? '').indexOf(text);
-                if (at < 0) continue;
-                const range = document.createRange();
-                range.setStart(n, at);
-                range.setEnd(n, at + text.length);
-                const r = range.getBoundingClientRect();
-                return { top: r.top, bottom: r.bottom };
-              }
-              return null;
-            };
-            const body = panel.querySelector<HTMLElement>('.sheet-body');
-            if (body !== null) body.scrollTop = 0;
-            return {
-              first: boxOf(FIRST_LINE_ARG), who: boxOf(WHO_LINE_ARG), viewportHeight: window.innerHeight,
-              scrollers,
-              titleScrolls: title !== null && scrolls(title),
-              pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-              panelText: panel.innerText,
-            };
-          }, [FIRST_LINE, WHO_LINE] as const);
-        } finally {
-          await opened.ctx.close();
-        }
-      }, 60_000);
+        ({ measured, errors } = await openAndMeasure(view));
+      }, 90_000);
 
       it('shows the question and who asks', () => {
         expect(measured, 'the ask sheet opened').toBeDefined();
-        const m = measured!;
-        expect(m.panelText).toContain(FIRST_LINE);
-        expect(m.panelText).toContain(WHO_LINE);
-        // Laid out, not only present: with the body at its top both lines sit inside the window.
-        for (const [what, box] of [['the first line', m.first], ['the who line', m.who]] as const) {
-          expect(box, `${what} is in the sheet`).not.toBeNull();
-          expect(box!.top, `${what} starts inside the window`).toBeGreaterThanOrEqual(0);
-          expect(box!.bottom, `${what} ends inside the window`).toBeLessThanOrEqual(m.viewportHeight);
-        }
+        expect(measured!.panelText).toContain(FIRST_LINE);
+        expect(measured!.panelText).toContain(WHO_LINE);
+      });
+
+      it('the question reads from its top when the sheet opens', () => {
+        expectReadsFromTop(measured!);
       });
 
       it('the ask has one vertical scroller', () => {
@@ -200,4 +239,17 @@ describe('an ask holds one vertical scroller (D-6325)', () => {
       });
     });
   }
+});
+
+// The open-time focus (`useAskKeys`) runs under a fine pointer, which a desk has and a phone has not: its own view,
+// with an eighty-line question so that the first option is below the fold and focusing it would scroll the body.
+describe('an ask at a desk opens at its top too (D-6325)', () => {
+  const desk: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
+  it(named(desk), async () => {
+    const { measured, errors } = await openAndMeasure(desk, true);
+    expect(measured.panelText).toContain(FIRST_LINE);
+    expect(measured.scrollers.map((s) => s.cls), 'the question overflows its body').toHaveLength(1);
+    expectReadsFromTop(measured);
+    expect(errors).toEqual([]);
+  }, 90_000);
 });
