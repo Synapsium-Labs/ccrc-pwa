@@ -11643,7 +11643,7 @@ A run that reports only skipped tests selected nothing, and its step is not gree
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts
 ```
 
-Expected: `Test Files  1 passed (1)`, every case passed or skipped. The skips are the root-only cases (`process.getuid() === 0`) and the darwin-only rows. W2-4's pins are all among the passes: RP1-contract, RP2, RP3-admission, RP4, RP9, the limits parity over `rolloverCases`, step 0a and the probe. So are Tasks 1 to 7's:
+Expected: `Test Files  1 passed (1)`, every case passed or skipped. The skips are the root-only cases (`process.getuid() === 0`) and the darwin-only rows; measured at the final tip on a non-root Linux box: `Tests  764 passed (764)`, no skip. W2-4's pins are all among the passes: RP1-contract, RP2, RP3-admission, RP4, RP9, the limits parity over `rolloverCases`, step 0a and the probe. So are Tasks 1 to 7's:
 - RP5, with the straddle and two-copy CONTROLs;
 - RP1-writer and RP3-writer, where a refused account leaves the stub's log absent;
 - W2-D61 to W2-D75's admission, Baseline B, answerability (D-5780's five pins) and freeze pins;
