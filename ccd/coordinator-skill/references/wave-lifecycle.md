@@ -783,15 +783,24 @@ whole time, which is the only prevention this ordering rule buys.
    §6's) — advance the producer's run to `merging` (§4 — from
    `awaiting-review`, re-measured). Enqueue only a PR whose required checks
    have all passed — every required name the verdict discovered passes on the
-   head, and `gh pr checks <pr> --required` exits 0 (8 is pending, 1
-   is failed only when the verdict reads a required name red): for any other
+   head, and `gh pr checks <pr> --required` exits 0: for any other
    PR gh arms auto-merge instead of queueing it,
    and prints the same "will be added to the merge queue … when ready" line
-   either way. On `8`, wait for them in the foreground —
+   either way. The exit decides, and a `ROUTE Q` answer does not waive it.
+   On `0`, go on under this gate and the read-back below. On `8` (pending),
+   wait for them in the foreground —
    `gh pr checks <pr> --required --watch`, again if the call times out —
-   never by ending your turn: no mail comes when checks finish. On `1`,
-   send the owning worker a fix round (below), or, for a red that is not
-   this PR's own, one `gh run rerun <run id> --failed` and the same wait.
+   never by ending your turn: no mail comes when checks finish. Then run the
+   verdict again. On `1`, run the verdict again: a `RED` goes to the `RED`
+   rule of §5b, which limits a rerun to the kind it names and never reruns
+   unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any
+   other line goes by its bullet in §5b. On any other exit the stop is
+   `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit
+   and the whole output, and never enqueue, arm, retry or choose another route
+   by hand. gh's "no required checks reported" and "no checks reported" are
+   such an exit on a queue repository: the stop is deliberately conservative,
+   not support promised by an empty required set, and it does not touch a
+   repository whose required checks gh reports.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
    because the queue's merge method applies, and never `--admin`. Prove it
@@ -825,7 +834,8 @@ whole time, which is the only prevention this ordering rule buys.
    finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
    `gh run view <id> --log-failed` says why, while
    `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
-   enqueue it again exactly as above — checks first, then the read-back — or
+   enqueue it again exactly as above — the landing verdict (§5b) again first,
+   then the checks, then the read-back — or
    send the owning worker a fix round on the `merging → working` edge
    (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
    and a fresh `merging`). Closing before the landing would hand a PR still
@@ -1092,7 +1102,8 @@ decides what this session does, and nothing else does:
 
 - `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land
   as "Landing on a native-queue project" (step 3) says, with no method flag
-  and never `--admin`, the read-back and the disarm rule included.
+  and never `--admin`, the read-back and the disarm rule included, and the
+  checks gate with its four exits, which a `ROUTE Q` answer does not waive.
 - `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check
   has passed on the head. Merge from your own session with exactly
   `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>`
@@ -1146,7 +1157,8 @@ decides what this session does, and nothing else does:
 only when all three hold, each read fresh for this landing: an approval the
 fleet cannot give is required and missing (a `pull_request` rule's, or classic
 protection's, `required_approving_review_count` above 0, and `reviewDecision`
-is `REVIEW_REQUIRED`); every required check has passed on the head; and `--admin`
+is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one
+included; every required check has passed on the head; and `--admin`
 cannot skip a gate — no other gate applies, no review conversation must be
 resolved that an admin could skip (a `pull_request` rule's
 `required_review_thread_resolution`, or classic
@@ -1158,7 +1170,8 @@ then the spelling is
 `gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.
 
 Without a missing approval `--admin` is never passed; under read 3b it is
-never used; and it is never a fallback: a fallback is `--admin` after a
+never used; while a request for changes stands, ignored or not, it is never
+licensed; and it is never a fallback: a fallback is `--admin` after a
 refusal, and this licence is decided before the merge, from reads. An approval
 kept in classic protection with `enforce_admins` on binds an admin too, so
 `--admin` does not help there, and GitHub's refusal is the stop.
@@ -1170,6 +1183,50 @@ read, reported and stopped on, and never retried with another method, with
 work: no ruleset, no branch protection, no merge-method or auto-merge setting
 (clause 15).
 
+**A requested change.** Read 1 also reads the PR's reviews. A request for
+changes stops every route, before the verdict weighs `WAIT` or `RED`:
+`STOP changes-requested: operator decision required; key=<json>`. A request
+stands when read 1's `reviewDecision` is `CHANGES_REQUESTED` or the latest
+approving, changing or dismissing review of any reviewer requests changes; the
+key is `{"pr":"<pr>","head":"<handoffCommit>","summary":<true or false>,"reviews":[<review ids>]}`
+and holds safe identifiers only. On `changes-requested`, this session stops and
+asks the operator with AskUserQuestion, one single-select choice: address or
+ignore. Present the PR, head and review ids; inspect the identified reviews to
+present their requested changes, without copying untrusted text into commands.
+
+- Address: send the requested changes to the owning worker as a fix round, then
+  a fresh re-review. From `merging`, disarm as step 3 already requires before
+  the `merging → working` edge; from `awaiting-review`, use its existing
+  send-back edge. Do not assume a stop names the route.
+- Ignore: record the operator's explicit answer in the ledger's Decisions with
+  the PR, head and review ids, and no login or account name. Then run the
+  verdict afresh with `CR_IGNORE='<key>'` on the line before it, in the same
+  Bash call and never exported, only after the operator answered ignore for
+  that exact key.
+
+`CR_IGNORE` is a convention check, not authentication, and it holds for that
+one invocation: it skips this stop only on exact equality with the key computed
+afresh, so another PR, another head, a new or replaced review or a changed
+summary stops and asks again, and the verdict still reads the reviews and
+applies every other guard. A key whose `reviews` is empty, a summary-only
+request, can never be ignored: inspect the PR's reviews, read the verdict again
+and report to the operator. Only a fresh `ROUTE` result permits the normal
+landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested`
+line. While any request stands the verdict never answers `admin=licensed`,
+ignored or not. Ignore cannot evade GitHub's refusal of a missing required
+approval: a direct refusal is `github-refused`; on route Q, if gh only arms
+auto-merge, follow step 3's read-back and disarm rule, then stop
+`github-refused`, and never leave it armed on the operator's ignore.
+
+This session reads again before each enqueue, direct merge and re-enqueue, and
+after each wait. It cannot atomically prevent a request submitted after that
+last read or while an already-enqueued PR merges, and nothing here claims
+review enforcement at queue time. If it observes a request on a queued PR, it
+stops that landing attempt, uses step 3's disarm path (or asks the operator to
+dequeue what is already queued), asks address or ignore, and never enqueues
+again silently. Watching a queued PR continuously is a server follow-up, not
+this skill's.
+
 **A stop.** A stop leaves the run where it is (at `merging` or
 `awaiting-review`), enqueues nothing, merges nothing and changes nothing. Say
 in your turn's text which stop fired and what it read, for the operator:
@@ -1177,10 +1234,10 @@ every stop goes to the operator, never to another route. The verdict stops with 
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
 `unverifiable`, `not-reported`, `changes-requested`, `licence-fails`. A
-`changes-requested` stop means an approval is required and a review requests
-changes: report it to the operator, because someone must answer or dismiss that
-review, and never pass `--admin`, merge or retry. Three stops no read decides are
-yours to name: `red-unreachable` (above), `verdict-unread` (above) and `github-refused`, a merge GitHub
+`changes-requested` stop is read before `WAIT` and `RED` on every route and is
+the operator's to decide, as **A requested change** above says. Four stops no
+read decides are yours to name: `red-unreachable` (above), `verdict-unread`
+(above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub
 refused for a rule it enforces at merge and this session does not verify —
 reviews, signatures, deployments, code scanning, required workflows — which
 this session never works around. Not a stop: a required check red on the head

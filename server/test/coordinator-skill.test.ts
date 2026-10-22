@@ -2912,12 +2912,28 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(words.sort()).toEqual(['MERGED', 'RED', 'ROUTE', 'STOP', 'WAIT not-reported', 'WAIT pending']);
     for (const w of words.filter((x) => x !== 'ROUTE')) expect(prose, `§5b never says what \`${w}\` means`).toContain('`' + w);
     for (const r of routes) expect(prose, `§5b never says what \`ROUTE ${r}\` means`).toContain('`ROUTE ' + r);
-    // The licence and strictness words: the block's own literals, and the prose's handling of each.
-    for (const [a, src] of [['admin=licensed', 'admin=licensed'], ['admin=never', 'admin=never'],
-      ['strict=yes', '"yes"'], ['strict=unknown', '"unknown"']] as const) {
+    // The licence words: the block's own literals, and the prose's handling of each. Strictness has its own test below,
+    // which slices the block's computation so each of its three values is pinned in the block AND in the prose.
+    for (const [a, src] of [['admin=licensed', 'admin=licensed'], ['admin=never', 'admin=never']] as const) {
       expect(block, `the block never prints ${a}`).toContain(src);
       expect(prose, `§5b never says what \`${a}\` means`).toContain('`' + a + '`');
     }
+  });
+
+  it('computes strictness in three values, and the prose handles each of the three (review F7)', () => {
+    // The block's own computation, sliced from its opening to its unreadable stop: a dropped arm or a renamed value is
+    // red here, on this file, not only on the verdict's run.
+    const from = block.indexOf('strict=$(');
+    const to = block.indexOf('|| stop "unreadable: strictness"');
+    expect(from, 'the block lost its strictness computation').toBeGreaterThanOrEqual(0);
+    expect(to, 'the block lost its strictness stop').toBeGreaterThan(from);
+    const strict = block.slice(from, to);
+    expect(strict).toContain('then "yes"');
+    expect(strict).toContain('then "unknown"');
+    expect(strict).toContain('else "no" end');
+    expect(prose).toContain('`strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today.');
+    expect(prose).toContain('`strict=no` — it does not.');
+    expect(prose).toContain('`strict=unknown` comes only under read 3b: on a direct route the verdict has already stopped on a head behind the base, and route Q needs no strictness, since the queue tests the merged group itself.');
   });
 
   it('lists exactly the stops the block prints, and the two no read decides', () => {
@@ -2930,9 +2946,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(printed).toEqual(['auto-merge-off', 'changes-requested', 'licence-fails', 'method-set-empty', 'not-at-head',
       'not-reported', 'queue-method-not-allowed', 'read-3b-unknowable', 'rebase-only', 'two-queue-methods',
       'unknown-rule-type', 'unreadable', 'unverifiable']);
-    expect(prose).toContain('Three stops no read decides are yours to name: `red-unreachable`');
-    expect(prose).toContain('`verdict-unread` (above) and `github-refused`');
-    expect(prose).toContain('is the stop `verdict-unread`: say what the run printed');
+    expect(prose).toContain('Four stops no read decides are yours to name: `red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge and this session does not verify — reviews, signatures, deployments, code scanning, required workflows — which this session never works around.');
+    expect(prose).toContain('is the stop `verdict-unread`: say what the run printed, and never land, enqueue or choose a route by hand.');
+    expect(prose).toContain('A `changes-requested` stop is read before `WAIT` and `RED` on every route and is the operator\'s to decide, as **A requested change** above says.');
   });
 
   it('says what a stop does, and what is not one (spec §5.7.5)', () => {
@@ -2963,11 +2979,72 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose).toContain('a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads');
     expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
     expect(prose).toContain('This session writes no setting to make a route work');
-    // Ruling 82: only REVIEW_REQUIRED is a missing approval; a requested change is a stop of its own, never licensed.
-    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`)');
-    expect(prose).toContain('report it to the operator, because someone must answer or dismiss that review, and never pass `--admin`, merge or retry.');
+    // Ruling 82's condition 1: only REVIEW_REQUIRED is a missing approval, and never while a request for changes stands.
+    // The old direct-route-only sentence ("an approval is required and a review requests changes") is superseded by the
+    // operator's ask on every route (the `A requested change` test below), so its pin is retired with it.
+    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one included;');
+    expect(prose).toContain('Without a missing approval `--admin` is never passed; under read 3b it is never used; while a request for changes stands, ignored or not, it is never licensed; and it is never a fallback:');
+    expect(prose, 'the superseded direct-route changes-requested sentence is back').not.toContain('someone must answer or dismiss that review');
     // Today's sentence, read literally, passed --admin over a required check an admin may skip: withdrawn.
     expect(allSkillText).not.toContain('where the repository\'s ruleset requires it');
+  });
+
+  // Review F2: the verdict-word tests above prove a line is NAMED; these pin what the prose TELLS the session to do on
+  // it, sentence by sentence and normalized (`flat`), so an action cut from a bullet is a red here. Each sentence is the
+  // mutation target of one destructive edit measured at the fix round (the table in its report).
+  it('pins the action text of every verdict line, whole (review F2)', () => {
+    const actions = [
+      '- `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land as "Landing on a native-queue project" (step 3) says, with no method flag and never `--admin`, the read-back and the disarm rule included, and the checks gate with its four exits, which a `ROUTE Q` answer does not waive.',
+      '- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check has passed on the head. Merge from your own session with exactly `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>` being the line\'s `<m>`; on a merge-commits-only repository that is exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.',
+      '- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
+      '- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the approval licence holds (below), and the spelling gains `--admin`.',
+      '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today.',
+      '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
+      '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish.',
+      '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green. Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open. Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000. It reads read 5 again every 30 seconds for at most 300 seconds.',
+      'A name it still reads as not reported is the stop `not-reported`.',
+      '- `RED <names>` — a required check is red on the head, each name with its kind. If it is the PR\'s own, that is the existing fix-round rule (step 3: on route Q disarm first, then a fix round to the owning worker on the `merging → working` edge). If it is not the PR\'s own and its kind is `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait, then the verdict again. One of kind `[app <id>]` or `[status]` that is not the PR\'s own, which no rerun here reaches, or one still red after the one rerun, is the stop `red-unreachable`.',
+      '- `STOP <reason>: <what it read>` — a stop (below).',
+      '- Anything else — no line at all (the run was cut off or did not parse), more than one line, or a first word this list does not name — is the stop `verdict-unread`: say what the run printed, and never land, enqueue or choose a route by hand.',
+      '**On every route** the merge is proven as step 3 proves it: MERGED, with `headRefOid` equal to `handoffCommit`. A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
+    ];
+    for (const a of actions) expect(prose, `§5b lost or reworded: ${a.slice(0, 70)}…`).toContain(a);
+  });
+
+  it('gates the queue enqueue on a complete checks answer and stops when it is unread, never widening the gate (review F1)', () => {
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    expect(para).toContain('every required name the verdict discovered passes on the head, and `gh pr checks <pr> --required` exits 0: for any other PR gh arms auto-merge instead of queueing it,');
+    expect(para).toContain('The exit decides, and a `ROUTE Q` answer does not waive it.');
+    expect(para).toContain('On `0`, go on under this gate and the read-back below.');
+    expect(para).toContain('On `8` (pending), wait for them in the foreground — `gh pr checks <pr> --required --watch`, again if the call times out — never by ending your turn: no mail comes when checks finish. Then run the verdict again.');
+    expect(para).toContain('On `1`, run the verdict again: a `RED` goes to the `RED` rule of §5b, which limits a rerun to the kind it names and never reruns unconditionally; a `ROUTE Q` answer is the stop `checks-gate-unread`; any other line goes by its bullet in §5b.');
+    expect(para).toContain('On any other exit the stop is `checks-gate-unread` too. Stop `checks-gate-unread` means: report the exit and the whole output, and never enqueue, arm, retry or choose another route by hand.');
+    expect(para).toContain('gh\'s "no required checks reported" and "no checks reported" are such an exit on a queue repository: the stop is deliberately conservative, not support promised by an empty required set, and it does not touch a repository whose required checks gh reports.');
+    // The enqueue and the dequeue: a re-enqueue is a landing, so it takes the verdict again, reviews included.
+    expect(para).toContain('Then either enqueue it again exactly as above — the landing verdict (§5b) again first, then the checks, then the read-back — or send the owning worker a fix round');
+  });
+
+  it('stops every route on a requested change and asks the operator, with a bounded ignore (rulings OR, items 12-14 and 21)', () => {
+    const rc = [
+      '**A requested change.** Read 1 also reads the PR\'s reviews. A request for changes stops every route, before the verdict weighs `WAIT` or `RED`: `STOP changes-requested: operator decision required; key=<json>`.',
+      'A request stands when read 1\'s `reviewDecision` is `CHANGES_REQUESTED` or the latest approving, changing or dismissing review of any reviewer requests changes; the key is `{"pr":"<pr>","head":"<handoffCommit>","summary":<true or false>,"reviews":[<review ids>]}` and holds safe identifiers only.',
+      'On `changes-requested`, this session stops and asks the operator with AskUserQuestion, one single-select choice: address or ignore.',
+      'Present the PR, head and review ids; inspect the identified reviews to present their requested changes, without copying untrusted text into commands.',
+      '- Address: send the requested changes to the owning worker as a fix round, then a fresh re-review. From `merging`, disarm as step 3 already requires before the `merging → working` edge; from `awaiting-review`, use its existing send-back edge. Do not assume a stop names the route.',
+      '- Ignore: record the operator\'s explicit answer in the ledger\'s Decisions with the PR, head and review ids, and no login or account name. Then run the verdict afresh with `CR_IGNORE=\'<key>\'` on the line before it, in the same Bash call and never exported, only after the operator answered ignore for that exact key.',
+      '`CR_IGNORE` is a convention check, not authentication, and it holds for that one invocation: it skips this stop only on exact equality with the key computed afresh, so another PR, another head, a new or replaced review or a changed summary stops and asks again, and the verdict still reads the reviews and applies every other guard.',
+      'A key whose `reviews` is empty, a summary-only request, can never be ignored: inspect the PR\'s reviews, read the verdict again and report to the operator.',
+      'Only a fresh `ROUTE` result permits the normal landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested` line.',
+      'While any request stands the verdict never answers `admin=licensed`, ignored or not. Ignore cannot evade GitHub\'s refusal of a missing required approval: a direct refusal is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
+      'This session reads again before each enqueue, direct merge and re-enqueue, and after each wait. It cannot atomically prevent a request submitted after that last read or while an already-enqueued PR merges, and nothing here claims review enforcement at queue time.',
+      'If it observes a request on a queued PR, it stops that landing attempt, uses step 3\'s disarm path (or asks the operator to dequeue what is already queued), asks address or ignore, and never enqueues again silently. Watching a queued PR continuously is a server follow-up, not this skill\'s.',
+    ];
+    for (const s of rc) expect(prose, `§5b lost or reworded: ${s.slice(0, 70)}…`).toContain(s);
+    // The block is where the key is built: its field order and its two ignore conditions are the prose's source.
+    expect(block).toContain('{pr: $pr, head: $head, summary, reviews}');
+    expect(block).toContain('stop "changes-requested: operator decision required; key=$key"');
+    expect(block).toContain('[ -n "$CR_IGNORE" ] && [ "$CR_IGNORE" = "$key" ]');
   });
 
   it('keeps route Q word for word in clause 15 and adds the merge-method settings to what it never writes (spec §5.7.6)', () => {
