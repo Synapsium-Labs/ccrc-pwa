@@ -906,7 +906,7 @@ unknown=$(jq -r '[.[].type] - ["pull_request", "merge_queue", "required_status_c
 [ -z "$unknown" ] || stop "unknown-rule-type: $unknown"
 
 # Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
-r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection")
+r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
   200) prot=$(jq -c . <<<"$b3") || stop "unreadable: read 3" ;;
@@ -1023,10 +1023,14 @@ if [ "$route" != Q ]; then
 fi
 admin=never
 need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
-  (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
-   or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0)
-  and $pr.reviewDecision != "APPROVED"') || stop "unreadable: the approval"
-if [ "$route" != Q ] && [ "$need" = true ]; then
+  if (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
+      or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0) | not then "no"
+  elif $pr.reviewDecision == "REVIEW_REQUIRED" then "yes"
+  elif $pr.reviewDecision == "CHANGES_REQUESTED" then "changes-requested"
+  else "no" end') || stop "unreadable: the approval"
+[ "$route" != Q ] && [ "$need" = changes-requested ] \
+  && stop "changes-requested: an approval is required and a review requests changes"
+if [ "$route" != Q ] && [ "$need" = yes ]; then
   [ "$via" = 3b ] && stop "read-3b-unknowable: an approval is missing and read 3 answered $c3"
   [ -z "$gates" ] || stop "licence-fails: an approval is missing and --admin could skip $gates"
   jq -ne --argjson r "$rules" --argjson p "$prot" 'any($r[]; .type == "pull_request"
@@ -1110,7 +1114,7 @@ decides what this session does, and nothing else does:
 only when all three hold, each read fresh for this landing: an approval the
 fleet cannot give is required and missing (a `pull_request` rule's, or classic
 protection's, `required_approving_review_count` above 0, and `reviewDecision`
-not `APPROVED`); every required check has passed on the head; and `--admin`
+is `REVIEW_REQUIRED`); every required check has passed on the head; and `--admin`
 cannot skip a gate — no other gate applies, no review conversation must be
 resolved that an admin could skip (a `pull_request` rule's
 `required_review_thread_resolution`, or classic
@@ -1140,7 +1144,10 @@ in your turn's text which stop fired and what it read, for the operator:
 every stop goes to the operator, never to another route. The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
-`unverifiable`, `not-reported`, `licence-fails`. Three stops no read decides are
+`unverifiable`, `not-reported`, `changes-requested`, `licence-fails`. A
+`changes-requested` stop means an approval is required and a review requests
+changes: report it to the operator, because someone must answer or dismiss that
+review, and never pass `--admin`, merge or retry. Three stops no read decides are
 yours to name: `red-unreachable` (above), `verdict-unread` (above) and `github-refused`, a merge GitHub
 refused for a rule it enforces at merge and this session does not verify —
 reviews, signatures, deployments, code scanning, required workflows — which

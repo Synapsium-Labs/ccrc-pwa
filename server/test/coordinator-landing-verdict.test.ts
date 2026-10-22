@@ -154,6 +154,9 @@ const preQueue = with_(measured, (f) => ({ ...f,
   checkruns: classicGreen() }));
 const thirdParty = with_(bare, { ...rules(pull({ allowed_merge_methods: ['merge'] }), rsc([{ context: 'ci/app', integration_id: 999 }])),
   ...settings(false, true, false), checkruns: runs(run('ci/app', 'success', 'completed', OTHER_APP)) });
+/** A classic check named for no particular App (`app_id: -1`, "any source"), as the legacy contexts GitHub migrated. */
+const classicAny = ok({ required_status_checks: { strict: false, contexts: ['legacy/ci'], checks: [{ context: 'legacy/ci', app_id: -1 }] },
+  enforce_admins: { enabled: false }, required_linear_history: { enabled: false }, required_signatures: { enabled: false } });
 const via3b = with_(bare, { protection: fail(403, 'Resource not accessible by integration'),
   branch: ok({ name: 'main', protection: { enabled: false } }), compare: ok({ behind_by: 0, ahead_by: 1 }) });
 
@@ -180,6 +183,40 @@ const ROUTES: Case[] = [
       enforce_admins: { enabled: false }, required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
     status: ok({ state: 'success', statuses: [{ context: 'legacy/ci', state: 'success' }] }) }),
     'ROUTE G method=squash admin=never strict=no'],
+  ['route G: classic protection alone makes the repository strict-protection', with_(bare, {
+    protection: ok({ required_status_checks: { strict: true, contexts: ['build-pwa'], checks: [{ context: 'build-pwa', app_id: 15368 }] },
+      enforce_admins: { enabled: true }, required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
+    checkruns: runs(run('build-pwa')) }), 'ROUTE G method=squash admin=never strict=yes'],
+  ['route G: a classic check that names no App (app_id -1) passes on a commit status', with_(bare, {
+    protection: classicAny, status: ok({ state: 'success', statuses: [{ context: 'legacy/ci', state: 'success' }] }) }),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['route G: a classic check that names no App (app_id -1) passes on a check run from any App', with_(bare, {
+    protection: classicAny, checkruns: runs(run('legacy/ci', 'success', 'completed', OTHER_APP)) }),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['route U: an approval kept in classic protection alone, with enforce_admins on, is licensed (Pre-flight 10(c))', with_(bare, {
+    protection: ok({ enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1 },
+      required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }) }),
+    'ROUTE U method=squash admin=licensed strict=no'],
+  ['route G: an approval is required and the reviewDecision is empty, so nothing is licensed', with_(preQueue, (f) => ({ ...f,
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: '' }) })),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['route G: an approval is required and the reviewDecision is null, so nothing is licensed', with_(preQueue, (f) => ({ ...f,
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: null }) })),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['route G: an approval is required and the reviewDecision is a word the block does not list, so nothing is licensed',
+    with_(preQueue, (f) => ({ ...f, pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'SOMETHING_NEW' }) })),
+    'ROUTE G method=squash admin=never strict=no'],
+  ['route U: no approval is required and a review requests changes, so the route is as it was and nothing is licensed',
+    with_(bare, { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['route Q: no approval is required and a review requests changes, so the queue route is as it was',
+    with_(measured, { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
+    'ROUTE Q method=squash admin=never strict=no'],
+  ['route Q: an approval is required and a review requests changes, which stops no queue landing',
+    with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')),
+      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
+    'ROUTE Q method=squash admin=never strict=no'],
   ['route G under read 3b: the check set from the branch view, strictness unknown', with_(via3b, {
     branch: ok({ name: 'main', protection: { enabled: true, required_status_checks: { enforcement_level: 'everyone',
       contexts: ['build-pwa'], checks: [{ context: 'build-pwa', app_id: 15368 }] } } }), checkruns: runs(run('build-pwa')) }),
@@ -214,6 +251,9 @@ const CHECKS: Case[] = [
     'WAIT pending: legacy/ci'],
   ['a required Actions check red on the head', with_(measured, { checkruns: runs(run('test (server)', 'failure'),
     run('test (agent)'), run('test (pwa)'), run('build-pwa')) }), 'RED test (server) [github-actions]'],
+  ['red is named before pending: one required name red and another still running prints RED', with_(measured, {
+    checkruns: runs(run('test (server)', 'failure'), run('test (agent)', null, 'in_progress'), run('test (pwa)'), run('build-pwa')) }),
+    'RED test (server) [github-actions]'],
   ['a required App check red on the head, which no rerun reaches', with_(thirdParty, {
     checkruns: runs(run('ci/app', 'action_required', 'completed', OTHER_APP)) }), 'RED ci/app [app 999]'],
   ['a required commit status in error', with_(bare, { ...rules(rsc([{ context: 'legacy/ci' }])),
@@ -229,6 +269,8 @@ const CHECKS: Case[] = [
 const STOPS: Case[] = [
   ['unreadable: read 1 fails', with_(measured, { pr: fail(502) }), 'STOP unreadable: read 1'],
   ['unreadable: read 2 is not a 200', with_(measured, { rules: fail(500) }), 'STOP unreadable: read 2'],
+  ['unreadable: read 2 fails and prints nothing on stdout, which jq alone would slurp into an empty rule set',
+    with_(measured, { rules: { code: 500, raw: '' } }), 'STOP unreadable: read 2'],
   ['unreadable: read 3 answers 404 Branch not found, the same status with another meaning',
     with_(measured, { protection: fail(404, 'Branch not found') }), 'STOP unreadable: read 3 answered 404'],
   ['unreadable: read 3 answers 404 Not Found', with_(measured, { protection: fail(404, 'Not Found') }),
@@ -248,6 +290,10 @@ const STOPS: Case[] = [
     repo: ok({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }) }), 'STOP unreadable: read 4'],
   ['unreadable: read 5 check runs are not a 200', with_(measured, { checkruns: fail(500) }), 'STOP unreadable: read 5'],
   ['unreadable: read 5 statuses are not a 200', with_(measured, { status: fail(500) }), 'STOP unreadable: read 5'],
+  ['unreadable: read 5 check runs fail and print nothing on stdout, which jq alone would slurp into no runs',
+    with_(measured, { checkruns: { code: 500, raw: '' } }), 'STOP unreadable: read 5'],
+  ['unreadable: read 5 statuses fail and print nothing on stdout, which jq alone would slurp into no statuses',
+    with_(measured, { status: { code: 500, raw: '' } }), 'STOP unreadable: read 5'],
   ['read 3b leaves the route unknowable: the method is merge', with_(via3b, settings(false, true, false)),
     'STOP read-3b-unknowable: read 3 answered 403 and the method is merge'],
   ['read 3b leaves the route unknowable: the head is behind the base', with_(via3b, { compare: ok({ behind_by: 2 }) }),
@@ -284,6 +330,22 @@ const STOPS: Case[] = [
     checkruns: runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')),
     status: ok({ state: 'success', statuses: [{ context: 'test (server)', state: 'success' }] }) }),
     'STOP unverifiable: test (server) shows only as a commit status'],
+  ['changes-requested: a ruleset requires an approval and a review requests changes', with_(preQueue, (f) => ({ ...f,
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
+    'STOP changes-requested: an approval is required and a review requests changes'],
+  ['changes-requested: classic protection alone requires an approval and a review requests changes', with_(bare, {
+    protection: ok({ enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1 },
+      required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) }),
+    'STOP changes-requested: an approval is required and a review requests changes'],
+  ['changes-requested is decided before the licence is weighed: another gate does not turn it into licence-fails',
+    with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }),
+      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
+    'STOP changes-requested: an approval is required and a review requests changes'],
+  ['changes-requested is decided before read 3b stops the licence: it is not read-3b-unknowable',
+    with_(via3b, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 })),
+      pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' }) })),
+    'STOP changes-requested: an approval is required and a review requests changes'],
   ['the approval licence fails: another gate an admin could skip', with_(preQueue, (f) => ({ ...f,
     ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }) })),
     'STOP licence-fails: an approval is missing and --admin could skip code_scanning'],
@@ -322,9 +384,19 @@ const LICENSED_NEVER: Case = ['the approval licence holds: every ruleset with re
 /** Every argv the block may send: the six reads (and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
- *  the close of its `$(…)`, a pipe, or a line continuation. An allowlist, so a write under a branch no case reaches
- *  is still a red: `gh pr review`, `gh api --method=PATCH …` and `gh api -XPATCH …` match none of it. */
-const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\||\s+\\$))/;
+ *  the close of its `$(…)`, a pipe, or read 3's one `2>/dev/null` before that close. An allowlist, so a write under a
+ *  branch no case reaches is still a red: `gh pr review`, `gh api --method=PATCH …` and `gh api -XPATCH …` match none
+ *  of it. It judges a LOGICAL line (see `ghSpelled`), so a write split over a `\` continuation cannot hide its flags
+ *  on the next physical line. */
+const GH_SPELLED = /^gh (pr view "\$PR" --json baseRefName,headRefOid,state,reviewDecision\)|api (--paginate |-i )?"repos\/\{owner\}\/\{repo\}[^"\s]*"(?=\)|\s+\||\s+2>\/dev\/null\)))/;
+/** Every gh the block's text spells, each from the word `gh` to the end of its logical line: backslash continuations
+ *  are joined first, so the whole call is judged and not only its first physical line. */
+const ghSpelled = (b: string): string[] => {
+  const logical = b.replace(/\\\n[ \t]*/g, ' ');
+  return [...logical.matchAll(/\bgh\b/g)].map((m) => logical.slice(m.index).split('\n')[0]!);
+};
+/** The spelled gh calls that are not one of the reads. */
+const ghOffenders = (b: string): string[] => ghSpelled(b).filter((s) => !GH_SPELLED.test(s));
 
 describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => {
   it('wave-lifecycle.md carries exactly one landing verdict block', () => {
@@ -335,11 +407,25 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('reads and never writes: every gh the block spells is one of the reads, with no GraphQL and no rm', () => {
     expect(blocks).toHaveLength(1);
     const b = blocks[0]!;
-    const spelled = [...b.matchAll(/\bgh\b/g)].map((m) => b.slice(m.index).split('\n')[0]!);
-    expect(spelled.length, 'the block spells fewer gh reads than its nine').toBeGreaterThanOrEqual(9);
-    for (const s of spelled) expect(s, 'the block spells a gh that is not one of the reads').toMatch(GH_SPELLED);
+    expect(ghSpelled(b).length, 'the block spells fewer gh reads than its nine').toBeGreaterThanOrEqual(9);
+    expect(ghOffenders(b), 'the block spells a gh that is not one of the reads').toEqual([]);
     expect(b).not.toContain('graphql');
     expect(b).not.toMatch(/\brm\s/);
+  });
+
+  it('judges a gh call as one logical line: a write split over a backslash continuation is refused', () => {
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0]!;
+    const anchor = '[ "$state" = CLOSED ] && stop "not-at-head: the PR is CLOSED"\n';
+    expect(b.split(anchor), 'the planted write lost its anchor').toHaveLength(2);
+    const split = b.replace(anchor, anchor + 'x=$(gh api "repos/{owner}/{repo}/pulls/$PR/merge" \\\n  -X PUT -f merge_method=squash | jq .)\n');
+    expect(split).not.toBe(b);
+    const offenders = ghOffenders(split);
+    expect(offenders, 'the allowlist passed a write split over two lines').toHaveLength(1);
+    expect(offenders[0]).toContain('pulls/$PR/merge');
+    expect(offenders[0], 'the offender is judged whole, flags included').toContain('-X PUT');
+    // The same read, on one line, is the control: the allowlist still passes what the block spells.
+    expect(ghOffenders(b)).toEqual([]);
   });
 
   it('under read 3b reads the compare only for a direct route: route Q needs no strictness, so a head behind the base lands', () => {
@@ -347,6 +433,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     const q = verdict(with_(via3b, { ...rules(pull({}), queue('SQUASH')), ...settings(true, false, false, true),
       compare: ok({ behind_by: 2 }) })());
     expect(q.out, `stderr: ${q.stderr}`).toBe('ROUTE Q method=squash admin=never strict=unknown\n');
+    expect(q.stderr, 'read 3 answered 403 and its message reached stderr').toBe('');
     expect(q.calls.filter((c) => c.includes('/compare/')), 'route Q under read 3b read the compare').toEqual([]);
     for (const c of q.calls) expect(c, 'the block sent gh something other than a read').toMatch(READ);
     // A direct route under read 3b still reads it, once.
@@ -358,12 +445,17 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
+    // gh prints `gh: <message> (HTTP n)` on any non-2xx. Read 3 meets one on every unprotected repository (404) and under
+    // read 3b (403), so it alone is silenced; a line that is not a STOP must leave stderr empty, or the run has two
+    // outputs and a coordinator reads `verdict-unread` over a right answer.
+    if (!line.startsWith('STOP')) expect(r.stderr, 'a verdict that is not a stop wrote to stderr').toBe('');
     for (const c of r.calls) expect(c, 'the block sent gh something other than a read').toMatch(READ);
   });
 
   it('asks about the PR\'s own base, never the literal main (§11 item 15)', () => {
     const r = verdict(with_(bare, { pr: ok({ baseRefName: 'release/2', headRefOid: HC, state: 'OPEN', reviewDecision: '' }) })());
     expect(r.out).toBe('ROUTE U method=squash admin=never strict=no\n');
+    expect(r.stderr).toBe('');
     expect(r.calls).toContain('api --paginate repos/{owner}/{repo}/rules/branches/release/2');
     expect(r.calls).toContain('api -i repos/{owner}/{repo}/branches/release/2/protection');
     expect(r.calls.filter((c) => c.includes('branches/main'))).toEqual([]);

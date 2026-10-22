@@ -2927,9 +2927,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(i, '§5b no longer lists the verdict\'s stops').toBeGreaterThanOrEqual(0);
     const listed = [...prose.slice(i + lead.length, prose.indexOf('.', i)).matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]!).sort();
     expect(listed).toEqual(printed);
-    expect(printed).toEqual(['auto-merge-off', 'licence-fails', 'method-set-empty', 'not-at-head', 'not-reported',
-      'queue-method-not-allowed', 'read-3b-unknowable', 'rebase-only', 'two-queue-methods', 'unknown-rule-type',
-      'unreadable', 'unverifiable']);
+    expect(printed).toEqual(['auto-merge-off', 'changes-requested', 'licence-fails', 'method-set-empty', 'not-at-head',
+      'not-reported', 'queue-method-not-allowed', 'read-3b-unknowable', 'rebase-only', 'two-queue-methods',
+      'unknown-rule-type', 'unreadable', 'unverifiable']);
     expect(prose).toContain('Three stops no read decides are yours to name: `red-unreachable`');
     expect(prose).toContain('`verdict-unread` (above) and `github-refused`');
     expect(prose).toContain('is the stop `verdict-unread`: say what the run printed');
