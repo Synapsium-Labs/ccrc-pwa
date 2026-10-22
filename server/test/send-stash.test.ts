@@ -179,7 +179,8 @@ function fakeCc(o: FakeOpts = {}) {
   return { tmux: new Tmux(run), keys, state: s };
 }
 
-const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+// A frozen clock: the proof's blind-poll deadline (`SUBMIT_BLIND_MS`) is spent by the fake sleeps alone, never by a real stall.
+const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 });
 type SendOpts = NonNullable<Parameters<typeof sendPrompt>[3]>;
 const STASH = { onDraft: 'stash' } as SendOpts;
 const send = (f: ReturnType<typeof fakeCc>, text: string, opts: SendOpts = STASH): Promise<SendResult> =>

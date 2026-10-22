@@ -2246,7 +2246,8 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
     };
     return { tmux: new Tmux(run), calls };
   }
-  const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello there');
+  // A frozen clock: the proof's blind-poll deadline (`SUBMIT_BLIND_MS`) is spent by the fake sleeps alone, never by a real stall.
+  const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 }, 'x', 'hello there');
 
   it('a failed Enter press whose box then reads empty is ok', async () => {
     // The press landed and its reply was lost; the next five captures fail (a link drop), then the box reads empty.
@@ -2270,7 +2271,7 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
   it('submitEnter ("Send it") under a failed capture mid-watch presses one Enter, no second key, and answers ok', async () => {
     // The rescue route shares the watch: a dropped read no longer ends its proof, and it never presses again.
     const { tmux, calls } = fakeTmux(['❯ a stuck draft\n', null, null, '❯ \n']);
-    const res = await submitEnter({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a stuck draft');
+    const res = await submitEnter({ tmux, queue: new KeyedQueue(), sleep: noSleep, now: () => 0 }, 'x', 'a stuck draft');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
   });
