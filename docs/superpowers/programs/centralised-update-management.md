@@ -2799,6 +2799,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         restart. What closed the dead socket is not visible from the session. The standing v0.0.572 request ran at once:
         the fleet box moved 21:08:20 to 21:09:31, its agent restarting at 21:08:33, and the server follows. The defect
         stands as recorded at 20:10.
+      - 21:55: a console tap moved both nodes to v0.0.574 (#1151, a phone layout fix): the fleet box from 21:49:46, the
+        server box 21:52:12 to 21:56:10, both reports `done`. STATUS: fleet and server v0.0.574, newest v0.0.574, intent
+        dev/auto=off, backups fleet 232M/server 9890M (under the 10 GB line), disk free fleet 148G/work volume 13G/server
+        21G. The work volume is 3G above the floor where `ws-add` refuses; it was 16G at 20:55.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
