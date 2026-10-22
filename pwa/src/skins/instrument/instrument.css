@@ -166,6 +166,14 @@
   width: 100%;
   min-height: var(--tap-min);
 }
+/* The Inbox door's unread count (T2e fix round 1, D-6335): the pill is `<CountBadge>`'s (its colours are the primitive's);
+   here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
+.ins-rail-count {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-1);
+  pointer-events: none;
+}
 /* The active item: a 2px accent rail on its leading edge, beside `aria-current="page"`. */
 .ins-rail-item[aria-current='page']::before {
   content: '';

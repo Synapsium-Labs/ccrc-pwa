@@ -23,13 +23,15 @@
 //   `ListColumn` keeps the head chrome ................. "at 900, 1280 and 1920 the frame holds one wordmark, and one each of …"
 //   the banners tied to the head flag .................. "one banner stack at any width"
 //   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
+// Fix round 1 (review 826, F1):
+//   the rail's Inbox door without the count ............ "at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import type { FleetSession, RunSummary } from '../../shared/api';
+import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
@@ -45,6 +47,7 @@ const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES } = await import('../src/lib/routes');
 const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
+const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
 const { ShellFrame } = await import('../src/skins/frame');
 const { INSTRUMENT_SET } = await import('../src/skins/instrument/parts');
 const { REFINED_SET } = await import('../src/skins/refined/parts');
@@ -116,7 +119,8 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [] }));
+  resetAcks();
   act(() => { setSkin(REFINED); });
   localStorage.clear();
 });
@@ -342,7 +346,9 @@ function stubAt(width: number): void {
 }
 
 /** The frame's doors, counted by what each one IS (its name), never by a class: the rail's and the list head's doors
- *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. */
+ *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. The
+ *  rail's `Inbox` (`Inbox, N unread` with mail) and the list head's `Mail — N unread` are told apart, so a desk that
+ *  has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1). */
 function doorCounts(): Record<string, number> {
   const named = [...document.querySelectorAll<HTMLElement>('[aria-label]')];
   const count = (re: RegExp): number => named.filter((el) => re.test(el.getAttribute('aria-label') ?? '')).length;
@@ -351,7 +357,9 @@ function doorCounts(): Record<string, number> {
     docs: count(/^Docs\b/),
     accounts: count(/^(Accounts|Your sign-in and accounts)$/),
     settings: count(/^Settings\b/),
-    inbox: count(/^(Inbox|Mail\b)/),
+    inbox: count(/^Inbox\b/),
+    mail: count(/^Mail\b/),
+    unread: count(/\d+ unread/),
     bell: count(/^Notifications (on|off)$/),
   };
 }
@@ -387,7 +395,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
-      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, bell: 1 });
+      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 0, bell: 1 });
       // The list column's head keeps its readouts and drops its chrome.
       expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).not.toBeNull();
       expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
@@ -397,8 +405,59 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
     stubAt(899);
     mount('/');
-    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, bell: 1 });
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, unread: 0, bell: 1 });
     expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
+  });
+
+  /** `n` unread mail records past the feed's ack, and one the count never counts (an interrupt record). */
+  function unreadFeed(n: number): NotifyEvent[] {
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    return [
+      ...Array.from({ length: n }, (_, i): NotifyEvent => ({ seq: i + 1, at: stamp + 60_000 + i, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null })),
+      { seq: n + 1, at: stamp + 120_000, kind: 'interrupt', sessionId: 'x', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+    ];
+  }
+
+  it("at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does", () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      act(() => useFleetStore.setState({ feed: unreadFeed(2) }));
+      mount('/');
+      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 unread' });
+      expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
+      // The tooltip says the same as the name, and the pill prints the number.
+      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 unread');
+      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 unread2');
+      // Nothing else in the frame names or draws an unread count: the list head's Mail door is gone at a desk.
+      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 1, bell: 1 });
+      expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
+      expect(document.querySelectorAll('[class*="bg-status-attention-tint"]'), `${width}px: count pills`).toHaveLength(1);
+      cleanup();
+    }
+    // The printed count is capped like the sibling doors' and the name carries the real number.
+    stubAt(1280);
+    act(() => useFleetStore.setState({ feed: unreadFeed(120) }));
+    mount('/');
+    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 unread' });
+    expect(capped.textContent).toBe('Inbox, 120 unread99+');
+  });
+
+  it('with no mail unread, the Inbox door draws no badge', () => {
+    for (const width of [900, 1920]) {
+      stubAt(width);
+      mount('/');
+      const door = within(rail()).getByRole('button', { name: 'Inbox' });
+      expect(door.textContent, `${width}px`).toBe('Inbox');
+      expect(door.querySelector('[class*="bg-status-attention-tint"]'), `${width}px`).toBeNull();
+      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
+      cleanup();
+    }
+    // Interrupt records and records at or before the ack are not unread.
+    stubAt(1280);
+    act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
+    mount('/');
+    expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
