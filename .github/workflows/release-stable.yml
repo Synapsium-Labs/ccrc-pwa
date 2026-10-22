@@ -3,9 +3,10 @@
 # lookup, the two flag flips and the read-back, and is tested locally
 # (server/test/release-stable.test.ts). No build step — nothing here can
 # produce bytes; the gate runs one dependency-free module with the runner's
-# own node, and it only reads the API. The branch's ruleset (no force push,
-# no deletion; D-3130) keeps it fast-forward; the script refuses an untagged
-# merge HEAD.
+# own node, and it only reads the API, and `promote` runs
+# `deploy/release-scope.mjs` the same way, only to word a refusal. The branch's
+# ruleset (no force push, no deletion; D-3130) keeps it fast-forward; the
+# script refuses a HEAD that carries no release tag.
 #
 # GATED ON THE FULL SUITE (design 2026-09-23 §8). Pull requests run only the
 # server tests their change can affect, so a promotion is where a selector
