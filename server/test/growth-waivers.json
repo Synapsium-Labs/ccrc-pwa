@@ -7,6 +7,13 @@
       "d": "D-6180",
       "reason": "auto-swap reliability W1: a stand-down line for every held limit, a re-logged tick-undecidable after the compact-note floor, and lane= on every decision line, all log-only bash in ccd/ccd's swap arm (measured +87 net code lines against the merge-base)",
       "added": "2026-10-21"
+    },
+    {
+      "file": "ccd/ccd",
+      "maxDelta": 89,
+      "d": "D-6181",
+      "reason": "auto-swap reliability W1: a manual-swap pin expires (swappinexp, the raw reset reader, a hashed offset for legacy pins) and never holds a session at its ceiling, and non-forced returns take the per-account and fleet-wide slots and a draft stand-down, each behind its off marker, all in ccd/ccd's swap arm (measured +89 net code lines against the merge-base)",
+      "added": "2026-10-22"
     }
   ]
 }
