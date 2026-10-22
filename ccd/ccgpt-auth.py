@@ -357,6 +357,13 @@ def _remedy(e: OSError, auth_dir: str, opened: bool) -> str:
     return "check the permissions of " + auth_dir + " and the directories above it"
 
 
+# The remedy for an `OSError` from the `fstat` or a `read` of a file that already opened as a regular file: its path
+# and its mode are already proven, so only a retry or a fresh sign-in can help.
+READ_FAILED_REMEDY = (
+    "the file opened but could not be read; retry, and if it persists move it aside and sign the lane in"
+)
+
+
 def read(auth_dir: str) -> Reading:
     """Read the lane's credential. Never writes, never locks, never touches the network.
 
@@ -365,8 +372,9 @@ def read(auth_dir: str) -> Reading:
     so a file swapped in between the two never blocks the read: a symlink fails the open (ELOOP), and a FIFO opens at
     once and is refused by the `fstat` that follows. A JSON parse failure (a file LiteLLM is rewriting in place) is
     re-read up to READ_RETRIES times, READ_RETRY_S apart, and then answers `unreadable`, never `absent`. Any
-    `OSError` other than ENOENT is `unreadable`, its remedy chosen by errno. A file nested past the parser's
-    recursion limit is `unreadable` at once, with no re-read."""
+    `OSError` other than ENOENT is `unreadable`: from `lstat` or the open, its remedy chosen by errno; from the
+    `fstat` or a `read` after the open, READ_FAILED_REMEDY. A file nested past the parser's recursion limit is
+    `unreadable` at once, with no re-read."""
     p = paths_for(auth_dir)
     where = p.credential
     unsaved = _UNSAVED.get(os.path.normpath(auth_dir))
@@ -411,9 +419,9 @@ def read(auth_dir: str) -> Reading:
                 if not chunk:
                     break
                 chunks.append(chunk)
-        except OSError as e:
+        except OSError as e:  # the open succeeded, so no path or permission remedy applies (EIO, ESTALE)
             return _empty("unreadable", "the credential at " + where + " cannot be read (" + errno.errorcode.get(
-                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=True), identity)
+                e.errno or 0, "error") + "); " + READ_FAILED_REMEDY, identity)
         finally:
             os.close(fd)
         try:

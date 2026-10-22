@@ -258,10 +258,13 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
       plantBackendCredential(elsewhere);
       symlinkSync(credPath(elsewhere), credPath(dir));
     }
-    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'read' }] }, {}, { timeoutMs: 2000 });
+    // `count-opens`: the driver counts every `os.open` on the credential path, a refused one (ELOOP) included.
+    const r = await runAuthDriver(home, { authDir: dir, ops: [{ op: 'read' }], faults: ['count-opens'] }, {},
+      { timeoutMs: 2000 });
     expect(r.timedOut, 'the read opened the file').toBe(false);
     const [line] = driverLines(r.stdout);
     expect(line.credential).toBe('unreadable');
+    expect(line.credentialOpens, 'the read opened (or tried to open) the credential path').toBe(0);
     // Only the lstat arm says this; the open (a symlink's ELOOP) and the fstat arm ("was replaced by a non-regular
     // file", a FIFO the non-blocking open let through) each say something else.
     expect(line.detail).toContain(`${credPath(dir)} is not a regular file; move it aside`);
@@ -293,6 +296,22 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
     } finally {
       restore();
     }
+  });
+
+  it('a credential whose read fails after it opened reads unreadable with its identity, naming a retry, not a path or a mode', async () => {
+    const home = mkTmp('codex-auth-eio-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const p = credPath(dir);
+    const before = lstatKey(p);
+    // `eio-read:1`: the first `os.read` on an fd opened on the credential raises OSError(EIO), after lstat, the open
+    // and fstat have all succeeded.
+    const line = await readAt(home, dir, { faults: ['eio-read:1'] });
+    expect(line.credential, 'an EIO is unreadable, never absent').toBe('unreadable');
+    expect(line.identity, 'the fstat identity is carried').toMatchObject({ ino: Number(lstatSync(p).ino), size: lstatSync(p).size });
+    expect(line.detail).toContain('cannot be read (EIO); the file opened but could not be read; retry, and if it persists move it aside');
+    expect(line.detail, 'the path and the mode are already proven').not.toMatch(/chmod|permissions|not a directory|symlink/);
+    expect(lstatKey(p)).toBe(before);
   });
 
   // The unsaved map is only ever filled by Task 2's writers; this case fills it directly, in a process of its own, to

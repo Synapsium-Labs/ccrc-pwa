@@ -34,14 +34,18 @@ its identity as {"ino", "mtimeNs" (a decimal STRING, exact past 2**53), "size"}.
 {"error": <the AuthError's word, else the exception's class name>, "class": <class name>, "message": str(e)}.
 Exit 0, or 1 when an op raised, 2 for a usage error, 3 when the library failed to load.
 
-THE FAULTS, applied by monkeypatching `os` after the library loads (the library calls `os.open`, `os.write`,
-`os.fsync`, `os.close` and `os.replace` through the module, so it sees them):
+THE FAULTS, applied by monkeypatching `os` after the library loads (the library calls `os.open`, `os.read`,
+`os.write`, `os.fsync`, `os.close` and `os.replace` through the module, so it sees them):
   enospc-writes:N   the first N `os.write` calls on an fd opened on a path ending in the checkpoint's name raise
                     OSError(ENOSPC) (the driver maps each such fd to its path by wrapping `os.open`, and forgets it
                     at `os.close`)
   enospc-fsync:N    the first N `os.fsync` calls on such an fd raise OSError(ENOSPC)
   enospc-replace:N  the first N `os.replace` calls onto the credential raise OSError(ENOSPC)
   die-before-rename `os.replace` onto the credential calls `os._exit(9)` (stdout flushed first)
+  eio-read:N        the first N `os.read` calls on an fd opened on the credential (a path whose basename is the
+                    credential's name, mapped the same way) raise OSError(EIO)
+  count-opens       every op's line gains `credentialOpens`: how many `os.open` calls that op made on the credential,
+                    counted BEFORE the real open runs, so an open the kernel refuses (a symlink's ELOOP) counts too
   uid:<n>           `os.getuid` answers <n>
 """
 
@@ -56,7 +60,7 @@ import time
 
 sys.dont_write_bytecode = True
 
-_state = {"lib": None}
+_state = {"lib": None, "opens": None}  # opens: the count-opens counter, None while that flag is off
 
 
 def _emit(line):
@@ -93,18 +97,21 @@ def _install_faults(lib, faults):
     flags = set()
     for f in faults:
         name, _, n = f.partition(":")
-        if name in ("enospc-writes", "enospc-fsync", "enospc-replace", "uid"):
+        if name in ("enospc-writes", "enospc-fsync", "enospc-replace", "eio-read", "uid"):
             if not n.lstrip("-").isdigit():
                 _usage("fault " + f + " needs a number")
             counts[name] = int(n)
-        elif name == "die-before-rename" and not n:
+        elif name in ("die-before-rename", "count-opens") and not n:
             flags.add(name)
         else:
             _usage("unknown fault " + f)
     pending_name = getattr(lib, "PENDING_NAME", "auth.pending.json")
     credential_name = getattr(lib, "CREDENTIAL_NAME", "auth.json")
     pending_fds = set()
-    real_open, real_close, real_write = os.open, os.close, os.write
+    credential_fds = set()
+    if "count-opens" in flags:
+        _state["opens"] = 0
+    real_open, real_close, real_read, real_write = os.open, os.close, os.read, os.write
     real_fsync, real_replace = os.fsync, os.replace
 
     def enospc():
@@ -117,14 +124,25 @@ def _install_faults(lib, faults):
         return False
 
     def f_open(path, flags_, *args, **kwargs):
+        on_credential = os.path.basename(os.fspath(path)) == credential_name
+        if on_credential and _state["opens"] is not None:
+            _state["opens"] += 1
         fd = real_open(path, flags_, *args, **kwargs)
         if os.fspath(path).endswith(pending_name):
             pending_fds.add(fd)
+        if on_credential:
+            credential_fds.add(fd)
         return fd
 
     def f_close(fd):
         pending_fds.discard(fd)
+        credential_fds.discard(fd)
         return real_close(fd)
+
+    def f_read(fd, n):
+        if fd in credential_fds and take("eio-read"):
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_read(fd, n)
 
     def f_write(fd, data):
         if fd in pending_fds and take("enospc-writes"):
@@ -146,7 +164,8 @@ def _install_faults(lib, faults):
                 raise enospc()
         return real_replace(src, dst, *args, **kwargs)
 
-    os.open, os.close, os.write, os.fsync, os.replace = f_open, f_close, f_write, f_fsync, f_replace
+    os.open, os.close, os.read, os.write = f_open, f_close, f_read, f_write
+    os.fsync, os.replace = f_fsync, f_replace
     if "uid" in counts:
         uid = counts.pop("uid")
         os.getuid = lambda: uid
@@ -260,6 +279,8 @@ def main():
         start = time.monotonic()
         extra = {}
         line = {"op": op.get("op")}
+        if _state["opens"] is not None:
+            _state["opens"] = 0
         try:
             value = _run(op, action, op.get("authDir", auth_dir), extra)
             if _is_reading(value):
@@ -273,6 +294,8 @@ def main():
                          "class": type(e).__name__, "message": str(e)})
             for key, buf in extra.items():
                 line[key] = buf.getvalue()
+        if _state["opens"] is not None:
+            line["credentialOpens"] = _state["opens"]
         line["ms"] = round((time.monotonic() - start) * 1000.0, 1)
         _emit(line)
     sys.exit(1 if raised else 0)
