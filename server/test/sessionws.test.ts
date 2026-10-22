@@ -790,6 +790,21 @@ describe('hook ask envelope frames', () => {
       expect(cleared(frames)).toHaveLength(0);
     });
 
+    it('an aged, kept envelope clears with the menu once FAILED_CAPTURES_CLEAR captures fail in a row', async () => {
+      // The third failure frames no menu (`dialog_cleared`); the envelope follows it on that tick and stays cleared.
+      for (const failures of [3, 5]) {
+        const { frames } = await streamWith({
+          paneSequence: [MENU.pane, MENU.pane, ...Array<null>(failures).fill(null)], transcript: MENU.transcript,
+          hookstate: aged({ ask: ENVELOPE }),
+        });
+        const dialogCleared = frames.findIndex((f) => f.type === 'dialog_cleared');
+        expect(asks(frames), `${failures}`).toHaveLength(1);
+        expect(dialogCleared, `${failures}`).toBeGreaterThan(-1);
+        expect(cleared(frames), `${failures}`).toHaveLength(1);
+        expect(frames.indexOf(cleared(frames)[0]), `${failures}`).toBe(dialogCleared + 1);
+      }
+    });
+
     it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
       const redraw = fixture('ask-2col-partial-redraw.txt');
       const one = await streamWith({
