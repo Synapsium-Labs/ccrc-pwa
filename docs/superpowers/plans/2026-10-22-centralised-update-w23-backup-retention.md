@@ -248,18 +248,18 @@ These twenty numbers, starting at D-6346, were issued to run 775. This plan defi
 - **D-6364.** `quickState`'s legacy arm reads `coord.db` the way `classify`'s legacy arm does, through `inspectDb`, with the header check and the table list but not `quick_check`. A manifest-less dir whose `coord.db` is not SQLite, cannot be opened read-only, or holds a `delegation_*` table is `damaged` and is kept, never thinned as `legacy`. This replaces D-6361's separate 16-byte read: one read now decides both questions. Why: by the coordinator's ruling on review 794 (F2), a damaged dir is never recorded as thinned by design. The commonest real `invalid` backup is a refused capture, which leaves `<ts>/coord.db` beside no manifest, and thinning it would drop the evidence and relabel the damage. `quick_check` stays out because it scans the whole database, and past the count presence and size decide (D-6350). The table list costs one read-only open of a rare legacy-shaped dir.
 - **D-6365.** Unmeasured is not unset. The rule applies when `CCRC_BACKUP_DATA_KEEP` is not in the process environment and `~/.ccrc/ccrc.env` exists. If the file cannot be read, or names `CCRC_BACKUP_DATA_KEEP` on a line this reader does not take, `_bak_data_keep` refuses exactly as it does for an invalid value. A dangling link or a directory at that path counts as a file that cannot be read. Which lines it takes is one positive rule, amended by the coordinator's ruling on review 806 (F1, F4a), and it replaces the list of refused shapes this entry gave before. It reads bytes, under `LC_ALL=C` (D-3833), so the box's locale cannot change an answer. Each line is first trimmed of its leading spaces, tabs and CRs, the set `_box_env_value` trims. Then: (a) a line that begins with `#` or `;` is a comment and is skipped (the set `_box_env_unit_whole` skips); (b) a line that begins, optionally after `export` and spaces or tabs, with an identifier `[A-Za-z_][A-Za-z0-9_]*` followed at once by `=`, where the identifier is not the knob, is another key's line and is skipped (D-3823 reads `export OLD_KEY=…` and `export NOTE=KEY=…` the same way); a line that begins with exactly `CCRC_BACKUP_DATA_KEEP=` is the one `_box_env_value` takes; (c) any other line that names the knob as a whole token (no `[A-Za-z0-9_]` byte on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. The scan reads every line, so an odd line beside a plain one still refuses. A line that holds a CR past its lead is never skipped by (a) or (b): systemd ends a line at a bare CR and reads what follows as a line of its own, so such a line refuses when it names the knob. A file that holds a NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), could not be scanned, and neither could a scan that answers anything but 0 or 1 (an awk that cannot run, or is killed); both refuse (fix round 2's own review). Nothing is pruned or thinned, and the refusal names the knob and the file, never the file's bytes. Why: by the coordinator's ruling on review 794 (F3), thinning cannot be undone. An operator who set a high keep in `ccrc.env` to stop thinning would otherwise get the default of 3 silently, and every data set past the third would be deleted on the next completed update, `ccrc backup`, console move or watchdog run. The same fallback is harmless in `_upd_deadline_ms`, because there the default deletes nothing.
 - **D-6464.** On the update path the thinning has a time budget, on the control plane's own clock (the coordinator's ruling F6b on mail 8134, recorded in the addendum to the rulings on review 806).
-  - **The bound.** `_bak_gc update` passes `thin --until <unix seconds>`: the instant of D-6356's re-stamp, plus `_upd_deadline_ms`, less a margin of 230 s. The control plane's deadline runs from the last `updatedAt` it read, and the re-stamp is the last one this run writes before `_bak_gc`. `cmd_update` reads that `updatedAt` back from the report it wrote, and falls back to the second it read just before the write, which is never later. Seconds throughout; no `date +%N`.
-  - **The margin, 230 s**, derived:
+  - **The bound.** `_bak_gc update` passes `thin --until <unix seconds>`: the instant of D-6356's re-stamp, plus `_upd_deadline_ms`, less a margin of 235 s. The control plane's deadline runs from the last `updatedAt` it read, and the re-stamp is the last one this run writes before `_bak_gc`. `cmd_update` reads that `updatedAt` back from the report it wrote. When the read fails or is not whole seconds, it falls back to the second it read just before the write, which is never later. Seconds throughout; no `date +%N`.
+  - **The margin, 235 s**, derived:
     - 150 s for one full verification that `thin` starts just before the bound: Step 7's largest per-set figure, the same estimate `thin` uses until it has timed one;
-    - 70 s for the control plane to read the final report: its deadline runs on what its inventory last read, once a minute (`UPDATE_INVENTORY_MS`), and a read can take its 10 s budget (`INVENTORY_BUDGET_MS`);
+    - 75 s for the control plane to read the final report. Its deadline runs on what its inventory last read. The inventory runs once a minute (`UPDATE_INVENTORY_MS`), gated on a 2 s tick and stamped as it starts, and a read can take its 10 s budget (`INVENTORY_BUDGET_MS`): 72 s, rounded up;
     - 10 s for what follows `thin`: the unlock, and `cmd_update`'s final report.
 
-    The count prune runs before `thin`, inside the window, so the absolute bound already accounts for it.
+    The count prune runs before `thin`, inside the window, so the absolute bound already accounts for it. Two boxes' clocks never meet here: the box that thins is the server box (a fleet box's backups hold no `coord.db`), whose `_upd_deadline_ms` reads the same `ccrc.env` as the server's own deadline.
   - **`thin` never starts a full verification it cannot expect to finish by the bound.** Before each one, at the count and at the pre-migration keep, it compares now plus V with the bound. V is the longest verification this run has timed, or 150 s until one has run.
     - When the check fails, the walk ends there. Every dir it did not reach that still holds a data set is left (D-6363).
     - One line says so: `thinning stopped at its time budget; N left as they are; the next update continues`. The summary line follows.
     - The exit is 0. This is not a refusal and not the verification budget's exit 3, so neither the update's exit nor `ccrc backup`'s changes.
-  - **What the budget never gates.** An interrupted thinning the walk reaches is finished whatever the budget, because finishing it verifies nothing. The record-first order is unchanged, and the walk never stops between a record and its deletes.
+  - **What the budget never gates.** An interrupted thinning is finished whatever the budget, because finishing it verifies nothing. That includes one past a time stop, which the stop's own pass finishes (the second review of fix round 2). The record-first order is unchanged, and the walk never stops between a record and its deletes.
   - **Who passes a bound.** `ccrc backup` passes none: it holds no lease, and the operator is waiting on it. CLI and rollout updates take the same bound as a console update: one path, and harmless where there is no lease.
   - **An absent or bad bound.** No `--until` means no budget (an older caller, or a direct call). An `--until` that is not a whole number of seconds is a usage error (exit 70), as any bad argument is.
   - **Not covered.** D-3407's hard cap fails a busy lease once four deadlines have passed since its start (`updateStartedAt`, the server's clock at dispatch), and the re-stamp does not move that. Reaching it needs the update before the re-stamp to have taken three deadlines, 45 minutes at the default. The ruling's bound runs from the re-stamp alone.
@@ -831,7 +831,7 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
   - **F6.** D-6350's opening and the Step 7 bullet now name `_bak_keepset`'s verification beside `thin`'s.
     - In steady state at the default a run makes two full verifications.
     - The worst case the ruling names, six, is stated as ruled. It is also qualified as that case's floor, not a bound on a run.
-  - **The deadline, read in the code (F6).** All citations are at 28df42ded, and this round moves none of those lines:
+  - **The deadline, read in the code (F6).** All citations are a snapshot at 28df42ded. F6b's three comment lines above `cmd_update`'s `_bak_gc` line later move each `ccd/ccrc` citation below it down by three (18657 to 18660, 19284 to 19287):
     - Nothing is reverted when `_bak_gc` after D-6356's re-stamp (`ccd/ccrc:18657`) runs past the deadline (`_upd_deadline_ms`, `ccd/ccrc:19284`, 900 s by default). While the updater holds `update.lock`, the watchdog stands down. Only past twice the deadline does it record `failed` "wedged", and it records that with the updater's pid, which the updater's own `done` then overwrites (`ccd/ccrc:19543-19550`).
     - On a console-driven update of a box whose role is `server` or `both`, though, the control plane releases the lease `failed`, detail `deadline` (`deadlineExpired`, `server/src/update/dispatch.ts:243`; `runDispatch`, `server/src/update/converge.ts:292`). The same function also fails a busy lease once four deadlines have passed since its start (D-3407's hard cap, `server/src/update/dispatch.ts:245`), which the re-stamp does not move.
     - The box's later `done` cannot settle that release (`not-busy`, `server/src/update/inventory.ts:388`), and the release halts every further move until the operator acks (`isHalting`, `server/src/update/dispatch.ts:99`).
@@ -844,18 +844,18 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     - D-6350's amendment and the helper's comment say which dir the walk reads again, and they name the side effect outside sparse mode.
   - **The recorded rulings.** They carry two substitutions: the report's path, and the round's two reserve numbers. A tracked file may not name an issued number before a plan defines it, and deviation-refs measured red with them spelled. D-6363 and D-6365 are amended in place. D-6464 is defined by the addendum's ruling, and the other number is unused.
   - **F6b (D-6464), as built.**
-    - **Bash: one code line**, the bound in `_bak_gc`. `cmd_update`'s one `_bak_gc update` line takes the instant, and `_bak_thin` passes `--until` when it is given one. `_upd_phase` is outside this wave's consent, which is why the instant is read back from the report rather than handed out by the writer.
+    - **Bash: one code line**, the bound in `_bak_gc`. `cmd_update`'s one `_bak_gc update` line takes the instant and checks that the read-back is whole seconds, and `_bak_thin` passes `--until` when it is given one. `_upd_phase` is outside this wave's consent, which is why the instant is read back from the report rather than handed out by the writer.
     - **The helper.** It gains `--until` and a check before each of the two verification sites. `stop` and the new time stop share one count of the dirs left behind (`leaveRest`).
     - **Rows.**
       - W23-T27: a bound already past starts no verification, leaves every candidate, prints the line, and exits 0.
-      - W23-T28: a bound that admits exactly one verification starts one, on a clock each verification moves by 100 s. One second less starts none, which pins the 150 s estimate.
-      - W23-T29: an interrupted thinning is finished with a past bound.
+      - W23-T28: a bound that admits exactly one verification starts one, on a clock each verification moves by 100 s. One second less starts none, which pins the 150 s estimate. With 10 s verifications at keep 4, all three the count needs fit, which pins V as the longest measured.
+      - W23-T29: an interrupted thinning is finished with a past bound, both ahead of the first verification and behind the time stop.
       - W23-T31: the pre-migration keep's verification waits on the budget too.
       - W23-T30: a bad `--until` is exit 70 and touches nothing.
-      - W23-B20: through the node shim, an update passes exactly the re-stamp's `updatedAt` plus 900, less 230; `ccrc backup` passes no bound.
+      - W23-B20: through the node shim, an update passes exactly the re-stamp's `updatedAt` plus 900, less 235. A jq shim that answers the read-back with another second shows the bound follows the read-back. One that answers a fraction shows the fall-back to the second before the re-stamp. `ccrc backup` passes no bound.
     - **`_bak_keepset` alone (carried to wave 24, as the ruling says).** Argued from Step 7's figures, not measured.
       - It classifies each earlier dir that `_bak_ours` does not claim, newest first, until one holds a valid data set. A thinned dir, or one with no data set, costs no node at all.
-      - It can list up to `CCRC_BACKUP_KEEP` earlier dirs (ten at the default) before this run's count prune. Full-size `invalid` sets whose defect shows only at the end of a full read then cost one verification each: up to ten, about 1010 s at the mean, 1320 s at the slowest and 1500 s weighted.
+      - After earlier runs' prunes it can list up to `CCRC_BACKUP_KEEP` earlier dirs (ten at the default) before this run's count prune, and more when those prunes did not run. Full-size `invalid` sets whose defect shows only at the end of a full read then cost one verification each: up to ten, about 1010 s at the mean, 1320 s at the slowest and 1500 s weighted.
       - Six reach 900 s at the weighted figure (seven at the slowest, nine at the mean). So `_bak_keepset` alone can pass the deadline.
       - That is a carried constraint for wave 24, not a fix here. D-6464's bound is absolute, so after a slow keep-set `thin` starts fewer verifications, never more.
   - **This round's own review** (Opus, on the four commits before F6b) found no blocker or major. Its five minors and the cheap nits are fixed:
@@ -870,6 +870,22 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     Two nits are left as they are:
     - the `LC_ALL=C` row can red only where awk is gawk, as noted above;
     - an own whose thinning record cannot be read counts as left with no WARN, where the walk WARNs.
+  - **The second review of fix round 2** (Opus, on the three F6b commits) found one major and four minors, all fixed:
+    - the major: W23-T8 was red at 4f574e635, because it still expected the usage line without `[--until <unix seconds>]`. The filtered runs never reached it; the whole file now passes;
+    - an interrupted dir behind a time stop was never finished. The stop's own pass now finishes it, in one `finish` shared with the walk (T29's second case);
+    - B20 could not tell the read-back from the second before it. The jq shim now answers both ways;
+    - nothing pinned V as the longest measured (T28's 10 s case);
+    - a non-integer read-back dropped the bound. It now falls back to the second before the re-stamp.
+
+    Its nits were fixed in text, except three:
+    - the margin's inventory term is 75 s, not 70;
+    - the citation note, the `_bak_thin` header ("unless something was refused"), `_bak_data_keep`'s empty-value fallback and the keep-set's "up to ten" are now stated exactly;
+    - README says `thin` works to the budget; the keep-set's own verifications are carried.
+
+    The three it left as they are:
+    - an elapsed time from a wall clock stepped back counts as zero;
+    - a `classify` that throws records no time;
+    - `KEEP=4\r\r` refuses where systemd reads 4, the safe direction.
   - **Growth.** `ccd/ccrc` grew by 38 net code lines against `origin/main` (F6b's one line), against the stop line of 39.
   - **Mutation rows of fix round 2**, each measured red and then restored byte-identical:
 
@@ -892,12 +908,16 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     | D-6363: own's `lstat` refusal leaves own | its `left++` deleted | T24-own: own's `lstat` fails |
     | D-6464: no verification past the bound, at the count | the check deleted | T27, T28, T29 |
     | D-6464: the estimate V is in the check | the bound compared with now alone | T28, T31 |
-    | D-6464: the finish arm waits on nothing | the budget applied to it | T29 |
+    | D-6464: the finish arm waits on nothing | the budget applied to both of its spellings (the walk's, and the time stop's pass) | T29 |
+    | D-6464: past a time stop an interrupted dir is still finished | the stop's pass only leaves it | T29 (its second case) |
+    | D-6464: V is the longest measured | `longest` never set | T28 (its 10 s case) |
+    | D-6464: the instant is read back from the report | the read-back deleted | B20 |
+    | D-6464: a read-back that is not whole seconds falls back | taken unvalidated | B20 |
     | D-6464: no verification past the bound, at the pre-migration keep | the check deleted | T31 |
     | D-6464: a bad `--until` is a usage error | its parse check deleted | T30 |
     | D-6464: an update passes the bound | `_bak_gc` drops the argument | B20 |
 
-    The B17 and B18 rows above were measured again at the final tree, all of them red as listed.
+    The B17 and B18 rows above were measured again at the final tree, all of them red as listed, and so were the D-6464 rows after the second review. The budget applied to the walk's finish arm alone no longer reds anything: the time stop's pass finishes the same dir. So the ruled mutation is measured on both spellings together.
 
 ## Coordinator rulings on review 794 (2026-10-22)
 

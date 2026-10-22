@@ -2705,7 +2705,7 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     [own, a, b, c].forEach((d, i) => expect(treeDigest(d), d).toEqual(before[i]));
     const bare = thinCli(home, []);
     expect(bare.status).toBe(70);
-    expect(bare.stderr).toContain('thin --keep <n> --by <update|backup> [--prefix <text>] [--own <dir>] [--verified <dir>] --dir <dir> [--dir <dir> ...]');
+    expect(bare.stderr).toContain('thin --keep <n> --by <update|backup> [--prefix <text>] [--own <dir>] [--verified <dir>] [--until <unix seconds>] --dir <dir> [--dir <dir> ...]');
     expect(H.main(['bogus'], { HOME: home }, { out: () => undefined, err: () => undefined })).toBe(70);
     const ok = thinCli(home, argv({ keep: 2, by: 'backup', prefix: 'prune:', own, dirs: [a, b, c] }));
     expect(ok.status).toBe(0);
@@ -3222,21 +3222,21 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(opened.filter((p) => MEMBERS.test(p) && dirs.some((d) => p.startsWith(`${d}/`))), 'no walked dir was verified').toEqual([]);
   });
 
-  it('W23-T28 (D-6464): a budget that admits exactly one full verification starts one: the first is estimated at 150 s, the next at the longest measured; one second less starts none', () => {
+  it('W23-T28 (D-6464): a budget that admits exactly one full verification starts one: the first is estimated at 150 s, the next at the longest measured; one second less starts none, and short verifications admit more', () => {
     const T0 = 1_800_000_000;
     const build = (): { own: string; dirs: string[] } => {
       const home = mkHome();
       const tpl = template(home, '20260101-000000');
       return { own: clone(home, tpl, stamp(9)), dirs: [8, 7, 6, 5].map((n) => clone(home, tpl, stamp(n))) };
     };
-    /** A clock each verification moves on by 100 s: the first open of a dir's journal, which only a full verification reads. */
-    const timed = (): { fs: any; now: () => Date; journals: string[] } => {
+    /** A clock each verification moves on by `step` s: the first open of a dir's journal, which only a full verification reads. */
+    const timed = (step = 100): { fs: any; now: () => Date; journals: string[] } => {
       let t = T0;
       const journals: string[] = [];
       const fs = {
         ...H.realFs,
         openRead(p: string) {
-          if (p.endsWith('delegation-events.log') && !journals.includes(p)) { journals.push(p); t += 100; }
+          if (p.endsWith('delegation-events.log') && !journals.includes(p)) { journals.push(p); t += step; }
           return H.realFs.openRead(p);
         },
       };
@@ -3253,6 +3253,12 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     const none = run({ own: b.own, dirs: b.dirs, keep: 3, by: 'update', until: T0 + 149, fs: cb.fs, now: cb.now });
     expect(cb.journals, 'the first is estimated at 150 s').toHaveLength(0);
     expect(none.r).toEqual({ kept: 1, thinned: 0, left: 4, refused: 0, stopped: false });
+    // 10 s verifications at keep 4: the estimate after the first is 10 s, not 150, so all three the count needs fit.
+    const c = build();
+    const cc = timed(10);
+    const three = run({ own: c.own, dirs: c.dirs, keep: 4, by: 'update', until: T0 + 150, fs: cc.fs, now: cc.now });
+    expect(cc.journals, 'V is the longest measured').toHaveLength(3);
+    expect(three.r).toEqual({ kept: 4, thinned: 1, left: 0, refused: 0, stopped: false });
   });
 
   it('W23-T29 (D-6464): an interrupted thinning is finished whatever the budget, since it verifies nothing, and the walk stops at the next verification', () => {
@@ -3276,6 +3282,25 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
       'coordination data sets: 1 kept, 1 thinned this run, 2 left as they are',
     ]);
     expect(dirListing(interrupted)).toEqual(AFTER);
+    // Behind the stop too: the walk ends at the first verification, and an interrupted dir past it is still finished.
+    const home2 = mkHome();
+    const own2 = clone(home2, tpl, stamp(9));
+    const full2 = clone(home2, tpl, stamp(8));
+    const full3 = clone(home2, tpl, stamp(7));
+    const behind = clone(home2, tpl, stamp(6));
+    cpSync(path.join(interrupted, RECORD), path.join(behind, RECORD));
+    rmSync(path.join(behind, 'coord.db'));
+    expect(H.quickState(H.realFs, behind).word).toBe('interrupted');
+    const r2 = thinCli(home2, [...argv({ keep: 2, own: own2, dirs: [full2, full3, behind] }), '--until', '1']);
+    expect(r2.stderr).toBe('');
+    expect(r2.status).toBe(0);
+    expect(linesOf(r2.stdout)).toEqual([
+      `thinned ${stamp(6)}: finished an interrupted thinning (0M); coordination-thinned.json records when and why`,
+      BUDGET_LINE(2),
+      'coordination data sets: 1 kept, 1 thinned this run, 2 left as they are',
+    ]);
+    expect(dirListing(behind)).toEqual(AFTER);
+    for (const d of [full2, full3]) expect(dirListing(d)).toContain('coord.db');
   });
 
   it('W23-T31 (D-6464): the pre-migration keep\'s verification waits on the budget too: past it, the candidate and every older dir are left, never thinned unverified', () => {

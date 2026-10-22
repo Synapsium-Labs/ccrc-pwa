@@ -13312,6 +13312,13 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       `PATH='${updateEnv(home).PATH ?? ''}'; exec node "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
+    // D-6464: `FX_JQ_UPDATED_AT` answers cmd_update's read-back of the re-stamp's `updatedAt`; every other jq call is the real one.
+    writeFileSync(join(bin, 'jq'), [
+      '#!/bin/sh',
+      'if [ -n "$FX_JQ_UPDATED_AT" ] && [ "$2" = ".updatedAt | numbers" ]; then printf "%s\\n" "$FX_JQ_UPDATED_AT"; exit 0; fi',
+      `PATH='${updateEnv(home).PATH ?? ''}'; exec jq "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
     return bin;
   };
   const withShim = (home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: `${nodeShim(home)}:${updateEnv(home).PATH ?? ''}`, ...extra });
@@ -14160,17 +14167,28 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(readFileSync(join(b, 'thin-lock-state'), 'utf8'), 'ccrc backup thins under its lock').toBe('held\n');
     });
 
-    it('W23-B20: an update passes thin a time budget, the re-stamp\'s own instant plus the deadline less the 230 s margin; ccrc backup passes none (D-6464)', () => {
-      const u = box('ccrc-fx-w23-b20-update-');
-      stubUpdate(u);
-      plantFull(u, ['20250101-000000']);
-      const r = runUpdate(u, [], withShim(u, { CCRC_UPDATE_DEADLINE_MS: '900000' }));
-      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-      const saw = JSON.parse(readFileSync(join(u, 'thin-saw-update.json'), 'utf8'));
-      expect(saw, 'thin sees the re-stamp').toMatchObject({ phase: 'restarting', detail: 'pruning and thinning ~/ccrc-backups' });
-      const args = readFileSync(join(u, 'thin-args'), 'utf8').split('\n');
-      expect(args.filter((a) => a === '--until'), 'one bound').toHaveLength(1);
-      expect(args[args.indexOf('--until') + 1], 'the re-stamp plus 900 s, less 230').toBe(String(saw.updatedAt + 900 - 230));
+    it('W23-B20: an update passes thin a time budget, the re-stamp\'s own instant plus the deadline less the 235 s margin; ccrc backup passes none (D-6464)', () => {
+      /** One update through the shim: the report thin saw, and the `--until` it was given. */
+      const update = (prefix: string, extra: NodeJS.ProcessEnv = {}): { saw: { updatedAt: number }; until: number } => {
+        const u = box(prefix);
+        stubUpdate(u);
+        plantFull(u, ['20250101-000000']);
+        const r = runUpdate(u, [], withShim(u, { CCRC_UPDATE_DEADLINE_MS: '900000', ...extra }));
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        const saw = JSON.parse(readFileSync(join(u, 'thin-saw-update.json'), 'utf8'));
+        expect(saw, 'thin sees the re-stamp').toMatchObject({ phase: 'restarting', detail: 'pruning and thinning ~/ccrc-backups' });
+        const args = readFileSync(join(u, 'thin-args'), 'utf8').split('\n');
+        expect(args.filter((a) => a === '--until'), 'one bound').toHaveLength(1);
+        return { saw, until: Number(args[args.indexOf('--until') + 1]) };
+      };
+      const plain = update('ccrc-fx-w23-b20-update-');
+      expect(plain.until, 'the re-stamp plus 900 s, less 235').toBe(plain.saw.updatedAt + 900 - 235);
+      // The instant is the one read back from the report, not the second before it: a read-back that answers otherwise wins.
+      expect(update('ccrc-fx-w23-b20-readback-', { FX_JQ_UPDATED_AT: '1700000000' }).until).toBe(1700000000 + 900 - 235);
+      // A read-back that is not whole seconds falls back to the second read just before the re-stamp, never later than it.
+      const odd = update('ccrc-fx-w23-b20-odd-', { FX_JQ_UPDATED_AT: '1700000000.5' });
+      expect(odd.until).toBeLessThanOrEqual(odd.saw.updatedAt + 900 - 235);
+      expect(odd.until).toBeGreaterThanOrEqual(odd.saw.updatedAt + 900 - 235 - 5);
       const b = box('ccrc-fx-w23-b20-backup-');
       plantFull(b, ['20250101-000000']);
       const br = runBackup(b, [], withShim(b, { CCRC_UPDATE_DEADLINE_MS: '900000' }));

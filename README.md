@@ -1208,8 +1208,8 @@ and CRs, a line is skipped when it is a comment (`#` or `;`) or another key's `[
 included; a line holding a CR past its lead is never skipped, and a file holding a NUL byte cannot be scanned: unmeasured
 is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
-same length there is not seen (D-6350, D-6364). On an update the thinning also keeps inside the console's deadline: it starts
-no full verification that could not finish in time, leaves the rest for the next update and still exits 0 (D-6464). The newest data set from
+same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
+it starts no full verification that could not finish in time, leaves the rest for the next update and still exits 0 (D-6464). The newest data set from
 before a schema migration (a `coord.db` `user_version` lower than the newest kept set's) is kept as well, one at most, so the
 snapshot an older build's by-hand restore needs survives a failed migrating update (D-6358). A thinned dir holds
 `coordination-thinned.json`, written before anything is deleted, which says when, by which verb and by which rule;

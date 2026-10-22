@@ -1151,8 +1151,8 @@ function finishOne(fs, dir, t) {
  * A `verified` dir that reads as anything but whole, stale or empty (an interrupted thinning, a thinned dir, a damaged one) is refused, never finished (D-6362).
  * `until` (unix seconds, `null` for none) is the time budget on the update path (D-6464): a full verification is started only when `now` plus
  * the longest one this run has measured (VERIFY_ESTIMATE_S until one has run) is not past it. Otherwise the walk ends there, every dir it did not
- * reach that holds a data set is left, one line says so, and `stopped` stays false: it is not a refusal. Nothing else waits on the budget,
- * so an interrupted thinning the walk reaches is finished, and a record is never written without its deletes.
+ * reach that holds a data set is left, one line says so, and `stopped` stays false: it is not a refusal. Nothing else waits on the budget:
+ * an interrupted thinning is finished whatever the budget, past a time stop too, and a record is never written without its deletes.
  * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
  */
 export function thinBackups({ own = null, verified = null, dirs, keep, by, until = null, fs = realFs, now = () => new Date(), out }) {
@@ -1218,10 +1218,31 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
     leaveRest(rest);
     out(`thinning stopped: ${spent} full verifications spent before the walk ended — every older backup is untouched until a later run`);
   };
-  /** The time budget's end (D-6464): not a refusal, so the exit stays 0. */
+  /** Finishes an interrupted thinning: the record already says what goes, so nothing is verified. */
+  const finish = (dir, q) => {
+    const bytes = finishOne(fs, dir, q.record);
+    out(`thinned ${path.basename(dir)}: finished an interrupted thinning (${mib(bytes)}M); ${THINNED_FILE} records when and why`);
+    thinned++;
+  };
+  /** The time budget's end (D-6464): not a refusal, so the exit stays 0. Past it an interrupted thinning is still finished,
+   *  whatever the budget, because that verifies nothing; every other dir of `rest` that holds a data set is left as it is. */
   const timeUp = (rest) => {
     timedOut = true;
-    out(`thinning stopped at its time budget; ${leaveRest(rest)} left as they are; the next update continues`);
+    const before = left;
+    for (const d of rest) {
+      try {
+        const st = fs.lstat(d);
+        if (st === null || !st.isDirectory()) continue;
+        const q = reads.get(d) ?? quickState(fs, d);
+        if (q.word === 'interrupted' && d !== verP) finish(d, q);
+        else if (holdsData(q)) left++;
+      } catch (err) {
+        if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+        warn(d, whyOf(err));
+        left++;
+      }
+    }
+    out(`thinning stopped at its time budget; ${left - before} left as they are; the next update continues`);
   };
 
   const reads = new Map();
@@ -1285,12 +1306,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
       if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
         refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
       }
-      if (q.word === 'interrupted') {
-        const bytes = finishOne(fs, dir, q.record);
-        out(`thinned ${name}: finished an interrupted thinning (${mib(bytes)}M); ${THINNED_FILE} records when and why`);
-        thinned++;
-        continue;
-      }
+      if (q.word === 'interrupted') { finish(dir, q); continue; }
       if (q.word === 'stale') {
         fs.unlink(path.join(dir, THINNED_FILE));
         fs.fsyncDir(dir);

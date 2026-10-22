@@ -18655,8 +18655,9 @@ cmd_update() {
   # UPD_BAK_FLOOR empty, which would only WARN). The re-stamp is a write with no lock held, like the final report below, so it
   # shares that write's m3 window: a newer run's report landing between `_upd_report_is_mine` and `_upd_phase` is overwritten.
   # UPD_THIN_AT is the instant the control plane's deadline now runs from (D-6464): the re-stamp's `updatedAt`, read back from the
-  # report it wrote, else the second read just before it, which is never later. `_bak_gc` turns it into `thin`'s time budget.
-  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups" && _upd_report_readable && UPD_THIN_AT="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null || printf '%s' "$UPD_THIN_AT")"; _bak_gc update || :; fi
+  # report it wrote when that reads as whole seconds, else the second read just before it, which is never later. `_bak_gc` turns it
+  # into `thin`'s time budget.
+  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then UPD_THIN_AT="$(date +%s)"; _upd_report_is_mine && _upd_phase restarting "pruning and thinning ~/ccrc-backups" && _upd_report_readable && { local rb=""; rb="$(jq -er '.updatedAt | numbers' -- "$BOX_UPDATE_JSON" 2>/dev/null)" && [[ "$rb" =~ ^[1-9][0-9]{0,10}$ ]] && UPD_THIN_AT="$rb"; }; _bak_gc update || :; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
   # second `ccrc update` may already hold ~/.ccrc/update.json for its own
@@ -23695,8 +23696,8 @@ _bak_ours() {
 # digit or `_` on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. A line holding a CR past its lead is never skipped,
 # since systemd ends a line at a bare CR and would read what follows as a line of its own (fix round 2's review); a file holding a
 # NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), and a scan that answers anything but
-# 0 or 1 (an awk that cannot run, or is killed) could not be scanned, and refuse too. Only an absent file, or one with no such line,
-# falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
+# 0 or 1 (an awk that cannot run, or is killed) could not be scanned, and refuse too. Only an absent file, one with no such line, or
+# an empty value there (as with an empty environment variable) falls back to 3. The same fallback is harmless in `_upd_deadline_ms`, whose default deletes nothing.
 _bak_data_keep() {
   local f="$BOX_ENV_FILE" g=0 why=""
   BAK_DATA_KEEP="${CCRC_BACKUP_DATA_KEEP:-}"; BAK_DATA_KEEP_WHY=""
@@ -23719,7 +23720,7 @@ _bak_data_keep() {
 # and has run `_bak_data_keep`, `_bak_list` and `_bak_keepset`. rc 0 nothing refused, a tree whose helper predates `thin`
 # included (D-6355: skipped by name, never a WARN); rc 1 refused or stopped (the helper's own exit 3), an unparsable floor, or the helper
 # missing or failing. It never dies. <until>, when not empty, is `thin`'s time budget in unix seconds (`--until`, D-6464); a walk that
-# reaches it ends with exit 0, so it is rc 0 here.
+# reaches it ends with exit 0, so it is rc 0 here unless something was refused.
 _bak_thin() {
   local i d rc=0 helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
   local -a own=() ver=() dirs=()
@@ -23803,11 +23804,13 @@ _bak_snap_class() {
 # helper may predate `thin`, D-6355; a rollback by re-install runs `cmd_update` and thins here as an update) then thins the coordination data set of the backups past the newest CCRC_BACKUP_DATA_KEEP (`_bak_thin`,
 # D-6346), under the same lock; an invalid CCRC_BACKUP_DATA_KEEP stops the prune and the thinning alike (D-6347). It still never
 # writes update.json: `cmd_update` re-stamps the report before it calls this (D-6356). An update passes `thin` a time budget (D-6464):
-# `--until`, the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms`, less a margin of 230 s. The margin is 150 s for one full
+# `--until`, the re-stamp's instant (UPD_THIN_AT) plus `_upd_deadline_ms`, less a margin of 235 s. The margin is 150 s for one full
 # verification `thin` starts just before the bound (Step 7's largest per-set figure, the estimate `thin` itself uses until it has timed
-# one), 70 s for the control plane to read the final report (one inventory minute plus its 10 s budget: its deadline runs on what it last
-# read), and 10 s for what follows `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside
-# the window. No UPD_THIN_AT (a direct call) passes no bound; `ccrc backup` passes none, as it holds no lease.
+# one); 75 s for the control plane to read the final report, since its deadline runs on what its inventory last read, and that runs once
+# a minute, gated on a 2 s tick and stamped as it starts, and takes up to its 10 s budget (72 s, rounded up); and 10 s for what follows
+# `thin` here (the unlock, and `cmd_update`'s final report). The count prune runs before `thin`, inside the window. On the box that
+# thins, `_upd_deadline_ms` reads the ccrc.env the server reads its deadline from. No UPD_THIN_AT (a direct call) passes no bound;
+# `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
   if ! _keep_ok "$keep"; then
@@ -23820,7 +23823,7 @@ _bak_gc() {   # <lead word: update|rollback>
     echo "$lead: backups: WARN: this run's lock time was not recorded, so nothing can say which backups are its own — nothing pruned"
     return 1
   fi
-  local took=0 lrc=0 until="" margin=230
+  local took=0 lrc=0 until="" margin=235
   [ -n "$UPD_LOCK_FD" ] || took=1
   _ver_lock_try || lrc=$?
   case "$lrc" in
