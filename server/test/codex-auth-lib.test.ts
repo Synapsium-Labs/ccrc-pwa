@@ -8,8 +8,10 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -340,7 +342,7 @@ describe.skipIf(!PY)('reading a credential (codex-bridge spec §2.6)', () => {
       'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
       'mod = importlib.util.module_from_spec(spec)',
       'spec.loader.exec_module(mod)',
-      'mod._UNSAVED[os.path.normpath(sys.argv[2])] = ({"access_token": "atok-fixture-u", "refresh_token": "rtok-fixture-u"}, None)',
+      'mod._UNSAVED[os.path.normpath(sys.argv[2])] = ({"access_token": "atok-fixture-u", "refresh_token": "rtok-fixture-u"}, None, None)',
       'print(mod.read(sys.argv[2]).credential)',
     ].join('\n');
     try {
@@ -1330,6 +1332,38 @@ async function refusal(body: unknown, status = 400): Promise<{ line: Record<stri
   });
 }
 
+/** The status file's temp path: a directory planted there makes every status write fail (its unlink is EISDIR). */
+const statusTmpPath = (dir: string): string => `${statusPath(dir)}.tmp`;
+
+/** A status file bound to the credential's current identity, written by hand (as another process would leave it):
+ *  the identity's digits are spliced in as text, since `mtimeNs` is past 2**53. */
+function plantStatus(dir: string, fields: Record<string, unknown>): void {
+  const id = fileIdentity(dir);
+  const body = JSON.stringify({
+    version: 1, family: 'chatgpt-backend', state: 'ok', expiresAt: null, lastRefreshAt: null, lastErrorCode: null,
+    lastRequestId: null, consent: null, identity: '@ID@', configHash: '0'.repeat(64), unsaved: false, updatedAt: 0,
+    ...fields,
+  });
+  writeFileSync(statusPath(dir), body.replace('"@ID@"', `{"ino": ${id.ino}, "mtimeNs": ${id.mtimeNs}, "size": ${id.size}}`));
+}
+
+/** Run `code` (python) in a process of its own with the library loaded as `mod`; argv[2..] are `args`. */
+function pyWithLib(home: string, body: string[], args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const code = [
+    'import importlib.util, json, os, sys',
+    'sys.dont_write_bytecode = True',
+    'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+    'mod = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mod)',
+    ...body,
+  ].join('\n');
+  const r = spawnSync(PY as string, ['-I', '-c', code, AUTH_LIB, ...args], {
+    encoding: 'utf8', cwd: home, timeout: 5000,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE },
+  });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
 describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
   it('a valid token is returned with no lock taken and no request made', async () => {
     const home = mkTmp('codex-auth-valid-');
@@ -1537,6 +1571,162 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  it('a full disk that also fails the status write loses nothing: the retry writes state ok with this refresh\'s fields, never the stale state on disk', async () => {
+    const home = mkTmp('codex-auth-refresh-enospc-status-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    // A config-error left under another library config: stale, so it bars nothing, but it is the status on disk.
+    plantStatus(dir, { state: 'config-error', lastErrorCode: 'invalid_client' });
+    const planted = statusText(dir);
+    mkdirSync(statusTmpPath(dir));
+    const answer = issuedAnswer();
+    const barrier = join(home, 'checked');
+    const started = Math.floor(Date.now() / 1000);
+    let afterFirst = '';
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh' },
+      ], { faults: ['enospc-writes:1'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          afterFirst = statusText(dir);
+          rmSync(statusTmpPath(dir), { recursive: true });
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      const [first, , second] = r.lines;
+      const len = (answer.access_token as string).length;
+      expect(first).toMatchObject({ credential: 'present', access_token: len });
+      expect(second).toMatchObject({ credential: 'present', access_token: len });
+      expect(srv.requests, 'one request in total').toHaveLength(1);
+      expect(afterFirst, 'the first call could not write its status').toBe(planted);
+      expect(fileRecord(dir).refresh_token, 'the second call wrote the record').toBe(answer.refresh_token);
+      const st = statusOf(dir);
+      expect(st).toMatchObject({ state: 'ok', lastErrorCode: null, unsaved: false });
+      expect(st.expiresAt, 'expiresAt is the new token\'s').toBe(payloadOf(answer.access_token as string).exp);
+      expect(st.expiresAt).toBe(fileRecord(dir).expires_at);
+      expect(typeof st.lastRefreshAt, 'this refresh\'s lastRefreshAt survives its failed status write').toBe('number');
+      expect(st.lastRefreshAt).toBeGreaterThanOrEqual(started);
+      expect(statusIdentity(statusText(dir)), 'the status binds the new file').toEqual(fileIdentity(dir));
+      expect(r.stderr.split('\n').filter((l) => l.includes('could not be written')), r.stderr).toHaveLength(1);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('a needs-signin another process wrote over the replaced file never bars the unsaved record, and the retry leaves state ok', async () => {
+    const home = mkTmp('codex-auth-refresh-enospc-signin-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const answer = issuedAnswer();
+    const barrier = join(home, 'checked');
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh' },
+      ], { faults: ['enospc-writes:1'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          // Another refresher redeemed the replaced file's (already spent) refresh token and wrote what it met, bound
+          // to that same file.
+          const first = statusText(dir);
+          const signin = first.replace('"state": "ok"', '"state": "needs-signin"')
+            .replace('"lastErrorCode": null', '"lastErrorCode": "refresh_token_reused"');
+          expect(signin).not.toBe(first);
+          writeFileSync(statusPath(dir), signin);
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      const [, , second] = r.lines;
+      expect(second, 'the unsaved record is served, not barred').toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      expect(srv.requests, 'one request in total').toHaveLength(1);
+      expect(fileRecord(dir).refresh_token, 'the second call wrote the record').toBe(answer.refresh_token);
+      expect(statusOf(dir)).toMatchObject({ state: 'ok', lastErrorCode: null, unsaved: false });
+      expect(statusIdentity(statusText(dir))).toEqual(fileIdentity(dir));
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('an unsaved record the disk still cannot write is refreshed past a needs-signin measured on the replaced file', async () => {
+    const home = mkTmp('codex-auth-refresh-enospc-signin2-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const a1 = issuedAnswer();
+    const a2 = issuedAnswer();
+    const barrier = join(home, 'checked');
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 200, body: a2 }] }, async (srv) => {
+      // Two failed commits: the first call's, and the retry inside the second call; the second call's own refresh
+      // (forced by withinS) then commits.
+      const r = await runFresh(home, dir, srv.base, [
+        { op: 'ensure_fresh' }, { op: 'wait', path: barrier, timeoutMs: 5000 }, { op: 'ensure_fresh', withinS: 100000 },
+      ], { faults: ['enospc-writes:2'] }, {
+        onLine: (l) => {
+          if (l.op !== 'ensure_fresh' || existsSync(barrier)) return;
+          writeFileSync(statusPath(dir), statusText(dir).replace('"state": "ok"', '"state": "needs-signin"'));
+          writeFileSync(barrier, '');
+        },
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.lines[2], 'the unsaved record is refreshed, not barred').toMatchObject({ credential: 'present', access_token: (a2.access_token as string).length });
+      expect(srv.requests).toHaveLength(2);
+      expect(srv.requests[1].form?.refresh_token, 'the record\'s refresh token is the one redeemed').toBe(a1.refresh_token);
+      expect(fileRecord(dir).refresh_token).toBe(a2.refresh_token);
+      expect(statusOf(dir)).toMatchObject({ state: 'ok', unsaved: false });
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(a1), ...tokensOf(a2)]);
+    });
+  });
+
+  it('a status file that cannot be written is named on stderr once and never fails the refresh', async () => {
+    const home = mkTmp('codex-auth-status-unwritable-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    mkdirSync(statusTmpPath(dir));
+    const a1 = issuedAnswer();
+    const a2 = issuedAnswer();
+    await withAuth({ token: [{ status: 200, body: a1 }, { status: 200, body: a2 }] }, async (srv) => {
+      // The second call is forced to refresh again, so the status write fails a second time.
+      const r = await runFresh(home, dir, srv.base, [{ op: 'ensure_fresh' }, { op: 'ensure_fresh', withinS: 100000 }]);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.lines.map((l) => l.access_token)).toEqual([(a1.access_token as string).length, (a2.access_token as string).length]);
+      expect(srv.requests).toHaveLength(2);
+      expect(fileRecord(dir).refresh_token, 'the refresh is on disk').toBe(a2.refresh_token);
+      expect(existsSync(statusPath(dir)), 'no status was written').toBe(false);
+      const named = r.stderr.split('\n').filter((l) => l !== '');
+      expect(named, 'named once').toHaveLength(1);
+      expect(named[0]).toMatch(/^ccgpt-auth: the status file for .+ could not be written \(E[A-Z]+\); the credential is unaffected$/);
+      for (const piece of secretPieces([...tokensOf(t), ...tokensOf(a1), ...tokensOf(a2)])) expect(r.stderr).not.toContain(piece);
+    });
+  });
+
+  it('write_status outside held() is a RuntimeError, and writes nothing', () => {
+    const home = mkTmp('codex-auth-status-unheld-');
+    const dir = laneDir(home);
+    plantBackendCredential(dir);
+    const r = pyWithLib(home, [
+      'try:',
+      '    mod.write_status(sys.argv[2], state="ok")',
+      '    print("written")',
+      'except RuntimeError:',
+      '    print("RuntimeError")',
+    ], [dir]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('RuntimeError');
+    expect(existsSync(statusPath(dir))).toBe(false);
+  });
+
+  it.each(['"x"', '{"ino": "1", "mtimeNs": 2, "size": 3}'])('a status whose identity is malformed (%s) is never current, over a credential path that is not a regular file', (identity) => {
+    const home = mkTmp('codex-auth-status-unmeasured-');
+    const dir = laneDir(home);
+    const elsewhere = join(home, 'elsewhere');
+    plantBackendCredential(elsewhere);
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(credPath(elsewhere), credPath(dir));
+    writeFileSync(statusPath(dir), `{"version": 1, "state": "needs-signin", "identity": ${identity}}`);
+    const r = pyWithLib(home, ['print(mod.read_status(sys.argv[2]) is None)'], [dir]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('True');
+  });
+
   it.each(NEEDS_SIGNIN_CODES)('%s lands in needs-signin, and is never retried', async (code) => {
     const home = mkTmp('codex-auth-signin-code-');
     const dir = laneDir(home);
@@ -1709,6 +1899,22 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
+  it.each([['a number', 5], ['null', null], ['an empty string', '']])('a stored id_token that is not a string is never written back (%s): with none in the answer, id_token is null', async (_label, stored) => {
+    const home = mkTmp('codex-auth-merge-idtoken-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120, extra: { id_token: stored } });
+    const answer = issuedAnswer({ omit: ['id_token'] });
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.lines[0], r.stdout + r.stderr).toMatchObject({ credential: 'present', access_token: (answer.access_token as string).length });
+      const rec = fileRecord(dir);
+      expect(Object.keys(rec).sort()).toEqual(['access_token', 'account_id', 'expires_at', 'id_token', 'refresh_token']);
+      expect(rec.id_token).toBeNull();
+      expect(rec.access_token).toBe(answer.access_token);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
   /** The four places a leak would show: driver stdout, its stderr, the error's sentence and the status file. */
   const expectNowhere = (r: { stdout: string; stderr: string; lines: Array<Record<string, any>> }, dir: string, secrets: string[]): void => {
     const places = [r.stdout, r.stderr, String(r.lines[0].message ?? ''), existsSync(statusPath(dir)) ? statusText(dir) : ''];
@@ -1735,10 +1941,14 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
     });
   });
 
-  it('a 400 whose body echoes the submitted refresh token leaks it nowhere', async () => {
+  const mixedCase = (hex: string): string => [...hex].map((c, i) => (i % 2 ? c.toUpperCase() : c)).join('');
+  it.each([
+    ['lower-case', (): string => `rtok-fixture-${randomBytes(16).toString('hex')}`],
+    ['mixed-case', (): string => `rtok-Fixture-${mixedCase(randomBytes(16).toString('hex'))}`],
+  ] as Array<[string, () => string]>)('a 400 whose body echoes the submitted refresh token leaks it nowhere (%s)', async (_label, refreshOf) => {
     const home = mkTmp('codex-auth-echo-');
     const dir = laneDir(home);
-    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const t = plantBackendCredential(dir, { expiresIn: -120, refresh: refreshOf() });
     // The token is echoed as the error code itself (it fits CODE_RE) and in the description.
     const body = { error: t.refresh, error_description: `the refresh token ${t.refresh} is not valid`, token: t.access };
     await withAuth({ token: [{ status: 400, body }] }, async (srv) => {
@@ -1746,20 +1956,87 @@ describe.skipIf(!PY)('the refresh (codex-bridge spec §2.6, §5)', () => {
       expect(r.lines[0].error, r.stderr).toBe('refresh-failed');
       expect(statusOf(dir).lastErrorCode, 'an echoed token is never a code').toBe('unrecognised');
       expectNowhere(r, dir, tokensOf(t));
+      // The code is lower-cased before it is bounded, so a case-folded copy of the token is a leak too.
+      const folded = t.refresh.toLowerCase();
+      for (const place of [String(r.lines[0].message ?? ''), statusText(dir)]) {
+        expect(place.toLowerCase(), 'a case-folded token leaked').not.toContain(folded);
+      }
       expectStatusClean(dir, tokensOf(t));
     });
   });
 
-  it.each(['http://example.invalid', 'https://127.0.0.1.example.invalid'])('a non-loopback CCRC_CODEX_AUTH_BASE is refused before any request (%s)', async (base) => {
+  // The plan's two names are refused by their word. The two that follow name no DNS name and reach the fake's own
+  // listener when connected to (0.0.0.0 and the IPv4-mapped loopback both land on 127.0.0.1), so its request count is
+  // a real check: a refusal that let them through would be seen there, with no query leaving the box.
+  it.each([
+    ['http://example.invalid', (): string => 'http://example.invalid'],
+    ['https://127.0.0.1.example.invalid', (): string => 'https://127.0.0.1.example.invalid'],
+    ['http://0.0.0.0:<the fake\'s port>', (port: string): string => `http://0.0.0.0:${port}`],
+    ['http://[::ffff:127.0.0.1]:<the fake\'s port>', (port: string): string => `http://[::ffff:127.0.0.1]:${port}`],
+  ] as Array<[string, (port: string) => string]>)('a non-loopback CCRC_CODEX_AUTH_BASE is refused before any request (%s)', async (_label, baseOf) => {
     const home = mkTmp('codex-auth-nonloop-');
     const dir = laneDir(home);
     const t = plantBackendCredential(dir, { expiresIn: -120 });
     await withAuth({ token: [{ status: 200, body: issuedAnswer() }] }, async (srv) => {
-      const r = await runFresh(home, dir, base);
+      const r = await runFresh(home, dir, baseOf(new URL(srv.base).port));
       expect(r.lines[0].error, r.stderr).toBe('auth-endpoint-refused');
       expect(srv.requests, 'the fake (bound anyway) saw nothing').toHaveLength(0);
       expectStatusClean(dir, tokensOf(t));
     });
+  });
+
+  it('an answer larger than ANSWER_MAX_BYTES is refresh-failed (refresh-response-unreadable) and writes nothing', async () => {
+    const home = mkTmp('codex-auth-answer-big-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const bytes = readFileSync(credPath(dir));
+    const answer = { ...issuedAnswer(), padding: 'p'.repeat((1 << 20) + 4096) };
+    await withAuth({ token: [{ status: 200, body: answer }] }, async (srv) => {
+      const r = await runFresh(home, dir, srv.base);
+      expect(r.lines[0].error, r.stdout + r.stderr).toBe('refresh-failed');
+      expect(srv.requests).toHaveLength(1);
+      expect(readFileSync(credPath(dir)).equals(bytes), 'the credential is unchanged').toBe(true);
+      expect(statusOf(dir).lastErrorCode).toBe('refresh-response-unreadable');
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    });
+  });
+
+  it('an answer sent slowly is cut at TOKEN_TIMEOUT_S from the request, not stretched by each read', async () => {
+    const home = mkTmp('codex-auth-answer-slow-');
+    const dir = laneDir(home);
+    const t = plantBackendCredential(dir, { expiresIn: -120 });
+    const bytes = readFileSync(credPath(dir));
+    const answer = issuedAnswer();
+    const text = JSON.stringify(answer);
+    // Sixteen pieces 150 ms apart: each read waits far less than the 0.5 s timeout, the whole answer 2.4 s.
+    const pieces = Array.from({ length: 16 }, (_, i) => text.slice(Math.floor((i * text.length) / 16), Math.floor(((i + 1) * text.length) / 16)));
+    const timers: NodeJS.Timeout[] = [];
+    let requests = 0;
+    const server = createServer((req, res) => {
+      requests += 1;
+      req.resume();
+      res.on('error', () => undefined);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      pieces.forEach((piece, i) => timers.push(setTimeout(() => {
+        if (res.destroyed) return;
+        if (i === pieces.length - 1) res.end(piece);
+        else res.write(piece);
+      }, 150 * (i + 1))));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const r = await runFresh(home, dir, base, [{ op: 'ensure_fresh' }], { consts: { TOKEN_TIMEOUT_S: 0.5 } });
+      expect(r.lines[0].error, r.stdout + r.stderr).toBe('refresh-failed');
+      expect(r.lines[0].ms, 'the request ends near its 0.5 s bound').toBeLessThan(1500);
+      expect(requests).toBe(1);
+      expect(readFileSync(credPath(dir)).equals(bytes), 'the credential is unchanged').toBe(true);
+      expectStatusClean(dir, [...tokensOf(t), ...tokensOf(answer)]);
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('the status file never holds a token, a JWT segment or the account id', async () => {

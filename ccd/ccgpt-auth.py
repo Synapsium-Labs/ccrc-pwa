@@ -314,10 +314,13 @@ class Reading(NamedTuple):
     detail: str  # a sentence, never a token
 
 
-# The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock).
-# `read` answers from one while the file's identity still equals its identity, and otherwise ignores it, leaving
-# the map unchanged and printing nothing. Only the writer side (`commit_record`, `retry_unsaved`) changes the map.
-_UNSAVED: Dict[str, Tuple[dict, Optional[Identity]]] = {}
+# The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock,
+# the ok-status fields of the refresh that produced it or None). `read` answers from one while the file's identity
+# still equals its identity, and otherwise ignores it, leaving the map unchanged and printing nothing. Only the
+# writer side (`commit_record`, `retry_unsaved`) changes the map. The status fields (`lastRefreshAt`,
+# `lastRequestId`) are kept with the record, not read back from the status file, because that file was measured on
+# the file the record replaces and its own write may have failed with the commit's.
+_UNSAVED: Dict[str, Tuple[dict, Optional[Identity], Optional[dict]]] = {}
 
 
 def _identity(st: os.stat_result) -> Identity:
@@ -429,7 +432,7 @@ def _read_raw(auth_dir: str) -> Tuple[Reading, object]:
     where = p.credential
     unsaved = _UNSAVED.get(_key(auth_dir))
     if unsaved is not None:
-        record, bound = unsaved
+        record, bound, _ = unsaved
         if _current_identity(where) == bound:
             r = _reading_of(record, bound, where)
             return r._replace(detail="an unsaved credential for " + where + " is held in memory; the next refresh "
@@ -679,7 +682,7 @@ def _fsync_dir(d: str) -> None:
         os.close(fd)
 
 
-def commit_record(auth_dir: str, record: dict) -> bool:
+def commit_record(auth_dir: str, record: dict, refreshed: Optional[dict] = None) -> bool:
     """Write `record` as the lane's credential. The caller holds `held(auth_dir)`; this creates no directory.
 
     Re-reads the file under the lock and refuses, with the file untouched, one that reads `unreadable` (Unreadable)
@@ -692,7 +695,8 @@ def commit_record(auth_dir: str, record: dict) -> bool:
     lock), a partial checkpoint is unlinked, and the answer is False: `read` serves the record while that file is
     unchanged, and `retry_unsaved` writes it at the next holder. A failure AFTER the rename (the directory fsync)
     binds the record to the file now in place, which already holds it, so the retry re-runs the commit, fsync
-    included, rather than dropping it."""
+    included, rather than dropping it. `refreshed` (the refresher's `lastRefreshAt` and `lastRequestId`) is kept with
+    an unsaved record, so the status `retry_unsaved` writes for it carries this refresh's fields."""
     p = paths_for(auth_dir)
     key = _key(auth_dir)
     current = _read_file(auth_dir)
@@ -722,7 +726,7 @@ def commit_record(auth_dir: str, record: dict) -> bool:
                 _unlink_absent_ok(p.pending)
             except OSError:
                 pass
-        _UNSAVED[key] = (dict(record), bound)  # type: ignore[assignment]
+        _UNSAVED[key] = (dict(record), bound, dict(refreshed) if refreshed is not None else None)  # type: ignore
         return False
     _UNSAVED.pop(key, None)
     return True
@@ -735,27 +739,30 @@ def retry_unsaved(auth_dir: str) -> str:
     `"none"`: no record. `"dropped"`: the credential file is no longer the one the record was to replace (a sign-in
     or a restore wrote it since), so the record is removed and the file kept, with one stderr line naming the authDir
     and no token; this is the only place a mismatched record is dropped. `"written"`: the commit succeeded and the
-    record is cleared; the status file, when one is current, is rewritten with the same fields, `unsaved: false` and
-    the new file's identity, so its `lastRefreshAt` stays readable once the record is on disk. `"still-unsaved"`: the
-    commit failed again and the record stays."""
+    record is cleared; the status file is rewritten as the refresh that produced the record would have written it:
+    state `ok`, `lastErrorCode` null, `expiresAt` the record's, `lastRefreshAt` and `lastRequestId` the ones kept with
+    the record, `unsaved: false` and the new file's identity. Nothing is carried from the status on disk: it was
+    measured on the file the record replaces (another process's needs-signin or config-error there is about that
+    file's token, not this record's), and it may be older than this refresh when the status write failed with the
+    commit. `"still-unsaved"`: the commit failed again and the record stays."""
     p = paths_for(auth_dir)
     key = _key(auth_dir)
     entry = _UNSAVED.get(key)
     if entry is None:
         return "none"
-    record, bound = entry
+    record, bound, refreshed = entry
     if _current_identity(p.credential) != bound:
         del _UNSAVED[key]
         sys.stderr.write("ccgpt-auth: dropped an unsaved credential for " + key + ": the credential file changed "
                          "since it was refreshed (a sign-in or a restore); the file on disk is kept\n")
         sys.stderr.flush()
         return "dropped"
-    prev = read_status(auth_dir)  # bound to the file the record replaces, so read before the commit
-    if not commit_record(auth_dir, record):
+    if not commit_record(auth_dir, record, refreshed):
         return "still-unsaved"
-    if prev is not None and prev.get("state") in STATES:
-        write_status(auth_dir, **{k: prev.get(k) for k in _STATUS_CARRIED},
-                     identity=_current_identity(p.credential), unsaved=False)
+    kept = refreshed or {}
+    write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastRefreshAt=kept.get("lastRefreshAt"),
+                 lastErrorCode=None, lastRequestId=kept.get("lastRequestId"),
+                 identity=_current_identity(p.credential), unsaved=False)
     return "written"
 
 
@@ -844,9 +851,9 @@ def recover_pending(auth_dir: str) -> str:
 
 
 # ── the status file ──────────────────────────────────────────────────────────────────────────────────────────────
-# The fields a status rewrite carries over unchanged (retry_unsaved's "written", a transient failure).
-_STATUS_CARRIED = ("state", "expiresAt", "lastRefreshAt", "lastErrorCode", "lastRequestId")
-_STATUS_FIELDS = frozenset(_STATUS_CARRIED + ("identity", "unsaved"))
+# The fields write_status takes.
+_STATUS_FIELDS = frozenset(("state", "expiresAt", "lastRefreshAt", "lastErrorCode", "lastRequestId", "identity",
+                            "unsaved"))
 # The authDirs whose status write has failed since the last one that succeeded: each failure is named once.
 _STATUS_WARNED = set()  # type: set
 
@@ -876,7 +883,9 @@ def _epoch_or_none(value: object) -> Optional[int]:
 def read_status(auth_dir: str) -> Optional[dict]:
     """The lane's status file, when it parses as a JSON object, is `version` 1, and its `identity` is the credential
     file's current one; else None (no file, another shape, or a status measured on a credential that has changed since,
-    such as a sign-in or a restore). Never writes, never locks. A non-regular file at the path is None, unopened."""
+    such as a sign-in or a restore). Never writes, never locks. A non-regular file at the path is None, unopened. An
+    identity that cannot be measured on either side (a malformed one in the file; a credential path that is not a
+    regular file) matches nothing, so such a status is never current."""
     p = paths_for(auth_dir)
     try:
         if not stat.S_ISREG(os.lstat(p.status).st_mode):
@@ -901,7 +910,9 @@ def read_status(auth_dir: str) -> Optional[dict]:
         return None
     if not isinstance(obj, dict) or type(obj.get("version")) is not int or obj["version"] != STATUS_VERSION:
         return None
-    if _identity_from_json(obj.get("identity")) != _current_identity(p.credential):
+    recorded = _identity_from_json(obj.get("identity"))
+    current = _current_identity(p.credential)
+    if recorded is _UNMEASURED or current is _UNMEASURED or recorded != current:
         return None
     return obj
 
@@ -1043,9 +1054,10 @@ def _request_id(headers: object) -> Optional[str]:
 
 def _echoes(code: str, secret: str) -> bool:
     """True when a code carries the submitted refresh token, or a piece of it long enough to identify it: a token of at
-    most 64 lower-case characters fits CODE_RE, so an endpoint that echoes it as its error code must not have it
-    stored."""
-    return bool(secret) and (secret in code or (len(code) >= 8 and code in secret))
+    most 64 characters fits CODE_RE once `classify_error` lower-cases it, so an endpoint that echoes it as its error
+    code must not have it stored. Compared without case, because the code is already lower-cased."""
+    s = secret.lower()
+    return bool(s) and (s in code or (len(code) >= 8 and code in s))
 
 
 class _Redirected(Exception):
@@ -1066,6 +1078,28 @@ class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
             raise _Redirected(code, headers)
 
 
+def _read_answer(resp: object, deadline: float) -> bytes:
+    """An answer's body, at most ANSWER_MAX_BYTES, read before `deadline` (a `time.monotonic()` value): each read is
+    one receive (`read1`) under the time left, so an endpoint that sends its answer slowly cannot stretch the request
+    past TOKEN_TIMEOUT_S, which bounds the body as a whole, not each socket operation. Past the deadline, TimeoutError
+    (an OSError). The status line and the headers are read by `http.client` under TOKEN_TIMEOUT_S per operation."""
+    chunks = []
+    left = ANSWER_MAX_BYTES
+    while left > 0:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("the token request's deadline passed")
+        sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+        if sock is not None:
+            sock.settimeout(remaining)
+        chunk = resp.read1(min(65536, left))  # type: ignore[attr-defined]
+        if not chunk:
+            break
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks)
+
+
 # What a token request's transport can raise: urllib's URLError and a socket timeout are OSErrors; a connection the
 # server drops mid-answer raises http.client's own exceptions.
 _TRANSPORT_ERRORS = (OSError, http.client.HTTPException, ValueError)
@@ -1077,8 +1111,10 @@ def token_request(refresh_token: str) -> Tuple[dict, Optional[str]]:
 
     Returns the answer (a JSON object) and its request id. Raises NeedsSignin, ConfigError or RefreshFailed, each
     carrying `.code` (classify_error's, or None) and `.request_id`; EndpointRefused for a non-loopback override, before
-    any request. No sentence formats the answer, its body or a token."""
+    any request. No sentence formats the answer, its body or a token. The answer's body is read within one deadline,
+    TOKEN_TIMEOUT_S from the start of the request (`_read_answer`)."""
     url = auth_base() + TOKEN_PATH
+    deadline = time.monotonic() + float(TOKEN_TIMEOUT_S)
     payload = json.dumps({"client_id": CLIENT_ID, "grant_type": "refresh_token", "refresh_token": refresh_token,
                           "scope": REFRESH_SCOPE}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST",
@@ -1115,7 +1151,7 @@ def token_request(refresh_token: str) -> Tuple[dict, Optional[str]]:
     rid = _request_id(resp.headers)
     try:
         with resp:
-            raw = resp.read(ANSWER_MAX_BYTES)
+            raw = _read_answer(resp, deadline)
     except _TRANSPORT_ERRORS as e:
         raise RefreshFailed("the token endpoint's answer could not be read (" + type(e).__name__ + "); the credential "
                             "is unchanged; retry", request_id=rid)
@@ -1135,7 +1171,9 @@ def _merge(r: Reading, old: object, answer: dict, rid: Optional[str]) -> dict:
     The answer must carry an access token (RefreshFailed `refresh-response-incomplete` otherwise, naming no field's
     value). A missing refresh token or id token keeps the stored one, as Codex keeps every token its refresh answer
     lacks (upstream openai/codex @ 092d3ac, codex-rs/login/src/auth/manager.rs:1600-1623), so a credential is never
-    thrown away for a missing field. `expires_at` is the access token's `exp`, else now + `expires_in`, else null;
+    thrown away for a missing field. A stored `id_token` is kept only when it is a non-empty string (the backend
+    format's `id_token` is a string); with neither the answer's nor a stored one, the record's `id_token` is null, and
+    the refresh still succeeds. `expires_at` is the access token's `exp`, else now + `expires_in`, else null;
     `account_id` is the id token's claim, else the access token's, else the stored one."""
     access = _nonempty_str(answer.get("access_token"))
     if access is None:
@@ -1144,14 +1182,14 @@ def _merge(r: Reading, old: object, answer: dict, rid: Optional[str]) -> dict:
     refresh = _nonempty_str(answer.get("refresh_token")) or r.refresh_token
     id_token = _nonempty_str(answer.get("id_token"))
     if id_token is None and isinstance(old, dict):
-        id_token = old.get("id_token")  # type: ignore[assignment]
+        id_token = _nonempty_str(old.get("id_token"))
     expires_at = _exp_of(access)
     if expires_at is None and _finite_number(answer.get("expires_in")):
         try:
             expires_at = int(time.time() + float(answer["expires_in"]))
         except (OverflowError, ValueError):
             expires_at = None
-    account_id = (_account_id_of(_nonempty_str(id_token)) or _account_id_of(access) or r.account_id)
+    account_id = (_account_id_of(id_token) or _account_id_of(access) or r.account_id)
     return {"access_token": access, "refresh_token": refresh, "id_token": id_token, "expires_at": expires_at,
             "account_id": account_id}
 
@@ -1180,6 +1218,12 @@ def _state_error(state: str, code: Optional[str], rid: Optional[str], lane: Opti
                        "credential: run ccrc codex login " + who, code=code, request_id=rid)
 
 
+def _from_unsaved(auth_dir: str, old: object) -> bool:
+    """True when the reading `_read_raw` answered with `old` was served from this process's unsaved record."""
+    entry = _UNSAVED.get(_key(auth_dir))
+    return entry is not None and old is entry[0]
+
+
 def _raise_if_barred(auth_dir: str, lane: Optional[str]) -> None:
     status = read_status(auth_dir)
     if _bars(status):
@@ -1205,18 +1249,21 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
 
     A present, unexpired credential with no unsaved record bound is answered at once: no lock, no network. A status
     that bars the credential (needs-signin, or config-error under this config) is raised at once, never retried and
-    never waiting on the lock. Otherwise, under `held`: settle a checkpoint (`recover_pending`), write an unsaved
+    never waiting on the lock. A reading served from the unsaved record is never barred: the status was measured on
+    the file the record replaces, and a refusal another process met there is about that file's token, not the
+    record's. Otherwise, under `held`: settle a checkpoint (`recover_pending`), write an unsaved
     record (`retry_unsaved`), re-read (another process may have refreshed or failed, and is obeyed), re-check the
     status, then make the one token request. A refusal writes its state to the status file and raises it; a transient
     failure leaves the state as it was and raises RefreshFailed. A refresh is committed atomically; a commit that
     cannot write keeps the record in memory, served by `read` and written by the next holder. `lane` names the lane in
     a remedy (`ccrc codex login <lane>`)."""
     key = _key(auth_dir)
-    r = read(auth_dir)
+    r, old = _read_raw(auth_dir)
     _raise_for(r)
     if not expired(r, within_s) and key not in _UNSAVED:
         return r
-    _raise_if_barred(auth_dir, lane)
+    if not _from_unsaved(auth_dir, old):
+        _raise_if_barred(auth_dir, lane)
     with held(auth_dir) as p:
         recover_pending(auth_dir)
         retry_unsaved(auth_dir)
@@ -1224,7 +1271,8 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
         _raise_for(r)
         if not expired(r, within_s):
             return r  # the unsaved record too: a disk that stays full never asks again
-        _raise_if_barred(auth_dir, lane)
+        if not _from_unsaved(auth_dir, old):
+            _raise_if_barred(auth_dir, lane)
         prev = read_status(auth_dir)
         failed = dict(expiresAt=r.expires_at, identity=r.identity, unsaved=key in _UNSAVED,
                       lastRefreshAt=prev.get("lastRefreshAt") if prev is not None else None)
@@ -1238,11 +1286,12 @@ def ensure_fresh(auth_dir: str, *, within_s: Optional[float] = None, lane: Optio
             write_status(auth_dir, state=_unchanged_state(prev), lastErrorCode=e.code, lastRequestId=e.request_id,
                          **failed)
             raise
-        saved = commit_record(auth_dir, rec)
+        refreshed = dict(lastRefreshAt=time.time(), lastRequestId=rid)
+        saved = commit_record(auth_dir, rec, refreshed)
         # The file still on disk when the commit could not write: the identity the unsaved record is bound to.
-        bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity))[1]
-        write_status(auth_dir, state="ok", expiresAt=rec["expires_at"], lastRefreshAt=time.time(), lastErrorCode=None,
-                     lastRequestId=rid, identity=bound, unsaved=not saved)
+        bound = _current_identity(p.credential) if saved else _UNSAVED.get(key, (rec, r.identity, None))[1]
+        write_status(auth_dir, state="ok", expiresAt=rec["expires_at"], lastErrorCode=None, identity=bound,
+                     unsaved=not saved, **refreshed)
         identity = bound if isinstance(bound, tuple) else None  # type: Optional[Identity]
         out = _reading_of(rec, identity, p.credential)
         if not saved:
