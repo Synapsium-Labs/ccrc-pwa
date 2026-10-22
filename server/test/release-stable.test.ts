@@ -199,6 +199,8 @@ describe('release-stable.sh: the refusal of a HEAD with no release tag says what
     expect(r.code, r.stderr).toBe(2);
     expect(r.stdout).toBe('');
     expect(ghArgv(home)).toEqual([]);
+    // Exactly one line on stderr, whatever the measurement printed.
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
     return r.stderr;
   }
   const docsOnly = { 'README.md': '# fixture, edited\n', 'docs/a.md': 'a\n' };

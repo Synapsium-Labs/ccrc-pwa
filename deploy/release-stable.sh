@@ -76,9 +76,10 @@ if [ "${#TAGS[@]}" -eq 0 ]; then
   NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""
   [ -n "$NEWEST" ] || refuse_untagged ", and it contains no release tag" "stable now points at $SHORT" first
   # One classifier, one two-helper rule, one node floor: release-main.sh's own
-  # measure arm. Its answer only picks the sentence, never the exit (D-6398).
+  # measure arm; its stderr carries nothing the message needs, so the refusal stays
+  # one line. Its answer only picks the sentence, never the exit (D-6398).
   RC=0
-  ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST")" || RC=$?
+  ANSWER="$(bash "$ROOT/deploy/release-main.sh" measure --base "$NEWEST" 2>/dev/null)" || RC=$?
   if [ "$RC" -ne 0 ]; then
     WHY="whether it changed what ships could not be measured (release-main.sh measure exited $RC), so read it as changed: check the release-main run for its merge"
   elif [[ "$ANSWER" =~ ^unchanged\ ([0-9]+)$ ]]; then
@@ -88,7 +89,8 @@ if [ "${#TAGS[@]}" -eq 0 ]; then
   elif [[ "$ANSWER" =~ ^unmeasured\ (.+)$ ]] && [[ "$ANSWER" != *$'\n'* ]]; then
     WHY="whether it changed what ships could not be measured (${BASH_REMATCH[1]}), so read it as changed: check the release-main run for its merge"
   else
-    WHY="whether it changed what ships could not be measured (release-main.sh measure answered '${ANSWER:0:80}'), so read it as changed: check the release-main run for its merge"
+    FLAT="${ANSWER//[$'\n\r']/ }"
+    WHY="whether it changed what ships could not be measured (release-main.sh measure answered '${FLAT:0:80}'), so read it as changed: check the release-main run for its merge"
   fi
   refuse_untagged "; it sits past $NEWEST, the newest release it contains, and $WHY" "stable now sits past $NEWEST" next
 fi
