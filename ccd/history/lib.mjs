@@ -297,7 +297,7 @@ export const ERROR_CODES = Object.freeze(['json-parse', 'not-object', 'line-too-
 export const CARD_PREFIX = 'History: ';
 // D-4167: W1 answers for this box's store only.
 export const COVERAGE = Object.freeze(['this-box']);
-export const SCOPE_SOURCES = Object.freeze(['tmux']);
+export const SCOPE_SOURCES = Object.freeze(['tmux', 'env']);
 export const VARIANT_CAUSES = Object.freeze(['ccd-sanitize', 'unknown']);
 export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);
 // W2-1 Task 4 (W2-D30): 'recall-off' carries the presence record's change and gap rows. JOURNAL_V stays 1, so a build
@@ -4565,6 +4565,27 @@ export function decideScope(i) {
     return verdict('workspace', { workdir });
   }
   return verdict('family', {});
+}
+
+/** W2-D41's env-only guard (§8.2 "Across projects: never"), run after decideScope on the headless path: the registry
+ *  project decideScope used (`verdict.project`, from $REG/<CCRC_RECALL_SESSION>.project) must equal the resolved family's
+ *  STORED sessions.project, or the answer is exit 2 cross-project. Every scope kind is guarded, the default family scope
+ *  included; a verdict with no project used none and passes. A verdict of any other source passes: the guard is the env
+ *  path's alone. */
+export function decideEnvProject({ verdict, storedProject }) {
+  if (verdict.source !== SCOPE_SOURCES[1] || verdict.project === null) return { ok: true };
+  return verdict.project === storedProject ? { ok: true } : refuseScope('cross-project');
+}
+
+/** W2-D46 steps 5 and 6 on the headless path, after step 4 admitted the family, so both answers are counted. `recallOff`
+ *  is decideRecallOff's answer for recall-off/<id> against the RESOLVED generation (§9.7): 'off' is exit 8 (step 5).
+ *  Then the arm (step 6, W2-D42): the treatment arm reads, and every other value is exit 8. decideHeadless admits only
+ *  RECALL_ARMS' words, so the other value a caller can pass is the control arm; anything else withholds too, fail
+ *  closed. `why` names the step for tests: exit 8 carries no word. */
+export function decideHeadlessRead({ recallOff, arm }) {
+  if (recallOff === 'off') return { ok: false, rc: EXIT.RECALL_OFF, why: 'recall-off' };
+  if (arm !== RECALL_ARMS[1]) return { ok: false, rc: EXIT.RECALL_OFF, why: 'arm' };
+  return { ok: true };
 }
 
 /** The shortest prefix of each id, its letter plus at least

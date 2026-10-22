@@ -95,7 +95,7 @@ export const DECLARED_BY: readonly DeclaredBy[];
 export const ERROR_CODES: readonly string[];
 export const CARD_PREFIX: 'History: ';
 export const COVERAGE: readonly ['this-box'];
-export const SCOPE_SOURCES: readonly ['tmux'];
+export const SCOPE_SOURCES: readonly ['tmux', 'env'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
@@ -580,6 +580,9 @@ export type ScopeVerdict =
   | ScopeRefusal<'no-identity' | 'bad-args' | 'bad-id' | 'cross-project' | 'project-unreadable' | 'workspace-unreadable'>
   | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null };
 export function decideScope(i: ScopeInputs): ScopeVerdict;
+// --- W2-2b Task 3: the headless path's own two decisions (W2-D41, W2-D46)
+export function decideEnvProject(i: { verdict: Extract<ScopeVerdict, { ok: true }>; storedProject: string }): { ok: true } | ScopeRefusal<'cross-project'>;
+export function decideHeadlessRead(i: { recallOff: 'off' | 'stale' | 'none'; arm: string }): { ok: true } | { ok: false; rc: 8; why: 'recall-off' | 'arm' };
 export function displayPrefixes(ids: readonly string[]): Map<string, string>;
 export type ScopedId =
   | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }
