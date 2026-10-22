@@ -27,11 +27,15 @@ const OUT = path.join(HERE, '..', 'src', 'icons', 'lucide.ts');
 /** The icons in use. Add a name here, re-run, and commit both files.
  *  `command`, `corner-down-left` and `search` are the palette's (D-5103, D-5457).
  *  `bot`, `chevron-right`, `palette`, `refresh-cw` and `shield` are the
- *  Settings index's (the Settings redesign, Task R2a; spec §3.2). */
+ *  Settings index's (the Settings redesign, Task R2a; spec §3.2).
+ *  `chevron-down` and `x` are the workbench tab strip's: "all tabs" and a
+ *  tab's close (the close is never `✕`, the dead glyph); `x` is also the
+ *  Sheet's desktop arm's close (D-5933, D-6033). */
 const NAMES = [
   'bell',
   'bell-off',
   'bot',
+  'chevron-down',
   'chevron-right',
   'command',
   'corner-down-left',
@@ -47,6 +51,12 @@ const NAMES = [
   // Stop's, in the composer's send slot (D-5471).
   'square',
   'shield',
+  'x',
+  // Instrument's rail and top bar (W2 Task S9, D-5472): Fleet, Runs, Archive and New session's `+`.
+  'layout-list',
+  'workflow',
+  'archive',
+  'plus',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);

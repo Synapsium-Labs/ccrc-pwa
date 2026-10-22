@@ -1402,7 +1402,10 @@ export const MIGRATIONS: readonly string[] = [
   //     (`delegation-checkpoint.json`) are the record. The checkpoint carries sessions, attempts, activities, leases and
   //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
   //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
-  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. The checkpoint
+  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
+  //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
+  //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
@@ -1758,6 +1761,23 @@ export const MIGRATIONS: readonly string[] = [
     at     INTEGER NOT NULL,
     PRIMARY KEY (laneId, gen, fp)
   );
+  `,
+  // ── 29: user_version 28 -> 29 ─────────────────────────────────────────────
+  // D-5860 (consolidation W1a plan, Task C1f; ARCH-55 #790): `feed_events.dedupe_key`, the label a notice that must
+  // happen once carries (which compaction a nudge is about; which PR removal a dequeue is about). Its ONE writer is
+  // `CoordStore.recordFeedEvent` and its one reader `CoordStore.hasNotice`; the key is stored as its SHA-256 hex,
+  // never through the body's redactor (departure `dedupe-key-unmasked`: a masked key collides exactly as a masked body
+  // does). NULL is a row written before this migration, or a notice with no once-only rule; `hasNotice` matches such a
+  // row by its body (departure `dedupe-key-legacy-text`). The index serves `hasNotice`'s three-column read.
+  //
+  // ONE NULLABLE COLUMN (no NOT NULL, no CHECK, no default) AND ONE INDEX, nothing else: an older build opening a file at
+  // `user_version 29` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its
+  // inserts store NULL. Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;
+  CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);
   `,
 ];
 

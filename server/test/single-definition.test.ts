@@ -5116,12 +5116,11 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
-  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
-  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
-  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
-  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
-  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
-  // exemption below.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer, sweep.mjs's
+  // `--op recall-off` (recallOffPass, W2-1), and it has readers in more files than the exact-holders form can list (the
+  // read verbs and the drain through readBounded, the hook's bash read, the replay driver's lstat). W2-1
+  // (W2-D29) replaced B1's half-case with the last case below: one writer, the hook the one bash file naming it, and the
+  // writer's shape.
   const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
     ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
     ['history-steer-off', ['ccd/history/lib.mjs']],
@@ -5266,16 +5265,55 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     }
   });
 
-  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
-    const W2_WRITER = 'ccd/history/sweep.mjs';
-    // CONTROL: the writer shapes this describe classifies are seen against this name too.
-    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
-    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
-    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
-    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
-      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
-      .map(rel).sort();
-    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
+  // W2-1 (W2-D29): recall-off/<id> has exactly one writer, sweep.mjs's recallOffPass, and every content reader reads it
+  // through store.mjs's readBounded, so no corpus line pairs a write verb (`open` included) with a recall-off needle but the
+  // writer's own. KNOWN WIDTH: a recall-off path held in a variable and written on a later line (`const p = recallOffPath(
+  // home, id);` then `unlinkSync(p)`) is invisible to the needle scan. Inside recallOffPass the writer-shape rule below
+  // closes it (every mutation there names `recallOffPath(` or `.recallOffDir` on its own line); outside it, nothing does.
+  it('recall-off/<id>: exactly one writer, sweep.mjs', () => {
+    const WRITER = 'ccd/history/sweep.mjs';
+    const NEEDLES = ['recall-off', 'recallOffPath', 'recallOffDir', 'RECALL_OFF_DIR'] as const;
+    const langOf = (f: string): 'bash' | 'mjs' => (BASH.includes(f) ? 'bash' : 'mjs');
+    const writesOff = (l: string, lang: 'bash' | 'mjs'): boolean => NEEDLES.some((n) => l.includes(n) && writes(l, lang, n));
+    // CONTROL: the classifier sees the planted writer shapes.
+    expect(writesOff('writeFileSync(recallOffPath(home, id), g);', 'mjs')).toBe(true);
+    expect(writesOff('    unlinkSync(`${P.recallOffDir}/${n}`);', 'mjs')).toBe(true);
+    expect(writesOff('touch "$H/recall-off/$id"', 'bash')).toBe(true);
+    // CONTROL: and not the two reads W2-D29 keeps, each read from the real file it lives in.
+    const SWEEP_MJS = path.join(HISTORY_DIR, 'sweep.mjs');
+    const reader = code(SWEEP_MJS).filter((l) => l.includes('readBounded(recallOffPath('));
+    expect(reader, 'sweep.mjs reads recall-off/<id> through readBounded on two lines, recallOffPresence and the tick scan (W2-D29, W2-D30)').toHaveLength(2);
+    const driver = code(path.join(ccrcRoot, 'deploy', 'history-replay.mjs')).filter((l) => l.includes('lstatSync(recallOffPath('));
+    expect(driver, 'the replay driver\'s one recall-off line (W2-D78 (ii))').toHaveLength(1);
+    for (const l of [...reader, ...driver]) expect(writesOff(l, 'mjs'), l.trim()).toBe(false);
+    const writers = CORPUS.filter((f) => code(f).some((l) => writesOff(l, langOf(f)))).map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13)').toEqual([WRITER]);
+    // W2-D29's CLI half: cli.mjs reaches recall-off/<id> only through the imported recallOffPresence, so it names no recallOffPath( at all
+    // (a read of its own there would be a second reader, which the needle scan above cannot see).
+    const cliNames = code(path.join(HISTORY_DIR, 'cli.mjs')).filter((l) => l.includes('recallOffPath('));
+    expect(cliNames.map((l) => l.trim()), 'cli.mjs names recallOffPath( : its one reader is sweep.mjs recallOffPresence (W2-D29)').toEqual([]);
+    expect(code(path.join(HISTORY_DIR, 'cli.mjs')).some((l) => l.includes('recallOffPresence(')), 'CONTROL: cli.mjs does call the one reader').toBe(true);
+    // The bash half: the hook reads recall-off/<id> and is the one bash file naming it; none of its lines writes it.
+    const bashNaming = BASH.filter((f) => code(f).some((l) => l.includes('/recall-off')));
+    expect(bashNaming.map(rel).sort()).toEqual(['ccd/session-hook.sh']);
+    for (const f of bashNaming) {
+      for (const l of code(f).filter((x) => x.includes('/recall-off'))) expect(writes(l, 'bash', 'recall-off'), `${rel(f)}: \`${l.trim()}\``).toBe(false);
+    }
+    // The writer shape: recallOffPass's body, from its declaration to the next line that is exactly `}`.
+    const lines = code(SWEEP_MJS);
+    const at = lines.findIndex((l) => /^export function recallOffPass\(/.test(l));
+    expect(at, 'sweep.mjs declares no recallOffPass').toBeGreaterThan(-1);
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(|\b(?:removeEntry|writeFileAtomic|mkdirDurable)\s*\(/;
+    const mutations = lines.slice(at + 1, end).filter((l) => VERB.test(l));
+    for (const l of mutations) {
+      expect(/recallOffPath\(|\.recallOffDir\b/.test(l), `recallOffPass: \`${l.trim()}\` names no recall-off path on its own line`).toBe(true);
+    }
+    for (const v of ['mkdirSync(', 'openSync(', 'renameSync(', 'unlinkSync(']) expect(mutations.some((l) => l.includes(v)), `recallOffPass makes no ${v}`).toBe(true);
+    // Every recall-off write in sweep.mjs is the executor's.
+    const outside = lines.filter((l, i) => (i <= at || i >= end) && writesOff(l, 'mjs')).map((l) => l.trim());
+    expect(outside, 'a recall-off write in sweep.mjs outside recallOffPass').toEqual([]);
   });
 });
 describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
@@ -5289,6 +5327,8 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
     'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W5h-2 Task 3 (D-5747): the operator relay's look-behind window, declared once in lib.mjs.
+    'RELAY_LOOKBEHIND_BYTES',
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
@@ -5296,7 +5336,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): the check after a bind's bounds and stop words; EXPORT_BIND_BATCH moved here from sweep.mjs.
     'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
     // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
-    'SEGMENT_HEADER_BYTES'] as const;
+    'SEGMENT_HEADER_BYTES',
+    // W2-1 Task 2 (W2-D12, W2-D30): the presence record's meta prefix and its two bounds, read by lib's planner, sweep.mjs and (the prefix) the gate.
+    'RECALL_OFF_META', 'RECALL_OFF_GAP_MS', 'RECALL_OFF_SCAN_MAX',
+    // W2-1 Task 4 (W2-D30): the presence record's meta keys, each built from RECALL_OFF_META.
+    'RECALL_OFF_KEYS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5379,12 +5423,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
   });
 
-  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP, REDACT_SOURCES_META and RECALL_OFF_META are quoted once, at their declaration (H-149)', async () => {
     // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
     // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
     const l = await lib();
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META', 'RECALL_OFF_META'] as const) {
       const value = l[name];
       expect(typeof value, `${name} is a string`).toBe('string');
       const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
@@ -5770,13 +5814,23 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
   const literalCalls = (files: readonly Text[]): string[] =>
     files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
   const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** D-5866 (Task C1k): `CCD_CAN`'s own entry for the row, a NAME keyed to its capability token, which builds and
+   *  calls nothing. It is excepted in `ccdargv.ts` alone, on its own line, and held to exactly one such line below. */
+  const CAN_ENTRY = /^\s*docsFetch: capRow\(DOCS_CAP\),\s*$/;
+  /** D-5866: the adapter's own gate, `ccdCan(deps.fleetState, 'docsFetch')`, ASKS by the row's name and builds
+   *  nothing. It is excepted in the adapter alone, on its own line, and held to exactly one such line below. */
+  const CAN_ASK = /^\s*if \(!ccdCan\(deps\.fleetState, 'docsFetch'\)\) return fail\('unsupported'\);\s*$/;
   /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
   const docsFetchLines = (files: readonly Text[]): string[] =>
-    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n')
+      .filter((l) => DOCS_FETCH_ID.test(l) && !(n === ARGV && CAN_ENTRY.test(l)) && !(n === SOURCE && CAN_ASK.test(l)))
+      .map(() => n));
   /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
   const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
   /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
-  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  // D-5866 (Task C1k): a TYPE query `keyof typeof CCD_ARGV` (the row-name type `CCD_CAN` is keyed by) reads no value,
+  // so it is not an escape. A bare `typeof CCD_ARGV` is still one.
+  const ARGV_ESCAPE = /(?<!\bkeyof\s+typeof\s+)\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
   const ARGV_DECLARATION = 'export const CCD_ARGV = {';
   /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
    *  declaration excepted. */
@@ -5799,6 +5853,30 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
 
   it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
     expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49: CCD_CAN\'s docsFetch entry is one line, in ccdargv.ts, and the exception sees nothing else (D-5866)', () => {
+    const argvText = LIVE.find(([n]) => n === ARGV)![1];
+    expect(stallCodeText(argvText).split('\n').filter((l) => CAN_ENTRY.test(l))).toHaveLength(1);
+    const before = docsFetchLines(LIVE).length;
+    expect(docsFetchLines(plantedIn(SOURCE, '  docsFetch: capRow(DOCS_CAP),')).length, 'outside ccdargv.ts it counts')
+      .toBe(before + 1);
+    expect(docsFetchLines(plantedIn(ARGV, '  docsFetch: (p, b) => CCD_ARGV.docsFetch(p, b),')).length, 'another line counts')
+      .toBe(before + 1);
+    const sourceText = LIVE.find(([n]) => n === SOURCE)![1];
+    expect(stallCodeText(sourceText).split('\n').filter((l) => CAN_ASK.test(l)), 'the adapter asks once').toHaveLength(1);
+    expect(docsFetchLines(plantedIn(ARGV, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return fail('unsupported');")).length,
+      'the ask counts outside the adapter').toBe(before + 1);
+    expect(docsFetchLines(plantedIn(SOURCE, "  if (!ccdCan(deps.fleetState, 'docsFetch')) return run(CCD_ARGV.docsFetch(p, b));"))
+      .length, 'a line that asks AND calls counts').toBe(before + 1);
+  });
+
+  it('CONTROL: a keyof-typeof type query is not an escape; a bare typeof or a value use still is (D-5866)', () => {
+    const before = argvEscapes(LIVE).length;
+    expect(argvEscapes(plantedIn(SOURCE, 'type R = keyof typeof CCD_ARGV;')).length).toBe(before);
+    expect(argvEscapes(plantedIn(SOURCE, 'type T = typeof CCD_ARGV;')).length).toBe(before + 1);
+    expect(argvEscapes(plantedIn(SOURCE, 'const r = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];')).length)
+      .toBe(before + 1);
   });
 
   it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
@@ -6984,7 +7062,7 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const l = await lib();
     const code = codeLines(HOOK_SH);
     expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
-    // The delegation spool's jq definitions (#448) spell its own 512-character path bound, `def maxpath: 512;`, a different
+    // The delegation spool's jq definitions (#448) spell its own 512-byte path bound, `def maxpath: 512;`, a different
     // quantity: that one token is set aside, and any other 512 or 513 on any line, that one included, still counts.
     expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x.replace('def maxpath: 512;', ''))), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
     const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
@@ -8115,6 +8193,52 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   });
 });
 
+// D-5866 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1k, Step 4;
+// ARCH-71 (#806); spec §5.1 rule 3). The capability ratchet, placed directly after the ARCH-40 tail block and ahead of
+// the next appended block, so no cited line above it moves. Every verb question goes through `ccdCan(state, row)`:
+// a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
+// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there), and in
+// `watch.ts`, whose commit waits its turn in the one `watch.ts` queue behind C1f (named in the C1k PR body as the
+// follow-up `c1k-watch-after-c1f`). Both sets may only shrink. Flag and verb-precondition sites are reported, never
+// ratcheted. The census is loaded inside the rows, so this block adds no import line.
+describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
+  /** `watch.ts`'s legacy verb calls at C1k's tip: the name sweep's probe, child reclaim's and the collector's gates
+   *  (each with its pause beside it), the expiry selection and the project PR read. */
+  const WATCH_DEFERRED = 7;
+
+  it('no verb question outside ccdCan, except W4\'s three (and watch.ts\'s deferred commit)', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('./consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
+    const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
+    expect(show(legacy.filter((x) => x.file !== 'server/src/watch.ts')), 'ask ccdCan(state, row) instead').toEqual([]);
+    expect(legacy.filter((x) => x.file === 'server/src/watch.ts').length, 'watch.ts may only shrink')
+      .toBeLessThanOrEqual(WATCH_DEFERRED);
+    const w4 = sites.filter((x) => x.tag === 'w4-held');
+    expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
+      .toBeLessThanOrEqual(3);
+    expect(w4.every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    console.log(`capability census: flag ${sites.filter((x) => x.tag === 'flag').length}, verb-precondition ${
+      sites.filter((x) => x.tag === 'verb-precondition').length}, w4-held ${w4.length}, ccdCan ${
+      sites.filter((x) => x.form === 'ccdCan').length}`);
+  });
+
+  it('CONTROL: the census tags a planted verbSupported( outside W4 as a verb', async () => {
+    const { capabilityChoiceSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'ccd-can-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/x.ts'), 'if (!verbSupported(state, CCD_ARGV.wsHold(id, r, null))) return;\n');
+      const [x] = await capabilityChoiceSites(tree);
+      expect([x?.form, x?.tag]).toEqual(['verbSupported', 'verb']);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
@@ -8179,6 +8303,33 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
   });
 });
 
+// Named workspaces review fixes: vocabularies the PWA and the server both read are declared ONCE in `shared/` and the
+// other side imports them. Each was spelled twice before (the rename words' `BAD_TITLE_REASONS`; the Linear failure
+// arms as the server's `LINEAR_FAILURES` beside the PWA's `LOOKUP_NOTE` keys, and the preview's wire type as a loose
+// interface), which is how an arm gets added on one side only.
+describe('the named-workspace vocabularies have one home each', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('LINEAR_FAILURES').test("export const LINEAR_FAILURES = [")).toBe(true);
+    expect(decl('LINEAR_FAILURES').test("import { LINEAR_FAILURES } from '../../../shared/linear';")).toBe(false);
+  });
+  it('the Linear failure arms and the preview answer are declared once, in shared/linear.ts', () => {
+    for (const c of ['LINEAR_FAILURES', 'LinearFailure', 'ResolveAnswer']) expect(holders(decl(c)), c).toEqual(['shared/linear.ts']);
+  });
+  it('the bad-title reasons are declared once, in shared/refusal.ts, and no source spells the three words as a list', () => {
+    for (const c of ['BAD_TITLE_REASONS', 'BadTitleReason']) expect(holders(decl(c)), c).toEqual(['shared/refusal.ts']);
+    expect(holders(/'blank'\s*,\s*'control-characters'\s*,\s*'too-long'/)).toEqual(['shared/refusal.ts']);
+  });
+  it('the workspace id `${project}-${slug}` is spelled once, by workspaceId in shared/slug.ts', () => {
+    const spelled = /`[^`]*\$\{\s*(?:ctx\.)?project\s*\}-\$\{\s*(?:ctx\.|preview\.|plan\.ask\.)?slug\s*\}/;
+    expect(spelled.test('`${project}-${slug}`'), 'CONTROL: the pattern sees the spelling').toBe(true);
+    expect(spelled.test('`new workspace ${project}-${preview.slug} · branch`'), 'CONTROL: and the preview line').toBe(true);
+    expect(holders(spelled).filter((f) => f !== 'shared/slug.ts')).toEqual([]);
+    expect(holders(/\bexport const workspaceId\b/)).toEqual(['shared/slug.ts']);
+  });
+});
+
 // PATH IDENTITY W2 (spec 2026-10-12 §3.4). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
 // citation audit cites this file by line. A `collect` `done`'s leaf words (`meas.leaf`) are ONE L0 table's keys in
 // `shared/api.ts`, and the runtime list derives from it. A second hand copy (a reader in `childReclaimSweep.ts` that
@@ -8203,5 +8354,96 @@ describe('path identity W2: the collect leaf words are spelled once, in shared/a
   it('the two words are spelled as a vocabulary in shared/api.ts alone', () => {
     const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders).toEqual(['shared/api.ts']);
+  });
+});
+
+// W2-1 Task 1 (W2-D33): the exports the deploy lane reads are each defined once. APPENDED after the last describe, for
+// the reason the CCRC HISTORY block above states; no import line is added. ALL_MJS, HISTORY_DIR, stallCode and rel are
+// that block's.
+describe('ccrc history: the deploy lane exports are each defined once (W2-D33; W2-1 Task 1)', () => {
+  const DEFINES = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\s*\\(`);
+  const definers = (name: string): string[] =>
+    ALL_MJS.filter((f) => stallCode(f).split('\n').some((l) => DEFINES(name).test(l))).map(rel).sort();
+  /** The body of the function whose head line `head` matches: from that line to the first line that is exactly `}`. */
+  const bodyOfFn = (src: string, head: RegExp): string => {
+    const lines = src.split('\n');
+    const at = lines.findIndex((l) => head.test(l));
+    if (at < 0) return '';
+    const end = lines.findIndex((l, i) => i > at && l === '}');
+    return lines.slice(at, end + 1).join('\n');
+  };
+  const DERIVE = path.join(HISTORY_DIR, 'derive.mjs');
+  const RECALL = path.join(HISTORY_DIR, 'recall.mjs');
+  const BLOB_SQL = ["'SELECT z FROM blobs WHERE blob_id = ?'", "'SELECT raw_len FROM blobs WHERE blob_id = ?'"] as const;
+
+  it('CONTROL: the definition pattern sees a declaration, exported or not, and never a call or an import', () => {
+    expect(DEFINES('stampAtOrBefore').test('export function stampAtOrBefore(rows, index) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('function stampAtOrBefore(copy, uuid) {')).toBe(true);
+    expect(DEFINES('stampAtOrBefore').test('    fileAtEofAfterBoundary: eofAfterBoundary({ eofMs: holding.eof_ms, boundaryTsMs: stampAtOrBefore(copy.rows, copy.index.get(b.uuid)) }),')).toBe(false);
+    expect(DEFINES('stampAtOrBefore').test('  secretUnits, summaryParts, stampAtOrBefore,')).toBe(false);
+    expect(bodyOfFn('x\nfunction f(a) {\n  return a;\n}\ny', /^function f\(/)).toBe('function f(a) {\n  return a;\n}');
+    expect(bodyOfFn('x\n', /^function f\(/), 'an absent head reads as no body').toBe('');
+  });
+
+  it('stampAtOrBefore is defined in lib.mjs alone, and derive.mjs imports it from lib', () => {
+    expect(definers('stampAtOrBefore')).toEqual(['ccd/history/lib.mjs']);
+    const block = /^import \{\n([^}]*)\} from '\.\/lib\.mjs';$/m.exec(stallCode(DERIVE));
+    expect(block, 'derive.mjs has no multi-line named import from ./lib.mjs').not.toBeNull();
+    expect(block![1]!.split(',').map((s) => s.trim())).toContain('stampAtOrBefore');
+  });
+
+  it('each blob SELECT is spelled once in shipped code, inside blobReadStmts, and stmts takes both from it', () => {
+    for (const sql of BLOB_SQL) {
+      expect(ALL_MJS.filter((f) => stallCode(f).includes(sql)).map(rel), sql).toEqual(['ccd/history/derive.mjs']);
+      expect(stallCode(DERIVE).split(sql).length - 1, `${sql}: spelled more than once in derive.mjs`).toBe(1);
+    }
+    const reads = bodyOfFn(stallCode(DERIVE), /^export function blobReadStmts\(db\) \{$/);
+    for (const sql of BLOB_SQL) expect(reads, `${sql} is not in blobReadStmts`).toContain(sql);
+    expect((reads.match(/\.prepare\(/g) ?? []).length, 'blobReadStmts prepares exactly the two blob reads').toBe(2);
+    expect(bodyOfFn(stallCode(DERIVE), /^function stmts\(db\) \{$/)).toContain('...blobReadStmts(db),');
+  });
+
+  it('pickExpandBody is called once in shipped code, by expandEntryBody, and expandEntryText reads through expandEntryBody', () => {
+    const calls = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => /\bpickExpandBody\(/.test(l) && !DEFINES('pickExpandBody').test(l)).map(() => rel(f)));
+    expect(calls).toEqual(['ccd/history/recall.mjs']);
+    const src = stallCode(RECALL);
+    expect(bodyOfFn(src, /^export function expandEntryBody\(rc, e\) \{$/)).toMatch(/\bpickExpandBody\(/);
+    const text = bodyOfFn(src, /^function expandEntryText\(rc, e\) \{$/);
+    expect(text, 'expandEntryText is gone or its signature moved').not.toBe('');
+    expect(text).toContain('expandEntryBody(rc, e)');
+    expect(text, 'expandEntryText decodes no blob of its own').not.toMatch(/\bexpandBlob\(|\bexpandParse\(/);
+  });
+});
+
+// CCRC HISTORY W2-1 TASK 2 (W2-D17): isSyntheticModel is the one angle-bracket model test. APPENDED, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line. O14's `declares` reads const,
+// let and var only, so a function needs its own scan: lib.mjs declares it and no other .mjs under ccd/history, deploy
+// or shared does, and the angle-bracket test it holds is spelled on one code line of that corpus, its own.
+describe('ccrc history W2-1 Task 2: isSyntheticModel is declared once, in lib.mjs, and holds the one angle-bracket test (W2-D17)', () => {
+  const CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declaresFn = (name: string): RegExp =>
+    new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:(?:async\\s+)?function\\*?\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`);
+  const ANGLE_TEST = /startsWith\(\s*['"`]<['"`]\s*\)|endsWith\(\s*['"`]>['"`]\s*\)/;
+
+  it('CONTROL: the corpus holds lib.mjs and the gate, and the two patterns see what they look for and nothing else', () => {
+    expect(CORPUS.map(rel)).toEqual(expect.arrayContaining(['ccd/history/lib.mjs', 'deploy/history-gate.mjs']));
+    expect(declaresFn('isSyntheticModel').test('export function isSyntheticModel(model) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('function isSyntheticModel(m) {')).toBe(true);
+    expect(declaresFn('isSyntheticModel').test("const isSyntheticModel = (m) => m === '<x>';")).toBe(true);
+    expect(declaresFn('isSyntheticModel').test('    if (isSyntheticModel(row[5])) continue;')).toBe(false);
+    expect(declaresFn('isSyntheticModel').test("import { EXIT, isSyntheticModel } from '../ccd/history/lib.mjs';")).toBe(false);
+    expect(ANGLE_TEST.test("  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');")).toBe(true);
+    expect(ANGLE_TEST.test("  if (leadText(content).trimStart().startsWith('<local-command-stdout>')) return 'harness';")).toBe(false);
+  });
+
+  it('lib.mjs is the one file of the corpus that declares isSyntheticModel', () => {
+    expect(CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declaresFn('isSyntheticModel').test(l))).map(rel).sort())
+      .toEqual(['ccd/history/lib.mjs']);
+  });
+
+  it('the angle-bracket model test is spelled on one code line of the corpus, the return of lib.mjs\'s isSyntheticModel', () => {
+    const hits = CORPUS.flatMap((f) => stallCode(f).split('\n').filter((l) => ANGLE_TEST.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits).toEqual(["ccd/history/lib.mjs: return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');"]);
   });
 });

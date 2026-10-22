@@ -96,12 +96,23 @@ export const COLLECT_REFUSAL_TEXT: Readonly<Record<CollectLaneRefusal, string>> 
   'write-failed': 'The server could not prove the choice was stored; the section re-reads what stands.',
 };
 
-/** The adjacent "Pause all cleanup" action (§5.4, §5.7). It names every lane the switch stops, and offers Pause only:
- *  resuming stays on Runs, so the switch keeps one resume door. */
+/** The Cleanup pause card (settings spec §5.4; settings Task R2b2, D-5503): moved out of the collector card, because
+ *  it stops more than the collector. `stops` is the card's purpose line and names every lane the switch stops. The
+ *  card offers Pause only: resuming stays on Runs, so the switch keeps one resume door, and while paused the card
+ *  links there. The status reads the coord frame: a skeleton before the first one, never "runs normally". */
 export const COLLECT_PAUSE_TEXT = {
+  title: 'Cleanup pause',
   label: 'Pause all cleanup',
-  stops: 'Pauses all cleanup: child reclamation, archived-workspace expiry, the dead-coordinator lane and this collector. Resume it from the cleanup row on Runs.',
-  paused: 'All cleanup is paused. Resume it from the cleanup row on Runs.',
+  stops: "An emergency brake. Stops all of the fleet's automatic cleanup at once: removing finished child workspaces, "
+    + 'expiring archived workspaces, the dead-coordinator lane, and the collector above. Nothing is deleted while '
+    + 'paused; disk use grows until you resume.',
+  running: 'Cleanup runs normally.',
+  paused: 'Cleanup is paused for the whole fleet.',
+  /** The link while paused: the one resume door. */
+  resume: 'Resume it from the cleanup row on Runs.',
+  /** A switch this build cannot read: doubt fails toward stopping deletion, so Pause is still offered. */
+  unmeasurable: 'Whether cleanup is paused could not be read. Pause all cleanup still stops it.',
+  when: 'Cleanup is removing something it should not.',
   pausing: 'pausing…',
   unconfirmed: COORD_UNCONFIRMED_TEXT,
 } as const;

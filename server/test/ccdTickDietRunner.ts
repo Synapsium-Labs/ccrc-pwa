@@ -51,6 +51,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _route_wanted_to: 'W3 Task 15 (D-4963)',
   _route_pending_word_to: 'W3 Task 15 (D-4963)',
   _home_measured_to: 'W3 Task 16 (D-4963)',
+  _swap_lane_to: 'auto-swap reliability W1 (D-6180)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -59,12 +60,12 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 Task 13 (D-4963) landed `_file_read_to`, `_reg_get_to` and
  *  `_reg_read_to`; W3 Task 15 (D-4963) landed `_route_peek_to`, `_route_effort_for_to`, `_route_applied_get_to`,
  *  `_route_wanted_to` and `_route_pending_word_to`; W3 Task 16 (D-4963) landed `_home_measured_to`; the rest of W3 removes
- *  its own. */
+ *  its own. D-6180 (auto-swap reliability W1) landed `_swap_lane_to`, planned and landed in one commit. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
-  '_home_measured_to',
+  '_home_measured_to', '_swap_lane_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

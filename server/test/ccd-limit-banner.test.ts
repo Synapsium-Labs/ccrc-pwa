@@ -379,7 +379,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.assistant()]);
     h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'typing' });
     expect(dispatches()).toHaveLength(1);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\]$/m);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] lane=\S+$/m);   // D-6180's lane= word ends the line
   });
   it('no destination: a transcript banner marks the row stranded, like a pane banner does', () => {
     seed(); writeTranscript([L.banner()]);
@@ -816,7 +816,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     const f = path.join(h.home, '.cc-sessions', 'swap.log');
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
   };
-  const notes = (): string[] => swapLog().split('\n').filter((l) => l.includes(' carried-in '));
+  const notes = (): string[] => swapLog().split('\n').filter((l) => l.split(' ')[2] === 'carried-in');   // the note itself: a D-6180 stand-down line names the word too
   const stranded = (): boolean => fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`));
   const authdead = (): string | null => {
     const f = path.join(h.home, '.cc-sessions', 'claude-authdead');

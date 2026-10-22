@@ -28,6 +28,8 @@ import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
 import { useFrameSet } from '../skins/frame';
+import { INSPECTOR_QUERY } from '../inspector/useInspectorSession';
+import { useMediaQuery } from '../lib/useMediaQuery';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
@@ -483,7 +485,11 @@ export function SessionScreen({
   // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
   // none (Instrument until S12) and outside a frame, as most suites render this screen. A part takes no props, so the
   // header's inputs reach it through `SessionChromeInputs`.
-  const SkinChrome = useFrameSet()?.SessionChrome ?? null;
+  const frameSet = useFrameSet();
+  const SkinChrome = frameSet?.SessionChrome ?? null;
+  // ONE INSTANCE PER WIDTH (W2 Task S8, D-5474): where the skin's inspector holds the plan and the mail (at >=1600, a
+  // skin that places one), the column does not render their strips. Asked of the set, never of the skin's id.
+  const inspectorHoldsStrips = useMediaQuery(INSPECTOR_QUERY) && (frameSet?.Inspector ?? null) !== null;
   const chromeInputs: SessionHeaderProps = {
     session: live,
     status,
@@ -625,7 +631,7 @@ export function SessionScreen({
           by width. */}
       <div key="strips" className="chat-strips">
         {/* Above the plan, which stays the composer's neighbour. */}
-        <MailStrip mail={mail} />
+        {!inspectorHoldsStrips && <MailStrip mail={mail} />}
 
         {/* D-5560: the workflows this session is running, between the mail and the
             plan — one line each, the facts Claude Code's own row prints; the head
@@ -634,7 +640,7 @@ export function SessionScreen({
 
         {/* Sits between the conversation and the composer — where the TUI puts it,
             directly above the prompt you're about to type into. */}
-        <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
+        {!inspectorHoldsStrips && <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />}
       </div>
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something

@@ -38,8 +38,9 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
                           <= 0.02), each null, never 0, when its denominator is 0. A reading whose
                           window holds a restore or rebuild is void; a served_share above 1 is its tell
   w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL; null if none
-  w2                      null without --families; else {row_cap, window_start_ms, window_end_ms, families},
-                          the W2 raw rows, below; the two window fields echo --window-start and --window-end
+  w2                      null without --families; else {row_cap, window_start_ms, window_end_ms, families,
+                          recall_off}, the W2 raw rows, below; the two window fields echo --window-start and
+                          --window-end
   census                  null without --census; else the census, below
 p95 is NEAREST-RANK: the value at 1-based rank ceil(95n/100) of the sorted sample, in integer arithmetic.
 
@@ -78,6 +79,11 @@ probes (the transcript's ingest_files, then memberships by (file_id, entry_id)),
                        boundary, ordered by first appearance: the witnesses lib.mjs's producerOfCopy reads
 The model text is printed raw: this file never tests, compares or classifies it (O32 narrowed, D-5772).
 
+THE PRESENCE RECORD (W2-D23, W2-D30). w2.recall_off is the recall-off presence record's raw meta rows: [k, v]
+for every meta row whose key begins with RECALL_OFF_META (lib.mjs's constant, spelled once below as its twin,
+which measure-history.test.ts holds equal), ordered by k and read in the families snapshot. Nothing here parses
+them: deploy/history-gate.mjs's changedFamilies decides which listed families' files changed during the window.
+
 CENSUS MODE (W2-D13, W2-D20). --census --as-of MS --since MS --row-cap N, all three required, never beside
 --families. It reads this store as of --as-of (W2 open: the census instant T0, one per node) and adds `census`:
   as_of_ms, since_ms, row_cap   the arguments
@@ -96,6 +102,9 @@ Exit 0 measured; 2 an input missing or unreadable, or a usage error.
 import argparse, hashlib, json, os, sqlite3, sys, time, urllib.parse
 
 WEEK_MS = 7 * 86_400_000
+# The presence record's meta prefix: lib.mjs's RECALL_OFF_META, spelled here once because this file imports nothing
+# from lib (W2-D23). measure-history.test.ts holds the two equal, so a changed copy on either side goes red.
+RECALL_OFF_META = 'recall_off:'
 
 
 def fail(msg):
@@ -257,6 +266,14 @@ def families_report(db, families, start_ms, end_ms, row_cap):
     return [family_report(db, ccrc_id, generation, start_ms, end_ms, row_cap) for ccrc_id, generation in families]
 
 
+def recall_off_rows(db):
+    """The presence record's raw rows (W2-D23, W2-D30): [k, v] for every meta row whose key begins with
+    RECALL_OFF_META, ordered by k, unparsed. The prefix is compared whole, by substr: LIKE would read its underscore
+    as a wildcard and ignore case. main calls this after families_report, so it reads that function's snapshot."""
+    sql = 'SELECT k, v FROM meta WHERE substr(k, 1, ?) = ? ORDER BY k'
+    return [[k, v] for k, v in db.execute(sql, (len(RECALL_OFF_META), RECALL_OFF_META)).fetchall()]
+
+
 def w1e_statistic(counters):
     """W1-e (spec 2026-10-05 §10.7, §8.6; ruling RC3): the card line's delivery, from the counters alone. The
     sweep counts each prediction file a later main boundary consumed as card_consumed:<scope>, by the scope marker
@@ -373,7 +390,8 @@ def main():
         if a.families is not None:
             report['w2'] = {'row_cap': a.row_cap, 'window_start_ms': a.window_start, 'window_end_ms': a.window_end,
                             'families': families_report(db, load_families(a.families, store_id), a.window_start,
-                                                        a.window_end, a.row_cap)}
+                                                        a.window_end, a.row_cap),
+                            'recall_off': recall_off_rows(db)}   # after families: its snapshot (W2-D23)
         if a.census:
             report['census'] = census_report(db, a.as_of, a.since, a.row_cap)
     except sqlite3.Error as e:

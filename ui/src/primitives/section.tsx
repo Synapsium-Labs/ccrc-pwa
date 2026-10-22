@@ -8,7 +8,10 @@
 //     stacked mono-caps lines blur together (that spec's §3.3);
 //   - `title`: the h2, at the section type roles (`--fs-section` and its four
 //     companions), which Instrument re-points to 11px mono caps;
-//   - `purpose`: one sentence under the head saying what the card is for.
+//   - `purpose`: one sentence under the head saying what the card is for;
+//   - `level`: the title's heading level, 2 by default. A page whose own name is
+//     already its h2 (a Settings section page) gives its cards 3, so the
+//     outline stays h1, h2, h3 with no level repeated or skipped.
 //
 // THE SCOPE'S PLACE IS ONE TOKEN. Only skins.css may select on `data-skin`
 // (skin-identity.test.ts, census (k)), so the head cannot say "in Instrument,
@@ -44,18 +47,21 @@ export interface SectionProps extends Omit<HTMLAttributes<HTMLElement>, 'title'>
   title?: ReactNode;
   /** One sentence: what the card is for. */
   purpose?: ReactNode;
+  /** The title's heading level: 2, or 3 under a page that names itself in an h2. */
+  level?: 2 | 3;
   children?: ReactNode;
   className?: string;
 }
 
-export function Section({ scope, title, purpose, children, className, ...props }: SectionProps): ReactNode {
+export function Section({ scope, title, purpose, level = 2, children, className, ...props }: SectionProps): ReactNode {
   const titleId = useId();
   const named = title !== undefined;
+  const Heading = level === 3 ? 'h3' : 'h2';
   return (
     <section aria-labelledby={named ? titleId : undefined} className={cn(SECTION, className)} {...props}>
       {(named || scope !== undefined) && (
         <div className={SECTION_HEAD}>
-          {named && <h2 id={titleId} className={SECTION_TITLE}>{title}</h2>}
+          {named && <Heading id={titleId} className={SECTION_TITLE}>{title}</Heading>}
           {scope !== undefined && <p className={SECTION_SCOPE}>{scope}</p>}
         </div>
       )}

@@ -1,13 +1,15 @@
-// Settings › Security (settings spec §3.1; D-5503): the Box token card, and the sign-in gate's unarmed-exposure
-// paragraph, which the frame draws at the top of every Settings page as today's page drew it at its top. Settings
-// Task R2b1 moved both here from `SettingsScreen.tsx` unchanged; the auth status they read is the frame's.
-import { useId, useState } from 'react';
+// Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then Your
+// sign-in and This session (`YourSignInCard.tsx`, `ThisSessionCard.tsx`; from Accounts, R2d, D-5508), then the Box
+// token card, then the Linear card (named workspaces S4b), each a `Section` with its scope. The slot before Box token
+// is reserved for "Recent account changes".
+// The auth status, the passkey list and the Linear connection the cards show are the frame's reads.
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AuthStatus, UpdatesView } from '../../../../shared/api';
-import { LOOPBACK_HOSTS } from '../../../../shared/base-url';
-import { Button, Skeleton, elapsedShort, useNow } from '@ccrc/ui';
-import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from '../../fleet/settingsText';
+import type { UpdatesView } from '../../../../shared/api';
+import { Button, Section, Skeleton, elapsedShort, useNow } from '@ccrc/ui';
+import { BOX_TOKEN_CARD, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, useResultLine } from '../../fleet/settingsText';
 import { isPlaceableInstant, type UpdatesPoll } from '../../fleet/useUpdatesView';
+import { armedMode } from '../../lib/auth';
 import { ApiError, api, apiErrorText, readBoxTokenView } from '../../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -20,36 +22,12 @@ import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 // `NodeItem` is their consumer — see that file's header.
 import { dayClock, elapsedWords } from '../updates';
 import '../../fleet/fleet.css';
-import type { AuthRead } from './SettingsDataProvider';
-
-// THE UNARMED-EXPOSURE BANNER (spec §12) sits above every Settings page (the frame draws it). Its trigger
-// is `AuthStatus.mode === 'off'` from the unauthenticated GET /api/auth/status
-// (D-3298 — /health reports no gate state), AND a
-// page origin whose hostname is not one of shared/base-url.ts's
-// LOOPBACK_HOSTS: the one list of loopback spellings, reused rather than
-// re-spelled (single-definition.test.ts's LOOP_SET scan holds that). Every
-// non-answer draws NOTHING — a failed read, an older server with no route, a
-// body without `mode` — because a red banner is a claim about this box, and a
-// status read that told us nothing is not evidence of an open gate.
-
-/** The ONE spelling of the §12 sentence (the W4 doctor check will name the same route). */
-export const UNARMED_EXPOSURE_TEXT =
-  "The sign-in gate is off and this page was reached over a non-loopback address — anyone who can reach it can "
-  + 'change what the fleet installs, and POST /api/updates/apply will let them install it. Arm the gate: '
-  + 'CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN, together (ccrc expose writes all three).';
-
-/** (D-3298) true iff status?.mode === 'off' exactly AND !LOOPBACK_HOSTS.includes(hostname). */
-export function unarmedExposure(status: Partial<AuthStatus> | null, hostname: string): boolean {
-  return status?.mode === 'off' && !LOOPBACK_HOSTS.includes(hostname);
-}
-
-/** The paragraph, over the frame's one status read (`SettingsDataProvider`'s `auth`, once per mount, the
- *  AccountsScreen `AuthSection` shape). Every non-answer draws nothing: pending, failed, or a body without `mode`. */
-export function UnarmedExposureBanner({ auth }: { auth: AuthRead }): ReactNode {
-  const status = auth.kind === 'read' ? auth.status : null;
-  if (!unarmedExposure(status, location.hostname)) return null;
-  return <div className="settings-unarmed" role="alert">{UNARMED_EXPOSURE_TEXT}</div>;
-}
+import type { AuthRead, PasskeysRead } from './SettingsDataProvider';
+import type { LinearPoll } from '../../fleet/useLinearConnection';
+import { LinearSection } from '../LinearSection';
+import { SignInGateCard } from './SignInGateCard';
+import { ThisSessionCard } from './ThisSessionCard';
+import { YourSignInCard } from './YourSignInCard';
 
 // ── The box-token card (box-token lifecycle wave 1, Task B6; spec 4.7, D-4392) ──
 // A THIRD section, over the same one /api/updates poll: `view.boxToken`, read
@@ -206,7 +184,6 @@ const keyValue = (line: string): [string, string] => {
 };
 
 function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number; reload: () => void }): ReactNode {
-  const titleId = useId();
   const [busy, setBusy] = useState(false);
   const result = useResultLine();
   const v = view.boxToken === undefined ? undefined : readBoxTokenView(view.boxToken);
@@ -299,26 +276,49 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
           </Button>
           <ResultLine line={result.line} />
           <p className="settings-note">{BOX_TOKEN_TEXT.rotateNote}</p>
-          <p className="settings-note">{BOX_TOKEN_TEXT.rotateWhen}</p>
+          <p className={SETTINGS_WHEN}>{BOX_TOKEN_TEXT.rotateWhen}</p>
         </div>
       </>
     );
   }
   return (
-    <section className="settings-section" aria-labelledby={titleId}>
-      <h3 id={titleId} className="settings-section-title">Box token</h3>
-      <p className="settings-note" data-box-token="purpose">{BOX_TOKEN_TEXT.purpose(spanWords(TOKEN_ROTATION_INTERVAL_MS))}</p>
+    <Section
+      level={3} scope={BOX_TOKEN_CARD.scope} title={BOX_TOKEN_CARD.title}
+      purpose={<span data-box-token="purpose">{BOX_TOKEN_TEXT.purpose(spanWords(TOKEN_ROTATION_INTERVAL_MS))}</span>}
+    >
       {body}
-    </section>
+    </Section>
   );
 }
 
-/** The Security page's body (the heading is the frame's `<h2>`): the Box token card, over the frame's one
- *  /api/updates poll, once a view has landed, as today's page drew it. */
-export function SecuritySection({ poll }: { poll: UpdatesPoll }): ReactNode {
+/** The Security page's body (the heading is the frame's `<h2>`): the Sign-in gate card over the frame's one status
+ *  read; Your sign-in and This session while that read says the gate is armed (absent while it is off, unread or
+ *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll; then
+ *  the Linear card over the frame's one Linear read. */
+export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
+  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearPoll;
+}): ReactNode {
   const now = useNow(30_000);
-  if (poll.view !== null) return <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />;
-  // Before the first read lands, a skeleton rather than an empty page; a failed or absent read draws nothing, as
-  // today's page drew no card then.
-  return poll.failure === null ? <Skeleton lines={3} /> : null;
+  return (
+    <>
+      <SignInGateCard auth={auth} />
+      {auth.kind === 'read' && armedMode(auth.status.mode) && (
+        <>
+          <YourSignInCard status={auth.status} passkeys={passkeys} refreshAuth={refreshAuth} />
+          <ThisSessionCard />
+        </>
+      )}
+      {poll.view !== null ? (
+        <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />
+      ) : poll.failure === null ? (
+        // Before the first read lands, a skeleton rather than nothing; a failed or absent read draws no card, as
+        // today's page drew none then.
+        <Skeleton lines={3} />
+      ) : null}
+      {/* The Linear key is a credential the box holds, like the box token, so its card follows it: last, after the
+          reserved "Recent account changes" slot and Box token (spec §3.3), which adding it reshuffles nothing of. It
+          reads its own endpoint, so it does not wait on /api/updates. */}
+      <LinearSection poll={linear} />
+    </>
+  );
 }

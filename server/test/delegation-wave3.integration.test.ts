@@ -1054,7 +1054,10 @@ describe('8. the closed scope census', () => {
     // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
       ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts']],
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
+      // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
+      // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
+      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
@@ -1146,12 +1149,25 @@ describe('8. the closed scope census', () => {
     const storeLines = code(read('server/src/coord/store.ts')).split('\n');
     let inMethod = '';
     const updatesInDelegationMethods: string[] = [];
+    const linesOfDeltaMethod: string[] = [];
     for (const l of storeLines) {
       const m = /^ {2}(?:(?:private|public|static|async|readonly)\s+)*([A-Za-z_]\w*)\(/.exec(l) ?? /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
       if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) inMethod = m[1]!;
       if (/\bUPDATE\b/.test(l) && /elegation/.test(inMethod) && inMethod !== 'delegationUpsertSql') updatesInDelegationMethods.push(`${inMethod}: ${l.trim().slice(0, 80)}`);
+      if (inMethod === 'projectDelegationCheckpointChanges') linesOfDeltaMethod.push(l);
     }
-    expect(updatesInDelegationMethods, 'an UPDATE inside a delegation method of the store').toEqual([]);
+    // the delta projection is the one per-row updater, and its compare-and-swap UPDATEs are exactly these four (sessions, activities,
+    // attempts, lineage), each spelling its table literally: a fifth UPDATE, one on another table, or one in another delegation method reds this
+    expect(updatesInDelegationMethods, 'an UPDATE inside a delegation method of the store: the delta projection\'s four compare-and-swaps and nothing else').toEqual([
+      "projectDelegationCheckpointChanges: case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', del",
+      "projectDelegationCheckpointChanges: case delegationActivityCodec.table: return swap('UPDATE delegation_activities', ",
+      "projectDelegationCheckpointChanges: case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', del",
+      "projectDelegationCheckpointChanges: case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', dele",
+    ]);
+    // a lease never changes in a delta: no line of the delta method (statements, tripwire, messages) names the lease table or its codec,
+    // and the method is not empty (so a renamed method cannot turn this into a scan of nothing)
+    expect(linesOfDeltaMethod.length, 'the delta method\'s lines were found').toBeGreaterThan(20);
+    expect(linesOfDeltaMethod.filter((l) => /delegation_leases|delegationLeaseCodec/.test(l)), 'a compare-and-swap or any other line of the delta method that names the lease table').toEqual([]);
     const store = code(read('server/src/coord/store.ts'));
     expect(store.match(/delegationUpsertSql\([^)]*\)/g), 'the only upsert of the delegation tables is the sessions\'').toEqual(["delegationUpsertSql(delegationSessionCodec, ['sessionId', 'parentIncarnation'])"]);
     expect(store.match(/^.*delegationLeaseCodec.*$/gm)?.map((l) => l.trim()), 'every use of the lease codec in the store: its import, the projection\'s encode, insert and read').toEqual([
@@ -1204,7 +1220,12 @@ describe('8. the closed scope census', () => {
     try {
       const routes = app.printRoutes({ commonPrefix: false });
       expect(routes, 'the route table was printed').toContain('/api/runs');
-      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l)), 'no later wave\'s route').toEqual([]);
+      // The one route in another sense of the word: the named-workspace wave's `GET /api/linear/resolve` previews what a pasted
+      // ticket reference would become as a workspace name. It resolves a name, no lease or run, and it is listed by its exact printed line, so a second
+      // `resolve` route, or this one under another verb, is still red.
+      const OTHER_SENSE = ['├── /api/linear/resolve (GET, HEAD)'];
+      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)), 'no later wave\'s route').toEqual([]);
+      expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
       expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l))).toEqual([]);
     } finally { await app.close(); }
@@ -1526,12 +1547,13 @@ describe('8. the closed scope census', () => {
     const lane = code(watch.slice(watch.indexOf('class DelegationLane {')));
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
-    // the lane's whole contact with the coordination store: three calls, all through the applier's projection port (and the store's
-    // presence, tested once); a fourth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
+    // the lane's whole contact with the coordination store: four calls, all through the applier's projection port (and the store's
+    // presence, tested once); a fifth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
     expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
       'const coord = this.deps.coord;',
       'projection: coord === undefined ? null : {',
       'project: (cp) => coord.projectDelegationCheckpoint(cp),',
+      'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
       'if (this.deps.coord === undefined) return;',

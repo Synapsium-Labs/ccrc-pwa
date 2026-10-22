@@ -4440,3 +4440,60 @@ describe('no numbered SQL parameter in ccd/history (node:sqlite on Node 22 binds
     expect(hits, 'write a plain ? and bind the arguments in text order').toEqual([]);
   });
 });
+
+// ── W5h-2 Task 2: the BELT_VERSION 2 generation rewrites only the rows the widened class changes (D-5746 (history-belt-v2-value-class-reindex)) ─
+// In process, so the re-derivation's own count is read. A store this build indexed has its row for the widened value replanted
+// as a BELT_VERSION 1 build indexed it (the value's tail a term of its own), and fts_belt stamped v 1, as every B4 or W5h-1 build
+// stamps it: the first tick after an upgrade, or after a rollback and forward again. The stamp is the literal 1, never
+// BELT_VERSION - 1, so the mutant that leaves BELT_VERSION at 1 reads a covered store and opens nothing.
+describe('W5h-2 Task 2: a store stamped BELT_VERSION 1 re-derives under the widened class and rewrites only the row a widened value changes (D-5746)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const W5 = (s: IxSweep) => s as unknown as { beltWitness(db: DatabaseSync): string };
+  const w5Matches = (db: DatabaseSync, q: string): number =>
+    (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
+
+  it('one row re-indexed: the widened value\'s; the row whose named value v1 already masked whole and the plain row are left as they are', async () => {
+    const { sweep: S, store, lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-w5h2-belt-');
+    const tail = `zqwt${randomBytes(6).toString('hex')}7`;
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, `zqwide one password=zqa&${tail} end`, 1),
+        IX.user(IX.uuidN(2), IX.uuidN(1), 'zqwide two password=zqplain7 end', 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), 'zqwide three plain words', 3),
+      ]));
+      IX.sweepTwice(box);
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const w = store.openWriter(P.dbFile);
+      try {
+        expect(w5Matches(w, 'zqwide'), 'CONTROL: the three rows are indexed').toBe(3);
+        expect(w5Matches(w, `"${tail}"`), 'CONTROL: this build indexed the value whole').toBe(0);
+        const bare = lib.makePairIndex([]);
+        const blobs = w.prepare('SELECT blob_id, z, raw_len FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL ORDER BY blob_id').all() as { blob_id: number; z: Uint8Array; raw_len: number }[];
+        let planted = 0;
+        for (const b of blobs) {
+          const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+          if (t.text === null || !t.text.includes(tail)) continue;
+          const now = lib.entryIndexText(t.text, bare);
+          const v1 = now.replaceAll(`password=${lib.REDACTED_MARK}`, `password=${lib.REDACTED_MARK}&${tail}`);
+          expect(v1, 'CONTROL: the row this build wrote masks the value whole').not.toBe(now);
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(b.blob_id);
+          w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(b.blob_id, v1);
+          planted += 1;
+        }
+        expect(planted, 'CONTROL: one blob holds the widened value').toBe(1);
+        const s0 = lib.parseBeltState((w.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string }).v)!;
+        store.setMeta(w, lib.BELT_META, lib.formatBeltState({ v: 1, rids: s0.rids, gen: null, w: W5(S).beltWitness(w) }));
+        expect(w5Matches(w, `"${tail}"`), 'CONTROL: the replanted row answers the tail, as a v1 row does').toBe(1);
+        const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+        ctx.fts = S.ftsPrepare(w, ctx.nowMs).tables;
+        expect(await S.rederiveFts(w, ctx, S.newBudget())).toEqual({ state: 'completed', reindexed: 1 });
+        expect(w5Matches(w, `"${tail}"`), 'the tail is no MATCH').toBe(0);
+        expect(w5Matches(w, 'zqwide'), 'every row is still indexed').toBe(3);
+        expect(lib.parseBeltState((w.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string }).v)?.v).toBe(lib.BELT_VERSION);
+        expect(IX.blobsHold(w, tail), 'the store stays lossless').toBe(true);
+      } finally { w.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 120_000);
+});

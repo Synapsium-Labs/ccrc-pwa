@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
-import { CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
+import { ACCOUNT_DENY_RULES, CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -432,5 +432,35 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
     execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+  });
+});
+
+// D-6202 (accounts plan Task A9): the box's second managed file, beside the children's, written the same way.
+describe('the account deny file (D-6202)', () => {
+  const acctFile = (): string => path.join(home, '.cc-sessions', 'account-deny.settings.json');
+  it('holds exactly ACCOUNT_DENY_RULES, touches no home\'s settings.json, and a re-run keeps its bytes and inode', () => {
+    run();
+    expect(JSON.parse(fs.readFileSync(acctFile(), 'utf8'))).toEqual({ permissions: { deny: [...ACCOUNT_DENY_RULES] } });
+    expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
+    const bytes = fs.readFileSync(acctFile());
+    const ino = fs.statSync(acctFile()).ino;
+    run();
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    expect(fs.statSync(acctFile()).ino).toBe(ino);
+  });
+  it('a hand-edited or symlinked file is rewritten to the list; --remove leaves it byte-identical (D-5392\'s rule)', () => {
+    run();
+    const bytes = fs.readFileSync(acctFile());
+    fs.writeFileSync(acctFile(), '{"permissions":{"deny":[]}}\n');
+    run();
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    const elsewhere = path.join(home, 'elsewhere.json');
+    fs.renameSync(acctFile(), elsewhere);
+    fs.symlinkSync(elsewhere, acctFile());
+    run();
+    expect(fs.lstatSync(acctFile()).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
   });
 });

@@ -64,6 +64,7 @@
 
   /* elevation — depth from grounds and hairlines, not shadow */
   --elev-card: none;
+  --elev-pop: 0 0 0 1px var(--edge-strong); /* the centred dialog and the popover: a hairline (D-5933) */
 
   /* meter — ten LED segments with 2px gaps, 8px tall, on every meter
      (D-5098). Unlit segments show the palette's track. */

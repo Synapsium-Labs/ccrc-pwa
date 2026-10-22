@@ -247,6 +247,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     const degraded: SessionRecord = {
       hibernatedAt: null,
+      namedByOperator: false, title: null,
       id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',

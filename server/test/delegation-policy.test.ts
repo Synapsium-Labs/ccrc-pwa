@@ -427,15 +427,129 @@ describe('unowned work: what is reported, and about whom', () => {
     const again = substantive(planDelegationReconciliation(one(rawRec(), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), { now: T(36060) })));
     expect(again[0]!.kind === 'record-unowned-worktree' && again[0]!.attempt.attemptId).toBe(e.attempt.attemptId);
   });
-  it('different evidence or a different reason is a different attempt', () => {
-    const id = (v: DelegationCorrelationVerdict): string => {
+  it('a different reason is a different attempt, and more evidence for the same decision is the same one (C-P2, D-6190)', () => {
+    // Re-pointed from "different evidence or a different reason is a different attempt": an attempt is the DECISION, never its witnesses.
+    const row = (v: DelegationCorrelationVerdict): DelegationAttemptRow => {
       const e = substantive(planDelegationReconciliation(one(rawRec(), v)))[0]!;
-      return e.kind === 'record-unowned-worktree' ? e.attempt.attemptId : '';
+      if (e.kind !== 'record-unowned-worktree') throw new Error('unreachable');
+      return e.attempt;
     };
-    const a = id(unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]));
-    expect(a).not.toBe('');
-    expect(id(unresolvedV('parent-cwd', [agentAct.identityJournalId]))).not.toBe(a);
-    expect(id(unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId, hex('more')]))).not.toBe(a);
+    const a = row(unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]));
+    const grown = row(unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId, hex('more')]));
+    const reason = row(unresolvedV('parent-cwd', [agentAct.identityJournalId]));
+    expect(a.attemptId).toMatch(/^[0-9a-f]{64}$/);
+    expect(grown.attemptId).toBe(a.attemptId);
+    expect(reason.attemptId).not.toBe(a.attemptId);
+    expect(grown.evidenceJournalIds).toEqual([agentAct.identityJournalId, hex('more')].sort());       // the row still carries what it saw
+  });
+});
+
+describe('an attempt is a decision, not its witnesses (D-6190, C-P1, C-P3..C-P8)', () => {
+  // The tree the plan below decides about: PARENT's unowned `wt-raw`, `parent-cwd`, unresolved.
+  const decided = (over: Partial<DelegationAttemptRow> = {}): DelegationAttemptRow => attempt({
+    attemptId: hex('on-file'), adminRecord: RAW, canonicalPath: WT(RAW), rung: null, verdict: 'unresolved', detail: 'parent-cwd',
+    evidenceJournalIds: [agentAct.identityJournalId], ...over,
+  });
+  const filed = (effects: readonly DelegationReportEffect[]): DelegationAttemptRow[] =>
+    substantive(effects).flatMap((e) => (e.kind === 'record-unowned-worktree' ? [e.attempt] : []));
+  it('C-P1: a row filed under an old, evidence-hashed ID still counts: the same decision seen with more evidence files nothing', () => {
+    const legacy = decided({ attemptId: hex('legacy-v1') });
+    const effects = planDelegationReconciliation(one(rawRec(), unresolvedV('parent-cwd', [agentAct.identityJournalId, hex('ev-later')]), { recovery: recovery({ attempts: [legacy] }) }));
+    expect(substantive(effects)).toEqual([]);
+  });
+  it('C-P3: the same tree and parent under a DIFFERENT reason is another decision: exactly one attempt is filed', () => {
+    const onFile = decided({ detail: 'ambiguous-subagent-path' });
+    const effects = planDelegationReconciliation(one(rawRec(), unresolvedV('parent-cwd', [agentAct.identityJournalId]), { recovery: recovery({ attempts: [onFile] }) }));
+    expect(kinds(substantive(effects))).toEqual(['record-unowned-worktree']);
+    expect(filed(effects)[0]).toMatchObject({ detail: 'parent-cwd', verdict: 'unresolved', adminRecord: RAW });
+  });
+  it('C-P4 (i): a linked rung-4 row filed under an old ID is REUSED as the request\'s attempt (so the lease gate still finds it), while the request carries the new evidence', () => {
+    const onFile = attempt({ attemptId: hex('legacy-linked'), adminRecord: RAW, canonicalPath: WT(RAW), rung: 4, verdict: 'linked', detail: null, evidenceJournalIds: [hex('ev-old')] });
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(rawAct, 4, [hex('ev-new')]), { recovery: recovery({ attempts: [onFile] }) })));
+    expect(kinds(effects)).toEqual(['request-linked-lease-identity']);
+    const e = effects[0]!;
+    if (e.kind !== 'request-linked-lease-identity') throw new Error('unreachable');
+    expect(e.attempt).toEqual(onFile);
+    expect(e.request.correlationJournalIds).toEqual([hex('ev-new'), rawAct.identityJournalId].sort());
+  });
+  it('C-P4 (ii): a rung-3 link of the same tree is another decision from the rung-4 row on file: a fresh attempt, not that row', () => {
+    const onFile = attempt({ attemptId: hex('legacy-linked'), adminRecord: RAW, canonicalPath: WT(RAW), rung: 4, verdict: 'linked', detail: null, evidenceJournalIds: [hex('ev-old')] });
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(agentAct, 3, [hex('ev-new')]), { recovery: recovery({ attempts: [onFile] }) })));
+    expect(kinds(effects)).toEqual(['request-linked-lease-identity']);
+    const e = effects[0]!;
+    if (e.kind !== 'request-linked-lease-identity') throw new Error('unreachable');
+    expect(e.attempt.rung).toBe(3);
+    expect(e.attempt.attemptId).not.toBe(hex('legacy-linked'));
+    expect(e.attempt.attemptId).not.toBe(onFile.attemptId);
+  });
+
+  // C-P5: each of the eight key fields is part of the decision: a row on file that differs in ONLY that field is not this decision.
+  const second = (over: Partial<DelegationCheckpointV1>): Partial<DelegationCheckpointV1> => ({ sessions: [session(PARENT), session(OTHER), session(PARENT, 'g2')], ...over });
+  const FIELDS: { field: string; onFile: Partial<DelegationAttemptRow>; verdict?: DelegationCorrelationVerdict }[] = [
+    { field: 'parentId', onFile: { parentId: OTHER } },
+    { field: 'parentIncarnation', onFile: { parentIncarnation: 'g2' } },
+    { field: 'project', onFile: { project: 'project-b' } },
+    { field: 'adminRecord', onFile: { adminRecord: 'wt-other' } },
+    { field: 'canonicalPath', onFile: { canonicalPath: WT('elsewhere') } },
+    { field: 'rung', onFile: { rung: 3 } },
+    { field: 'verdict', onFile: { verdict: 'unresolved' }, verdict: conflictingV('parent-cwd', [agentAct.identityJournalId]) },
+    { field: 'detail', onFile: { detail: 'rungs-disagree' } },
+  ];
+  it.each(FIELDS)('C-P5[$field]: a row equal in every key field but $field does not stand for this decision: one attempt is filed', ({ onFile, verdict }) => {
+    const v = verdict ?? unresolvedV('parent-cwd', [agentAct.identityJournalId]);
+    const effects = planDelegationReconciliation(one(rawRec(), v, { recovery: recovery(second({ attempts: [decided({ attemptId: hex('differs-in-one-field'), ...onFile })] })) }));
+    expect(kinds(substantive(effects))).toEqual(['record-unowned-worktree']);
+    expect(filed(effects)[0]).toMatchObject({ parentId: PARENT, parentIncarnation: INC, project: REPO, adminRecord: RAW, canonicalPath: WT(RAW) });
+  });
+  it('C-P6: evidence naming two parents with ONE parent\'s decision on file files only the other\'s', () => {
+    const theirs = activity('agent', 'zzz', { parentId: OTHER });
+    const rc = recovery({ sessions: [session(PARENT), session(OTHER)], activities: [agentAct, theirs] });
+    const v = unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId, theirs.identityJournalId]);
+    const both = filed(planDelegationReconciliation(one(rawRec(), v, { recovery: rc })));
+    expect(both.map((a) => a.parentId)).toEqual([PARENT, OTHER].sort());
+    const parents = recovery({ sessions: [session(PARENT), session(OTHER)], activities: [agentAct, theirs], attempts: [both.find((a) => a.parentId === PARENT)!] });
+    expect(filed(planDelegationReconciliation(one(rawRec(), v, { recovery: parents, now: T(36060) }))).map((a) => a.parentId)).toEqual([OTHER]);
+  });
+  it('C-P7: the attempt ID is the v2 hash of the decision key alone: a fixed vector gives a fixed ID, whatever the evidence', () => {
+    // sha256 of the canonical JSON of ['delegation_attempt_v2', 'lane-a-demo', 'g1', 'project-a', 'wt-raw', '/fixture/project-a/.claude/worktrees/wt-raw',
+    // null, 'unresolved', 'parent-cwd'], computed once with Python's hashlib and json (not this module) and pasted.
+    const V2_ID = '52f1f198f4b2e0e47e970a69f6ddcafb5bc5fd67f08a670259422ce92072e489';
+    expect(filed(planDelegationReconciliation(one(rawRec(), unresolvedV('parent-cwd', [agentAct.identityJournalId]))))[0]!.attemptId).toBe(V2_ID);
+    expect(filed(planDelegationReconciliation(one(rawRec(), unresolvedV('parent-cwd', [agentAct.identityJournalId, hex('more')]))))[0]!.attemptId).toBe(V2_ID);
+  });
+  // C-P8: the other three sites that dedupe by the decision key. Each case puts on file a row of the SAME decision under a legacy ID
+  // (other evidence), and asserts the effect list holds no record of that kind; the same ground with no row on file is the positive control.
+  // (b) and (c) sit behind `planRecord`'s final-conflict guard, which already refuses a tree with a conflicting row on file, so their key check
+  // is a second line: these two cases pin the outcome, and only go red with that guard also off (the plan's MC12b, MC12c).
+  const otherAct = activity('agent', 'zzz');
+  const rawLease = lease({ leaseId: hex('lease-raw'), activityId: rawAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW), sourceKind: 'raw' });
+  const heldRc = (leases: DelegationLeaseRow[], attempts: DelegationAttemptRow[]): DelegationRecoveryState =>
+    recovery({ leases, attempts, activities: [agentAct, otherAct, rawAct] });
+  const conflictRow = attempt({ attemptId: hex('legacy-conflict'), adminRecord: RAW, canonicalPath: WT(RAW), rung: null, verdict: 'conflicting', detail: 'rungs-disagree', evidenceJournalIds: [hex('ev-old')] });
+  const SITES: { site: string; kind: DelegationReportEffect['kind']; run: (attempts: DelegationAttemptRow[]) => readonly DelegationReportEffect[]; onFile: DelegationAttemptRow }[] = [
+    {
+      site: 'planRunChildOwned', kind: 'record-run-child-owned',
+      run: (attempts) => planDelegationReconciliation(one(rec(), ownedV(), { recovery: recovery({ attempts }) })),
+      onFile: attempt({ attemptId: hex('legacy-owned'), rung: 1, verdict: 'linked', detail: null, evidenceJournalIds: [hex('rc-old')] }),
+    },
+    {
+      site: 'planLinked (rungs disagree)', kind: 'record-unowned-worktree',
+      run: (attempts) => planDelegationReconciliation(one(rawRec(), linkedV(otherAct, 3), { recovery: heldRc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })], attempts) })),
+      onFile: conflictRow,
+    },
+    {
+      site: 'planWorkspaceOverLease', kind: 'record-unowned-worktree',
+      run: (attempts) => planDelegationReconciliation(one(rawRec(), unresolvedV('ccd-workspace-not-a-lease'), { recovery: heldRc([rawLease], attempts) })),
+      onFile: conflictRow,
+    },
+  ];
+  it.each(SITES)('C-P8 (D-6190): a decision already on file under another ID is not re-filed at $site', ({ kind, run, onFile }) => {
+    // Positive control: with nothing on file this ground reaches the site and files exactly one record of the kind.
+    expect(kinds(substantive(run([]))), 'control: nothing on file').toEqual([kind]);
+    // The row on file has another ID and other evidence but the same eight key fields: nothing is filed.
+    const effects = substantive(run([onFile]));
+    expect(kinds(effects)).toEqual([]);
+    expect(effects).toEqual([]);
   });
 });
 

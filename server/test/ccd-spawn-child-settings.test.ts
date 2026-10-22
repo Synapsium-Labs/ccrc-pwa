@@ -2,8 +2,9 @@
 //
 // Plan Task 15 (spec §6.6, D-5299, D-5391): a dispatched child (a row with `.child`) spawns with the box's one managed
 // deny file through `--settings` and with its Bash tool pinned to bash, and the spawn records both
-// (`$REG/<id>.deny-settings`, `$REG/<id>.childshell`); a row without `.child` spawns byte-identically to today and
-// writes neither. The harness and the RESUME_DIES substrate are `ccd-route-spawn.test.ts`'s, so both spawn lines (the
+// (`$REG/<id>.deny-settings`, `$REG/<id>.childshell`); a row without `.child` writes neither. The CHILD layer is
+// measured here alone: `install()` removes the account deny file the installer also writes (D-6202), whose layer on
+// every row, this file's child lines merged with it included, is `ccd-spawn-account-settings.test.ts`'s. The harness and the RESUME_DIES substrate are `ccd-route-spawn.test.ts`'s, so both spawn lines (the
 // `--resume` primary and the `--session-id` retry) are measured.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -42,6 +43,7 @@ const denyFile = (): string => path.join(h.home, '.cc-sessions', 'child-deny.set
 const sha = (p: string): string => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const install = (): void => {
   execFileSync('bash', [INSTALLER, '--homes'], { env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+  fs.rmSync(path.join(h.home, '.cc-sessions', 'account-deny.settings.json'), { force: true });   // the child layer alone (D-6202)
 };
 const seed = (id: string, child: boolean): void => {
   h.sh(`_reg_set ${id} wrapper claude
@@ -96,8 +98,10 @@ describe('CHILD_DENY_RULES (spec §6.6)', () => {
   });
 });
 
-describe('_spawn_start of a row WITHOUT .child is byte-identical to today (plan Task 15)', () => {
-  it('both lines equal today\'s spelling and the spawn with no deny file at all, and no field is written', () => {
+// D-6202 replaced CF15's "a top-level spawn is byte-identical" with "differs only by the account rules inside its one
+// `--settings`" (`ccd-spawn-account-settings.test.ts`); with no account file, the child layer still adds nothing here.
+describe('_spawn_start of a row WITHOUT .child takes nothing from the child layer (plan Task 15, D-6202)', () => {
+  it('with no account file, both lines equal today\'s spelling and the spawn with no deny file at all, and no field is written', () => {
     seed(TOP, false);
     const without = spawnBoth(TOP);
     install();

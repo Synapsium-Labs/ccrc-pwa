@@ -16,8 +16,8 @@ import {
   PRELOADS, REPO, SWEEP, counters, makeHistoryBox, openStoreRO, runShim, runSweep, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { SCHEMA_VERSION, STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
-import { createStore, getMeta, userVersion } from '../../ccd/history/store.mjs';
-import { parseSweepArgv } from '../../ccd/history/sweep.mjs';
+import { closeWriter, createStore, getMeta, openWriter, userVersion } from '../../ccd/history/store.mjs';
+import { parseSweepArgv, recordRecallOff } from '../../ccd/history/sweep.mjs';
 import { readFileSync as readUnitText } from 'node:fs';
 import { join as joinUnitPath, resolve as resolveUnitPath } from 'node:path';
 
@@ -554,4 +554,241 @@ describe('tick()\'s docstring names its steps in the order the body runs them (r
     const called = [...new Set([...body.matchAll(/\b([a-z]\w*)\(db\b/g)].map((m) => m[1]!))].filter((n) => !NOT_STEPS.has(n));
     expect(called.filter((n) => !listed.includes(n))).toEqual([]);
   });
+});
+
+// ── W2-1 Task 4: the per-tick presence record (W2-D30) ───────────────────────────────────────────────────────────
+// The real sweep, as the box runs it. recall-off/ is planted the way the W2 verb leaves it (`<generation>\n`, 0600, in a
+// 0700 directory); this file never runs the verb. The step's place in tick is pinned by the docstring describe above.
+import * as roLib from '../../ccd/history/lib.mjs';
+import { journalRecords as roJournal } from './historyHelpers.js';
+
+describe('the recall-off presence record, one tick step (W2-D30; W2-1 Task 4)', () => {
+  const K = roLib.RECALL_OFF_KEYS;
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-0123456789ac';
+  const X = 'claude-a-demo';
+  const UNREADABLE = { s: 'unreadable', v: null };
+  const dirOf = (box: HistoryBox): string => path.join(box.root, 'recall-off');
+  const plant = (box: HistoryBox, id: string, text: string): void => {
+    fs.mkdirSync(dirOf(box), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dirOf(box), id), text, { mode: 0o600 });
+  };
+  const tickOk = (box: HistoryBox): void => {
+    const r = runSweep(box);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+  };
+  /** Every presence row, by key: the meta keys from RECALL_OFF_META up to the same prefix with ':' replaced by ';'. */
+  const presence = (box: HistoryBox): Record<string, string> => {
+    const db = openStoreRO(box);
+    try {
+      const out: Record<string, string> = {};
+      const all = db.prepare('SELECT k, v FROM meta WHERE k >= ? AND k < ? ORDER BY k')
+        .all(roLib.RECALL_OFF_META, `${roLib.RECALL_OFF_META.slice(0, -1)};`) as Array<{ k: string; v: string }>;
+      for (const r of all) out[r.k] = r.v;
+      return out;
+    } finally {
+      db.close();
+    }
+  };
+  const changesOf = (p: Record<string, string>, id: string): Array<Record<string, unknown>> => Object.entries(p)
+    .filter(([k]) => k.startsWith(K.change) && k.endsWith(`:${id}`))
+    .map(([k, v]) => ({ ts: Number(k.slice(K.change.length, k.lastIndexOf(':'))), ...(JSON.parse(v) as object) }));
+  const body = (c: Record<string, unknown>): Record<string, unknown> => ({ from: c['from'], to: c['to'], prev_seen_ms: c['prev_seen_ms'] });
+  const stateOf = (p: Record<string, string>, id: string): unknown => {
+    const v = p[`${K.state}${id}`];
+    return v === undefined ? undefined : JSON.parse(v);
+  };
+  const gapsOf = (p: Record<string, string>): Array<{ from: number | null; to: number }> => Object.entries(p)
+    .filter(([k]) => k.startsWith(K.gap)).map(([, v]) => JSON.parse(v) as { from: number | null; to: number });
+  const setSeen = (box: HistoryBox, ms: number): void => {
+    const db = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      expect(Number(db.prepare('UPDATE meta SET v = ? WHERE k = ?').run(String(ms), K.seen).changes)).toBe(1);
+    } finally {
+      db.close();
+    }
+  };
+  const outboxRows = (box: HistoryBox): number => {
+    const db = openStoreRO(box);
+    try { return Number((db.prepare('SELECT count(*) AS n FROM journal_outbox').get() as { n: number }).n); } finally { db.close(); }
+  };
+
+  it('one change row per transition and none for an unchanged file; each row journaled as a recall-off record through the outbox', () => {
+    const box = makeHistoryBox('ccrc-history-roff-trans-');
+    tickOk(box);   // first install: the first observation ever, of no directory, is complete
+    const p0 = presence(box);
+    expect(gapsOf(p0).map((g) => g.from), 'the first observation ever is a gap from null').toEqual([null]);
+    expect(p0[K.seen], 'an absent directory is an empty, complete observation: seen_ms advances').toMatch(/^[0-9]+$/);
+    plant(box, X, `${G1}\n`);
+    tickOk(box);
+    const p1 = presence(box);
+    expect(changesOf(p1, X).map(body)).toEqual([{ from: 'unobserved', to: { s: 'value', v: G1 }, prev_seen_ms: null }]);
+    expect(stateOf(p1, X)).toEqual({ s: 'value', v: G1 });
+    tickOk(box);   // nothing changed
+    const p2 = presence(box);
+    expect(changesOf(p2, X), 'an unchanged file is not flagged').toHaveLength(1);
+    expect(Number(p2[K.seen]), 'CONTROL: that tick observed, and seen_ms moved').toBeGreaterThan(Number(p1[K.seen]));
+    plant(box, X, `${G2}\n`);
+    tickOk(box);
+    const p3 = presence(box);
+    fs.rmSync(path.join(dirOf(box), X));
+    tickOk(box);
+    const p4 = presence(box);
+    expect(changesOf(p4, X).map(body)).toEqual([
+      { from: 'unobserved', to: { s: 'value', v: G1 }, prev_seen_ms: null },
+      { from: { s: 'value', v: G1 }, to: { s: 'value', v: G2 }, prev_seen_ms: Number(p2[K.seen]) },
+      { from: { s: 'value', v: G2 }, to: 'absent', prev_seen_ms: Number(p3[K.seen]) },
+    ]);
+    expect(stateOf(p4, X), 'a file gone has no state row').toBeUndefined();
+    // Journaled: one recall-off record per row, its t the row's key ms, and nothing left in the outbox.
+    const firstGap = Number(Object.keys(p0).find((k) => k.startsWith(K.gap))!.slice(K.gap.length));
+    expect(roJournal(box).filter((r) => r['k'] === 'recall-off').map((r) => [r['rk'], r['id'] ?? null, r['t']])).toEqual([
+      ['gap', null, firstGap],
+      ...changesOf(p4, X).map((c) => ['change', X, c['ts']]),
+    ]);
+    expect(outboxRows(box)).toBe(0);
+  }, 120_000);
+
+  it('unreadable is never absent: a link, a directory and an over-cap file at an id each read unreadable, with a state row', () => {
+    const box = makeHistoryBox('ccrc-history-roff-unread-');
+    tickOk(box);
+    plant(box, X, `${G1}\n`);
+    tickOk(box);
+    const p1 = presence(box);
+    const target = path.join(box.home, 'g1');
+    fs.writeFileSync(target, `${G1}\n`);
+    fs.rmSync(path.join(dirOf(box), X));
+    fs.symlinkSync(target, path.join(dirOf(box), X));   // a link to the same generation: never followed
+    fs.mkdirSync(path.join(dirOf(box), 'claude-b-demo'));
+    plant(box, 'claude-c-demo', 'a'.repeat(roLib.CONTROL_FILE_MAX + 1));
+    plant(box, 'claude-d-demo', '');                   // CONTROL: an empty file is a value, ''
+    tickOk(box);
+    const p2 = presence(box);
+    expect(changesOf(p2, X).map(body).at(-1)).toEqual({ from: { s: 'value', v: G1 }, to: UNREADABLE, prev_seen_ms: Number(p1[K.seen]) });
+    expect([stateOf(p2, X), stateOf(p2, 'claude-b-demo'), stateOf(p2, 'claude-c-demo'), stateOf(p2, 'claude-d-demo')])
+      .toEqual([UNREADABLE, UNREADABLE, UNREADABLE, { s: 'value', v: '' }]);
+    expect(Object.values(p2).some((v) => v.includes('"absent"')), 'no transition to absent').toBe(false);
+  }, 120_000);
+
+  it('a gap row after an interval longer than RECALL_OFF_GAP_MS with no observation, and none after a shorter one', () => {
+    const box = makeHistoryBox('ccrc-history-roff-gap-');
+    tickOk(box);
+    const long = Date.now() - roLib.RECALL_OFF_GAP_MS - 60_000;
+    setSeen(box, long);
+    tickOk(box);
+    const after = gapsOf(presence(box));
+    expect(after).toHaveLength(2);
+    expect(after[1]!.from).toBe(long);
+    expect(after[1]!.to - long).toBeGreaterThan(roLib.RECALL_OFF_GAP_MS);
+    setSeen(box, Date.now());   // the next tick starts after this, inside the case's 120 s timeout, which is below the gap
+    tickOk(box);
+    expect(gapsOf(presence(box)), 'CONTROL: an interval shorter than the gap writes none').toHaveLength(2);
+  }, 120_000);
+
+  it('a capped or unreadable directory writes nothing, leaves seen_ms and is counted; names outside the id grammar are counted, never read', () => {
+    const box = makeHistoryBox('ccrc-history-roff-cap-');
+    tickOk(box);
+    fs.mkdirSync(dirOf(box), { mode: 0o700 });
+    // RECALL_OFF_SCAN_MAX + 1 entries, none of them an id (`~` is outside ID_RE, like the writer's `~tmp.<pid>`).
+    for (let i = 0; i <= roLib.RECALL_OFF_SCAN_MAX; i += 1) fs.writeFileSync(path.join(dirOf(box), `~tmp.${i}`), '');
+    const seen0 = presence(box)[K.seen];
+    tickOk(box);
+    expect(presence(box)[K.seen], 'a capped directory leaves seen_ms').toBe(seen0);
+    expect(counters(box)['recall_off_scan_capped']).toBe(1);
+    expect(counters(box)['recall_off_name_skipped'], 'a capped scan counts no name').toBeUndefined();
+    fs.rmSync(path.join(dirOf(box), '~tmp.0'));   // CONTROL: exactly RECALL_OFF_SCAN_MAX entries is a complete observation
+    tickOk(box);
+    expect(Number(presence(box)[K.seen])).toBeGreaterThan(Number(seen0));
+    expect(counters(box)).toMatchObject({ recall_off_scan_capped: 1, recall_off_name_skipped: roLib.RECALL_OFF_SCAN_MAX });
+    expect(Object.keys(presence(box)).filter((k) => k.startsWith(K.state)), 'a name outside the grammar is never a state row').toEqual([]);
+    // An unreadable directory: a link standing at recall-off/, to a directory that holds an id's file. Never followed.
+    fs.rmSync(dirOf(box), { recursive: true });
+    const real = path.join(box.home, 'elsewhere');
+    fs.mkdirSync(real);
+    fs.writeFileSync(path.join(real, X), `${G1}\n`);
+    fs.symlinkSync(real, dirOf(box));
+    const seen1 = presence(box)[K.seen];
+    tickOk(box);
+    expect(presence(box)[K.seen], 'an unreadable directory leaves seen_ms').toBe(seen1);
+    expect(stateOf(presence(box), X), 'and the link is never followed').toBeUndefined();
+    expect(counters(box)['recall_off_dir_unreadable']).toBe(1);
+  }, 240_000);
+
+  it('a state row off its grammar is counted recall_off_state_malformed, once per tick that reads it', () => {
+    const box = makeHistoryBox('ccrc-history-roff-malformed-');
+    tickOk(box);
+    expect(counters(box)['recall_off_state_malformed'], 'CONTROL: a clean store counts none').toBeUndefined();
+    plant(box, X, `${G1}\n`);
+    const db = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(`${K.state}${X}`, '{"s":"maybe"}');
+    } finally {
+      db.close();
+    }
+    tickOk(box);
+    expect(counters(box)['recall_off_state_malformed']).toBe(1);
+    expect(stateOf(presence(box), X), 'the pass rewrote the row from the file it read').toEqual({ s: 'value', v: G1 });
+  }, 120_000);
+
+  /** Every journal_outbox record, in seq order: its seq and the parsed line (the step is run with no ids, so nothing flushes). */
+  const outboxRecs = (box: HistoryBox): Array<{ seq: number; rec: Record<string, unknown> }> => {
+    const db = openStoreRO(box);
+    try {
+      return (db.prepare('SELECT seq, rec FROM journal_outbox ORDER BY seq').all() as Array<{ seq: number; rec: string }>)
+        .map((r) => ({ seq: r.seq, rec: JSON.parse(r.rec) as Record<string, unknown> }));
+    } finally {
+      db.close();
+    }
+  };
+
+  it('in process, a stepping clock: change and gap rows and their records are keyed by the observation\'s end and seen_ms by its start; a clock that steps back is clamped to the start (r761 F2)', () => {
+    const box = makeHistoryBox('ccrc-history-roff-clock-');
+    tickOk(box);   // the schema and a seen_ms exist; its records were flushed
+    expect(outboxRows(box), 'CONTROL: the real tick left the outbox empty').toBe(0);
+    const S0 = 1_700_000_000_000;
+    const S1 = S0 + roLib.RECALL_OFF_GAP_MS + 60_000;
+    const E1 = S1 + 7_000;
+    const S2 = E1 + 60_000;   // 67 s after S1: inside the gap, so no gap row
+    const clock = (queue: number[]): (() => number) => () => {
+      const v = queue.shift();
+      if (v === undefined) throw new Error('the step read the clock more than twice');
+      return v;
+    };
+    const step = (queue: number[]): void => {
+      const now = clock(queue);
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        recordRecallOff(db, { home: box.home, paths: historyPaths(box.home), now, ids: null });
+      } finally {
+        closeWriter(db);
+      }
+      expect(queue, 'CONTROL: the step read the clock exactly twice').toEqual([]);
+    };
+    // Observation 1: the clock steps forward. seen_ms was left far back, so a gap row is written too.
+    setSeen(box, S0);
+    plant(box, X, `${G1}\n`);
+    step([S1, E1]);
+    const p1 = presence(box);
+    expect(p1[`${K.change}${E1}:${X}`], 'X\'s change row is keyed by the observation\'s end').toBeDefined();
+    expect(Object.keys(p1).filter((k) => k.startsWith(K.change)), 'and by nothing else').toEqual([`${K.change}${E1}:${X}`]);
+    expect(p1[`${K.gap}${E1}`], 'the gap row is keyed by the end').toBe(roLib.canonicalJson({ from: S0, to: S1 }));
+    expect(Object.keys(p1).filter((k) => k.startsWith(K.gap) && k !== `${K.gap}${E1}`), 'the first tick\'s gap row is the only other')
+      .toHaveLength(1);
+    expect(p1[K.seen], 'seen_ms is the start').toBe(String(S1));
+    const o1 = outboxRecs(box);
+    expect(o1.map((r) => [r.rec['k'], r.rec['rk']]), 'CONTROL: the gap and the change were journaled')
+      .toEqual([['recall-off', 'gap'], ['recall-off', 'change']]);
+    expect(o1.map((r) => r.rec['t']), 'every record carries the end').toEqual([E1, E1]);
+    // Observation 2: the clock steps back between the two reads; the end is clamped to the start.
+    plant(box, X, `${G2}\n`);
+    step([S2, S2 - 5_000]);
+    const p2 = presence(box);
+    const newChange = Object.keys(p2).filter((k) => k.startsWith(K.change) && !(k in p1));
+    expect(newChange, 'the clamp keys the change row by the start').toEqual([`${K.change}${S2}:${X}`]);
+    expect(Object.keys(p2).filter((k) => k.startsWith(K.gap)), 'inside the gap: no gap row')
+      .toEqual(Object.keys(p1).filter((k) => k.startsWith(K.gap)));
+    expect(p2[K.seen]).toBe(String(S2));
+    const o2 = outboxRecs(box).filter((r) => r.seq > o1[o1.length - 1]!.seq);
+    expect(o2.map((r) => [r.rec['rk'], r.rec['t']]), 'its record carries the clamped end').toEqual([['change', S2]]);
+  }, 120_000);
 });

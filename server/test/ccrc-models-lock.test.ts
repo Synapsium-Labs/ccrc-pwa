@@ -61,10 +61,14 @@ afterEach(async () => {
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   // A runner's own knobs never steer a case.
-  for (const k of ['CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_CODEX_READY_S', 'CCRC_CODEX_PROBE_S', 'CCGPT_CONFIG']) {
+  for (const k of ['CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_CODEX_READY_S', 'CCRC_CODEX_PROBE_S', 'CCGPT_CONFIG',
+    'CCRC_MODELS_CANARY_S', 'CCRC_MODELS_ADVANCE_BUDGET_S']) {
     delete inherited[k];
   }
-  const e = ghContainedEnv(h, { ...inherited, HOME: h }, { systemd: true });
+  // The advance step is OFF here (budget 0, RB7): the one case that runs a codex refresh is about the first pass's
+  // re-materialise under the lock, and must not enter a backfill, a plan or a canary of the step that follows it.
+  // `ccrc-models-advance.test.ts` is the step's suite; a case that wants it passes its own budget in `extra`.
+  const e = ghContainedEnv(h, { ...inherited, HOME: h, CCRC_MODELS_ADVANCE_BUDGET_S: '0' }, { systemd: true });
   fs.writeFileSync(join(h, '.local', 'bin', 'curl'),
     '#!/bin/sh\necho "the lane-files lock suite must never reach curl" >&2\nexit 97\n', { mode: 0o755 });
   return { ...e, ...extra };
@@ -683,10 +687,12 @@ describe('no writing models-op call runs outside the lane lock (D21)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('no line runs deploy/models-op.mjs itself but the two the wrappers are built on', () => {
+  it('no line runs deploy/models-op.mjs itself but the three the wrappers are built on', () => {
     const DEFS = [
       '_models_node() { node "$CCRC_HERE/../deploy/models-op.mjs" "$@"; }',
       '_plat_timeout "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"',
+      // The same writer under the advance step's strict deadline (the automatic context of `_models_node_locked`).
+      '_plat_timeout_strict "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"',
     ];
     // An invocation: `node` with the program as its next word, or the program followed by an argument (a variable,
     // an op word and its first flag, or a line continuation). A sentence that names the file is neither.
@@ -701,7 +707,7 @@ describe('no writing models-op call runs outside the lane lock (D21)', () => {
       }
     }
     expect(offenders).toEqual([]);
-    expect(seen.sort(), 'the scan no longer sees the two definitions').toEqual([...DEFS].sort());
+    expect(seen.sort(), 'the scan no longer sees the three definitions').toEqual([...DEFS].sort());
   });
 
   it('and it is looking at something: the locked sites are there, each locking the lane it names in --id', () => {

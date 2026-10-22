@@ -208,4 +208,38 @@ if [[ "$MODE" != remove ]]; then
       || { rm -f "$deny_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_FILE" >&2; rc=1; }
   fi
 fi
+
+# THE ACCOUNT DENY FILE (D-6202; accounts plan Task A9, spec §3.1). The box's second managed file,
+# `~/.cc-sessions/account-deny.settings.json`, whose `permissions.deny` is `ACCOUNT_DENY_RULES`
+# (`shared/api.ts`): the mutating `ccrc account` subs, `seed`, `openrouter-management` with every sub,
+# `ccd-account-auth`, `ccd account-pane`, Read of the secret and scratch paths and `agent.env`, and
+# writes under `.auth/` and `.accounts/`. `ccd` passes it to EVERY session's spawn in its one
+# `--settings`. It never names a swap path (the operator's Q8 ruling of 2026-10-19): no other `ccd`
+# rule, no bare `ccrc account`, no `env`/`printenv` rule (the hook refuses only their bare forms).
+# The documented second copy, held equal to the TypeScript list by iteration in `account-deny.test.ts`.
+# Written as the children's file is (byte-level converge; `--remove` leaves it, as D-5392 rules).
+ACCOUNT_DENY_FILE="$HOME/.cc-sessions/account-deny.settings.json"
+_account_deny_json() {
+  local w p rules=()
+  for w in add auth-start auth-code auth-cancel set check enable disable credential remove seed \
+           openrouter-management 'openrouter-management ceiling'; do
+    rules+=("Bash(ccrc account $w:*)")
+  done
+  rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
+  for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env'; do
+    rules+=("Read($p)")
+  done
+  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done
+  printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
+}
+if [[ "$MODE" != remove ]]; then
+  mkdir -p -- "${ACCOUNT_DENY_FILE%/*}" 2>/dev/null || :
+  if ! acct_next=$(_account_deny_json) || ! jq empty <<<"$acct_next"; then
+    echo "install-session-hooks: could not build $ACCOUNT_DENY_FILE" >&2; rc=1
+  elif [[ -L "$ACCOUNT_DENY_FILE" || ! -f "$ACCOUNT_DENY_FILE" || "$(cat "$ACCOUNT_DENY_FILE")" != "$acct_next" ]]; then
+    acct_tmp="$ACCOUNT_DENY_FILE.tmp.$$"
+    printf '%s\n' "$acct_next" > "$acct_tmp" && mv -f "$acct_tmp" "$ACCOUNT_DENY_FILE" \
+      || { rm -f "$acct_tmp"; echo "install-session-hooks: could not write $ACCOUNT_DENY_FILE" >&2; rc=1; }
+  fi
+fi
 exit "$rc"

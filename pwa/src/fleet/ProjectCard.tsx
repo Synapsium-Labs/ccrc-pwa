@@ -28,6 +28,7 @@ import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
+import { actionDoor } from '../command/door';
 import './fleet.css';
 
 /** The nesting prefix, spelled ONCE (Task 4). Both branches that can draw a
@@ -446,7 +447,7 @@ export function ProjectCard({
                   aria-label={archivingReleased
                     ? `Archiving released workspaces in ${group.project}`
                     : `Archive all ${releasedArchivable} released ${releasedArchivable === 1 ? 'workspace' : 'workspaces'} in ${group.project}`}
-                  onClick={() => onArchiveReleased(group.project)}
+                  {...actionDoor('archive-all', () => onArchiveReleased(group.project))}
                 >
                   {archivingReleased ? 'Archiving…' : `Archive all (${releasedArchivable})`}
                 </Button>

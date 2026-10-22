@@ -131,6 +131,12 @@ import {
  *    idle-home 92/33 -> 90/33 · busy 92/33 -> 90/33 · narrow 51/17 -> 51/17 · away-over-ceiling 92/33 -> 90/33 ·
  *    hard-blocked 129/37 -> 127/37 · cooldown 67/24 -> 65/24 · fable 94/34 -> 92/34 · leaving 115/43 -> 113/43 ·
  *    fable-leaving 123/47 -> 121/47.
+ *
+ *  UNCHANGED BY D-6180 (the stand-down lines; macOS bash 5.3): every steady tick costs what it did. The busy tick's
+ *  `running` site reads the probe's kept answer with a builtin and never probes. Tick 1 is where the new lines land,
+ *  once per episode: narrow 58/24 -> 68/26 and cooldown 65/24 -> 75/26 (one evidence probe: the transcript path,
+ *  the pane's birth and `_limit_read`, then kept for TRANSCRIPT_ARM_INTERVAL, so ticks 2-4 read it back), and leaving
+ *  114/43 -> 116/45 and fable-leaving 122/47 -> 124/49 (the `idle-gate` stand-down line, once per episode).
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 90, execs: 33 },

@@ -3,37 +3,34 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton, useNow,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton,
 } from '@ccrc/ui';
 import { AccountsStrip } from '../fleet/AccountsStrip';
-import { FleetHostBanner } from '../fleet/FleetHostBanner';
-import { HaltBanner } from '../fleet/HaltBanner';
-import { UpdateBanner } from '../fleet/UpdateBanner';
+import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
+import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
+import { UpdateBanner, updateBannerShows } from '../fleet/UpdateBanner';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
-import { SubstrateBanner } from '../fleet/SubstrateBanner';
-import { PasskeyNotice } from '../fleet/PasskeyNotice';
+import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
+import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
+import { BannerStack } from '../fleet/BannerStack';
+import { fleetSummary } from '../fleet/fleetSummary';
+import { unreadMailCount } from '../fleet/navBadges';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
-import { fleetTree } from '../fleet/fleetTree';
-import { ProjectCard } from '../fleet/ProjectCard';
+import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
-import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
-import { useFolded, useRollupPrefs } from '../fleet/foldState';
-import { useHoldView } from '../fleet/useHoldView';
-import { useRollupClock } from '../fleet/useRollupClock';
-import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from '../fleet/rollup';
-import { useProjectedHome } from '../fleet/useProjectedHome';
+import { isRunClosed } from '../fleet/runWords';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { navigate } from '../lib/router';
-import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
-import { raisesUnread } from '../lib/feed';
+import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
+import { useFrameSet } from '../skins/frame';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -42,6 +39,8 @@ export function FleetScreen({
   onNewSession,
   selectedId = null,
   showAccounts = true,
+  banners = true,
+  headChrome = true,
   epoch,
   observedEpoch,
 }: {
@@ -51,6 +50,11 @@ export function FleetScreen({
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
+  /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
+  banners?: boolean;
+  /** False where the skin's bar holds the head's wordmark and doors (Refined at a desk, W2 Task S4b); the readouts
+   *  stay. */
+  headChrome?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -95,11 +99,6 @@ export function FleetScreen({
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
-  const notices = useStore((s) => s.notices);
-  const dismissNotice = useStore((s) => s.dismissNotice);
-  const roster = useStore((s) => s.roster);
-  const pools = useStore((s) => s.pools);
-  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -134,8 +133,9 @@ export function FleetScreen({
   // (`useProjectRows`), which is where its generation discipline and its two
   // deviations are argued; the chrome calls it once.
   const projects = chrome.projects;
+  // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
+  const FleetList = useFrameSet()?.FleetList ?? null;
 
-  const projected = useProjectedHome();
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
   const archived = archivedSummary(sessions);
@@ -160,42 +160,6 @@ export function FleetScreen({
   const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
   const runsLabel =
     !runsFrameSeen ? '—' : activeRuns.length > 0 ? `${activeRuns.length} active` : 'none active';
-  // Task 4's clock, for the pending child's elapsed readout — and the CADENCE
-  // FOLLOWS THE CONTENT, the `SessionHeader`/`ToolCard` idiom `RunsScreen`
-  // already adopted for the same window: a second-granular readout on a
-  // half-minute tick is the "board that never moves" §Design complains about.
-  // `active: false` when nothing is spawning, so this screen runs NO timer at
-  // all in the ordinary case — which is how it has always behaved, and a
-  // permanent interval under twenty session rows is not a change anyone asked
-  // for. `anyDispatchPending` rather than an inline condition, so what counts
-  // as a dispatch window stays `dispatchWindow`'s single answer; it is asked
-  // of `activeRuns` and not of the per-card slices, because the tick is one
-  // fact about the screen.
-  const nowMs = useNow(1_000, anyDispatchPending(activeRuns));
-  // Fold state persists across navigation (foldState.ts) — useState here would
-  // re-expand every project on the way back from a session.
-  const [folded, toggleFold] = useFolded();
-  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: fresh on every render, and
-  // one timer for the next window end only (`useRollupClock`), so a quiet fleet still runs no timer.
-  const [rollupPrefs, updateRollup] = useRollupPrefs();
-  const rollNow = useRollupClock(sessions);
-  // The tree the cards draw, once, and its rollup over the same groups (D-6088).
-  const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks);
-  const rollup = rollupFleet(tree, rollupPrefs, Math.max(nowMs, rollNow), selectedId);
-  // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
-  // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
-  // nothing changes, so this writes nothing on an ordinary frame.
-  // Keyed on what the reset reads — each card's class and the fleet's ids — so it runs when one of them moves.
-  const pruneKey = `${[...rollup.cards].map(([p, c]) => `${p}:${c.cls}`).join('|')}#${sessions.map((s) => s.id).join('|')}`;
-  useEffect(() => {
-    if (!fleetFrameSeen) return;
-    const ids = new Set(sessions.map((s) => s.id));
-    updateRollup((p) => prunePrefs(p, rollup, ids) ?? p);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pruneKey` is the dependency: it names every input read.
-  }, [fleetFrameSeen, pruneKey, updateRollup]);
-  // D-6090: a card rolled up or out on its own must not move the one the operator is reading (`useHoldView`).
-  const listRef = useRef<HTMLDivElement>(null);
-  useHoldView(listRef, [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? '-' : c.rows.length}`).join('|'));
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
@@ -205,11 +169,6 @@ export function FleetScreen({
   const updates = chrome.updates;
   // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every reader below says so.
   const stale = updates.view !== null && updates.failure !== null;
-  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1):
-  // the cards read the loop's in-flight set, which the chrome holds (D-5468).
-  // The ··· sheet's lifecycle, the guarded reap flow and the confirm's subject
-  // are the chrome's too; this screen only opens them (`useFleetFlows`).
-  const archiveAll = chrome.archiveAll;
 
   // `bucket`, not `dialogPending` — the LAST client-side re-derivation of the
   // attention bucket, and the one that sat directly above the bucket bar that
@@ -218,17 +177,14 @@ export function FleetScreen({
   // ladder checks `status === 'dead'` first, and fleet.ts keeps ORing a stale
   // hook `waiting` into `dialogPending`), so this head said "1 waiting" while
   // the chip below it said "Dead 1" and the row said `exited`.
-  const waiting = sessions.filter((s) => s.bucket === 'attention').length;
-  const countLine =
-    `${sessions.length} session${sessions.length === 1 ? '' : 's'}` +
-    (waiting > 0 ? ` · ${waiting} waiting` : '');
+  // Counted by `fleetSummary`, the fleet's one count readout (W2 Task S2c), which every shell's readout renders
+  // too. `null` runs: this head has never carried the runs part (the runs line below is their door).
+  const countLine = fleetSummary(sessions, null).readout;
 
-  // The feed's unread count, through the SAME comparison the bucket chips use
-  // (seen.ts's isUnseenAt — see groupFleet.ts:30-44's pre-commitment). `acks`
-  // is already subscribed on this screen, so this costs one filter. An `interrupt` record never counts
-  // (`raisesUnread`, D-5431): it is kept in Mail as a record, but every Escape the console sends writes one.
+  // The feed's unread count: `unreadMailCount` (navBadges.ts), the one function every door that shows it reads (the
+  // tabs of W2 Task S4b too). An `interrupt` record never counts (`raisesUnread`, D-5431).
   const feed = useStore((s) => s.feed);
-  const unreadMail = feed.filter((ev) => raisesUnread(ev) && isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
+  const unreadMail = unreadMailCount(feed, acks);
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known
@@ -256,45 +212,11 @@ export function FleetScreen({
         countLine={sessions.length > 0 ? countLine : null}
         poolLag={poolLag}
         unreadMail={unreadMail}
+        chrome={headChrome}
       />
-      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />
-      {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
-          disables while it stands. Re-polls on every Ack. */}
-      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />
-      <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />
-
-      {/* The substrate fault, said once (spec §4) — derived from the SAME
-          injected store the rows render from, so the banner and the chips can
-          never disagree about which fleet they describe. */}
-      <SubstrateBanner store={useStore} />
-
-      {conn === 'down' && (
-        <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
-          Reconnecting…
-        </div>
-      )}
-
-      {conn === 'connecting' && sessions.length > 0 && (
-        // Cold start hydrated from the offline snapshot (lib/offline.ts):
-        // cards render instantly, clearly marked stale until the socket opens.
-        <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
-          Last known state — connecting…
-        </div>
-      )}
-
-      {notices.map((n) => (
-        <div key={n.id} className="notice" role="status">
-          <span className="notice-msg">{n.message}</span>
-          <button
-            type="button"
-            className="notice-x"
-            aria-label="Dismiss"
-            onClick={() => dismissNotice(n.id)}
-          >
-            ×
-          </button>
-        </div>
-      ))}
+      {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
+          (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}
+      {banners && <FleetBanners />}
 
       {/* Its own poller, independent of `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
@@ -306,15 +228,6 @@ export function FleetScreen({
           above, D-161); the rule that a door must never render nothing is
           unchanged. */}
       {showAccounts && <AccountsStrip />}
-
-      {/* The passphrase-only notice (D-161) — renders ITSELF or nothing, from
-          the box's own posture, so it is mounted unconditionally here for the
-          same reason AccountsStrip and the runs row are: every branch below
-          needs it, and a first-run box with zero sessions is the one most
-          likely to have a gate armed and no passkey on it yet. Outside
-          `showAccounts` too — that flag is about which surface owns the
-          accounts STRIP (top bar vs fleet list), and this is not it. */}
-      <PasskeyNotice />
 
       {/* The only door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three
@@ -411,89 +324,9 @@ export function FleetScreen({
         <>
           <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
 
-          <div className="fleet-list" ref={listRef}>
-            {tree.map((g) => (
-              <ProjectCard
-                key={g.project}
-                group={g}
-                onOpen={open}
-                selectedId={selectedId}
-                onAddWorkspace={(p) => void projects.addWorkspace(p)}
-                projected={projected}
-                placement={projects.placementFor(g.project)}
-                poolFor={projects.poolFor}
-                adding={projects.adding.has(g.project)}
-                /* D-6088: the project fold and the worker lines are the rollup's (`rollup.ts`); the Released and
-                   Archived sub-folds keep `useFolded`. */
-                rollup={rollup.cards.get(g.project)}
-                onToggle={(key) => {
-                  const card = rollup.cards.get(g.project);
-                  if (key === g.project && card !== undefined) updateRollup((p) => toggleProject(p, card, g.project));
-                  else toggleFold(key);
-                }}
-                onToggleChildren={(id) => updateRollup((p) => toggleChildren(p, id))}
-                onActions={(s) => flows.openActions(s.id)}
-                roster={roster}
-                pools={pools}
-                onPool={flows.openPool}
-                /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
-                   renders here — `runCard`, never `r.project`. A run kept on
-                   its worker's OWN project's card after the row moved would be
-                   spec §1's pure regression: one end on each card, no edge.
-                   Both lists are computed by `fleetTree` (D-5527), over the
-                   same card map as the rows; the filters described here live there. */
-                runs={g.runs}
-                /* The SECOND list (spec §3 F4): the runs this project is the
-                   HOME of, working somewhere else. NOT the exact complement of
-                   the filter above (D-2582): a run homed on a third project
-                   and working on a fourth is in NEITHER of this card's lists,
-                   and a crossing run appears in `runs` on the working card and
-                   in `abroad` on the home card — two different cards' lists —
-                   so there is no partition across cards either; the two
-                   filters are merely disjoint on this one card. What is true:
-                   that one asks where the work is, this one asks whose
-                   programme it is — and the two never merge, because only the
-                   first may reach `nestFleet`. `runHomeProject` rather than
-                   `r.homeProject`, for the house rule its own docstring
-                   gives — one reader per field — not because the tolerance is
-                   load-bearing at THIS `===` comparison: an older server's
-                   missing key makes `runHomeProject(r)` `null` and a raw
-                   `r.homeProject` `undefined`, and either one `=== g.project`
-                   is false, so the failure mode without the tolerant reader
-                   would have been a crossing run silently missing its abroad
-                   line on an older server, never every run landing on every
-                   card. And this predicate SPECIALIZES `crossingNote`'s
-                   decision rather than re-spelling it, which is the distinction
-                   D-2575 turns on: `crossingNote` asks whether a run is
-                   crossing AT ALL, judged from the run's own project, while
-                   this asks the same question from a THIRD party — the card
-                   whose project is neither necessarily the run's work nor its
-                   home. Named here so the next reader neither deletes it as a
-                   duplicate of that decision nor forks it into a second copy
-                   of it. Since wave 2 it also SUBTRACTS a run whose worker now
-                   renders on this very card — that run is a bracketed row
-                   here, and a second line for it would state the same wave
-                   twice (spec §6). */
-                abroad={g.abroad}
-                nowMs={Math.max(nowMs, rollNow)}
-                /* Fleet-wide, unlike every other lookup this card is handed —
-                   an orphan's coordinator is by construction NOT among this
-                   card's own sessions (D-3009), so a card-scoped read would
-                   always answer `null` for the one row that asks. */
-                coordOf={(id) => sessions.find((s) => s.id === id) ?? null}
-                frameSeen={fleetFrameSeen}
-                /* INVERTED against the project fold on purpose: foldState
-                   stores what is COLLAPSED, so absence means open — right for
-                   a project, wrong for an archive fold that must start
-                   closed. Under this composite key, presence means EXPANDED. */
-                archivedOpen={folded.has(`${g.project}::archived`)}
-                /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
-                releasedOpen={folded.has(`${g.project}::released`)}
-                onArchiveReleased={flows.openArchiveAll}
-                archivingReleased={archiveAll.archiving.has(g.project)}
-              />
-            ))}
-          </div>
+          {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
+              project cards (`FleetCards`), which that table also places in its project mode. */}
+          {FleetList === null ? <FleetCards selectedId={selectedId} onOpen={open} /> : <FleetList />}
           {archived.count > 0 && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
@@ -528,5 +361,94 @@ export function FleetScreen({
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
       <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
     </section>
+  );
+}
+
+/** The fleet's global banners, through the one stack both shells place (W2 Task S2c, BannerStack.tsx): the first two
+ *  that apply in rank order, every alert, and "+n more" for the rest. Each banner stays mounted and renders exactly as
+ *  it did in the fleet column; `shows` is the module's own predicate. Takes no props: it reads the shell's chrome
+ *  (D-5468), so the fleet column and a skin's frame (W2 Task S4b) place the same stack, and only one of them at a
+ *  time does. */
+export function FleetBanners(): ReactNode {
+  const chrome = useFleetChrome();
+  const useStore = chrome.store;
+  const sessions = useStore((s) => s.sessions);
+  const conn = useStore((s) => s.conn);
+  const notices = useStore((s) => s.notices);
+  const dismissNotice = useStore((s) => s.dismissNotice);
+  const fleetHealth = chrome.health;
+  const updates = chrome.updates;
+  // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every banner says so.
+  const stale = updates.view !== null && updates.failure !== null;
+  // The passkey notice's posture, read once here for the stack's predicate and the notice alike.
+  const passkeyStatus = usePasskeyStatus();
+  return (
+    <BannerStack
+      items={[
+        {
+          id: 'fleet-host',
+          shows: fleetHostBannerShows(fleetHealth),
+          node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
+        },
+        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
+        // disables while it stands. Re-polls on every Ack.
+        {
+          id: 'halt',
+          shows: haltBannerShows(updates.view),
+          node: <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />,
+        },
+        {
+          id: 'update',
+          shows: updateBannerShows(updates.view),
+          node: <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />,
+        },
+        // The substrate fault, said once (spec §4) — derived from the SAME injected store the rows render from,
+        // so the banner and the chips can never disagree about which fleet they describe.
+        { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
+        {
+          id: 'offline',
+          shows: conn === 'down',
+          node: conn === 'down' && (
+            <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
+              Reconnecting…
+            </div>
+          ),
+        },
+        // Cold start hydrated from the offline snapshot (lib/offline.ts): cards render instantly, clearly marked
+        // stale until the socket opens.
+        {
+          id: 'connecting',
+          shows: conn === 'connecting' && sessions.length > 0,
+          node: conn === 'connecting' && sessions.length > 0 && (
+            <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
+              Last known state — connecting…
+            </div>
+          ),
+        },
+        ...notices.map((n) => ({
+          id: 'notice' as const,
+          key: n.id,
+          shows: true,
+          node: (
+            <div className="notice" role="status">
+              <span className="notice-msg">{n.message}</span>
+              <button
+                type="button"
+                className="notice-x"
+                aria-label="Dismiss"
+                onClick={() => dismissNotice(n.id)}
+              >
+                ×
+              </button>
+            </div>
+          ),
+        })),
+        // The passphrase-only notice (D-161) — renders ITSELF or nothing, from the box's own posture, so it is
+        // in the stack unconditionally: every branch below needs it, and a first-run box with zero sessions is
+        // the one most likely to have a gate armed and no passkey on it yet. Outside `showAccounts` too — that
+        // flag is about which surface owns the accounts STRIP (top bar vs fleet list), and this is not it.
+        { id: 'passkey', shows: passkeyNoticeShows(passkeyStatus), node: <PasskeyNotice status={passkeyStatus} /> },
+      ]}
+    />
   );
 }

@@ -25,6 +25,7 @@ import type { ChildRunContext } from './runWords';
 import type { CoordPresence } from './coordWords';
 import { SessionMeta } from './SessionMeta';
 import { cardFacts, sessionFacts } from './sessionFacts';
+import { actionDoor } from '../command/door';
 import './fleet.css';
 
 
@@ -233,7 +234,8 @@ export function SessionLine({
         type="button"
         className="sess-actions"
         aria-label={`Actions for ${label}`}
-        onClick={() => onActions(session)}
+        // The fleet flow's actions sheet, as a door the parity test finds in both skins (W2 Task S10, D-5473).
+        {...actionDoor('open-actions', () => onActions(session))}
       >
         <span aria-hidden="true">···</span>
       </button>

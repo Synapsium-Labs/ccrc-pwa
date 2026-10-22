@@ -26,6 +26,8 @@ _plat_uuid	K
 _plat_ppid	K
 _plat_cgroup	K
 _plat_timeout	K
+_plat_timeout_capability	K
+_plat_timeout_strict	K
 _svc_label	C2
 _svc_plist	C2
 _svc_domain	C2
@@ -141,6 +143,9 @@ _ws_slug_residue	C4
 _ws_slug_new	C4
 _ws_least_loaded	C1
 _ws_disk_free_gb	C4
+_ws_pool_read	C1
+_ws_lane_why	C1
+_ws_wrapper_why	C1
 cmd_ws_add	C4
 _ws_realpath	C4
 _ws_common_dir	C4
@@ -262,7 +267,7 @@ _home_measured_to	C1
 _avail	C1
 _swap_target	C1
 _pane_measurable	C3
-_pane_narrow_note	C3
+_pane_narrow_note	C1
 _pane_auto_continue_armed	C3
 _pane_born	C3
 _session_hard_blocked	C1
@@ -276,6 +281,9 @@ _swap_pin_tick	C1
 _swap_pinned	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
+_swap_bg_hold	C1
+_swap_bg_note	C1
+_swap_bg_release	C1
 _pane_statusline_seg	C3
 _pane_ctx_pct	C3
 _route_word_in	C1
@@ -365,6 +373,7 @@ _tool_adj_env	C2
 _child_tmpdir	C4
 _delegation_spool_dir	C5
 _child_spawn_compose	C5
+_account_spawn_compose	C2
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
 _reg_id_ok	C1
@@ -446,6 +455,11 @@ _crosspool_tick	C1
 _tick_undecidable	C1
 _tick_strand_undecidable	C1
 _tick_decided	C1
+_standdown_evidence	C1
+_standdown_probe	C1
+_standdown_outside_tail	C3
+_swap_lane_to	C1
+_standdown_note	C1
 _crosspool_mark	C1
 _swap_lastswap_restore	C1
 _rescue_prev_save	C1
@@ -671,3 +685,8 @@ cmd_docs_show	C9
 cmd_docs_fetch	C9
 _docs_py	C9
 _launchd_class	C2
+_ws_title	C1
+_ws_title_check	C1
+_ws_title_set	C1
+_ws_title_clear	C1
+cmd_ws_title	C1

@@ -284,11 +284,13 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/forget', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/hold', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/release', args: 'id' },
+      // Named workspaces S9: the rename route, behind the same gate as every other write to a named session.
+      { method: 'POST', routePath: '/api/sessions/:id/title', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(21);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(17);
+    expect(requestGates).toHaveLength(22);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(18);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');

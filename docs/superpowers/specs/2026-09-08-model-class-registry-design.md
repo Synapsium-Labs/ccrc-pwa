@@ -8,6 +8,16 @@ live in exactly one place per account. Provider catalogues are refreshed on a
 timer; a model the operator has not classified is **surfaced, never
 auto-classed**.
 
+> **Amended by `2026-10-13-model-class-auto-advance-design.md` (accepted 2026-10-15).** "Surfaced, never auto-classed"
+> is superseded on Codex lanes for a model of a family some class follows: the hourly `ccrc models refresh` moves that
+> class to the newest eligible model of its family, after one canary request through the lane, unless the class is
+> held, and keeps the previous pin so a Revert is one step. A model of a family no class follows is still listed as
+> unclassified, and it joins a class only when the operator assigns one. The approved direction covers every provider,
+> Codex and Anthropic first and OpenRouter later, but the first plan,
+> `2026-10-15-model-class-auto-advance-codex-arm.md`, covers Codex lanes only: a lane of any other provider keeps the
+> rule as written here until its own arm lands. The decision table below keeps its 2026-09-08 wording as the record of
+> what was decided then.
+
 Builds on the account-connections design
 (`2026-09-05-account-connections-ui-design.md`, branch
 `ws/gemini-subscription-account-connection`): §4.1's `ModelMap`, §4.3's

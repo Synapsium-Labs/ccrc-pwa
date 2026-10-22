@@ -1,4 +1,5 @@
-import type { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
@@ -41,7 +42,9 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 import {
   assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationRowCodec, type DelegationSqlValue,
+  prepareDelegationProjectionChanges,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
@@ -1696,6 +1699,10 @@ export interface LifecycleBirthEvent {
   readonly at: number | null;
   readonly uuid: string | null;
 }
+
+/** D-5860: the stored form of a notice's once-only key (`feed_events.dedupe_key`): SHA-256 hex, so a key carrying a
+ *  token-shaped run (a compaction uuid) is neither archived in the clear nor masked into a collision. */
+const feedDedupeHash = (key: string): string => createHash('sha256').update(key).digest('hex');
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -5932,14 +5939,17 @@ export class CoordStore {
    * the insert, so a reader can never observe more rows than the retention
    * promise, even mid-write.
    */
-  recordFeedEvent(epoch: string, e: NotifyEvent): void {
+  recordFeedEvent(epoch: string, e: NotifyEvent, dedupeKey?: string): void {
     tx(this.db, () => {
       this.db.prepare(
-        'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId, dedupe_key) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       // D-5298 (spec §6.7): every body is redacted before it is archived — a child's command or question can carry a
       // token, and the feed outlives the push. The in-memory ring is the push's own copy; this is the durable one.
-      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, redactCommand(e.body), e.runId);
+      // D-5860: the once-only key is stored HASHED, never redacted (departure `dedupe-key-unmasked`). It REFUSES
+      // NOTHING: a key already present is archived again, because the archive never decides the ring (O11 (a)).
+      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, redactCommand(e.body), e.runId,
+        dedupeKey === undefined ? null : feedDedupeHash(dedupeKey));
       this.db.prepare(
         'DELETE FROM feed_events WHERE id NOT IN (SELECT id FROM feed_events ORDER BY id DESC LIMIT ?)',
       ).run(CoordStore.FEED_RETENTION);
@@ -5978,18 +5988,28 @@ export class CoordStore {
     }));
   }
 
-  /** Whether the feed archive holds a record of this kind, about this session,
-   *  with exactly this body — `sweepLanding`'s durable "already told" read for
-   *  a removal no open run names (landing-order wave 2), whose body carries the
-   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
-   *  pruned out of the archive reads as never recorded, and is announced again.
-   *  The body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped
-   *  run (a compaction uuid, a commit SHA) is archived masked, and a raw comparison would never match it. */
-  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
-    const row = this.db.prepare(
-      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
-    ).get(kind, sessionId, redactCommand(body));
-    return row !== undefined;
+  /**
+   * D-5860 `notice-dedupe-key` (W1a plan, Task C1f; ARCH-55 #790): whether the feed archive holds a notice of this kind,
+   * about this session, carrying this once-only key — the read-before-write "already sent" answer for a notice whose
+   * wording may change while its event does not (OA-C3, ruled A: the label decides). The key is compared hashed, as
+   * `recordFeedEvent` stored it, never through the body's redactor (departure `dedupe-key-unmasked`).
+   *
+   * `legacyBody`, when given, also matches a row written BEFORE the key existed (`dedupe_key IS NULL`) by its body, as
+   * the body read this replaced did (departure `dedupe-key-legacy-text`), so the deploy itself re-sends nothing. The
+   * body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped run is
+   * archived masked, and a raw comparison would never match it. A keyed row is never matched by its body. Bounded by
+   * `FEED_RETENTION` like every feed read: a row pruned out of the archive reads as never recorded.
+   */
+  hasNotice(kind: string, sessionId: string, dedupeKey: string, legacyBody?: string): boolean {
+    const byKey = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND dedupe_key = ? LIMIT 1',
+    ).get(kind, sessionId, feedDedupeHash(dedupeKey));
+    if (byKey !== undefined) return true;
+    if (legacyBody === undefined) return false;
+    const byBody = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND dedupe_key IS NULL AND body = ? LIMIT 1',
+    ).get(kind, sessionId, redactCommand(legacyBody));
+    return byBody !== undefined;
   }
 
   /**
@@ -8912,9 +8932,11 @@ export class CoordStore {
 
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
   // The six `delegation_*` tables (MIGRATIONS entry 22) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
-  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these five methods (the projection, the event
-  // insert and its batch, the event stats and the read-back) only make SQLite say
-  // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
+  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these six methods (the full projection, the delta
+  // projection, the event insert and its batch, the event stats and the read-back) only make SQLite say
+  // what they say. The delta projection is the one per-row updater, and it never reaches a lease row: the full projection stays the
+  // parity reference it falls back to and the repair that heals what the delta's checks cannot see. `CoordStore` stays synchronous
+  // and holds no health and no coordinator intent as an authority: the
   // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
   // map before they reach this method.
   //
@@ -9000,6 +9022,64 @@ export class CoordStore {
       run(delegationInsertSql(delegationLeaseCodec), delegationLeaseCodec, leases);
       run(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, lineage);
     });
+  }
+
+  /**
+   * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
+   * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
+   * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
+   *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
+   *      parent that is new in this same delta;
+   *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
+   *      value (`IS ?`, so a NULL matches), so a row somebody edited since `prior` was projected changes nothing and the call
+   *      refuses; each must change exactly one row;
+   *   3. `SELECT COUNT(*)` on each of the five tables, each held to `next`'s length, on EVERY delta, a zero-row one included, so a
+   *      row that went missing or turned up out of band is found at once.
+   * A miss at 2 or 3 throws `projection-delta-mismatch` naming the table and the key or the two counts, the transaction rolls back,
+   * and the caller repairs with the full projection. Any other change runs `projectDelegationCheckpoint(next)` and answers
+   * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
+   *
+   * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
+   * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
+   * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
+   * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
+   */
+  projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
+    const diff = prepareDelegationProjectionChanges(prior, next);
+    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
+    const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
+    if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
+    tx(this.db, () => {
+      // Each statement is prepared at most once per call, the first time its table needs it (as the full path prepares once per table).
+      const prepared = new Map<string, StatementSync>();
+      const prep = (key: string, sql: () => string): StatementSync => { let st = prepared.get(key); if (st === undefined) { st = this.db.prepare(sql()); prepared.set(key, st); } return st; };
+      const swap = <Row, Col extends string>(head: string, codec: DelegationRowCodec<Row, Col>, insertSql: () => string) => ({
+        update: (u: DelegationProjectionUpdate): void => {
+          const written = codec.columns.filter((c) => !u.keyColumns.includes(c));
+          const res = prep(head, () => `${head} SET ${written.map((c) => `${c} = ?`).join(', ')} WHERE ${codec.columns.map((c) => `${c} IS ?`).join(' AND ')}`)
+            .run(...written.map((c) => u.next[c] as DelegationSqlValue), ...codec.columns.map((c) => u.prior[c] as DelegationSqlValue));
+          if (Number(res.changes) !== 1) throw new DelegationModelError('projection-delta-mismatch',
+            `${u.table} row ${u.keyColumns.map((c) => String(u.prior[c])).join(', ')}: the compare-and-swap changed ${String(res.changes)} rows`);
+        },
+        insert: (i: DelegationProjectionInsert): void => { prep(i.table, insertSql).run(...codec.columns.map((c) => i.values[c] as DelegationSqlValue)); },
+      });
+      const at = (table: string) => {
+        switch (table) {
+          case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
+          case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
+          case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
+          default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
+        }
+      };
+      for (const i of diff.inserts) at(i.table).insert(i);
+      for (const u of diff.updates) at(u.table).update(u);
+      for (const c of diff.counts) {
+        const held = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${c.table}`).get() as { n: number | bigint }).n);
+        if (held !== c.count) throw new DelegationModelError('projection-delta-mismatch', `${c.table} holds ${String(held)} rows after the delta, expected ${String(c.count)}`);
+      }
+    });
+    return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };
   }
 
   /**

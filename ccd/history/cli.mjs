@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -56,11 +56,11 @@ import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
-  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
-  decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
+  decideRecallOff, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
-import { loadSecrets, procIdentityOf } from './sweep.mjs';
+import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
@@ -92,6 +92,10 @@ const EXIT_MEANING = Object.freeze({
   [EXIT.RECALL_OFF]: 'recall is off for this session (the eval control arm; counted)',
   [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
 });
+
+/** What recall-off's stated rc 1 prints after the pass's own line (which names the entry or the directory): the pass stopped
+ *  by design, so OP_EXIT_WORDS[EXIT.INTERNAL]'s "gave no result" is false there. The operator note still follows. */
+const RECALL_OFF_STATED_WORDS = 'the history writer stopped, as the line above says';
 
 /** The inputs §8.3's table does not reach on its first rows (Darwin, a server role, an unsettled stat):
  *  passed as unmeasured, so the table, not this file, decides every answer. */
@@ -144,15 +148,6 @@ function settleWithin(promise, ms) {
   });
 }
 
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'EPERM';
-  }
-}
-
 function parseJsonOr(text, fallback) {
   if (text === undefined || text === null || text === '') return fallback;
   try { return JSON.parse(text); } catch { return fallback; }
@@ -177,6 +172,7 @@ function emptyEnvelope(P) {
     },
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
+    recall_off: { seen_ms: null, files: 0, unreadable: 0 },   // W2-D31 (W2-1 Task 4): no store read, no observation
     recovering: null, op: null, pass: null, pass_died: null, history_off: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
@@ -203,7 +199,10 @@ function boxFacts(env, P) {
   env.cap_malformed = cap.malformed;
   const text = readTrimmed(P.op);
   const m = text === null ? null : parseOpMarker(text);
-  env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: pidAlive(m.pid), start_ms: m.startMs };
+  // D-5748 (history-op-marker-identity): `alive` is lib's decideOpLive over what is measured of the pid now, the rule the stale-marker
+  // removal reads too: a marker that names its process is alive only when its identity measures equal (a reused pid is not), and
+  // a legacy three-field one only when kill(pid, 0) answers ok (EPERM is another user's process: the fleet is one UNIX user).
+  env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: decideOpLive(m, measureOpProcess(m.pid)), start_ms: m.startMs };
   // D-5016 (history-doctor-reads-a-live-pass): the scheduled pass's marker. `live` is the IDENTITY test (the pid's start
   // time and the boot id measured now equal the marker's), never `kill(pid, 0)`, which a reused pid answers; anything
   // unmeasurable (no /proc, a dead pid, an unreadable or malformed marker) is not live, and a malformed one is no marker.
@@ -343,6 +342,7 @@ function readStore(env, P, nowMs) {
       .sort();
     const unreadable = parseJsonOr(meta.get('redact_unreadable'), []);
     env.redact_unreadable = Array.isArray(unreadable) ? unreadable.filter((x) => typeof x === 'string') : [];
+    env.recall_off = healthLib.recallOffStatusOf(meta);   // W2-D31 (W2-1 Task 4): from the meta rows, counts only
     decided(env, read);
   } finally {
     db.close();
@@ -433,6 +433,8 @@ export function render(env) {
       lines.push(`export(${h}): horizon=${ex.horizon_days ?? 'unmeasured'}d retention=${ex.retention_days ?? 'unmeasured'}d `
         + `due=${ex.due_blobs} overdue=${ex.overdue_blobs} segments=${ex.segments}`);
     }
+    const ro = env.recall_off;   // W2-D31 (W2-1 Task 4): the presence record, counts only
+    lines.push(`recall-off: seen=${ro.seen_ms === null ? 'never' : new Date(ro.seen_ms).toISOString()} files=${ro.files} unreadable=${ro.unreadable}`);
   }
   const op = env.op === null ? 'none' : `${env.op.verb}/${env.op.pid}${env.op.alive ? '' : ' (dead)'}`;
   const recovering = env.recovering === null ? 'no' : `${env.recovering.step} ${env.recovering.cursor}`;
@@ -445,8 +447,8 @@ export function render(env) {
 // ── W1-B2: the verb dispatcher and the read verbs' delivery (spec §8.1–§8.4, §8.8; W1-B2 Task 10) ──────────
 //
 // `ccrc history <verb>` answers two kinds of verb (§8.2):
-//   - BOX verbs derive no identity: `status`; `recall-off`, which in B2 answers only its refusals (the verb that
-//     writes ships with W2); and, from Task 19, the operator verbs.
+//   - BOX verbs derive no identity: `status`; and, from Task 19, the operator verbs, `recall-off` among them since
+//     W2-1 (THE OPERATOR DOOR, below).
 //   - READ verbs (READ_VERBS) need one, from tmux. They run in this order, each step a lib decision over what
 //     this file measured:
 //     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
@@ -474,7 +476,8 @@ const USAGE = [
   '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
-  '  operator verbs: import | prune | reparse | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
+  '  operator verbs: import | prune | reparse | recall-off <id> [--generation <uuid>] [--clear] | recall-off --clear-all',
+  '    | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
 
@@ -497,7 +500,7 @@ function thrownText(e) {
 }
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
-/** A registry field or a recall-off file is a few dozen bytes; a read stops here. */
+/** A registry field is a few dozen bytes; a read stops here. A recall-off file is read by sweep.mjs's recallOffPresence (W2-D29). */
 const FIELD_READ_MAX = 4096;
 
 /** A small file as a Presence (§8.2; IV5: unreadable is never absent):
@@ -558,8 +561,11 @@ function refusalStoreId(reach, P) {
  *  values read now; the declared paths are those the last tick recorded in meta redact_sources (Task 7B), because this
  *  process sources no bash. The values live only in this process's memory, inside the belt (and, for --regex, the
  *  child's stdin, Task 14): never printed, persisted or journaled. loadSecrets is the W1-B2 block's static import
- *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index. */
-function pairIndexOf(db, home) {
+ *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index.
+ *  Exported for the deploy lane (W2-D33): W2-5a builds its run's index once through it (W2-D54, W2-D67). Importing
+ *  this module sets the process umask to 0o077 and loads sweep.mjs, recall.mjs and store.mjs; main runs only behind
+ *  the entry guard, this file's last statement. */
+export function pairIndexOf(db, home) {
   const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
     .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
   const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
@@ -693,7 +699,8 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
   let gen = generation.value;
   seen.id = id;
   seen.gen = gen;
-  const offFile = presenceOf(recallOffPath(home, id));
+  // W2-D29: the one reader of recall-off/<id>, the drain's too (store.mjs readBounded at CONTROL_FILE_MAX).
+  const offFile = recallOffPresence(home, id);
   const offNow = generation.value !== null || offFile.state !== 'value';
   if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
     return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
@@ -920,17 +927,6 @@ async function statusVerb(home, args) {
   return env.exit;
 }
 
-/** `recall-off` in B2: its refusals only (decideRecallOffPreflight). The verb writes nothing and spawns
- *  nothing. */
-function recallOffVerb(home, args) {
-  const json = args.includes('--json');
-  const a = args.filter((x) => x !== '--json');
-  let d = decideRecallOffPreflight({ args: a, generation: null });
-  if (!d.done) d = decideRecallOffPreflight({ args: a, generation: regPresence(historyPaths(home), d.id, 'generation') });
-  if (d.reason === 'bad-args') process.stderr.write('ccrc history: recall-off writes its file from W2 (the replay eval); this build answers only its refusals\n');
-  return emitRefusal({ exit: d.exit, reason: d.reason, storeId: null }, json, NO_PAIRS);
-}
-
 /** `ccrc history <verb> …` (§8.2): help, the box verbs, the read verbs; anything else is bad-args. */
 export async function main(argv) {
   const home = process.env.HOME ?? '';
@@ -941,7 +937,6 @@ export async function main(argv) {
     return EXIT.OK;
   }
   if (verb === 'status') return statusVerb(home, rest);
-  if (verb === 'recall-off') return recallOffVerb(home, rest);
   if (READ_VERBS.includes(verb)) return readVerb(home, verb, rest);
   if (verb === 'doctor' || (!verb.startsWith('--') && Object.hasOwn(OP_OF_VERB, verb))) return operatorMain(home, argv);
   return unknownVerb(home, argv.includes('--json'));
@@ -1353,7 +1348,7 @@ export function formatHealth(health) {
 }
 
 // ── THE OPERATOR DOOR (W1-B2 Task 19) ─────────────────────────────────────────────────────────────────────
-// `ccrc history import|prune|reparse …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
+// `ccrc history import|prune|reparse|recall-off …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
 // --restore <file>|--rebuild [--store-id <uuid>]` (spec §8.4 "Operator verbs" and "Speed bumps", §8.3's no-store
 // table, §5.1). A BOX verb: it derives no identity and writes no spool line. In order, each step a lib decision:
 //   1. the verb and its arguments, by parseOpVerbArgs. A refusal here spawns nothing;
@@ -1367,11 +1362,13 @@ export function formatHealth(health) {
 //      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
 //   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin is inherited, so the sweep's
 //      own isatty(0) is the operator's terminal (nothing on the --op path asks whether stderr is a terminal). stdout
-//      and stderr are piped. stdout is relayed line by line as it arrives (an import's dry run can list thousands of
-//      files), each line through redactFinalLines with the read verbs' index (D-5022, review 441 F10; spec §9.8:
-//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message, so a
-//      shape that spans lines (a PEM body, a JSON value on the line after its key) is masked whole; it is written when
-//      the child ends, before the CLI's own last line (opRelay's header names the endings and the cap). Its LAST stdout
+//      and stderr are piped. stdout is relayed as it arrives (an import's dry run can list thousands of files), each
+//      read's whole lines as one batch, redacted with the read verbs' index (D-5022, review 441 F10; spec §9.8:
+//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message; it is
+//      written when the child ends, before the CLI's own last line (opRelay's header names the endings and the cap).
+//      Every text either stream relays is redacted with the last RELAY_LOOKBEHIND_BYTES its own stream wrote before it
+//      (lib redactAfter, D-5747), so a shape that spans lines (a PEM body, a JSON value on the line after its key) is
+//      masked whole when its head went out in an earlier batch or before the stderr spill. Its LAST stdout
 //      line, the sweep's `{"rc":…}`, is held back for
 //      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
 //      reason, and anything else is exit 1.
@@ -1382,7 +1379,7 @@ export function formatHealth(health) {
 
 /** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
 export const OP_OF_VERB = Object.freeze({
-  import: 'import', prune: 'prune', reparse: 'reparse',
+  import: 'import', prune: 'prune', reparse: 'reparse', 'recall-off': 'recall-off',
   '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
 });
 
@@ -1426,16 +1423,20 @@ function opPaneName(form) {
  *  redacted as one text when the child ends. Past it, the text up to its LAST line boundary is redacted and written, and
  *  the rest is held on. A held stretch with NO line break past the cap is written where the over-cap read ended, mid-line, and
  *  emit adds a newline there: the seam falls at that read, not exactly at the cap, and one line break is ADDED (no byte is
- *  dropped). The only residual is a shape that is split across that seam, which no pass on either side can see whole. */
+ *  dropped). The text after the seam is read with stderr's look-behind (D-5747), so a shape split across the seam is masked
+ *  when its head lies within RELAY_LOOKBEHIND_BYTES of it; the residual is a longer shape. The look-behind joins the two sides
+ *  at a line break, as the output shows them, so a value cut by a mid-line seam is read as two lines. */
 const ERR_HOLD_CAP = 1 << 20;
 /** How long the CLI's own signal handler waits for the held text to leave stderr before it ends the CLI anyway. */
 const SIGNAL_FLUSH_MS = 2000;
 const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 
-/** The shim as a child: its stdout relayed line by line as it arrives, its LAST stdout line held back for the relay;
- *  its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling 5020: a per-line redaction
- *  cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which errLine's whole-text
- *  pass masks). `emit(text, true)` is the held stderr text, without its last line break (emit adds one). The held text
+/** The shim as a child: its stdout relayed as it arrives, each read's whole lines as one batch (D-5747), its LAST stdout
+ *  line held back for the relay; its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling
+ *  5020: a per-line redaction cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which
+ *  errLine's whole-text pass masks). `emit(text, false)` is a batch of stdout lines and `emit(text, true)` the held stderr
+ *  text, each without its last line break (emit adds one); the second argument names the SOURCE stream, which is what
+ *  runOpVerb keys each stream's look-behind by (D-5747). The held text
  *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
  *    - the child exits with a code, or is killed by a signal (the child's `close`);
  *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
@@ -1501,12 +1502,18 @@ function opRelay(P, op, opArgs, emit) {
       reject(e);
     };
     const safe = (fn) => (...a) => { try { fn(...a); } catch (e) { fail(e); } };
+    // D-5747 (history-relay-lookbehind-window): each data chunk's complete lines go out as ONE batch, the line held before
+    // them first and the chunk's last complete line held in its place, so a chunk costs one windowed redaction, not one per line.
     const onOut = safe((d) => {
       buf += d;
-      for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
-        take(buf.slice(0, i));
-        buf = buf.slice(i + 1);
-      }
+      const cut = buf.lastIndexOf('\n');
+      if (cut === -1) return;
+      const lines = buf.slice(0, cut).split('\n');
+      buf = buf.slice(cut + 1);
+      const last = lines.pop();
+      if (held !== null) lines.unshift(held);
+      if (lines.length > 0) emit(lines.join('\n'), false);
+      held = last;
     });
     const onErr = safe((d) => {
       errHeld += d;
@@ -1566,9 +1573,10 @@ function relayIndexOf(home, P, reach) {
   return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
 }
 
-/** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
- *  stdout, and the text it printed on stderr, held and written whole (`toStderr` true; D-5022), already through
- *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+/** One operator verb through the door. `emit(text, toStderr)` gets the lines the sweep printed before its result on
+ *  stdout, a read's whole lines at a time, and the text it printed on stderr, held and written whole (`toStderr` true;
+ *  D-5022), already redacted with relayIndexOf's index, which is built only once the gate has passed, before the shim
+ *  starts, and with the look-behind of the stream the text came from (lib redactAfter, D-5747). */
 export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1593,7 +1601,16 @@ export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
   seam.idx = idx;   // the caller's catch redacts its internal-error line with the index of the read that line belongs to (D-5023)
-  return opRelay(P, map.op, map.opArgs, (line, toStderr) => emit(redactFinalLines(line, idx), toStderr));
+  // D-5747 (history-relay-lookbehind-window): one look-behind per SOURCE stream, keyed by the shim's stream that opRelay
+  // names (`fromStderr`), never by where operatorMain writes it: under --json both go to stderr, unordered between themselves.
+  // Every ending (onClose, fail(), the signal handlers) writes through this one callback, so through its window.
+  const behind = { out: '', err: '' };
+  return opRelay(P, map.op, map.opArgs, (text, fromStderr) => {
+    const k = fromStderr ? 'err' : 'out';
+    const r = healthLib.redactAfter(behind[k], text, idx);
+    behind[k] = r.keep;
+    emit(r.emit, fromStderr);
+  });
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
@@ -1618,9 +1635,9 @@ function guardClosedStdio() {
   }
 }
 
-/** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
- *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
- *  already through redactFinalLines (runOpVerb's relayIndexOf). */
+/** main's arm for `import`, `prune`, `reparse`, `recall-off` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
+ *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed text arrives here
+ *  already redacted (runOpVerb's relayIndexOf, through its stream's look-behind, D-5747). */
 export async function operatorMain(home, argv) {
   guardClosedStdio();
   const json = argv.includes('--json');
@@ -1661,7 +1678,11 @@ export async function operatorMain(home, argv) {
     });
     process.stdout.write(`${JSON.stringify(env)}\n`);
   } else if (r.exit !== EXIT.OK && !thrown) {
-    const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
+    // recall-off's designed rc 1 (an unusable history root or recall-off/, a --clear on an entry that is neither a file nor a
+    // link) is a result the sweep stated (lib decideRelay's `stated`), after the line that names the entry: the generic
+    // "gave no result" words are false there, so the one line names the operator and points at the line above.
+    const stated = verb === 'recall-off' && r.stated === true;
+    const words = stated ? RECALL_OFF_STATED_WORDS : OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
     process.stderr.write(`ccrc history ${verb}: ${words}; ${OP_OPERATOR_NOTE[r.exit] ?? OP_OPERATOR_NOTE_ANY}\n`);
   }
   return r.exit;

@@ -99,7 +99,7 @@ export const SCOPE_SOURCES: readonly ['tmux'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
-export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick';
+export type JournalKind = 'head' | 'file' | 'spool' | 'verdict' | 'redact' | 'tick' | 'recall-off';
 export const JOURNAL_KINDS: readonly JournalKind[];
 export type JournalVerdict = 'family' | 'epoch-confirmed' | 'epoch-unconfirmed' | 'epoch-chained'
   | 'generation-joined' | 'rekeyed' | 'mapping' | 'bind' | 'drained';
@@ -122,6 +122,8 @@ export interface HistoryPaths {
   readonly journalFile: string;
   readonly backups: string; readonly storeId: string; readonly pending: string; readonly writer: string;
   readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
+  /** W2-D29: the headless-on switch (SWITCHES.headlessOn) and the recall-off directory (RECALL_OFF_DIR under the root). */
+  readonly headlessOn: string; readonly recallOffDir: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -272,6 +274,7 @@ export function isHistoryCommand(command: string): boolean;
 export function provenanceOf(row: Record<string, unknown>, ctx: { pairedToolUse: null | { name: string; command?: string } }): Provenance;
 export function ftsTextOf(body: unknown, kind: 'entry' | 'sidecar'): string;
 export function variantCauseOf(a: unknown, b: unknown): 'ccd-sanitize' | 'unknown';
+export function isSyntheticModel(model: unknown): boolean;
 export function backendOf(model: string | null | undefined): Backend;
 export function producerOf(modelsAfterSummary: readonly (string | null)[]): Backend;
 export function producerOfCopy(rows: readonly { type: string; model: string | null }[], summaryIndex: number): Backend;
@@ -309,6 +312,21 @@ export function redactFinal(text: string, idx: PairIndex): string;
 export function redactFinalJson<T>(value: T, idx: PairIndex): T;
 export function redactFinalText(text: string, idx: PairIndex): string;
 export function redactFinalLines(text: string, idx: PairIndex): string;
+export const RELAY_LOOKBEHIND_BYTES: 16384;
+export function redactAfter(lookBehind: string, text: string, idx: PairIndex): { emit: string; keep: string };
+/** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
+ *  rules over the base reading's output (`v2`); null for any other function. A display window's and a snippet's also carry
+ *  `whole`, the door they return, answering `{ base, out }` from one read (D-6071): (1) the cut stays the base door's; (2) `v2` reads
+ *  the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text), the pre-round composition;
+ *  (3) a token of that output is masked unless the widened rules, read over the base reading of the margin-widened text, print it
+ *  AND the shown text holds the same string as a token too (a token `v2` joined or decoded is masked unless the shown text holds that
+ *  string, on purpose, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a window: `tokensOf`, the tokens of `v2` over its text with the note, null where `v2` changed nothing; it came back on review 744 F2, because a cut that splits a mark leaves the mark's fragment out of the piece's tokens while the pre-round output's own tokens join it to its neighbour), or of `v2` over the unframed cut slice (a snippet)); (4) `v2` then
+ *  reads the result. So the door only replaces spans of the pre-round composition's output with marks. The door is `v2(base)` for a
+ *  window of the whole text, where no margin is read (longer than DISPLAY_WINDOW_MAX), and where the widened reading changes nothing.
+ *  A test seam:
+ *  no shipped file calls it. */
+export function redactDoorReadings(door: (...args: never[]) => unknown):
+  { base: (...args: any[]) => any; v2: (out: any, idx: PairIndex | null) => any; whole?: (...args: any[]) => { base: any; out: any } } | null;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
 export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
 export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;
@@ -359,7 +377,13 @@ export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
-export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;
+/** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */
+export interface OpMarker { readonly verb: string; readonly pid: number; readonly startMs: number; readonly procStart: string | null; readonly bootId: string | null }
+export function parseOpMarker(text: string): OpMarker | null;
+export function formatOpMarker(marker: OpMarker): string;
+/** D-5748: what the caller measured of an op marker's pid just now: its identity (both null when unmeasurable) and kill(pid, 0) as a word. */
+export interface OpMeasure { readonly procStart: string | null; readonly bootId: string | null; readonly kill: 'ok' | 'esrch' | 'eperm' }
+export function decideOpLive(marker: OpMarker | null, measured: OpMeasure | null): boolean;
 export interface ProcIdentity { readonly procStart: string; readonly bootId: string }
 export function parsePassMarker(text: string): { pid: number; startMs: number; procStart: string; bootId: string } | null;
 export function formatPassMarker(pid: number, startMs: number, identity: ProcIdentity): string;
@@ -487,6 +511,9 @@ export const SCOPE_KINDS: readonly ['family', 'project', 'workspace'];
 export const NODE_ID_DISPLAY_MIN: 6;
 export const HISTORY_NODE_ID_RE: RegExp;
 export const RECALL_OFF_DIR: 'recall-off';
+export const RECALL_OFF_META: 'recall_off:';
+export const RECALL_OFF_GAP_MS: number;
+export const RECALL_OFF_SCAN_MAX: number;
 export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
@@ -514,6 +541,27 @@ export function resolveScopedId(i: { wanted: string; inScope: readonly string[];
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
+
+// --- W2-1 Task 4: the recall-off presence record (W2-D30) and status's block (W2-D31)
+export const RECALL_OFF_KEYS: Readonly<{ seen: string; state: string; change: string; gap: string }>;
+export type RecallOffState = { s: 'value'; v: string } | { s: 'unreadable'; v: null };
+export function recallOffStateOf(
+  read: { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string },
+): RecallOffState | 'absent';
+export interface RecallOffRow { k: string; v: string }
+export interface RecallOffPlan {
+  seen: RecallOffRow; put: RecallOffRow[]; del: string[]; insert: RecallOffRow[];
+  records: Array<{ t: number; fields: JournalFields & { rk: 'change' | 'gap' } }>;
+  malformed: number;
+}
+export function planRecallOffObservation(i: {
+  seenRaw: string | null;
+  stateRows: ReadonlyArray<{ id: string; raw: string }>;
+  files: ReadonlyArray<{ id: string; state: RecallOffState | 'absent' }>;
+  startMs: number; endMs: number;
+}): RecallOffPlan;
+export function recallOffReplayRows(rec: JournalRecord): { insert: RecallOffRow; put: RecallOffRow | null; del: string | null };
+export function recallOffStatusOf(meta: Iterable<readonly [string, string]>): { seen_ms: number | null; files: number; unreadable: number };
 
 
 // --- W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10)
@@ -585,7 +633,7 @@ export type CursorOf<R extends CursorResource> = Extract<Cursor, { resource: R }
 export function encodeCursor(c: Cursor): string;
 export function decodeCursor<R extends CursorResource>(s: string, resource: R): CursorOf<R> | null;
 export function decideRelay(i: { status: number | null; signal: string | null; lastLine: string | null }):
-  { exit: number; reason?: string };
+  { exit: number; reason?: string; stated?: true };
 export function stripReadPrefix(text: string): string;
 export type ExploreKind = 'json' | 'csv' | 'tsv' | 'code';
 export function exploreKindOf(path: string | null): ExploreKind | null;
@@ -645,6 +693,8 @@ export function planSpans(i: { rows: readonly SpanRow[]; boundaries: readonly Sp
 export function decideLeafId(i: { ccrcId: string; ccUuid: string; spanStartUuid: string; boundaryUuid: string; plainBoundOther: boolean }): { id: string; forked: boolean };
 export const RAW_LEAF_GRACE_MS: number;
 export function eofAfterBoundary(i: { eofMs: number | null; boundaryTsMs: number | null }): boolean;
+/** W2-D33: moved from derive.mjs. Null for an undefined index, or when no row up to it has a stamp. */
+export function stampAtOrBefore(rows: readonly { readonly ts_ms: number | bigint | null }[], index: number | undefined): number | null;
 export function leafReady(i: { summaryStored: boolean; fileAtEofAfterBoundary: boolean }): boolean;
 export const FAN_IN: Readonly<{ leaf: 8; condensed: 4 }>;
 export interface FanInSlot { readonly nodeId: string | null; readonly final: boolean; readonly parented: boolean }
@@ -669,7 +719,8 @@ export type OpArgs =
   | { readonly op: 'backup' }
   | { readonly op: 'adopt' }
   | { readonly op: 'restore'; readonly name: string }
-  | { readonly op: 'rebuild'; readonly storeId: string | null };
+  | { readonly op: 'rebuild'; readonly storeId: string | null }
+  | { readonly op: 'recall-off'; readonly mode: 'write' | 'clear' | 'clear-all'; readonly id: string | null; readonly generation: string | null };
 export function parseOpVerbArgs(op: string, args: readonly string[]):
   { ok: true; args: OpArgs } | { ok: false; reason: 'bad-args' | 'bad-id' | 'older-than-floor' | 'restore-refused' };
 export function decideOpDoor(f: CliStoreFacts):
@@ -709,6 +760,7 @@ export type ReplayAction =
   | { do: 'verdict'; rec: JournalRecord }
   | { do: 'redact'; len: number; sha256: string; t: number }
   | { do: 'tick'; t: number; lagMs: number | null }
+  | { do: 'recall-off'; rec: JournalRecord }
   | { do: 'skip'; counter: 'journal_line_malformed' | 'journal_record_unknown' | 'journal_head_mismatch' };
 export interface ReplayState {
   storeId: string; file: string | null; recvMs: number;
@@ -778,7 +830,7 @@ export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; 
 export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
 export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };
 
-// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects, recall-off's B2 refusals
+// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects; W2-1: recall-off's write, decided
 export function paneOk(pane: unknown): boolean;
 export const TREE_DEPTH_DEFAULT: 2;
 export const TREE_DEPTH_MAX: 8;
@@ -802,10 +854,10 @@ export type ReadArgs =
 export function parseReadArgs(verb: string, argv: readonly string[]): ReadArgs;
 export function selectColumns(version: number, table: string, cols: readonly string[],
   schema?: Readonly<Record<number, SchemaVersionAdded>>, alias?: string | null): string;
-export type RecallOffPreflight =
-  | { done: true; exit: 2; reason: 'bad-args' | 'bad-id' | 'generation-unreadable' }
-  | { done: false; id: string };
-export function decideRecallOffPreflight(i: { args: readonly string[]; generation: Presence<string> | null }): RecallOffPreflight;
+export type RecallOffWrite =
+  | { ok: true; generation: string }
+  | { ok: false; rc: 2; reason: 'generation-unreadable' | 'generation-malformed' | 'generation-mismatch' };
+export function decideRecallOffWrite(i: { registry: Presence<string>; want: string | null }): RecallOffWrite;
 
 // --- W1-B2 Task 11: the --json scope's family bound
 export const SCOPE_FAMILIES_JSON_MAX: 3;

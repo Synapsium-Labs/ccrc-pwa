@@ -116,7 +116,9 @@ describe('the full-height sheet census', () => {
     // giving the panel a handle to drag by.
     const src = readFileSync(
       path.join(REPO, 'ui', 'src', 'primitives', 'sheet.tsx'), 'utf8');
-    expect(src, 'the full variant no longer stands the panel down').toMatch(/handleOnly=\{full\}/);
+    // The desktop arm (D-5933) stands the panel down too, on purpose with NO handle: a centred dialog has no drag,
+    // and the ✕, Escape and the scrim close it (`sheet-desktop-arm.test.tsx`). The flag is `full` or that, nothing else.
+    expect(src, 'the full variant no longer stands the panel down').toMatch(/handleOnly=\{full \|\| desk\}/);
     expect(src, 'the full variant renders no vaul handle to drag by')
       .toMatch(/full\s*\r?\n?\s*\?\s*<Drawer\.Handle/);
   });

@@ -3,7 +3,7 @@ import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
 import type { SessionRecord } from '../registry.js';
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrLine, type CcdPrRow } from '../prstate.js';
 import { readPrHistory } from './prhistory.js';
 import type { PrLineageEntry } from './store.js';
@@ -252,7 +252,7 @@ export async function childSpent(
  * THE FETCH ONLY (spec §5.7): a LIVE `ccd pr-state --session <id>` —
  * nothing in this system learns of a PR by push, and the sweep's cadence is
  * minutes while a coordinator opens wave N+1 seconds after the worker's done
- * mail. Gated like every other caller of the verb (`verbSupported`). Every
+ * mail. Gated like every other caller of the verb (`ccdCan(state, 'prStateSession')`, D-5866). Every
  * rung of judgment over the answered line lives in the pure
  * `childSpentLiveFrom` below, which this calls once the line is in hand — the
  * split exists so a caller already holding this session's own measured line
@@ -267,7 +267,7 @@ export async function childSpentLive(
   deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
 ): Promise<ChildSpentVerdict> {
   const argv = CCD_ARGV.prStateSession(rec.id);
-  if (!verbSupported(deps.fleetState, argv)) {
+  if (!ccdCan(deps.fleetState, 'prStateSession')) {
     return { kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' };
   }
   const res = await deps.runCcd(argv);

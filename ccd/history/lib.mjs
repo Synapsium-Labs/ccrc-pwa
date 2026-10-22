@@ -52,6 +52,11 @@ const REASON_ROWS = [
     // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
     // mapping names a uuid another family already holds confirmed. Plan-chosen words.
     'roster-unreadable', 'uuid-claimed',
+    // `generation-malformed` and `generation-mismatch` (W2-1, W2-D27): recall-off's two refusals of the id's generation,
+    // decided under the shim's lock before any write: $REG/<id>.generation holds neither nothing nor one generation, or
+    // `--generation` names another than the registry's (or the registry holds none).
+    // D-5764 (history-w2-recall-off-generation-checks)
+    'generation-malformed', 'generation-mismatch',
   ]],
   [EXIT.WRITER_BUSY, ['writer-busy']],
   [EXIT.DB, [
@@ -285,7 +290,9 @@ export const COVERAGE = Object.freeze(['this-box']);
 export const SCOPE_SOURCES = Object.freeze(['tmux']);
 export const VARIANT_CAUSES = Object.freeze(['ccd-sanitize', 'unknown']);
 export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);
-export const JOURNAL_KINDS = Object.freeze(['head', 'file', 'spool', 'verdict', 'redact', 'tick']);
+// W2-1 Task 4 (W2-D30): 'recall-off' carries the presence record's change and gap rows. JOURNAL_V stays 1, so a build
+// before W2-1 reads such a record as an unknown kind, skipped and counted (journal_record_unknown), never as newer.
+export const JOURNAL_KINDS = Object.freeze(['head', 'file', 'spool', 'verdict', 'redact', 'tick', 'recall-off']);
 export const JOURNAL_VERDICTS = Object.freeze([
   'family', 'epoch-confirmed', 'epoch-unconfirmed', 'epoch-chained', 'generation-joined',
   'rekeyed', 'mapping', 'bind', 'drained',
@@ -412,8 +419,10 @@ export function readBoxEnvValue(text, key) {
 
 // ── every path the history code forms (§5.2) ──────────────────────────────
 /** Absolute paths under one HOME, joined with '/' (no `node:path` in L1).
- *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL or SWITCHES — never a
- *  second spelling. `journalFile` is SQLite's rollback journal beside the DB
+ *  Each is derived from STORE_DB_REL, HISTORY_ROOT_REL, SWITCHES or
+ *  RECALL_OFF_DIR — never a second spelling; `recallOffDir` is the one place
+ *  RECALL_OFF_DIR is joined onto a path (W2-D29). `journalFile` is SQLite's
+ *  rollback journal beside the DB
  *  (`history.db-journal`), NOT the history journal: that is `journalDir`. */
 export function historyPaths(home) {
   const h = String(home).replace(/\/+$/, '');
@@ -438,9 +447,11 @@ export function historyPaths(home) {
     op: `${root}/op`,
     pass: `${root}/pass`,
     passDied: `${root}/pass-died`,
+    recallOffDir: `${root}/${RECALL_OFF_DIR}`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
+    headlessOn: `${h}/${SWITCHES.headlessOn}`,
     ccrcEnv: `${h}/.ccrc/ccrc.env`,
     accountsSh: `${h}/.ccrc/accounts.sh`,
     reg: `${h}/.cc-sessions`,
@@ -753,6 +764,30 @@ const VERDICT_SHAPES = Object.freeze({
   drained: shape({ file: drainingNameOk }),
 });
 
+// W2-1 Task 4 (W2-D30): a `recall-off` record is one change or gap row of the presence record, keyed by `rk` as a verdict is
+// by `kind`. A state is exactly `{s, v}`: `{s: 'value', v}`, v a generation ('' or a lowercase UUID) or `sha256:` and a
+// hex digest (recallOffStateOf), or `{s: 'unreadable', v: null}`. A change's `from` may also be 'unobserved' (no state row)
+// and its `to` 'absent' (no file); a gap's `from` is the last observation's start, or null when none is recorded.
+const RECALL_OFF_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+function isRecallOffState(x) {
+  if (x === null || typeof x !== 'object' || Array.isArray(x)) return false;
+  const keys = Object.keys(x).sort();
+  if (keys.length !== 2 || keys[0] !== 's' || keys[1] !== 'v') return false;
+  if (x.s === 'unreadable') return x.v === null;
+  return x.s === 'value' && typeof x.v === 'string' && (isGen(x.v) || RECALL_OFF_DIGEST_RE.test(x.v));
+}
+const RECALL_OFF_RKS = Object.freeze(['change', 'gap']);
+const RECALL_OFF_BASE = Object.freeze({ rk: oneOf(RECALL_OFF_RKS) });
+const RECALL_OFF_SHAPES = Object.freeze({
+  change: shape({
+    id: idOk,
+    from: (x) => x === 'unobserved' || isRecallOffState(x),
+    to: (x) => x === 'absent' || isRecallOffState(x),
+    prev_seen_ms: (x) => x === null || isMs(x),
+  }),
+  gap: shape({ from: (x) => x === null || isMs(x), to: isMs }),
+});
+
 /** Exactly the declared fields beyond `v`, `k`, `t`: none missing, none extra,
  *  each value in its grammar. */
 function fieldsOk(o, base, s) {
@@ -786,6 +821,12 @@ export function parseJournalRecord(line) {
     if (typeof o.kind !== 'string') return { kind: 'malformed' };
     if (!JOURNAL_VERDICTS.includes(o.kind)) return { kind: 'unknown' };
     return fieldsOk(o, VERDICT_BASE, VERDICT_SHAPES[o.kind]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
+  }
+  if (o.k === 'recall-off') {
+    if (typeof o.rk !== 'string') return { kind: 'malformed' };
+    // An rk this build does not know is a newer build's row kind: unknown, skipped and counted, never malformed (W2-1 Task 4).
+    if (!RECALL_OFF_RKS.includes(o.rk)) return { kind: 'unknown' };
+    return fieldsOk(o, RECALL_OFF_BASE, RECALL_OFF_SHAPES[o.rk]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
   }
   return fieldsOk(o, {}, RECORD_SHAPES[o.k]) ? { kind: 'record', rec: o } : { kind: 'malformed' };
 }
@@ -1515,14 +1556,23 @@ export function variantCauseOf(a, b) {
   return sanitized > 0 ? 'ccd-sanitize' : 'unknown';
 }
 
+/** Whether a row's model name is Claude Code's own notice rather than any
+ *  backend's output: an angle-bracketed name (`<synthetic>`). NULL, empty and
+ *  every other name are not, so a row with no model stays a turn. The one
+ *  predicate (W2-D17): backendOf reads it for `unknown`, and
+ *  deploy/history-gate.mjs's turnsOf imports it to drop such rows. */
+export function isSyntheticModel(model) {
+  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');
+}
+
 /** A row's backend, from its model name alone (§6.2, `BACKENDS`). A name
  *  starting `claude` is `anthropic`; NULL, empty, or angle-bracketed
- *  (`<synthetic>`: Claude Code's own notices, no backend's output) is
+ *  (`<synthetic>`, isSyntheticModel: Claude Code's own notices) is
  *  `unknown`; any other name is `other`. Nothing is read from the roster.
  *  D-4196 */
 export function backendOf(model) {
   if (typeof model !== 'string' || model === '') return 'unknown';
-  if (model.startsWith('<') && model.endsWith('>')) return 'unknown';
+  if (isSyntheticModel(model)) return 'unknown';
   return model.startsWith('claude') ? 'anthropic' : 'other';
 }
 
@@ -1924,6 +1974,24 @@ export const LEAD_READINGS_MAX = 16;
  *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
 const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
+/** The line ends a quoted value never crosses: CR, LF, U+2028 and U+2029, the last two built from their code points. */
+const QUOTED_LINE_ENDS = String.raw`\r\n` + String.fromCharCode(0x2028, 0x2029);
+/** D-5745 (history-redact-value-class-widened; closes D-5021's residual): the named rule's value in the FIELD form, read
+ *  whole. v1's class `[^\s"'`,;&]` ended a value at `&`, `;`, `,` and either quote, so `password=abc&def`,
+ *  `password="abc&def"` and `PASSWORD='a b c'` printed their tails. Three alternatives, group 1 the opening quote:
+ *  - after `"` or `'` (the lookbehind reads group 1), the value runs to the same closing quote on the same line, which
+ *    the backreference `\1` consumes; an empty quoted value matches and every caller reads it as no value;
+ *  - unquoted, a value still ends at whitespace and the backtick. `&` ends it only before `NAME=` (a 256-character NAME,
+ *    the head's own bound), and `,` `;` `"` `'` end it only before whitespace, a closer (`,` `;` `)` `}` `]`) or the end
+ *    of the text, so `url?a=1&password=x&b=2`, `password=x; path=/` and `{"cmd":"password=x"}` keep their structure.
+ *  An unclosed quote fails the quoted reading, and group 1 then backs off to empty, so the quote is read as the
+ *  value's first character. Linear: each alternative's classes are disjoint, the lookaheads are bounded or one
+ *  character, and a failed quoted reading costs its own line once. The final form keeps v1's class (D-4613's structure
+ *  safety is unchanged). This is the prototype scope b2-redaction measured (R1). Every door reads it only over its rev
+ *  3.6 door's output (R11, composeDoor), so it never prints a value that door masks. */
+const NAMED_VALUE_FIELD_SRC = String.raw`(["']?)((?<=")[^"${QUOTED_LINE_ENDS}]*|(?<=')[^'${QUOTED_LINE_ENDS}]*|(?:[^\s"'` + '`'
+  + String.raw`,;&]|[,;"'](?![\s,;)}\]]|$)|&(?![A-Za-z_][A-Za-z0-9_.-]{0,255}=))+)\1`;
+
 /** Layer 2's rules (the context layer), one definition each, built twice: `field` is the field pass, `final` the second
  *  belt's structure-safe form, D-4613 (history-final-belt-layer2-structure-safe) (§8.3, whole-branch review: the final
  *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
@@ -1933,10 +2001,12 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  structure-aware belt (redactFinalText, redactFinalJson): it is never run over serialised structure, so it needs no
  *  rule about a closing quote or a closer (round 2's `]` and `}` exclusion was that, and it made the form
  *  non-idempotent on the field pass's own marks: `TOKEN=[redacted]` read as `[redacted` and was masked again). The
- *  field form is today's, byte for byte. */
-function contextRules(final) {
+ *  field form is today's, byte for byte, except the named rule's value (D-5745). `base` builds the rev 3.6 rules, byte for
+ *  byte, from the same template (BASE_RULES, R11); `final` is kept on the rules, which redactLayers reads. */
+function contextRules(final, base = false) {
   const stop = final ? String.raw`\\<>&` : '';
   return Object.freeze({
+    final,
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
     // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
     // (namedSpans). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
@@ -1945,7 +2015,10 @@ function contextRules(final) {
     namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
     // The NAME a value ends in (`namedSpans`' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
     namedTail: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`),
-    namedValue: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y'),
+    // D-5745 (history-redact-value-class-widened): the value of the named rule. Group 1 is the opening quote or empty, group 2
+    // the value; a caller's span is group 2's own, never the whole match (the field form consumes a closing quote). The final
+    // form, and the rev 3.6 rules (`base`), keep v1's class from the base's own template; the field form reads a value whole.
+    namedValue: new RegExp(final || base ? String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)` : NAMED_VALUE_FIELD_SRC, 'y'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
     bearerSticky: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'iy'),
@@ -1954,6 +2027,11 @@ function contextRules(final) {
   });
 }
 const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+
+/** R11 (W5h-2; the coordinator's composition ruling of 2026-10-19, which amends R1 and R3): the rev 3.6 (BELT_VERSION 1)
+ *  rules, frozen, built from contextRules' one template (`base`): v1's named value class in both forms. Every redaction
+ *  door reads them first and CONTEXT_RULES over their output (composeDoor). Nothing else reads them. */
+const BASE_RULES = Object.freeze({ field: contextRules(false, true), final: contextRules(true, true) });
 
 /** What a secret value that ends where it could hide a further head of its own rule hands on (D-4614, whole-branch fix
  *  round 7). A rule scanned left to right and not overlapping resumes AFTER a value, so a head that STARTS inside the
@@ -1974,7 +2052,7 @@ function tailHead(s, R, valueStart, end, kind) {
     R.namedValue.lastIndex = at;
     const v = R.namedValue.exec(s);
     if (v === null || v[2] === REDACTED_MARK) return null;
-    return [at + v[1].length, at + v[0].length];
+    return [at + v[1].length, at + v[1].length + v[2].length];   // D-5745: the value group's own span
   }
   // The value's tail against a FULL nested head (D-4614, whole-branch fix round 8). A value holds no whitespace, so a
   // head with no space after its colon ends INSIDE it: `Vabcauthorization:Bearer` (then ` SECRET`) and
@@ -2025,7 +2103,10 @@ function namedSpans(s, R, add) {
       head.lastIndex = sepEnd;
       continue;
     }
-    head.lastIndex = addChain(s, R, sepEnd + v[1].length, sepEnd + v[0].length, 'named', add);
+    const start = sepEnd + v[1].length;
+    // D-5745: the span is the value group's own (the field form consumes a closing quote, which stays). An empty quoted
+    // value (`TOKEN=""`) gives an empty span, which `add` drops: no value.
+    head.lastIndex = addChain(s, R, start, start + v[2].length, 'named', add);
   }
 }
 
@@ -2151,7 +2232,7 @@ function maskSpans(s, spans) {
  *  pattern needs a `"`, `=`, `:`, `?` or `&`, so it can match nothing there,
  *  while on a span of short dotted words it is the costliest layer. `context`
  *  `'final'` runs layer 2 in redactFinal's structure-safe form (D-4613). */
-function redactRun(segment, idx, context = true) {
+function redactRun(segment, idx, context) {
   try {
     return redactLayers(segment, idx, context);
   } catch (e) {
@@ -2185,7 +2266,8 @@ function redactLayers(segment, idx, context) {
   // (`mode=auth: abcdefAuthorization: Bearer S`), anchors and shapes first lets a shape or anchor value swallow a glued
   // NAME (`sk-…api_key: "V"`), so no rule may read what another has rewritten. Every pattern and value class is
   // unchanged. A span whose text already is the mark is not a span (idempotence).
-  const R = context ? (context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field) : null;
+  // R11: `context` is one form of one rule set (BASE_RULES or CONTEXT_RULES, `field` or `final`), or false for no layer 2.
+  const R = context || null;
   const spans = [];
   const add = (a, b) => {
     if (b > a && !(b - a === REDACTED_MARK.length && s.startsWith(REDACTED_MARK, a))) spans.push([a, b]);
@@ -2195,7 +2277,7 @@ function redactLayers(segment, idx, context) {
     jsonSpans(s, R, add);
     namedSpans(s, R, add);
   }
-  if (R === CONTEXT_RULES.final) {
+  if (R !== null && R.final) {
     const shapes = [];
     shapeSpans(s, (x, y) => {
       add(x, y);
@@ -2471,10 +2553,11 @@ function markSpansAt(plain, offsets) {
 /** The complete field redaction. Layer 4 allocates per-field buffers too, so its RangeError shares layers 1-3's
  * fail-closed contract while non-RangeError defects remain visible. */
 export function redactField(text, idx) {
-  return redactFieldIn(text, idx, true);
+  return composeDoor(DOOR_READINGS.redactField, [text, idx], idx);
 }
 
-/** redactField's body, with layer 2's mode (`true` the field form, `'final'` redactFinal's structure-safe form). */
+/** redactField's body, with layer 2's rules for one form (R11: a rule set's `field`, or its `final`, redactFinal's
+ *  structure-safe form). */
 function redactFieldIn(text, idx, context) {
   const layered = redactLayered(text, idx, context);
   try {
@@ -2486,7 +2569,7 @@ function redactFieldIn(text, idx, context) {
 }
 
 /** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
-function redactLayered(text, idx, context = true) {
+function redactLayered(text, idx, context) {
   if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx, context);
   const raw = redactRun(text, idx, context);
   let out = '';
@@ -2550,12 +2633,17 @@ function markEscapeGluedSpans(s) {
  *  backslash marked (`markEscapeGluedSpans`), so no part of a secret a further decode would separate is indexed.
  *  `idx` is required: `sidecarIndexText(…, null)` never calls this. */
 export function redactForIndex(text, idx) {
-  let t = redactIndexReading(text, idx);
+  return composeDoor(DOOR_READINGS.redactForIndex, [text, idx], idx);
+}
+
+/** redactForIndex's body over one rule set (R11). */
+function redactForIndexWith(text, idx, rs) {
+  let t = redactIndexReading(text, idx, rs);
   let keep = t;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const u = unescapeJsonText(t);
     if (u === t) return keep;
-    t = redactIndexReading(u, idx);
+    t = redactIndexReading(u, idx, rs);
     if (t !== u) keep = t;
   }
   return markEscapeGluedSpans(t);
@@ -2586,6 +2674,11 @@ function dropTrailingRun(s) {
  *  rule). `bytes` is the file's first bytes, never more than the window is read. The window and the cut are
  *  `windowText` and `cutIndexText`, which an entry's index text shares (D-4419). */
 export function sidecarIndexText(bytes, idx) {
+  return composeDoor(DOOR_READINGS.sidecarIndexText, [bytes, idx], idx);
+}
+
+/** sidecarIndexText's body over one rule set (R11). */
+function sidecarIndexTextWith(bytes, idx, rs) {
   const w = windowText(bytes, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);
   let text = w.text;
   // D-4336 (history-sidecar-index-text-unescaped): redacted RAW, decoded, then redacted again. Decoding first is a
@@ -2596,9 +2689,9 @@ export function sidecarIndexText(bytes, idx) {
   // are redactForIndex's (D-4343): a nested JSON level or a backslash-u-005c chain glues an escape letter onto a
   // secret one decode later, and the last redaction below reads every remaining level, keeping a deeper reading only
   // when it redacted something.
-  if (idx !== null) text = redactIndexReading(text, idx);
+  if (idx !== null) text = redactIndexReading(text, idx, rs);
   text = unescapeJsonText(text);
-  if (idx !== null) text = redactForIndex(text, idx);
+  if (idx !== null) text = redactForIndexWith(text, idx, rs);
   return cutIndexText(text, w.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN);
 }
 
@@ -2636,10 +2729,15 @@ function cutIndexText(text, windowCut, ftsBytes, margin) {
  *  index one text (D-4344's premise). A sidecar's text, `sidecarIndexText`'s, is shorter than the window and is
  *  redacted whole. Text past the cut is not searchable. */
 export function entryIndexText(text, idx) {
+  return composeDoor(DOOR_READINGS.entryIndexText, [text, idx], idx);
+}
+
+/** entryIndexText's body over one rule set (R11). */
+function entryIndexTextWith(text, idx, rs) {
   const window = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
   // Every UTF-16 code unit is at least one UTF-8 byte, so the window's bytes lie in the text's first `window` units.
   const w = windowText(new TextEncoder().encode(text.length > window ? text.slice(0, window) : text), window);
-  return cutIndexText(redactForIndex(w.text, idx), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
+  return cutIndexText(redactForIndexWith(w.text, idx, rs), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
 }
 
 /** The second belt (§8.3), per-segment primitive: the field pass's layers once more over ONE piece of text that has no
@@ -2651,7 +2749,7 @@ export function entryIndexText(text, idx) {
  *  line, rounds 1 and 2). The callers are `redactFinalJson` (every string leaf of the envelope value, in the FIELD
  *  form) and `redactFinalText` (each line segment and each frame-tag attribute value, in this form). */
 export function redactFinal(text, idx) {
-  return redactFieldIn(text, idx, 'final');
+  return composeDoor(DOOR_READINGS.redactFinal, [text, idx], idx);
 }
 
 /** The final belt over a `--json` envelope, D-4613 (whole-branch fix round 3): the VALUE is deep-mapped BEFORE it is
@@ -2664,10 +2762,15 @@ export function redactFinal(text, idx) {
  *  holds. Residuals: a secret an object KEY would carry is not masked (no key is data); a leaf the field form cannot
  *  mask is no worse than the field pass was. */
 export function redactFinalJson(value, idx) {
-  if (typeof value === 'string') return redactFinal(redactField(value, idx), idx);
-  if (Array.isArray(value)) return value.map((v) => redactFinalJson(v, idx));
+  return composeDoor(DOOR_READINGS.redactFinalJson, [value, idx], idx);
+}
+
+/** redactFinalJson's body over one rule set (R11). */
+function redactFinalJsonWith(value, idx, rs) {
+  if (typeof value === 'string') return redactFieldIn(redactFieldIn(value, idx, rs.field), idx, rs.final);
+  if (Array.isArray(value)) return value.map((v) => redactFinalJsonWith(v, idx, rs));
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJson(v, idx)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJsonWith(v, idx, rs)]));
   }
   return value;
 }
@@ -2686,7 +2789,178 @@ export function redactFinalJson(value, idx) {
  *  form's wider value classes costs a reader a few characters and breaks no structure. It is idempotent on the field
  *  pass's marks. `redactFinalText` (tag-aware) stays for the human page, which recallEnvelope frames. */
 export function redactFinalLines(text, idx) {
-  return redactFinal(redactField(text, idx), idx);
+  return composeDoor(DOOR_READINGS.redactFinalLines, [text, idx], idx);
+}
+
+/** How much of a relayed stream's own RAW text the relay keeps behind what it has written, to read the next batch in context:
+ *  16 KiB, which holds a 4096-bit PEM private key (about 3.3 KB) several times over. D-5747 (history-relay-lookbehind-window) */
+export const RELAY_LOOKBEHIND_BYTES = 16384;
+
+/** The relay's next look-behind (D-5747): the last RELAY_LOOKBEHIND_BYTES UTF-8 bytes of `raw`, never starting inside a
+ *  character, and from the first line start inside them, so a shape that opens a line (a PEM BEGIN line) within the window is
+ *  kept whole. With no line start inside them (one line longer than the window) they are kept from mid-line. Every UTF-16 unit
+ *  is at least one UTF-8 byte, so those bytes lie in the last RELAY_LOOKBEHIND_BYTES units. */
+function relayKeep(raw) {
+  if (Buffer.byteLength(raw, 'utf8') <= RELAY_LOOKBEHIND_BYTES) return raw;
+  const from = Math.max(0, raw.length - RELAY_LOOKBEHIND_BYTES);
+  const enc = Buffer.from(raw.slice(from), 'utf8');
+  let at = enc.length - RELAY_LOOKBEHIND_BYTES;
+  while (at < enc.length && (enc[at] & 0xc0) === 0x80) at += 1;
+  const tail = enc.subarray(at).toString('utf8');
+  if (at > 0 ? enc[at - 1] === 0x0a : raw[from - 1] === '\n') return tail;
+  const nl = tail.indexOf('\n');
+  return nl === -1 ? tail : tail.slice(nl + 1);
+}
+
+/** One relayed batch of a stream's text, read in the context of what the same stream wrote before it: the window's
+ *  reading, which redactAfter unions with the per-line reading. D-5747 (history-relay-lookbehind-window), amending
+ *  D-5022's final shape.
+ *
+ *  `lookBehind` is the stream's own RAW text that the relay has already written, at most RELAY_LOOKBEHIND_BYTES of it, or ''
+ *  before the first batch. `text` is the next batch, which the relay writes as whole lines (emit adds the last line break); it
+ *  joins the look-behind at a line break. Three readings:
+ *    - A, the batch read ALONE (redactFinalLines), first: the standalone pass. Its marks are carried into the next reading,
+ *      where a mark stays a mark, so what is written is never less masked than A. Run last instead, over the context
+ *      reading's output, it would not be: a PEM block the look-behind opens can run to an END line in the batch, and its
+ *      mark then takes in a NAME the batch read alone keeps (`TOKEN=<BEGIN line>…<END line>V`), so no pass sees a NAME
+ *      before V;
+ *    - R, the look-behind and A read as ONE text;
+ *    - P, the look-behind read alone, which the relay already wrote (redacted).
+ *  Written: the rest of R when R starts with P and a line break. Otherwise a span runs from the look-behind into the batch,
+ *  and what is written is R from the last mark that starts at or before the first character where R and P differ and
+ *  reaches it (that mark stands for the span's new tail), or, with no such mark, from the start of that character's line.
+ *  `keep` is the next look-behind: the RAW look-behind and batch, cut by relayKeep.
+ *  This reading alone does not keep the per-line guarantee (R4 as amended on review finding 11): one batch can hold a PEM
+ *  block whose mark runs to an END line and takes the next line's NAME in (`<BEGIN line>`, then `TOKEN=<BEGIN line>abc<END
+ *  line>V` prints V, which that line read alone masks), and the line-start branch can write look-behind text again.
+ *  redactAfter's union (relayUnion) closes both, and review finding 11's JSON key and next pair in one batch too: this
+ *  reading takes the next pair's key as the key's value and prints its value, and the union writes that pair as one mark
+ *  from its key on. Each reading here is this build's redactFinalLines, a composed door (R11).
+ *  Residuals: a shape longer than the window; text written before its key line cannot be taken back; the window's raw text
+ *  sits in process memory, as the held stderr already does. */
+function relayRead(lookBehind, text, idx) {
+  const alone = redactFinalLines(text, idx);
+  const keep = relayKeep(lookBehind === '' ? text : `${lookBehind}\n${text}`);
+  if (lookBehind === '') return { emit: alone, keep };
+  const head = `${redactFinalLines(lookBehind, idx)}\n`;
+  const R = redactFinalLines(`${lookBehind}\n${alone}`, idx);
+  if (R.startsWith(head)) return { emit: R.slice(head.length), keep };
+  let d = 0;
+  while (d < head.length && d < R.length && R[d] === head[d]) d += 1;
+  const m = R.lastIndexOf(REDACTED_MARK, d);
+  return { emit: m !== -1 && m + REDACTED_MARK.length >= d ? R.slice(m) : R.slice(R.lastIndexOf('\n', d - 1) + 1), keep };
+}
+
+/** R4's fallback, taken at the plan's second review and aligned by line at its third (D-5747): `read`, the window's reading
+ *  of one batch, with a mark over every piece of it that `perLine` (the same batch read one line at a time by this build's
+ *  redactFinalLines, as the relay before this wave read it) does not print where that piece can lie. `read` is split at its marks and line breaks. A
+ *  mark only ever takes text in, so each line break `read` keeps is one of the batch's, in order, and `perLine` keeps them
+ *  all, one line per batch line. So a piece lies on the line the breaks since the last piece written count to when no mark
+ *  stands between them, and otherwise on a line no earlier than that and no later than the breaks after it allow. On such
+ *  a line, a piece that starts its line in `read` must start the line of `perLine`, one that ends its line must end it, and
+ *  one between two marks is looked for after the last piece written. The lines are tried in order, at most
+ *  RELAY_LOOKBEHIND_BYTES characters of them past the first, and then the last line allowed (one mark that takes in every
+ *  break, a long PEM body, say). A piece found is written; a piece not found becomes a mark, and marks that meet are
+ *  written as one. So every piece written is text the per-line reading prints on a line the window's line breaks allow, and
+ *  a mark of `read` stays a mark, so what is written is never less masked than `read`. A piece the line-start branch wrote
+ *  again from the look-behind is not on any line of `perLine`, so it becomes a mark. A union of the text written, not of
+ *  spans over the original text: no reading of redactFinalLines answers spans (it composes two passes that answer text).
+ *  Each piece costs at most two lines and RELAY_LOOKBEHIND_BYTES characters of the lines between, and the output is joined
+ *  once, so the union stays near linear in the batch (an unaligned search that scanned to the batch's end for each piece
+ *  it missed, and a mark test that read the growing output's end, were each quadratic). */
+function relayUnion(read, perLine) {
+  const lines = perLine.split('\n');
+  const toks = [];   // the pieces of `read`, in order: text, null for a mark, '\n' for a line break
+  read.split(REDACTED_MARK).forEach((part, i) => {
+    if (i > 0) toks.push(null);
+    part.split('\n').forEach((piece, j) => {
+      if (j > 0) toks.push('\n');
+      if (piece !== '') toks.push(piece);
+    });
+  });
+  let breaksLeft = toks.filter((t) => t === '\n').length;
+  let line = 0;      // the line of perLine where the last piece written ends, and its column
+  let col = 0;
+  let breaks = 0;    // the line breaks written since then
+  let open = true;   // a mark since then: the look-behind's own mark may take in the batch's first lines
+  const out = [];
+  const mark = () => {
+    if (out[out.length - 1] !== REDACTED_MARK) out.push(REDACTED_MARK);
+  };
+  toks.forEach((piece, i) => {
+    if (piece === '\n') {
+      out.push('\n');
+      breaks += 1;
+      breaksLeft -= 1;
+      return;
+    }
+    if (piece === null) {
+      mark();
+      open = true;
+      return;
+    }
+    const startsLine = i === 0 || toks[i - 1] === '\n';
+    const endsLine = i === toks.length - 1 || toks[i + 1] === '\n';
+    const find = (L) => {
+      const s = lines[L];
+      const from = L === line ? col : 0;
+      if (startsLine) return from === 0 && (endsLine ? s === piece : s.startsWith(piece)) ? 0 : -1;
+      if (endsLine) return s.length - piece.length >= from && s.endsWith(piece) ? s.length - piece.length : -1;
+      const k = s.slice(from, from + RELAY_LOOKBEHIND_BYTES + piece.length).indexOf(piece);
+      return k === -1 ? -1 : from + k;
+    };
+    const lo = line + breaks;
+    const hi = open ? lines.length - 1 - breaksLeft : lo;
+    let L = lo;
+    let k = L <= hi ? find(L) : -1;
+    for (let reach = 0; k === -1 && L + 1 < hi && reach <= RELAY_LOOKBEHIND_BYTES; ) {
+      reach += lines[L].length + 1;
+      L += 1;
+      k = find(L);
+    }
+    if (k === -1 && L < hi) {
+      L = hi;
+      k = find(L);
+    }
+    if (k === -1) {
+      mark();
+      open = true;
+      return;
+    }
+    out.push(piece);
+    line = L;
+    col = k + piece.length;
+    breaks = 0;
+    open = false;
+  });
+  return out.join('');
+}
+
+/** One relayed batch of a stream's text, as the relay writes it. D-5747 (history-relay-lookbehind-window), amending D-5022's
+ *  final shape; ruling R4 as amended. `lookBehind` is the stream's own RAW text that the relay has already written, at most
+ *  RELAY_LOOKBEHIND_BYTES of it, or '' before the first batch; `text` is the next batch, whole lines joined by line breaks
+ *  (emit adds the last). `emit` is what to write for `text`: the window's reading (relayRead) unioned with the batch read
+ *  one line at a time (relayUnion). `keep` is the next look-behind. What is written is never less masked than
+ *  redactFinalLines of the batch alone (relayRead's standalone pass runs first), and every piece of it is text that this
+ *  build's redactFinalLines prints reading each line alone, on a line the window's line breaks allow (the union): a value a
+ *  line alone masks is written only where another line of the batch, read alone, prints the same characters. This build's
+ *  redactFinalLines reads the widened rules only over the rev 3.6 door's output (R11), so its per-line reading masks every
+ *  value the per-line relay before this wave masked. The per-line reading is memoised by line within the batch:
+ *  redactFinalLines is a function of the line and the index alone (the relay's index is never a probe), so a blank or
+ *  repeated line is read once, and a held stderr of short lines costs per distinct line, not per line (the plan's seventh
+ *  review measured 10 s of CPU on 1 MiB of blank lines without it). */
+export function redactAfter(lookBehind, text, idx) {
+  const { emit, keep } = relayRead(lookBehind, text, idx);
+  const seen = new Map();
+  const perLine = text.split('\n').map((line) => {
+    let read = seen.get(line);
+    if (read === undefined) {
+      read = redactFinalLines(line, idx);
+      seen.set(line, read);
+    }
+    return read;
+  }).join('\n');
+  return { emit: relayUnion(emit, perLine), keep };
 }
 
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
@@ -2704,22 +2978,121 @@ const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;
  *  pass's output. Residual: a secret split by a line break or a tag is masked only by the field pass, which saw it
  *  whole. */
 export function redactFinalText(text, idx) {
+  return composeDoor(DOOR_READINGS.redactFinalText, [text, idx], idx);
+}
+
+/** redactFinalText's body over one rule set (R11). */
+function redactFinalTextWith(text, idx, rs) {
+  const one = (segment) => redactFieldIn(segment, idx, rs.final);
   return text.split('\n').map((line) => {
     let out = '';
     let last = 0;
     for (const m of line.matchAll(FRAME_TAG_RE)) {
-      out += redactFinal(line.slice(last, m.index), idx);
+      out += one(line.slice(last, m.index));
       let at = 0;
       for (const q of m[0].matchAll(/"([^"]*)"/g)) {
-        out += `${redactFinal(m[0].slice(at, q.index), idx)}"${redactFinal(q[1], idx)}"`;
+        out += `${one(m[0].slice(at, q.index))}"${one(q[1])}"`;
         at = q.index + q[0].length;
       }
-      out += redactFinal(m[0].slice(at), idx);
+      out += one(m[0].slice(at));
       last = m.index + m[0].length;
     }
-    return out + redactFinal(line.slice(last), idx);
+    return out + one(line.slice(last));
   }).join('\n');
 }
+
+/** R11 (W5h-2; the coordinator's composition ruling of 2026-10-19, which amends R1 and R3): each redaction door's two
+ *  readings. `base(...args)` is the door as rev 3.6 built it (BASE_RULES); `v2(out, idx)` is the same door built from this
+ *  build's rules (CONTEXT_RULES), read over `out`, the base reading's output. A text door reads that output as its text. A
+ *  sidecar's v2 reading is the index redaction and the cut: its window and its first decode are readings of the raw bytes,
+ *  which the base reading already took, and decoded again a JSON string held inside a JSON string would be indexed at its
+ *  second level whether or not anything there is masked (D-4343's rule keeps a deeper level only when it masks something).
+ *  A display window's or a snippet's v2 reading is redactForDisplay's reading of its base output. The door they return is not
+ *  v2(base), so a NAME the cut removed still masks its value's tail (D-6071, review 711 F1). `whole`: (1) the cut stays the base
+ *  door's; (2) v2 reads the text the base door shows (a window's text with its inexact note ahead, a snippet's framed text, the
+ *  very text the pre-round door read), the pre-round composition (review 725 F1); (3) the widened rules read the BASE READING of
+ *  the margin-widened text (composedTokens), and a token of v2's output is masked unless that reading prints it and the shown text
+ *  holds the same string as a token too (maskUnprinted: a token v2 joined or decoded is masked unless the shown text holds that
+ *  string as a token, availability only; both doors also need the second reading: the tokens of the pre-round output itself (a
+ *  window: v2 over its text with the note; tokensOf, null where v2 rewrote nothing), or of v2 over the unframed cut slice (a
+ *  snippet; preRoundTokens). The window's second reading
+ *  was dropped as redundant in 66864b647 and came back on review 744 F2: where the cut splits a mark, the piece's tokens leave the
+ *  mark's fragment out and v2's own output's tokens join it to its neighbour; an edge token keeps its whole-token decision only
+ *  where v2 left the edge as the cut made it); (4) v2 then reads the result. So the door only replaces spans of the pre-round
+ *  composition's output with marks. The door is v2(base) in three cases: a window of the whole text through redactDisplayWindow
+ *  (displayWindow's step 0), a window or snippet whose margin text is not read (longer than DISPLAY_WINDOW_MAX), and any window or
+ *  snippet whose widened reading of the margin text (composedTokens) changes nothing. A whole-text snippet is otherwise not.
+ *  `whole` answers `{ base, out }` from one read, so composeDoor's base is not computed twice.
+ *  nodeIndexTexts, the --regex child, the node fields and the relay read these doors, so they are composed through them. */
+const DOOR_READINGS = (() => {
+  const door = (impl, over = impl) => Object.freeze({
+    base: (...args) => impl(...args, BASE_RULES),
+    v2: (out, idx) => over(out, idx, CONTEXT_RULES),
+  });
+  const shown = (out, idx, rs) => redactForDisplayWith(out, idx, rs);
+  // A display window or snippet: its base is rev 3.6's door; its v2 is redactForDisplay's reading of that output (the (j10) CONTROL
+  // reads it over the raw text); and `whole`, the door composeDoor returns: the base door's cut, v2 over the text it shows (a snippet's
+  // is the framed base snippet), each token of that output masked unless the widened rules print it over the base reading of the
+  // margin-widened text AND the shown text holds the same string as a token (composedTokens, maskUnprinted, D-6071; a joined or
+  // decoded token is masked unless the shown text holds that string), and the second reading holds it (both doors: the
+  // window's is the tokens of the pre-round output itself, tokensOf, null where v2 rewrote nothing (back since review 744 F2: a cut that splits a mark leaves the fragment out of the piece's tokens); the snippet's is the tokens of v2 over the unframed cut slice, preRoundTokens), then v2 over that. It is v2(base) where no margin is read or the widened reading changes nothing.
+  const display = (impl) => Object.freeze({
+    base: (...args) => impl(...args, BASE_RULES),
+    v2: (out, idx) => shown(out, idx, CONTEXT_RULES),
+    whole: (...args) => {
+      const r = impl(...args, BASE_RULES, true);
+      return { base: r.base, out: shown(r.out, args[args.length - 1], CONTEXT_RULES) };
+    },
+  });
+  return Object.freeze({
+    redactField: door((text, idx, rs) => redactFieldIn(text, idx, rs.field)),
+    redactFinal: door((text, idx, rs) => redactFieldIn(text, idx, rs.final)),
+    redactFinalLines: door((text, idx, rs) => redactFieldIn(redactFieldIn(text, idx, rs.field), idx, rs.final)),
+    redactFinalJson: door(redactFinalJsonWith),
+    redactFinalText: door(redactFinalTextWith),
+    redactForIndex: door(redactForIndexWith),
+    redactForDisplay: door((text, idx, rs) => redactForDisplayWith(text, idx, rs)),
+    entryIndexText: door(entryIndexTextWith),
+    sidecarIndexText: door(sidecarIndexTextWith, (out, idx, rs) => (idx === null ? out
+      : cutIndexText(redactForIndexWith(out, idx, rs), false, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN))),
+    redactDisplayWindow: display(redactDisplayWindowWith),
+    displaySnippet: display(displaySnippetWith),
+  });
+})();
+
+/** R11: a door of this build is its v2 reading over its base reading, v2(base(…)) (DOOR_READINGS). Every reading is
+ *  SUBTRACTIVE: its output is its input, a JSON-escape decoding of it (the index and display readings), or its input with
+ *  escape sequences removed (D-4307's joined reading), with spans replaced by the mark and, for an index text, cut, so it
+ *  writes no character its input (so read) did not hold but a mark's (and a window's note). A value a door masks is one
+ *  that no reading of its output holds: as written, decoded, or with its sequences removed. So the v2 reading never writes
+ *  back a value the base reading masked, whatever the widened rules read: no door of this build prints a value its rev 3.6
+ *  door masks, in that sense. Two residuals follow (D-5745): where the widened rules find a value only with the text's
+ *  sequences removed, or only at a JSON-decoded level, the door returns that reading, so a value the base printed split by
+ *  a sequence, or only JSON-escaped, prints whole. The cost is about two passes of the door. */
+function composeDoor(r, args, idx) {
+  // a display door answers its base and its composed text from one read (`whole`); every other door is v2 over its base
+  const { base, out } = r.whole !== undefined ? r.whole(...args) : (() => { const b = r.base(...args); return { base: b, out: r.v2(b, idx) }; })();
+  // D-5746: under a re-derivation probe, a text this build writes otherwise than its rev 3.6 door wrote it is an owed hit
+  if (out !== base && typeof out === 'string' && idx !== null) {
+    const hit = beltHit(idx);
+    if (hit !== null) hit();
+  }
+  return out;
+}
+
+/** R11's two readings of one exported door, or null for any other function: a read-only test accessor, which arms nothing
+ *  (no env var, flag or file), read by history-lib's property, subtractiveness and mutant cases. No shipped file calls it. */
+export function redactDoorReadings(door) {
+  return DOOR_OF.get(door) ?? null;
+}
+const DOOR_OF = new Map([
+  [redactField, DOOR_READINGS.redactField], [redactFinal, DOOR_READINGS.redactFinal],
+  [redactFinalLines, DOOR_READINGS.redactFinalLines], [redactFinalJson, DOOR_READINGS.redactFinalJson],
+  [redactFinalText, DOOR_READINGS.redactFinalText], [redactForIndex, DOOR_READINGS.redactForIndex],
+  [redactForDisplay, DOOR_READINGS.redactForDisplay], [entryIndexText, DOOR_READINGS.entryIndexText],
+  [sidecarIndexText, DOOR_READINGS.sidecarIndexText], [redactDisplayWindow, DOOR_READINGS.redactDisplayWindow],
+  [displaySnippet, DOOR_READINGS.displaySnippet],
+]);
 
 // ===========================================================================
 // The harness table and the export's horizon (spec §6.10 item 3, §9.15).
@@ -3200,11 +3573,40 @@ export function ftsPhrase(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-/** The op marker's one grammar (§9.6 op-running; Task 25): `~/.ccrc/history/op` holds `<verb> <pid> <start_ms>`.
- *  Anything else is null, which a pass treats as stale (it names no live pid) and status reports as no op. */
+/** The op marker's one grammar (§9.6 op-running; Task 25): `~/.ccrc/history/op` holds `<verb> <pid> <start_ms>
+ *  <proc_start> <boot_id>` since D-5748 (history-op-marker-identity), the pass marker's identity (D-5016) after the verb, pid
+ *  and start, so a reused pid or another boot never reads as the pass that wrote it. The three-field form `<verb> <pid>
+ *  <start_ms>` is a LEGACY marker, left by an operator pass of the older build that is still running across `ccrc update`:
+ *  it parses with `procStart` and `bootId` null, and decideOpLive reads it by the kill probe. At most 119 B (32 + 10 + 16 +
+ *  20 + 36, four spaces and a newline). Anything else is null, which a pass treats as stale (it names no live pid) and status
+ *  reports as no op. */
 export function parseOpMarker(text) {
-  const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})\s*$/.exec(text);
-  return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
+  const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})(?: ([0-9]{1,20}) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?\s*$/.exec(text);
+  return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]), procStart: m[4] ?? null, bootId: m[5] ?? null };
+}
+
+/** The op marker's text (D-5748): the grammar above, newline-ended. Five fields when the writer measured its identity, the
+ *  legacy three when it could not (no /proc: the shim is Linux-only, so this is a Darwin test box); half an identity is a
+ *  writer's bug and throws. */
+export function formatOpMarker({ verb, pid, startMs, procStart, bootId }) {
+  const start = procStart ?? null;
+  const boot = bootId ?? null;
+  if ((start === null) !== (boot === null)) throw new TypeError('formatOpMarker: procStart and bootId are both measured or both null');
+  return start === null ? `${verb} ${pid} ${startMs}\n` : `${verb} ${pid} ${startMs} ${start} ${boot}\n`;
+}
+
+/** Whether an op marker names an operator pass that is running now (D-5748): the one rule status's `op.alive` and the
+ *  stale-marker removal both read. `measured` is what the caller measured of the marker's pid just now: its identity
+ *  (`procStart` and `bootId`, both null when it cannot be measured) and `kill`, the answer of `kill(pid, 0)` as a word
+ *  ('ok', 'esrch' or 'eperm'). An identity-bearing marker is live ONLY when the identity measured now equals it in both
+ *  fields (decidePassLive), and a mismatch or an unmeasurable identity is never retried by the kill probe, which a reused
+ *  pid answers. A legacy marker is live only when the kill probe answers 'ok': EPERM is another user's process, and the
+ *  fleet runs as one UNIX user, so it is not ours. No marker is no live pass. */
+export function decideOpLive(marker, measured) {
+  if (marker === null || measured === null || measured === undefined) return false;
+  if (marker.procStart === null || marker.bootId === null) return measured.kill === 'ok';
+  const identityNow = measured.procStart === null || measured.bootId === null ? null : { procStart: measured.procStart, bootId: measured.bootId };
+  return decidePassLive(marker, identityNow);
 }
 
 /** The pass marker's one grammar (D-5016 `history-doctor-reads-a-live-pass`): `~/.ccrc/history/pass` holds
@@ -3447,8 +3849,30 @@ function evidenceOf(h) {
   return found.length > 0 ? found.join(', ') : 'the evidence the refusal found';
 }
 
+/** Whether the store is newer than this build: deriveHealth's schema-newer FAIL and lagHoldOf read this one predicate. */
+function schemaNewerOf(h) {
+  return h.migration === 'refuse-newer' || (h.userVersion !== null && h.userVersion > h.codeVersion);
+}
+
+/** D-5027's follow-up (wave 5h-2 Task 5, coordinator ruling R6): the hold that keeps a lag from draining, as the word of the hold's
+ *  own FAIL, or null. No scheduled pass ingests while one stands (planRun holds on a migration verdict; openStore refuses a newer
+ *  store before that), so the lag is real and only clearing the hold drains it. D-5027's three holds only, schema-newer first when
+ *  it stands beside a migration verdict. A capture pause (at-cap, capture-paused-low-disk) is not one here: it has its own FAIL. */
+function lagHoldOf(h) {
+  if (schemaNewerOf(h)) return 'schema-newer';
+  if (h.migration === 'snapshot-needs-op') return 'migration-needs-op';
+  if (h.migration === 'refuse-low-disk') return 'migration-refused';
+  return null;
+}
+
 function remedyFor(word, h) {
   switch (word) {
+    case 'lag-high': {   // R6: on a held node, the hold's own remedy, through remedyFor so it stays single-sourced
+      const hold = lagHoldOf(h);
+      return hold === null
+        ? HEALTH_REMEDIES['lag-high']
+        : `no scheduled pass ingests while ${hold} stands, so this lag cannot drain until it clears: ${remedyFor(hold, h)}`;
+    }
     case 'at-cap':
       return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap; or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-near':
@@ -3621,7 +4045,9 @@ export function deriveHealth(h) {
   // zero-behind tick (capture is paused while the hold stands, so the lag is real). schema-newer is NOT covered (review 466 F1): a
   // scheduled pass on a newer store is refused at openStore, before the held arm, and leaves through holdPass, which opens no
   // database and stamps nothing (DM17: no write on a newer store), so tick-stale keeps standing beside schema-newer; planRun's
-  // refuse-newer arm is defensive on a scheduled pass.
+  // refuse-newer arm is defensive on a scheduled pass. One window stays, as text only (review 467 F3; wave 5h-2's R7): heldFresh
+  // reads no schema verdict, so a held_pass_ms stamped before the store became newer still reads fresh, and tick-stale is held
+  // back beside schema-newer for up to TICK_STALE_MS after that stamp (spec §9.6; D-5027's residual (d) in the B2 plan).
   const heldFresh = h.heldPassMs !== null && h.heldPassMs !== undefined
     && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
 
@@ -3655,7 +4081,7 @@ export function deriveHealth(h) {
   if (h.capturePause === 'at-cap') fail.push(item('at-cap', `capture is paused: the store is at its cap of ${h.capGb} GB`));
   if (h.capturePause === 'low-disk') fail.push(item('capture-paused-low-disk', `capture is paused: free space on the filesystem holding ${h.dbPath} is below the floor`));
   if (h.modesWrong.length > 0) fail.push(item('mode-wrong', h.modesWrong.map((m) => `${m.path} is ${m.got}, wants ${m.want}`).join('; ')));
-  if (h.migration === 'refuse-newer' || (h.userVersion !== null && h.userVersion > h.codeVersion)) {
+  if (schemaNewerOf(h)) {   // W5h-2 Task 5: one predicate, which lag-high's remedy reads too
     fail.push(item('schema-newer', `the store is schema v${h.userVersion ?? '?'}, newer than this build's v${h.codeVersion}`));
   }
   if (h.migration === 'refuse-low-disk') {
@@ -3766,6 +4192,22 @@ export const HISTORY_NODE_ID_RE = /^[LN][0-9a-f]{20}$/;
 /** The directory under the history root that holds the eval control arm's
  *  per-id files (§9.7). Spelled once; the W2 verb writes it, B2 only reads. */
 export const RECALL_OFF_DIR = 'recall-off';
+
+/** The recall-off presence record's meta-key prefix (W2-D30): its `state:<id>`,
+ *  `seen_ms`, `change:<ts_ms>:<id>` and `gap:<ts_ms>` rows are keyed under it in
+ *  the store's `meta` table, so the record needs no schema change (W2-D10). The
+ *  sweep writes them, status reads them, deploy/history-gate.mjs's
+ *  changedFamilies parses them and deploy/measure-history.py emits them raw.
+ *  Spelled once, here; measure-history.py's twin is held equal to it by
+ *  measure-history.test.ts (W2-D23). */
+export const RECALL_OFF_META = 'recall_off:';
+/** When the time since the presence record's last observation exceeds this,
+ *  the tick writes a gap row (W2-D30, chosen). */
+export const RECALL_OFF_GAP_MS = 10 * 60 * 1000;
+/** The most `recall-off/` entries one tick's scan reads (W2-D30, chosen): the
+ *  counted iteration stops there, and a capped directory writes nothing and
+ *  does not advance the record's seen time. */
+export const RECALL_OFF_SCAN_MAX = 4096;
 
 /** `tmux display-message` prints `#S`; ccd names every session `cc-<id>`, and
  *  the hook requires the same prefix (spec §8.2). decideOpGate's pane test
@@ -3952,10 +4394,10 @@ function validNodeId(id) {
 
 /** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
  *  path exists, so `../x` can never name a file outside the store
- *  (D-4170, C66). */
+ *  (D-4170, C66). The directory is historyPaths' recallOffDir (W2-D29). */
 export function recallOffPath(home, id) {
   if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
-  return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
+  return `${historyPaths(home).recallOffDir}/${id}`;
 }
 
 /** Whether `recall-off/<id>` holds this family (§9.7,
@@ -3975,6 +4417,142 @@ export function decideRecallOff({ file, generation }) {
   if (file.state === 'absent') return 'none';
   if (file.state !== 'value') return 'off';
   return file.value.trim() === generation ? 'off' : 'stale';
+}
+
+// ── W2-1 Task 4: the recall-off presence record (W2-D30) and status's block (W2-D31) ──────────────────────────────
+// The sweep observes recall-off/ once per tick (sweep.mjs recordRecallOff) and keeps what it saw in meta rows under
+// RECALL_OFF_META; no schema change. Every decision is here: the state a read is, the rows and journal records one
+// complete observation writes, the rows one journal record replays to, and what status reports.
+
+/** The presence record's meta keys (W2-D30): `seen`, the last complete observation's start in ms; `state` + id, one
+ *  file's state, absent while the file is; `change` + `<ts_ms>:<id>`, one transition `{from, to, prev_seen_ms}`; and
+ *  `gap` + `<ts_ms>`, one interval with no observation `{from, to}`. deploy/history-gate.mjs's parseRecallOffRow reads
+ *  the change and gap rows (W2-D23). */
+export const RECALL_OFF_KEYS = Object.freeze({
+  seen: `${RECALL_OFF_META}seen_ms`,
+  state: `${RECALL_OFF_META}state:`,
+  change: `${RECALL_OFF_META}change:`,
+  gap: `${RECALL_OFF_META}gap:`,
+});
+
+/** One recall-off/<id> read (store.mjs readBounded's answer) as the record keeps it (W2-D30). 'absent' has no state
+ *  row. An unreadable or over-cap read is `{s: 'unreadable', v: null}`, never absent (C67: a file that exists says the
+ *  id was assigned). A value is the text trimmed as decideRecallOff trims it, kept as it is when that is a generation
+ *  ('' or a lowercase UUID) and otherwise as `sha256:` and its hex digest, so a planted file's change is still seen and
+ *  a state row stays bounded whatever the file holds. */
+export function recallOffStateOf(read) {
+  if (read.state === 'absent') return 'absent';
+  if (read.state !== 'value') return { s: 'unreadable', v: null };
+  const t = read.value.trim();
+  return { s: 'value', v: isGen(t) ? t : `sha256:${sha256Hex(t)}` };
+}
+
+const RECALL_OFF_SEEN_RE = /^(?:0|[1-9][0-9]{0,15})$/;
+/** seen_ms as stored: a decimal ms within Date's range, else null. A value off that grammar, or past Date's last ms (so
+ *  `new Date(..).toISOString()` in status cannot throw), reads as never observed, the conservative reading: a null
+ *  prev_seen_ms reads as -Infinity downstream (W2-D23), and a null gap `from` reports the gap. */
+function recallOffSeenOf(raw) {
+  if (typeof raw !== 'string' || !RECALL_OFF_SEEN_RE.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n <= ROW_TS_MAX_MS ? n : null;
+}
+/** A state row's value, or null when it is off the grammar (isRecallOffState). */
+function recallOffStateRowOf(raw) {
+  let x;
+  try { x = JSON.parse(raw); } catch { return null; }
+  return isRecallOffState(x) ? x : null;
+}
+const recallOffById = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/** What one COMPLETE observation of recall-off/ writes (W2-D30), as data; the sweep writes it in one transaction.
+ *  - `seen`: seen_ms becomes the observation's start, `startMs`. Every row it writes is keyed by its end, `endMs`, and
+ *    every record's `t` is `endMs`: a change made during the scan lies in (prev_seen_ms, endMs], on the conservative
+ *    side of W2-3's drop test at both bounds.
+ *  - A gap row `{from, to: startMs}` when seen_ms is absent or off its grammar (`from` null: the first observation, or
+ *    the first after a rebuild) or more than RECALL_OFF_GAP_MS before `startMs` (`from` the old seen_ms).
+ *  - Changes are recorded only against state rows. A present file with no state row (or one off the grammar) is a change
+ *    from 'unobserved' with prev_seen_ms null; a state row whose file is not present (or read absent) is a change to
+ *    'absent' and its row is deleted; a state that differs is a change carrying the old seen_ms. An unchanged file writes
+ *    nothing. A state row whose key names no idOk id is deleted with no record (journalRecord would refuse its id).
+ *  - `insert` rows are written DO NOTHING; `put` and `del` are the state rows; `malformed` counts the rows off grammar. */
+export function planRecallOffObservation({ seenRaw, stateRows, files, startMs, endMs }) {
+  if (!isMs(startMs) || !isMs(endMs) || endMs < startMs) {
+    throw new TypeError(`planRecallOffObservation: startMs and endMs are ms, startMs <= endMs: ${JSON.stringify([startMs, endMs])}`);
+  }
+  for (const f of files) {
+    if (!idOk(f.id)) throw new TypeError(`planRecallOffObservation: not a session id: ${JSON.stringify(f.id)}`);
+  }
+  const prevSeen = recallOffSeenOf(seenRaw);
+  const plan = { seen: { k: RECALL_OFF_KEYS.seen, v: String(startMs) }, put: [], del: [], insert: [], records: [], malformed: 0 };
+  const row = (rk, k, body, fields) => {
+    plan.insert.push({ k, v: canonicalJson(body) });
+    plan.records.push({ t: endMs, fields: { rk, ...fields } });
+  };
+  const change = (id, from, to, prev) => {
+    const body = { from, to, prev_seen_ms: prev };
+    row('change', `${RECALL_OFF_KEYS.change}${endMs}:${id}`, body, { id, ...body });
+  };
+  if (prevSeen === null || startMs - prevSeen > RECALL_OFF_GAP_MS) {
+    const body = { from: prevSeen, to: startMs };
+    row('gap', `${RECALL_OFF_KEYS.gap}${endMs}`, body, body);
+  }
+  const prior = new Map();
+  for (const r of [...stateRows].sort(recallOffById)) {
+    if (!idOk(r.id)) {
+      plan.malformed += 1;
+      plan.del.push(`${RECALL_OFF_KEYS.state}${r.id}`);
+      continue;
+    }
+    const st = recallOffStateRowOf(r.raw);
+    if (st === null) plan.malformed += 1;
+    prior.set(r.id, st);
+  }
+  const present = new Set();
+  for (const f of [...files].sort(recallOffById)) {
+    if (f.state === 'absent') continue;
+    present.add(f.id);
+    const was = prior.get(f.id);
+    if (was === undefined || was === null) change(f.id, 'unobserved', f.state, null);
+    else if (canonicalJson(was) === canonicalJson(f.state)) continue;
+    else change(f.id, was, f.state, prevSeen);
+    plan.put.push({ k: `${RECALL_OFF_KEYS.state}${f.id}`, v: canonicalJson(f.state) });
+  }
+  for (const [id, was] of prior) {
+    if (present.has(id)) continue;
+    change(id, was ?? 'unobserved', 'absent', was === null ? null : prevSeen);
+    plan.del.push(`${RECALL_OFF_KEYS.state}${id}`);
+  }
+  return plan;
+}
+
+/** The rows one replayed `recall-off` record gives (W2-D30), byte for byte the rows the live plan wrote for it: the
+ *  change or gap row (inserted DO NOTHING), and for a change its state row, last-wins from `to` and deleted when `to` is
+ *  'absent'. seen_ms is never replayed, and nothing here reads the directory. */
+export function recallOffReplayRows(rec) {
+  if (rec.rk === 'gap') {
+    return { insert: { k: `${RECALL_OFF_KEYS.gap}${rec.t}`, v: canonicalJson({ from: rec.from, to: rec.to }) }, put: null, del: null };
+  }
+  const insert = { k: `${RECALL_OFF_KEYS.change}${rec.t}:${rec.id}`, v: canonicalJson({ from: rec.from, to: rec.to, prev_seen_ms: rec.prev_seen_ms }) };
+  const key = `${RECALL_OFF_KEYS.state}${rec.id}`;
+  return rec.to === 'absent' ? { insert, put: null, del: key } : { insert, put: { k: key, v: canonicalJson(rec.to) }, del: null };
+}
+
+/** status --json's `recall_off` (W2-D31), from the meta rows alone: the last complete observation's start, the files
+ *  it recorded present, and how many of them read unreadable. A state row off the grammar counts as unreadable: status
+ *  never reports a row it cannot read as a readable file. Counts only, never an id, so status stays identity-free. */
+export function recallOffStatusOf(meta) {
+  let seen = null;
+  let files = 0;
+  let unreadable = 0;
+  for (const [k, v] of meta) {
+    if (k === RECALL_OFF_KEYS.seen) seen = recallOffSeenOf(v);
+    else if (k.startsWith(RECALL_OFF_KEYS.state)) {
+      files += 1;
+      const st = recallOffStateRowOf(v);
+      if (st === null || st.s === 'unreadable') unreadable += 1;
+    }
+  }
+  return { seen_ms: seen, files, unreadable };
 }
 
 
@@ -4715,17 +5293,24 @@ function cutBefore(s, n) {
  *  displayed window's indices. */
 export function snippetWindow(text, terms) {
   const content = String(text);
+  const b = snippetBounds(content, terms);
+  return `${b.pre}${content.slice(b.start, b.end).trim()}${b.suf}`;
+}
+
+/** snippetWindow's cut, as positions: the snippet is `pre`, then `content.slice(start, end).trim()`, then `suf` (`pre` and `suf` are
+ *  `...` or empty). With no hit the first 80 characters of the trimmed text. Module-private; snippetWindow is built on it so the
+ *  composed snippet (D-6071) can frame the same trimmed slice with the same `...`, with the cut the base's. */
+function snippetBounds(content, terms) {
   const { at, len } = snippetSpan(content, terms);
   if (at === -1) {
     const head = content.trim();
-    return head.length <= 80 ? head : `${head.slice(0, cutBefore(head, 77)).trimEnd()}...`;
+    if (head.length <= 80) return { start: 0, end: content.length, pre: '', suf: '' };
+    return { start: 0, end: content.length - content.trimStart().length + cutBefore(head, 77), pre: '', suf: '...' };
   }
   let start = Math.max(0, at - 24);
   if (start > 0 && cutBefore(content, start) !== start) start -= 1;
   const end = cutBefore(content, Math.min(content.length, at + Math.max(len, 1) + 40));
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < content.length ? '...' : '';
-  return `${prefix}${content.slice(start, end).trim()}${suffix}`;
+  return { start, end, pre: start > 0 ? '...' : '', suf: end < content.length ? '...' : '' };
 }
 
 /** `--since` / `--before` (§8.4), plan-chosen grammar: `<n>d`, `<n>h` or
@@ -4935,7 +5520,10 @@ export function decideRelay({ status, signal, lastLine }) {
   if (keys !== 'rc' && keys !== 'rc,reason') return internal;
   if (!Object.values(EXIT).includes(r.rc) || r.rc !== status) return internal;
   if (REASON_EXITS.has(r.rc)) return typeof r.reason === 'string' && Object.hasOwn(REASONS, r.reason) && REASONS[r.reason] === r.rc ? { exit: r.rc, reason: r.reason } : internal;
-  return r.reason === undefined ? { exit: r.rc } : internal;
+  if (r.reason !== undefined) return internal;
+  // A stated `{"rc":1}` is told apart from no result by a field, never a REASONS word (R3): the operator relay prints the arm's
+  // own line for a verb whose pass states its rc 1 (recall-off), and the generic words for a shim that gave nothing.
+  return r.rc === EXIT.INTERNAL ? { exit: EXIT.INTERNAL, stated: true } : { exit: r.rc };
 }
 
 // derived from lossless-claw src/large-files.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
@@ -5417,6 +6005,20 @@ export function decideLeafId({ ccrcId, ccUuid, spanStartUuid, boundaryUuid, plai
  *  the leaf raw for good. *Chosen*. D-4690 (history-raw-leaf-grace) */
 export const RAW_LEAF_GRACE_MS = 5 * 60 * 1000;
 
+/** The newest stamped row's time at or before row `index` of `rows`, in the order `rows` holds (a copy's file
+ *  order): row `index`'s own time when it has one, and a stamp of 0 is a time. Null when no row up to it has one,
+ *  and when `index` is undefined (derive.mjs passes what a copy's uuid map answers). Otherwise `index` is at most
+ *  `rows.length - 1`. Moved from derive.mjs, where it was private (W2-D33), so that W2-2a's as-of cut (W2-D34) reads
+ *  the one definition: lib cannot import derive.mjs, which imports lib. lib's raw-leaf grace reads it through
+ *  derive.mjs (D-4690 (history-raw-leaf-grace)). */
+export function stampAtOrBefore(rows, index) {
+  for (let i = index; i >= 0; i -= 1) {
+    const t = rows[i].ts_ms;
+    if (t !== null) return Number(t);
+  }
+  return null;
+}
+
 /** Whether the file holding a boundary was read to its end late enough to say its summary row is missing. `eofMs`
  *  is the holding file's ingest_files.eof_ms: the start of the last tick that left its cursor at end-of-file.
  *  `boundaryTsMs` is the boundary's time; derive.mjs passes the newest stamped row before a boundary that has none
@@ -5543,8 +6145,9 @@ function readOpFlags(args, spec) {
  *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
  *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
  *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
- *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. A verb B2 does not run
- *  (recall-off is W2's) is `bad-args`. */
+ *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. `recall-off` (W2-1, W2-D27;
+ *  D-5764 (history-w2-recall-off-generation-checks)) takes `<id> [--generation <uuid>]`, `<id> --clear`, or `--clear-all`
+ *  alone; `--generation` is a lowercase UUID on the write form only. Any other verb is `bad-args`. */
 export function parseOpVerbArgs(op, args) {
   const refuse = (reason) => ({ ok: false, reason });
   const ok = (a) => ({ ok: true, args: Object.freeze(a) });
@@ -5598,6 +6201,18 @@ export function parseOpVerbArgs(op, args) {
       const storeId = r.flags['--store-id'] ?? null;
       if (storeId !== null && !UUID_RE.test(storeId)) return refuse('bad-args');
       return ok({ op, storeId });
+    }
+    case 'recall-off': {
+      // Every shape error is bad-args, read before the id grammar, which is bad-id before any path is formed (C66).
+      if (args.length === 1 && args[0] === '--clear-all') return ok({ op, mode: 'clear-all', id: null, generation: null });
+      const r = readOpFlags(args, { '--generation': 'value', '--clear': 'bool' });
+      if (r === null || r.positional.length !== 1) return refuse('bad-args');
+      const generation = r.flags['--generation'] ?? null;
+      const clear = r.flags['--clear'] === true;
+      if (generation !== null && (clear || !UUID_RE.test(generation))) return refuse('bad-args');
+      const id = r.positional[0];
+      if (!idOk(id)) return refuse('bad-id');
+      return ok({ op, mode: clear ? 'clear' : 'write', id, generation });
     }
     default:
       return refuse('bad-args');
@@ -5959,6 +6574,10 @@ export function replayStep(state, r) {
       const before = typeof state.ticksBefore !== 'number' || rec.t < state.ticksBefore;
       return { state, actions: rec.t > state.ticksAfter && before ? [{ do: 'tick', t: rec.t, lagMs: rec.lag_ms }] : [] };
     }
+    case 'recall-off':
+      // W2-1 Task 4 (W2-D30): applied at its own position, so a state row is last-wins in journal order. The executor
+      // inserts the change or gap row DO NOTHING and never reads the directory; seen_ms is never replayed.
+      return { state, actions: [{ do: 'recall-off', rec }] };
     default:
       return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
   }
@@ -6117,8 +6736,16 @@ export function ftsTablesHealthy({ tables, columns }) {
 /** The belt's derivation version (meta fts_belt's `v`). A store whose recorded version differs, a B1 store's absent
  *  state included, re-derives its whole index once (decideBelt, rederivePlan); a generation open across a bump is
  *  restarted, and a completion stamps the version its walk ran under (`gv`, ruling R-version). Bump it with any change
- *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule. */
-export const BELT_VERSION = 1;
+ *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule, and with any change to a layer-2
+ *  field-form rule that can change an index text (D-5746 (history-belt-v2-value-class-reindex)).
+ *  2 (W5h-2): the named value class widened in its field form, which every door reads over its rev 3.6 door's output
+ *  (W5h-2 Task 1, D-5745, R11). Under a re-derivation probe composeDoor counts an owed hit when that reading changes the
+ *  rev 3.6 door's text, which is the text a build at 1 stored, so the generation this bump opens rewrites exactly the rows
+ *  whose text changes, and, as every belt generation does, rows with a pair above the mark or a layer-4 or glue-window
+ *  hit; the node belt step re-redacts every stored node field from its own text. A rollback to a build at 1 reads 2 as
+ *  due, walks once and stamps 1; moving forward reads 1 as due and walks again: safe, since a walk rewrites only rows
+ *  whose probe counted a hit, at the cost of a second walk. */
+export const BELT_VERSION = 2;
 /** The bits a matched stretch must carry in its unit's folded alphabet: SECRET_SEGMENT_MIN base64url characters'
  *  72 bits, the bound §8.3 already sets on a segment. */
 export const BELT_BITS = 72;
@@ -6463,8 +7090,8 @@ function beltHit(idx) {
 /** One index reading's redaction (redactForIndex's readings, the sidecar's raw pass): the three layers, then the belt
  *  over the literal and escape readings only. An FTS term is a run of the literal text, and redactForIndex decodes
  *  the deeper levels itself, each through this. */
-function redactIndexReading(text, idx) {
-  return beltMask(redactLayered(text, idx), idx.belt, false, beltHit(idx));
+function redactIndexReading(text, idx, rs) {
+  return beltMask(redactLayered(text, idx, rs.field), idx.belt, false, beltHit(idx));
 }
 
 const isGlueSep = (c) => c === 0x5f || c === 0x2d;
@@ -6561,8 +7188,9 @@ export function formatBeltState(s) {
  *  holds. `rids`: the units every indexed row is known to carry the belt of, at version `v`. `gen`: the units live at
  *  every tick of the open generation, which opened under version `gv`.
  *  - A unit no longer live leaves `rids` and `gen`: a row indexed while its value is not loaded lacks its belt.
- *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or a live unit at or
- *    below the mark is not in `rids` (its file readable again). A unit above the mark is the pair generation's.
+ *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or an open generation
+ *    (`gen` a list) was recorded under another BELT_VERSION (D-6068), or a live unit at or below the mark is not in
+ *    `rids` (its file readable again). A unit above the mark is the pair generation's.
  *  - Restart (ruling R-version): when due, an open generation whose `gen` is absent (one a build without the belt
  *    opened, or one a due record cleared) or was recorded under another BELT_VERSION covers nothing this version can
  *    stamp, so rederivePlan begins its walk again from cursor 0 rather than finishing one that ran partly under other
@@ -6575,7 +7203,9 @@ export function decideBelt(state, live, mark) {
   const genOk = state.gen !== null && state.gv === BELT_VERSION;
   const next = { v: state.v, rids: state.v === BELT_VERSION ? keep(state.rids) : [], gen: genOk ? keep(state.gen) : null, ...(genOk ? { gv: BELT_VERSION } : {}) };
   const covered = new Set(next.rids);
-  const due = state.v !== BELT_VERSION || live.some((r) => r <= mark && !covered.has(r));
+  // D-6068: a generation another version opened is due. Its walk ran partly under other code, so the stamp it would leave
+  // (this version's, once it completes) would claim rows it never re-cleaned: a roll forward over a rolled-back build's open walk.
+  const due = state.v !== BELT_VERSION || (state.gen !== null && state.gv !== BELT_VERSION) || live.some((r) => r <= mark && !covered.has(r));
   return { due, restart: due && !genOk, next };
 }
 /** The state a completed generation leaves: the units live at every one of its ticks (`gen`), at the version its walk
@@ -6639,10 +7269,15 @@ export const DISPLAY_READINGS_MAX = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
  *  It calls nothing but redactField and redactForIndex (whose readings are redactIndexReading's, the belt included),
  *  so it fails closed as they do (R2). */
 export function redactForDisplay(text, idx) {
-  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);
-  const t = redactField(text, idx);
+  return composeDoor(DOOR_READINGS.redactForDisplay, [text, idx], idx);
+}
+
+/** redactForDisplay's body over one rule set (R11). */
+function redactForDisplayWith(text, idx, rs) {
+  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndexWith(text, idx, rs);
+  const t = redactFieldIn(text, idx, rs.field);
   if (!t.includes('\\')) return t;
-  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
+  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndexWith(span, idx, rs) !== span ? REDACTED_MARK : span));
 }
 
 /** A node's `topics` column as a list (HA2 H-14). The writer stores a JSON array of strings; a column that is not
@@ -6743,7 +7378,7 @@ export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies })
   };
 }
 
-// ── recall: the read verbs' arguments, selects by store version, recall-off's B2 refusals (W1-B2 Task 10) ──
+// ── recall: the read verbs' arguments and selects by store version (W1-B2 Task 10); recall-off's write, decided (W2-1) ──
 //
 // THE ARGUMENT WHITELIST is one table per read verb: §8.2 builds the whitelist from that one list. These are
 // exit 2 bad-args before anything is measured:
@@ -6906,24 +7541,25 @@ export function selectColumns(version, table, cols, schema = SCHEMA_ADDED, alias
   }).join(', ');
 }
 
-/** `recall-off` in B2 (slug history-recall-off-preflight-b2, NEW): the verb that writes recall-off/<id> ships
- *  with W2 (§8.10), and B2 answers only its refusals, in this order:
- *   - an argv off `<id> [--clear]` or `--clear-all` is bad-args;
- *   - an id off ccd's grammar is bad-id, before any path is formed from it (C66);
- *   - then the caller reads $REG/<id>.generation (`generation` null asks it to): unreadable is
- *     generation-unreadable (C67);
- *   - anything else is bad-args, naming W2. */
-export function decideRecallOffPreflight(i) {
-  const a = i.args;
-  const done = (reason) => ({ done: true, exit: EXIT.REFUSED, reason });
-  if (a.length === 1 && a[0] === '--clear-all') return done('bad-args');
-  const shapeOk = a.length >= 1 && a.length <= 2 && typeof a[0] === 'string' && !a[0].startsWith('--')
-    && (a.length === 1 || a[1] === '--clear');
-  if (!shapeOk) return done('bad-args');
-  if (!idOk(a[0])) return done('bad-id');
-  if (i.generation === null) return { done: false, id: a[0] };
-  if (i.generation.state === 'unreadable') return done('generation-unreadable');
-  return done('bad-args');
+/** What `recall-off <id> [--generation G]` writes, decided under the shim's lock (W2-1, W2-D27; D-5764
+ *  (history-w2-recall-off-generation-checks)). `registry` is $REG/<id>.generation read raw now: absent, unreadable, or its
+ *  text (any other state, an over-cap read, is unreadable here too). `want` is the `--generation` argument, or null. One
+ *  trailing LF is trimmed and nothing else: ccd writes the field with no LF, and a padded value is not a generation.
+ *   - unreadable: generation-unreadable, with or without want (C67: a '' written then would put a pre-registered control
+ *     family in the treatment arm);
+ *   - absent, or empty after that trim: '' (the legacy family, §8.4; the hook's "absent or empty" reading), or
+ *     generation-mismatch when want names a generation;
+ *   - a UUID: it, when want is null or equals it; otherwise generation-mismatch;
+ *   - anything else: generation-malformed, with or without want.
+ *  A refusal is `{ ok: false, rc, reason }`, which the executor answers before any write. */
+export function decideRecallOffWrite({ registry, want }) {
+  const refuse = (reason) => ({ ok: false, rc: EXIT.REFUSED, reason });
+  if (registry.state !== 'absent' && registry.state !== 'value') return refuse('generation-unreadable');
+  const raw = registry.state === 'absent' ? '' : registry.value;
+  const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+  if (text === '') return want === null ? { ok: true, generation: '' } : refuse('generation-mismatch');
+  if (!UUID_RE.test(text)) return refuse('generation-malformed');
+  return want === null || want === text ? { ok: true, generation: text } : refuse('generation-mismatch');
 }
 
 
@@ -7121,7 +7757,11 @@ function spanHoldsWord(span) {
 }
 
 /** A break between token spans: whitespace, or one of `"`, `'`, `` ` ``, `,`, `;` and `&`, the characters that end
- *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). */
+ *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). Since D-5745 the field form reads a value
+ *  past `&`, `,`, `;` and either quote where they do not end it (NAMED_VALUE_FIELD_SRC), so such a value is more than
+ *  one token span: when its NAME sits more than ENTRY_REDACT_MARGIN before a window, it is spec §8.3's display
+ *  residual (a match that is not one token span), as a quoted value already was; within the margin the display doors'
+ *  widened reading sees the NAME (composedTokens, D-6071). The spans are unchanged. */
 const TOKEN_BREAK_RE = /[\s"'`,;&]/;
 
 /** A code unit of a token span (`[^\s"'`,;&]`): a margin's far end moves off one, and a partial one that reaches the
@@ -7176,14 +7816,14 @@ function unmarkedLength(s) {
  *  marked the escape-glued spans. redactForIndex's own loop, step for step, so the window knows which reading it is
  *  cut from; Step 1's case `a whole text's window is redactForDisplay's, …` pins the two equal on every reading, through
  *  each text's window inside a longer one (a whole text's window no longer reaches this function). */
-function displayReading(text, idx) {
-  let t = redactIndexReading(text, idx);
+function displayReading(text, idx, rs) {
+  let t = redactIndexReading(text, idx, rs);
   let keep = t;
   let levels = 0;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const deeper = unescapeJsonText(t);
     if (deeper === t) return { text: keep, levels, bound: false };
-    t = redactIndexReading(deeper, idx);
+    t = redactIndexReading(deeper, idx, rs);
     if (t !== deeper) {
       keep = t;
       levels = pass + 1;
@@ -7196,9 +7836,9 @@ function displayReading(text, idx) {
  *  redacted, and the escape-glued spans marked when that reading marked them. A margin read so is comparable with the
  *  read text whichever reading the read text's content chose (finding V15: a margin read through its own choice stays
  *  raw while the read text is shown decoded). */
-function readingAt(text, idx, levels, bound) {
-  let t = redactIndexReading(text, idx);
-  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx);
+function readingAt(text, idx, levels, bound, rs) {
+  let t = redactIndexReading(text, idx, rs);
+  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx, rs);
   return bound ? markEscapeGluedSpans(t) : t;
 }
 
@@ -7268,11 +7908,11 @@ function windowEnd(d, rights, s) {
  *  sequences or escapes at the edge goes with it), through redactForDisplay, then every span (DISPLAY_SPAN_RE) that
  *  holds a word of 8 or more characters in its own readings (spanHoldsWord) replaced by the mark. It reads the window
  *  and the one character beyond each edge, and nothing else. */
-function inexactWindow(t, lo, hi, idx) {
+function inexactWindow(t, lo, hi, idx, rs) {
   let w = t.slice(lo, hi);
   if (lo > 0 && isInexactEdgeByte(t.charCodeAt(lo - 1)) && isInexactEdgeByte(t.charCodeAt(lo))) w = dropLeadingWhile(w, isInexactEdgeByte);
   if (hi < t.length && hi > 0 && isInexactEdgeByte(t.charCodeAt(hi - 1)) && isInexactEdgeByte(t.charCodeAt(hi))) w = dropTrailingWhile(w, isInexactEdgeByte);
-  return { text: redactForDisplay(w, idx).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
+  return { text: redactForDisplayWith(w, idx, rs).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
 }
 
 /** text[from, to) as a read verb shows it, and whether it was cut exactly (spec §8.3 and §8.4; coordinator rulings
@@ -7305,32 +7945,192 @@ function inexactWindow(t, lo, hi, idx) {
  *  Each reading reads at most (to - from) + 2 × ENTRY_REDACT_MARGIN characters, through at most
  *  INDEX_UNESCAPE_PASSES + 1 redactions; an inexact window reads the window once more. No slice splits a surrogate
  *  pair. `idx` is the read's pair index, with its belt (Task 7A). */
-function displayWindow(text, from, to, idx) {
+function displayWindow(text, from, to, idx, rs) {
+  const w = displayWindowRead(text, from, to, idx, rs);
+  return { text: w.text, exact: w.exact };
+}
+
+/** displayWindow, and with it `read`: the reading of the margin-widened text t[a, b) that the cut was made from (step 2's
+ *  `d`), or null where there is none (step 0's whole text, and a window longer than DISPLAY_WINDOW_MAX, which reads no
+ *  margin). An exact window also has `at`, where its text starts in `read` (after the lead drop), so `text` is
+ *  `read.slice(at, at + text.length)` and a cut edge can be decided by the whole token of `read` it split (D-6071's
+ *  union). An inexact window whose cut could not be shown exact has its `read` and no `at`. */
+function displayWindowRead(text, from, to, idx, rs) {
   const t = String(text);
   const lo = pairStart(t, Math.max(0, Math.min(from, t.length)));
   const hi = Math.max(lo, pairStart(t, Math.max(0, Math.min(to, t.length))));
-  if (lo === 0 && hi === t.length) return { text: redactForDisplay(t, idx), exact: true };
-  if (hi - lo > DISPLAY_WINDOW_MAX) return inexactWindow(t, lo, hi, idx);
+  if (lo === 0 && hi === t.length) return { text: redactForDisplayWith(t, idx, rs), exact: true, read: null, whole: true };
+  if (hi - lo > DISPLAY_WINDOW_MAX) return { ...inexactWindow(t, lo, hi, idx, rs), read: null };
   let a = pairStart(t, Math.max(0, lo - ENTRY_REDACT_MARGIN));
   while (a > 0 && a < lo && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a))) a += 1;
   let b = pairStart(t, Math.min(t.length, hi + ENTRY_REDACT_MARGIN));
   while (b < t.length && b > hi && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b))) b -= 1;
   const leadCut = a > 0 && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a));
   const tailCut = b < t.length && b > 0 && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b));
-  const read = displayReading(t.slice(a, b), idx);
+  const read = displayReading(t.slice(a, b), idx, rs);
   const d = read.text;
-  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound)) : [''];
-  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound)) : [''];
+  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound, rs)) : [''];
+  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound, rs)) : [''];
   const s0 = windowStart(d, lefts);
   const e0 = s0 === -1 ? -1 : windowEnd(d, rights, s0);
-  if (s0 === -1 || e0 === -1) return inexactWindow(t, lo, hi, idx);
+  if (s0 === -1 || e0 === -1) return { ...inexactWindow(t, lo, hi, idx, rs), read: d };
   const s = pairStart(d, s0);
   const e = Math.max(s, pairStart(d, e0));
   let out = d.slice(s, e);
-  if (leadCut) out = dropLeadingWhile(out, isTokenByte);
+  let ds = s;
+  if (leadCut) {
+    const n = out.length;
+    out = dropLeadingWhile(out, isTokenByte);
+    ds += n - out.length;
+  }
   if (tailCut) out = dropTrailingWhile(out, isTokenByte);
-  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return inexactWindow(t, lo, hi, idx);
-  return { text: out, exact: true };
+  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return { ...inexactWindow(t, lo, hi, idx, rs), read: d };
+  return { text: out, exact: true, read: d, at: ds };
+}
+
+/** D-6071 (review 711 F1; the scoped review's FR1-A and FR1-C; review 725 F1 and its amendment): a display window or snippet that
+ *  composes the widened rules BEFORE its cut. The cut stays the base door's, byte for byte (the margins are read through BASE_RULES
+ *  alone, so every alignment is the one rev 3.6 made, and a snippet's cut is snippetBounds' over the base window text). The door is
+ *  v2(maskUnprinted(v2(shown))), `shown` being the base door's text. The pre-round composition is v2(shown), so v2 reads it FIRST,
+ *  every pair of it intact, and the rest only replaces spans of that output by marks: whatever v2(shown) masked stays masked, by
+ *  construction, with no position map. The widened rules are then read over the base reading of the margin-widened text, `read`,
+ *  which holds the NAME a cut removed (composedTokens), and a token of v2(shown) is replaced by the mark unless it is KEPT
+ *  (maskUnprinted). relayUnion's pattern, over tokens: the output only replaces spans of the pre-round output with marks, so it is
+ *  subtractive over it, over the base output, and the last v2 pass is subtractive too.
+ *  A token (UNION_TOKEN_RE) is a mark, or a maximal run of characters that are neither whitespace nor one of `"`, `'`, `` ` ``,
+ *  `,`, `;` and `&` (TOKEN_BREAK_RE's sense) and hold no mark, so a word in any script, and the punctuation of a value, are
+ *  masked with it. What can still print between tokens is whitespace and those six break characters: a value's separators,
+ *  never its words. A token of v2's output is kept when three memberships hold: (1) the widened reading prints the same characters
+ *  anywhere (relayUnion's same-characters residual, at the level of the token); (2) the shown text holds it as a token too, a
+ *  deliberate rule at the string level: a token v2 JOINED or DECODED (a value a colour sequence split, an escape) is masked unless
+ *  the text the cut shows holds the same string as a token (between its split-mark edges), availability only, and for that joined or
+ *  decoded class the display doors never hand back a masking 8e2ff9040 had; (3) the second reading: for a snippet the tokens of v2
+ *  over the unframed cut slice (preRoundTokens, which changes a few snippet outputs and only masks more), for a window the tokens of
+ *  the pre-round output itself, v2 over its text with the note (tokensOf, null where v2 rewrote nothing). The window's was dropped as redundant in 66864b647 and came
+ *  back on review 744 F2: where the cut splits a mark, the tokens of the piece between the split edges leave the mark's fragment out,
+ *  and v2's own output's tokens join it to its neighbour, so a token touching a fragment was masked by 8e2ff9040 and printed once
+ *  the reading was gone. A token the cut itself split at an edge is decided by the WHOLE token of `read` around
+ *  that edge, not by the fragment, and only where v2 left that edge as the cut made it: the edge token is the same token in v2's
+ *  output as in `shown` (a split mark is kept as written when v2's output starts, or ends, with the cut part of it, and the fragment
+ *  of a split mark is no token of `shown`). Where v2 rewrote the edge, or for an inexact window, whose text is not a slice of `read`,
+ *  the edge token is decided as itself: masked unless the widened reading prints it as it stands, `shown` holds it as a token and
+ *  the second reading holds it (fail closed, availability only). The one edge where the door takes v2's rewritten
+ *  text is the snippet's right edge whenever v2's output does not end with the closing `...`: the cut ended inside a value or a
+ *  split mark, or in a value v2 reads glued to the `...`, and v2 takes the `...` into the mark it makes. That is safe because in
+ *  every such case v2's output ends in a mark (measured: 547, 550 and 666 cases over three seeds, all ending in one), which can
+ *  only mask; the door adds no second `...`. Nothing changes when the widened reading
+ *  changes nothing; a window with no margin read (`read` null: longer than DISPLAY_WINDOW_MAX) is left alone. Residuals: a NAME more
+ *  than ENTRY_REDACT_MARGIN before the window, and a closing quote more than ENTRY_REDACT_MARGIN past its end (the value reads
+ *  unquoted in `read`), are not in the margin the widened reading reads. Two more classes print a value 8e2ff9040 masked, both ruled
+ *  exceptions to bar (c) (the plan's D-6071 gives the definitions and the figures): (i) the first reading's token-level
+ *  same-characters residual, a token the widened reading prints elsewhere in the margin text (a CONTROL, (j24)); (ii) a value in
+ *  JSON-escaped double quotes whose NAME an earlier unit's open or odd double quote swallows (a CONTROL, (j26)). */
+const UNION_TOKEN_RE = new RegExp(`${MARK_RE_SRC}|(?:(?!${MARK_RE_SRC})[^\\s"'\`,;&])+`, 'g');
+
+/** The first reading of the union (D-6071): the tokens the widened rules (CONTEXT_RULES) print over `read`, the base reading of the
+ *  margin-widened text, as a set. null where `read` is null, or the widened reading changes nothing: nothing is then masked. */
+function composedTokens(read, idx) {
+  if (read === null) return null;
+  const dc = redactForDisplayWith(read, idx, CONTEXT_RULES);
+  if (dc === read) return null;
+  const printed = new Set();
+  for (const m of dc.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) printed.add(m[0]);
+  return printed;
+}
+
+/** What a cut at position `p` of `d` splits: null when it splits no token (an end of `d`, a break either side, or a mark's
+ *  edge); `{ mark }` (where that mark starts) when it falls inside a mark; else `{ token }`, the whole token of `d` around it. */
+function splitAt(d, p) {
+  if (p <= 0 || p >= d.length) return null;
+  if (!isTokenByte(d.charCodeAt(p - 1)) || !isTokenByte(d.charCodeAt(p))) return null;
+  const j = d.lastIndexOf(REDACTED_MARK, p - 1);
+  if (j !== -1) {
+    if (p < j + REDACTED_MARK.length) return { mark: j };
+    if (p === j + REDACTED_MARK.length) return null;
+  }
+  const k = d.indexOf(REDACTED_MARK, p);
+  if (k === p) return null;
+  let a = p;
+  while (a > 0 && isTokenByte(d.charCodeAt(a - 1))) a -= 1;
+  let b = p;
+  while (b < d.length && isTokenByte(d.charCodeAt(b))) b += 1;
+  if (j !== -1 && j + REDACTED_MARK.length > a) a = j + REDACTED_MARK.length;
+  if (k !== -1 && k < b) b = k;
+  return { token: d.slice(a, b) };
+}
+
+const UNION_HEAD_RE = new RegExp(UNION_TOKEN_RE.source, 'y');
+
+/** The token of `s` that starts at its first character and the one that ends at its last, or null for a side where `s` has none. */
+function edgeTokens(s) {
+  UNION_HEAD_RE.lastIndex = 0;
+  const head = UNION_HEAD_RE.exec(s);
+  let r = s.length;
+  while (r > 0 && isTokenByte(s.charCodeAt(r - 1))) r -= 1;
+  let last = null;
+  for (const m of s.slice(r).matchAll(UNION_TOKEN_RE)) last = m.index + m[0].length === s.length - r ? m[0] : null;
+  return { head: head === null ? null : head[0], last };
+}
+
+/** The snippet door's second reading (D-6071, review 721 item 1): the tokens v2 prints over `slice`, the unframed cut slice of the base
+ *  window text, as 8e2ff9040 defined it. It changes a few snippet outputs, and only by masking more. null when v2 changes nothing: it
+ *  then masks nothing. The window door's second reading is tokensOf(v2's own output) (composedWindow): it was dropped as redundant in
+ *  66864b647 (0 outputs changed, but none of the measured windows split a mark) and restored on review 744 F2, where a cut that splits
+ *  a mark leaves the mark's fragment out of the piece's tokens. */
+function preRoundTokens(slice, idx) {
+  const v2 = redactForDisplayWith(slice, idx, CONTEXT_RULES);
+  return v2 === slice ? null : tokensOf(v2);
+}
+
+/** The tokens of `s` (UNION_TOKEN_RE) other than the mark, as a set: the second reading's membership (preRoundTokens, composedWindow). */
+function tokensOf(s) {
+  const tokens = new Set();
+  for (const m of s.matchAll(UNION_TOKEN_RE)) if (m[0] !== REDACTED_MARK) tokens.add(m[0]);
+  return tokens;
+}
+
+/** `piece`, v2 over `shown` (the base door's text), with each token masked that is not kept. A token is kept when ALL of these hold:
+ *  (1) the first reading (`printed`) prints it; (2) `shown` holds the same string as a token (the third membership, a deliberate
+ *  rule at the string level: a token v2 joined or decoded, such as a value a colour sequence split, is masked unless `shown` also
+ *  holds that string as a token, availability only); (3) `pre`, where there is one (the second reading: the snippet's preRoundTokens, the window's tokensOf of the pre-round output itself), holds it. `shown` is tokenized
+ *  between its split-mark edges, as `piece` is (lo, hi): the fragment of a mark the cut splits is no token, so the NAME before a split
+ *  mark stays a token even where v2 completes that mark. `shown` is `d.slice(p0, p0 + shown.length)` (`d` null for an inexact window,
+ *  which is not a slice of its read: no edge leniency). A token the cut at either end splits is decided by its whole token in `d`
+ *  (splitAt), and a mark it splits is kept as written, but only where v2 left that edge as the cut made it: the edge token is the same
+ *  token in `piece` as in `shown`, or `piece` starts (ends) with the cut part of the edge mark. Otherwise the fragment is a token of
+ *  its own, decided as itself (the three memberships above). The one edge where the door takes v2's rewritten text is the snippet's
+ *  right edge whenever v2's output does not end with the closing `...` (the cut ended inside a value or a split mark, or in a value
+ *  v2 reads glued to the `...`): v2 takes the `...` into the mark it makes and the caller adds no second one. In every such case
+ *  v2's output ends in a mark (547, 550 and 666 cases over three seeds, all), which can only mask. */
+function maskUnprinted(piece, shown, printed, d, p0, pre = null) {
+  const p1 = p0 + shown.length;
+  let m0 = d === null ? null : splitAt(d, p0);
+  let m1 = d === null ? null : splitAt(d, p1);
+  const from = m0 !== null && m0.mark !== undefined ? Math.min(shown.length, m0.mark + REDACTED_MARK.length - p0) : 0;
+  const to = m1 !== null && m1.mark !== undefined ? Math.max(from, shown.length - (p1 - m1.mark)) : shown.length;
+  const held = new Set(shown.slice(from, to).match(UNION_TOKEN_RE) ?? []);
+  if (m0 !== null && m0.mark !== undefined && !piece.startsWith(shown.slice(0, m0.mark + REDACTED_MARK.length - p0))) m0 = null;
+  if (m1 !== null && m1.mark !== undefined && !piece.endsWith(shown.slice(Math.max(0, shown.length - (p1 - m1.mark))))) m1 = null;
+  let lo = 0;
+  let hi = piece.length;
+  if (m0 !== null && m0.mark !== undefined) lo = Math.min(hi, m0.mark + REDACTED_MARK.length - p0);
+  if (m1 !== null && m1.mark !== undefined) hi = Math.max(lo, piece.length - (p1 - m1.mark));
+  const mid = piece.slice(lo, hi);
+  const leftFull = lo === 0 && m0 !== null && m0.token !== undefined ? m0.token : null;
+  const rightFull = hi === piece.length && m1 !== null && m1.token !== undefined ? m1.token : null;
+  const edge = leftFull !== null || rightFull !== null ? edgeTokens(shown) : null;
+  let out = piece.slice(0, lo);
+  let at = 0;
+  for (const m of mid.matchAll(UNION_TOKEN_RE)) {
+    const tok = m[0];
+    out += mid.slice(at, m.index);
+    at = m.index + tok.length;
+    let full = tok;
+    if (leftFull !== null && m.index === 0 && tok === edge.head) full = leftFull;
+    else if (rightFull !== null && at === mid.length && tok === edge.last) full = rightFull;
+    out += tok === REDACTED_MARK || (printed.has(full) && held.has(tok) && (pre === null || pre.has(tok))) ? tok : REDACTED_MARK;
+  }
+  return out + mid.slice(at) + piece.slice(hi);
 }
 
 /** text[from, to) as a read verb shows it (displayWindow): the exact cut of its redacted context, or an inexact window
@@ -7339,8 +8139,34 @@ function displayWindow(text, from, to, idx) {
  *  (`from` at or before 0, `to` at or past its length) has no margin, so it is always exact and IS redactForDisplay's
  *  reading, whatever its length (displayWindow's step 0, ahead of the DISPLAY_WINDOW_MAX guard). */
 export function redactDisplayWindow(text, from, to, idx) {
-  const w = displayWindow(text, from, to, idx);
-  return w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`;
+  return composeDoor(DOOR_READINGS.redactDisplayWindow, [text, from, to, idx], idx);
+}
+
+/** A display window composed (D-6071; review 725 F1): v2 over the base window as the base door shows it (its text, with the inexact
+ *  note ahead of an inexact one), the pre-round composition; then each token of that output replaced by the mark unless the
+ *  widened reading of the window's margin-widened text prints it AND the window's own text holds it as a token AND the tokens of that
+ *  very v2 output hold it (the second reading, null where v2 rewrote nothing; maskUnprinted; an edge token keeps its whole-token
+ *  decision only where v2 left the edge as it was). v2 reads the result last, in
+ *  DOOR_READINGS. If v2 rewrote the inexact note, the text is one mark. A window of the whole text is redactForDisplay's reading
+ *  and is left to v2. */
+function composedWindow(w, idx) {
+  const printed = w.whole === true ? null : composedTokens(w.read, idx);
+  if (printed === null) return w;
+  const note = w.exact ? '' : `${DISPLAY_INEXACT_NOTE}\n`;
+  const pre = redactForDisplayWith(`${note}${w.text}`, idx, CONTEXT_RULES);
+  if (!pre.startsWith(note)) return { ...w, text: REDACTED_MARK };
+  // the second reading: the tokens of v2's own output, `pre` whole (a mark fragment stays joined to its neighbour); null where v2 rewrote nothing
+  const second = pre === `${note}${w.text}` ? null : tokensOf(pre);
+  return { ...w, text: maskUnprinted(pre.slice(note.length), w.text, printed, w.at === undefined ? null : w.read, w.at ?? 0, second) };
+}
+
+/** redactDisplayWindow's body over one rule set (R11). With `composed` it answers `{ base, out }`: the base door's text and
+ *  the composed door's (D-6071, composedWindow), both from the one displayWindowRead, so the base is computed once. */
+function redactDisplayWindowWith(text, from, to, idx, rs, composed = false) {
+  const fmt = (w) => (w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`);
+  if (!composed) return fmt(displayWindow(text, from, to, idx, rs));
+  const w = displayWindowRead(text, from, to, idx, rs);
+  return { base: fmt(w), out: fmt(composedWindow(w, idx)) };
 }
 
 /** How far past the snippet's hit, each way, grep's snippet reads its RAW window (*chosen*): SNIPPET_MAX, more than
@@ -7354,15 +8180,46 @@ const SNIPPET_READ = SNIPPET_MAX;
  *  text's first 2 × SNIPPET_READ characters are read, and snippetWindow takes its first 80 of them. An inexact window
  *  is shown with DISPLAY_INEXACT_NOTE ahead of the snippet, on the snippet's one line. */
 export function displaySnippet(text, terms, idx) {
+  return composeDoor(DOOR_READINGS.displaySnippet, [text, terms, idx], idx);
+}
+
+/** displaySnippet's body over one rule set (R11). With `composed` it answers `{ base, out }` (redactDisplayWindowWith's): the base is
+ *  the framed snippet `H + core + T`, H being the inexact note, the `...` the read adds and snippetBounds' `...`, `core` the trimmed
+ *  slice of the base window text that snippetBounds cuts, T the closing `...`s. The composed snippet is the pre-round composition's
+ *  reading of that very text, v2 over the framed base snippet, with `core`'s part of it masked as a window's is (composedTokens,
+ *  maskUnprinted: kept only where the widened reading prints the token, `core` holds it as a token, and v2 over the unframed
+ *  slice prints it, preRoundTokens; the edge tokens are the whole tokens of the reading around the cut, where v2 left them as the
+ *  cut made them), in its frame. If v2 rewrote H, `core` is one mark; where v2 took T into a mark it completed (a value or a split
+ *  mark the cut ended inside), its text is the output, with no second T. */
+function displaySnippetWith(text, terms, idx, rs, composed = false) {
   const content = String(text);
   const { at, len } = snippetSpan(content, terms);
   const from = at === -1 ? 0 : Math.max(0, at - SNIPPET_READ);
   const to = at === -1 ? Math.min(content.length, 2 * SNIPPET_READ) : Math.min(content.length, at + Math.max(len, 1) + SNIPPET_READ);
-  const w = displayWindow(content, from, to, idx);
+  const w = composed ? displayWindowRead(content, from, to, idx, rs) : displayWindow(content, from, to, idx, rs);
+  // the frame the read puts round a snippet: its head (the note and the `...` before) and its tail (the `...` after)
+  const head = (shown) => `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${from > 0 && !shown.startsWith('...') ? '...' : ''}`;
+  const tail = (shown) => (to < content.length && !shown.endsWith('...') ? '...' : '');
+  const fmt = (shown) => `${head(shown)}${shown}${tail(shown)}`;
   const shown = snippetWindow(w.text, terms);
-  const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
-  const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
-  return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
+  if (!composed) return fmt(shown);
+  const b = snippetBounds(w.text, terms);
+  const printed = composedTokens(w.whole === true ? w.text : w.read, idx);
+  if (printed === null) return { base: fmt(shown), out: fmt(shown) };
+  const slice = w.text.slice(b.start, b.end);
+  const core = slice.trim();
+  const H = `${head(shown)}${b.pre}`;
+  const T = `${b.suf}${tail(shown)}`;
+  const framed = `${H}${core}${T}`;
+  const pre = redactForDisplayWith(framed, idx, CONTEXT_RULES);
+  if (!pre.startsWith(H)) return { base: fmt(shown), out: `${H}${REDACTED_MARK}${T}` };
+  // v2 reads a value to the end of its token, so it takes the closing `...` into a mark it makes of a value the cut ended inside
+  // (pre then does not end with T, and holds that mark where T was): the output is that text, with no second T
+  const keepsT = pre.length - T.length >= H.length && pre.endsWith(T);
+  const piece = pre.slice(H.length, keepsT ? pre.length - T.length : pre.length);
+  const p0 = (w.whole === true ? 0 : w.at ?? 0) + b.start + (slice.length - slice.trimStart().length);
+  const masked = maskUnprinted(piece, core, printed, w.whole === true ? w.text : w.at === undefined ? null : w.read, p0, preRoundTokens(slice, idx));
+  return { base: fmt(shown), out: `${H}${masked}${keepsT ? T : ''}` };
 }
 
 // ── describe: arguments (W1-B2 Task 15; spec §8.4) ────────────────────────────────────────────────────

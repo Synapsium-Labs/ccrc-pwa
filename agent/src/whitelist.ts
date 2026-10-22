@@ -355,6 +355,7 @@ export const REQUIRED_VERB_FLAG = {
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
   'ws-collect': '--expect',
+  'ws-title': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -620,6 +621,13 @@ export const EXEC_WHITELIST = {
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
     // `['ws-audit','--session']`. ccd recomputes the token and compares it inside the reap lock before anything moves.
     ['ws-collect', '--expect'],
+    // RENAME AN EXISTING WORKSPACE (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text>
+    // | --clear)` writes a workspace's operator title and its `named` marker, or removes both, and nothing else — no
+    // worktree, branch, transcript or session is touched. Granted on `--session` and ENROLLED in `REQUIRED_VERB_FLAG`
+    // above for `route`'s and `win-size`'s reason: the flag is the verb's whole argument surface, a bare grant would
+    // admit every positional form it might grow, and the id it names is the PWA's. ccd re-proves every gate on the box
+    // (a real session, a workspace and not a main checkout, a clean title).
+    ['ws-title', '--session'],
   ],
 } as const satisfies ExecWhitelist;
 

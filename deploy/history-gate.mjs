@@ -20,7 +20,7 @@
 // here (O14), and FACT_KINDS and LABELS have this file as their one declaring file under deploy/ and server/test/.
 // Two class words of the model catalogue are never spelled in this file, not even in a comment, so the catalogue's
 // class-enumeration scan in single-definition.test.ts never counts it.
-import { EXIT, UUID_RE, canonicalJson, pickHoldingCopy, producerOf, sha256Hex } from '../ccd/history/lib.mjs';
+import { EXIT, RECALL_OFF_META, UUID_RE, canonicalJson, isSyntheticModel, pickHoldingCopy, producerOf, sha256Hex } from '../ccd/history/lib.mjs';
 
 // ── The window (W2-D14) ──────────────────────────────────────────────────────────────────────────────────────
 /** K: a post-compaction window is the first K assistant turns after a main boundary (spec §10.2, Q14). */
@@ -209,27 +209,20 @@ export function familyKey(storeId, ccrcId, generation) {
  *    state: 'measured'|'unmeasured', start_ms: number, end_ms: number|null, end_inclusive: boolean,
  *    turns: number, calls: number, with_call: boolean}} Window */
 
-/** TEMPORARY (W2-D17): Claude Code's own notices carry an angle-bracketed model name and are no backend's turn.
- *  W2-1 extracts lib's isSyntheticModel, has backendOf use it, and rewires this file to import it in place of this
- *  module-local test. A null or empty model is not synthetic: that row stays a turn.
- *  @param {string|null} model @returns {boolean} */
-function isSyntheticLocal(model) {
-  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');
-}
-
 /** One API response's key (W2-D14): msg_id, else request_id, else the entry's own uuid.
  *  @param {RawRow} row @returns {string} */
 export function turnKey(row) {
   return row[2] ?? row[3] ?? row[4];
 }
 
-/** A copy's assistant turns in file order (W2-D14): synthetic rows dropped, consecutive rows with one key grouped.
+/** A copy's assistant turns in file order (W2-D14): synthetic rows dropped through lib's isSyntheticModel (W2-D17; a
+ *  null or empty model is not synthetic, so that row stays a turn), consecutive rows with one key grouped.
  *  @param {RawRow[]} rows @returns {Turn[]} */
 export function turnsOf(rows) {
   /** @type {Turn[]} */
   const turns = [];
   for (const row of rows) {
-    if (isSyntheticLocal(row[5])) continue;
+    if (isSyntheticModel(row[5])) continue;
     const key = turnKey(row);
     const last = turns.length === 0 ? null : turns[turns.length - 1];
     if (last !== null && last.key === key) last.rows.push(row);
@@ -477,11 +470,6 @@ export function activeFamilies(storeId, census, opts = {}) {
 // measure-history.py report into keyed families with their windows, or refuses with one GATE_REASONS word and no
 // partial answer (W2-D22), re-checking each report's script_sha256 against the record's gate_code (W2-D24).
 
-/** TEMPORARY (W2-D23): the presence record's meta prefix (W2-D30), spelled here only until W2-1 defines
- *  `RECALL_OFF_META` in lib.mjs, replaces this binding with an import of it and adds the Python twin pin. Module-
- *  local and never exported, so no other module can come to read this spelling. */
-const RECALL_OFF_PREFIX_LOCAL = 'recall_off:';
-
 /** A key's ms field: a decimal integer with no sign, no fraction and no leading zero. */
 const RECALL_OFF_MS_RE = /^(?:0|[1-9][0-9]*)$/;
 
@@ -505,8 +493,8 @@ function recallOffOffGrammar(k, why) {
  *   | {kind: 'other'}}
  */
 export function parseRecallOffRow(k, v) {
-  if (typeof k !== 'string' || !k.startsWith(RECALL_OFF_PREFIX_LOCAL)) return { kind: 'other' };
-  const rest = k.slice(RECALL_OFF_PREFIX_LOCAL.length);
+  if (typeof k !== 'string' || !k.startsWith(RECALL_OFF_META)) return { kind: 'other' };
+  const rest = k.slice(RECALL_OFF_META.length);
   const kind = rest.startsWith('change:') ? 'change' : rest.startsWith('gap:') ? 'gap' : null;
   if (kind === null) return { kind: 'other' };
   const tail = rest.slice(kind.length + 1);

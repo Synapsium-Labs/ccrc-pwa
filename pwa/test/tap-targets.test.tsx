@@ -22,7 +22,7 @@ import { act, cleanup, render, screen, fireEvent } from '@testing-library/react'
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
-import { declValue, norm, ruleIn, stripComments } from './cssRule';
+import { declValue, norm, rootBody, ruleIn, stripComments } from './cssRule';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
@@ -150,7 +150,7 @@ describe('the tap-target token', () => {
   it('is the 44px acceptance criterion, so every rule below inherits it from one place', () => {
     // The DECLARATION, not the three spaces tokens.css currently aligns it
     // with: a formatter closing that gap is not a regression in the tap floor.
-    expect(declValue(ruleIn(tokensCss, ':root'), '--tap-min')).toBe('44px');
+    expect(declValue(rootBody(tokensCss), '--tap-min')).toBe('44px');
   });
 });
 
@@ -524,7 +524,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     // rather than the "no answer yet" loading state (review finding 19).
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
+    expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toHaveClass('run-open');
   });
 });
 
@@ -1080,10 +1080,10 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       // density role (`min-h-row`): Refined's default 52px, above the 44px token, and held to the token everywhere but
       // under a fine pointer by skin-identity.test.ts's floor case (f2). W5 edits neither; the Docs item adds no rule
       // that could lower it.
-      const token = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--tap-min') ?? 'NaN');
+      const token = Number.parseFloat(declValue(rootBody(tokensCss), '--tap-min') ?? 'NaN');
       const menu = /(?:^|\s)min-h-(tap|row|\[(\d+)px\])(?:\s|$)/.exec(LIST_ROW);
       expect(menu, LIST_ROW).not.toBeNull();
-      const rowH = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--row-h') ?? 'NaN');
+      const rowH = Number.parseFloat(declValue(rootBody(tokensCss), '--row-h') ?? 'NaN');
       const floor = menu?.[1] === 'tap' ? token : menu?.[1] === 'row' ? rowH : Number(menu?.[2]);
       expect(floor >= token, `${String(menu?.[0])}: ${floor}px against --tap-min ${token}px`).toBe(true);
       // docs.css may carry OVERFLOW rules for the two (a long branch must not push the word off the row), but no rule
@@ -1121,5 +1121,21 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'More' }));
       expect(screen.getByRole('button', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
     });
+  });
+});
+
+describe('TextLink stays inside a line of text — a link alone is a control', () => {
+  // TextLink has no tap floor by contract (ui/src/primitives/text-link.tsx: WCAG 2.5.8's in-a-sentence exemption).
+  // The census grants that exemption to every TextLink, so a TextLink that is the ONLY thing in its element — the
+  // paused Cleanup pause card's resume door was one, 14–16px tall on a phone — would pass every row above. A link
+  // that stands alone is `buttonVariants` on an anchor (PrSheet's "Open on GitHub").
+  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx$/.test(e.name) ? [path.join(dir, e.name)] : []);
+
+  it('no element in the app holds a TextLink and nothing else', () => {
+    const alone = /<[a-zA-Z][^<>]*>\s*<TextLink\b[^]*?<\/TextLink>\s*<\//g;
+    const hits = files(path.join(import.meta.dirname, '..', 'src')).flatMap((f) =>
+      [...readFileSync(f, 'utf8').matchAll(alone)].map(() => path.relative(path.join(import.meta.dirname, '..'), f)));
+    expect(hits).toEqual([]);
   });
 });

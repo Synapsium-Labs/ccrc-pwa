@@ -2452,7 +2452,9 @@ button.proj-card-pool::before {
 }
 .run-row .run-glyph { color: var(--ink-tertiary); }
 .run-row .run-state { font-size: var(--fs-meta); color: var(--ink-secondary); }
-.run-ws { font-size: var(--fs-sm); }
+/* D-6170: the row's name is the programme's title and wave in words; it wraps
+   and never ellipsizes, so a long title stays whole at every width. */
+.run-name { font-size: var(--fs-sm); overflow-wrap: anywhere; }
 /* F4 (cross-repo): which repo this run is in, and whether that is its
    programme's home. Scoped under `.run-row` — self-grounded above, background
    and colour both set — so these inherit the same recovered ground
@@ -3240,27 +3242,8 @@ button.proj-card-pool::before {
    contrast gate already measures; the tag and date lines take the sheet's own
    ink. In the sheet the notes read at the prose size rather than the Settings
    row's compact one.
-   ≥900 the panel is a centred dialog (the skins rules' desktop arm for a sheet,
-   which the shared Sheet does not have yet): this rule is unlayered, so it
-   re-places the primitive's layered bottom-sheet utilities — all four insets
-   to 0, auto margins and a content height centre it, the corners all round. */
+   ≥900 the panel is the Sheet's own centred dialog (D-5933), size lg. */
 .whats-new-sheet .settings-release-notes { font-size: var(--fs-sm); }
-@media (min-width: 900px) {
-  .whats-new-panel {
-    inset: 0;
-    margin: auto;
-    width: min(40rem, calc(100vw - 2 * var(--sp-8)));
-    height: fit-content;
-    max-height: calc(100dvh - 2 * var(--sp-8));
-    border-radius: var(--r-xl);
-  }
-  /* vaul draws an `::after` under a bottom drawer (`top: 100%; height: 200%`,
-     the panel's own ground) to cover an overscroll pull. Under a centred panel
-     it is a strip of sheet below the dialog. vaul injects that rule unlayered at
-     runtime, after this sheet, at higher specificity, so only importance removes
-     it — the handle-ground precedent in `sheet.tsx`. */
-  .whats-new-panel::after { content: none !important; }
-}
 
 /* HaltBanner (centralised-update programme wave 14, R15(a)): the home screen's halt, with each halting node's Ack
    in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
@@ -3307,13 +3290,8 @@ button.proj-card-pool::before {
 }
 
 /* ------------------------------------------------------------------ *
- *  Appearance — the theme picker (SettingsScreen.tsx).                *
- *                                                                     *
- *  THE SWATCHES CARRY `data-theme` THEMSELVES, so the five chips in   *
- *  each row resolve that palette's own tokens rather than a copy of   *
- *  them. Nothing here names a colour: every value below is a token,   *
- *  and inside a stamped swatch the token resolves to the palette      *
- *  being previewed. That is why there is no list of hexes to drift.   *
+ *  Appearance — the Layout picker's row (AppearanceRow.tsx). Theme is *
+ *  a preview grid since settings Task R2e (settings.css, D-5503).     *
  * ------------------------------------------------------------------ */
 /* The radio rides the NAME's line (D-5458): on a phone the note wraps to two
    or three lines, and a radio centred on the whole row floated beside the
@@ -3341,41 +3319,10 @@ button.proj-card-pool::before {
   min-width: 0;
   flex: 1;
 }
-/* The name and its swatch, on one line — the swatch is the name's preview, so
-   it sits beside it rather than at the row's far edge (1400px away at 1920).
-   Wraps under the name only if a phone cannot fit both. */
-.settings-theme-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
 .settings-theme-name {
   font-family: var(--family-ui);
   font-size: var(--fs-ui);
   color: var(--ink-primary);
-}
-/* A group heading inside the fieldset — not a second <legend>, which would be
-   invalid, and not a token the screen reader reads as a control. */
-.settings-theme-group {
-  margin-top: var(--sp-3);
-}
-.settings-theme-swatch {
-  display: flex;
-  flex: none;
-  gap: 0;
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  /* The hairline keeps a light palette's white surface chip from dissolving
-     into a light THEME's own background. Decorative — no contrast claim, the
-     same exemption every other hairline in this file takes. */
-  border: 1px solid var(--edge-strong);
-}
-.settings-theme-swatch i {
-  display: block;
-  width: 14px;
-  height: 22px;
 }
 
 /* ── reduced motion, part two ──────────────────────────────────────────
@@ -3441,3 +3388,73 @@ button.proj-card-pool::before {
   .fit-full { display: inline; }
   .fit-short { display: none; }
 }
+
+/* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays
+   sticky against the fleet column, and a fleet with two banners or fewer lays out as it did before the stack. A
+   folded slot is `hidden`; the attribute selector is needed because `display: contents` would beat the UA's
+   `[hidden]` rule. */
+.banner-slot { display: contents; }
+.banner-slot[hidden] { display: none; }
+/* "+n more" sits under the banners it folds, at the end of the row. */
+.banner-more {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-2);
+}
+
+/* The compact gauges (W2 Task S2c, CompactGauges.tsx): one group, one door to /accounts, on the tap floor like the
+   full strip. Layout only: the name's ink is its lane hue, the meter paints itself (meter.tsx). In `bar` and `led`
+   the lanes are one row, one line tall, that wraps and clips: a gauge that does not fit whole wraps out of sight (the
+   door counts it into "+n"), so no gauge shrinks under its floor or paints over its neighbour. */
+.accounts-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: var(--tap-min);
+  overflow: hidden;
+  cursor: pointer;
+}
+.accounts-compact-lanes {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--sp-3);
+  min-width: 0;
+  height: 1.5em;
+  overflow: hidden;
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+}
+.accounts-compact[data-compact='grid'] .accounts-compact-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  height: auto;
+}
+.accounts-compact-gauge {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 1.5em;
+  min-width: 0;
+}
+/* The floor in `bar` and `led`: a 6ch name, the 40px meter, a 5ch reading ("reset"). A name past 12ch truncates, so
+   a gauge's natural width is bounded and one long name never wraps the rest out. */
+.accounts-compact:not([data-compact='grid']) .accounts-compact-gauge {
+  min-width: calc(6ch + 40px + 5ch + 2 * var(--sp-1));
+}
+.accounts-compact-name { max-width: 12ch; }
+.accounts-compact-pct,
+.accounts-compact-more {
+  flex: none;
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.accounts-compact-pct { min-width: 5ch; }
+/* A gauge the measure hid (`hiddenGauges`: wrapped, or cut at the row's edge) is not drawn, and moves nothing, so
+   the measure stays true; its lane is in the "+n". With every placed gauge hidden the "+n" leads (W2 Task S4b). */
+.accounts-compact-gauge[data-clipped] { visibility: hidden; }
+.accounts-compact[data-lanes-hidden] > .accounts-compact-more { order: -1; }

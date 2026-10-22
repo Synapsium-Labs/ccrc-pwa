@@ -366,12 +366,13 @@ describe('focus after a switch is never on <body>', () => {
   });
 
   it('a control inside a part the switch replaced: focus moves to #content', () => {
-    // Today's two sets place the same parts, so the frame is driven directly
-    // with two sets whose bars differ.
+    // The frame is driven directly with two sets whose bars differ and that
+    // place nothing else (Instrument's rail and status bar, W2 Task S9, read
+    // providers this case does not mount).
     function BarA(): ReactNode { return <button type="button">Bar A</button>; }
     function BarB(): ReactNode { return <button type="button">Bar B</button>; }
-    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Nav: null };
-    const b = { ...SKIN_SETS[INSTRUMENT], Bar: BarB, Nav: null };
+    const a = { ...SKIN_SETS[REFINED], Bar: BarA, Banners: null, Rail: null, Nav: null, StatusBar: null };
+    const b = { ...SKIN_SETS[INSTRUMENT], Bar: BarB, Banners: null, Rail: null, Nav: null, StatusBar: null };
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('min-width: 900px'), media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,

@@ -226,12 +226,16 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // arm honoured and a GPT-lane session can carry. Inherited, it would have
   // aimed a case's render and its `pgrep -f` at a real config. Plan 4 deleted
   // the arm and kept this drop: it costs nothing, and a return stays loud.
-  // The lane-files lock's wait and the advance file's clock (auto-advance Codex arm): a runner's values never
-  // steer a case either.
-  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW']) {
+  // The lane-files lock's wait, the advance file's clock and the advance step's knobs (auto-advance Codex arm, W1 and W2
+  // Task 11): a runner's values never steer a case either.
+  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW',
+    'CCRC_MODELS_CANARY_S', 'CCRC_MODELS_ADVANCE_BUDGET_S']) {
     delete inherited[k];
   }
-  const e = ghContainedEnv(h, { ...inherited, HOME: h, ...extra }, { systemd: true });
+  // The advance step is OFF here (budget 0): this file's codex-kind lanes sit on fixed fixture ports a canary must never
+  // reach, and its refresh goldens predate the step. `ccrc-models-advance.test.ts` is the step's suite; a case that wants
+  // the step passes its own budget in `extra`.
+  const e = ghContainedEnv(h, { ...inherited, HOME: h, CCRC_MODELS_ADVANCE_BUDGET_S: '0', ...extra }, { systemd: true });
   const poison = (name: string, says: string): void =>
     fs.writeFileSync(join(h, '.local', 'bin', name),
       `#!/bin/sh\n${MANAGER_STANDIN_MARK}\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`

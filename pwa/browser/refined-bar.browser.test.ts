@@ -1,0 +1,122 @@
+// Refined's app bar at a desk (W2 Task S4b, D-5471), in a real Chrome over the production build.
+//
+// The bar is at its tightest just above the phone break: six lanes with short names, and the Inbox and Runs tabs each
+// carrying a two-digit badge, leave the gauges about 84px at 900 (the plan's Step 0 fixture). There the first gauge,
+// which opens its line and cannot wrap, used to be cut at the row's edge: a meter with no reading. This file holds
+// what jsdom cannot: at 900, 930, 960 and 1280 in both palettes, every gauge that shows is whole inside its row with
+// its reading whole inside it, the "+n" is whole inside the door, and the page does not scroll sideways. Under a coarse
+// pointer every door in the bar is at least 44 x 44. The coarse pointer is a touch screen: headless Chrome ignores the
+// DevTools protocol's pointer media feature (measured), so `openApp` takes `touch`.
+//
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/refined-bar.browser.test.ts )`.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser } from 'playwright-core';
+import { PHOSPHOR, REFINED } from '@ccrc/ui';
+import { resolveChrome } from './harness';
+import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+
+// Each width with a mouse and with a touch screen (a coarse pointer at a desk width: a tablet in landscape, a touch
+// laptop): the layout half runs under both, the doors' size under the touch screen.
+const VIEWS: AppView[] = [false, true].flatMap((touch) => [PHOSPHOR, 'light'].flatMap((theme) =>
+  [900, 930, 960, 1280].map((width) => ({ skin: REFINED, theme, width, touch }))));
+const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px, ${v.touch === true ? 'touch' : 'mouse'}`;
+
+const nowSec = Math.floor(Date.now() / 1000);
+const NAMES = ['alpha', 'beta', 'gamma', 'delta', 'eps', 'zeta'];
+const FIXTURE: AppFixture = {
+  api: {
+    '/api/feed': {
+      events: Array.from({ length: 12 }, (_, i) => ({
+        seq: i + 1, at: Date.now() - i * 1000, kind: 'mail', sessionId: 's', title: 't', body: 'b', runId: null,
+      })),
+    },
+    '/api/accounts': {
+      accounts: NAMES.map((_, i) => ({
+        wrapper: `w${i}`, five: [100, 88, 76, 40, 30, 20][i], seven: 50, ts: nowSec - 60, fiveResetAt: null, sevenResetAt: null,
+        fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+      })),
+      projected: null,
+      roster: NAMES.map((label, i) => ({ id: `w${i}`, label, hue: 'cyan', homeAble: true, hidden: false })),
+    },
+  },
+  fleetFrames: [
+    { type: 'fleet', sessions: [] },
+    {
+      type: 'runs',
+      runs: Array.from({ length: 12 }, (_, i) => ({
+        id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
+      })),
+    },
+  ],
+};
+
+let dist: string | undefined;
+let server: DistServer | undefined;
+let browser: Browser | undefined;
+
+beforeAll(async () => {
+  const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
+  dist = buildDist();
+  server = await serveDist(dist);
+  browser = await chromium.launch({ executablePath, headless: true });
+}, 180_000);
+
+afterAll(async () => {
+  await browser?.close();
+  await server?.close();
+  removeDist(dist);
+});
+
+describe("Refined's app bar shows nothing cut, and every door is a finger's square under a coarse pointer", () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await page.goto(server!.origin + '/');
+        // The lanes and both badges have landed once the gauges and the two counted tab names are in the bar.
+        await page.waitForFunction(() => document.querySelectorAll('.ref-bar .accounts-compact-gauge').length > 0
+          && document.querySelector('.ref-bar [aria-label="Inbox, 12 unread"]') !== null
+          && document.querySelector('.ref-bar [aria-label="Runs, 12 active"]') !== null, undefined, { timeout: 20_000 });
+        await page.waitForTimeout(200); // the measure's ResizeObserver settles
+        const faults = await page.evaluate(() => {
+          const out: string[] = [];
+          const door = document.querySelector<HTMLElement>('.ref-bar .accounts-compact')!;
+          const row = door.querySelector<HTMLElement>('.accounts-compact-lanes')!;
+          const r = row.getBoundingClientRect();
+          const d = door.getBoundingClientRect();
+          const shown = [...row.querySelectorAll<HTMLElement>('.accounts-compact-gauge')]
+            .filter((g) => getComputedStyle(g).visibility !== 'hidden' && g.getBoundingClientRect().top < r.bottom - 1);
+          for (const g of shown) {
+            const gr = g.getBoundingClientRect();
+            const pct = g.querySelector<HTMLElement>('.accounts-compact-pct')!;
+            const pr = pct.getBoundingClientRect();
+            const name = g.querySelector<HTMLElement>('.accounts-compact-name')!.textContent;
+            if (gr.right > r.right + 0.5) out.push(`${name} sticks out of the row (${gr.right} > ${r.right})`);
+            if (pr.right > r.right + 0.5 || pr.right > d.right + 0.5) out.push(`${name}'s ${pct.textContent} is cut`);
+            if (pct.scrollWidth > pct.clientWidth + 0.5) out.push(`${name}'s reading overflows its box`);
+          }
+          const more = door.querySelector<HTMLElement>('.accounts-compact-more');
+          if (more === null) out.push('six lanes and no +n');
+          else if (more.getBoundingClientRect().right > d.right + 0.5) out.push('+n is cut');
+          else if (shown.length === 0 && more.getBoundingClientRect().left > r.left + 0.5) out.push('no gauge shows, and +n does not lead');
+          if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
+          return out;
+        });
+        expect(faults).toEqual([]);
+
+        if (view.touch !== true) { expect(errors).toEqual([]); return; }
+        const small = await page.evaluate(() => {
+          if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
+          return [...document.querySelectorAll<HTMLElement>('.ref-bar-doors button')]
+            .map((b) => ({ name: b.getAttribute('aria-label') ?? b.textContent?.trim() ?? '?', r: b.getBoundingClientRect() }))
+            .filter(({ r }) => r.width < 43.5 || r.height < 43.5)
+            .map(({ name, r }) => `${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
+        });
+        expect(small).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});

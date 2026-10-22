@@ -1,0 +1,172 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workbench status bar — one quiet line along the bottom of the     *
+   *  desk shell: the agent link, the fleet totals, what needs you, the *
+   *  palette and shortcut hints, the build. Nothing on it glows (glow  *
+   *  means life, and the bar is not a session) and nothing moves.      *
+   * ------------------------------------------------------------------ */
+  /* Self-grounded: ink AND ground on the root, so every descendant ink below
+     is measured against `--bg-surface` by the contrast gate. Mono, because
+     every word on the bar is the machine's (counts, versions, a link state);
+     tabular figures inherit into every item so a ticking count never jitters. */
+  .wb-status {
+    /* The bar's own width drives the yield order (below), not the viewport's:
+       the bar is as wide as the desk's main column, whatever the window. */
+    container: wb-status / inline-size;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 24px;
+    padding: 0 var(--sp-1);
+    overflow: hidden;
+    white-space: nowrap;
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: var(--ink-tertiary);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--edge-subtle);
+  }
+
+  /* Every item is a quiet button. The tap floor is the default; the card's
+     20px item in a 24px bar is the FINE-pointer size only (below), so a touch
+     screen showing the desk shell still gets a target a finger can hit. */
+  .wb-status .wb-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    min-width: var(--tap-min);
+    min-height: var(--tap-min);
+    justify-content: center;
+    padding: 0 6px;
+    border-radius: var(--r-sm);
+    font: inherit;
+    color: var(--ink-tertiary);
+    cursor: pointer;
+  }
+  @media (pointer: fine) {
+    .wb-status {
+      height: 24px;
+    }
+    .wb-status .wb-status-item {
+      min-width: 0;
+      min-height: 20px;
+      height: 20px;
+    }
+  }
+  @media (hover: hover) {
+    .wb-status .wb-status-item:hover {
+      color: var(--ink-secondary);
+      background: var(--bg-hover);
+    }
+  }
+
+  /* The yield order on a narrow bar. These come AFTER the item rules, at
+     the same specificity or above, so each floor beats the item's own
+     `min-width`. The steps that hide come from the container queries at the
+     foot of this sheet and are sized to fire BEFORE anything below shrinks:
+     The shrink factors are a millionfold apart (totals, calm words, build),
+     so each item gives way before the next starts: at a hundredfold the calm
+     words took a fraction of a pixel early and drew an ellipsis.
+     1. The plain totals shrink first, by a factor no other item comes near,
+        down to about 3ch. */
+  .wb-status .wb-status-totals {
+    flex: 0 1e12 auto;
+    min-width: calc(3ch + 12px);
+    justify-content: flex-start;
+  }
+  /* 4. The calm "nothing needs you" ellipsizes next (never to "0 need you"),
+        down to "nothing…". "need you" and "exited" never shrink. */
+  .wb-status .wb-status-needs[data-calm='true'] {
+    flex: 0 1e6 auto;
+    min-width: calc(8ch + 12px);
+    justify-content: flex-start;
+  }
+  /* 5. The build line ellipsizes last, down to a floor that keeps its first
+        11 characters ("v1.4.2 → v1", "unversioned"); a shorter line is its
+        own floor (`data-long` marks a longer one). Below the widths the
+        desk is drawn for, the floor goes (the last container step) and it
+        can shrink to nothing, so the bar never overflows. */
+  .wb-status .wb-status-build {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .wb-status .wb-status-build[data-long='true'] {
+    min-width: calc(11ch + 12px);
+  }
+  .wb-status-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-status-spacer {
+    flex: 1 1 0;
+    min-width: var(--sp-2);
+  }
+  .wb-status .wb-status-sep {
+    flex: none;
+    white-space: pre;
+    color: var(--ink-tertiary);
+  }
+
+  /* The link dot: matte, 6px. Accent while the link is up, attention when
+     it is down — and the word beside it always says which. */
+  .wb-status-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-full);
+    background: var(--accent);
+  }
+  .wb-status-dot[data-link='off'] {
+    background: var(--status-attention);
+  }
+
+  /* The exceptional words, each with its own colour AND its own text. */
+  .wb-status .wb-status-word[data-link='off'] {
+    color: var(--status-attention-text);
+  }
+  .wb-status .wb-status-need {
+    color: var(--status-attention-text);
+  }
+  .wb-status .wb-status-exited {
+    color: var(--status-dead-text);
+  }
+  .wb-status .wb-status-text[data-warn='true'] {
+    color: var(--status-attention-text);
+  }
+
+  /* 2. On a bar under about 84 characters, `?` and the word "connected"
+        yield; the dot and the link button's aria-label keep the state.
+        "offline" never hides. 84ch holds every item whole beside the longest
+        build words the app writes ("unversioned (bd2bf57a)") and both needs
+        words, so this fires before the build line starts to shrink.
+     3. Under about 68 characters the palette hint yields too: ⌘K still
+        opens it, and the item's name says so.
+     And under about 54 characters, below any desk, the build line's floor
+     goes (step 5).
+     `ch` here is the bar's own (container units resolve against the
+     container), so both steps scale with each skin's meta size. Written under
+     `.wb-status` so the hide outranks the item's own `display: inline-flex`
+     (0,2,0) rather than losing to it. */
+  @container wb-status (max-width: 84ch) {
+    .wb-status .wb-status-keys,
+    .wb-status .wb-status-word[data-link='on'] {
+      display: none;
+    }
+  }
+  @container wb-status (max-width: 68ch) {
+    .wb-status .wb-status-palette {
+      display: none;
+    }
+  }
+  @container wb-status (max-width: 54ch) {
+    .wb-status .wb-status-build[data-long='true'] {
+      min-width: 0;
+    }
+  }
+}

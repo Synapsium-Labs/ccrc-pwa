@@ -53,6 +53,14 @@ const POLL_MS = 15_000;
 const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
+/** Does the banner show for this health answer? Exactly the union of its arms below: on a remote fleet, the host
+ *  unreachable, or reachable with a divergent roster, a skewed build or project pools unavailable. The banner stack
+ *  asks it (W2 Task S2c, BannerStack.tsx); the render below reads it first, so the two cannot disagree. */
+export function fleetHostBannerShows(health: FleetHealth | null | undefined): boolean {
+  if (!health || health.mode !== 'remote') return false;
+  return !health.connected || health.roster === 'divergent' || health.build === 'skewed' || health.projectPools === 'unavailable';
+}
+
 export function FleetHostBanner(
   { health: injected, nodes, intent, stale = false }: {
     health?: FleetHealth | null; nodes?: readonly NodeWire[] | null; intent?: readonly UpdateIntentWire[] | null;
@@ -69,6 +77,7 @@ export function FleetHostBanner(
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rebooting, setRebooting] = useState(false);
   const now = useNow(30_000);
+  if (!fleetHostBannerShows(health)) return null;
 
   // Roster divergence is orthogonal to reachability and is checked FIRST: a
   // fleet host that is up and answering is exactly the state in which the two
