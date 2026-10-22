@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_BUDGET_MS, ECHO_POLL_MS, ECHO_TRIES, SUBMIT_TRIES } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, isMailResidue, ECHO_BUDGET_MS, ECHO_POLL_MS, SUBMIT_TRIES } from '../src/inject/send.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
@@ -2248,8 +2248,9 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
   const send = (tmux: Tmux) => sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello there');
 
   it('a failed Enter press whose box then reads empty is ok', async () => {
-    // The press landed and its reply was lost; the next three captures fail (a link drop), then the box reads empty.
-    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null, null, null, EMPTY] });
+    // The press landed and its reply was lost; the next five captures fail (a link drop), then the box reads empty.
+    // Five outlast the two single-capture watches and the final read of a proof that gives up on a failed capture.
+    const { tmux } = enterRig({ enterCode: 1, afterEnter: [null, null, null, null, null, EMPTY] });
     expect(await send(tmux)).toEqual({ ok: true });
   });
 
@@ -2307,7 +2308,7 @@ describe("answerDialogText's echo wait (D-6366)", () => {
       { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: noSleep }, 'lane-a:project-a', parseDialog(open)!.id, 3, 'only in staging',
     );
     expect(res).toEqual({ ok: false, error: 'echo-failed' });
-    expect(capturesAfterLiteral).toBe(ECHO_TRIES);
+    expect(capturesAfterLiteral).toBe(12);   // today's count, a literal on purpose: raising ECHO_TRIES moves this route too
     expect(sendKeysCalls(calls).some((c) => c.at(-1) === 'Enter')).toBe(false);
   });
 });
