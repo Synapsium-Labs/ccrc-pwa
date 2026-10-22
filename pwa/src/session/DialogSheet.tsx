@@ -155,19 +155,19 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
-import { OptionRow, Sheet, toast } from '@ccrc/ui';
+import { OptionRow, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskHeader, AskReview, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, escapeHidesOnly, keyed, lit, picksBusy,
+  AskHeader, AskReview, AskSheet, AskTabs, KICKER_CHOICE, KICKER_WAITING, REVIEW_TITLE, keyed, lit, picksBusy,
   wordsBusy, type Asker, type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import {
-  askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, slotHolds,
+  askScreen, askSource, freeTextSlot, isUsableAsk, paneTicks, picksUncommitted, questionKey, shownQuestion, slotHolds, type AskSource, type ShownQuestion,
 } from './askLive';
 import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './askKeys';
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskKeys } from './useAskKeys';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, failedTo } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
@@ -249,6 +249,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
   // any other: it refuses the others and the dismissal while it runs.
   const [tabbing, setTabbing] = useState(false);
+  // Deny's interrupt is in flight. Not "answering an option" (Escape has no option index), so it has its own flag, but it
+  // is a send like the rest: it refuses the others and the dismissal while it runs.
+  const [denying, setDenying] = useState(false);
 
   // A new question (or a cleared one) invalidates the in-flight marker.
   // D-5090: and ends an own-words answer that LANDED, the same way, unless the new frame is that send's own typed row
@@ -270,9 +273,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogId]);
 
-  // Anything in flight: an option's answer, an own-words send or a multiSelect commit. Each refuses another send and
+  // Anything in flight: an option's answer, a Deny, an own-words send or a multiSelect commit. Each refuses another send and
   // the dismissal.
-  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call) || tabbing;
+  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call) || tabbing || denying;
   // One send at a time, held where a send STARTS. `locked` is render state, and React commits a tap's state only after
   // its handler returns, so a second tap handled in the same tick finds every row still enabled and `locked` still
   // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. `sending` is set the
@@ -355,6 +358,28 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
       // branch, so it says what actually happened instead.
       const stale = err instanceof ApiError && err.message === 'stale-dialog';
       toast(dialogRefusal(err, source.kind === 'structured'), stale ? undefined : 'error');
+    }
+  };
+
+  // Deny on an approval: `api.interrupt`'s literal Escape, Claude Code's own hint for declining a permission confirm,
+  // whatever the menu is. It moved here from the approval's content (D-6325) so the one container's dismissal (`close`)
+  // sees it as the send it is, and this file stays the only sender.
+  const deny = async (): Promise<void> => {
+    if (!claim()) return;
+    setDenying(true);
+    try {
+      await api.interrupt(id, 'deny');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // interrupt's `not-busy` can mean EITHER "the agent already finished
+        // on its own" or "someone else already answered this same request" —
+        // the response can't tell them apart, so the copy doesn't pretend to.
+        toast("Couldn't stop — the session may be idle or the request already resolved");
+      } else {
+        toast(failedTo('decline', err), 'error');
+      }
+    } finally {
+      setDenying(false);
     }
   };
 
@@ -472,161 +497,163 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
 
   if (source.kind === 'none') return null;
 
-  // The approval, and Claude's own question (the hook's envelope, or the transcript's copy once that has aged out): one
-  // sheet, the one hardened sender (`EnvelopeSheet`), whose SEND goes through the functions above.
+  // ONE container for every kind of surface (D-6325): the drawer is rendered here, once, at one place in the tree, and
+  // each kind only chooses its header, its title and what goes inside, so moving between kinds (the last question to the
+  // review) never remounts it. Dismissal is `close`, which refuses while any send is in flight.
+  const view = source.kind === 'structured' ? shownQuestion({ questions: source.questions }, dialog) : null;
+  const frame = askFrame(source, view, asker);
+  // The way out of a surface that cannot be answered here: hide it and open the terminal.
+  const leave = (): void => {
+    hide();
+    onOpenTerminal?.();
+  };
+
+  let surface: ReactNode;
   if (source.kind === 'approval' || source.kind === 'structured') {
-    return (
+    // The approval, and Claude's own question (the hook's envelope, or the transcript's copy once that has aged out): the
+    // one hardened sender's content (`EnvelopeSheet`), whose SEND goes through the functions above.
+    surface = (
       <EnvelopeSheet
-        id={id}
         ask={source.kind === 'approval' ? { approval: source.approval } : { questions: source.questions }}
+        view={view}
         from={source.kind === 'structured' ? source.from : 'hook'}
-        asker={asker}
         dialog={dialog}
         answering={answering}
+        denying={denying}
         words={words}
         picks={picks}
         open={open}
-        onHide={hide}
+        onClose={close}
         onSelectOption={(optionIndex) => void answer(optionIndex)}
+        onDeny={() => void deny()}
         onOpenTerminal={onOpenTerminal}
         tabbing={tabbing}
         picksHeld={picksHeld}
         onTab={(to, from) => void moveTab(to, from)}
       />
     );
-  }
-
-  // The review screen an ask ends on (D-5089), one render for every source of copy (D-6325): titled `Review your
-  // answers` and answered by the pane's own rows, never the pane's words. The strip is drawn when the structured copy
-  // and the pane's tab row agree on the count (`summary` carries the marks only then).
-  if (source.kind === 'review') {
+  } else if (source.kind === 'review') {
+    // The review screen an ask ends on (D-5089), one render for every source of copy (D-6325): titled `Review your
+    // answers` and answered by the pane's own rows, never the pane's words. The strip is drawn when the structured copy
+    // and the pane's tab row agree on the count (`summary` carries the marks only then).
     if (dialog === null) return null; // unreachable: the review is the pane's, so `askSource` had a dialog
     const chips = source.summary.length > 0 && source.summary.every((q) => q.answered !== null)
       ? source.summary.map((q) => ({ header: q.header, answered: q.answered === true }))
       : null;
-    return (
-      <Sheet
-        open={open}
-        onClose={close}
-        onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskHeader asker={asker} />}
-        title={REVIEW_TITLE}
-        titleScroll={false}
+    surface = (
+      <div
+        data-source={envelope !== null ? 'hook' : dialog.ask !== undefined ? 'transcript' : undefined}
+        className="ask-envelope"
+        ref={keys.root}
       >
-        <div
-          data-source={envelope !== null ? 'hook' : dialog.ask !== undefined ? 'transcript' : undefined}
-          className="ask-envelope"
-          ref={keys.root}
-        >
-          {chips !== null && (
-            <AskTabs
-              tabs={chips}
-              active={null}
-              onReview
-              held={picksHeld}
-              busy={locked}
-              onGo={(to) => void moveTab(to)}
-            />
-          )}
-          <AskReview
-            dialogId={dialog.id}
-            selectedIndex={dialog.selectedIndex}
-            rows={source.rows}
-            summary={source.summary}
-            answering={answering}
-            locked={locked}
-            onAnswer={(k) => void answer(k)}
-            keys={keys}
+        {chips !== null && (
+          <AskTabs
+            tabs={chips}
+            active={null}
+            onReview
+            held={picksHeld}
+            busy={locked}
+            onGo={(to) => void moveTab(to)}
           />
-        </div>
-      </Sheet>
-    );
-  }
-
-  // Ask evidence on the pane and no copy of the question that fully lines up: the surface says so and offers the
-  // terminal. Nothing the pane painted is shown, and nothing is offered to tap.
-  if (source.kind === 'ask-unreadable') {
-    return (
-      <Sheet
-        open={open}
-        onClose={close}
-        onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskHeader asker={asker} />}
-        title="Claude is asking a question this screen can't read yet."
-        titleScroll={false}
-      >
-        <TerminalCta
-          onOpen={() => {
-            hide();
-            onOpenTerminal?.();
-          }}
-          onLater={close}
+        )}
+        <AskReview
+          dialogId={dialog.id}
+          selectedIndex={dialog.selectedIndex}
+          rows={source.rows}
+          summary={source.summary}
+          answering={answering}
+          locked={locked}
+          onAnswer={(k) => void answer(k)}
+          keys={keys}
         />
-      </Sheet>
-    );
-  }
-
-  // A pane nothing could be read off, with no sign of an ask: only the terminal can answer it.
-  if (source.kind === 'terminal-only') {
-    return (
-      <Sheet
-        open={open}
-        onClose={close}
-        onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskHeader kicker={KICKER_WAITING} asker={asker} />}
-        title="Claude is waiting on the terminal."
-        titleScroll={false}
-      >
-        <TerminalCta
-          onOpen={() => {
-            hide();
-            onOpenTerminal?.();
-          }}
-          onLater={close}
-        />
-      </Sheet>
-    );
-  }
-
-  // A menu that is no AskUserQuestion (a plan approval, a TUI prompt): no copy of it exists but the pane's parse, so its
-  // title and rows are the one place pane text is shown (D-6325), and the foot line says only what a tap does. Its rows
-  // are answered by their printed index, exactly as they always were.
-  return (
-    <Sheet
-      open={open}
-      onClose={close}
-      onEscapeKeyDown={escapeHidesOnly}
-      eyebrow={<AskHeader kicker={KICKER_CHOICE} asker={asker} />}
-      title={source.title || KICKER_CHOICE}
-      titleScroll={false}
-    >
-      <div ref={keys.root} hidden />
-      <div className="opts">
-        {source.options.map((o) => {
-          const selected = lit(keys, o.index);
-          const waiting = answering === o.index;
-          return (
-            <OptionRow
-              key={`${dialog?.id ?? ''}:${o.index}`}
-              {...keyed(keys, o.index)}
-              selected={selected}
-              glyph={selected ? '❯' : ''}
-              index={o.index}
-              label={o.label}
-              sublabel={o.description}
-              disabled={locked}
-              busy={waiting}
-              onClick={() => void answer(o.index)}
-              // The optimistic "answering…" is this package's marker, not the
-              // row's: it is a fact about a keystroke in flight to a pane.
-              // It takes the slot the ↵ would have had, never both.
-              marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
-              enter={!waiting && selected ? '↵' : undefined}
-            />
-          );
-        })}
       </div>
-      <p className="sheet-foot">Choose an option</p>
-    </Sheet>
+    );
+  } else if (source.kind === 'ask-unreadable' || source.kind === 'terminal-only') {
+    // Ask evidence on the pane and no copy of the question that fully lines up, or a pane nothing could be read off with
+    // no sign of an ask: the surface says so and offers the terminal. Nothing the pane painted is shown, and nothing is
+    // offered to tap.
+    surface = <TerminalCta onOpen={leave} onLater={close} />;
+  } else {
+    // A menu that is no AskUserQuestion (a plan approval, a TUI prompt): no copy of it exists but the pane's parse, so its
+    // title and rows are the one place pane text is shown (D-6325), and the foot line says only what a tap does. Its rows
+    // are answered by their printed index, exactly as they always were.
+    surface = (
+      <>
+        <div ref={keys.root} hidden />
+        <div className="opts">
+          {source.options.map((o) => {
+            const selected = lit(keys, o.index);
+            const waiting = answering === o.index;
+            return (
+              <OptionRow
+                key={`${dialog?.id ?? ''}:${o.index}`}
+                {...keyed(keys, o.index)}
+                selected={selected}
+                glyph={selected ? '❯' : ''}
+                index={o.index}
+                label={o.label}
+                sublabel={o.description}
+                disabled={locked}
+                busy={waiting}
+                onClick={() => void answer(o.index)}
+                // The optimistic "answering…" is this package's marker, not the
+                // row's: it is a fact about a keystroke in flight to a pane.
+                // It takes the slot the ↵ would have had, never both.
+                marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+                enter={!waiting && selected ? '↵' : undefined}
+              />
+            );
+          })}
+        </div>
+        <p className="sheet-foot">Choose an option</p>
+      </>
+    );
+  }
+
+  return (
+    <AskSheet open={open} onClose={close} eyebrow={frame.eyebrow} title={frame.title}>
+      {surface}
+    </AskSheet>
   );
+}
+
+/** The titles of the two surfaces that offer only the terminal. Sentence constants, so `plain-words.test.ts` reads them. */
+const UNREADABLE_TITLE = "Claude is asking a question this screen can't read yet.";
+const WAITING_TITLE = 'Claude is waiting on the terminal.';
+
+/** The header and the title of the one container, for each kind of surface (D-6325, R4): the same `AskHeader` for all of
+ *  them, with the kicker, and the question's own chip and `n of N`, that the kind has. `view` is the question showing
+ *  (`shownQuestion`), non-null exactly for a structured question. */
+function askFrame(
+  source: Exclude<AskSource, { kind: 'none' }>,
+  view: ShownQuestion | null,
+  asker: Asker | null,
+): { eyebrow: ReactNode; title: string } {
+  switch (source.kind) {
+    case 'approval':
+      return { eyebrow: <AskHeader asker={asker} />, title: source.approval.tool };
+    case 'structured': {
+      const { shown, placed } = view!; // `view` is set for exactly this kind
+      const q = source.questions[shown]!; // `askSource` proves question 1 exists (a usable envelope, or an aligned copy)
+      const count = source.questions.length;
+      return {
+        eyebrow: (
+          <AskHeader
+            header={q.header}
+            progress={count > 1 && placed !== null ? { n: placed + 1, of: count } : undefined}
+            asker={asker}
+          />
+        ),
+        title: q.question,
+      };
+    }
+    case 'review':
+      return { eyebrow: <AskHeader asker={asker} />, title: REVIEW_TITLE };
+    case 'ask-unreadable':
+      return { eyebrow: <AskHeader asker={asker} />, title: UNREADABLE_TITLE };
+    case 'terminal-only':
+      return { eyebrow: <AskHeader kicker={KICKER_WAITING} asker={asker} />, title: WAITING_TITLE };
+    case 'menu':
+      return { eyebrow: <AskHeader kicker={KICKER_CHOICE} asker={asker} />, title: source.title || KICKER_CHOICE };
+  }
 }

@@ -19,18 +19,17 @@
 //
 // The classes stay `dlg-*`: chat.css grounds them and these are their only
 // consumers. The shape moves, the ground stays.
-import { Fragment, useState } from 'react';
+import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
-import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
-import { api, ApiError, failedTo } from '../lib/api';
+import { Button, OptionRow } from '@ccrc/ui';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
-import { chatRow, freeTextSlot, liveQuestion, namedQuestion, optionCopy, tabChips, type AskQuestions } from './askLive';
+import { chatRow, freeTextSlot, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
 import {
-  AskHeader, AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
-  SEVERAL_ANSWERS, escapeHidesOnly, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy, type Asker,
+  AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
+  SEVERAL_ANSWERS, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy,
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
@@ -88,30 +87,31 @@ export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: 
  * and stays enabled regardless of `dialog`.
  */
 export function EnvelopeSheet({
-  id,
   ask,
+  view,
   from = 'hook',
-  asker,
   dialog,
   answering,
+  denying,
   words,
   picks,
   open,
-  onHide,
+  onClose,
   onSelectOption,
+  onDeny,
   onOpenTerminal,
   tabbing = false,
   picksHeld = false,
   onTab,
 }: {
-  id: string;
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
   ask: { approval: { tool: string; summary: string } } | AskQuestions;
+  /** Which of the questions is showing (`shownQuestion`), worked out by the controller because the container's header
+   *  reads it too; null for an approval. */
+  view: ShownQuestion | null;
   /** Where the questions came from: the hook's envelope, or the transcript's copy once that has aged out. Only the
    *  wrapper's `data-source` says which; the surface is the same. */
   from?: 'hook' | 'transcript';
-  /** Who is asking, for the header (D-6325). */
-  asker?: Asker | null;
   /** The scraped dialog `answer()` needs to have anything to send against.
    *  null means the envelope showed up with no matching live pane menu yet
    *  (or it moved on) — read-only until one appears. */
@@ -119,14 +119,19 @@ export function EnvelopeSheet({
   /** The scraped flow's in-flight option index — shared so a numbered-option
    *  tap here disables the same way a scraped one does. */
   answering: number | null;
+  /** Deny's interrupt is in flight (held by the controller, the one sender). */
+  denying: boolean;
   /** D-5090: the own-words text and its call. Held by the PARENT, never here, so an `ask_cleared` mid-call hands the
    *  same text and call to the scraped sheet when this one unmounts. */
   words: Words;
   /** D-5091: a multiSelect question's set and its commit, held by the PARENT for the same reason as `words`. */
   picks: Picks;
   open: boolean;
-  onHide: () => void;
+  /** Hide the container: the controller's `close`, which refuses while any send is in flight. */
+  onClose: () => void;
   onSelectOption: (optionIndex: number) => void;
+  /** Decline an approval: the controller's `deny` (`api.interrupt`'s literal Escape). */
+  onDeny: () => void;
   onOpenTerminal?: () => void;
   /** Decision `ask-dialog-tab-route`: a tab move is under way (held by the parent, which sends it). */
   tabbing?: boolean;
@@ -135,15 +140,9 @@ export function EnvelopeSheet({
   /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
   onTab?: (to: DialogTabTarget, from?: number) => void;
 }): ReactNode {
-  // Deny's own busy flag: interrupt is not "answering an option" (there is no
-  // optionIndex for Escape), so it can't reuse `answering` — but it disables
-  // the same buttons `answering` would, and vice versa, so neither send can
-  // race the other, and BOTH gate dismissal below (the open sheet is the only
-  // honest record that a tap is still landing — same rule the scraped sheet's
-  // `close` follows for `answering` alone).
-  const [denying, setDenying] = useState(false);
-  // D-5090: an own-words send is a send too, and refuses the others and the dismissal while it is under way. So is a
-  // multiSelect commit (D-5091).
+  // Every send disables the same buttons and gates the dismissal: an option's answer, Deny (held by the controller, which
+  // sends it), an own-words send and a multiSelect commit, and a tab move. The open sheet is the only honest record that
+  // a tap is still landing.
   const sendingWords = wordsBusy(words.call);
   const picking = picksBusy(picks.call);
   const busy = answering !== null || denying || sendingWords || picking || tabbing;
@@ -156,9 +155,7 @@ export function EnvelopeSheet({
   // title names (a multiSelect question, which labels cannot reach), else question 1 — displayed read-only, never
   // answered.
   const questions = 'approval' in ask ? null : ask;
-  const live = questions === null ? null : liveQuestion(questions, dialog);
-  const named = questions === null ? null : namedQuestion(questions, dialog);
-  const shown = live ?? named ?? 0;
+  const { live, named, shown, placed } = view ?? { live: null, named: null, shown: 0, placed: null };
   // A question the envelope carries NO OPTIONS for: `options: []`. Hoisted out
   // of `canAnswer` because two things read it and they must not drift — the
   // gate below, and the copy that explains an ungated sheet. It is a property
@@ -202,30 +199,6 @@ export function EnvelopeSheet({
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
       : live !== null;
 
-  const close = (): void => {
-    if (busy) return;
-    onHide();
-  };
-
-  const deny = async (): Promise<void> => {
-    if (busy) return;
-    setDenying(true);
-    try {
-      await api.interrupt(id, 'deny');
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        // interrupt's `not-busy` can mean EITHER "the agent already finished
-        // on its own" or "someone else already answered this same request" —
-        // the response can't tell them apart, so the copy doesn't pretend to.
-        toast("Couldn't stop — the session may be idle or the request already resolved");
-      } else {
-        toast(failedTo('decline', err), 'error');
-      }
-    } finally {
-      setDenying(false);
-    }
-  };
-
   // The fail-visible CTA (I-critical #2): identical markup to the unparsed
   // scraped branch above, so a dialog-less envelope reads as "the same kind
   // of dead end", not a new one. Both buttons route through `close` (not a
@@ -245,11 +218,11 @@ export function EnvelopeSheet({
   // itself, once, so both the hide and the navigation are refused together.
   const openTerminal = (): void => {
     if (busy) return;
-    close();
+    onClose();
     onOpenTerminal?.();
   };
   const terminalCta = !canAnswer && (
-    <TerminalCta onOpen={openTerminal} onLater={close} />
+    <TerminalCta onOpen={openTerminal} onLater={onClose} />
   );
 
   // D-5090/D-5091: the live question's free-text row, Chat row and boxes, read only while it IS the live menu.
@@ -258,9 +231,6 @@ export function EnvelopeSheet({
   const slot = pane !== null ? freeTextSlot(pane, shownOptions) : { kind: 'none' as const };
   const chat = pane !== null ? chatRow(pane) : undefined;
   const boxes = pane?.multi;
-  // `n of N` only for a question the pane is painting (live) or names (its title): the fallback to question 1 is a
-  // display, not a position, and a pane on another ask entirely would make "1 of N" a guess (D-5089).
-  const placed = live ?? named;
   // Decisions `ask-sheet-keyboard-model` and `ask-tab-strip`: the pane's tab row, where the sheet is on it (the
   // question it is showing by the pane), and the keys over the screen showing. Worked out before any branch returns,
   // since the hook runs on every render. Nothing is keyed while the sheet cannot answer what it shows.
@@ -301,50 +271,41 @@ export function EnvelopeSheet({
   );
 
   if ('approval' in ask) {
-    const { tool, summary } = ask.approval;
+    const { summary } = ask.approval;
     const allowing = answering === 1;
     return (
-      <Sheet
-        open={open}
-        onClose={close}
-        onEscapeKeyDown={escapeHidesOnly}
-        eyebrow={<AskHeader asker={asker} />}
-        title={tool}
-        titleScroll={false}
-      >
-        <div data-source="hook" className="ask-envelope">
-          <p className="dlg-copy">{summary}</p>
-          {!canAnswer && (
-            <p className="dlg-copy">
-              This can't be matched to what's on the terminal yet — Allow can't be sent until it does.
-            </p>
-          )}
-          <div className="dlg-actions">
-            <Button
-              variant="primary"
-              // A flex box drops the marker's leading space (`Allowanswering…`); the gap keeps the two apart.
-              className="gap-2"
-              disabled={!canAnswer || busy}
-              aria-busy={allowing || undefined}
-              onClick={() => onSelectOption(1)}
-            >
-              Allow
-              {allowing && <span className="opt-wait"> answering…</span>}
-            </Button>
-            <button
-              type="button"
-              className="dlg-later"
-              disabled={busy}
-              aria-busy={denying || undefined}
-              onClick={() => void deny()}
-            >
-              Deny
-              {denying && <span className="opt-wait"> answering…</span>}
-            </button>
-          </div>
-          {terminalCta}
+      <div data-source="hook" className="ask-envelope">
+        <p className="dlg-copy">{summary}</p>
+        {!canAnswer && (
+          <p className="dlg-copy">
+            This can't be matched to what's on the terminal yet — Allow can't be sent until it does.
+          </p>
+        )}
+        <div className="dlg-actions">
+          <Button
+            variant="primary"
+            // A flex box drops the marker's leading space (`Allowanswering…`); the gap keeps the two apart.
+            className="gap-2"
+            disabled={!canAnswer || busy}
+            aria-busy={allowing || undefined}
+            onClick={() => onSelectOption(1)}
+          >
+            Allow
+            {allowing && <span className="opt-wait"> answering…</span>}
+          </Button>
+          <button
+            type="button"
+            className="dlg-later"
+            disabled={busy}
+            aria-busy={denying || undefined}
+            onClick={onDeny}
+          >
+            Deny
+            {denying && <span className="opt-wait"> answering…</span>}
+          </button>
         </div>
-      </Sheet>
+        {terminalCta}
+      </div>
     );
   }
 
@@ -354,148 +315,131 @@ export function EnvelopeSheet({
   // others are listed read-only (`OtherQuestions`), shown, never silently dropped, and never wired to a send this
   // sheet has no way to route safely; each becomes tappable when the pane paints it.
   const q = ask.questions[shown]!; // `askSource` proves question 1 exists (a usable envelope, or an aligned copy)
-  const count = ask.questions.length;
   // D-5090: the live question's free-text row, at n + 1 under its n options, and the pane's `Chat about this` row (`slot`
   // and `chat`, above), read only while the question IS the live menu: an unmatched one is answered in the terminal
   // (the CTA above says so). D-5091: its boxes (`boxes`) take the option rows' place when it is a multiSelect question
   // the pane carries as `Dialog.multi`; such a question has no own-words region here (its free text is the terminal's
   // in v1) and no Chat row (`Dialog.multi` carries none).
-  const eyebrow = (
-    <AskHeader
-      header={q.header}
-      progress={count > 1 && placed !== null ? { n: placed + 1, of: count } : undefined}
-      asker={asker}
-    />
-  );
 
   return (
-    <Sheet
-      open={open}
-      onClose={close}
-      onEscapeKeyDown={escapeHidesOnly}
-      eyebrow={eyebrow}
-      title={q.question}
-      titleScroll={false}
-    >
-      <div data-source={from} className="ask-envelope" ref={keys.root}>
-        {strip}
-        {/* Three different dead ends, and the copy must not confuse them. An
-            unmatched question is TRANSIENT — the pane can catch up, and then
-            the rows below become tappable — so "wait" is honest advice. An
-            option-less envelope is not: `options: []` is fixed for the life
-            of the envelope, there are no rows to become tappable, and nothing
-            the user waits for can change that. Telling them to wait would be
-            a claim the state cannot support (and an unbounded wait). A
-            multiSelect question the pane's title names is neither: the sheet
-            knows exactly which question is up, and that one tap cannot answer
-            it (D-5089, until D-5091's boxes).
+    <div data-source={from} className="ask-envelope" ref={keys.root}>
+      {strip}
+      {/* Three different dead ends, and the copy must not confuse them. An
+          unmatched question is TRANSIENT — the pane can catch up, and then
+          the rows below become tappable — so "wait" is honest advice. An
+          option-less envelope is not: `options: []` is fixed for the life
+          of the envelope, there are no rows to become tappable, and nothing
+          the user waits for can change that. Telling them to wait would be
+          a claim the state cannot support (and an unbounded wait). A
+          multiSelect question the pane's title names is neither: the sheet
+          knows exactly which question is up, and that one tap cannot answer
+          it (D-5089, until D-5091's boxes).
 
-            What the option-less sentence must NOT do is guess what the
-            terminal wants instead. It used to say "this one wants an answer
-            in your own words" — an inference from `options: []` that the pane
-            itself disproves (the TUI's free-text escape hatch arrives as an
-            option LABEL, in a populated list), and one that would send the
-            operator to type prose at a menu. It now says only what is known:
-            this envelope lists nothing to tap, and the pane is where the
-            answer goes. */}
-        {!canAnswer && (
-          <p className="dlg-copy">
-            {noOptions
-              ? 'This question has no options to choose from. Answer it in the terminal.'
-              : severalAnswers
-                ? SEVERAL_ANSWERS
-                : "This can't be matched to what's on the terminal yet — answer it there, or wait for it to catch up."}
-          </p>
-        )}
-        {/* A multiSelect question is never answered by one tap: answerDialog
-            walks to ONE option index and presses Enter, and Enter on a
-            multi-select row ticks it. D-5091 answers it with boxes where the
-            pane carries `Dialog.multi`: the WHOLE set at once, through the
-            digits `/dialog/multi` sends (`MultiPick`). Otherwise it renders the
-            same plain rows as a single-select one, never tappable, and two
-            gates keep it that way, either alone enough: `questionCorresponds`
-            takes a multiSelect question only through `Dialog.multi` (the
-            envelope's own flag against the pane's), and `parseDialog` answers
-            { parsed: false } for a multi-select, by its footer on older builds
-            and by the checkboxes on its rows on 2.1.280, and an unparsed
-            dialog without `multi` never corresponds. */}
-        {pane !== null && boxes !== undefined ? (
-          <MultiPick
-            multi={boxes}
-            dialogId={pane.id}
-            copy={q.options}
-            picks={picks}
-            locked={answering !== null || sendingWords || tabbing}
-            keys={keys}
-          />
-        ) : (
-          <>
-            <div className="opts">
-              {q.options.map((o, oi) => {
-                const idx = oi + 1;
-                const waiting = answering === idx;
-                // The keyboard's highlight wears the cursor, as on the pane (decision `ask-sheet-keyboard-model`); a
-                // question the sheet cannot answer shows none.
-                const selected = keyScreen !== null && lit(keys, idx);
-                // `(Recommended)` leaves the label for a tag after it (D-6325); the answer still goes by the printed index.
-                const { label, recommended } = optionCopy(o.label);
-                return (
-                  // The preview is keyed by its question's text, so a new question opens its own previews instead of
-                  // inheriting the last one's folded state (the scraped rows keyed it by the pane's dialog id).
-                  <Fragment key={`${shown}:${oi}`}>
-                    <OptionRow
-                      {...(keyScreen === null ? {} : keyed(keys, idx))}
-                      selected={selected}
-                      glyph={keyScreen === null ? undefined : selected ? '❯' : ''}
-                      enter={!waiting && selected ? '↵' : undefined}
-                      index={idx}
-                      label={label}
-                      tag={recommendedTag(recommended)}
-                      sublabel={o.description}
-                      disabled={!canAnswer || answering !== null || sendingWords || picking || tabbing}
-                      busy={waiting}
-                      onClick={() => onSelectOption(idx)}
-                      marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
-                    />
-                    {/* A transcript option's worked example, folded under its row and open on the highlighted one. */}
-                    {o.preview && <OptionPreview key={q.question} text={o.preview} defaultOpen={selected} />}
-                  </Fragment>
-                );
-              })}
-              {/* `Other`, through the pane's free-text row (D-5090, D-6325): the last row of the list, the field and Send
-                  under it once chosen. A send under way stays on screen even if the pane stops matching mid-call. */}
-              {(pane !== null || sendingWords) && (
-                <OwnWords
-                  slot={slot}
-                  chat={chat !== undefined}
-                  words={words}
-                  question={q.question}
-                  locked={answering !== null || picking || tabbing}
-                  keys={keyScreen === null ? undefined : keys}
-                />
-              )}
-            </div>
-            {chat && (
-              <ChatRow
-                row={chat}
-                answering={answering}
-                disabled={busy}
-                onAnswer={onSelectOption}
+          What the option-less sentence must NOT do is guess what the
+          terminal wants instead. It used to say "this one wants an answer
+          in your own words" — an inference from `options: []` that the pane
+          itself disproves (the TUI's free-text escape hatch arrives as an
+          option LABEL, in a populated list), and one that would send the
+          operator to type prose at a menu. It now says only what is known:
+          this envelope lists nothing to tap, and the pane is where the
+          answer goes. */}
+      {!canAnswer && (
+        <p className="dlg-copy">
+          {noOptions
+            ? 'This question has no options to choose from. Answer it in the terminal.'
+            : severalAnswers
+              ? SEVERAL_ANSWERS
+              : "This can't be matched to what's on the terminal yet — answer it there, or wait for it to catch up."}
+        </p>
+      )}
+      {/* A multiSelect question is never answered by one tap: answerDialog
+          walks to ONE option index and presses Enter, and Enter on a
+          multi-select row ticks it. D-5091 answers it with boxes where the
+          pane carries `Dialog.multi`: the WHOLE set at once, through the
+          digits `/dialog/multi` sends (`MultiPick`). Otherwise it renders the
+          same plain rows as a single-select one, never tappable, and two
+          gates keep it that way, either alone enough: `questionCorresponds`
+          takes a multiSelect question only through `Dialog.multi` (the
+          envelope's own flag against the pane's), and `parseDialog` answers
+          { parsed: false } for a multi-select, by its footer on older builds
+          and by the checkboxes on its rows on 2.1.280, and an unparsed
+          dialog without `multi` never corresponds. */}
+      {pane !== null && boxes !== undefined ? (
+        <MultiPick
+          multi={boxes}
+          dialogId={pane.id}
+          copy={q.options}
+          picks={picks}
+          locked={answering !== null || sendingWords || tabbing}
+          keys={keys}
+        />
+      ) : (
+        <>
+          <div className="opts">
+            {q.options.map((o, oi) => {
+              const idx = oi + 1;
+              const waiting = answering === idx;
+              // The keyboard's highlight wears the cursor, as on the pane (decision `ask-sheet-keyboard-model`); a
+              // question the sheet cannot answer shows none.
+              const selected = keyScreen !== null && lit(keys, idx);
+              // `(Recommended)` leaves the label for a tag after it (D-6325); the answer still goes by the printed index.
+              const { label, recommended } = optionCopy(o.label);
+              return (
+                // The preview is keyed by its question's text, so a new question opens its own previews instead of
+                // inheriting the last one's folded state (the scraped rows keyed it by the pane's dialog id).
+                <Fragment key={`${shown}:${oi}`}>
+                  <OptionRow
+                    {...(keyScreen === null ? {} : keyed(keys, idx))}
+                    selected={selected}
+                    glyph={keyScreen === null ? undefined : selected ? '❯' : ''}
+                    enter={!waiting && selected ? '↵' : undefined}
+                    index={idx}
+                    label={label}
+                    tag={recommendedTag(recommended)}
+                    sublabel={o.description}
+                    disabled={!canAnswer || answering !== null || sendingWords || picking || tabbing}
+                    busy={waiting}
+                    onClick={() => onSelectOption(idx)}
+                    marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+                  />
+                  {/* A transcript option's worked example, folded under its row and open on the highlighted one. */}
+                  {o.preview && <OptionPreview key={q.question} text={o.preview} defaultOpen={selected} />}
+                </Fragment>
+              );
+            })}
+            {/* `Other`, through the pane's free-text row (D-5090, D-6325): the last row of the list, the field and Send
+                under it once chosen. A send under way stays on screen even if the pane stops matching mid-call. */}
+            {(pane !== null || sendingWords) && (
+              <OwnWords
+                slot={slot}
+                chat={chat !== undefined}
+                words={words}
+                question={q.question}
+                locked={answering !== null || picking || tabbing}
                 keys={keyScreen === null ? undefined : keys}
               />
             )}
-          </>
-        )}
-        {terminalCta}
-        <OtherQuestions questions={ask.questions} shown={shown} />
-        {/* The foot line says what a tap does, and names Other only where the row is offered (a pick-several question
-            says in its own line how to add an answer). Nothing is said under a question the sheet cannot answer. */}
-        {canAnswer && (
-          <p className="sheet-foot">
-            {boxes === undefined && ownWordsRow(slot, words.text, words.call) !== null ? FOOT_WITH_OTHER : FOOT_PLAIN}
-          </p>
-        )}
-      </div>
-    </Sheet>
+          </div>
+          {chat && (
+            <ChatRow
+              row={chat}
+              answering={answering}
+              disabled={busy}
+              onAnswer={onSelectOption}
+              keys={keyScreen === null ? undefined : keys}
+            />
+          )}
+        </>
+      )}
+      {terminalCta}
+      <OtherQuestions questions={ask.questions} shown={shown} />
+      {/* The foot line says what a tap does, and names Other only where the row is offered (a pick-several question
+          says in its own line how to add an answer). Nothing is said under a question the sheet cannot answer. */}
+      {canAnswer && (
+        <p className="sheet-foot">
+          {boxes === undefined && ownWordsRow(slot, words.text, words.call) !== null ? FOOT_WITH_OTHER : FOOT_PLAIN}
+        </p>
+      )}
+    </div>
   );
 }

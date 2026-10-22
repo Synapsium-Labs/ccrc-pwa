@@ -23,7 +23,7 @@
 // option preview (`OptionPreview`) lives here beside the rows it opens under.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Dialog, DialogMulti } from '../../../shared/api';
-import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Well } from '@ccrc/ui';
+import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Sheet, Well } from '@ccrc/ui';
 import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
 import type { AskKeys } from './useAskKeys';
@@ -131,6 +131,35 @@ export function AskHeader({
  * of the same rule is its own guard (D-5235), which ignores an Escape a sheet handled; either half alone holds it.
  */
 export const escapeHidesOnly = (e: KeyboardEvent): void => e.stopPropagation();
+
+/**
+ * THE ONE CONTAINER of every ask surface (D-6325): the single `Sheet` the approval, a question, the review, an unreadable
+ * ask, a menu and the terminal-only surface all draw inside, with the header in its `eyebrow`, the title, and the
+ * surface as `children`. `DialogSheet` renders it ONCE, at one place in its tree, for every kind but `none`, so moving
+ * between kinds (the last question to the review, a question to an approval) changes what is inside the drawer and never
+ * the drawer: no remount, so no fresh entrance, no scroll reset and no focus taken again. It is also the single site
+ * where T1c swaps the drawer for an inline panel at the desk. Dismissal gating stays with the caller (`onClose`), and
+ * Escape only hides (`escapeHidesOnly`).
+ */
+export function AskSheet({
+  open,
+  onClose,
+  eyebrow,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  eyebrow: ReactNode;
+  title: string;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <Sheet open={open} onClose={onClose} onEscapeKeyDown={escapeHidesOnly} eyebrow={eyebrow} title={title} titleScroll={false}>
+      {children}
+    </Sheet>
+  );
+}
 
 /** A row's keyboard wiring (decision `ask-sheet-keyboard-model`): its element and roving tab stop when the sheet's keys
  *  are on, and the digit that answers it. */

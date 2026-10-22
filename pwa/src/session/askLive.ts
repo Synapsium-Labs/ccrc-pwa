@@ -136,6 +136,24 @@ export function namedQuestion(ask: AskQuestions, dialog: Dialog | null): number 
   return named.length === 1 ? named[0]! : null;
 }
 
+/** Which question of the envelope the sheet is showing, worked out once for everything that draws it (D-6325: the header
+ *  in `DialogSheet`'s one container, and the question's rows in `EnvelopeSheet`). `live` is the question the pane is
+ *  painting (`liveQuestion`) and `named` the one its title names (`namedQuestion`); `shown` is what the sheet displays:
+ *  the live question, else the named one, else question 1, displayed read-only and never answered; `placed` is where
+ *  the pane IS (`live ?? named`, else null: the fallback to question 1 is a display, not a position). */
+export interface ShownQuestion {
+  readonly live: number | null;
+  readonly named: number | null;
+  readonly shown: number;
+  readonly placed: number | null;
+}
+
+export function shownQuestion(ask: AskQuestions, dialog: Dialog | null): ShownQuestion {
+  const live = liveQuestion(ask, dialog);
+  const named = namedQuestion(ask, dialog);
+  return { live, named, shown: live ?? named ?? 0, placed: live ?? named };
+}
+
 /** Which screen of the ask the pane is on, by QUESTION IDENTITY (decision `ask-envelope-dismissal-per-screen`):
  *  `review` for the review screen (`isAskReview`), `q<i>` for question `i` (`liveQuestion`, else `namedQuestion` by its
  *  title), or null for a screen the sheet cannot place (no menu, or an unparsed or unmatched grab). Never the raw
