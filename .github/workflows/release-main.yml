@@ -55,10 +55,12 @@ jobs:
           fetch-depth: 0
 
       # Decide first, with the runner's own node, as release-stable.yml's gate
-      # does: does this merge change what ships? The token serves only the
-      # published-base check; this step installs nothing, and no later step
-      # but the publish holds a token. A merge that changes nothing that ships
-      # skips the toolchain and its cache below (D-6401).
+      # does: does this merge change what ships? GH_TOKEN serves only the
+      # published-base check, and the helpers run without it. This step
+      # installs nothing. A merge that changes nothing that ships skips the
+      # toolchain and its cache below (D-6401). The checkout's persisted
+      # credential and the job's OIDC request token still reach every step,
+      # as before this wave (D-6405).
       - name: Decide whether this merge changes what ships
         id: decide
         env:

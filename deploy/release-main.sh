@@ -113,7 +113,9 @@ derive_tags() {
 scope_ask() {
   local helper="$1" base="$2" label="$3" out rc=0
   CHANGE=unmeasured; CHANGE_N=""; CHANGE_FIRST=""; CHANGE_WHY=""
-  out="$(node "$helper" --repo "$ROOT" --base "$base")" || rc=$?
+  # The helpers run without the job's token or its workflow-command files: a
+  # first-party module, and a base tag's older copy, need none of them (D-6405).
+  out="$(env -u GH_TOKEN -u GITHUB_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY node "$helper" --repo "$ROOT" --base "$base")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     CHANGE_WHY="$label exited $rc"
   elif [[ "$out" == *$'\n'* ]]; then
@@ -242,13 +244,15 @@ measure() {
 # ── prepare ──────────────────────────────────────────────────────────────
 # The one file decide leaves inside the checkout when --out names a directory
 # there (the workflow's release-out is not gitignored): prepare's dirty-tree
-# refusal must not read the decision it is about to consume as a straggler.
-# Prints the file's path relative to the checkout, or nothing when it lies
-# outside it or does not exist yet.
+# refusal must not read the decision it is about to consume as a straggler
+# (D-6404). Prints the file's path relative to the checkout, or nothing when it
+# lies outside it, does not exist yet, or its directory IS the checkout root:
+# a decision beside the sources is refused as a straggler.
 decision_in_tree() {
   local rootp dirp
   [ -f "$DECISION" ] || return 0
   rootp="$(cd "$ROOT" && pwd -P)"; dirp="$(cd "$(dirname "$DECISION")" && pwd -P)"
+  [ "$dirp" != "$rootp" ] || return 0
   case "$dirp/" in "$rootp"/*) printf '%s\n' "${dirp#"$rootp"/}/release-main.decision" ;; esac
   return 0
 }
@@ -311,18 +315,14 @@ prepare() {
   # and drop the local tag again if the build fails so a re-run derives the
   # same number.
   # The builder refuses a dirty tree too, and a decision file inside the
-  # checkout is an untracked file: hold it aside for the build, put it back after.
-  local held=""
-  if [ -n "$rel" ]; then
-    held="$(mktemp)" && mv -f -- "$DECISION" "$held" || held=""
-  fi
-  git -C "$ROOT" tag "$next" || { [ -z "$held" ] || mv -f -- "$held" "$DECISION"; die "git tag $next failed"; }
+  # checkout is an untracked file. prepare has read it and nothing reads it
+  # again, so it is consumed here, before the tag (D-6404).
+  [ -z "$rel" ] || rm -f -- "$DECISION"
+  git -C "$ROOT" tag "$next" || die "git tag $next failed"
   if ! bash "$ROOT/deploy/build-release.sh" --out "$OUT_DIR"; then
     git -C "$ROOT" tag -d "$next" >/dev/null 2>&1 || :
-    [ -z "$held" ] || mv -f -- "$held" "$DECISION"
     die "build-release.sh failed — the local tag $next was removed; nothing reached origin"
   fi
-  [ -z "$held" ] || mv -f -- "$held" "$DECISION"
   printf 'built true\ntag %s\n' "$next" > "$STATE"
   echo "release-main.sh: prepared $next — tagged locally (NOT pushed), artifacts in $OUT_DIR; next: the attest step, then 'release-main.sh publish'"
 }

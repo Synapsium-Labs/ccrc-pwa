@@ -735,7 +735,7 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
 
   it.each([
     ['a docs-only merge, which skips', docsOnly, 'built unchanged\nsame-as v0.0.1\n', 'same-as v0.0.1\n'],
-    ['a shipped merge, which releases', undefined, 'built true\ntag v0.0.2\n', 'release\n'],
+    ['a shipped merge, which releases', undefined, 'built true\ntag v0.0.2\n', undefined],
   ] as const)('W25-R23: --out inside the checkout (the workflow\'s release-out) — the decision file is not a dirty tree, for prepare or for the builder; %s', (_name, merge, state, decision) => {
     const home = mkTmp('ccrc-relmain-w25r23-');
     const root = fixture(home, { tags: ['v0.0.1'], ...(merge === undefined ? {} : { merge }) });
@@ -743,14 +743,37 @@ describe('release-main.sh: decide — a merge that changes nothing that ships cu
     expect(d.code, d.stderr).toBe(0);
     expect(p.code, p.stderr).toBe(0);
     expect(readFileSync(join(root, 'release-out', 'release-main.state'), 'utf8')).toBe(state);
-    expect(readFileSync(join(root, 'release-out', 'release-main.decision'), 'utf8')).toBe(decision);
+    // The skip leaves the decision (nothing builds); a release consumes it before the tag (D-6404).
+    if (decision === undefined) expect(existsSync(join(root, 'release-out', 'release-main.decision'))).toBe(false);
+    else expect(readFileSync(join(root, 'release-out', 'release-main.decision'), 'utf8')).toBe(decision);
+  });
+
+  it('W25-R23: a decision beside the sources (--out is the checkout root) is refused as a straggler', () => {
+    const home = mkTmp('ccrc-relmain-w25r23r-');
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
+    expect(run(root, home, ['decide', '--out', '.']).code).toBe(0);
+    const p = run(root, home, ['prepare', '--out', '.']);
+    expect(p.code).toBe(1);
+    expect(p.stderr).toMatch(/refusing a dirty tree/);
+  });
+
+  it('W25-R24: the helpers never see the job\'s token or its workflow-command files', () => {
+    const home = mkTmp('ccrc-relmain-w25r24-');
+    const leak = "process.stdout.write(process.env.GH_TOKEN || process.env.GITHUB_OUTPUT ? 'changed 1 \"leak\"\\n' : 'unchanged 0\\n');";
+    const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly, scope: leak });
+    const out = join(home, 'out');
+    const d = run(root, home, ['decide', '--out', out], 0, { GH_TOKEN: 'fixture-token', GITHUB_OUTPUT: join(home, 'output') });
+    expect(d.code, d.stderr).toBe(0);
+    expect(readFileSync(join(out, 'release-main.decision'), 'utf8')).toBe('same-as v0.0.1\n');
+    expect(readFileSync(join(home, 'gh-env'), 'utf8')).toBe('GH_TOKEN=fixture-token\n');
   });
 
   it('W25-R23: a real straggler beside the decision file still refuses the dirty tree', () => {
     const home = mkTmp('ccrc-relmain-w25r23s-');
     const root = fixture(home, { tags: ['v0.0.1'], merge: docsOnly });
     expect(run(root, home, ['decide', '--out', 'release-out']).code).toBe(0);
-    writeFileSync(join(root, 'straggler.txt'), 'untracked\n');
+    // A name that merely CONTAINS the decision's path must not be excluded with it.
+    writeFileSync(join(root, 'release-out', 'release-main.decision.bak'), 'untracked\n');
     const p = run(root, home, ['prepare', '--out', 'release-out']);
     expect(p.code).toBe(1);
     expect(p.stderr).toMatch(/refusing a dirty tree/);
