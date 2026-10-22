@@ -2723,6 +2723,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 08:55: no tap. v0.0.558 (#1122, the broker's ledger) was released, unapplied. Server 15051M free, still under
         the operator's line. STATUS: fleet and server v0.0.555, newest v0.0.558, stable v0.0.502, intent dev/auto=off,
         backups fleet 229M/server 16320M, disk free fleet 166G/work volume 38G/server 15G.
+      - 09:55: an operator tap moved both boxes to v0.0.559, which carries the broker's growth fix: the fleet box
+        09:19:28 to 09:20:39, then the server 09:21:56 to 09:23:58. Both gates passed, doctor reported 0 failed on each,
+        the watchdog left the move in flight, and the fleet sweep skipped the same three long-failed units. The boot's
+        recovery changed 507 rows (09:26:57). The first ready pass (09:29:38) retired 99,000 zero-delta rows with a full
+        projection: block 18.8 s, `stallMid` 5.3 s, the checkpoint 81.2 MB to 12.6 MB, activities 112,218 to 13,220.
+        The 27 passes since block for 1.4 to 2.8 s (8 to 10 s before), and the checkpoint stays flat at 12.6 MB. No
+        retirement failure, failed recovery or mismatch line. One attempt was filed at 09:05 on v0.0.555, a new decision
+        (`cpAttempts` 56 to 57, `stallMid` 24.1 s): a filing still costs the old stall. Sent to the broker's coordinator.
+        The move's backup is 1842M, so backups total 16763M and the server has 14668M free, further under the
+        operator's line. STATUS: fleet and server v0.0.559, newest v0.0.560, stable v0.0.502, intent dev/auto=off,
+        backups fleet 230M/server 16763M, disk free fleet 166G/work volume 39G/server 15G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
