@@ -45,7 +45,7 @@
 // data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the four snapshot files (D-6346, D-6348): 0 every directory was handled,
 // 3 one or more was refused or the verification budget stopped the walk (the others were still handled; 3, not 1, because node itself exits 1 when it cannot load this file). 70: usage, or the helper itself
 // failed (an exception it did not name). `--until <unix seconds>` is the update path's time budget (D-6464): a walk that reaches it ends
-// there and still exits 0, its untouched dirs left for the next update.
+// there, its untouched dirs left for the next update, and exits 0 unless a dir was refused, one behind the stop included.
 import { createHash, randomBytes } from 'node:crypto';
 import nodeFs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -1152,7 +1152,9 @@ function finishOne(fs, dir, t) {
  * `until` (unix seconds, `null` for none) is the time budget on the update path (D-6464): a full verification is started only when `now` plus
  * the longest one this run has measured (VERIFY_ESTIMATE_S until one has run) is not past it. Otherwise the walk ends there, every dir it did not
  * reach that holds a data set is left, one line says so, and `stopped` stays false: it is not a refusal. Nothing else waits on the budget:
- * an interrupted thinning is finished whatever the budget, past a time stop too, and a record is never written without its deletes.
+ * an interrupted thinning is finished whatever the budget, past a time stop too, and a record is never written without its deletes. A dir
+ * behind a time stop is read as the walk reads it, so what the walk refuses there (a failed reading, a `verified` dir that is not whole) is
+ * refused with its WARN, and counts in `refused` (review 817 F6).
  * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
  */
 export function thinBackups({ own = null, verified = null, dirs, keep, by, until = null, fs = realFs, now = () => new Date(), out }) {
@@ -1224,22 +1226,33 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
     out(`thinned ${path.basename(dir)}: finished an interrupted thinning (${mib(bytes)}M); ${THINNED_FILE} records when and why`);
     thinned++;
   };
-  /** The time budget's end (D-6464): not a refusal, so the exit stays 0. Past it an interrupted thinning is still finished,
-   *  whatever the budget, because that verifies nothing; every other dir of `rest` that holds a data set is left as it is. */
+  /** A dir as the walk reads it before deciding anything, refusing what it refuses (D-6362): not a directory, a quick reading that
+   *  failed, and a verified dir that reads as something a verification does not leave behind. The time stop reads through it too. */
+  const enter = (dir) => {
+    const st = fs.lstat(dir);
+    if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${path.basename(dir)} is not a directory`);
+    const q = reads.get(dir) ?? quickState(fs, dir);
+    if (q.error !== undefined) throw q.error;
+    if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
+      refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
+    }
+    return q;
+  };
+  /** The time budget's end (D-6464): not a refusal in itself, so it leaves the exit at 0. Past it an interrupted thinning is still
+   *  finished, whatever the budget, because that verifies nothing; every other dir of `rest` that holds a data set is left as it is.
+   *  A dir there is read as the walk reads it, so what the walk would refuse is refused there too, with its WARN and exit 3 (review 817 F6). */
   const timeUp = (rest) => {
     timedOut = true;
     const before = left;
     for (const d of rest) {
       try {
-        const st = fs.lstat(d);
-        if (st === null || !st.isDirectory()) continue;
-        const q = reads.get(d) ?? quickState(fs, d);
-        if (q.word === 'interrupted' && d !== verP) finish(d, q);
+        const q = enter(d);
+        if (q.word === 'interrupted') finish(d, q);
         else if (holdsData(q)) left++;
       } catch (err) {
         if (!(err instanceof SnapError) && !hasCode(err)) throw err;
         warn(d, whyOf(err));
-        left++;
+        if (err.code !== 'thin-not-a-dir') left++;
       }
     }
     out(`thinning stopped at its time budget; ${left - before} left as they are; the next update continues`);
@@ -1299,13 +1312,7 @@ export function thinBackups({ own = null, verified = null, dirs, keep, by, until
   for (const [at, dir] of walk.entries()) {
     const name = path.basename(dir);
     try {
-      const st = fs.lstat(dir);
-      if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${name} is not a directory`);
-      let q = reads.get(dir) ?? quickState(fs, dir);
-      if (q.error !== undefined) throw q.error;
-      if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
-        refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
-      }
+      let q = enter(dir);
       if (q.word === 'interrupted') { finish(dir, q); continue; }
       if (q.word === 'stale') {
         fs.unlink(path.join(dir, THINNED_FILE));
