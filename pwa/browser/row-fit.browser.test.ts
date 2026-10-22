@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
+import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const SKINS = [REFINED, INSTRUMENT] as const;
@@ -125,9 +126,19 @@ afterAll(async () => {
   removeDist(dist);
 });
 
+/** These cases measure the project cards, which Instrument draws in its project mode (D-5473): seed that mode before
+ *  the first paint. Refined ignores the key. */
+const openCards = async (view: AppView): ReturnType<typeof openApp> => {
+  const opened = await openApp(browser!, view, FIXTURE);
+  await opened.ctx.addInitScript((key) => {
+    try { localStorage.setItem(key, 'project'); } catch { /* no storage: Instrument opens on status */ }
+  }, GROUP_MODE_KEY);
+  return opened;
+};
+
 /** Open the app at `route` in `view` and wait for the shell to stamp the skin and theme it was asked for. */
 async function boot(view: AppView, route: string): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
-  const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+  const { ctx, page, errors } = await openCards(view);
   await page.goto(server!.origin + route);
   await page.waitForFunction(([skin, theme]) => {
     const root = document.documentElement;
