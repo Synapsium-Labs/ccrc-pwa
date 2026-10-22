@@ -3186,8 +3186,9 @@ rather than cut, a tab or another control character holds **Send** with a line s
 is a row of its own that says it declines the ask. A multiSelect question is a set of checkboxes, committed whole
 with **Next** (`/dialog/multi`, D-5091). One send is under way at a time, and the rows that decline the whole ask
 wait for it. The hook's envelope stays on the session stream past thirty minutes while the pane shows that ask's own
-menu or its review screen (D-6324); it ages out only when no corresponding menu is up, and the sheet then carries on
-from the pane alone with the same rows, field and boxes.
+menu, or its review screen listing at least one answered question and none but its own (D-6324); it ages out when no
+corresponding menu is up, a review with nothing answered included, and the sheet then carries on from the pane alone
+with the same rows, field and boxes.
 
 Five routes act on what the pane already shows, each with its own named refusals:
 

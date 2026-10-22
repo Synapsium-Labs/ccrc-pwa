@@ -163,10 +163,12 @@ export function reviewRows(dialog: ReviewScreen | null): ReviewRows | null {
 const REVIEW_LISTED_RE = /^(?:│\s*)?●\s+(.+)$/;
 
 /**
- * The question texts a review screen lists (D-6324), in screen order, or null when the pane menu is not a review
- * screen (`reviewRows` decides that, called here and never copied). Each listed question is a line ` ● <question>`
- * followed by `   → <answer>` lines. A long question wraps and its continuation lines carry no `●`, so a listed text is
- * the FIRST line of its question, a prefix when wrapped. Measured on 2.1.296 and 2.1.300
+ * The question texts a review screen lists (D-6324; the departure `review-arm-matches-the-listed-questions`, D-6478),
+ * in screen order, or null when the pane menu is not a review screen (`reviewRows` decides that, called here and never
+ * copied). Each listed question is a line ` ● <question>` followed by `   → <answer>` lines. A long question wraps and
+ * its continuation lines carry no `●`, so a listed text is the FIRST line of its question, a prefix when wrapped. A
+ * review lists only the questions that were answered (a skipped one is absent, `cc300-ask-review-skipped`), so a caller
+ * matches every listed question, never all of the asked ones. Measured on 2.1.296 and 2.1.300
  * (`cc300-ask-review-1q-multiselect`, `cc296-ask-2q-long-review`, `cc300-ask-review-4q-long`).
  *
  * The capture's scrollback above the box can hold other `●` lines (Claude Code's own message bullets) and `·` summary

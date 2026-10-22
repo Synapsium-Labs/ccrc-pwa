@@ -66,12 +66,15 @@ function showsQuestion(menu: MenuEvidence, q: HookAskQuestion): boolean {
  * 30 minutes under a question still on screen. True only when the raw read is the current session's, `waiting`, a
  * questions envelope, and the pane shows it, by one of three arms:
  * - a parsed menu: SOME question of the envelope (every question, not only the first that `askKey` hashes: the pane
- *   may be on the second) has the same text and the same option labels;
+ *   may be on the second) has the same text by `sameQuestion` (case and whitespace folded, a prefix either way) and
+ *   the same option labels;
  * - an unparsed multi menu: its labels match one question's through `pairMatches`;
- * - the review screen the ask ends on, which lists the questions it asked: at least one is listed, and EVERY listed
- *   question is one of the envelope's. "Every listed", not "all listed", because a tall review can lose rows from the
- *   capture. It covers a one-question multiSelect ask, which Claude Code also ends on a review, and it drops an
- *   envelope on the review of another call.
+ * - the review screen the ask ends on, which lists the questions that were answered: at least one ANSWERED question
+ *   is listed, and EVERY listed question is one of the envelope's. "Every listed", not "all listed", because a review
+ *   lists only the questions that were answered (a skipped question is absent). It covers a one-question multiSelect
+ *   ask, which Claude Code also ends on a review, and it drops an envelope on the review of another call. A review with
+ *   nothing answered lists no question, and that cannot tell this call's review from another call's, so it keeps
+ *   nothing (fail-closed).
  *
  * Question texts are compared by ONE matcher for the parsed and review arms (`sameQuestion`). The parsed arm trusts
  * `alignAsk`'s forgiveness: it receives only alignments `alignAsk` produced, where a `null` entry is a row it forgave
