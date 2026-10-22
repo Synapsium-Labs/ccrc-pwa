@@ -1208,7 +1208,8 @@ and CRs, a line is skipped when it is a comment (`#` or `;`) or another key's `[
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
 past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file the box's model of systemd cannot
 decide (a value a quote or a backslash carries across lines, a CR inside a line, a non-ASCII byte in an assignment) refuses
-too: unmeasured is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+too, `~/.ccrc/exposure.env` included, and so does an exposure file that names the knob at all, since only the environment or
+`ccrc.env` sets it: unmeasured is not unset (D-6365). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
 it starts no full verification that could not finish in time, leaves the rest for the next update and still exits 0 (D-6464). The newest data set from

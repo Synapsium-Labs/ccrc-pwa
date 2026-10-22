@@ -3308,6 +3308,13 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(cd.journals, 'V is the longest measured, not the latest or the shortest').toHaveLength(2);
     expect(two.r).toEqual({ kept: 3, thinned: 0, left: 2, refused: 0, stopped: false });
     expect(two.lines).toContain(BUDGET_LINE(2));
+    // A 10 s verification, then a 100 s one (the review of fix round 3): V becomes 100 s, so at T0 + 200 the third does not start
+    // at T0 + 110. V frozen at the first time measured, or the shortest, would stay 10 s and start it.
+    const e = build();
+    const ce = timed([10, 100]);
+    const rising = run({ own: e.own, dirs: e.dirs, keep: 4, by: 'update', until: T0 + 200, fs: ce.fs, now: ce.now });
+    expect(ce.journals, 'V rises to the longest measured').toHaveLength(2);
+    expect(rising.r).toEqual({ kept: 3, thinned: 0, left: 2, refused: 0, stopped: false });
   });
 
   it('W23-T29 (D-6464): an interrupted thinning is finished whatever the budget, since it verifies nothing, and the walk stops at the next verification', () => {

@@ -23692,8 +23692,10 @@ _bak_ours() {
 # systemd's `EnvironmentFile=` (D-3979; the coordinator's ruling on review 817, F1, F2 and F8), never the two-argument
 # `_box_env_value`, whose `read` runs in the caller's locale: the model trims the value as systemd does, and what it cannot decide
 # refuses with its own clause (BUE_WHY, which names the file and never its bytes): a value a quote or a backslash carries across
-# lines, a CR inside a line, a non-ASCII byte in an assignment. So does an exposure file that is there but cannot be read, though
-# that file never carries this knob. The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
+# lines, a CR inside a line, a non-ASCII byte in an assignment. That holds for the exposure file too, which the model reads after
+# ccrc.env, as the unit does: one that is there but cannot be read, or that the model cannot decide, refuses; and since that file
+# never carries this knob (`ccrc expose` writes only its own keys), one that names it refuses too, rather than overriding ccrc.env
+# by presence as the unit's second EnvironmentFile= would (the review of fix round 3). The scan before it refuses what the model does not: ONE positive rule, over bytes (`LC_ALL=C`,
 # as D-3833 reads ccrc.env, so the box's locale cannot change an answer), on each line with its leading spaces, tabs and CRs gone
 # (the set `_box_env_value` trims): a comment (`#` or `;`, the set `_box_env_unit_whole` skips) is skipped; so is another key's
 # line, `[export ]NAME=` with NAME an identifier other than the knob (as D-3823 reads `export OLD_KEY=…`); a line that begins
@@ -23709,7 +23711,7 @@ _bak_data_keep() {
   if [ -z "$BAK_DATA_KEEP" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
     if [ -f "$f" ] && [ -r "$f" ]; then if _box_env_has_nul "$f"; then g=2; else LC_ALL=C awk -v k=CCRC_BACKUP_DATA_KEEP '{ sub(/^[ \t\r]+/, ""); t = $0; sub(/^export[ \t]+/, "", t) } !/\r./ && (/^[#;]/ || index($0, k "=") == 1 || (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && index(t, k "=") != 1)) { next } (" " $0 " ") ~ ("[^A-Za-z0-9_]" k "[^A-Za-z0-9_]") { f = 1; exit } END { exit !f }' "$f" || g=$?; fi; else g=3; fi
     case "$g" in 0) why="$f names it on a line this reader does not take (it reads only a plain KEY=value line)" ;; 1) ;; 3) why="$f is there but cannot be read" ;; *) why="$f could not be scanned" ;; esac
-    if [ -z "$why" ]; then _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) BAK_DATA_KEEP="$BUE_VAL" ;; 2) why="$CCRC_EXPOSURE_FILE is there but cannot be read" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
+    if [ -z "$why" ]; then _box_unit_env CCRC_BACKUP_DATA_KEEP; case $? in 0) if [ "$BUE_NAMED" -eq 0 ] || [ "$BUE_SRC" = "$f" ]; then BAK_DATA_KEEP="$BUE_VAL"; else why="$BUE_SRC names it, but only the environment or ${f##*/} sets this knob"; fi ;; 2) why="$CCRC_EXPOSURE_FILE is there but cannot be read" ;; *) why="${BUE_WHY:-$f could not be scanned}" ;; esac; fi
     [ -z "$why" ] || { BAK_DATA_KEEP_WHY="CCRC_BACKUP_DATA_KEEP cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
   BAK_DATA_KEEP="${BAK_DATA_KEEP:-3}"

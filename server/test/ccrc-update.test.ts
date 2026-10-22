@@ -14320,6 +14320,22 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(out).toBe(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/exposure.env is there but cannot be read\n`);
     });
 
+    // The exposure file never carries the knob, so it never overrides ccrc.env by presence, as the unit's second EnvironmentFile=
+    // would; and a shape the model does not decide there refuses as it does in ccrc.env (the review of fix round 3).
+    const EXPOSED: readonly (readonly [string, Buffer, string])[] = [
+      ['an exposure file that names the knob', bytes(`CCRC_AUTH=on\n${K}=2\n`), 'names it, but only the environment or ccrc.env sets this knob'],
+      ['an exposure file that names the knob with an empty value', bytes(`${K}=\n`), 'names it, but only the environment or ccrc.env sets this knob'],
+      ['an exposure file with a non-ASCII byte in an assignment', bytes('CCRC_ORIGIN=https://b', [0xc3, 0xbc], 'cher.example\n'), 'line 1 has a non-ASCII byte in a NAME=value line'],
+    ];
+    it.each(EXPOSED)('W23-B17: %s refuses, and ccrc.env\'s own value is not taken (D-6365, review 817 F1)', (shape, text, clause) => {
+      const home = freshUpdateBox('ccrc-fx-w23-b17x-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'exposure.env'), text);
+      const out = dataKeep(home, bytes(`${K}=9\n`), 'C');
+      expect(out.startsWith(`rc 1 keep  why ${K} cannot be measured: ~/.ccrc/exposure.env ${clause}`), `${shape}: ${out}`).toBe(true);
+      expect(out, `${shape}: the refusal never prints the file's bytes`).not.toMatch(/=\d/);
+    });
+
     it('W23-B17: a ccrc.env that holds a NUL byte, and a scan that cannot run or is killed, could not be scanned: each refuses (D-6365, fix round 2)', () => {
       const SCANNED = `rc 1 keep  why ${K} cannot be measured: ~/.ccrc/ccrc.env could not be scanned\n`;
       // bash's `read` drops a NUL, so the line `_box_env_value` reads is not the one in the file.
