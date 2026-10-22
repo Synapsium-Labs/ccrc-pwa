@@ -1,3 +1,12 @@
 {
-  "exemptions": []
+  "exemptions": [
+    {
+      "pr": 1132,
+      "file": "ccd/ccd",
+      "cap": 751,
+      "reason": "path-identity W3 (#1132): the worktree-identity walk, the entry field, the rows rung and the cwd probe grow ccd/ccd by 751 net code lines (17869 -> 18620, measured at 0135c60b3); the entry goes once #1132 lands",
+      "ruling": "operator 2026-10-21: W3 named exempt for ccd/ccd",
+      "since": "2026-10-22"
+    }
+  ]
 }
