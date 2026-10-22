@@ -93,7 +93,7 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
   // Gate 2: nothing conversational after it. Line positions decide, with one exception by message id (D-6324): an
   // `assistant` line whose message id is the AskUserQuestion line's own is that message's trailing block (a text block
   // logged after the tool_use), not the conversation moving on. Any other later line, a later assistant message
-  // included, still counts. Without it the alignment answered null for about 2% of answered asks.
+  // included, still counts. Without it the alignment answered null for those asks (6 of about 270 answered asks on the fleet corpus, measured 2026-10-22, plan T1a).
   const own = found.messageId;
   if (conversational.some((c) => c.at > found!.at && (own === null || c.assistantMessageId !== own))) return null;
   return found.questions;
