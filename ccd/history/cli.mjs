@@ -56,12 +56,12 @@ import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
-  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
-  decideRecallOff, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  decideSeamInPane, decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
+  decideRecallOff, parseSpoolLine,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
-import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
@@ -454,6 +454,7 @@ export function render(env) {
 //     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
 //     2. §8.3's Darwin and recorded-role rows (decideCliStore): 9 before any identity, so a server box needs no
 //        pane;
+//     2a. the seam variables inside a pane (decideSeamInPane, W2-D39): 2 headless-in-pane, before any tmux spawn;
 //     3. the identity (decideIdentity over a bounded `tmux display-message -p -t "$TMUX_PANE" '#S'`);
 //     4. the harness (decideHarness over $REG/<id>.harness: unsupported and unreadable are refusals, never 6);
 //     5. the generation (resolveGeneration: CCRC_SESSION_GENERATION, then $REG/<id>.generation, then newest);
@@ -688,6 +689,17 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
     return refusal(d.exit, d.reason, null, null, null);
   }
   const pane = process.env.TMUX_PANE ?? null;
+  // W2-D39: the seam variables inside a pane are 2 headless-in-pane, decided before any tmux spawn (C4, C31). Each of
+  // the three is read here, by name and once; lib decides what set means (W2-D45).
+  const inPane = decideSeamInPane({
+    pane,
+    recall: {
+      session: process.env.CCRC_RECALL_SESSION ?? null,
+      arm: process.env.CCRC_RECALL_ARM ?? null,
+      asof: process.env.CCRC_RECALL_ASOF ?? null,
+    },
+  });
+  if (!inPane.ok) return refusal(inPane.rc, inPane.reason, null, null, null);
   const who = decideIdentity({ pane, tmux: paneOk(pane) ? tmuxSession(pane) : null });
   if (!who.ok) return refusal(who.rc, who.reason, null, null, null);
   const id = who.id;
@@ -812,17 +824,6 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
-/** The --json scope object (§8.3). A widened scope names only a bounded prefix; `families_total` is complete. */
-function scopeJson(rc) {
-  return {
-    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
-      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
-    families_total: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length,
-  };
-}
-
 /** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
  *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
  *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
@@ -831,7 +832,7 @@ function emitResult(rc, res, json) {
   let text;
   if (json) {
     text = `${JSON.stringify(redactFinalJson(readEnvelope({
-      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
+      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJsonOf(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
       // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.

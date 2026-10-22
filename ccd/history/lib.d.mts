@@ -518,6 +518,10 @@ export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
   { ok: true; id: string } | ScopeRefusal<'no-identity' | 'bad-id'>;
+/** The headless seam's three values as the CLI read them (§8.2; W2-D39, W2-D45): null when the variable is undefined. */
+export interface RecallSeamValues { session: string | null; arm: string | null; asof: string | null }
+export function recallSeamEngaged(recall: RecallSeamValues): boolean;
+export function decideSeamInPane(i: { pane: string | null; recall: RecallSeamValues }): { ok: true } | ScopeRefusal<'headless-in-pane'>;
 export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
 export function decideHarness(p: Presence<string>):
@@ -538,6 +542,43 @@ export type ScopedId =
   | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }
   | { kind: 'ambiguous'; candidates: string[] } | { kind: 'bad' };
 export function resolveScopedId(i: { wanted: string; inScope: readonly string[]; outOfScope: readonly string[] }): ScopedId;
+// --- W2-2a Task 1: the as-of cut, lib's one definition (W2-D34, W2-D38, W2-D39)
+/** One row of N's holding copy, in file order, in derive.mjs's copyRows column names. */
+export interface AsOfCopyRow {
+  readonly entry_id: number | bigint; readonly uuid: string; readonly line: number | bigint; readonly ts_ms: number | bigint | null;
+  readonly type: string; readonly provenance: string; readonly is_compact_summary: number | bigint;
+}
+/** The cut at boundary N (W2-D38). Plain data: it rides on `rc.scope.cut`. */
+export interface AsOfCut {
+  readonly asof: string; readonly tsCut: number; readonly boundaryEntryId: number; readonly summaryEntryId: number | null;
+  readonly keptUuids: readonly string[]; readonly holdingFileId: number; readonly boundaryLine: number;
+}
+export function asOfCut(i: {
+  asof: string;
+  boundary: { entryId: number; uuid: string; main: boolean; anchorUuid: string | null } | null;
+  copy: { fileId: number; rows: readonly AsOfCopyRow[] } | null;
+  kept: Iterable<unknown>;
+}): { ok: true; cut: AsOfCut } | ScopeRefusal<'asof-invalid'>;
+/** The cut's one SQL predicate over an entries alias: one parenthesised boolean term, named `asof_` parameters only. For a
+ *  hidden row it is never true (NULL or false): use it only as a filter; negate it only through coalesce((…), 0). */
+export function asOfEntrySql(alias: string): string;
+/** asOfEntrySql's named parameters for a cut, by bare name: exactly the names it uses; kept(N) as JSON text. */
+export function asOfBinds(cut: AsOfCut): {
+  asof_ts: number; asof_file: number; asof_line: number; asof_boundary: number; asof_summary: number | null; asof_kept: string;
+};
+// --- W2-2a Task 3: the as-of cut's node, epoch and entry statements (W2-D35, W2-D36, W2-D38). Each binds asOfBinds' names plus one JSON array.
+/** Of the node ids at :asof_nodes, those the cut hides (column node_id). A leaf other than N's is hidden when its boundary entry is,
+ *  or when it has a summary row (summaryRowFor's pick over its holding copy) and that row is (D-6282), or when its stored
+ *  summary_blob_id is not NULL and the pick is NULL or names another blob (D-6284); a node is hidden when a leaf
+ *  under it is, and when a condensed node at or below it has no leaf below it, however deep (R4 at every depth, D-6283). */
+export function asOfHiddenNodesSql(): string;
+/** Of the node ids at :asof_nodes, each non-condensed node's summary row as the store gives it (columns node_id, entry_id; entry_id NULL
+ *  for no pick): the pick asOfHiddenNodesSql judges a leaf's summary row by, held to pickHoldingCopy plus summaryRowFor by a test. D-6282. */
+export function asOfSummaryPickSql(): string;
+/** Of the epoch session uuids at :asof_epochs, those one of whose transcripts holds a row the cut shows (column cc_session_uuid). */
+export function asOfVisibleEpochsSql(): string;
+/** Of the entry ids at :asof_entries, those the cut shows (column entry_id). */
+export function asOfVisibleEntriesSql(): string;
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
@@ -903,6 +944,7 @@ export function expandArgsOf(parsed: { positional: readonly string[]; opts: Read
   { ok: true; args: ExpandArgs } | { ok: false; reason: 'bad-args' };
 export function expandResumeOf(cursor: Readonly<Record<string, unknown>> | null):
   { target: string | null; around: string | null; before: number; after: number } | null;
+export function expandCursorKey(key: string, asof: string | null): string;
 export function entryScopeVerdict(i: { found: boolean; inScope: boolean }): 'ok' | 'out-of-scope' | 'not-found';
 export function expandCuts(i: { whole: boolean; kind: 'entry' | 'sidecar'; provenance: string | null }): boolean;
 export function decideExpandCursor(i: { cursor: Readonly<Record<string, unknown>> | null; key: string; total: number }):
