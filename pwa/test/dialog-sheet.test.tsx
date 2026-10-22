@@ -85,15 +85,21 @@ const parsedDialog = (patch: Partial<Dialog> = {}): Dialog => ({
 // D-6325: the transcript's copy of one question, as the server attaches it to a scraped menu (`Dialog.ask`), every row
 // aligned. It is what an ask whose envelope has aged out is rendered from: a recorded pane carries none of its own, and
 // with none the surface says it cannot read the question (`askSource`).
-const transcribed = (dialog: Dialog, question: HookAskQuestion): Dialog => ({
-  ...dialog,
-  ask: {
-    question: question.question,
-    ...(question.header === undefined ? {} : { header: question.header }),
-    multiSelect: question.multiSelect === true,
-    options: question.options.map((o) => ({ ...o })),
-  },
-});
+const transcribed = (dialog: Dialog, question: HookAskQuestion): Dialog => {
+  // The server attaches `Dialog.ask` only behind `dialog?.parsed` (`server/src/sessionws.ts`), and a multiSelect menu is
+  // never parsed (`options: []`, its boxes are `Dialog.multi`), so a case that puts a transcript copy on an unparsed
+  // pane feeds the sheet an input production never sends. Fail at once rather than pin it.
+  if (!dialog.parsed) throw new Error(`transcribed(): the server never attaches Dialog.ask to an unparsed pane (${dialog.id})`);
+  return {
+    ...dialog,
+    ask: {
+      question: question.question,
+      ...(question.header === undefined ? {} : { header: question.header }),
+      multiSelect: question.multiSelect === true,
+      options: question.options.map((o) => ({ ...o })),
+    },
+  };
+};
 
 /** A recorded pane with the transcript's copy of question `i` of `asks` attached (`transcribed`): an ask whose envelope
  *  has aged out. */
@@ -2305,8 +2311,7 @@ describe('multiSelect boxes (D-5091)', () => {
     const call = deferred();
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
     const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    // D-6325: every pane after the hand-off carries the transcript's copy of its question (`aged`).
-    const { store } = renderAsk(DRINK_FEATURES_TOOLS, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'), 1));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
     fireEvent.click(box('Tracing'));
     fireEvent.click(commit('Next'));
 
@@ -2318,23 +2323,16 @@ describe('multiSelect boxes (D-5091)', () => {
     };
     busy();
     // The pane repaints under the same id while the server ticks: still the set sent, still busy.
-    show(store, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'), 1));
+    show(store, pane('cc300-ask-multiselect-digit1'));
     busy();
     fireEvent.click(screen.getByTestId('sheet-overlay'));
     expect(heading('Which features do you want?'), 'the envelope sheet hid mid-commit').toBeInTheDocument();
-
-    // ask_cleared mid-commit: the transcript's sheet carries the same set and the same call.
-    act(() => store.getState().apply({ type: 'ask_cleared' }));
-    expect(document.querySelector('[data-source="hook"]')).toBeNull();
-    busy();
-    fireEvent.click(screen.getByTestId('sheet-overlay'));
-    expect(heading('Which features do you want?'), 'the transcript\'s sheet hid mid-commit').toBeInTheDocument();
 
     // Ok: like a tapped option, the sheet waits for the pane to move on.
     await act(async () => call.resolve());
     busy();
     // The next question (a new id): its own boxes, from its own pane, ready.
-    show(store, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'), 2));
+    show(store, pane('cc300-ask-multiselect-submit-open'));
     expect(heading('Which tools?')).toBeInTheDocument();
     expect(ticks()).toEqual([]);
     expect(box('Saw')).toBeEnabled();
@@ -2359,15 +2357,15 @@ describe('multiSelect boxes (D-5091)', () => {
     expect(commit('Review answers')).toBeEnabled();
   });
 
-  it('a single-select screen arriving mid-commit waits too, its own-words field included', () => {
-    // DERIVED sequence: the recorded multiSelect question, then a recorded single-select screen (`cc300-ask-1q-open`)
-    // before the commit answers. One call at a time, on the transcript's sheet as on the envelope's.
+  it('a single-select screen arriving mid-commit waits too, its Other row included', () => {
+    // DERIVED sequence: the recorded multiSelect question, then the ask's recorded single-select question
+    // (`cc300-ask-q2-of-2-single`, as the pane paints it after a ← back) before the commit answers. One call at a time.
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
-    const { store } = renderAsk(null, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'), 1));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
     fireEvent.click(commit('Next'));
-    show(store, aged(COLOUR_ONE, pane('cc300-ask-1q-open')));
-    expect(heading('Which colour?')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Red/ })).toBeDisabled();
+    show(store, pane('cc300-ask-q2-of-2-single'));
+    expect(heading('Which drink?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Tea/ })).toBeDisabled();
     // D-6325: the free-text row is the `Other` row, closed until chosen, and it waits like every other row.
     expect(screen.getByRole('button', { name: /^Other/ })).toBeDisabled();
   });
@@ -2417,6 +2415,22 @@ describe('multiSelect boxes (D-5091)', () => {
       expect(screen.queryByText(/│/)).toBeNull();
       expect(screen.queryByText(/staging cluster/)).toBeNull();
       expect(screen.queryByText(/observability/)).toBeNull();
+    });
+
+    it('ask_cleared while a commit is in flight leaves the unreadable surface, and the pending call is the only call', async () => {
+      let resolve!: () => void;
+      const call = new Promise<DialogAnswered>((res) => { resolve = () => res({ ok: true }); });
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call);
+      const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+      fireEvent.click(box('Tracing'));
+      fireEvent.click(commit('Next'));
+      expect(multi).toHaveBeenCalledTimes(1);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      noBoxes();
+      await act(async () => resolve());
+      noBoxes();
+      expect(multi).toHaveBeenCalledTimes(1);
     });
 
     it('a set touched on the envelope sheet is not sent by the hand-off, and its boxes are gone', () => {
@@ -2502,7 +2516,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, [chat()], 'transcript');
   });
 
-  it('Chat about this waits while a multiSelect commit is under way, on both sheets', () => {
+  it('Chat about this waits while a multiSelect commit is under way', () => {
     // The commit's next screen (question 1 of the same ask, `cc300-ask-q2-of-2-single`'s Which drink?, as the pane
     // paints it after a ← back) reaches the sheet before the commit answers. DERIVED sequence of recorded screens.
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
@@ -2513,12 +2527,6 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     expect(screen.getByRole('heading', { name: 'Which drink?' })).toBeInTheDocument();
     expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
     declineRowsWait(option, [chat()], 'envelope');
-    cleanup();
-
-    const scraped = renderAsk(null, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'), 1));
-    fireEvent.click(commit('Next'));
-    show(scraped.store, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-q2-of-2-single'), 0));
-    declineRowsWait(option, [chat()], 'transcript');
   });
 
   it('the review\'s Submit and Cancel wait while own words are being sent, on both sheets', () => {
@@ -2540,7 +2548,7 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, reviewRows(), 'scraped');
   });
 
-  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way, on both sheets', () => {
+  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way', () => {
     // The last question's commit lands on the review (measured: `-submit-open`, then `cc300-ask-review-multiselect`).
     vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
     const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
@@ -2550,13 +2558,6 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     show(envelope.store, pane('cc300-ask-review-multiselect'));
     expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
     declineRowsWait(option, reviewRows(), 'envelope');
-    cleanup();
-
-    const scraped = renderAsk(null, aged(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'), 2));
-    fireEvent.click(box('Saw'));
-    fireEvent.click(commit('Review answers'));
-    show(scraped.store, pane('cc300-ask-review-multiselect'));
-    declineRowsWait(option, reviewRows(), 'scraped');
   });
 
   it('the own-words field and Send wait while a tapped option\'s answer is under way, on both sheets', () => {
@@ -2877,18 +2878,15 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
 
   it('the one-line notes under the boxes sit as far below the last box as the own-words region does', () => {
     // Measured flush (0px) under the last box's rule at every width before this rule; the notes follow `.opts`
-    // directly, on both sources of the question, which is the structure the rule selects on.
-    for (const ask of [DRINK_FEATURES_TOOLS, null]) {
-      const focused = pane('cc300-ask-multiselect-next-focused');
-      renderAsk(ask, ask === null ? aged(DRINK_FEATURES_TOOLS, focused, 1) : focused);
-      const notes = [...document.querySelectorAll('.dlg-copy')];
-      expect(notes.map((n) => n.textContent), String(ask !== null)).toEqual([
-        expect.stringMatching(/cursor is on the Next row/),
-        expect.stringMatching(/^To add your own answer, use the terminal/),
-      ]);
-      expect(notes[0]!.previousElementSibling).toHaveClass('opts');
-      cleanup();
-    }
+    // directly, which is the structure the rule selects on. A multiSelect question is drawn from the hook's envelope
+    // only: the transcript's copy never rides on a multiSelect pane (it is unparsed).
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-focused'));
+    const notes = [...document.querySelectorAll('.dlg-copy')];
+    expect(notes.map((n) => n.textContent)).toEqual([
+      expect.stringMatching(/cursor is on the Next row/),
+      expect.stringMatching(/^To add your own answer, use the terminal/),
+    ]);
+    expect(notes[0]!.previousElementSibling).toHaveClass('opts');
     const gap = declValue(ruleIn(css, '.opts + .dlg-copy'), 'margin-top');
     expect(gap).toBe('var(--sp-3)');
     expect(declValue(ruleIn(css, '.dlg-words'), 'margin')).toBe(norm(`${gap} 0`));
