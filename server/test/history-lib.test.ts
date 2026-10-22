@@ -11516,9 +11516,12 @@ describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsO
   /** A marker as Task 1's fold answers it, from the one formatter (W2-D44). */
   const markerOf = (l: Lib, pairs: Pair[], storeId: string = STORE): Marker =>
     l.headlessMarkerOf({ state: 'value', value: l.formatHeadlessList({ storeId, pairs }) });
-  /** The same marker text with its first LF made CRLF: a CR anywhere is malformed (W2-D44). */
-  const withCr = (l: Lib): Marker =>
-    l.headlessMarkerOf({ state: 'value', value: l.formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] }).replace('\n', '\r\n') });
+  /** The same marker text with one CR put before its first LF (so that LF is a CRLF): a CR anywhere is malformed (W2-D44). */
+  const withCr = (l: Lib): Marker => {
+    const text = l.formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] });
+    const lf = text.indexOf('\n');
+    return l.headlessMarkerOf({ state: 'value', value: text.slice(0, lf) + '\r\n' + text.slice(lf + 1) });
+  };
   /** A marker that throws when looked at: a row before the marker row never reads it. */
   const UNTOUCHABLE = { get ok(): never { throw new Error('the marker was looked at'); } } as unknown as Marker;
   /** A function's text in lib.mjs: its `export function <name>(` line through the next line that is exactly `}`. */
