@@ -2689,6 +2689,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         many rows it removed). The probe now reads that count, any `delegation attempt collapse failed` line (an
         ANOMALY), and, from v0.0.553 on, passes that still file an attempt. Baseline before it: `cpAttempts` 780, and
         7 to 38 attempt-filing passes an hour. This hour's /health miss (about 01:16) fell on one (`stallMid` 21.7 s).
+      - 01:55: no tap. v0.0.554 (PWA work) was released, unapplied. Server 15919M free. STATUS: fleet and server
+        v0.0.544, newest v0.0.554, stable v0.0.502, intent dev/auto=off, backups fleet 228M/server 15508M, disk free
+        fleet 159G/work volume 13G/server 16G.
         - STATUS: fleet and server v0.0.493, newest v0.0.505, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 188G/work volume 51G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
