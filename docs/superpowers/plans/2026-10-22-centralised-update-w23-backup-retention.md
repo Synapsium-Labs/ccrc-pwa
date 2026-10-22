@@ -159,7 +159,8 @@ One PR, from this workspace's own branch.
 - **The update that installs this wave cannot thin.** `cmd_update` runs as the process that started it: its `_bak_gc` (called at ccd/ccrc:18653) is the old tree's function text, which has no `_bak_thin` call, while `$CCRC_HERE/../deploy/...` already resolves to the new tree (`CCRC_HERE` is the logical `$HOME/ccrc/ccd`, ccd/ccrc:1670-1672). So the first thinning on a box is its next completed update or `ccrc backup`. For the server box, the PR body names one `ccrc backup` on that box, run by the operator right after the rollout, as the documented first thinning: it runs outside `update.json` and the control plane's deadline, and it needs about 2G free for that backup's own copy.
 - **Mixed trees.** An old `_bak_gc` with the new helper never calls `thin`. The new helper's `classify` answers exactly as before for a dir that has no record. A new `_bak_gc` with an old helper (a move to an older tree by update) skips thinning by name. A rollback by flip never thins (D-6355); a rollback by re-install thins as the update it runs.
 - **A damaged dir is never thinned.** A dir `quickState` calls damaged, and a counted candidate `classify` calls `invalid`, keeps its bytes as evidence and leaves only by the newest-`CCRC_BACKUP_KEEP` count. A same-length corruption past the count is invisible to `quickState` and is thinned like any full dir: the N counted sets are verified, so nothing that a restore could use is lost.
-- **`CCRC_BACKUP_DATA_KEEP` is read from the process environment, else from `~/.ccrc/ccrc.env`** (D-6360), as `_upd_deadline_ms` reads its knob (ccd/ccrc:19280-19290, through `_box_env_value`, :3161). So a console-driven move and the watchdog's unattended run honour an operator's setting in `ccrc.env`. An invalid value there is refused like an invalid value in the environment: nothing is pruned or thinned. `CCRC_BACKUP_KEEP` stays environment-only, as documented.
+- **`CCRC_BACKUP_DATA_KEEP` is read from the process environment, else from `~/.ccrc/ccrc.env`** (D-6360), in the order `_upd_deadline_ms` reads its knob (ccd/ccrc:19280-19290). Since review 817 its value is read through `_box_unit_env`, the box's byte-wise model of systemd (D-6365), not through `_box_env_value` (:3161) as `_upd_deadline_ms` still reads its own. So a console-driven move and the watchdog's unattended run honour an operator's setting in `ccrc.env`. An invalid value there is refused like an invalid value in the environment: nothing is pruned or thinned. `CCRC_BACKUP_KEEP` stays environment-only, as documented.
+- **The deadline has two parsers (review 817 F4, a residual carried to wave 24).** `_upd_deadline_ms` takes `CCRC_UPDATE_DEADLINE_MS` from the environment, else from `ccrc.env` through two-argument `_box_env_value`, which does not trim, and reads only `^[1-9][0-9]{0,14}$`; anything else is 900000. The server takes `Number(…)` with `isSafeInteger && > 0` (`server/src/config.ts`), after systemd's `EnvironmentFile=` has trimmed the value. They agree on canonical digits only. A non-canonical spelling in `ccrc.env` (`6e5`, `0600000`, `600000.0`, `+600000`, a space before or after it, `0x927C0`) reads 900000 in the bash and 600000 in the server. So does a user-manager value larger than the file's, because the detached update reads its environment first and the server unit's file overrides it. Since D-6464 the bash reading sets `thin`'s bound, so in either case the bound lands past the server's deadline (T + 665 s against T + 600 s at those figures), and a `thin` that runs to it releases the lease `failed` and halts the fleet until ack. It needs one of those two shapes. Wave 24 makes every operator tunable read `ccrc.env` through one reader, and the coordinator carries this design input there: the bound uses the smaller of the readings the bash can make, and a non-canonical or undecidable reading starts no verification that run. `_upd_deadline_ms` is unchanged in this wave.
 - **Thinning cannot be undone.** Every guard below errs toward keeping: an unparsable floor, a classifier failure, an invalid knob, a helper that is missing, older or failing, an update in a failed gate, a restore child, and a spent verification budget all thin nothing.
 
 ## Saving, from the measured sizes
@@ -246,7 +247,7 @@ These twenty numbers, starting at D-6346, were issued to run 775. This plan defi
 - **D-6362.** `thinBackups` never thins the `--verified` dir: wherever it falls in the walk it is counted while the count is below the keep, and otherwise left as it is, except that a verified dir past the count whose `coord.db` predates a schema migration may be the one pre-migration keep (D-6358), which is kept, not merely left. A verified dir that reads as anything but whole, stale or empty, an interrupted thinning above all, is refused with the walk's WARN (`thin-verified-not-whole`) and never finished: the only thing `thin` removes from it is a stale thinning record. It also refuses a `dirs` list whose basenames are not strictly descending (newest first), as `thin-usage` (exit 70 through `main`), since the count means "the newest N" only in that order. Why: D-6346's guarantee that the keep-set's data keep survives must not rest on the caller's ordering.
 - **D-6363.** The `thin` summary's `left` counts only dirs that still hold a data set and were left as they are: a damaged or invalid dir, a dir refused with a WARN, and every dir untouched past a stop that still holds one. A dir already thinned and a dir with no data set (`none`, an empty v1) are not counted, nor is a path that is not a directory. A dir is counted only after everything its count reads has been read (its `user_version` included), so no dir is both counted and left (review 794, F8). Own counts the same way. A refused own (a WARN on its quick reading or on its `user_version` read) is left, never kept, and so is an own that reads as anything but `full` while it still holds a data set (review 806, F2). An own whose `lstat` fails ends the run before the walk; own (unless it is not a directory) and every walked dir that still holds a data set are then left, as past a stop (fix round 2's own review). So own is counted once, kept or left. Why: this line is the wave's only visibility (D-6351) and must not read as data sets still on disk.
 - **D-6364.** `quickState`'s legacy arm reads `coord.db` the way `classify`'s legacy arm does, through `inspectDb`, with the header check and the table list but not `quick_check`. A manifest-less dir whose `coord.db` is not SQLite, cannot be opened read-only, or holds a `delegation_*` table is `damaged` and is kept, never thinned as `legacy`. This replaces D-6361's separate 16-byte read: one read now decides both questions. Why: by the coordinator's ruling on review 794 (F2), a damaged dir is never recorded as thinned by design. The commonest real `invalid` backup is a refused capture, which leaves `<ts>/coord.db` beside no manifest, and thinning it would drop the evidence and relabel the damage. `quick_check` stays out because it scans the whole database, and past the count presence and size decide (D-6350). The table list costs one read-only open of a rare legacy-shaped dir.
-- **D-6365.** Unmeasured is not unset. The rule applies when `CCRC_BACKUP_DATA_KEEP` is not in the process environment and `~/.ccrc/ccrc.env` exists. If the file cannot be read, or names `CCRC_BACKUP_DATA_KEEP` on a line this reader does not take, `_bak_data_keep` refuses exactly as it does for an invalid value. A dangling link or a directory at that path counts as a file that cannot be read. Which lines it takes is one positive rule, amended by the coordinator's ruling on review 806 (F1, F4a), and it replaces the list of refused shapes this entry gave before. It reads bytes, under `LC_ALL=C` (D-3833), so the box's locale cannot change an answer. Each line is first trimmed of its leading spaces, tabs and CRs, the set `_box_env_value` trims. Then: (a) a line that begins with `#` or `;` is a comment and is skipped (the set `_box_env_unit_whole` skips); (b) a line that begins, optionally after `export` and spaces or tabs, with an identifier `[A-Za-z_][A-Za-z0-9_]*` followed at once by `=`, where the identifier is not the knob, is another key's line and is skipped (D-3823 reads `export OLD_KEY=…` and `export NOTE=KEY=…` the same way); a line that begins with exactly `CCRC_BACKUP_DATA_KEEP=` is the one `_box_env_value` takes; (c) any other line that names the knob as a whole token (no `[A-Za-z0-9_]` byte on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. The scan reads every line, so an odd line beside a plain one still refuses. A line that holds a CR past its lead is never skipped by (a) or (b): systemd ends a line at a bare CR and reads what follows as a line of its own, so such a line refuses when it names the knob. A file that holds a NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), could not be scanned, and neither could a scan that answers anything but 0 or 1 (an awk that cannot run, or is killed); both refuse (fix round 2's own review). Nothing is pruned or thinned, and the refusal names the knob and the file, never the file's bytes. Why: by the coordinator's ruling on review 794 (F3), thinning cannot be undone. An operator who set a high keep in `ccrc.env` to stop thinning would otherwise get the default of 3 silently, and every data set past the third would be deleted on the next completed update, `ccrc backup`, console move or watchdog run. The same fallback is harmless in `_upd_deadline_ms`, because there the default deletes nothing.
+- **D-6365.** Unmeasured is not unset. The rule applies when `CCRC_BACKUP_DATA_KEEP` is not in the process environment and `~/.ccrc/ccrc.env` exists. If the file cannot be read, or names `CCRC_BACKUP_DATA_KEEP` on a line this reader does not take, `_bak_data_keep` refuses exactly as it does for an invalid value. A dangling link or a directory at that path counts as a file that cannot be read. The knob's value is read through `_box_unit_env CCRC_BACKUP_DATA_KEEP`, the tree's byte-wise model of systemd's `EnvironmentFile=` (D-3979, `local LC_ALL=C`), no longer through two-argument `_box_env_value`, whose `read` runs in the caller's locale (amended by the coordinator's ruling on review 817, F1, F2 and F8). Its answers map so: rc 0 with the knob named gives that value, trimmed as systemd trims it, to `_keep_ok`; rc 0 without it gives 3; rc 3, a shape the model does not decide (a value a quote or a backslash carries across lines, a CR inside a line, a non-ASCII byte in an assignment), refuses as unmeasured with the model's own clause (`BUE_WHY`), which names the file and never its bytes; an exposure file that is there but cannot be read (rc 2) refuses too, though that file never carries this knob. Precedence is unchanged: the process environment, else `ccrc.env`, else 3. A scan runs before the model and refuses what the model does not. Which lines it takes is one positive rule, amended by the coordinator's ruling on review 806 (F1, F4a), and it replaces the list of refused shapes this entry gave before. The scan reads bytes, under `LC_ALL=C` (D-3833), and so does the model, so the box's locale cannot change an answer. Each line is first trimmed of its leading spaces, tabs and CRs, the set `_box_env_value` trims. Then: (a) a line that begins with `#` or `;` is a comment and is skipped (the set `_box_env_unit_whole` skips); (b) a line that begins, optionally after `export` and spaces or tabs, with an identifier `[A-Za-z_][A-Za-z0-9_]*` followed at once by `=`, where the identifier is not the knob, is another key's line and is skipped (D-3823 reads `export OLD_KEY=…` and `export NOTE=KEY=…` the same way); a line that begins with exactly `CCRC_BACKUP_DATA_KEEP=` is the one the model reads; (c) any other line that names the knob as a whole token (no `[A-Za-z0-9_]` byte on either side) refuses, `export CCRC_BACKUP_DATA_KEEP=` included. The scan reads every line, so an odd line beside a plain one still refuses. A line that holds a CR past its lead is never skipped by (a) or (b): systemd ends a line at a bare CR and reads what follows as a line of its own, so such a line refuses when it names the knob. A file that holds a NUL byte, which bash's `read` drops and systemd cannot read at all (`_box_env_has_nul`, D-3832), could not be scanned, and neither could a scan that answers anything but 0 or 1 (an awk that cannot run, or is killed); both refuse (fix round 2's own review). Nothing is pruned or thinned, and the refusal names the knob and the file, never the file's bytes. Why: by the coordinator's ruling on review 794 (F3), thinning cannot be undone. An operator who set a high keep in `ccrc.env` to stop thinning would otherwise get the default of 3 silently, and every data set past the third would be deleted on the next completed update, `ccrc backup`, console move or watchdog run. The same fallback is harmless in `_upd_deadline_ms`, because there the default deletes nothing.
 - **D-6464.** On the update path the thinning has a time budget, on the control plane's own clock (the coordinator's ruling F6b on mail 8134, recorded in the addendum to the rulings on review 806).
   - **The bound.** `_bak_gc update` passes `thin --until <unix seconds>`: the instant of D-6356's re-stamp, plus `_upd_deadline_ms`, less a margin of 235 s. The control plane's deadline runs from the last `updatedAt` it read, and the re-stamp is the last one this run writes before `_bak_gc`. `cmd_update` reads that `updatedAt` back from the report it wrote. When the read fails or is not whole seconds, it falls back to the second it read just before the write, which is never later. Seconds throughout; no `date +%N`.
   - **The margin, 235 s**, derived:
@@ -254,11 +255,12 @@ These twenty numbers, starting at D-6346, were issued to run 775. This plan defi
     - 75 s for the control plane to read the final report. Its deadline runs on what its inventory last read. The inventory runs once a minute (`UPDATE_INVENTORY_MS`), gated on a 2 s tick and stamped as it starts, and a read can take its 10 s budget (`INVENTORY_BUDGET_MS`): 72 s, rounded up;
     - 10 s for what follows `thin`: the unlock, and `cmd_update`'s final report.
 
-    The count prune runs before `thin`, inside the window, so the absolute bound already accounts for it. Two boxes' clocks never meet here: the box that thins is the server box (a fleet box's backups hold no `coord.db`), whose `_upd_deadline_ms` reads the same `ccrc.env` as the server's own deadline.
+    The count prune runs before `thin`, inside the window, so the absolute bound already accounts for it. Two boxes' clocks never meet here: the box that thins is the server box (a fleet box's backups hold no `coord.db`), whose `_upd_deadline_ms` reads the same `ccrc.env` as the server's own deadline, though by its own parse: the two agree on canonical digits only (Risk notes, review 817 F4).
   - **`thin` never starts a full verification it cannot expect to finish by the bound.** Before each one, at the count and at the pre-migration keep, it compares now plus V with the bound. V is the longest verification this run has timed, or 150 s until one has run.
     - When the check fails, the walk ends there. Every dir it did not reach that still holds a data set is left (D-6363).
     - One line says so: `thinning stopped at its time budget; N left as they are; the next update continues`. The summary line follows.
-    - The exit is 0. This is not a refusal and not the verification budget's exit 3, so neither the update's exit nor `ccrc backup`'s changes.
+    - The exit is 0. This is not a refusal and not the verification budget's exit 3, so neither the update's exit nor `ccrc backup`'s changes. A refusal still exits 3, one behind the stop included (review 817 F7).
+    - A dir behind the stop is read as the walk reads it, through the walk's own first step (review 817 F6). What the walk refuses there is refused there too, with its WARN, counted in `refused` and, unless it is no directory, as left: a `--verified` dir that is not whole (an interrupted one included, which is never finished, D-6362), a quick reading that carries an error, and a path that is no directory.
   - **What the budget never gates.** An interrupted thinning is finished whatever the budget, because finishing it verifies nothing. That includes one past a time stop, which the stop's own pass finishes (the second review of fix round 2). The record-first order is unchanged, and the walk never stops between a record and its deletes.
   - **Who passes a bound.** `ccrc backup` passes none: it holds no lease, and the operator is waiting on it. CLI and rollout updates take the same bound as a console update: one path, and harmless where there is no lease.
   - **An absent or bad bound.** No `--until` means no budget (an older caller, or a direct call). An `--until` that is not a whole number of seconds is a usage error (exit 70), as any bad argument is.
@@ -893,7 +895,7 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     |---|---|---|
     | D-6365: the scan reads bytes | `LC_ALL=C` dropped | B17 under C.UTF-8 (the 0xA0 and 0xFF leads) |
     | D-6365 (b): only another key's line is skipped | (b) takes the knob too | B17: an export of the knob, an odd line beside a plain one, the end-to-end row, the UTF-8 row |
-    | D-6365 (c): the knob as a whole token anywhere | (c) narrowed to the start of the line | B17: the NBSP, 0xA0, 0xFF and vertical-tab leads, an export of the knob, an odd line, the end-to-end row, the UTF-8 row |
+    | D-6365 (c): the knob as a whole token anywhere | (c) narrowed to the start of the line | B17: the NBSP, 0xA0, 0xFF and vertical-tab leads, an export of the knob, an odd line, a bare CR inside another key's line and inside a comment, the end-to-end row, the UTF-8 row (ten rows; review 817 F9) |
     | D-6365 (a): a comment is skipped | (a) dropped | B17: the two comment rows, the UTF-8 row |
     | D-6365: a dangling link cannot be read | `\|\| [ -L "$f" ]` deleted | B18: a dangling link |
     | D-6365: a directory cannot be read | `[ -f "$f" ] &&` deleted | B18: a directory |
@@ -918,6 +920,63 @@ Three lenses (restore safety, tests and guards, scope and landing) read revision
     | D-6464: an update passes the bound | `_bak_gc` drops the argument | B20 |
 
     The B17 and B18 rows above were measured again at the final tree, all of them red as listed, and so were the D-6464 rows after the second review. The budget applied to the walk's finish arm alone no longer reds anything: the time stop's pass finishes the same dir. So the ruled mutation is measured on both spellings together.
+- **Fix round 3 (review 817), as built.** The coordinator's rulings are recorded verbatim at the end of this plan.
+  - **F1, F2 and F8 (D-6365 amended): the value is read through the unit model.** `_bak_data_keep` calls `_box_unit_env CCRC_BACKUP_DATA_KEEP` where it called two-argument `_box_env_value`.
+    - rc 0 with the knob named takes `BUE_VAL`, and rc 0 without it falls to 3.
+    - rc 2, an exposure file that is there but cannot be read, refuses and names that file.
+    - Any other answer refuses with `BUE_WHY`, or with "could not be scanned" if that is empty.
+    - The scan still runs first, so each refusal it makes keeps its wording. `why` now carries the file's path, because the model's clause names its own file.
+    - One code line is replaced by one, so the count is unchanged.
+  - **Two rows the ruling lists answer otherwise under the ruled reader.** The ruling's mechanism was obeyed over these two row expectations. Both err toward refusing, and the coordinator may rule otherwise.
+    - `FOO=\xc3` above `CCRC_BACKUP_DATA_KEEP=9` refuses, under C and under C.UTF-8, where the mail lists it to read 9. The model calls any byte of 0x80 or more in an assignment undecidable (`_box_env_unit_whole`'s `utf8`), because it does not check UTF-8 validity. systemd itself rejects a file whose values are not valid UTF-8, and a lone 0xC3 is not valid, so the unit would receive neither 9 nor anything else from that file. The Latin-1 é in a comment reads 9 in both locales, as ruled.
+    - Fix round 2's READ row "a CR lead" (`\rCCRC_BACKUP_DATA_KEEP=4`) now refuses, because the model calls a CR inside a line undecidable (`cr`), though systemd would read 4. The row moved to B17's undecided table. Every other B17 row reads or refuses as before, and the scan keeps CR in its trim set.
+  - **What else the model refuses**, the same shape, measured in the prototype: a bare CR inside any line, and a byte of 0x80 or more in any assignment line, now refuse the knob even when that line never names it (`FOO=a\rb` above a plain knob line refuses). A non-ASCII comment still reads, unless a value above it spans lines.
+  - **The rows.**
+    - B17 gains four READ rows: the é comment (9), and a trailing space, a trailing tab and a space before CRLF (4 each).
+    - It gains an undecided table of seven: the five F2 files and the two above. Each row checks the opening of the model's clause, and that no digit follows an `=` in the refusal.
+    - It gains an exposure-file row.
+    - Each row runs under LC_ALL=C, and again in the UTF-8 row, which is skipped by name where `locale -a` lists neither UTF-8 locale.
+    - `dataKeep` sets `CCD_OS=linux`. A macOS box models its launchd job's bash instead (`_box_unit_env_shell`), which refuses a CR anywhere, so B17 pins the Linux arm on every runner.
+  - **The exposure file never carries this knob.** `ccrc expose` writes only the sign-in keys and the DuckDNS ones. If the file ever named it, it would decide the value by presence, as the unit's second `EnvironmentFile=` does.
+  - **F4 is a residual (Risk notes), not a fix.** `_upd_deadline_ms` is unchanged.
+    - The claim in `_bak_gc`'s header, and D-6464's sentence that the bash reads "the same `ccrc.env` as the server's own deadline", now say the two parses agree on canonical digits only.
+    - The other site is outside this wave's consent. `_upd_deadline_ms`'s own header (ccd/ccrc:19284 at 65d5daa83) still says `updateDeadlineMs` "reads the same value from the same key", and it is left for wave 24.
+  - **F3.** T28 has a fourth case: a 100 s verification, then a 10 s one, at keep 4 and a bound of T0 + 200. V stays 100 s, so the third verification is not started.
+  - **F5.** T27 has a `--verified` case for each arm.
+    - Under `--until 1`, the verified newest dir is counted without a verification, and the two dirs past the count thin.
+    - In process, a verified pre-migration candidate is kept after the count's one verification has taken the clock past the bound.
+  - **F6 (D-6464 amended).** The walk's first step is now one function, `enter`. A path that is not a directory, a quick reading that carries an error, and a verified dir that is not whole each refuse there.
+    - The time stop reads every dir through `enter`. So an interrupted `--verified` dir behind the stop refuses `thin-verified-not-whole`, with a WARN and exit 3, and is never finished.
+    - So does a dir whose thinning record cannot be read (the review's residual).
+    - So does a path that is no directory, which the time stop used to skip with no WARN. That is the same shape, extended.
+    - T29 has a case for the three.
+    - The ruled mutation's text, `&& d !== verP` in `timeUp`, is gone with the fix. Three mutations were measured instead (below): its analogue (the time stop passing the verified dir around `enter`), the time stop's pre-fix reading, and `enter`'s verified clause deleted.
+    - `stop`'s pass, the verification budget's (D-6350), still reads quietly: it skips a path that is no directory and leaves a failed reading with no WARN. It exits 3 anyway. That was not ruled, so it stays.
+  - **F7.** T29's F7 case: an interrupted dir behind `--until 1`, whose leftover journal is byte-flipped at the same length, is refused with a WARN and left byte-identical, and the exit is 3.
+  - **F9.** The (c) row above now lists the ten rows that red.
+  - **Growth.** `ccd/ccrc` is still 38 net code lines over `origin/main`, 0 of them this round, against the stop line of 39.
+  - **Mutation rows of fix round 3**, each measured red and then restored byte-identical. The bash rows ran `-t 'W23-B1[78]'` in `ccrc-update.test.ts`, and the helper rows `-t 'W23-'` in `coordination-snapshot.test.ts`. Each row lists every row in its filter that reds.
+
+    | Guard | Mutation | Red |
+    |---|---|---|
+    | D-6365: the value through the unit model | the two-argument reader swapped back | B17: the three trailing-blank READ rows, the seven undecided rows, the exposure row, the UTF-8 row (twelve) |
+    | D-6365: what the model does not decide refuses | rc 3's refusal dropped, so it falls to 3 | B17: the seven undecided rows, the UTF-8 row (eight) |
+    | D-6365: an unreadable exposure file refuses | rc 2 takes `ccrc.env`'s value | B17: the exposure row |
+    | D-6464: V is the longest measured | V is the latest time measured | T28 |
+    | D-6464: V is the longest measured | V is the shortest time measured | T28 |
+    | D-6464: the verified dir costs no verification, at the count | `dir !== verP &&` deleted from the count's budget check | T27 (its F5 case) |
+    | D-6464: the verified dir costs no verification, at the pre-migration keep | `dir !== verP &&` deleted from the pre-migration keep's budget check | T27 (its F5 case) |
+    | D-6464: behind a time stop the verified dir is read as the walk reads it | the time stop passes the verified dir around `enter` (the ruled mutation's analogue) | T29 (its F6 case) |
+    | D-6464: behind a time stop every dir is read as the walk reads it | the time stop's reading before the fix | T29 (its F6 case) |
+    | D-6362: a verified dir that is not whole refuses | `enter`'s verified clause deleted | T21, T29 (its F6 case) |
+    | D-6464: a failed quick reading refuses | `enter`'s error check deleted | T9 (malformed, version 2), T29 (its F6 case) |
+    | D-6363: a path that is no directory refuses | `enter` lets it through | T20, T29 (its F6 case) |
+    | D-6464: a refusal behind a time stop is a WARN | `timeUp`'s `warn` made `void 0` | T29 (its F6 and F7 cases) |
+    | D-6464: a refusal behind a time stop exits 3 | `refused = 0` in `timeUp` | T29 (its F6 and F7 cases) |
+    | D-6464: past a time stop an interrupted dir is still finished | the stop's pass only leaves it | T29, and its F7 case |
+    | D-6464: the finish arm waits on nothing | the shared `finish` waits on the budget (review 817's single spelling) | T29, and its F7 case |
+
+    Fix round 2's ten B17 and B18 rows were measured again at this tree, and each reds as its row lists.
 
 ## Coordinator rulings on review 794 (2026-10-22)
 
@@ -1045,3 +1104,65 @@ Recorded verbatim from the coordinator's reply to the worker's mail 8134, which 
 > Landing: with F6b in, the stop condition is answered by the fix, so the round lands normally. Repeat the 8134 reading and F6b's measurements in the wave-done. A review run follows the wave-done.
 >
 > Growth: the same stop line, 39. The bash side should be one or two lines; most of the budget lives in the helper. If F1 plus F6b cannot fit, stop and report the count. Do not compress unrelated code.
+
+## Coordinator rulings on review 817 (2026-10-22)
+
+Recorded verbatim from the coordinator's third fix-round mail, with one substitution: as before, the review report's path is written as "the review's report", because this repository is public. The mail names no deviation number, and the one reserve number left from fix round 2 stays unnamed here until a plan line defines it. The round defines none: it amends D-6365 and D-6464 in place.
+
+> Run 775, wave 23: fix round 3. Review 817 read 65d5daa83. Its report is the review's report; read it whole, including its whole-branch section on F1, F2 and F8's shared root.
+>
+> Record these rulings verbatim in the plan as "Coordinator rulings on review 817 (2026-10-22)". Write the report's path as "the review's report", as before. The one remaining reserve number stays unnamed in tracked text until a plan line defines it.
+>
+> F1, F2 and F8, ruled together: the knob's VALUE is read through `_box_unit_env CCRC_BACKUP_DATA_KEEP`, the tree's byte-wise model of systemd's EnvironmentFile= (D-3979, `local LC_ALL=C`), no longer through two-argument `_box_env_value`.
+> - Why: D-6365's own sentence is "the box's locale cannot change an answer", and the 806 ruling said "byte semantics everywhere". The two-argument reader is neither byte-wise nor a model of systemd. The unit model is both, and it refuses what it cannot decide. That closes F1 (the locale), F2 (multi-line context) and F8 (trailing whitespace, which systemd trims) in one move.
+> - Precedence is unchanged: the process environment, else ccrc.env, else 3.
+> - Its answers map like this:
+>   - rc 0 with the key named: that value goes to `_keep_ok`, as today.
+>   - rc 0 with the key not named: 3.
+>   - rc 3 (undecidable): refuse, as unmeasured, with BUE_WHY's clause. It names the file and never its bytes.
+>   - An unreadable ccrc.env still refuses, exactly as B18 pins.
+>   - The exposure file's rc 2 refuses too (unmeasured). Say in the as-built note that the exposure file never carries this knob.
+> - The awk scan stays. Its job narrows to the lines the unit model does not refuse: an `export` of the knob, a knob token on a line that assigns nothing, and the rest of the positive rule. Keep B17 whole.
+> - Add READ and refuse rows, each under C and under a UTF-8 locale (skipped by name when neither exists):
+>   - the two F1 files (a Latin-1 é in a comment, and `FOO=\xc3`, each above `CCRC_BACKUP_DATA_KEEP=9`) read 9;
+>   - the five F2 multi-line files refuse;
+>   - F8's trailing space, tab and space-CRLF read 4.
+> - Mutation rows:
+>   - swap back to the two-argument reader: the F1 and F2 rows red;
+>   - drop rc 3's refusal: the F2 rows red.
+> - Amend D-6365's text in place, plus the function header and README's retention sentence if it names the reader.
+> - Growth: this swaps a call, so it should be about zero net lines. Stay at or under the stop line of 39. If you cannot, stop and report the count before pushing.
+>
+> F4, carried to wave 24 (it plans and opens after this wave lands). The deadline knob's parse and precedence differ between the bash and the server. Wave 24 makes every operator tunable read ccrc.env through one reader, so that is where the two meet.
+> - The design input I am carrying there: thin's bound uses the smaller of the readings the bash can make, and any non-canonical or undecidable reading means thin starts no verification that run.
+> - In this round:
+>   - record F4 in the plan's Risk notes as a residual: it needs a non-canonical spelling, or a user-manager value larger than the file's;
+>   - correct the stale "the same value from the same key" comment wherever it sits in your consented lines; name the other site in the as-built note if it is outside them;
+>   - do not change `_upd_deadline_ms`.
+>
+> F3 (important, fix): add a T28 case with unequal steps, one long verification and then a short one, so that it reds under BOTH mutants: V as the latest time measured, and V as the shortest. Measure both red, then restore.
+>
+> F5 (fix): add a T27 or T28 case with `--verified` under a past bound. It reds when `dir !== verP &&` is deleted, from each arm separately (two mutation rows).
+>
+> F6 (fix): a time stop must not treat an interrupted `--verified` dir differently from the walk. It refuses, as the walk does: `thin-verified-not-whole`, a WARN, refused++, exit 3 (D-6362).
+> - Add a T29 case.
+> - Mutation: delete `&& d !== verP` from timeUp, and it reds.
+> - Amend D-6464's text.
+> - The residual the review notes takes the same rule: a dir behind a time stop whose quick reading carries `.error` WARNs and counts as refused, as the walk does. Add a row.
+>
+> F7 (fix): pin "a time stop plus a refusal still exits 3" with the review's probe as a T29 case: an interrupted dir, its journal byte-flipped at the same length, behind `--until 1`. Two mutations each red: replace timeUp's warn with `void 0`, and add `refused = 0`.
+>
+> F9 (text): the D-6365 (c) row lists every row that reds, including B17's two bare-CR rows.
+>
+> Not ruled, so they stay as they are:
+> - the hard cap (plan "Not covered");
+> - the untimed hashing after the bound (ruled ungated, inside the 150 s slack);
+> - B20's "not mine" arm.
+>
+> Routing: unchanged, class opus, effort xhigh. This round's findings concentrate in one reader, and the ruling replaces that reader instead of patching it. If the next review still finds the knob reading wrong, I raise the effort then.
+>
+> Gate: as before. The whole of ccrc-update.test.ts is the arbiter on CI. Locally, the describes you touch, coordination-snapshot whole, and the guards.
+>
+> Landing: first-ready against runs 793 (PR #1149, in review), 722 and 774. Measure merge-tree against origin/main and #1149's head before pushing. Absorb only on a conflict or a red, with git merge.
+>
+> Claim 2215 holds. Mail wave-done with the fingerprint when done.
